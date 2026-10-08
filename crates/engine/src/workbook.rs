@@ -36,6 +36,7 @@ pub trait Engine: Send {
     fn redo(&mut self) -> Result<(), EngineError>;
     fn sizes(&self, sheet: SheetId) -> SheetSizes;
     fn frozen(&self, sheet: SheetId) -> (u32, u16);
+    fn merged(&self, sheet: SheetId) -> Vec<Range>;
     fn used_end(&self, sheet: SheetId) -> CellPos;
     fn add_sheet(&mut self) -> Result<SheetId, EngineError>;
     fn rename_sheet(&mut self, sheet: SheetId, name: &str) -> Result<(), EngineError>;
@@ -258,6 +259,20 @@ impl Engine for Workbook {
             u32::try_from(rows).unwrap_or(0),
             u16::try_from(cols).unwrap_or(0),
         )
+    }
+
+    fn merged(&self, sheet: SheetId) -> Vec<Range> {
+        self.model
+            .get_model()
+            .workbook
+            .worksheet(sheet.0)
+            .map(|ws| {
+                ws.merge_cells
+                    .iter()
+                    .filter_map(|m| Range::parse_a1(m))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn used_end(&self, sheet: SheetId) -> CellPos {
