@@ -12,6 +12,7 @@ mod find;
 mod jump;
 mod palette;
 mod recovery;
+mod region;
 mod stats;
 mod theme;
 mod toolbar;

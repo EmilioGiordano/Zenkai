@@ -27,6 +27,7 @@ use crate::find::{self, FindBar, FindResults};
 use crate::jump::jump_target;
 use crate::palette;
 use crate::recovery;
+use crate::region;
 use crate::stats::{self, SelectionStats};
 use crate::theme;
 use crate::toolbar;
@@ -1813,16 +1814,41 @@ impl Workspace {
         }
     }
 
-    // Excel sorts the current region when only one cell is selected; Zenkai sorts the
-    // selection, and a single cell has nothing to sort.
+    // With a single cell selected, Excel sorts its current region.
     fn sort(&mut self, descending: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        let sheet = self.document.sheet;
+        // Taken before the region is selected, which moves the active cell to its corner.
+        let key = self.grid.read(cx).selection().active.col;
+        let mut range = self.selection(cx);
+        if range.cell_count() == 1 {
+            range = self.select_current_region(cx);
+        }
         if range.rows() < 2 {
-            self.notify(Severity::Info, "Select the rows to sort first.", cx);
+            self.notify(
+                Severity::Info,
+                "Nothing to sort: select rows of data first.",
+                cx,
+            );
             return;
         }
-        let key = self.grid.read(cx).selection().active.col;
         self.edit(window, cx, move |wb| wb.sort(sheet, range, key, descending));
+    }
+
+    fn select_current_region(&mut self, cx: &mut Context<Self>) -> Range {
+        let active = self.grid.read(cx).selection().active;
+        let sheet = self.document.sheet;
+        let Some(workbook) = self.document.workbook() else {
+            return Range::single(active);
+        };
+        let region = region::current_region(active, |pos| !workbook.input(sheet, pos).is_empty());
+        self.grid
+            .update(cx, |grid, cx| grid.select(region.start, region.end, cx));
+        region
+    }
+
+    fn freeze(&mut self, rows: u32, cols: u16, window: &mut Window, cx: &mut Context<Self>) {
+        let sheet = self.document.sheet;
+        self.edit(window, cx, move |wb| wb.set_frozen(sheet, rows, cols));
     }
 
     fn fill(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -2209,6 +2235,17 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &BordersNone, window, cx| {
                 this.style(StyleChange::Borders(BorderPreset::None), window, cx)
             }))
+            .on_action(cx.listener(|this, _: &SelectCurrentRegion, _, cx| {
+                this.select_current_region(cx);
+            }))
+            .on_action(
+                cx.listener(|this, _: &FreezeTopRow, window, cx| this.freeze(1, 0, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &FreezeFirstColumn, window, cx| {
+                    this.freeze(0, 1, window, cx)
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &SortAscending, window, cx| this.sort(false, window, cx)),
             )

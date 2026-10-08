@@ -30,6 +30,10 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Insert today's date", InsertDate),
             item("Insert the current time", InsertTime),
             item("Go to…", GoTo),
+            item(
+                "Select the current region (data block)",
+                SelectCurrentRegion,
+            ),
         ]),
         CommandGroup::new().label("Format").items([
             item("Bold", ToggleBold),
@@ -77,6 +81,8 @@ pub fn groups() -> Vec<CommandGroup> {
                 ToggleReduceMotion,
             ),
             item("Freeze or unfreeze panes at the active cell", FreezePanes),
+            item("Freeze top row", FreezeTopRow),
+            item("Freeze first column", FreezeFirstColumn),
             item("Next sheet", NextSheet),
             item("Previous sheet", PreviousSheet),
             item("Theme: light, dark, high contrast", ToggleTheme),
