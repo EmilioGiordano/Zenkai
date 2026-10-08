@@ -54,6 +54,7 @@ fn apply_high_contrast(cx: &mut App) {
             &mut colors.title_bar,
             &mut colors.status_bar,
             &mut colors.list,
+            &mut colors.sidebar,
             &mut colors.secondary,
             &mut colors.button,
             &mut colors.primary_foreground,
@@ -66,6 +67,9 @@ fn apply_high_contrast(cx: &mut App) {
             &mut colors.muted_foreground,
             &mut colors.popover_foreground,
             &mut colors.border,
+            &mut colors.sidebar_border,
+            &mut colors.sidebar_foreground,
+            &mut colors.sidebar_accent_foreground,
             &mut colors.input,
             &mut colors.tab_foreground,
             &mut colors.secondary_foreground,
@@ -93,6 +97,7 @@ fn apply_high_contrast(cx: &mut App) {
         colors.secondary_hover = gray;
         colors.button_hover = gray;
         colors.list_hover = gray;
+        colors.sidebar_accent = gray;
         colors.table_even = rgb(0x14_14_14).into();
         colors.selection = yellow.opacity(0.4);
         colors.list_active = yellow.opacity(0.3);
