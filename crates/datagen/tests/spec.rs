@@ -84,12 +84,11 @@ fn malformed_json_is_rejected_with_a_reason() {
 
 #[test]
 fn schema_matches_the_committed_snapshot() {
-    let schema = schemars::schema_for!(GenerationSpec);
-    let generated = serde_json::to_string_pretty(&schema).unwrap();
-    let committed = include_str!("../generation-spec.schema.json").replace("\r\n", "\n");
+    let generated = serde_json::to_value(schemars::schema_for!(GenerationSpec)).unwrap();
+    let committed: serde_json::Value =
+        serde_json::from_str(include_str!("../generation-spec.schema.json")).unwrap();
     assert_eq!(
-        generated.trim_end(),
-        committed.trim_end(),
+        generated, committed,
         "the spec changed: update crates/datagen/generation-spec.schema.json"
     );
 }
