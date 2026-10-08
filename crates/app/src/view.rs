@@ -43,7 +43,7 @@ enum StructureEdit {
     FreezePanes,
 }
 
-const MAX_AUTOSUM_SCAN: usize = 100_000;
+const MAX_AUTOSUM_SCAN: usize = 10_000;
 
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
@@ -1475,7 +1475,7 @@ impl Workspace {
                 if rows >= visible_rows || cols >= visible_cols {
                     self.notify(
                         Severity::Warning,
-                        "Pick a cell inside the visible area to freeze the rows above and columns to its left.",
+                        "Scroll to the top-left and pick a visible cell: the rows above it and the columns to its left are frozen.",
                         cx,
                     );
                     return;
@@ -1497,7 +1497,7 @@ impl Workspace {
         };
         let sheet = self.document.sheet;
         let active = self.grid.read(cx).selection().active;
-        let is_number = |pos: CellPos| workbook.cell(sheet, pos).number.is_some();
+        let is_number = |pos: CellPos| workbook.number(sheet, pos).is_some();
         let run = |direction: Direction| {
             let mut first = None;
             let mut pos = active;
@@ -1521,24 +1521,23 @@ impl Workspace {
 
     fn insert_now(&mut self, time: bool, window: &mut Window, cx: &mut Context<Self>) {
         let now = chrono::Local::now().naive_local();
-        let epoch = chrono::NaiveDate::from_ymd_opt(1899, 12, 30)
-            .and_then(|d| d.and_hms_opt(0, 0, 0))
-            .unwrap_or_default();
-        // Excel serial dates count days since 1899-12-30.
-        let serial = (now - epoch).num_milliseconds() as f64 / 86_400_000.0;
-        let (value, format) = if time {
-            (serial.fract(), NumberFormat::Time)
-        } else {
-            (serial.floor(), NumberFormat::Date)
-        };
         let (sheet, active) = (self.document.sheet, self.grid.read(cx).selection().active);
-        let text = value.to_string();
+        if !time {
+            // An ISO date is recognised and formatted by the engine in one undo step.
+            let text = now.format("%Y-%m-%d").to_string();
+            self.edit(window, cx, move |wb| wb.set_input(sheet, active, &text));
+            return;
+        }
+        let midnight = now.date().and_hms_opt(0, 0, 0).unwrap_or(now);
+        // Excel stores a time of day as the fraction of a day.
+        let fraction = (now - midnight).num_milliseconds() as f64 / 86_400_000.0;
+        let text = fraction.to_string();
         self.edit(window, cx, move |wb| {
             wb.set_input(sheet, active, &text)?;
             wb.apply_style(
                 sheet,
                 Range::single(active),
-                StyleChange::NumberFormat(format),
+                StyleChange::NumberFormat(NumberFormat::Time),
             )
         });
     }
