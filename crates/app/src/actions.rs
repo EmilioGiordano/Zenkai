@@ -43,6 +43,11 @@ actions!(
         CloseFind,
         TogglePalette,
         ClosePalette,
+        RenameSheet,
+        CloseRename,
+        DeleteSheet,
+        MoveSheetLeft,
+        MoveSheetRight,
     ]
 );
 
@@ -80,6 +85,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-f1", InsertChart, CONTEXT),
         KeyBinding::new("ctrl-f", Find, CONTEXT),
         KeyBinding::new("ctrl-shift-p", TogglePalette, CONTEXT),
+        KeyBinding::new("escape", CloseRename, Some("RenameBar")),
         KeyBinding::new("escape", CloseFind, Some("FindBar")),
     ]);
 }

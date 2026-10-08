@@ -65,6 +65,9 @@ pub struct Workspace {
     find: Option<FindBar>,
     palette: Option<Entity<CommandState>>,
     session_lock: Option<recovery::SessionLock>,
+    rename: Option<Entity<InputState>>,
+    pending_sheet: Option<SheetId>,
+    last_tab_click: Option<(Instant, SheetId)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -91,6 +94,9 @@ impl Workspace {
             find: None,
             palette: None,
             session_lock: None,
+            rename: None,
+            pending_sheet: None,
+            last_tab_click: None,
             _subscriptions: vec![subscription],
         };
         workspace.reset_grid(window, cx);
@@ -102,6 +108,13 @@ impl Workspace {
     }
 
     fn reset_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.load_sheet_view(cx);
+        window.set_window_title(&self.document.title());
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
+    }
+
+    fn load_sheet_view(&mut self, cx: &mut Context<Self>) {
         self.forget_find_results();
         let sheet = self.document.sheet;
         let view = self
@@ -118,9 +131,6 @@ impl Workspace {
             })
             .unwrap_or_default();
         self.grid.update(cx, |grid, cx| grid.reset(view, cx));
-        window.set_window_title(&self.document.title());
-        let focus = self.grid.focus_handle(cx);
-        window.focus(&focus, cx);
         self.refresh_cells(cx);
     }
 
@@ -141,7 +151,11 @@ impl Workspace {
     }
 
     fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.palette.is_some() {
+        let focused = self
+            .palette
+            .as_ref()
+            .is_some_and(|state| state.focus_handle(cx).contains_focused(window, cx));
+        if focused {
             self.close_palette(window, cx);
             return;
         }
@@ -365,6 +379,7 @@ impl Workspace {
     }
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette = None;
         let input = match &self.find {
             Some(bar) => bar.input.clone(),
             None => {
@@ -699,9 +714,19 @@ impl Workspace {
                 })
                 .await;
             let update = this.update(cx, |this, cx| {
+                let sheets_before = this.document.sheets.clone();
+                let sheet_before = this.document.sheet;
                 if !this.document.restore(workbook, generation) {
                     this.clear_busy(CALCULATING, cx);
                     return;
+                }
+                if let Some(target) = this.pending_sheet.take() {
+                    this.document.sheet = target;
+                }
+                let sheet_changed = this.document.sheet != sheet_before
+                    || this.document.sheets.len() != sheets_before.len();
+                if sheet_changed {
+                    this.load_sheet_view(cx);
                 }
                 this.last_recalc = Some(started.elapsed());
                 this.clear_busy(CALCULATING, cx);
@@ -1300,9 +1325,19 @@ impl Workspace {
                     .selected_index(self.document.sheet.0 as usize)
                     .on_click(move |index, window, cx| {
                         let sheet = SheetId(u32::try_from(*index).unwrap_or(0));
-                        if let Err(error) =
-                            entity.update(cx, |this, cx| this.switch_sheet(sheet, window, cx))
-                        {
+                        if let Err(error) = entity.update(cx, |this, cx| {
+                            // A second click on the active tab within the double-click time renames it.
+                            let now = Instant::now();
+                            let double = this.last_tab_click.is_some_and(|(at, tab)| {
+                                tab == sheet && now.duration_since(at) < Duration::from_millis(450)
+                            });
+                            this.last_tab_click = Some((now, sheet));
+                            if double && sheet == this.document.sheet {
+                                this.open_rename(window, cx);
+                            } else {
+                                this.switch_sheet(sheet, window, cx);
+                            }
+                        }) {
                             tracing::debug!(%error, "workspace dropped");
                         }
                     }),
@@ -1319,7 +1354,122 @@ impl Workspace {
     }
 
     fn add_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_sheet = Some(SheetId(
+            u32::try_from(self.document.sheets.len()).unwrap_or(0),
+        ));
         self.edit(window, cx, |wb| wb.add_sheet().map(|_| ()));
+    }
+
+    fn open_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette = None;
+        let current = self
+            .document
+            .sheets
+            .get(self.document.sheet.0 as usize)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder("Sheet name");
+            state.set_value(current, window, cx);
+            state
+        });
+        let subscription = cx.subscribe_in(&input, window, |this, input, event, window, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                let name = input.read(cx).value().trim().to_string();
+                this.close_rename(window, cx);
+                if !name.is_empty() {
+                    let sheet = this.document.sheet;
+                    this.edit(window, cx, move |wb| wb.rename_sheet(sheet, &name));
+                }
+            }
+        });
+        self._subscriptions.push(subscription);
+        let focus = input.focus_handle(cx);
+        window.focus(&focus, cx);
+        self.rename = Some(input);
+        cx.notify();
+    }
+
+    fn close_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.rename = None;
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn render_rename(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let input = self.rename.as_ref()?;
+        let theme = cx.theme();
+        Some(
+            h_flex()
+                .key_context("RenameBar")
+                .h(px(36.0))
+                .px_2()
+                .gap_2()
+                .items_center()
+                .border_t_1()
+                .border_color(theme.border)
+                .bg(theme.background)
+                .child(div().text_sm().child("Rename sheet"))
+                .child(div().w(px(260.0)).child(Input::new(input)))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme.muted_foreground)
+                        .child("Enter to apply, Esc to cancel"),
+                ),
+        )
+    }
+
+    fn delete_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.document.sheets.len() < 2 {
+            self.notify(
+                Severity::Warning,
+                "A workbook must contain at least one sheet.",
+                cx,
+            );
+            return;
+        }
+        let sheet = self.document.sheet;
+        let name = self
+            .document
+            .sheets
+            .get(sheet.0 as usize)
+            .map(|s| s.name.clone())
+            .unwrap_or_default();
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Delete sheet \"{name}\"?"),
+            Some("Its data is removed. You can undo with Ctrl+Z."),
+            &["Cancel", "Delete"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await == Ok(1)
+                && let Err(error) = this.update_in(cx, |this, window, cx| {
+                    this.pending_sheet = Some(SheetId(sheet.0.saturating_sub(1)));
+                    this.edit(window, cx, move |wb| wb.delete_sheet(sheet));
+                })
+            {
+                tracing::debug!(%error, "workspace closed during delete prompt");
+            }
+        })
+        .detach();
+    }
+
+    fn move_sheet(&mut self, left: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let sheet = self.document.sheet;
+        let last = u32::try_from(self.document.sheets.len().saturating_sub(1)).unwrap_or(0);
+        let target = if left {
+            sheet.0.checked_sub(1)
+        } else {
+            (sheet.0 < last).then_some(sheet.0 + 1)
+        };
+        let Some(target) = target else {
+            return;
+        };
+        self.pending_sheet = Some(SheetId(target));
+        self.edit(window, cx, move |wb| wb.move_sheet(sheet, target));
     }
 
     fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1478,6 +1628,23 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &InsertChart, _, cx| this.insert_chart(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
             .on_action(
+                cx.listener(|this, _: &RenameSheet, window, cx| this.open_rename(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CloseRename, window, cx| this.close_rename(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &DeleteSheet, window, cx| this.delete_sheet(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &MoveSheetLeft, window, cx| {
+                    this.move_sheet(true, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &MoveSheetRight, window, cx| {
+                this.move_sheet(false, window, cx)
+            }))
+            .on_action(
                 cx.listener(|this, _: &TogglePalette, window, cx| this.toggle_palette(window, cx)),
             )
             .on_action(
@@ -1529,6 +1696,7 @@ impl Render for Workspace {
                             .map(|panel| chart_panel::render(panel, cx)),
                     ),
             )
+            .children(self.render_rename(cx))
             .child(self.render_tabs(cx))
             .child(self.render_status(cx))
             .children(self.render_palette())

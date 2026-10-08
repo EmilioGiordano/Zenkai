@@ -39,6 +39,10 @@ pub fn groups() -> Vec<CommandGroup> {
         CommandGroup::new().label("Insert").items([
             item("Chart of the selection", InsertChart),
             item("New sheet", NewSheet),
+            item("Rename sheet", RenameSheet),
+            item("Delete sheet", DeleteSheet),
+            item("Move sheet left", MoveSheetLeft),
+            item("Move sheet right", MoveSheetRight),
         ]),
         CommandGroup::new().label("View").items([
             item("Zoom in", ZoomIn),
