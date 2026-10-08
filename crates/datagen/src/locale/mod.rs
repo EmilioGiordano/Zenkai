@@ -9,8 +9,8 @@ pub(crate) enum StreetOrder {
     NumberThenName,
 }
 
-// Lists are hand-compiled common given names, surnames, cities and street names, plus
-// invented company words; no third-party dataset is copied.
+// Common names are public facts: en-US follows the SSA and 2010 Census rankings, es-AR is
+// common Argentine names. Cities and streets are real places; company words are invented.
 pub(crate) struct LocaleData {
     pub(crate) female_names: &'static [&'static str],
     pub(crate) male_names: &'static [&'static str],
