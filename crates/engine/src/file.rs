@@ -397,6 +397,20 @@ line 2"
     }
 
     #[test]
+    fn filled_cells_lists_populated_cells_in_order() {
+        let mut book = Workbook::new_empty().unwrap();
+        let rows = vec![vec!["1".to_string(), String::new(), "x".to_string()]];
+        book.set_inputs(SheetId(0), CellPos::default(), &rows)
+            .unwrap();
+        let cells: Vec<String> = book
+            .filled_cells(SheetId(0))
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(cells, ["A1", "C1"]);
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

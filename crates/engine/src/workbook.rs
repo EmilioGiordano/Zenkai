@@ -603,6 +603,7 @@ impl Engine for Workbook {
                 })
             })
             .collect();
+        cells.retain(|pos| !self.input(sheet, *pos).is_empty());
         cells.sort_by_key(|pos| (pos.row, pos.col));
         cells
     }

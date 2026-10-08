@@ -20,7 +20,7 @@ fn reject(reason: String) -> EngineError {
 
 // Every XML part is checked, wherever it lives: the engine follows relationship
 // targets to any path and also parses formulas outside worksheets (defined names,
-// conditional formats, validations). Parts that are not XML are left to the engine.
+// conditional-format rules, validations). Parts that are not XML are left to the engine.
 pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
     let mut features = SheetFeatures::default();
     let Ok(text) = std::str::from_utf8(bytes) else {
