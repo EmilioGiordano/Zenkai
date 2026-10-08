@@ -1,6 +1,5 @@
 use std::fs;
 use std::io::{Cursor, Read, Write};
-use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 
 use crate::error::EngineError;
@@ -68,12 +67,7 @@ pub fn open_xlsx(path: &Path) -> Result<Opened, EngineError> {
 // The engine's importer can panic on malformed parts; a broken file must
 // become an error message, never take the application down.
 fn load_guarded(bytes: &[u8], name: &str) -> Result<Workbook, EngineError> {
-    match std::panic::catch_unwind(AssertUnwindSafe(|| Workbook::from_xlsx_bytes(bytes, name))) {
-        Ok(result) => result,
-        Err(_) => Err(EngineError::InvalidFile(
-            "the file is damaged and could not be read".to_string(),
-        )),
-    }
+    preflight::run_with_engine_stack(|| Workbook::from_xlsx_bytes(bytes, name))
 }
 
 pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
@@ -128,11 +122,11 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
                 .take(preflight::MAX_ENTRY_BYTES)
                 .read_to_end(&mut xml)
                 .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
-            preflight::check_formulas(&xml)?;
-            if preflight::find(&xml, b"<conditionalFormatting").is_some() {
+            let features = preflight::check_worksheet(&xml)?;
+            if features.conditional_formatting {
                 found.push(Unsupported::ConditionalFormatting);
             }
-            if preflight::find(&xml, b"<dataValidations").is_some() {
+            if features.data_validation {
                 found.push(Unsupported::DataValidation);
             }
         }
@@ -145,7 +139,7 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
 // Write to a sibling temp file, prove it reopens, then replace: the original is
 // never truncated and survives any failure before the final rename.
 pub fn save_xlsx_atomic(workbook: &Workbook, path: &Path) -> Result<(), EngineError> {
-    let bytes = workbook.to_xlsx()?;
+    let bytes = preflight::run_with_engine_stack(|| workbook.to_xlsx())?;
     let temp = temp_path(path);
     if let Err(source) = write_new(&temp, &bytes) {
         if source.kind() != std::io::ErrorKind::AlreadyExists {

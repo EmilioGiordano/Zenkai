@@ -144,10 +144,13 @@ impl Document {
 }
 
 pub fn run_batch(workbook: &mut Workbook, edits: Vec<Edit>) -> Vec<EngineError> {
-    edits
-        .into_iter()
-        .filter_map(|edit| edit(workbook).err())
-        .collect()
+    let run = zenkai_engine::run_with_engine_stack(|| {
+        Ok(edits
+            .into_iter()
+            .filter_map(|edit| edit(workbook).err())
+            .collect::<Vec<_>>())
+    });
+    run.unwrap_or_else(|error| vec![error])
 }
 
 #[cfg(test)]

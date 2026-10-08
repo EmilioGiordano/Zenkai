@@ -60,7 +60,22 @@ fn deeply_nested_formula_is_rejected_not_a_stack_overflow() {
         ")".repeat(100_000)
     );
     let error = open_bytes(workbook_with_sheet(&sheet(&cell))).unwrap_err();
-    assert!(error.contains("nested"), "{error}");
+    assert!(error.contains("a formula"), "{error}");
+}
+
+#[test]
+fn long_operator_chain_is_rejected_not_a_stack_overflow() {
+    let cell = format!(r#"<c r="A1"><f>{}1</f></c>"#, "1+".repeat(20_000));
+    let error = open_bytes(workbook_with_sheet(&sheet(&cell))).unwrap_err();
+    assert!(error.contains("characters"), "{error}");
+}
+
+#[test]
+fn single_quoted_array_ref_on_new_line_is_rejected() {
+    let cell = "<c r=\"A1\"><f
+ t='array' ref='A1:XFD1048576'>1</f></c>";
+    let error = open_bytes(workbook_with_sheet(&sheet(cell))).unwrap_err();
+    assert!(error.contains("cells"), "{error}");
 }
 
 #[test]
