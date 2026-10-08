@@ -128,7 +128,8 @@ GitHub Actions, in `.github/workflows/`:
   above. Each run uploads its numbers as the `bench-current` artifact.
 
 The baseline in `bench\baseline.csv` comes from the Phase 0 run on a desktop machine, not
-from a CI runner. Refresh it from the `bench-current` artifact of a manual `bench.yml` run on
-`main` before trusting the timing gate.
+from a CI runner, so the timing gate fails until it is refreshed: copy the `bench-current`
+artifact of any `bench.yml` run (the artifact is uploaded even when the check fails) over
+`bench\baseline.csv` and commit it.
 
 License: Apache-2.0.
