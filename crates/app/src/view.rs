@@ -39,6 +39,7 @@ use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
 use crate::toolbar;
 use gpui_kit::component::Sizable;
+use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::command::{Command, CommandState};
@@ -1994,6 +1995,26 @@ impl Workspace {
         self.reset_grid(window, cx);
     }
 
+    fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+        TitleBar::new().child(
+            h_flex()
+                .size_full()
+                .items_center()
+                .text_sm()
+                .child(div().w(px(160.0)).text_color(muted).child("Zenkai"))
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .justify_center()
+                        .truncate()
+                        .child(self.document.title()),
+                )
+                .child(div().w(px(160.0))),
+        )
+    }
+
     fn render_formula_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let grid = self.grid.read(cx);
@@ -3205,6 +3226,7 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| theme::cycle(window, cx)))
+            .child(self.render_title_bar(cx))
             .child(toolbar::render(&self.active_style, &self.colors, cx))
             .child(self.render_formula_bar(cx))
             .children(self.render_find(cx))
