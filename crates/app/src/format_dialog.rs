@@ -3,7 +3,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::*;
-use zenkai_types::Range;
+use zenkai_types::{Range, SheetId};
 
 use crate::actions::{ApplyNumberFormat, CloseFormatDialog};
 
@@ -28,6 +28,8 @@ pub struct FormatDialog {
     pub code: Entity<InputState>,
     pub sample: f64,
     pub range: Range,
+    pub sheet: SheetId,
+    pub generation: u64,
     pub focus: FocusHandle,
     // Redraws the sample as the code is typed; dropped with the dialog.
     pub _refresh: Subscription,

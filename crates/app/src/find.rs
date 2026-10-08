@@ -97,8 +97,13 @@ pub fn replacements(
 fn replace_ignoring_case(text: &str, query: &str, replacement: &str) -> String {
     let lower_text = text.to_lowercase();
     let lower_query = query.to_lowercase();
-    // Lowercasing can change byte lengths outside ASCII; fall back to an exact match then.
-    if lower_text.len() != text.len() || lower_query.len() != query.len() {
+    // Lowercasing can change a character's byte length outside ASCII, which would shift
+    // match offsets (even when the totals happen to agree); fall back to an exact match.
+    let same_widths = |s: &str| {
+        s.chars()
+            .all(|c| c.to_lowercase().map(char::len_utf8).sum::<usize>() == c.len_utf8())
+    };
+    if !same_widths(text) || !same_widths(query) {
         return text.replace(query, replacement);
     }
     let mut out = String::with_capacity(text.len());
@@ -118,6 +123,11 @@ mod tests {
 
     #[test]
     fn replaces_every_occurrence_ignoring_case() {
+        // U+0130 grows and U+212A shrinks when lowercased; their sum hides the shift.
+        assert_eq!(
+            replace_ignoring_case("\u{130}\u{212A}ab", "ab", "x"),
+            "\u{130}\u{212A}x"
+        );
         assert_eq!(
             replace_ignoring_case("Total total TOTAL", "total", "Sum"),
             "Sum Sum Sum"

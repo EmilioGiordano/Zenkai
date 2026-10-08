@@ -114,6 +114,7 @@ pub struct Workspace {
     // Bumped by every CSV read, re-parse, import and cancel; a background result is
     // applied only if no newer request started meanwhile.
     csv_request: u64,
+    open_request: u64,
     // Interface scale, independent of the grid zoom: everything sized in rems.
     ui_scale: f32,
     show_formulas: bool,
@@ -181,6 +182,7 @@ impl Workspace {
             palette: None,
             csv_preview: None,
             csv_request: 0,
+            open_request: 0,
             ui_scale: 1.0,
             show_formulas: false,
             formula_bar: None,
@@ -206,6 +208,39 @@ impl Workspace {
         workspace.start_autosave(window, cx);
         workspace.load_recent(cx);
         workspace
+    }
+
+    // A file that finishes opening after the user edited the current workbook asks again
+    // before replacing it; the question asked before the open covered the old state only.
+    fn replace_document(
+        &mut self,
+        document: Document,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document.dirty {
+            self.confirm_discard(window, cx, move |this, window, cx| {
+                this.install_document(document, window, cx)
+            });
+        } else {
+            self.install_document(document, window, cx);
+        }
+    }
+
+    // Everything tied to the old workbook goes with it: a pending copy, the Format Cells
+    // dialog and a formula bar edit would otherwise act on the new one.
+    fn install_document(
+        &mut self,
+        document: Document,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clipboard_source = None;
+        self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
+        self.format_dialog = None;
+        self.formula_bar = None;
+        self.document = document;
+        self.reset_grid(window, cx);
     }
 
     fn reset_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -478,9 +513,9 @@ impl Workspace {
                 .await;
             let update = this.update_in(cx, |this, window, cx| match opened {
                 Ok((opened, path)) => {
-                    this.document = Document::new(opened.workbook, None, opened.unsupported);
-                    this.document.dirty = true;
-                    this.reset_grid(window, cx);
+                    let mut document = Document::new(opened.workbook, None, opened.unsupported);
+                    document.dirty = true;
+                    this.install_document(document, window, cx);
                     // Kept as this session's own recovery copy until the work is saved.
                     if let Err(error) = std::fs::rename(&path, &own) {
                         tracing::warn!(?path, %error, "could not adopt the recovery file");
@@ -824,11 +859,20 @@ impl Workspace {
             GridEvent::ViewportChanged => self.refresh_cells(cx),
             GridEvent::EditChanged => cx.notify(),
             GridEvent::EditRequested(pos) => {
-                let text = self
+                // Unknown while a recalculation holds the workbook: editing an empty
+                // text would clear the cell on Enter.
+                let Some(text) = self
                     .document
                     .workbook()
                     .map(|wb| wb.input(self.document.sheet, *pos))
-                    .unwrap_or_default();
+                else {
+                    self.notify(
+                        Severity::Warning,
+                        "Still calculating, try again in a moment.",
+                        cx,
+                    );
+                    return;
+                };
                 let pos = *pos;
                 self.grid.update(cx, |grid, cx| {
                     grid.begin_edit(pos, text, EditMode::Edit, cx)
@@ -983,6 +1027,8 @@ impl Workspace {
     }
 
     fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // A CSV read and an xlsx open replace the same document: the newer one wins.
+        self.next_open_request();
         self.busy = Some(format!("Reading {}…", path.display()).into());
         cx.notify();
         let label = self.busy.clone().unwrap_or_default();
@@ -1097,8 +1143,8 @@ impl Workspace {
                 this.clear_busy(IMPORTING, cx);
                 match result {
                     Ok(workbook) => {
-                        this.document = Document::new(workbook, None, Vec::new());
-                        this.reset_grid(window, cx);
+                        let document = Document::new(workbook, None, Vec::new());
+                        this.replace_document(document, window, cx);
                         this.notify(Severity::Info, summary, cx);
                     }
                     Err((error, parsed)) => {
@@ -1132,6 +1178,11 @@ impl Workspace {
             cx,
         );
         cx.notify();
+    }
+
+    fn next_open_request(&mut self) -> u64 {
+        self.open_request += 1;
+        self.open_request
     }
 
     fn next_csv_request(&mut self) -> u64 {
@@ -1215,6 +1266,8 @@ impl Workspace {
         self.busy = Some(format!("Opening {}…", path.display()).into());
         cx.notify();
         let started = Instant::now();
+        let request = self.next_open_request();
+        self.next_csv_request();
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.clone();
             let result: Result<Opened, EngineError> = cx
@@ -1223,13 +1276,17 @@ impl Workspace {
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.busy = None;
+                // A newer open started meanwhile; this result is out of date.
+                if this.open_request != request {
+                    return;
+                }
                 match result {
                     Ok(opened) => {
                         let unsupported = opened.unsupported.clone();
                         this.remember_recent(&path, cx);
-                        this.document =
+                        let document =
                             Document::new(opened.workbook, Some(path), opened.unsupported);
-                        this.reset_grid(window, cx);
+                        this.replace_document(document, window, cx);
                         if unsupported.is_empty() {
                             this.notify(
                                 Severity::Info,
@@ -1308,9 +1365,9 @@ impl Workspace {
                 this.clear_busy(&label, cx);
                 match result {
                     Ok(workbook) => {
-                        this.document = Document::new(workbook, Some(path), Vec::new());
-                        this.document.read_only = true;
-                        this.reset_grid(window, cx);
+                        let mut document = Document::new(workbook, Some(path), Vec::new());
+                        document.read_only = true;
+                        this.replace_document(document, window, cx);
                         this.notify(
                             Severity::Warning,
                             "Opened read-only: values only, without formulas or formatting. Save As keeps a copy.",
@@ -1644,8 +1701,7 @@ impl Workspace {
     fn replace_with_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match Workbook::new_empty() {
             Ok(workbook) => {
-                self.document = Document::new(workbook, None, Vec::new());
-                self.reset_grid(window, cx);
+                self.install_document(Document::new(workbook, None, Vec::new()), window, cx)
             }
             Err(error) => self.notify(Severity::Error, error.to_string(), cx),
         }
@@ -2077,6 +2133,11 @@ impl Workspace {
         let (sheet, range) = (self.document.sheet, self.selection(cx));
         let active = self.grid.read(cx).selection().active;
         let Some(workbook) = self.document.workbook() else {
+            self.notify(
+                Severity::Warning,
+                "Still calculating, try again in a moment.",
+                cx,
+            );
             return;
         };
         let view = workbook.cell(sheet, active);
@@ -2096,10 +2157,19 @@ impl Workspace {
     fn toggle_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (sheet, range) = (self.document.sheet, self.selection(cx));
         let active = self.grid.read(cx).selection().active;
-        let wrap = !self
+        let Some(wrapped) = self
             .document
             .workbook()
-            .is_some_and(|wb| wb.cell(sheet, active).style.wrap);
+            .map(|wb| wb.cell(sheet, active).style.wrap)
+        else {
+            self.notify(
+                Severity::Warning,
+                "Still calculating, try again in a moment.",
+                cx,
+            );
+            return;
+        };
+        let wrap = !wrapped;
         self.edit(window, cx, move |wb| {
             wb.apply_style(sheet, range, StyleChange::Wrap(wrap))?;
             if !wrap || range.cell_count() > MAX_AUTOFIT_CELLS as u64 {
@@ -2155,6 +2225,8 @@ impl Workspace {
             code: input,
             sample: view.number.unwrap_or(1234.5678),
             range: self.selection(cx),
+            sheet: self.document.sheet,
+            generation: self.document.generation(),
             focus,
             _refresh: refresh,
         });
@@ -2174,6 +2246,16 @@ impl Workspace {
             self.notify(
                 Severity::Warning,
                 format!("Invalid number format: {error}"),
+                cx,
+            );
+            return;
+        }
+        // Applied where it was opened, never to another sheet or document.
+        if dialog.sheet != self.document.sheet || dialog.generation != self.document.generation() {
+            self.close_format_dialog(window, cx);
+            self.notify(
+                Severity::Warning,
+                "The sheet changed; open Format Cells again on the cells to format.",
                 cx,
             );
             return;
