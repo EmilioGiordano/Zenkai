@@ -2,19 +2,19 @@
 
 ## En una línea
 
-Todo lo hecho está en la rama **`fix/clear-used-area`** (`7e9fcfd`): 149 commits lineales
-sobre `main`. Cada rama intermedia es un punto de esa misma pila. No hubo push ni merge;
+Todo lo hecho está en la rama **`test/overnight-coverage`** (`9952315`): 156 commits
+lineales sobre `main`. Cada rama intermedia es un punto de esa misma pila. No hubo push ni merge;
 `main` solo recibe este reporte.
 
 Cada tanda pasó por reviews de calidad, y de seguridad y rendimiento cuando correspondía,
 hasta dar PASS. La validación final sobre la punta está toda en verde: `cargo fmt --check`,
-`clippy -D warnings`, 108 tests, `cargo deny`, build release y prueba abriendo un archivo
+`clippy -D warnings`, 138 tests, `cargo deny`, build release y prueba abriendo un archivo
 real.
 
 ## Cómo probarlo
 
 ```powershell
-git checkout fix/clear-used-area
+git checkout test/overnight-coverage
 cargo build --release -p zenkai -j 6
 .\target\release\zenkai.exe                 # libro vacío
 .\target\release\zenkai.exe ruta\libro.xlsx # o .xls/.ods/.csv
@@ -38,6 +38,8 @@ Windows.
   - Si guardar falla, se abre Guardar como.
 - **Grilla.**
   - Formatos de Excel, celdas combinadas, paneles inmovilizados, desborde de texto.
+  - Barra de fórmulas editable (Enter confirma, Esc cancela).
+  - La barra de estado nombra los modos "Mostrando fórmulas" y "Solo lectura".
   - Ajuste de texto y alineación vertical.
   - Números en formato General que no entran se acortan o pasan a notación científica.
   - Redimensionar columnas y filas; autoajuste de columnas.
@@ -77,7 +79,7 @@ El detalle está en `README.md`. Las decisiones, con su porqué, están en `DECI
   reinsertan en el archivo guardado (`crates/engine/src/empty_rows.rs`).
   - Con un archivo hostil, IronCalc también escribía filas fuera de la grilla o con
     alturas imposibles, y Excel lo habría marcado como dañado. Ahora se descartan o se
-    acotan.
+    acotan, incluido el `<dimension>` que IronCalc derivaba de esas filas.
   - Conviene reportar ambas cosas upstream.
 - **Atajos Ctrl+Shift+símbolo** (formatos Ctrl+Shift+$ % # ~ !) no funcionaban en Windows:
   GPUI reporta Shift+4 como "$" sin Shift. Verificado en vivo antes y después.
@@ -106,7 +108,9 @@ El detalle está en `README.md`. Las decisiones, con su porqué, están en `DECI
 1. **Merge.** `feat/core-app` (la base de toda la pila) quedó estacionada tras tres rondas
    de seguridad. Los arreglos están commiteados y las reviews de seguridad posteriores
    sobre la pila dieron PASS, incluido un barrido final de todo el motor y los formatos.
-   Si te parece, mergeá `fix/clear-used-area` entera.
+   Si te parece, mergeá `test/overnight-coverage` entera. `main` ya tiene el commit de
+   este reporte, así que la pila no entra por fast-forward: hace falta un merge commit o
+   un rebase.
 2. **Ctrl+0** ahora oculta columnas, como en Excel. Antes reseteaba el zoom, que sigue en
    la paleta.
 3. **Presupuesto de edición < 50 ms.** IronCalc recalcula el libro entero en cada edición:
@@ -127,10 +131,20 @@ El detalle está en `README.md`. Las decisiones, con su porqué, están en `DECI
   filas o columnas enteras.
 - Ordenar no mueve el formato ni detecta encabezados.
 - El relleno no copia formato.
-- La barra de fórmulas muestra el contenido pero no se edita ahí (un clic edita en la
-  celda), y el autocompletado solo funciona en la celda.
+- En la barra de fórmulas no hay modo punto (hacer clic en celdas no inserta
+  referencias), la barra no crece con contenido largo, y el autocompletado solo funciona
+  en la celda.
 - Las fechas generadas por el relleno se ven como yyyy-mm-dd.
 - La copia de hoja se llama "Sheet1 (1)" (Excel usa "(2)").
+
+## Para verificar en tu máquina
+
+- Los atajos Ctrl+Shift+símbolo se registran como los reporta GPUI en Windows (`ctrl-$`).
+  En macOS o Linux probablemente no disparen así. Si vas a compilar para otra plataforma,
+  hay que sumar la forma `ctrl-shift-$`.
+- Todas las pruebas de atajos corrieron con el teclado en inglés (EE. UU.) activo, pero
+  también tenés instalada la distribución española (Latinoamérica). Conviene probar
+  Ctrl+;, Ctrl+Shift+$ y Ctrl+\` con la tuya.
 
 ## Limpieza
 
