@@ -50,6 +50,8 @@ fn wildcards() {
     assert_eq!(count("\"*\""), "7");
     assert_eq!(count("\"<>a*\""), "7");
     assert_eq!(count("\"*CLAIR\""), "1");
+    assert_eq!(count("\"A?PLE\""), "3");
+    assert_eq!(count("\"é*\""), "1");
 }
 
 #[test]

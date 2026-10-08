@@ -1,6 +1,8 @@
 #[cfg(target_arch = "wasm32")]
 use regex_lite as regex;
 
+use std::cmp::Ordering;
+
 use crate::{
     calc_result::CalcResult,
     expressions::token::{is_english_error_string, Error},
@@ -265,14 +267,28 @@ pub(crate) fn result_matches_regex(calc_result: &CalcResult, reg: &regex::Regex)
     }
 }
 
+// The same as `value.to_lowercase().as_str().cmp(target)`, without allocating per cell.
+fn cmp_lowercase(value: &str, target: &str) -> Ordering {
+    if value.is_ascii() {
+        value
+            .bytes()
+            .map(|byte| byte.to_ascii_lowercase())
+            .cmp(target.bytes())
+    } else if value.contains('\u{3A3}') {
+        // `to_lowercase` turns a word-final capital sigma into 'ς', which a
+        // character-by-character mapping cannot know.
+        value.to_lowercase().as_str().cmp(target)
+    } else {
+        value
+            .chars()
+            .flat_map(char::to_lowercase)
+            .cmp(target.chars())
+    }
+}
+
 fn result_is_equal_to_string(calc_result: &CalcResult, target: &str) -> bool {
     match calc_result {
-        CalcResult::String(s) => {
-            if target == s.to_lowercase() {
-                return true;
-            }
-            false
-        }
+        CalcResult::String(s) => cmp_lowercase(s, target) == Ordering::Equal,
         CalcResult::EmptyCell => target.is_empty(),
         _ => false,
     }
@@ -280,47 +296,65 @@ fn result_is_equal_to_string(calc_result: &CalcResult, target: &str) -> bool {
 
 fn result_is_not_equal_to_string(calc_result: &CalcResult, target: &str) -> bool {
     match calc_result {
-        CalcResult::String(s) => {
-            if target != s.to_lowercase() {
-                return true;
-            }
-            false
-        }
+        CalcResult::String(s) => cmp_lowercase(s, target) != Ordering::Equal,
         _ => true,
     }
 }
 
 fn result_is_less_than_string(calc_result: &CalcResult, target: &str) -> bool {
     match calc_result {
-        CalcResult::String(s) => target.cmp(&s.to_lowercase()) == std::cmp::Ordering::Greater,
+        CalcResult::String(s) => cmp_lowercase(s, target) == Ordering::Less,
         _ => false,
     }
 }
 
 fn result_is_less_or_equal_than_string(calc_result: &CalcResult, target: &str) -> bool {
     match calc_result {
-        CalcResult::String(s) => {
-            let lower_case = &s.to_lowercase();
-            target.cmp(lower_case) == std::cmp::Ordering::Greater || lower_case == target
-        }
+        CalcResult::String(s) => cmp_lowercase(s, target) != Ordering::Greater,
         _ => false,
     }
 }
 
 fn result_is_greater_than_string(calc_result: &CalcResult, target: &str) -> bool {
     match calc_result {
-        CalcResult::String(s) => target.cmp(&s.to_lowercase()) == std::cmp::Ordering::Less,
+        CalcResult::String(s) => cmp_lowercase(s, target) == Ordering::Greater,
         _ => false,
     }
 }
 
 fn result_is_greater_or_equal_than_string(calc_result: &CalcResult, target: &str) -> bool {
     match calc_result {
-        CalcResult::String(s) => {
-            let lower_case = &s.to_lowercase();
-            target.cmp(lower_case) == std::cmp::Ordering::Less || lower_case == target
-        }
+        CalcResult::String(s) => cmp_lowercase(s, target) != Ordering::Less,
         _ => false,
+    }
+}
+
+// Matches text against a wildcard criterion as `result_matches_regex` does. For ASCII text
+// and an ASCII criterion, ignoring case gives the same answer without lowercasing a copy.
+struct Wildcard {
+    lowercase: regex::Regex,
+    ascii_any_case: Option<regex::Regex>,
+}
+
+impl Wildcard {
+    fn new(criterion: &str) -> Option<Wildcard> {
+        let lowercase = from_wildcard_to_regex(&criterion.to_lowercase(), true).ok()?;
+        let ascii_any_case = if criterion.is_ascii() {
+            Some(regex::Regex::new(&format!("(?i){}", lowercase.as_str())).ok()?)
+        } else {
+            None
+        };
+        Some(Wildcard {
+            lowercase,
+            ascii_any_case,
+        })
+    }
+
+    fn matches(&self, calc_result: &CalcResult) -> bool {
+        match (calc_result, &self.ascii_any_case) {
+            (CalcResult::String(s), Some(any_case)) if s.is_ascii() => any_case.is_match(s),
+            _ => result_matches_regex(calc_result, &self.lowercase),
+        }
     }
 }
 
@@ -383,7 +417,10 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_less_or_equal_than_number(x, f))
                 } else {
-                    Box::new(move |x| result_is_less_or_equal_than_string(x, &v.to_lowercase()))
+                    {
+                        let target = v.to_lowercase();
+                        Box::new(move |x| result_is_less_or_equal_than_string(x, &target))
+                    }
                 }
             } else if let Some(v) = s.strip_prefix(">=") {
                 // TODO: I am not implementing >= ERROR or >= BOOLEAN
@@ -394,7 +431,10 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_greater_or_equal_than_number(x, f))
                 } else {
-                    Box::new(move |x| result_is_greater_or_equal_than_string(x, &v.to_lowercase()))
+                    {
+                        let target = v.to_lowercase();
+                        Box::new(move |x| result_is_greater_or_equal_than_string(x, &target))
+                    }
                 }
             } else if let Some(v) = s.strip_prefix("<>") {
                 if let Ok(f) = v.parse::<f64>() {
@@ -404,8 +444,8 @@ pub(crate) fn build_criteria<'a>(
                 } else if is_english_error_string(v) {
                     Box::new(move |x| result_is_not_equal_to_error(x, v))
                 } else if v.contains('*') || v.contains('?') {
-                    if let Ok(reg) = from_wildcard_to_regex(&v.to_lowercase(), true) {
-                        Box::new(move |x| !result_matches_regex(x, &reg))
+                    if let Some(wildcard) = Wildcard::new(v) {
+                        Box::new(move |x| !wildcard.matches(x))
                     } else {
                         Box::new(move |_| false)
                     }
@@ -414,7 +454,10 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_not_equal_to_number(x, f))
                 } else {
-                    Box::new(move |x| result_is_not_equal_to_string(x, &v.to_lowercase()))
+                    {
+                        let target = v.to_lowercase();
+                        Box::new(move |x| result_is_not_equal_to_string(x, &target))
+                    }
                 }
             } else if let Some(v) = s.strip_prefix('<') {
                 // TODO: I am not implementing < ERROR or < BOOLEAN
@@ -425,7 +468,10 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_less_than_number(x, f))
                 } else {
-                    Box::new(move |x| result_is_less_than_string(x, &v.to_lowercase()))
+                    {
+                        let target = v.to_lowercase();
+                        Box::new(move |x| result_is_less_than_string(x, &target))
+                    }
                 }
             } else if let Some(v) = s.strip_prefix('>') {
                 // TODO: I am not implementing > ERROR or > BOOLEAN
@@ -436,7 +482,10 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_greater_than_number(x, f))
                 } else {
-                    Box::new(move |x| result_is_greater_than_string(x, &v.to_lowercase()))
+                    {
+                        let target = v.to_lowercase();
+                        Box::new(move |x| result_is_greater_than_string(x, &target))
+                    }
                 }
             } else {
                 let v = if let Some(a) = s.strip_prefix('=') {
@@ -451,15 +500,18 @@ pub(crate) fn build_criteria<'a>(
                 } else if is_english_error_string(v) {
                     Box::new(move |x| result_is_equal_to_error(x, v))
                 } else if v.contains('*') || v.contains('?') {
-                    if let Ok(reg) = from_wildcard_to_regex(&v.to_lowercase(), true) {
-                        Box::new(move |x| result_matches_regex(x, &reg))
+                    if let Some(wildcard) = Wildcard::new(v) {
+                        Box::new(move |x| wildcard.matches(x))
                     } else {
                         Box::new(move |_| false)
                     }
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_equal_to_number(x, f))
                 } else {
-                    Box::new(move |x| result_is_equal_to_string(x, &v.to_lowercase()))
+                    {
+                        let target = v.to_lowercase();
+                        Box::new(move |x| result_is_equal_to_string(x, &target))
+                    }
                 }
             }
         }
@@ -467,10 +519,42 @@ pub(crate) fn build_criteria<'a>(
         CalcResult::Boolean(b) => Box::new(move |x| result_is_equal_to_bool(x, *b)),
         CalcResult::Error { error, .. } => {
             // An error will match an error (never a string that is an error)
-            Box::new(move |x| result_is_equal_to_error(x, &error.to_string()))
+            let target = error.to_string();
+            Box::new(move |x| result_is_equal_to_error(x, &target))
         }
         CalcResult::Range { left: _, right: _ } => Box::new(move |_x| false),
         CalcResult::Array(_) | CalcResult::Lambda(_) => Box::new(move |_x| false),
         CalcResult::EmptyCell | CalcResult::EmptyArg => Box::new(result_is_equal_to_empty),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cmp_lowercase;
+
+    #[test]
+    fn cmp_lowercase_matches_lowercasing_a_copy() {
+        let values = [
+            "",
+            "apple",
+            "APPLE",
+            "b*n",
+            "Zebra",
+            "ÉCLAIR",
+            "Straße",
+            "İstanbul",
+            "ΟΔΟΣ",
+            "ΣΑΣ",
+            "日本",
+        ];
+        for value in values {
+            for target in values.map(str::to_lowercase) {
+                assert_eq!(
+                    cmp_lowercase(value, &target),
+                    value.to_lowercase().as_str().cmp(target.as_str()),
+                    "{value} against {target}"
+                );
+            }
+        }
     }
 }
