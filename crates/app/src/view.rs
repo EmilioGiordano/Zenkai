@@ -346,7 +346,72 @@ impl Workspace {
         }
     }
 
+    fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.busy = Some(format!("Importing {}…", path.display()).into());
+        cx.notify();
+        let label = self.busy.clone().unwrap_or_default();
+        cx.spawn_in(window, async move |this, cx| {
+            let task_path = path.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { files::import_csv(&task_path) })
+                .await;
+            let update = this.update_in(cx, |this, window, cx| {
+                this.clear_busy(&label, cx);
+                match result {
+                    Ok((workbook, summary)) => {
+                        this.document = Document::new(workbook, None, Vec::new());
+                        this.reset_grid(window, cx);
+                        this.notify(Severity::Info, summary, cx);
+                    }
+                    Err(error) => this.notify(Severity::Error, error, cx),
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during import");
+            }
+        })
+        .detach();
+    }
+
+    fn export_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workbook) = self.document.workbook() else {
+            self.notify(
+                Severity::Warning,
+                "Still calculating, try again in a moment.",
+                cx,
+            );
+            return;
+        };
+        let rows = files::sheet_rows(workbook, self.document.sheet);
+        let sheets = self.document.sheets.len();
+        cx.spawn_in(window, async move |this, cx| {
+            let target = path.clone();
+            let written = cx
+                .background_executor()
+                .spawn(async move { files::write_csv_file(&target, &rows) })
+                .await;
+            let update = this.update(cx, |this, cx| match written {
+                Ok(()) if sheets > 1 => this.notify(
+                    Severity::Warning,
+                    format!("Saved the active sheet only to {}", path.display()),
+                    cx,
+                ),
+                Ok(()) => this.notify(Severity::Info, format!("Saved {}", path.display()), cx),
+                Err(error) => this.notify(Severity::Error, error, cx),
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during export");
+            }
+        })
+        .detach();
+    }
+
     fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if files::is_delimited_text(&path) {
+            self.import_csv(path, window, cx);
+            return;
+        }
         self.busy = Some(format!("Opening {}…", path.display()).into());
         cx.notify();
         let started = Instant::now();
@@ -507,6 +572,10 @@ impl Workspace {
     }
 
     fn confirm_target(&mut self, chosen: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if files::is_delimited_text(&chosen) {
+            self.export_csv(chosen, window, cx);
+            return;
+        }
         let path = files::xlsx_target(&chosen);
         let renamed = path != chosen;
         let replaces_source = self
@@ -687,13 +756,7 @@ impl Workspace {
             if let Some(source) = cut_source {
                 wb.clear(sheet, source)?;
             }
-            for (r, row) in (0i64..).zip(rows) {
-                for (c, value) in (0i64..).zip(row) {
-                    let pos = CellPos::new(origin.row.offset(r), origin.col.offset(c));
-                    wb.set_input(sheet, pos, &value)?;
-                }
-            }
-            Ok(())
+            wb.set_inputs(sheet, origin, &rows)
         });
         let end = CellPos::new(
             origin.row.offset(i64::from(height.saturating_sub(1))),

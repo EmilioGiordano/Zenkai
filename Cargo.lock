@@ -9630,6 +9630,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "zenkai-engine",
+ "zenkai-formats",
  "zenkai-grid",
  "zenkai-types",
 ]
@@ -9659,6 +9660,15 @@ dependencies = [
  "tracing",
  "zenkai-types",
  "zip 0.6.6",
+]
+
+[[package]]
+name = "zenkai-formats"
+version = "0.1.0"
+dependencies = [
+ "csv",
+ "encoding_rs",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
