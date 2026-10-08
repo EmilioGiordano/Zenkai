@@ -19,8 +19,8 @@ pub(crate) struct NameSource {
 }
 
 impl NameSource {
-    fn read<'a>(&self, columns: &'a [Vec<String>], row: usize) -> &'a str {
-        let cell = columns[self.column][row].as_str();
+    fn read<'a>(&self, row_cells: &'a [String]) -> &'a str {
+        let cell = row_cells[self.column].as_str();
         match self.part {
             NamePart::WholeCell => cell,
             NamePart::FirstWord => cell.split(' ').next().unwrap_or(cell),
@@ -70,15 +70,14 @@ pub(crate) enum Addresses {
 impl EmailPlan {
     pub(crate) fn address(
         &self,
-        columns: &[Vec<String>],
-        row: usize,
+        row_cells: &[String],
         rng: &mut Rng,
         addresses: &mut Addresses,
     ) -> String {
-        let first = self.part(self.first_name_from, columns, row, || {
+        let first = self.part(self.first_name_from, row_cells, || {
             self.fallback_first_names.sample(rng).to_string()
         });
-        let last = self.part(self.last_name_from, columns, row, || {
+        let last = self.part(self.last_name_from, row_cells, || {
             self.fallback_last_names.sample(rng)
         });
         let local = match self.format {
@@ -96,11 +95,10 @@ impl EmailPlan {
     fn part(
         &self,
         source: Option<NameSource>,
-        columns: &[Vec<String>],
-        row: usize,
+        row_cells: &[String],
         generate: impl FnOnce() -> String,
     ) -> String {
-        let from_cell = source.map_or("", |source| source.read(columns, row));
+        let from_cell = source.map_or("", |source| source.read(row_cells));
         let word = email_word(from_cell);
         if word.is_empty() {
             email_word(&generate())
