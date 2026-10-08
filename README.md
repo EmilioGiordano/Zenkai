@@ -120,7 +120,7 @@ baseline to accept new numbers. Fixture 3 is not in the baseline: one run takes 
 
 GitHub Actions, in `.github/workflows/`:
 
-- `ci.yml` (every push and pull request): `cargo fmt --check`, `cargo clippy
+- `ci.yml` (pushes to `main` and every pull request): `cargo fmt --check`, `cargo clippy
   --all-targets -- -D warnings` and `cargo test` on Windows, Linux and macOS, plus
   `cargo deny check` on Linux.
 - `bench.yml` (pull requests that touch the engine, formats, grid, types or bench, and
