@@ -45,7 +45,7 @@ pub fn open_xlsx(path: &Path) -> Result<Opened, EngineError> {
     };
     let size = fs::metadata(path).map_err(read_error)?.len();
     if size > preflight::MAX_FILE_BYTES {
-        return Err(EngineError::InvalidFile(format!(
+        return Err(EngineError::Unsafe(format!(
             "the file is {} MB, larger than the {} MB supported",
             size / 1024 / 1024,
             preflight::MAX_FILE_BYTES / 1024 / 1024
@@ -74,7 +74,7 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
     let invalid = |e: zip::result::ZipError| EngineError::InvalidFile(e.to_string());
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(invalid)?;
     if archive.len() > preflight::MAX_ENTRIES {
-        return Err(EngineError::InvalidFile(format!(
+        return Err(EngineError::Unsafe(format!(
             "{} entries in the archive",
             archive.len()
         )));
@@ -83,7 +83,7 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
     for index in 0..archive.len() {
         let entry = archive.by_index(index).map_err(invalid)?;
         if entry.size() > preflight::MAX_ENTRY_BYTES {
-            return Err(EngineError::InvalidFile(format!(
+            return Err(EngineError::Unsafe(format!(
                 "part {} expands to {} MB",
                 entry.name(),
                 entry.size() / 1024 / 1024
@@ -92,7 +92,7 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
         total = total.saturating_add(entry.size());
     }
     if total > preflight::MAX_TOTAL_BYTES {
-        return Err(EngineError::InvalidFile(format!(
+        return Err(EngineError::Unsafe(format!(
             "the workbook expands to {} MB",
             total / 1024 / 1024
         )));
@@ -350,6 +350,33 @@ mod tests {
             "",
             "the whole fill undoes in one step"
         );
+    }
+
+    #[test]
+    fn set_inputs_keeps_quotes_tabs_newlines_and_blanks() {
+        let mut book = Workbook::new_empty().unwrap();
+        let sheet = SheetId(0);
+        let tricky = vec![
+            vec!["say \"hi\"".to_string(), "a	b".to_string()],
+            vec![
+                String::new(),
+                "line 1
+line 2"
+                    .to_string(),
+            ],
+            vec!["last".to_string()],
+        ];
+        book.set_inputs(sheet, CellPos::default(), &tricky).unwrap();
+        let at = |a1: &str| book.input(sheet, CellPos::parse_a1(a1).unwrap());
+        assert_eq!(at("A1"), "say \"hi\"");
+        assert_eq!(at("B1"), "a	b");
+        assert_eq!(at("A2"), "");
+        assert_eq!(
+            at("B2"),
+            "line 1
+line 2"
+        );
+        assert_eq!(at("A3"), "last");
     }
 
     #[test]

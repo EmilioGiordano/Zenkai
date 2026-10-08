@@ -283,9 +283,17 @@ impl Engine for Workbook {
             .delimiter(b'\t')
             .flexible(true)
             .from_writer(Vec::new());
+        // The engine's TSV reader drops records whose width differs, so every row is
+        // padded to the full width of the block.
+        let padding = usize::try_from(width).unwrap_or(usize::MAX);
         for row in rows {
+            let missing = padding.saturating_sub(row.len());
+            let fields = row
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::repeat_n("", missing));
             writer
-                .write_record(row)
+                .write_record(fields)
                 .map_err(|e| rejected(e.to_string()))?;
         }
         let tsv = writer
