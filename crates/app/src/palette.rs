@@ -22,6 +22,11 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Cut", Cut),
             item("Paste", Paste),
             item("Find", Find),
+            item("Fill down", FillDown),
+            item("Fill right", FillRight),
+            item("AutoSum", AutoSum),
+            item("Insert today's date", InsertDate),
+            item("Insert the current time", InsertTime),
             item("Go to…", GoTo),
         ]),
         CommandGroup::new().label("Format").items([

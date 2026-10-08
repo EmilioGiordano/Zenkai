@@ -54,6 +54,11 @@ actions!(
         InsertColumns,
         DeleteColumns,
         FreezePanes,
+        FillDown,
+        FillRight,
+        AutoSum,
+        InsertDate,
+        InsertTime,
         CloseGoTo,
     ]
 );
@@ -95,6 +100,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", CloseRename, Some("RenameBar")),
         KeyBinding::new("ctrl-g", GoTo, CONTEXT),
         KeyBinding::new("f5", GoTo, CONTEXT),
+        KeyBinding::new("ctrl-d", FillDown, CONTEXT),
+        KeyBinding::new("ctrl-r", FillRight, CONTEXT),
+        KeyBinding::new("alt-=", AutoSum, CONTEXT),
+        KeyBinding::new("ctrl-;", InsertDate, CONTEXT),
+        KeyBinding::new("ctrl-shift-;", InsertTime, CONTEXT),
+        KeyBinding::new("ctrl-:", InsertTime, CONTEXT),
         KeyBinding::new("escape", CloseGoTo, Some("NameBox")),
         KeyBinding::new("escape", CloseFind, Some("FindBar")),
     ]);

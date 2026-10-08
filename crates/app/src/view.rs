@@ -43,6 +43,8 @@ enum StructureEdit {
     FreezePanes,
 }
 
+const MAX_AUTOSUM_SCAN: usize = 100_000;
+
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
 const SEARCHING: &str = "Searching…";
@@ -1483,6 +1485,64 @@ impl Workspace {
         }
     }
 
+    fn fill(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        self.edit(window, cx, move |wb| wb.fill(sheet, range, down));
+    }
+
+    // Alt+= proposes =SUM over the numbers right above (or to the left), in edit mode.
+    fn auto_sum(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workbook) = self.document.workbook() else {
+            return;
+        };
+        let sheet = self.document.sheet;
+        let active = self.grid.read(cx).selection().active;
+        let is_number = |pos: CellPos| workbook.cell(sheet, pos).number.is_some();
+        let run = |direction: Direction| {
+            let mut first = None;
+            let mut pos = active;
+            for _ in 0..MAX_AUTOSUM_SCAN {
+                let next = zenkai_grid::step(pos, direction, 1);
+                if next == pos || !is_number(next) {
+                    break;
+                }
+                pos = next;
+                first = Some(pos);
+            }
+            first.map(|start| Range::new(start, zenkai_grid::step(active, direction, 1)))
+        };
+        let range = run(Direction::Up).or_else(|| run(Direction::Left));
+        let formula = range.map_or_else(|| "=SUM()".to_string(), |r| format!("=SUM({r})"));
+        self.grid.update(cx, |grid, cx| {
+            grid.begin_edit(active, formula, EditMode::Enter, cx)
+        });
+        window.refresh();
+    }
+
+    fn insert_now(&mut self, time: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let now = chrono::Local::now().naive_local();
+        let epoch = chrono::NaiveDate::from_ymd_opt(1899, 12, 30)
+            .and_then(|d| d.and_hms_opt(0, 0, 0))
+            .unwrap_or_default();
+        // Excel serial dates count days since 1899-12-30.
+        let serial = (now - epoch).num_milliseconds() as f64 / 86_400_000.0;
+        let (value, format) = if time {
+            (serial.fract(), NumberFormat::Time)
+        } else {
+            (serial.floor(), NumberFormat::Date)
+        };
+        let (sheet, active) = (self.document.sheet, self.grid.read(cx).selection().active);
+        let text = value.to_string();
+        self.edit(window, cx, move |wb| {
+            wb.set_input(sheet, active, &text)?;
+            wb.apply_style(
+                sheet,
+                Range::single(active),
+                StyleChange::NumberFormat(format),
+            )
+        });
+    }
+
     fn add_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_sheet = Some(SheetId(
             u32::try_from(self.document.sheets.len()).unwrap_or(0),
@@ -1811,6 +1871,15 @@ impl Render for Workspace {
                 cx.listener(|this, _: &RenameSheet, window, cx| this.open_rename(window, cx)),
             )
             .on_action(cx.listener(|this, _: &GoTo, window, cx| this.open_go_to(window, cx)))
+            .on_action(cx.listener(|this, _: &FillDown, window, cx| this.fill(true, window, cx)))
+            .on_action(cx.listener(|this, _: &FillRight, window, cx| this.fill(false, window, cx)))
+            .on_action(cx.listener(|this, _: &AutoSum, window, cx| this.auto_sum(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &InsertDate, window, cx| this.insert_now(false, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &InsertTime, window, cx| this.insert_now(true, window, cx)),
+            )
             .on_action(cx.listener(|this, _: &InsertRows, window, cx| {
                 this.structure_edit(window, cx, StructureEdit::InsertRows)
             }))
