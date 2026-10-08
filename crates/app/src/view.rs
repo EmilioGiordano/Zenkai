@@ -1669,6 +1669,28 @@ impl Workspace {
         });
     }
 
+    // Excel's Paste Values: the values shown in the copied cells, without formulas or
+    // formats; works for copies from Zenkai and from other programs alike.
+    fn paste_values(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        let sheet = self.document.sheet;
+        let origin = self.grid.read(cx).selection().active;
+        let rows = clipboard::values_only(&text);
+        let height = i64::try_from(rows.len()).unwrap_or(i64::MAX);
+        let width = i64::try_from(rows.iter().map(Vec::len).max().unwrap_or(0)).unwrap_or(i64::MAX);
+        self.edit(window, cx, move |wb| wb.set_inputs(sheet, origin, &rows));
+        let end = CellPos::new(
+            origin.row.offset(height.saturating_sub(1)),
+            origin.col.offset(width.saturating_sub(1)),
+        );
+        self.grid.update(cx, |grid, cx| {
+            grid.set_marquee(None, cx);
+            grid.select(origin, end, cx);
+        });
+    }
+
     fn switch_sheet(&mut self, sheet: SheetId, window: &mut Window, cx: &mut Context<Self>) {
         if sheet.0 as usize >= self.document.sheets.len() || sheet == self.document.sheet {
             return;
@@ -2455,6 +2477,9 @@ impl Render for Workspace {
                 this.show_formulas = !this.show_formulas;
                 this.refresh_cells(cx);
             }))
+            .on_action(
+                cx.listener(|this, _: &PasteValues, window, cx| this.paste_values(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
             }))
@@ -2643,6 +2668,7 @@ fn cell_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
         .menu("Cut", Box::new(Cut))
         .menu("Copy", Box::new(Copy))
         .menu("Paste", Box::new(Paste))
+        .menu("Paste values", Box::new(PasteValues))
         .separator()
         .menu("Insert rows above", Box::new(InsertRows))
         .menu("Insert columns to the left", Box::new(InsertColumns))

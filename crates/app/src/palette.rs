@@ -21,6 +21,7 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Copy", Copy),
             item("Cut", Cut),
             item("Paste", Paste),
+            item("Paste values", PasteValues),
             item("Find", Find),
             item("Replace…", Replace),
             item("Fill down", FillDown),

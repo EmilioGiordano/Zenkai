@@ -1,5 +1,24 @@
 pub const MAX_COPY_CELLS: u64 = 1_000_000;
 
+// What was copied, as values: text that would read as a formula keeps a leading
+// apostrophe, which Excel and the engine treat as "this is text".
+pub fn values_only(text: &str) -> Vec<Vec<String>> {
+    parse_tsv(text)
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|field| {
+                    if field.starts_with('=') {
+                        format!("'{field}")
+                    } else {
+                        field
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
 pub fn parse_tsv(text: &str) -> Vec<Vec<String>> {
     let mut rows = Vec::new();
     let mut row = Vec::new();
@@ -50,6 +69,16 @@ pub fn parse_tsv(text: &str) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn values_keep_formula_looking_text_as_text() {
+        let rows = values_only(
+            "=A1	5
+-3	$4.00
+",
+        );
+        assert_eq!(rows, vec![vec!["'=A1", "5"], vec!["-3", "$4.00"]]);
+    }
 
     #[test]
     fn parses_excel_clipboard() {
