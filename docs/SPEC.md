@@ -217,13 +217,25 @@ Los agentes de IA (Claude Code, Gemini CLI, Codex y cualquier cliente MCP) traba
 
 ### Alcance
 
-Esta fase entrega, en este orden y cada paso útil por sí solo:
+Esta fase avanza en este orden, cada paso útil por sí solo:
 
 1. **Archivo de configuración** con esquema, recarga en caliente, secretos en el Administrador de credenciales de Windows y una página de Configuración que detecta los agentes instalados.
 2. **Capa de herramientas** en Rust puro sobre el documento abierto, sin LLM y probada de forma determinista.
 3. **Puente MCP**: Zenkai como servidor MCP local, para que un Claude Code externo (o cualquier cliente MCP) lea y edite el libro abierto en vivo.
 
-Quedan para ramas posteriores de esta misma fase, cada una con su propia aprobación: el panel de chat sobre ACP (Agent Client Protocol), las menciones de contexto (`[Ventas!A1:N200]`) y la capa de revisión (resaltar cambios del agente, aceptar o rechazar, paso de deshacer con nombre). El resto de las ideas (Ctrl+K, auditoría, carpeta como espacio de trabajo) sigue en `docs/IDEAS.md`.
+4. **Pestañas, espacios y sesión** (diseño visual a definir con el usuario):
+   - Un espacio es un grupo con nombre de archivos; cada archivo es un ítem o pestaña.
+   - Barra lateral opcional (Ctrl+B en la propuesta del usuario; en Excel Ctrl+B es negrita, así que el atajo se decide con el diseño), con un estilo sobrio a la Waku.
+   - Carga diferida: las pestañas restauradas son enlaces hasta que se activan.
+   - Las pestañas inactivas y sin cambios se descargan cuando falta memoria.
+   - `session.json` restaura espacios, pestañas, hoja activa, selección y scroll; los cambios sin guardar vuelven por la recuperación.
+   - Atajos de navegador: Ctrl+Tab, Ctrl+W, Ctrl+Shift+T y Ctrl+P (en Excel, Ctrl+P es imprimir, que está fuera del alcance).
+   - Más adelante, vista dividida para dos archivos lado a lado.
+5. **Chat de agentes** sobre ACP (Agent Client Protocol).
+6. **Menciones de contexto** (`[Ventas!A1:N200]`).
+7. **Capa de revisión**: resaltar cambios del agente, aceptar o rechazar, paso de deshacer con nombre.
+
+Los pasos 4 a 7 se aprueban por separado. Las herramientas identifican el libro con un `WorkbookId` tipado desde el primer día, para que su forma no cambie cuando lleguen las pestañas. El resto de las ideas (Ctrl+K, auditoría, carpeta como espacio de trabajo) sigue en `docs/IDEAS.md`.
 
 ### Arquitectura
 
@@ -247,6 +259,8 @@ Quedan para ramas posteriores de esta misma fase, cada una con su propia aprobac
 ### Herramientas
 
 `list_workbooks`, `list_sheets`, `get_selection`, `read_range`, `find`, `write_cells`, `set_formula` y `format_range`. Ninguna guarda, ninguna expone la ruta del archivo ni el sistema de archivos.
+
+- `list_workbooks` devuelve un `WorkbookId` por libro abierto, y cada herramienta de lectura o escritura recibe uno. Hoy hay un solo documento abierto; un id desconocido o de un libro ya reemplazado es un error tipado.
 
 - `read_range` está paginada y limitada en celdas por llamada.
 - `write_cells` y `set_formula` escriben **bloques rectangulares** con un tope de celdas por llamada, a través de `Workspace::edit`: recalculan, se ven en la grilla al instante y se deshacen con Ctrl+Z en un solo paso. Las escrituras dispersas quedan fuera hasta que el motor tenga deshacer por lotes.
@@ -274,7 +288,8 @@ La amenaza principal es la misma que en el resto de Zenkai, un archivo malicioso
 | `feat/settings-file` | Tipos de configuración, esquema, recarga en caliente, secretos, página de Configuración con detección de agentes |
 | `feat/workbook-tools` | Capa de herramientas tipada sobre el documento abierto, canal hacia el hilo de UI, aprobación de escrituras, Vista protegida y avisos de contenido oculto, pruebas deterministas |
 | `feat/mcp-bridge` | `rmcp` en un hilo de tokio, named pipe restringido, relé `zenkai-mcp`, comando `claude mcp add` en Configuración, prueba de punta a punta |
-| `feat/agent-chat` y siguientes | Panel de chat ACP, menciones y capa de revisión; se aprueban por separado |
+| Pestañas, espacios y sesión | Paso 4; diseño visual a definir |
+| `feat/agent-chat` y siguientes | Pasos 5 a 7: chat ACP, menciones y capa de revisión; se aprueban por separado |
 
 ## Proceso de trabajo para el agente
 
