@@ -552,6 +552,14 @@ impl<'a> Model<'a> {
         }
     }
 
+    // Only the ordering of spill cells in `evaluate` reads what supports a cell; recording
+    // it for every formula of a workbook without spills costs a vector per formula.
+    fn record_support(&mut self, cell: CellReferenceIndex, support: CellOrRange) {
+        if !self.spill_cells.is_empty() {
+            self.support.entry(cell).or_default().push(support);
+        }
+    }
+
     pub(crate) fn evaluate_node_in_context(
         &mut self,
         node: &Node,
@@ -582,10 +590,7 @@ impl<'a> Model<'a> {
                 if !absolute_column {
                     column1 += cell.column;
                 }
-                self.support
-                    .entry(cell)
-                    .or_default()
-                    .push(CellOrRange::Cell((*sheet_index, row1, column1)));
+                self.record_support(cell, CellOrRange::Cell((*sheet_index, row1, column1)));
                 self.evaluate_cell(CellReferenceIndex {
                     sheet: *sheet_index,
                     row: row1,
@@ -631,16 +636,16 @@ impl<'a> Model<'a> {
                 } else {
                     *column2 + cell.column
                 };
-                self.support
-                    .entry(cell)
-                    .or_default()
-                    .push(CellOrRange::Range((
+                self.record_support(
+                    cell,
+                    CellOrRange::Range((
                         *sheet_index,
                         r1.min(r2),
                         c1.min(c2),
                         r1.max(r2),
                         c1.max(c2),
-                    )));
+                    )),
+                );
                 CalcResult::Range {
                     left: CellReferenceIndex {
                         sheet: *sheet_index,
