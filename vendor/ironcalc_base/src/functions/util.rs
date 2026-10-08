@@ -2,6 +2,7 @@
 use regex_lite as regex;
 
 use std::cmp::Ordering;
+use std::sync::OnceLock;
 
 use crate::{
     calc_result::CalcResult,
@@ -142,6 +143,10 @@ pub(crate) fn from_wildcard_to_regex(
     wildcard: &str,
     exact: bool,
 ) -> Result<regex::Regex, regex::Error> {
+    regex::Regex::new(&wildcard_to_pattern(wildcard, exact))
+}
+
+fn wildcard_to_pattern(wildcard: &str, exact: bool) -> String {
     // 1. Escape all
     let reg = &regex::escape(wildcard);
 
@@ -166,9 +171,9 @@ pub(crate) fn from_wildcard_to_regex(
 
     // And we have a valid Perl regex! (As Kim Kardashian said before me: "I know, right?")
     if exact {
-        return regex::Regex::new(&format!("^{reg}$"));
+        return format!("^{reg}$");
     }
-    regex::Regex::new(reg)
+    reg.to_string()
 }
 
 // NUMBERS ///
@@ -331,29 +336,37 @@ fn result_is_greater_or_equal_than_string(calc_result: &CalcResult, target: &str
 
 // Matches text against a wildcard criterion as `result_matches_regex` does. For ASCII text
 // and an ASCII criterion, ignoring case gives the same answer without lowercasing a copy.
+// Each regex is compiled on first need, so a criterion usually compiles one. A pattern
+// that cannot compile (past the regex size limit) matches nothing, as before.
 struct Wildcard {
-    lowercase: regex::Regex,
-    ascii_any_case: Option<regex::Regex>,
+    lowercase_pattern: String,
+    ascii_criterion: bool,
+    lowercase: OnceLock<Option<regex::Regex>>,
+    ascii_any_case: OnceLock<Option<regex::Regex>>,
 }
 
 impl Wildcard {
-    fn new(criterion: &str) -> Option<Wildcard> {
-        let lowercase = from_wildcard_to_regex(&criterion.to_lowercase(), true).ok()?;
-        let ascii_any_case = if criterion.is_ascii() {
-            Some(regex::Regex::new(&format!("(?i){}", lowercase.as_str())).ok()?)
-        } else {
-            None
-        };
-        Some(Wildcard {
-            lowercase,
-            ascii_any_case,
-        })
+    fn new(criterion: &str) -> Wildcard {
+        Wildcard {
+            lowercase_pattern: wildcard_to_pattern(&criterion.to_lowercase(), true),
+            ascii_criterion: criterion.is_ascii(),
+            lowercase: OnceLock::new(),
+            ascii_any_case: OnceLock::new(),
+        }
     }
 
-    fn matches(&self, calc_result: &CalcResult) -> bool {
-        match (calc_result, &self.ascii_any_case) {
-            (CalcResult::String(s), Some(any_case)) if s.is_ascii() => any_case.is_match(s),
-            _ => result_matches_regex(calc_result, &self.lowercase),
+    fn matches(&self, calc_result: &CalcResult) -> Option<bool> {
+        match calc_result {
+            CalcResult::String(s) if s.is_ascii() && self.ascii_criterion => self
+                .ascii_any_case
+                .get_or_init(|| regex::Regex::new(&format!("(?i){}", self.lowercase_pattern)).ok())
+                .as_ref()
+                .map(|any_case| any_case.is_match(s)),
+            _ => self
+                .lowercase
+                .get_or_init(|| regex::Regex::new(&self.lowercase_pattern).ok())
+                .as_ref()
+                .map(|lowercase| result_matches_regex(calc_result, lowercase)),
         }
     }
 }
@@ -444,11 +457,8 @@ pub(crate) fn build_criteria<'a>(
                 } else if is_english_error_string(v) {
                     Box::new(move |x| result_is_not_equal_to_error(x, v))
                 } else if v.contains('*') || v.contains('?') {
-                    if let Some(wildcard) = Wildcard::new(v) {
-                        Box::new(move |x| !wildcard.matches(x))
-                    } else {
-                        Box::new(move |_| false)
-                    }
+                    let wildcard = Wildcard::new(v);
+                    Box::new(move |x| wildcard.matches(x) == Some(false))
                 } else if v.is_empty() {
                     Box::new(result_is_not_equal_to_empty)
                 } else if let Some(f) = parse_date_criterion(v, locale) {
@@ -500,11 +510,8 @@ pub(crate) fn build_criteria<'a>(
                 } else if is_english_error_string(v) {
                     Box::new(move |x| result_is_equal_to_error(x, v))
                 } else if v.contains('*') || v.contains('?') {
-                    if let Some(wildcard) = Wildcard::new(v) {
-                        Box::new(move |x| wildcard.matches(x))
-                    } else {
-                        Box::new(move |_| false)
-                    }
+                    let wildcard = Wildcard::new(v);
+                    Box::new(move |x| wildcard.matches(x) == Some(true))
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_equal_to_number(x, f))
                 } else {
