@@ -32,6 +32,13 @@ actions!(
         NewSheet,
         ToggleTheme,
         ToggleDiagnostics,
+        InsertChart,
+        ChartColumn,
+        ChartLine,
+        ChartPie,
+        ExportChartSvg,
+        CopyChartMermaid,
+        CloseChart,
     ]
 );
 
@@ -66,5 +73,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-pageup", PreviousSheet, CONTEXT),
         KeyBinding::new("shift-f11", NewSheet, CONTEXT),
         KeyBinding::new("ctrl-shift-d", ToggleDiagnostics, CONTEXT),
+        KeyBinding::new("alt-f1", InsertChart, CONTEXT),
     ]);
 }

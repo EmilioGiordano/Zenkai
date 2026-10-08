@@ -13,6 +13,8 @@ use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_types::{CellPos, CellStyle, HAlign, NumberFormat, Range, SheetId, StyleChange};
 
 use crate::actions::*;
+use crate::chart::{self, ChartKind};
+use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
 use crate::document::{self, Document};
 use crate::files;
@@ -46,6 +48,7 @@ pub struct Workspace {
     last_recalc: Option<Duration>,
     diagnostics: bool,
     clipboard_source: Option<(Range, String)>,
+    chart: Option<ChartPanel>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -68,6 +71,7 @@ impl Workspace {
             last_recalc: None,
             diagnostics: false,
             clipboard_source: None,
+            chart: None,
             _subscriptions: vec![subscription],
         };
         workspace.reset_grid(window, cx);
@@ -107,6 +111,86 @@ impl Workspace {
         }
         self.grid.update(cx, |grid, cx| grid.set_cells(cells, cx));
         self.refresh_stats(cx);
+    }
+
+    fn refresh_chart(&mut self) {
+        if let (Some(panel), Some(wb)) = (&mut self.chart, self.document.workbook()) {
+            panel.refresh(wb);
+        }
+    }
+
+    fn insert_chart(&mut self, cx: &mut Context<Self>) {
+        let Some(workbook) = self.document.workbook() else {
+            return;
+        };
+        let source = self.grid.read(cx).selection().range();
+        self.chart = Some(ChartPanel::new(workbook, self.document.sheet, source));
+        cx.notify();
+    }
+
+    fn set_chart_kind(&mut self, kind: ChartKind, cx: &mut Context<Self>) {
+        if let Some(panel) = &mut self.chart {
+            panel.kind = kind;
+            cx.notify();
+        }
+    }
+
+    fn copy_chart_mermaid(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = &self.chart {
+            let text = chart::to_mermaid(&panel.data, panel.kind);
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            self.notify(Severity::Info, "Chart copied as Mermaid", cx);
+        }
+    }
+
+    fn export_chart_svg(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(panel) = &self.chart else {
+            return;
+        };
+        let svg = chart::to_svg(&panel.data, panel.kind);
+        let directory = self
+            .document
+            .path
+            .as_ref()
+            .and_then(|p| p.parent().map(PathBuf::from))
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        let path = cx.prompt_for_new_path(&directory, Some("chart.svg"));
+        cx.spawn_in(window, async move |this, cx| {
+            let chosen = match path.await {
+                Ok(Ok(Some(path))) => path,
+                Ok(Ok(None)) => return,
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "export dialog failed");
+                    return;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "export dialog dropped");
+                    return;
+                }
+            };
+            let target = chosen.clone();
+            let written = cx
+                .background_executor()
+                .spawn(async move { std::fs::write(&target, svg) })
+                .await;
+            let update = this.update(cx, |this, cx| match written {
+                Ok(()) => this.notify(
+                    Severity::Info,
+                    format!("Chart saved to {}", chosen.display()),
+                    cx,
+                ),
+                Err(error) => this.notify(
+                    Severity::Error,
+                    format!("Could not save the chart: {error}"),
+                    cx,
+                ),
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during chart export");
+            }
+        })
+        .detach();
     }
 
     fn refresh_stats(&mut self, cx: &mut Context<Self>) {
@@ -241,6 +325,7 @@ impl Workspace {
                     this.notify(Severity::Error, error.to_string(), cx);
                 }
                 this.refresh_cells(cx);
+                this.refresh_chart();
                 this.flush_edits(cx);
             });
             if let Err(error) = update {
@@ -887,6 +972,26 @@ impl Render for Workspace {
                 this.switch_sheet(previous, window, cx);
             }))
             .on_action(cx.listener(|this, _: &NewSheet, window, cx| this.add_sheet(window, cx)))
+            .on_action(cx.listener(|this, _: &InsertChart, _, cx| this.insert_chart(cx)))
+            .on_action(cx.listener(|this, _: &ChartColumn, _, cx| {
+                this.set_chart_kind(ChartKind::Column, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ChartLine, _, cx| this.set_chart_kind(ChartKind::Line, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ChartPie, _, cx| this.set_chart_kind(ChartKind::Pie, cx)),
+            )
+            .on_action(cx.listener(|this, _: &CopyChartMermaid, _, cx| this.copy_chart_mermaid(cx)))
+            .on_action(
+                cx.listener(|this, _: &ExportChartSvg, window, cx| {
+                    this.export_chart_svg(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &CloseChart, _, cx| {
+                this.chart = None;
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &ToggleDiagnostics, _, cx| {
                 this.diagnostics = !this.diagnostics;
                 cx.notify();
@@ -901,7 +1006,17 @@ impl Render for Workspace {
             }))
             .child(toolbar::render(&self.active_style, cx))
             .child(self.render_formula_bar(cx))
-            .child(div().flex_1().min_h_0().child(self.grid.clone()))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(div().flex_1().min_w_0().h_full().child(self.grid.clone()))
+                    .children(
+                        self.chart
+                            .as_ref()
+                            .map(|panel| chart_panel::render(panel, cx)),
+                    ),
+            )
             .child(self.render_tabs(cx))
             .child(self.render_status(cx))
     }

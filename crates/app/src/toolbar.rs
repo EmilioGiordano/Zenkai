@@ -117,6 +117,13 @@ pub fn render(style: &CellStyle, cx: &App) -> impl IntoElement {
         ))
         .child(separator(cx))
         .child(tool(
+            "chart",
+            IconName::ChartColumn,
+            "Chart of the selection (Alt+F1)",
+            InsertChart,
+        ))
+        .child(separator(cx))
+        .child(tool(
             "zoom-out",
             IconName::ZoomOut,
             "Zoom out (Ctrl+-)",

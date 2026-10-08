@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
+mod chart;
+mod chart_panel;
 mod clipboard;
 mod document;
 mod files;
