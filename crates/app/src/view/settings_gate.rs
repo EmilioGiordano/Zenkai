@@ -67,7 +67,7 @@ impl Workspace {
                 .border_color(theme.border)
                 .bg(theme.secondary)
                 .child(div().text_color(theme.warning).child("⚠"))
-                .child(div().flex_1().child(format!(
+                .child(div().flex_1().min_w_0().child(format!(
                     "settings.json was changed outside Zenkai's Settings page and asks to {}. \
                      Apply it only if you made this change.",
                     asks.join(" and ")
