@@ -7,7 +7,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
 use zenkai_agent::bridge::{Bridge, ENDPOINT_FILE};
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_agent::settings::{ExternalAgents, PermissionMode};
+use zenkai_agent::settings::{ExternalAgents, PermissionMode, Settings};
 use zenkai_agent::tools::{
     self, AgentAccess, PlannedWrite, ReadOnlyReason, ReadRequest, ToolCall, ToolEndpoint,
     ToolError, ToolReply, ToolRequest, WorkbookId, WriteRequest,
@@ -38,6 +38,34 @@ pub(super) enum BridgeState {
     Off,
     Starting,
     Running(Bridge),
+    // Not retried until the settings change, or a failing start would loop forever.
+    Failed(Settings),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BridgeStep {
+    Start,
+    Stop,
+    Forget,
+    Stay,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SinceFailure {
+    Unchanged,
+    Changed,
+}
+
+fn bridge_step(state: &BridgeState, wanted: ExternalAgents, since: SinceFailure) -> BridgeStep {
+    match (state, wanted) {
+        (BridgeState::Off, ExternalAgents::Allowed) => BridgeStep::Start,
+        (BridgeState::Running(_), ExternalAgents::Blocked) => BridgeStep::Stop,
+        (BridgeState::Failed(_), _) if since == SinceFailure::Changed => match wanted {
+            ExternalAgents::Allowed => BridgeStep::Start,
+            ExternalAgents::Blocked => BridgeStep::Forget,
+        },
+        _ => BridgeStep::Stay,
+    }
 }
 
 pub(super) struct AgentLink {
@@ -351,27 +379,28 @@ impl Workspace {
     }
 
     pub(super) fn sync_bridge(&mut self, cx: &mut Context<Self>) {
-        let wanted = cx
-            .global::<AgentConfig>()
-            .state
-            .current
-            .agents
-            .external_agents
-            == ExternalAgents::Allowed;
-        match (&self.agent.bridge, wanted) {
-            (BridgeState::Off, true) => self.start_bridge(cx),
-            (BridgeState::Running(_), false) => {
-                let BridgeState::Running(bridge) =
+        let current = cx.global::<AgentConfig>().state.current.clone();
+        let since = match &self.agent.bridge {
+            BridgeState::Failed(at) if *at == current => SinceFailure::Unchanged,
+            _ => SinceFailure::Changed,
+        };
+        match bridge_step(&self.agent.bridge, current.agents.external_agents, since) {
+            BridgeStep::Start => self.start_bridge(cx),
+            BridgeStep::Stop => {
+                if let BridgeState::Running(bridge) =
                     std::mem::replace(&mut self.agent.bridge, BridgeState::Off)
-                else {
-                    return;
-                };
-                cx.background_executor()
-                    .spawn(async move { drop(bridge) })
-                    .detach();
+                {
+                    cx.background_executor()
+                        .spawn(async move { drop(bridge) })
+                        .detach();
+                }
                 set_bridge_status(BridgeStatus::Off, cx);
             }
-            _ => {}
+            BridgeStep::Forget => {
+                self.agent.bridge = BridgeState::Off;
+                set_bridge_status(BridgeStatus::Off, cx);
+            }
+            BridgeStep::Stay => {}
         }
     }
 
@@ -390,7 +419,8 @@ impl Workspace {
                         set_bridge_status(BridgeStatus::Listening, cx);
                     }
                     Err(error) => {
-                        this.agent.bridge = BridgeState::Off;
+                        let settings = cx.global::<AgentConfig>().state.current.clone();
+                        this.agent.bridge = BridgeState::Failed(settings);
                         tracing::warn!(%error, "could not start the MCP bridge");
                         set_bridge_status(BridgeStatus::Failed(error.to_string()), cx);
                     }
@@ -407,4 +437,44 @@ impl Workspace {
 
 fn set_bridge_status(status: BridgeStatus, cx: &mut App) {
     cx.update_global::<AgentConfig, _>(|config, _| config.bridge = status);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BridgeState, BridgeStep, ExternalAgents, Settings, SinceFailure, bridge_step};
+
+    #[test]
+    fn a_failed_bridge_waits_for_a_settings_change_before_starting_again() {
+        let failed = BridgeState::Failed(Settings::default());
+        let allowed = ExternalAgents::Allowed;
+        assert_eq!(
+            bridge_step(&failed, allowed, SinceFailure::Unchanged),
+            BridgeStep::Stay
+        );
+        assert_eq!(
+            bridge_step(&failed, allowed, SinceFailure::Changed),
+            BridgeStep::Start
+        );
+        assert_eq!(
+            bridge_step(&failed, ExternalAgents::Blocked, SinceFailure::Changed),
+            BridgeStep::Forget
+        );
+    }
+
+    #[test]
+    fn the_bridge_follows_the_external_agents_setting() {
+        let since = SinceFailure::Changed;
+        assert_eq!(
+            bridge_step(&BridgeState::Off, ExternalAgents::Allowed, since),
+            BridgeStep::Start
+        );
+        assert_eq!(
+            bridge_step(&BridgeState::Off, ExternalAgents::Blocked, since),
+            BridgeStep::Stay
+        );
+        assert_eq!(
+            bridge_step(&BridgeState::Starting, ExternalAgents::Allowed, since),
+            BridgeStep::Stay
+        );
+    }
 }
