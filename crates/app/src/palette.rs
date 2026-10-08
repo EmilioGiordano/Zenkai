@@ -39,6 +39,8 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Replace…", Replace),
             item("Fill down", FillDown),
             item("Fill right", FillRight),
+            item("Clear formats", ClearFormats),
+            item("Clear all (contents and formats)", ClearAll),
             item("Sort A to Z (by the active cell's column)", SortAscending),
             item("Sort Z to A (by the active cell's column)", SortDescending),
             item("AutoSum", AutoSum),

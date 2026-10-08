@@ -2699,6 +2699,14 @@ impl Render for Workspace {
                     this.duplicate_sheet(window, cx)
                 }),
             )
+            .on_action(cx.listener(|this, _: &ClearFormats, window, cx| {
+                let (sheet, range) = (this.document.sheet, this.selection(cx));
+                this.edit(window, cx, move |wb| wb.clear_formats(sheet, range));
+            }))
+            .on_action(cx.listener(|this, _: &ClearAll, window, cx| {
+                let (sheet, range) = (this.document.sheet, this.selection(cx));
+                this.edit(window, cx, move |wb| wb.clear_all(sheet, range));
+            }))
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
             }))
@@ -2896,6 +2904,8 @@ fn cell_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
         .menu("Delete columns", Box::new(DeleteColumns))
         .separator()
         .menu("Clear contents", Box::new(DeleteForward))
+        .menu("Clear formats", Box::new(ClearFormats))
+        .menu("Clear all", Box::new(ClearAll))
         .separator()
         .menu("Sort A to Z", Box::new(SortAscending))
         .menu("Sort Z to A", Box::new(SortDescending))

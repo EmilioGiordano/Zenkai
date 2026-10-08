@@ -36,6 +36,8 @@ actions!(
         InterfaceReset,
         ToggleReduceMotion,
         NoFill,
+        ClearFormats,
+        ClearAll,
         OpenRecent1,
         OpenRecent2,
         OpenRecent3,

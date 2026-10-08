@@ -805,6 +805,21 @@ line 2"
     }
 
     #[test]
+    fn clear_formats_keeps_values_and_clear_all_empties() {
+        use zenkai_types::{Range, StyleChange};
+        let mut book = Workbook::new_empty().unwrap();
+        let a1 = CellPos::default();
+        book.set_input(SheetId(0), a1, "7").unwrap();
+        book.apply_style(SheetId(0), Range::single(a1), StyleChange::Bold(true))
+            .unwrap();
+        book.clear_formats(SheetId(0), Range::single(a1)).unwrap();
+        assert!(!book.cell(SheetId(0), a1).style.bold);
+        assert_eq!(book.input(SheetId(0), a1), "7");
+        book.clear_all(SheetId(0), Range::single(a1)).unwrap();
+        assert_eq!(book.input(SheetId(0), a1), "");
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

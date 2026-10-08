@@ -50,6 +50,8 @@ pub trait Engine: Send {
         rows: &[Vec<String>],
     ) -> Result<(), EngineError>;
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
+    fn clear_formats(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
+    fn clear_all(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError>;
     fn extend(&mut self, sheet: SheetId, source: Range, target: Range) -> Result<(), EngineError>;
     fn sort(
@@ -713,6 +715,18 @@ impl Engine for Workbook {
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.set_inputs(sheet, rest.start, &rows)
+    }
+
+    fn clear_formats(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+        self.model
+            .range_clear_formatting(&area(sheet, range))
+            .map_err(rejected)
+    }
+
+    fn clear_all(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+        self.model
+            .range_clear_all(&area(sheet, range))
+            .map_err(rejected)
     }
 
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
