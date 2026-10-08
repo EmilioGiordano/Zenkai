@@ -396,27 +396,32 @@ impl Grid {
         self.viewport_changed(cx);
     }
 
+    // Frozen rows and columns are always on screen, so only the scrolled pane moves.
     fn scroll_into_view(&mut self, pos: CellPos, cx: &mut Context<Self>) {
-        let mut moved = false;
-        if pos.row < self.top {
-            self.top = pos.row;
-            moved = true;
-        } else if pos.row.get() >= self.top.get() + self.visible_rows.saturating_sub(1) {
-            self.top = RowIdx::clamped(
-                i64::from(pos.row.get()) - i64::from(self.visible_rows.saturating_sub(2)),
-            );
-            moved = true;
+        let origin = self.scroll_origin();
+        let mut top = origin.row;
+        let mut left = origin.col;
+        if pos.row.get() >= self.frozen_rows {
+            if pos.row < top {
+                top = pos.row;
+            } else if pos.row.get() >= top.get() + self.visible_rows.saturating_sub(1) {
+                top = RowIdx::clamped(
+                    i64::from(pos.row.get()) - i64::from(self.visible_rows.saturating_sub(2)),
+                );
+            }
         }
-        if pos.col < self.left {
-            self.left = pos.col;
-            moved = true;
-        } else if pos.col.get() >= self.left.get() + self.visible_cols.saturating_sub(1) {
-            self.left = ColIdx::clamped(
-                i64::from(pos.col.get()) - i64::from(self.visible_cols.saturating_sub(2)),
-            );
-            moved = true;
+        if pos.col.get() >= self.frozen_cols {
+            if pos.col < left {
+                left = pos.col;
+            } else if pos.col.get() >= left.get() + self.visible_cols.saturating_sub(1) {
+                left = ColIdx::clamped(
+                    i64::from(pos.col.get()) - i64::from(self.visible_cols.saturating_sub(2)),
+                );
+            }
         }
-        if moved {
+        if (top, left) != (self.top, self.left) {
+            self.top = top;
+            self.left = left;
             self.viewport_changed(cx);
         }
     }
@@ -428,10 +433,24 @@ impl Grid {
     }
 
     fn recompute_viewport(&mut self, _cx: &mut Context<Self>) {
-        let width = (f32::from(self.bounds.size.width) / self.zoom - self.row_header()).max(0.0);
-        let height = (f32::from(self.bounds.size.height) / self.zoom - HEADER_HEIGHT).max(0.0);
-        self.visible_cols = self.layout.visible_cols(self.left, width);
-        self.visible_rows = self.layout.visible_rows(self.top, height);
+        let (frozen_w, frozen_h) = self.frozen_size();
+        let origin = self.scroll_origin();
+        let width =
+            (f32::from(self.bounds.size.width) / self.zoom - self.row_header() - frozen_w).max(0.0);
+        let height =
+            (f32::from(self.bounds.size.height) / self.zoom - HEADER_HEIGHT - frozen_h).max(0.0);
+        self.visible_cols = self.layout.visible_cols(origin.col, width);
+        self.visible_rows = self.layout.visible_rows(origin.row, height);
+    }
+
+    fn frozen_size(&self) -> (f32, f32) {
+        let width = (0..self.frozen_cols)
+            .map(|c| self.layout.col_width(ColIdx::clamped(i64::from(c))))
+            .sum();
+        let height = (0..self.frozen_rows)
+            .map(|r| self.layout.row_height(RowIdx::clamped(i64::from(r))))
+            .sum();
+        (width, height)
     }
 
     fn set_bounds(&mut self, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
@@ -444,12 +463,7 @@ impl Grid {
     fn hit(&self, position: Point<Pixels>) -> Hit {
         let x = f32::from(position.x - self.bounds.origin.x) / self.zoom;
         let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
-        let frozen_h: f32 = (0..self.frozen_rows)
-            .map(|r| self.layout.row_height(RowIdx::clamped(i64::from(r))))
-            .sum();
-        let frozen_w: f32 = (0..self.frozen_cols)
-            .map(|c| self.layout.col_width(ColIdx::clamped(i64::from(c))))
-            .sum();
+        let (frozen_w, frozen_h) = self.frozen_size();
         let origin = self.scroll_origin();
         let body_y = y - HEADER_HEIGHT;
         let body_x = x - self.row_header();
