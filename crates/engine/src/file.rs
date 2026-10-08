@@ -17,6 +17,8 @@ pub enum Unsupported {
     Hyperlinks,
     DataValidation,
     ExternalLinks,
+    AutoFilter,
+    SheetProtection,
 }
 
 impl Unsupported {
@@ -31,6 +33,8 @@ impl Unsupported {
             Unsupported::Hyperlinks => "hyperlinks",
             Unsupported::DataValidation => "data validation",
             Unsupported::ExternalLinks => "links to other workbooks",
+            Unsupported::AutoFilter => "filters (AutoFilter)",
+            Unsupported::SheetProtection => "sheet protection",
         }
     }
 }
@@ -133,6 +137,12 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
         }
         if features.data_validation {
             found.push(Unsupported::DataValidation);
+        }
+        if features.auto_filter {
+            found.push(Unsupported::AutoFilter);
+        }
+        if features.protection {
+            found.push(Unsupported::SheetProtection);
         }
     }
     found.sort();

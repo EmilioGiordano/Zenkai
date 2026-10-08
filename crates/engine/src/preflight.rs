@@ -44,13 +44,15 @@ pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
             "f" | "formula" | "formula1" | "formula2" | "definedName" => check_formula(&node)?,
             "hyperlinks" => features.hyperlinks = true,
             "dataValidations" => features.data_validation = true,
+            "autoFilter" => features.auto_filter = true,
+            "sheetProtection" => features.protection = true,
             _ => {}
         }
     }
     Ok(features)
 }
 
-const CHECKED_ELEMENTS: [&[u8]; 7] = [
+const CHECKED_ELEMENTS: [&[u8]; 9] = [
     b"f",
     b"formula",
     b"formula1",
@@ -58,6 +60,8 @@ const CHECKED_ELEMENTS: [&[u8]; 7] = [
     b"definedName",
     b"hyperlinks",
     b"dataValidations",
+    b"autoFilter",
+    b"sheetProtection",
 ];
 
 // XML forbids entities or whitespace between '<' and an element name, so a part with
@@ -84,6 +88,8 @@ fn has_checked_element(bytes: &[u8]) -> bool {
 pub struct SheetFeatures {
     pub hyperlinks: bool,
     pub data_validation: bool,
+    pub auto_filter: bool,
+    pub protection: bool,
 }
 
 fn check_formula(node: &roxmltree::Node<'_, '_>) -> Result<(), EngineError> {
@@ -232,9 +238,10 @@ mod tests {
 
     #[test]
     fn reports_hyperlinks_and_validation() {
-        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><dataValidations count="0"/><hyperlinks/></worksheet>"#;
+        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><sheetProtection sheet="1"/><autoFilter ref="A1:B2"/><dataValidations count="0"/><hyperlinks/></worksheet>"#;
         let features = check_part(xml.as_bytes()).unwrap();
         assert!(features.hyperlinks && features.data_validation);
+        assert!(features.auto_filter && features.protection);
     }
 
     #[test]
