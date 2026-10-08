@@ -24,6 +24,7 @@ pub trait Engine: Send {
     fn sheets(&self) -> Vec<SheetInfo>;
     fn cell(&self, sheet: SheetId, pos: CellPos) -> CellView;
     fn input(&self, sheet: SheetId, pos: CellPos) -> String;
+    fn number(&self, sheet: SheetId, pos: CellPos) -> Option<f64>;
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError>;
     fn set_inputs(
         &mut self,
@@ -232,6 +233,17 @@ impl Engine for Workbook {
         }
     }
 
+    fn number(&self, sheet: SheetId, pos: CellPos) -> Option<f64> {
+        match self.model.get_model().get_cell_value_by_index(
+            sheet.0,
+            row_i32(pos.row),
+            col_i32(pos.col),
+        ) {
+            Ok(ironcalc::base::cell::CellValue::Number(n)) => Some(n),
+            _ => None,
+        }
+    }
+
     fn input(&self, sheet: SheetId, pos: CellPos) -> String {
         self.model
             .get_cell_content(sheet.0, row_i32(pos.row), col_i32(pos.col))
@@ -245,6 +257,7 @@ impl Engine for Workbook {
             .map_err(rejected)
     }
 
+    // One engine paste, so a whole paste, import or fill is a single undo step.
     fn set_inputs(
         &mut self,
         sheet: SheetId,
@@ -260,19 +273,42 @@ impl Engine for Workbook {
                 "{height} rows by {width} columns starting at {origin} do not fit in a sheet"
             )));
         }
-        self.model.pause_evaluation();
-        let result = (0i64..).zip(rows).try_for_each(|(r, row)| {
-            (0i64..).zip(row).try_for_each(|(c, text)| {
-                check_input(text)?;
-                let pos = CellPos::new(origin.row.offset(r), origin.col.offset(c));
-                self.model
-                    .set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
-                    .map_err(rejected)
-            })
-        });
-        self.model.resume_evaluation();
-        self.model.evaluate();
-        result
+        rows.iter()
+            .flatten()
+            .try_for_each(|text| check_input(text))?;
+        if rows.is_empty() || width == 0 {
+            return Ok(());
+        }
+        let mut writer = csv::WriterBuilder::new()
+            .delimiter(b'\t')
+            .flexible(true)
+            .from_writer(Vec::new());
+        for row in rows {
+            writer
+                .write_record(row)
+                .map_err(|e| rejected(e.to_string()))?;
+        }
+        let tsv = writer
+            .into_inner()
+            .map_err(|e| rejected(e.to_string()))
+            .and_then(|bytes| String::from_utf8(bytes).map_err(|e| rejected(e.to_string())))?;
+        let area = Area {
+            sheet: sheet.0,
+            row: row_i32(origin.row),
+            column: col_i32(origin.col),
+            width: i32::try_from(width).map_err(|e| rejected(e.to_string()))?,
+            height: i32::try_from(height).map_err(|e| rejected(e.to_string()))?,
+        };
+        let end = CellPos::new(
+            origin
+                .row
+                .offset(i64::try_from(height).unwrap_or(i64::MAX) - 1),
+            origin
+                .col
+                .offset(i64::try_from(width).unwrap_or(i64::MAX) - 1),
+        );
+        select(&mut self.model, sheet, Range::new(origin, end))?;
+        self.model.paste_csv_string(&area, &tsv).map_err(rejected)
     }
 
     fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError> {
@@ -312,46 +348,33 @@ impl Engine for Workbook {
             .map_err(rejected)
     }
 
-    // Ctrl+D / Ctrl+R: the first row (or column) of the target is copied over the rest;
-    // a single row (or column) target copies the one above (or to the left), as Excel does.
+    // Ctrl+D / Ctrl+R: the first row (or column) of the target is extended over the rest
+    // with references shifted; a single row (or column) extends the one above (or left).
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError> {
-        let (source, rest) = if down {
+        let source_line = if down {
             if target.rows() == 1 {
-                if target.start.row.get() == 0 {
-                    return Ok(());
-                }
-                let above = target.start.row.offset(-1);
-                let source = Range::new(
-                    CellPos::new(above, target.start.col),
-                    CellPos::new(above, target.end.col),
-                );
-                (source, target)
+                target.start.row.get().checked_sub(1)
             } else {
-                let source =
-                    Range::new(target.start, CellPos::new(target.start.row, target.end.col));
-                let rest = Range::new(
-                    CellPos::new(target.start.row.offset(1), target.start.col),
-                    target.end,
-                );
-                (source, rest)
+                Some(target.start.row.get())
             }
         } else if target.cols() == 1 {
-            if target.start.col.get() == 0 {
-                return Ok(());
-            }
-            let left = target.start.col.offset(-1);
-            let source = Range::new(
-                CellPos::new(target.start.row, left),
-                CellPos::new(target.end.row, left),
-            );
-            (source, target)
+            target.start.col.get().checked_sub(1).map(u32::from)
         } else {
-            let source = Range::new(target.start, CellPos::new(target.end.row, target.start.col));
-            let rest = Range::new(
+            Some(u32::from(target.start.col.get()))
+        };
+        let Some(source_line) = source_line else {
+            return Ok(());
+        };
+        let rest = match (down, target.rows() == 1, target.cols() == 1) {
+            (true, true, _) | (false, _, true) => target,
+            (true, false, _) => Range::new(
+                CellPos::new(target.start.row.offset(1), target.start.col),
+                target.end,
+            ),
+            (false, _, false) => Range::new(
                 CellPos::new(target.start.row, target.start.col.offset(1)),
                 target.end,
-            );
-            (source, rest)
+            ),
         };
         if rest.cell_count() > MAX_FILL_CELLS {
             return Err(rejected(format!(
@@ -359,23 +382,30 @@ impl Engine for Workbook {
                 rest.cell_count()
             )));
         }
-        let copied = self.copy(sheet, source)?;
-        self.model.pause_evaluation();
-        let steps: Vec<CellPos> = if down {
-            (rest.start.row.get()..=rest.end.row.get())
-                .map(|row| CellPos::new(RowIdx::clamped(i64::from(row)), rest.start.col))
-                .collect()
-        } else {
-            (rest.start.col.get()..=rest.end.col.get())
-                .map(|col| CellPos::new(rest.start.row, ColIdx::clamped(i64::from(col))))
-                .collect()
-        };
-        let result = steps
-            .into_iter()
-            .try_for_each(|at| self.paste(sheet, at, &copied, false));
-        self.model.resume_evaluation();
-        self.model.evaluate();
-        result
+        let model = self.model.get_model();
+        let rows = (rest.start.row.get()..=rest.end.row.get())
+            .map(|row| {
+                (rest.start.col.get()..=rest.end.col.get())
+                    .map(|col| {
+                        let (from_row, from_col) = if down {
+                            (source_line, u32::from(col))
+                        } else {
+                            (row, source_line)
+                        };
+                        model
+                            .extend_to(
+                                sheet.0,
+                                from_row as i32 + 1,
+                                from_col as i32 + 1,
+                                row as i32 + 1,
+                                i32::from(col) + 1,
+                            )
+                            .map_err(rejected)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.set_inputs(sheet, rest.start, &rows)
     }
 
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {

@@ -9664,6 +9664,7 @@ dependencies = [
 name = "zenkai-engine"
 version = "0.1.0"
 dependencies = [
+ "csv",
  "iana-time-zone",
  "ironcalc",
  "roxmltree 0.19.0",

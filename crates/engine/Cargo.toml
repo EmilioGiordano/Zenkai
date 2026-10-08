@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+csv = "1"
 ironcalc = "=0.8.3"
 iana-time-zone = "0.1"
 roxmltree = "0.19"

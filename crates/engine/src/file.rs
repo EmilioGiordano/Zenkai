@@ -343,6 +343,13 @@ mod tests {
             book.input(sheet, CellPos::parse_a1("C1").unwrap()),
             "=B1*10"
         );
+        book.undo().unwrap();
+        book.undo().unwrap();
+        assert_eq!(
+            book.input(sheet, b3),
+            "",
+            "the whole fill undoes in one step"
+        );
     }
 
     #[test]
