@@ -77,8 +77,9 @@ impl Workspace {
                 .bg(theme.secondary)
                 .child(div().text_color(theme.warning).child("⚠"))
                 .child(div().flex_1().min_w_0().child(format!(
-                    "settings.json was changed outside Zenkai's Settings page and asks to {}. \
-                     Apply it only if you made this change.",
+                    "settings.json asks to {}. Zenkai confirms this at every start and \
+                     whenever the file changes outside its Settings page. Press Alt+A to \
+                     apply it if you set it yourself; Enter keeps the current settings.",
                     asks.join(" and ")
                 )))
                 .child(Button::new("held-apply").label("Apply (Alt+A)").on_click(

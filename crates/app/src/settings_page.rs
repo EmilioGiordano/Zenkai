@@ -333,7 +333,8 @@ impl Render for SettingsPage {
                     .child(h_flex().gap_2().children(permission_buttons))
                     .child(muted(
                         "Ask before writing shows every change for approval first. Agents never \
-                         save the file, and every change can be undone.",
+                         save the file, and every change can be undone. For safety, Zenkai asks \
+                         again at each start before it lets agents write without asking.",
                         cx,
                     )),
             )
@@ -348,6 +349,11 @@ impl Render for SettingsPage {
                             }),
                     )
                     .child(muted(format!("Status: {bridge}"), cx))
+                    .child(muted(
+                        "For safety, Zenkai asks again at each start before it lets outside \
+                         clients connect.",
+                        cx,
+                    ))
                     .children(claude_command.map(|command| {
                         v_flex()
                             .gap_1()
