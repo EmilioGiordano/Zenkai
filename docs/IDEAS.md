@@ -74,3 +74,6 @@ local computation); Zenkai's edge is being native: faster start, less memory, lo
 6. **Database connections** (Postgres, MySQL) that pull data into a sheet.
 7. **Real-time collaboration.** Needs CRDT sync and a server; changes the architecture.
    Only after the app is solid.
+
+8. **Presentation video.** A short product video of Zenkai in action: speed on large files,
+   spaces, data generation and the agent. Real footage for every speed claim.
