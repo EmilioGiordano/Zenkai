@@ -28,7 +28,23 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
 - Unsupported content (charts, images, pivots, macros, comments, Excel tables, hyperlinks,
   validation, external links) is detected on open; saving asks for a new name instead of
   silently dropping it. `.xlsm` originals are never overwritten.
+- Files the engine cannot open (`.xls`, `.ods`, `.xlsb`, broken `.xlsx`) open read-only
+  with their values through calamine, with a clear notice.
+- CSV/TSV import with a preview: detected encoding and separator, decimal comma
+  (`1.234,56`) and day-first dates (`25/10/2026`) with switches, and the table shows the
+  values exactly as they will be imported. Save As `.csv` exports with a BOM.
+- Columns resize by dragging header edges; double-click autofits. Insert/delete rows and
+  columns, freeze panes, Go To (Ctrl+G / F5), fill down/right (Ctrl+D / Ctrl+R),
+  AutoSum (Alt+=), today/now (Ctrl+; / Ctrl+Shift+;), find (Ctrl+F).
+- Formula point mode: while typing a formula, arrows or clicks insert references, which
+  are coloured in the formula and in the grid.
+- Light, dark and high-contrast themes; follows the system light/dark setting until one is
+  picked. Interface size (Ctrl+Alt+= / - / 0) is independent of the grid zoom.
+- Screen readers: the sheet, the active cell (address, value, formula), the name box and
+  the formula bar carry AccessKit labels.
+- Diagnostics panel (Ctrl+Shift+D): memory, frame time, last recalculation.
 - Autosave every minute to a recovery folder and a recovery offer after a crash.
+- If saving fails (file locked by another program, read-only folder), Save As opens.
 - Hostile files are rejected before the engine sees them (zip bombs, huge array areas,
   formulas deeper or longer than Excel allows).
 
@@ -62,6 +78,13 @@ cargo deny check            # cargo install cargo-deny --locked
 cargo build --release -p zenkai-bench -j 6
 .\target\release\zenkai-bench.exe run bench\fixtures 1   # generates fixtures on first run
 .\target\release\zenkai-bench.exe coverage               # function coverage table
+```
+
+Compatibility corpus (`docs/COMPATIBILITY.md`):
+
+```powershell
+.	argetelease\zenkai-bench.exe compat-generate fixtures\compat
+.	argetelease\zenkai-bench.exe compat fixtures\compat docs\COMPATIBILITY.md
 ```
 
 Fixture 3 (20k lookups against 10k rows) takes several minutes per engine; see
