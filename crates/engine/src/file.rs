@@ -772,6 +772,7 @@ line 2"
         use crate::workbook::format_preview;
         assert_eq!(format_preview(1234.5, "#,##0.00").unwrap(), "1,234.50");
         assert_eq!(format_preview(0.256, "0.0%").unwrap(), "25.6%");
+        assert!(format_preview(1.0, &"0".repeat(256)).is_err());
     }
 
     #[test]

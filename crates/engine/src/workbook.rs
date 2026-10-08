@@ -23,6 +23,19 @@ const PIXELS_PER_POINT: f64 = 4.0 / 3.0;
 const COLUMN_WIDTH_FACTOR: f64 = 9.0;
 // And its row height setter takes points times this factor.
 const ROW_HEIGHT_FACTOR: f64 = 1.5625;
+// Excel's last date, 9999-12-31.
+const MAX_DATE_SERIAL: f64 = 2_958_465.0;
+// Excel's own limit for a number format code.
+const MAX_FORMAT_CODE: usize = 255;
+
+fn check_format_code(code: &str) -> Result<(), EngineError> {
+    if code.chars().count() > MAX_FORMAT_CODE {
+        return Err(rejected(format!(
+            "a number format is limited to {MAX_FORMAT_CODE} characters"
+        )));
+    }
+    Ok(())
+}
 
 pub trait Engine: Send {
     fn sheets(&self) -> Vec<SheetInfo>;
@@ -231,7 +244,12 @@ impl Workbook {
         // Dates first: a date loaded from a file may read back as its bare serial.
         let dates = cells
             .iter()
-            .map(|(_, view)| view.number.filter(|_| is_date_format(&view.style.num_fmt)))
+            .map(|(_, view)| {
+                // Excel dates run from serial 0 to 2958465 (9999-12-31).
+                view.number
+                    .filter(|serial| (0.0..=MAX_DATE_SERIAL).contains(serial))
+                    .filter(|_| is_date_format(&view.style.num_fmt))
+            })
             .collect::<Option<Vec<f64>>>();
         if let Some(serials) = dates {
             return Some(Series::Dates(Trend::fit_or_step(&serials)));
@@ -743,6 +761,7 @@ impl Engine for Workbook {
         range: Range,
         code: &str,
     ) -> Result<(), EngineError> {
+        check_format_code(code)?;
         self.model
             .update_range_style(&area(sheet, range), "num_fmt", code)
             .map_err(rejected)
@@ -1123,7 +1142,9 @@ impl Series {
                 format!("{rounded}")
             }
             // Written as an ISO date, which the engine reads back as a date.
-            Series::Dates(trend) => iso_date(trend.at(step).round() as i64),
+            Series::Dates(trend) => {
+                iso_date(trend.at(step).round().clamp(0.0, MAX_DATE_SERIAL) as i64)
+            }
             Series::Text {
                 prefix,
                 width,
@@ -1171,6 +1192,7 @@ fn iso_date(serial: i64) -> String {
 }
 
 pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
+    check_format_code(code)?;
     let locale = ironcalc::base::locale::get_locale(LOCALE).map_err(rejected)?;
     let formatted = ironcalc::base::formatter::format::format_number(value, code, locale);
     match formatted.error {

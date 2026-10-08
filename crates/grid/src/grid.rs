@@ -1205,6 +1205,20 @@ impl Render for Grid {
                 cx.emit(GridEvent::SelectionChanged);
                 cx.notify();
             }))
+            .on_action(cx.listener(|g, _: &CycleReference, _, cx| {
+                let Some(editor) = &mut g.editor else {
+                    return;
+                };
+                if let Some((text, caret)) =
+                    formula_refs::cycle_reference(&editor.text, editor.caret)
+                {
+                    editor.text = text;
+                    editor.caret = caret;
+                    editor.point = None;
+                    cx.emit(GridEvent::EditChanged);
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|g, _: &EditCell, _, cx| match &mut g.editor {
                 Some(editor) => {
                     editor.mode = match editor.mode {

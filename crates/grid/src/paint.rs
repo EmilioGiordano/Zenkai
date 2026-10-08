@@ -84,6 +84,7 @@ pub struct Frame {
 }
 
 const FILL_HANDLE: f32 = 7.0;
+const MAX_WRAPPED_CHARS: usize = 2_000;
 
 // Excel's reference colours while editing a formula, in order of appearance.
 const REFERENCE_COLORS: [u32; 6] = [0x1F6FD1, 0xD0342C, 0x7A3FB5, 0x1E8C4E, 0xB5651D, 0xC2185B];
@@ -488,14 +489,17 @@ fn paint_wrapped_text(
     cx: &mut App,
 ) {
     let width = (bounds.size.width - padding * 2.0).max(px(1.0));
-    let run = text_run(frame, cell, cell.text.len(), color);
-    let lines = match window.text_system().shape_text(
-        cell.text.clone(),
-        font_size,
-        &[run],
-        Some(width),
-        None,
-    ) {
+    // A cell shows a few hundred characters at most; shaping all 32k of a hostile cell
+    // every frame would stall the grid.
+    let text: SharedString = match cell.text.char_indices().nth(MAX_WRAPPED_CHARS) {
+        Some((cut, _)) => cell.text[..cut].to_string().into(),
+        None => cell.text.clone(),
+    };
+    let run = text_run(frame, cell, text.len(), color);
+    let lines = match window
+        .text_system()
+        .shape_text(text, font_size, &[run], Some(width), None)
+    {
         Ok(lines) => lines,
         Err(error) => {
             tracing::warn!(%error, "failed to shape wrapped cell text");
@@ -518,6 +522,9 @@ fn paint_wrapped_text(
     );
     window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
         for line in &lines {
+            if y > bounds.origin.y + bounds.size.height {
+                break;
+            }
             let origin = point(bounds.origin.x + padding, y);
             if let Err(error) = line.paint(
                 origin,

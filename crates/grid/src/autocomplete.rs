@@ -150,9 +150,12 @@ pub fn token_at(text: &str, caret: usize) -> Option<(usize, &str)> {
         return None;
     }
     let before = &text[..caret];
+    // The boundary char can be multi-byte ("=é"), so step past its full width.
     let start = before
-        .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '.' || c == '_'))
-        .map_or(0, |at| at + 1);
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_ascii_alphanumeric() || *c == '.' || *c == '_'))
+        .map_or(0, |(at, c)| at + c.len_utf8());
     let token = &before[start..];
     let opener = before[..start].chars().last()?;
     let in_text = before[..start].matches('"').count() % 2 == 1;
@@ -191,6 +194,9 @@ mod tests {
         assert_eq!(token_at("=\"su", 4), None);
         assert_eq!(token_at("=A1", 3), Some((1, "A1")));
         assert_eq!(token_at("=1", 2), None);
+        assert_eq!(token_at("=é", 3), None);
+        assert_eq!(token_at("=Añ+su", 7), Some((5, "su")));
+        assert_eq!(token_at("=ñsu", 5), None);
     }
 
     #[test]
