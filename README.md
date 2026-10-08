@@ -59,6 +59,11 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
 - Screen readers: the sheet, the active cell (address, value, formula), the name box and
   the formula bar carry AccessKit labels.
 - Diagnostics panel (Ctrl+Shift+D): memory, frame time, last recalculation.
+- Agent settings (Ctrl+,): `%APPDATA%\Zenkai\settings.json`, with
+  `settings.schema.json` written next to it so an agent can edit it correctly. Changes on
+  disk apply at once; a broken edit keeps the last valid settings and says why. The page
+  detects Node, npx, Claude Code and Gemini CLI, adds the Claude, Gemini and Codex ACP
+  presets, sets the permission mode and stores API keys in Windows Credential Manager.
 - Autosave every minute to a recovery folder and a recovery offer after a crash.
 - If saving fails (file locked by another program, read-only folder), Save As opens.
 - Hostile files are rejected before the engine sees them (zip bombs, huge array areas,
