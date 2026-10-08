@@ -106,4 +106,29 @@ Compatibility corpus (`docs/COMPATIBILITY.md`):
 Fixture 3 (20k lookups against 10k rows) takes several minutes per engine; see
 `docs/BENCHMARK.md`.
 
+Regression check against the saved baseline (IronCalc, median of 5 runs; exits non-zero
+if a time or memory metric is more than 15% worse, or missing):
+
+```powershell
+.\target\release\zenkai-bench.exe check bench\fixtures bench\baseline.csv bench-current.csv
+```
+
+`bench-current.csv` has the same format as `bench\baseline.csv`; copy it over the
+baseline to accept new numbers. Fixture 3 is not in the baseline: one run takes minutes.
+
+## CI
+
+GitHub Actions, in `.github/workflows/`:
+
+- `ci.yml` (every push and pull request): `cargo fmt --check`, `cargo clippy
+  --all-targets -- -D warnings` and `cargo test` on Windows, Linux and macOS, plus
+  `cargo deny check` on Linux.
+- `bench.yml` (pull requests that touch the engine, formats, grid, types or bench, and
+  manual runs): builds the benchmark in release on Windows and runs the baseline check
+  above. Each run uploads its numbers as the `bench-current` artifact.
+
+The baseline in `bench\baseline.csv` comes from the Phase 0 run on a desktop machine, not
+from a CI runner. Refresh it from the `bench-current` artifact of a manual `bench.yml` run on
+`main` before trusting the timing gate.
+
 License: Apache-2.0.
