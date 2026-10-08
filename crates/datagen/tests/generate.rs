@@ -370,6 +370,54 @@ fn every_kind_has_its_format() {
 }
 
 #[test]
+fn en_us_addresses_phones_and_dates_have_their_formats() {
+    let mut english = spec(
+        300,
+        vec![
+            column("Address", ColumnKind::StreetAddress {}),
+            column(
+                "Phone",
+                ColumnKind::Phone {
+                    pattern: "(###) ###-####".to_string(),
+                },
+            ),
+            column(
+                "Date",
+                ColumnKind::Date {
+                    from: date("2023-02-27"),
+                    to: date("2023-03-02"),
+                },
+            ),
+            column("Company", ColumnKind::Company {}),
+        ],
+    );
+    english.locale = Locale::EnglishUnitedStates;
+    let rows = generate(&english).unwrap();
+    assert_all(&rows, 0, |cell| {
+        cell.split_once(' ').is_some_and(|(number, street)| {
+            number
+                .parse::<u32>()
+                .is_ok_and(|n| (1..=9_999).contains(&n))
+                && street.starts_with(char::is_uppercase)
+                && street
+                    .split(' ')
+                    .all(|word| word.chars().all(char::is_alphabetic))
+        })
+    });
+    assert_all(&rows, 1, |cell| digits_where(cell, "'(###) ###-####"));
+    let dates: HashSet<&str> = column_values(&rows, 2).into_iter().collect();
+    assert_eq!(
+        dates,
+        HashSet::from(["2023-02-27", "2023-02-28", "2023-03-01", "2023-03-02"])
+    );
+    assert_all(&rows, 3, |cell| {
+        ["Inc.", "LLC", "Group", "Co.", "Partners"]
+            .iter()
+            .any(|suffix| cell.ends_with(suffix))
+    });
+}
+
+#[test]
 fn email_comes_from_the_names_in_the_same_row() {
     let mut columns = people_columns();
     columns[0].blanks = Percent::new(30).unwrap();
