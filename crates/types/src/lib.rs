@@ -247,6 +247,8 @@ pub struct CellStyle {
     pub font_color: Option<Rgb>,
     pub fill: Option<Rgb>,
     pub align: HAlign,
+    pub border_top: bool,
+    pub border_left: bool,
     pub border_bottom: bool,
     pub border_right: bool,
     pub num_fmt: String,
@@ -266,6 +268,15 @@ pub struct SheetInfo {
     pub name: String,
 }
 
+// Excel's quick border buttons; borders are thin and automatic colour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BorderPreset {
+    All,
+    Outside,
+    Bottom,
+    None,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StyleChange {
     Bold(bool),
@@ -276,6 +287,7 @@ pub enum StyleChange {
     Align(HAlign),
     NumberFormat(NumberFormat),
     FontColor(Option<Rgb>),
+    Borders(BorderPreset),
     Fill(Option<Rgb>),
 }
 

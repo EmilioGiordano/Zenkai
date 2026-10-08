@@ -4,6 +4,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
+use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::*;
 use zenkai_types::{CellStyle, HAlign};
 
@@ -75,6 +76,19 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
                 .icon(IconName::PaintBucket)
                 .accessibility_label("Fill colour")
                 .small(),
+        )
+        .child(
+            Button::new("borders")
+                .ghost()
+                .compact()
+                .icon(IconName::Grid2x2)
+                .tooltip("Borders")
+                .dropdown_menu(|menu, _, _| {
+                    menu.menu("Bottom border", Box::new(BorderBottom))
+                        .menu("All borders", Box::new(BordersAll))
+                        .menu("Outside borders", Box::new(BordersOutside))
+                        .menu("No border", Box::new(BordersNone))
+                }),
         )
         .child(separator(cx))
         .child(

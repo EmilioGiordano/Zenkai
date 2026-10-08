@@ -252,6 +252,20 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
                 let Some(cell) = frame.cells.get(&pos) else {
                     continue;
                 };
+                // Top and left lines sit on the neighbour's bottom and right pixel, so a
+                // border two adjacent cells share stays one pixel thin.
+                if cell.style.border_top {
+                    window.paint_quad(fill(
+                        rect(origin, *x - 1.0, y - 1.0, w + 1.0, 1.0),
+                        c.foreground,
+                    ));
+                }
+                if cell.style.border_left {
+                    window.paint_quad(fill(
+                        rect(origin, x - 1.0, y - 1.0, 1.0, h + 1.0),
+                        c.foreground,
+                    ));
+                }
                 if cell.style.border_bottom {
                     window.paint_quad(fill(rect(origin, *x, y + h - 1.0, *w, 1.0), c.foreground));
                 }

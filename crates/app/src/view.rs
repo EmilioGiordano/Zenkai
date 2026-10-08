@@ -12,7 +12,8 @@ use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, sa
 use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_types::{
-    CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, Rgb, SheetId, StyleChange,
+    BorderPreset, CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, Rgb, SheetId,
+    StyleChange,
 };
 
 use crate::actions::*;
@@ -2177,6 +2178,18 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &FormatGeneral, window, cx| {
                 this.style(StyleChange::NumberFormat(NumberFormat::General), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &BordersAll, window, cx| {
+                this.style(StyleChange::Borders(BorderPreset::All), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &BordersOutside, window, cx| {
+                this.style(StyleChange::Borders(BorderPreset::Outside), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &BorderBottom, window, cx| {
+                this.style(StyleChange::Borders(BorderPreset::Bottom), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &BordersNone, window, cx| {
+                this.style(StyleChange::Borders(BorderPreset::None), window, cx)
             }))
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)

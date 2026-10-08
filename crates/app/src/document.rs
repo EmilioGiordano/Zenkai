@@ -126,6 +126,8 @@ impl Document {
                 let view = workbook.cell(self.sheet, pos);
                 let blank = view.text.is_empty()
                     && view.style.fill.is_none()
+                    && !view.style.border_top
+                    && !view.style.border_left
                     && !view.style.border_bottom
                     && !view.style.border_right;
                 (!blank).then(|| {

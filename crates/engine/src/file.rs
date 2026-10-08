@@ -598,6 +598,32 @@ line 2"
     }
 
     #[test]
+    fn border_presets_apply_survive_save_and_clear() {
+        use zenkai_types::{BorderPreset, StyleChange};
+        let mut book = Workbook::new_empty().unwrap();
+        let at = |r: i64, c: i64| {
+            CellPos::new(
+                zenkai_types::RowIdx::clamped(r),
+                zenkai_types::ColIdx::clamped(c),
+            )
+        };
+        let block = zenkai_types::Range::new(at(0, 0), at(1, 1));
+        book.apply_style(SheetId(0), block, StyleChange::Borders(BorderPreset::All))
+            .unwrap();
+        let reopened = Workbook::from_xlsx_bytes(&book.to_xlsx().unwrap(), "b").unwrap();
+        for pos in [at(0, 0), at(1, 1)] {
+            let style = reopened.cell(SheetId(0), pos).style;
+            assert!(
+                style.border_top && style.border_left && style.border_bottom && style.border_right
+            );
+        }
+        book.apply_style(SheetId(0), block, StyleChange::Borders(BorderPreset::None))
+            .unwrap();
+        let style = book.cell(SheetId(0), at(1, 1)).style;
+        assert!(!style.border_top && !style.border_bottom);
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

@@ -2,14 +2,14 @@ use std::io::Cursor;
 
 use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::{Color, HorizontalAlignment, Style};
-use ironcalc::base::{ClipboardData, UserModel};
+use ironcalc::base::{BorderArea, ClipboardData, UserModel};
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx_bytes;
 
 use crate::error::EngineError;
 use zenkai_types::{
-    CellPos, CellStyle, CellView, ColIdx, ColumnSpan, HAlign, Range, Rgb, RowIdx, SheetId,
-    SheetInfo, SheetSizes, StyleChange, ValueKind,
+    BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, HAlign, Range, Rgb, RowIdx,
+    SheetId, SheetInfo, SheetSizes, StyleChange, ValueKind,
 };
 
 const LOCALE: &str = "en";
@@ -227,6 +227,8 @@ impl Workbook {
             font_color: self.resolve(&style.font.color),
             fill: self.resolve(&style.fill.color),
             align,
+            border_top: style.border.top.is_some(),
+            border_left: style.border.left.is_some(),
             border_bottom: style.border.bottom.is_some(),
             border_right: style.border.right.is_some(),
             num_fmt: style.num_fmt.clone(),
@@ -567,6 +569,23 @@ impl Engine for Workbook {
         range: Range,
         change: StyleChange,
     ) -> Result<(), EngineError> {
+        if let StyleChange::Borders(preset) = change {
+            let kind = match preset {
+                BorderPreset::All => "All",
+                BorderPreset::Outside => "Outer",
+                BorderPreset::Bottom => "Bottom",
+                BorderPreset::None => "None",
+            };
+            let border: BorderArea = serde_json::from_value(serde_json::json!({
+                "item": { "style": "thin" },
+                "type": kind,
+            }))
+            .map_err(|e| rejected(e.to_string()))?;
+            return self
+                .model
+                .set_area_with_border(&area(sheet, range), &border)
+                .map_err(rejected);
+        }
         let flag = |on: bool| if on { "true" } else { "false" }.to_string();
         let hex = |color: Option<Rgb>| color.map_or_else(String::new, |c| format!("#{:06X}", c.0));
         let (path, value) = match change {
@@ -575,6 +594,7 @@ impl Engine for Workbook {
             StyleChange::Underline(on) => ("font.u", flag(on)),
             StyleChange::Strike(on) => ("font.strike", flag(on)),
             StyleChange::FontSize(points) => ("font.size", points.to_string()),
+            StyleChange::Borders(_) => return Ok(()),
             StyleChange::FontColor(color) => ("font.color", hex(color)),
             StyleChange::Fill(color) => ("fill.fg_color", hex(color)),
             StyleChange::Align(align) => (
