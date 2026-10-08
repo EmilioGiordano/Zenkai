@@ -25,6 +25,13 @@ Meant for upstream (each is self-contained and has tests):
   `record_support`).
 - Hiding or showing rows recalculates what reads them, for SUBTOTAL
   (`src/user_model/common.rs`, `src/user_model/undo_redo.rs`).
+- Text criteria as in Excel: `<=` and `>=` compared the wrong way round, and `<>text`
+  skipped non-text cells (`src/functions/util.rs`). Tests:
+  `src/test/test_criteria_semantics.rs`.
+- Text criteria matched without allocating per cell (`src/functions/util.rs`).
+- SUMIF, COUNTIF and the rest of the family read each large range once per
+  recalculation (`src/criteria_ranges.rs`, `src/functions/statistical/if_ifs.rs`). Tests:
+  `src/test/test_criteria_ranges.rs`.
 
 Zenkai-only, not for upstream:
 
