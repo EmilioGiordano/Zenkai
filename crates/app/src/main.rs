@@ -9,6 +9,7 @@ mod document;
 mod files;
 mod find;
 mod jump;
+mod palette;
 mod stats;
 mod toolbar;
 mod view;

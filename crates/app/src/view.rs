@@ -20,8 +20,10 @@ use crate::document::{self, Document};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::jump::jump_target;
+use crate::palette;
 use crate::stats::{self, SelectionStats};
 use crate::toolbar;
+use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 
 const SAVING: &str = "Saving…";
@@ -53,6 +55,7 @@ pub struct Workspace {
     clipboard_source: Option<(Range, String)>,
     chart: Option<ChartPanel>,
     find: Option<FindBar>,
+    palette: Option<Entity<CommandState>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -77,6 +80,7 @@ impl Workspace {
             clipboard_source: None,
             chart: None,
             find: None,
+            palette: None,
             _subscriptions: vec![subscription],
         };
         workspace.reset_grid(window, cx);
@@ -87,6 +91,7 @@ impl Workspace {
     }
 
     fn reset_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.forget_find_results();
         let sheet = self.document.sheet;
         let view = self
             .document
@@ -121,6 +126,59 @@ impl Workspace {
     fn refresh_chart(&mut self) {
         if let (Some(panel), Some(wb)) = (&mut self.chart, self.document.workbook()) {
             panel.refresh(wb);
+        }
+    }
+
+    fn toggle_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            self.close_palette(window, cx);
+            return;
+        }
+        let state = cx.new(|cx| CommandState::new(window, cx));
+        state.update(cx, |state, cx| state.focus(window, cx));
+        self.palette = Some(state);
+        cx.notify();
+    }
+
+    fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette = None;
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn render_palette(&self) -> Option<impl IntoElement> {
+        let state = self.palette.as_ref()?;
+        Some(
+            div()
+                .absolute()
+                .top(px(72.0))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div().w(px(560.0)).shadow_lg().child(
+                        palette::groups()
+                            .into_iter()
+                            .fold(Command::new(state), Command::group)
+                            .placeholder("Type a command")
+                            .bordered(true)
+                            .max_h(px(420.0))
+                            .on_confirm(|_, window, cx| {
+                                window.dispatch_action(Box::new(ClosePalette), cx)
+                            })
+                            .on_cancel(|window, cx| {
+                                window.dispatch_action(Box::new(ClosePalette), cx)
+                            }),
+                    ),
+                ),
+        )
+    }
+
+    fn forget_find_results(&mut self) {
+        if let Some(bar) = &mut self.find {
+            bar.results = FindResults::default();
         }
     }
 
@@ -175,6 +233,14 @@ impl Workspace {
     }
 
     fn run_find(&mut self, query: String, cx: &mut Context<Self>) {
+        if self.document.has_pending() {
+            self.notify(
+                Severity::Warning,
+                "Still calculating, try again in a moment.",
+                cx,
+            );
+            return;
+        }
         let Some(workbook) = self.document.take() else {
             self.notify(
                 Severity::Warning,
@@ -462,6 +528,7 @@ impl Workspace {
                 }
                 this.refresh_cells(cx);
                 this.refresh_chart();
+                this.forget_find_results();
                 this.flush_edits(cx);
             });
             if let Err(error) = update {
@@ -1131,6 +1198,7 @@ impl Render for Workspace {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         v_flex()
+            .relative()
             .key_context("Workspace")
             .size_full()
             .bg(theme.background)
@@ -1208,6 +1276,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &NewSheet, window, cx| this.add_sheet(window, cx)))
             .on_action(cx.listener(|this, _: &InsertChart, _, cx| this.insert_chart(cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &TogglePalette, window, cx| this.toggle_palette(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ClosePalette, window, cx| this.close_palette(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &CloseFind, window, cx| this.close_find(window, cx)))
             .on_action(cx.listener(|this, _: &ChartColumn, _, cx| {
                 this.set_chart_kind(ChartKind::Column, cx)
@@ -1256,5 +1330,6 @@ impl Render for Workspace {
             )
             .child(self.render_tabs(cx))
             .child(self.render_status(cx))
+            .children(self.render_palette())
     }
 }
