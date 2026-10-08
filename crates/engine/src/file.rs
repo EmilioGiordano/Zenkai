@@ -776,6 +776,21 @@ line 2"
     }
 
     #[test]
+    fn duplicate_sheet_copies_cells_next_to_the_source() {
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_input(SheetId(0), CellPos::default(), "hola")
+            .unwrap();
+        book.add_sheet().unwrap();
+        book.duplicate_sheet(SheetId(0)).unwrap();
+        let names: Vec<String> = book.sheets().into_iter().map(|s| s.name).collect();
+        assert_eq!(names.len(), 3);
+        assert!(names[1].starts_with("Sheet1 ("), "{names:?}");
+        assert_eq!(book.input(SheetId(1), CellPos::default()), "hola");
+        book.undo().unwrap();
+        assert_eq!(book.sheets().len(), 2);
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

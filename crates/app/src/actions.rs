@@ -82,6 +82,7 @@ actions!(
         RenameSheet,
         CloseRename,
         DeleteSheet,
+        DuplicateSheet,
         MoveSheetLeft,
         MoveSheetRight,
         GoTo,

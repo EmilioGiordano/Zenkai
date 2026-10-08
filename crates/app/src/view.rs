@@ -2286,6 +2286,12 @@ impl Workspace {
         });
     }
 
+    fn duplicate_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let sheet = self.document.sheet;
+        self.pending_sheet = Some(SheetId(sheet.0 + 1));
+        self.edit(window, cx, move |wb| wb.duplicate_sheet(sheet));
+    }
+
     fn add_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_sheet = Some(SheetId(
             u32::try_from(self.document.sheets.len()).unwrap_or(0),
@@ -2688,6 +2694,11 @@ impl Render for Workspace {
                     this.style(change, window, cx);
                 }
             }))
+            .on_action(
+                cx.listener(|this, _: &DuplicateSheet, window, cx| {
+                    this.duplicate_sheet(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
             }))
@@ -2897,6 +2908,7 @@ fn sheet_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
     menu.action_context(grid_focus)
         .menu("Insert sheet", Box::new(NewSheet))
         .menu("Rename", Box::new(RenameSheet))
+        .menu("Duplicate", Box::new(DuplicateSheet))
         .menu("Delete", Box::new(DeleteSheet))
         .separator()
         .menu("Move left", Box::new(MoveSheetLeft))

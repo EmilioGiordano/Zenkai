@@ -123,6 +123,7 @@ pub trait Engine: Send {
     fn used_end(&self, sheet: SheetId) -> CellPos;
     fn filled_cells(&self, sheet: SheetId) -> Vec<CellPos>;
     fn add_sheet(&mut self) -> Result<SheetId, EngineError>;
+    fn duplicate_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError>;
     fn rename_sheet(&mut self, sheet: SheetId, name: &str) -> Result<(), EngineError>;
     fn delete_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError>;
     fn move_sheet(&mut self, sheet: SheetId, to: u32) -> Result<(), EngineError>;
@@ -1007,6 +1008,12 @@ impl Engine for Workbook {
         self.model.new_sheet().map_err(rejected)?;
         let count = self.model.get_worksheets_properties().len();
         Ok(SheetId(u32::try_from(count.saturating_sub(1)).unwrap_or(0)))
+    }
+
+    // The copy lands right after the source, with formulas that pointed at the source
+    // now pointing at the copy, as in Excel.
+    fn duplicate_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError> {
+        self.model.duplicate_sheet(sheet.0).map_err(rejected)
     }
 
     fn rename_sheet(&mut self, sheet: SheetId, name: &str) -> Result<(), EngineError> {

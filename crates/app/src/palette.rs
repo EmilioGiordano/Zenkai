@@ -91,6 +91,7 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Delete sheet", DeleteSheet),
             item("Move sheet left", MoveSheetLeft),
             item("Move sheet right", MoveSheetRight),
+            item("Duplicate sheet", DuplicateSheet),
         ]),
         CommandGroup::new().label("View").items([
             item("Zoom in", ZoomIn),
