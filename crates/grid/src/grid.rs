@@ -9,6 +9,7 @@ use gpui_kit::*;
 use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
 use crate::actions::*;
+use crate::autocomplete;
 use crate::formula_refs;
 use crate::layout::Layout;
 use crate::paint::{self, Frame};
@@ -154,6 +155,7 @@ pub struct Grid {
     resize_hover: Option<Edge>,
     fill_target: Option<Range>,
     fill_hover: bool,
+    suggestion: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -201,6 +203,7 @@ impl Grid {
             resize_hover: None,
             fill_target: None,
             fill_hover: false,
+            suggestion: 0,
         }
     }
 
@@ -409,6 +412,15 @@ impl Grid {
     }
 
     fn navigate(&mut self, direction: Direction, extend: bool, cx: &mut Context<Self>) {
+        let shown = self.suggestions().len();
+        if shown > 0 && !extend && matches!(direction, Direction::Up | Direction::Down) {
+            self.suggestion = match direction {
+                Direction::Up => (self.suggestion + shown - 1) % shown,
+                _ => (self.suggestion + 1) % shown,
+            };
+            cx.notify();
+            return;
+        }
         if let Some(editor) = &mut self.editor {
             if editor.can_point() {
                 let (anchor, corner) = match editor.point {
@@ -895,6 +907,7 @@ impl Grid {
                 editor.text.insert_str(editor.caret, typed);
                 editor.caret += typed.len();
                 editor.point = None;
+                self.suggestion = 0;
             }
             None => {
                 let pos = self.selection.active;
@@ -910,6 +923,72 @@ impl Grid {
         cx.emit(GridEvent::EditChanged);
         cx.stop_propagation();
         cx.notify();
+    }
+
+    fn suggestions(&self) -> Vec<&'static str> {
+        let Some(editor) = &self.editor else {
+            return Vec::new();
+        };
+        autocomplete::token_at(&editor.text, editor.caret)
+            .map(|(_, prefix)| autocomplete::suggestions(prefix))
+            .unwrap_or_default()
+    }
+
+    // Tab with the list open inserts the highlighted function and its "(", as in Excel.
+    fn accept_suggestion(&mut self, cx: &mut Context<Self>) -> bool {
+        let suggestions = self.suggestions();
+        let Some(name) = suggestions.get(self.suggestion).copied() else {
+            return false;
+        };
+        let Some(editor) = &mut self.editor else {
+            return false;
+        };
+        let Some((start, _)) = autocomplete::token_at(&editor.text, editor.caret) else {
+            return false;
+        };
+        let inserted = format!("{name}(");
+        editor.text.replace_range(start..editor.caret, &inserted);
+        editor.caret = start + inserted.len();
+        editor.point = None;
+        self.suggestion = 0;
+        cx.emit(GridEvent::EditChanged);
+        cx.notify();
+        true
+    }
+
+    fn render_suggestions(&self, cx: &App) -> Option<impl IntoElement> {
+        let suggestions = self.suggestions();
+        let editor = self.editor.as_ref()?;
+        if suggestions.is_empty() {
+            return None;
+        }
+        let right = self.col_right(editor.pos.col)?;
+        let bottom = self.row_bottom(editor.pos.row)?;
+        let left = right - self.layout.col_width(editor.pos.col);
+        let theme = cx.theme();
+        Some(
+            div()
+                .absolute()
+                .left(px(left * self.zoom))
+                .top(px(bottom * self.zoom + 2.0))
+                .min_w(px(160.0))
+                .py_1()
+                .bg(theme.popover)
+                .border_1()
+                .border_color(theme.border)
+                .rounded_md()
+                .shadow_md()
+                .text_sm()
+                .text_color(theme.popover_foreground)
+                .children(suggestions.into_iter().enumerate().map(|(index, name)| {
+                    div()
+                        .px_2()
+                        .when(index == self.suggestion, |row| {
+                            row.bg(theme.accent).text_color(theme.accent_foreground)
+                        })
+                        .child(name)
+                })),
+        )
     }
 
     pub fn merge_at(&self, pos: CellPos) -> Option<Range> {
@@ -1230,12 +1309,16 @@ impl Render for Grid {
                 )
                 .size_full(),
             )
+            .children(self.render_suggestions(cx))
     }
 }
 
 impl Grid {
     // Excel returns Enter to the column where a row of Tab entries began.
     fn confirm(&mut self, direction: Direction, cx: &mut Context<Self>) {
+        if direction == Direction::Right && self.accept_suggestion(cx) {
+            return;
+        }
         self.commit_edit(cx);
         let single = self.selection.range().cell_count() == 1;
         let active = self.selection.active;

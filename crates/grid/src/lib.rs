@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod actions;
+mod autocomplete;
 mod formula_refs;
 mod general;
 mod grid;

@@ -49,6 +49,8 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   to scientific notation, formatted numbers and dates widen a default-width column.
 - Formula point mode: while typing a formula, arrows or clicks insert references, which
   are coloured in the formula and in the grid.
+- Formula AutoComplete (Tab inserts the function), show formulas (Ctrl+`), find and
+  replace (Ctrl+H), paste values (Ctrl+Shift+V), hide/unhide rows and columns.
 - Light, dark and high-contrast themes; follows the system light/dark setting until one is
   picked. Interface size (Ctrl+Alt+= / - / 0) is independent of the grid zoom.
 - Screen readers: the sheet, the active cell (address, value, formula), the name box and
