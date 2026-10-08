@@ -139,7 +139,9 @@ fn merge_rows(sheet: &str, rows: &str) -> Result<String, String> {
 
 // A row tag with ht outside Excel's 0..=409.5 points gets the nearest valid height.
 fn clamp_height(row: &str) -> String {
-    let Some(start) = row.find(" ht=\"").map(|at| at + " ht=\"".len()) else {
+    // Only the opening <row ...> tag is searched, never the cells inside it.
+    let tag_end = row.find('>').unwrap_or(row.len());
+    let Some(start) = row[..tag_end].find(" ht=\"").map(|at| at + " ht=\"".len()) else {
         return row.to_string();
     };
     let Some(len) = row[start..].find('"') else {
@@ -166,7 +168,21 @@ fn row_number(row: &str) -> Result<i32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::merge_rows;
+    use super::{clamp_height, merge_rows};
+
+    #[test]
+    fn clamps_only_the_row_height_attribute() {
+        assert_eq!(
+            clamp_height(r#"<row r="2" ht="5000"></row>"#),
+            r#"<row r="2" ht="409.5"></row>"#
+        );
+        let cells = r#"<row r="2"><c r="A2" t="str"><v> ht="9999"</v></c></row>"#;
+        assert_eq!(clamp_height(cells), cells);
+        assert_eq!(
+            clamp_height(r#"<row r="2" ht="15"/>"#),
+            r#"<row r="2" ht="15"/>"#
+        );
+    }
 
     #[test]
     fn inserts_rows_in_ascending_order() {
