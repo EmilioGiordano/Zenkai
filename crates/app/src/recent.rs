@@ -55,11 +55,24 @@ pub fn save(
         .map(|path| format!("{}\n", path.display()))
         .collect();
     let temp = file.with_extension(format!("{generation}.tmp"));
-    std::fs::write(&temp, text)?;
-    if latest.load(std::sync::atomic::Ordering::SeqCst) != generation {
-        return std::fs::remove_file(&temp);
+    // Check and rename under one lock, so an older save can never land after a newer one.
+    static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _saving = SAVING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let written = std::fs::write(&temp, text).and_then(|()| {
+        if latest.load(std::sync::atomic::Ordering::SeqCst) == generation {
+            std::fs::rename(&temp, &file)
+        } else {
+            Ok(())
+        }
+    });
+    if temp.exists()
+        && let Err(error) = std::fs::remove_file(&temp)
+    {
+        tracing::debug!(%error, "could not remove a stale recent-list temp file");
     }
-    std::fs::rename(&temp, &file)
+    written
 }
 
 pub fn label(path: &Path) -> String {

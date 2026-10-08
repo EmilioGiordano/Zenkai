@@ -58,6 +58,83 @@ pub fn references(formula: &str) -> Vec<Range> {
     found
 }
 
+// Excel's F4 while editing a formula: the reference at `caret` (both ends of a range)
+// cycles A1 → $A$1 → A$1 → $A1 → A1. Returns the new text and caret.
+pub fn cycle_reference(text: &str, caret: usize) -> Option<(String, usize)> {
+    if !text.starts_with('=') || caret > text.len() || !text.is_char_boundary(caret) {
+        return None;
+    }
+    // Inside a string literal nothing is a reference.
+    if text[..caret].matches('"').count() % 2 == 1 {
+        return None;
+    }
+    let is_ref_char = |c: char| c.is_ascii_alphanumeric() || c == '$';
+    let is_span_char = |c: char| is_ref_char(c) || c == ':';
+    let start = text[..caret]
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !is_span_char(*c))
+        .map_or(0, |(at, c)| at + c.len_utf8());
+    let end = text[caret..]
+        .find(|c: char| !is_span_char(c))
+        .map_or(text.len(), |at| caret + at);
+    // A function name ("LOG10(") or a sheet name ("Q1!A1") is not a cell reference.
+    if text[end..].starts_with(['(', '!']) {
+        return None;
+    }
+    let span = &text[start..end];
+    let parts: Vec<(&str, &str, bool, bool)> = span
+        .split(':')
+        .map(parse_reference)
+        .collect::<Option<Vec<_>>>()?;
+    if parts.len() > 2 {
+        return None;
+    }
+    // Every end takes the next state of the first one, as Excel does for a range.
+    let (_, _, col_fixed, row_fixed) = parts[0];
+    let (col_fixed, row_fixed) = match (col_fixed, row_fixed) {
+        (false, false) => (true, true),
+        (true, true) => (false, true),
+        (false, true) => (true, false),
+        (true, false) => (false, false),
+    };
+    let dollar = |fixed: bool| if fixed { "$" } else { "" };
+    let next = parts
+        .iter()
+        .map(|(col, row, _, _)| format!("{}{col}{}{row}", dollar(col_fixed), dollar(row_fixed)))
+        .collect::<Vec<_>>()
+        .join(":");
+    let mut out = String::with_capacity(text.len() + 4);
+    out.push_str(&text[..start]);
+    out.push_str(&next);
+    out.push_str(&text[end..]);
+    Some((out, start + next.len()))
+}
+
+// "$A$1" → ("A", "1", true, true), within Excel's grid (XFD1048576).
+fn parse_reference(token: &str) -> Option<(&str, &str, bool, bool)> {
+    let (col_fixed, rest) = match token.strip_prefix('$') {
+        Some(rest) => (true, rest),
+        None => (false, token),
+    };
+    let letters = rest.chars().take_while(char::is_ascii_alphabetic).count();
+    let (col, rest) = rest.split_at(letters);
+    let (row_fixed, row) = match rest.strip_prefix('$') {
+        Some(row) => (true, row),
+        None => (false, rest),
+    };
+    let col_number = col.chars().try_fold(0u32, |n, c| {
+        Some(n * 26 + u32::from(c.to_ascii_uppercase() as u8 - b'A' + 1))
+    })?;
+    let row_number: u32 = row.parse().ok()?;
+    let valid = (1..=3).contains(&col.len())
+        && row.chars().all(|c| c.is_ascii_digit())
+        && !row.starts_with('0')
+        && (1..=16_384).contains(&col_number)
+        && (1..=1_048_576).contains(&row_number);
+    valid.then_some((col, row, col_fixed, row_fixed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,47 +166,6 @@ mod tests {
     }
 }
 
-/// Excel's F4 while editing a formula: the reference that ends at or contains `caret`
-/// cycles A1 → $A$1 → A$1 → $A1 → A1. Returns the new text and caret.
-pub fn cycle_reference(text: &str, caret: usize) -> Option<(String, usize)> {
-    if !text.starts_with('=') || caret > text.len() || !text.is_char_boundary(caret) {
-        return None;
-    }
-    let is_ref_char = |c: char| c.is_ascii_alphanumeric() || c == '$';
-    let start = text[..caret]
-        .char_indices()
-        .rev()
-        .find(|(_, c)| !is_ref_char(*c))
-        .map_or(0, |(at, c)| at + c.len_utf8());
-    let end = text[caret..]
-        .find(|c: char| !is_ref_char(c))
-        .map_or(text.len(), |at| caret + at);
-    let token = &text[start..end];
-    let bare: String = token.chars().filter(|c| *c != '$').collect();
-    let letters = bare.chars().take_while(char::is_ascii_alphabetic).count();
-    let (col, row) = bare.split_at(letters);
-    let valid = (1..=3).contains(&col.len())
-        && !row.is_empty()
-        && row.chars().all(|c| c.is_ascii_digit())
-        && !row.starts_with('0');
-    if !valid {
-        return None;
-    }
-    let col_fixed = token.starts_with('$');
-    let row_fixed = token.get(1..).is_some_and(|rest| rest.contains('$'));
-    let next = match (col_fixed, row_fixed) {
-        (false, false) => format!("${col}${row}"),
-        (true, true) => format!("{col}${row}"),
-        (false, true) => format!("${col}{row}"),
-        (true, false) => format!("{col}{row}"),
-    };
-    let mut out = String::with_capacity(text.len() + 2);
-    out.push_str(&text[..start]);
-    out.push_str(&next);
-    out.push_str(&text[end..]);
-    Some((out, start + next.len()))
-}
-
 #[cfg(test)]
 mod cycle_tests {
     use super::cycle_reference;
@@ -151,5 +187,13 @@ mod cycle_tests {
         assert_eq!(cycle_reference("A1", 2), None);
         assert_eq!(cycle_reference("=ñA1", 5).unwrap().0, "=ñ$A$1");
         assert_eq!(cycle_reference("=é", 3), None);
+        assert_eq!(
+            cycle_reference("=SUM(A1:B2)", 9).unwrap().0,
+            "=SUM($A$1:$B$2)"
+        );
+        assert_eq!(cycle_reference("=LOG10(2)", 6), None);
+        assert_eq!(cycle_reference("=\"A1\"", 4), None);
+        assert_eq!(cycle_reference("=ZZZ1", 5), None);
+        assert_eq!(cycle_reference("=Q1!A1", 3), None);
     }
 }
