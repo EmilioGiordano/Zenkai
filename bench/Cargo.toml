@@ -19,5 +19,8 @@ zenkai-engine = { path = "../crates/engine" }
 zenkai-formats = { path = "../crates/formats" }
 zenkai-types = { path = "../crates/types" }
 
+[dev-dependencies]
+tempfile = "3"
+
 [lints]
 workspace = true

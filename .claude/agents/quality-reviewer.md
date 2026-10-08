@@ -35,8 +35,8 @@ Severity: `BLOCKER`, `Critical`, `High`, `Medium`, `Low`.
 **Data integrity (BLOCKER)**
 - Save that is not atomic: writing straight to the original instead of temp file, reopen
   check, then replace.
-- Unsupported content (charts, pivots, macros, images, conditional formatting, validation,
-  comments, defined names) dropped on save without the warning dialog.
+- Unsupported content (see `docs/COMPATIBILITY.md` for what the engine really drops) lost
+  on save without the warning dialog.
 - A `Result` ignored anywhere on the load or save path: `let _ =`, `.ok()`,
   `unwrap_or_default()` or a default value that hides the error.
 - Overwriting an `.xlsm` or a file with unsupported content when "Save as" should be the

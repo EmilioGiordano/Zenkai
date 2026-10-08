@@ -180,16 +180,28 @@ fn same_value(cached: &Data, text: &str, number: Option<f64>) -> bool {
 // Streams the values saved in the file (calamine's cell reader never builds a dense
 // range, so sparse sheets cannot blow up) and compares them with Zenkai's.
 fn compare_cached(path: &Path, book: &zenkai_engine::Workbook) -> String {
-    let Ok(mut cached) = calamine::open_workbook::<Xlsx<_>, _>(path) else {
-        return "calamine could not read it".to_string();
+    let mut cached = match calamine::open_workbook::<Xlsx<_>, _>(path) {
+        Ok(cached) => cached,
+        Err(e) => return format!("error: {e}"),
     };
+    let engine_sheets: Vec<String> = book.sheets().into_iter().map(|s| s.name).collect();
     let mut total = 0usize;
     let mut same = 0usize;
-    for (index, name) in (0u32..).zip(cached.sheet_names()) {
-        let Ok(mut reader) = cached.worksheet_cells_reader(&name) else {
-            continue;
+    for name in cached.sheet_names() {
+        let Some(index) = engine_sheets.iter().position(|n| *n == name) else {
+            return format!("error: sheet {name} missing in Zenkai");
         };
-        while let Ok(Some(cell)) = reader.next_cell() {
+        let sheet = SheetId(u32::try_from(index).unwrap_or(u32::MAX));
+        let mut reader = match cached.worksheet_cells_reader(&name) {
+            Ok(reader) => reader,
+            Err(e) => return format!("error: {e}"),
+        };
+        loop {
+            let cell = match reader.next_cell() {
+                Ok(Some(cell)) => cell,
+                Ok(None) => break,
+                Err(e) => return format!("error: {e}"),
+            };
             let value = Data::from(cell.get_value().clone());
             if matches!(value, Data::Empty) {
                 continue;
@@ -199,7 +211,7 @@ fn compare_cached(path: &Path, book: &zenkai_engine::Workbook) -> String {
                 RowIdx::clamped(i64::from(row)),
                 ColIdx::clamped(i64::from(col)),
             );
-            let view = book.cell(SheetId(index), pos);
+            let view = book.cell(sheet, pos);
             total += 1;
             if same_value(&value, &view.text, view.number) {
                 same += 1;
@@ -231,19 +243,18 @@ fn compare_round_trip(book: &zenkai_engine::Workbook) -> (String, Vec<u8>) {
     (format!("{same}/{total}"), bytes)
 }
 
-fn parts(bytes: &[u8]) -> Vec<(String, String)> {
-    let Ok(mut archive) = zip::ZipArchive::new(std::io::Cursor::new(bytes)) else {
-        return Vec::new();
-    };
+fn parts(bytes: &[u8]) -> Result<Vec<(String, String)>, String> {
+    let mut archive =
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
     (0..archive.len())
-        .filter_map(|i| {
-            let mut entry = archive.by_index(i).ok()?;
+        .map(|i| {
+            let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
             let name = entry.name().to_ascii_lowercase();
             let mut text = String::new();
             if name.ends_with(".xml") {
-                std::io::Read::read_to_string(&mut entry, &mut text).ok()?;
+                std::io::Read::read_to_string(&mut entry, &mut text).map_err(|e| e.to_string())?;
             }
-            Some((name, text))
+            Ok((name, text))
         })
         .collect()
 }
@@ -269,8 +280,10 @@ fn dropped_parts(original: &[u8], saved: &[u8]) -> String {
         ("<mergeCell ", "merged cells"),
         ("<pane ", "frozen panes"),
     ];
-    let before = parts(original);
-    let after = parts(saved);
+    let (before, after) = match (parts(original), parts(saved)) {
+        (Ok(before), Ok(after)) => (before, after),
+        (Err(e), _) | (_, Err(e)) => return format!("error: {e}"),
+    };
     let has_name =
         |set: &[(String, String)], prefix: &str| set.iter().any(|(n, _)| n.starts_with(prefix));
     let has_element =
@@ -301,7 +314,11 @@ fn check(path: &Path) -> Row {
     match open_xlsx(path) {
         Ok(opened) => {
             let (round_trip, saved) = compare_round_trip(&opened.workbook);
-            let original = std::fs::read(path).unwrap_or_default();
+            let dropped = match std::fs::read(path) {
+                Ok(original) if !saved.is_empty() => dropped_parts(&original, &saved),
+                Ok(_) => "error: nothing was saved".to_string(),
+                Err(e) => format!("error: {e}"),
+            };
             Row {
                 file,
                 opens: "yes".to_string(),
@@ -315,7 +332,7 @@ fn check(path: &Path) -> Row {
                         .collect::<Vec<_>>()
                         .join(", ")
                 },
-                dropped: dropped_parts(&original, &saved),
+                dropped,
                 cached: compare_cached(path, &opened.workbook),
                 round_trip,
             }
@@ -339,7 +356,9 @@ fn check(path: &Path) -> Row {
 
 pub fn report(dir: &Path, out: &Path) -> Result<()> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
-        .filter_map(|entry| entry.ok().map(|e| e.path()))
+        .map(|entry| entry.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
         .filter(|p| {
             p.extension().and_then(|e| e.to_str()).is_some_and(|e| {
                 ["xlsx", "xlsm", "xlsb", "xls", "ods"].contains(&e.to_ascii_lowercase().as_str())
@@ -369,4 +388,34 @@ pub fn report(dir: &Path, out: &Path) -> Result<()> {
     }
     std::fs::write(out, text).with_context(|| format!("writing {}", out.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check, generate};
+
+    // The corpus must keep opening, matching the cached values and surviving a save.
+    #[test]
+    fn generated_corpus_opens_matches_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        generate(dir.path()).unwrap();
+        let mut checked = 0;
+        for entry in std::fs::read_dir(dir.path()).unwrap() {
+            let path = entry.unwrap().path();
+            let row = check(&path);
+            assert_eq!(row.opens, "yes", "{}", row.file);
+            for counts in [&row.cached, &row.round_trip] {
+                let (same, total) = counts.split_once('/').unwrap();
+                assert_eq!(same, total, "{}: {counts}", row.file);
+            }
+            assert!(
+                !row.dropped.starts_with("error"),
+                "{}: {}",
+                row.file,
+                row.dropped
+            );
+            checked += 1;
+        }
+        assert!(checked >= 10);
+    }
 }
