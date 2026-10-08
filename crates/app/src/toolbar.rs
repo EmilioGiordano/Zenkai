@@ -1,7 +1,9 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Selectable, h_flex};
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
 use gpui_kit::*;
 use zenkai_types::{CellStyle, HAlign};
 
@@ -25,7 +27,12 @@ fn separator(cx: &App) -> Div {
     div().w(px(1.0)).h(px(18.0)).mx_1().bg(cx.theme().border)
 }
 
-pub fn render(style: &CellStyle, cx: &App) -> impl IntoElement {
+pub struct ColorPickers {
+    pub font: Entity<ColorPickerState>,
+    pub fill: Entity<ColorPickerState>,
+}
+
+pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     h_flex()
         .h(px(36.0))
@@ -58,6 +65,19 @@ pub fn render(style: &CellStyle, cx: &App) -> impl IntoElement {
         )
         .child(separator(cx))
         .child(
+            ColorPicker::new(&colors.font)
+                .icon(IconName::Baseline)
+                .accessibility_label("Font colour")
+                .small(),
+        )
+        .child(
+            ColorPicker::new(&colors.fill)
+                .icon(IconName::PaintBucket)
+                .accessibility_label("Fill colour")
+                .small(),
+        )
+        .child(separator(cx))
+        .child(
             tool(
                 "align-left",
                 IconName::TextAlignStart,
@@ -87,7 +107,7 @@ pub fn render(style: &CellStyle, cx: &App) -> impl IntoElement {
         .child(separator(cx))
         .child(tool(
             "general",
-            IconName::Baseline,
+            IconName::CaseSensitive,
             "General (Ctrl+Shift+~)",
             FormatGeneral,
         ))

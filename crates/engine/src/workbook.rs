@@ -446,11 +446,14 @@ impl Engine for Workbook {
         range: Range,
         change: StyleChange,
     ) -> Result<(), EngineError> {
-        let flag = |on: bool| if on { "true" } else { "false" };
+        let flag = |on: bool| if on { "true" } else { "false" }.to_string();
+        let hex = |color: Option<Rgb>| color.map_or_else(String::new, |c| format!("#{:06X}", c.0));
         let (path, value) = match change {
             StyleChange::Bold(on) => ("font.b", flag(on)),
             StyleChange::Italic(on) => ("font.i", flag(on)),
             StyleChange::Underline(on) => ("font.u", flag(on)),
+            StyleChange::FontColor(color) => ("font.color", hex(color)),
+            StyleChange::Fill(color) => ("fill.fg_color", hex(color)),
             StyleChange::Align(align) => (
                 "alignment.horizontal",
                 match align {
@@ -458,12 +461,13 @@ impl Engine for Workbook {
                     HAlign::Left => "left",
                     HAlign::Center => "center",
                     HAlign::Right => "right",
-                },
+                }
+                .to_string(),
             ),
-            StyleChange::NumberFormat(format) => ("num_fmt", format.code()),
+            StyleChange::NumberFormat(format) => ("num_fmt", format.code().to_string()),
         };
         self.model
-            .update_range_style(&area(sheet, range), path, value)
+            .update_range_style(&area(sheet, range), path, &value)
             .map_err(rejected)
     }
 

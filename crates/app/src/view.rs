@@ -11,7 +11,9 @@ use gpui_kit::*;
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
 use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView};
-use zenkai_types::{CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, SheetId, StyleChange};
+use zenkai_types::{
+    CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, Rgb, SheetId, StyleChange,
+};
 
 use crate::actions::*;
 use crate::chart::{self, ChartKind};
@@ -27,6 +29,7 @@ use crate::recovery;
 use crate::stats::{self, SelectionStats};
 use crate::theme;
 use crate::toolbar;
+use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
@@ -89,6 +92,7 @@ pub struct Workspace {
     csv_request: u64,
     // Interface scale, independent of the grid zoom: everything sized in rems.
     ui_scale: f32,
+    colors: toolbar::ColorPickers,
     focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
     rename: Option<(Entity<InputState>, Subscription)>,
@@ -104,6 +108,24 @@ impl Workspace {
     pub fn new(initial: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
         let grid = cx.new(Grid::new);
         let subscription = cx.subscribe_in(&grid, window, Self::on_grid_event);
+        let colors = toolbar::ColorPickers {
+            font: cx.new(|cx| ColorPickerState::new(window, cx)),
+            fill: cx.new(|cx| ColorPickerState::new(window, cx)),
+        };
+        let font_color = cx.subscribe_in(
+            &colors.font,
+            window,
+            |this, _, ColorPickerEvent::Change(color), window, cx| {
+                this.style(StyleChange::FontColor(color.map(rgb_of)), window, cx);
+            },
+        );
+        let fill_color = cx.subscribe_in(
+            &colors.fill,
+            window,
+            |this, _, ColorPickerEvent::Change(color), window, cx| {
+                this.style(StyleChange::Fill(color.map(rgb_of)), window, cx);
+            },
+        );
         theme::follow_system(window, cx);
         let appearance = cx.observe_window_appearance(window, |_, window, cx| {
             theme::follow_system(window, cx);
@@ -129,6 +151,7 @@ impl Workspace {
             csv_preview: None,
             csv_request: 0,
             ui_scale: 1.0,
+            colors,
             focus: cx.focus_handle(),
             session_lock: None,
             rename: None,
@@ -137,7 +160,7 @@ impl Workspace {
             last_tab_click: None,
             memory_mb: 0,
             diagnostics_task: None,
-            _subscriptions: vec![subscription, appearance],
+            _subscriptions: vec![subscription, appearance, font_color, fill_color],
         };
         workspace.reset_grid(window, cx);
         if let Some(path) = initial {
@@ -2251,7 +2274,7 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| theme::cycle(window, cx)))
-            .child(toolbar::render(&self.active_style, cx))
+            .child(toolbar::render(&self.active_style, &self.colors, cx))
             .child(self.render_formula_bar(cx))
             .children(self.render_find(cx))
             .child(
@@ -2311,4 +2334,10 @@ fn sheet_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
         .separator()
         .menu("Move left", Box::new(MoveSheetLeft))
         .menu("Move right", Box::new(MoveSheetRight))
+}
+
+fn rgb_of(color: Hsla) -> Rgb {
+    let rgba = color.to_rgb();
+    let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
+    Rgb(channel(rgba.r) << 16 | channel(rgba.g) << 8 | channel(rgba.b))
 }

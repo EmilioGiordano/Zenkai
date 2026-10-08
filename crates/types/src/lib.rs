@@ -273,6 +273,8 @@ pub enum StyleChange {
     Underline(bool),
     Align(HAlign),
     NumberFormat(NumberFormat),
+    FontColor(Option<Rgb>),
+    Fill(Option<Rgb>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

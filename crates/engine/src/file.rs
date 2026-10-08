@@ -492,6 +492,34 @@ line 2"
     }
 
     #[test]
+    fn font_and_fill_colours_apply_and_survive_save() {
+        let mut book = Workbook::new_empty().unwrap();
+        let a1 = CellPos::default();
+        book.set_input(SheetId(0), a1, "x").unwrap();
+        let range = zenkai_types::Range::single(a1);
+        let red = zenkai_types::Rgb(0xFF_00_00);
+        let yellow = zenkai_types::Rgb(0xFF_FF_00);
+        book.apply_style(
+            SheetId(0),
+            range,
+            zenkai_types::StyleChange::FontColor(Some(red)),
+        )
+        .unwrap();
+        book.apply_style(
+            SheetId(0),
+            range,
+            zenkai_types::StyleChange::Fill(Some(yellow)),
+        )
+        .unwrap();
+        let reopened = Workbook::from_xlsx_bytes(&book.to_xlsx().unwrap(), "b").unwrap();
+        let style = reopened.cell(SheetId(0), a1).style;
+        assert_eq!((style.font_color, style.fill), (Some(red), Some(yellow)));
+        book.apply_style(SheetId(0), range, zenkai_types::StyleChange::Fill(None))
+            .unwrap();
+        assert_eq!(book.cell(SheetId(0), a1).style.fill, None);
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
