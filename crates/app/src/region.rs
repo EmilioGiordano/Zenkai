@@ -19,28 +19,31 @@ pub fn current_region(active: CellPos, filled: impl Fn(CellPos) -> bool) -> Rang
         (0..=last_col).contains(&col)
             && (from.max(0)..=to.min(last_row)).any(|row| filled(at(row, col)))
     };
+    // Checked at every step, so even one dense edge cannot run past the cap.
+    let within = |top: i64, left: i64, bottom: i64, right: i64| {
+        ((bottom - top + 1) as u64) * ((right - left + 1) as u64) <= MAX_REGION_CELLS
+    };
     loop {
         let mut grew = false;
         // Each edge runs to its end before the others are checked, so a tall block costs
         // one pass per edge rather than one pass per row.
-        while any_in_row(top - 1, left - 1, right + 1) {
+        while within(top, left, bottom, right) && any_in_row(top - 1, left - 1, right + 1) {
             top -= 1;
             grew = true;
         }
-        while any_in_row(bottom + 1, left - 1, right + 1) {
+        while within(top, left, bottom, right) && any_in_row(bottom + 1, left - 1, right + 1) {
             bottom += 1;
             grew = true;
         }
-        while any_in_col(left - 1, top - 1, bottom + 1) {
+        while within(top, left, bottom, right) && any_in_col(left - 1, top - 1, bottom + 1) {
             left -= 1;
             grew = true;
         }
-        while any_in_col(right + 1, top - 1, bottom + 1) {
+        while within(top, left, bottom, right) && any_in_col(right + 1, top - 1, bottom + 1) {
             right += 1;
             grew = true;
         }
-        let area = (bottom - top + 1) as u64 * (right - left + 1) as u64;
-        if !grew || area > MAX_REGION_CELLS {
+        if !grew || !within(top, left, bottom, right) {
             break;
         }
     }

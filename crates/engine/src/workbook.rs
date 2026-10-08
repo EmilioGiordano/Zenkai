@@ -211,19 +211,20 @@ impl Workbook {
                 .ok()
                 .filter(|value| value.is_finite() && value.abs() < 1e290)
         };
-        if let Some(values) = cells
-            .iter()
-            .map(|(input, _)| plain(input))
-            .collect::<Option<Vec<_>>>()
-        {
-            return (values.len() >= 2).then(|| Series::Numbers(Trend::fit(&values)));
-        }
+        // Dates first: a date loaded from a file may read back as its bare serial.
         let dates = cells
             .iter()
             .map(|(_, view)| view.number.filter(|_| is_date_format(&view.style.num_fmt)))
             .collect::<Option<Vec<f64>>>();
         if let Some(serials) = dates {
             return Some(Series::Dates(Trend::fit_or_step(&serials)));
+        }
+        if let Some(values) = cells
+            .iter()
+            .map(|(input, _)| plain(input))
+            .collect::<Option<Vec<_>>>()
+        {
+            return (values.len() >= 2).then(|| Series::Numbers(Trend::fit(&values)));
         }
         let parts = cells
             .iter()
@@ -424,8 +425,6 @@ impl Engine for Workbook {
         self.model.paste_csv_string(&area, &tsv).map_err(rejected)
     }
 
-    // The fill handle: the cells of `target` past `source` (below it or to its right)
-    // repeat the source pattern, formulas shifted, in one undo step.
     // Rows of `range` reordered by the `key` column, with Excel's order: numbers, text
     // (ignoring case), logicals, errors, and blanks always last; ties keep their order.
     // Formulas are rewritten for their new row, as Excel's sort does; formats stay put.
@@ -441,6 +440,16 @@ impl Engine for Workbook {
                 "sorting {} cells at once is not supported",
                 range.cell_count()
             )));
+        }
+        // Excel refuses too: merged areas would stay put while their contents move.
+        if self
+            .merged(sheet)
+            .iter()
+            .any(|merge| merge.intersects(&range))
+        {
+            return Err(rejected(
+                "cells in the range are merged; unmerge them before sorting".to_string(),
+            ));
         }
         let rows: Vec<RowIdx> = (range.start.row.get()..=range.end.row.get())
             .map(|row| RowIdx::clamped(i64::from(row)))
@@ -477,6 +486,8 @@ impl Engine for Workbook {
         self.set_inputs(sheet, range.start, &moved)
     }
 
+    // The fill handle: the cells of `target` past `source` (below it or to its right)
+    // repeat the source pattern, formulas shifted, in one undo step.
     fn extend(&mut self, sheet: SheetId, source: Range, target: Range) -> Result<(), EngineError> {
         let down = target.end.row > source.end.row;
         let rest = if down {

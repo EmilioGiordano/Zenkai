@@ -689,6 +689,25 @@ line 2"
     }
 
     #[test]
+    fn sort_refuses_ranges_with_merged_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("merged.xlsx");
+        let mut source = rust_xlsxwriter::Workbook::new();
+        let sheet = source.add_worksheet();
+        sheet.write_string(0, 0, "b").unwrap();
+        sheet.write_string(1, 0, "a").unwrap();
+        sheet
+            .merge_range(2, 0, 2, 1, "merged", &rust_xlsxwriter::Format::new())
+            .unwrap();
+        source.save(&path).unwrap();
+        let mut book = open_xlsx(&path).unwrap().workbook;
+        let range = zenkai_types::Range::parse_a1("A1:B3").unwrap();
+        let sorted = book.sort(SheetId(0), range, zenkai_types::ColIdx::clamped(0), false);
+        assert!(sorted.is_err());
+        assert_eq!(book.input(SheetId(0), CellPos::default()), "b");
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
