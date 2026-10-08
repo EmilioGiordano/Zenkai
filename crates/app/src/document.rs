@@ -57,14 +57,18 @@ impl Document {
         }
     }
 
-    pub fn title(&self) -> String {
+    pub fn name_with_marker(&self) -> String {
         let name = self
             .path
             .as_ref()
             .and_then(|p| p.file_name())
             .map_or_else(|| "Book1".to_string(), |n| n.to_string_lossy().into_owned());
         let marker = if self.dirty { "• " } else { "" };
-        format!("{marker}{name} - Zenkai")
+        format!("{marker}{name}")
+    }
+
+    pub fn title(&self) -> String {
+        format!("{} - Zenkai", self.name_with_marker())
     }
 
     // The UI thread never waits: `None` means a recalculation holds the write lock.

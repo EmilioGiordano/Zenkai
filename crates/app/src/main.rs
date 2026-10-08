@@ -45,11 +45,7 @@ fn main() {
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.0), px(800.0)), cx)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Zenkai".into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
+                ..gpui_kit::component::TitleBar::window_options()
             };
             let opened = gpui_kit::open_window(options, cx, |window, cx| {
                 cx.new(|cx| view::Workspace::new(initial, window, cx))
