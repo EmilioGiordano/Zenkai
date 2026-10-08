@@ -34,6 +34,7 @@ use crate::{
     utils as common,
 };
 
+use crate::incremental::{Dependencies, Recalculation};
 use crate::{cf_types::CfCellResult, tz::Tz};
 
 #[cfg(any(test, feature = "mock_time"))]
@@ -223,6 +224,11 @@ pub struct Model<'a> {
     /// Evaluated CF results per cell, keyed by (sheet_index, row, column).
     /// Rebuilt from scratch on every call to evaluate_conditional_formatting().
     pub(crate) cf_cache: HashMap<(u32, i32, i32), Vec<CfCellResult>>,
+    /// Which formulas refer to which cells, for [`Model::evaluate_incremental`].
+    pub(crate) dependencies: Option<Box<Dependencies>>,
+    /// How many times a formula was reached again while it was being evaluated.
+    pub(crate) circular_hits: u64,
+    pub(crate) last_recalculation: Recalculation,
 }
 
 // FIXME: Maybe this should be the same as CellReference
@@ -242,7 +248,7 @@ impl<'a> Model<'a> {
         self.last_variable_id += 1;
         id
     }
-    fn clear_variable_stack(&mut self) {
+    pub(crate) fn clear_variable_stack(&mut self) {
         self.variable_stack.clear();
         self.last_variable_id = 0;
     }
@@ -251,7 +257,7 @@ impl<'a> Model<'a> {
         self.last_lambda_id += 1;
         id
     }
-    fn clear_lambdas(&mut self) {
+    pub(crate) fn clear_lambdas(&mut self) {
         self.lambdas.clear();
         self.last_lambda_id = 0;
     }
@@ -1442,6 +1448,7 @@ impl<'a> Model<'a> {
                 if let Some(state) = self.cells.get(&key) {
                     match state {
                         CellState::Evaluating => {
+                            self.circular_hits += 1;
                             return CalcResult::new_error(
                                 Error::CIRC,
                                 cell_reference,
@@ -1722,6 +1729,9 @@ impl<'a> Model<'a> {
             spill_cells: Vec::new(),
             support: HashMap::new(),
             cf_cache: HashMap::new(),
+            dependencies: None,
+            circular_hits: 0,
+            last_recalculation: Recalculation::Full,
         };
 
         model.parse_formulas();
@@ -2957,7 +2967,7 @@ impl<'a> Model<'a> {
 
     /// Returns all cells in the current spill area of a dynamic-formula anchor,
     /// including the anchor itself.
-    fn get_spill_area(&self, cell_ref: CellReferenceIndex) -> Vec<CellReferenceIndex> {
+    pub(crate) fn get_spill_area(&self, cell_ref: CellReferenceIndex) -> Vec<CellReferenceIndex> {
         let ws = match self.workbook.worksheet(cell_ref.sheet) {
             Ok(ws) => ws,
             Err(_) => return Vec::new(),
@@ -3028,6 +3038,9 @@ impl<'a> Model<'a> {
     /// Phase 2 evaluates every remaining cell in natural order.  Because all spill areas have
     /// already been written, regular cells always read the correct spill values.
     pub fn evaluate(&mut self) {
+        self.dependencies = None;
+        self.circular_hits = 0;
+        self.last_recalculation = Recalculation::Full;
         self.collect_spill_cells();
 
         let n = self.spill_cells.len();

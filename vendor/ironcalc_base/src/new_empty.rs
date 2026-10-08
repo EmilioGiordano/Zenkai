@@ -26,6 +26,7 @@ use crate::{
     utils::ParsedReference,
 };
 
+use crate::incremental::Recalculation;
 use crate::tz::Tz;
 
 pub const APPLICATION: &str = "IronCalc Sheets";
@@ -695,6 +696,9 @@ impl<'a> Model<'a> {
             spill_cells: Vec::new(),
             support: HashMap::new(),
             cf_cache: HashMap::new(),
+            dependencies: None,
+            circular_hits: 0,
+            last_recalculation: Recalculation::Full,
         };
         model.parse_formulas();
         model.evaluate_conditional_formatting();

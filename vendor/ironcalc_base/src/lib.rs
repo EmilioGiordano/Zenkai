@@ -51,8 +51,10 @@ mod cast;
 mod conditional_formatting;
 mod constants;
 mod cut_paste;
+mod dependency_index;
 mod functions;
 mod implicit_intersection;
+mod incremental;
 mod model;
 mod styles;
 mod tz;
@@ -67,6 +69,7 @@ mod test;
 #[cfg(any(test, feature = "mock_time"))]
 pub mod mock_time;
 
+pub use incremental::Recalculation;
 pub use locale::get_supported_locales;
 pub use model::get_milliseconds_since_epoch;
 pub use model::FmtSettings;
