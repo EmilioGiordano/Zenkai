@@ -7,6 +7,7 @@ pub const MAX_MATCHES: usize = 100_000;
 
 pub struct FindBar {
     pub input: Entity<InputState>,
+    pub replace: Option<Entity<InputState>>,
     pub results: FindResults,
 }
 
@@ -71,9 +72,61 @@ pub fn search(workbook: &Workbook, sheet: SheetId, query: &str) -> Vec<CellPos> 
     found
 }
 
+// Every filled cell whose content contains `query` (ignoring case), with each occurrence
+// replaced, as Excel's Replace All with "Look in: Formulas".
+pub fn replacements(
+    workbook: &Workbook,
+    sheet: SheetId,
+    query: &str,
+    replacement: &str,
+) -> Vec<(CellPos, String)> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+    workbook
+        .filled_cells(sheet)
+        .into_iter()
+        .filter_map(|pos| {
+            let input = workbook.input(sheet, pos);
+            let replaced = replace_ignoring_case(&input, query, replacement);
+            (replaced != input).then_some((pos, replaced))
+        })
+        .take(MAX_MATCHES)
+        .collect()
+}
+
+fn replace_ignoring_case(text: &str, query: &str, replacement: &str) -> String {
+    let lower_text = text.to_lowercase();
+    let lower_query = query.to_lowercase();
+    // Lowercasing can change byte lengths outside ASCII; fall back to an exact match then.
+    if lower_text.len() != text.len() || lower_query.len() != query.len() {
+        return text.replace(query, replacement);
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (at, _) in lower_text.match_indices(&lower_query) {
+        out.push_str(&text[last..at]);
+        out.push_str(replacement);
+        last = at + query.len();
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FindResults, search};
+    use super::{FindResults, replace_ignoring_case, search};
+
+    #[test]
+    fn replaces_every_occurrence_ignoring_case() {
+        assert_eq!(
+            replace_ignoring_case("Total total TOTAL", "total", "Sum"),
+            "Sum Sum Sum"
+        );
+        assert_eq!(replace_ignoring_case("=SUM(A1)", "a1", "B2"), "=SUM(B2)");
+        assert_eq!(replace_ignoring_case("Ñandú", "ú", "u"), "Ñandu");
+    }
+
     use zenkai_engine::{Engine, Workbook};
     use zenkai_types::{CellPos, SheetId};
 

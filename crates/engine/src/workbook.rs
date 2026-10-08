@@ -60,6 +60,11 @@ pub trait Engine: Send {
         range: Range,
         change: StyleChange,
     ) -> Result<(), EngineError>;
+    fn set_scattered_inputs(
+        &mut self,
+        sheet: SheetId,
+        inputs: &[(CellPos, String)],
+    ) -> Result<(), EngineError>;
     fn set_number_format(
         &mut self,
         sheet: SheetId,
@@ -741,6 +746,27 @@ impl Engine for Workbook {
         self.model
             .update_range_style(&area(sheet, range), "num_fmt", code)
             .map_err(rejected)
+    }
+
+    // IronCalc has no batch write, so each cell is its own undo step; evaluation waits
+    // until the last one so the workbook recalculates once.
+    fn set_scattered_inputs(
+        &mut self,
+        sheet: SheetId,
+        inputs: &[(CellPos, String)],
+    ) -> Result<(), EngineError> {
+        for (_, text) in inputs {
+            check_input(text)?;
+        }
+        self.model.pause_evaluation();
+        let written = inputs.iter().try_for_each(|(pos, text)| {
+            self.model
+                .set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
+                .map_err(rejected)
+        });
+        self.model.resume_evaluation();
+        self.model.evaluate();
+        written
     }
 
     fn set_rows_hidden(

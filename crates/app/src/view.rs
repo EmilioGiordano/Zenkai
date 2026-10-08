@@ -32,6 +32,8 @@ use crate::region;
 use crate::stats::{self, SelectionStats};
 use crate::theme;
 use crate::toolbar;
+use gpui_kit::component::Sizable;
+use gpui_kit::component::button::Button;
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -475,6 +477,7 @@ impl Workspace {
                 self._subscriptions.push(subscription);
                 self.find = Some(FindBar {
                     input: input.clone(),
+                    replace: None,
                     results: FindResults::default(),
                 });
                 input
@@ -483,6 +486,50 @@ impl Workspace {
         let focus = input.focus_handle(cx);
         window.focus(&focus, cx);
         cx.notify();
+    }
+
+    fn open_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_find(window, cx);
+        let Some(bar) = &mut self.find else {
+            return;
+        };
+        if bar.replace.is_none() {
+            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Replace with"));
+            let subscription = cx.subscribe_in(&input, window, |this, _, event, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.replace_all(window, cx);
+                }
+            });
+            self._subscriptions.push(subscription);
+            bar.replace = Some(input);
+        }
+        cx.notify();
+    }
+
+    fn replace_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bar) = &self.find else {
+            return;
+        };
+        let query = bar.input.read(cx).value().to_string();
+        let replacement = bar
+            .replace
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        if query.is_empty() {
+            return;
+        }
+        let sheet = self.document.sheet;
+        // The scan reads every filled cell, so it runs with the edit, off the UI thread.
+        self.edit(window, cx, move |wb| {
+            let changes = find::replacements(wb, sheet, &query, &replacement);
+            if changes.is_empty() {
+                return Err(EngineError::Rejected(format!(
+                    "no cell contains \"{query}\""
+                )));
+            }
+            wb.set_scattered_inputs(sheet, &changes)
+        });
     }
 
     fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -583,7 +630,21 @@ impl Workspace {
                 .border_b_1()
                 .border_color(theme.border)
                 .bg(theme.background)
-                .child(div().w(px(320.0)).child(Input::new(&bar.input)))
+                .child(div().w(px(260.0)).child(Input::new(&bar.input)))
+                .children(bar.replace.as_ref().map(|replace| {
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .child(div().w(px(220.0)).child(Input::new(replace)))
+                        .child(
+                            Button::new("replace-all")
+                                .small()
+                                .label("Replace all")
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.replace_all(window, cx)),
+                                ),
+                        )
+                }))
                 .child(
                     div()
                         .text_sm()
@@ -2414,6 +2475,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &NewSheet, window, cx| this.add_sheet(window, cx)))
             .on_action(cx.listener(|this, _: &InsertChart, _, cx| this.insert_chart(cx)))
+            .on_action(cx.listener(|this, _: &Replace, window, cx| this.open_replace(window, cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
             .on_action(
                 cx.listener(|this, _: &RenameSheet, window, cx| this.open_rename(window, cx)),

@@ -22,6 +22,7 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Cut", Cut),
             item("Paste", Paste),
             item("Find", Find),
+            item("Replace…", Replace),
             item("Fill down", FillDown),
             item("Fill right", FillRight),
             item("Sort A to Z (by the active cell's column)", SortAscending),

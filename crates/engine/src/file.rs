@@ -752,6 +752,22 @@ line 2"
     }
 
     #[test]
+    fn scattered_inputs_write_cells_and_recalculate_once_done() {
+        let mut book = Workbook::new_empty().unwrap();
+        let a1 = CellPos::parse_a1("A1").unwrap();
+        let b1 = CellPos::parse_a1("B1").unwrap();
+        let c3 = CellPos::parse_a1("C3").unwrap();
+        book.set_input(SheetId(0), a1, "1").unwrap();
+        book.set_input(SheetId(0), b1, "=A1*2").unwrap();
+        let changes = vec![(a1, "5".to_string()), (c3, "hola".to_string())];
+        book.set_scattered_inputs(SheetId(0), &changes).unwrap();
+        assert_eq!(book.number(SheetId(0), b1), Some(10.0));
+        assert_eq!(book.input(SheetId(0), c3), "hola");
+        let deep = vec![(c3, format!("={}1{}", "(".repeat(300), ")".repeat(300)))];
+        assert!(book.set_scattered_inputs(SheetId(0), &deep).is_err());
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
