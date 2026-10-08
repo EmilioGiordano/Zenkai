@@ -81,11 +81,13 @@ pub fn open_values(path: &Path) -> Result<Workbook, String> {
             if let Err(error) = workbook.rename_sheet(SheetId(index), &sheet.name) {
                 tracing::warn!(%error, name = %sheet.name, "kept the default sheet name");
             }
-            let origin = CellPos::new(
-                RowIdx::clamped(i64::from(sheet.first_row)),
-                ColIdx::clamped(i64::from(sheet.first_col)),
-            );
-            workbook.set_inputs(SheetId(index), origin, &sheet.rows)?;
+            for block in &sheet.blocks {
+                let origin = CellPos::new(
+                    RowIdx::clamped(i64::from(block.first_row)),
+                    ColIdx::clamped(i64::from(block.first_col)),
+                );
+                workbook.set_inputs(SheetId(index), origin, &block.rows)?;
+            }
         }
         Ok(workbook)
     })

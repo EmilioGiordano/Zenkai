@@ -1029,7 +1029,9 @@ impl Workspace {
     }
 
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
-        let must_rename = !self.document.unsupported.is_empty() || self.document.is_macro_enabled();
+        let must_rename = !self.document.unsupported.is_empty()
+            || self.document.is_macro_enabled()
+            || self.document.read_only;
         match self.document.path.clone() {
             Some(path) if !must_rename => self.save_to(path, window, cx),
             Some(_) => {
