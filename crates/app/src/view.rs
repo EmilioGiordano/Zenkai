@@ -1659,11 +1659,21 @@ impl Workspace {
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let entity = cx.entity().downgrade();
-        let tabs = self
-            .document
-            .sheets
-            .iter()
-            .map(|sheet| Tab::new().label(sheet.name.clone()));
+        let tabs = self.document.sheets.iter().map(|sheet| {
+            let entity = entity.clone();
+            let id = sheet.id;
+            // Excel activates a tab on right click, so its menu acts on that sheet.
+            Tab::new().label(sheet.name.clone()).on_mouse_down(
+                MouseButton::Right,
+                move |_, window, cx| {
+                    if let Err(error) =
+                        entity.update(cx, |this, cx| this.switch_sheet(id, window, cx))
+                    {
+                        tracing::debug!(%error, "workspace dropped");
+                    }
+                },
+            )
+        });
         h_flex()
             .h(px(32.0))
             .items_center()
