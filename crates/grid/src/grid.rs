@@ -81,6 +81,7 @@ pub struct Grid {
     zoom: f32,
     dragging: bool,
     marquee: Option<Range>,
+    tab_start: Option<ColIdx>,
     frozen_rows: u32,
     frozen_cols: u16,
     merges: Rc<Vec<Range>>,
@@ -121,6 +122,7 @@ impl Grid {
             zoom: 1.0,
             dragging: false,
             marquee: None,
+            tab_start: None,
             frozen_rows: 0,
             frozen_cols: 0,
             merges: Rc::new(Vec::new()),
@@ -227,6 +229,7 @@ impl Grid {
     }
 
     pub fn select(&mut self, active: CellPos, corner: CellPos, cx: &mut Context<Self>) {
+        self.tab_start = None;
         self.selection = Selection { active, corner };
         self.scroll_into_view(corner, cx);
         cx.emit(GridEvent::SelectionChanged);
@@ -754,9 +757,26 @@ impl Render for Grid {
 }
 
 impl Grid {
+    // Excel returns Enter to the column where a row of Tab entries began.
     fn confirm(&mut self, direction: Direction, cx: &mut Context<Self>) {
         self.commit_edit(cx);
-        self.after_commit_move(direction, cx);
+        let single = self.selection.range().cell_count() == 1;
+        let active = self.selection.active;
+        match (direction, self.tab_start) {
+            (Direction::Right, _) if single => {
+                let start = self.tab_start.unwrap_or(active.col);
+                self.after_commit_move(direction, cx);
+                self.tab_start = Some(start);
+            }
+            (Direction::Down, Some(col)) if single => {
+                let pos = CellPos::new(active.row.offset(1), col);
+                self.select(pos, pos, cx);
+            }
+            _ => {
+                self.tab_start = None;
+                self.after_commit_move(direction, cx);
+            }
+        }
     }
 
     fn jump(&mut self, direction: Direction, extend: bool, cx: &mut Context<Self>) {
