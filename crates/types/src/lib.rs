@@ -271,6 +271,8 @@ pub enum StyleChange {
     Bold(bool),
     Italic(bool),
     Underline(bool),
+    Strike(bool),
+    FontSize(u16),
     Align(HAlign),
     NumberFormat(NumberFormat),
     FontColor(Option<Rgb>),

@@ -55,6 +55,7 @@ const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 
 const UI_SCALE_STEP: f32 = 0.125;
+const FONT_SIZES: [u16; 16] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 const IMPORTING: &str = "Importing…";
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
@@ -1503,6 +1504,27 @@ impl Workspace {
         self.style(make(!current), window, cx);
     }
 
+    // Ctrl+Shift+> and < move through Excel's font size list from the active cell's size.
+    fn step_font_size(&mut self, grow: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let active = self.grid.read(cx).selection().active;
+        let current = self
+            .document
+            .workbook()
+            .and_then(|wb| wb.cell(self.document.sheet, active).style.font_size)
+            .unwrap_or(11.0);
+        let next = if grow {
+            FONT_SIZES.iter().find(|size| f32::from(**size) > current)
+        } else {
+            FONT_SIZES
+                .iter()
+                .rev()
+                .find(|size| f32::from(**size) < current)
+        };
+        if let Some(size) = next {
+            self.style(StyleChange::FontSize(*size), window, cx);
+        }
+    }
+
     fn copy(&mut self, cut: bool, cx: &mut Context<Self>) {
         let range = self.selection(cx);
         let sheet = self.document.sheet;
@@ -2131,6 +2153,15 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleItalic, window, cx| {
                 this.toggle_flag(|s| s.italic, StyleChange::Italic, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleStrikethrough, window, cx| {
+                this.toggle_flag(|s| s.strike, StyleChange::Strike, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &GrowFont, window, cx| this.step_font_size(true, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ShrinkFont, window, cx| {
+                this.step_font_size(false, window, cx)
             }))
             .on_action(cx.listener(|this, _: &ToggleUnderline, window, cx| {
                 this.toggle_flag(|s| s.underline, StyleChange::Underline, window, cx)

@@ -571,6 +571,8 @@ impl Engine for Workbook {
             StyleChange::Bold(on) => ("font.b", flag(on)),
             StyleChange::Italic(on) => ("font.i", flag(on)),
             StyleChange::Underline(on) => ("font.u", flag(on)),
+            StyleChange::Strike(on) => ("font.strike", flag(on)),
+            StyleChange::FontSize(points) => ("font.size", points.to_string()),
             StyleChange::FontColor(color) => ("font.color", hex(color)),
             StyleChange::Fill(color) => ("fill.fg_color", hex(color)),
             StyleChange::Align(align) => (

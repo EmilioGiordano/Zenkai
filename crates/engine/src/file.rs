@@ -577,6 +577,21 @@ line 2"
     }
 
     #[test]
+    fn strike_and_font_size_apply() {
+        let mut book = Workbook::new_empty().unwrap();
+        let a1 = CellPos::default();
+        book.set_input(SheetId(0), a1, "x").unwrap();
+        let range = zenkai_types::Range::single(a1);
+        book.apply_style(SheetId(0), range, zenkai_types::StyleChange::Strike(true))
+            .unwrap();
+        book.apply_style(SheetId(0), range, zenkai_types::StyleChange::FontSize(14))
+            .unwrap();
+        let style = book.cell(SheetId(0), a1).style;
+        assert!(style.strike);
+        assert_eq!(style.font_size, Some(14.0));
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
