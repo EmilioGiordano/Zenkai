@@ -267,22 +267,109 @@ impl Settings {
     }
 }
 
-// The settings in force: a file that stops parsing keeps the last good settings and
-// reports why, so a half-written edit never switches the agents off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Escalation {
+    WriteWithoutAsking,
+    ExternalAgents,
+}
+
+impl Escalation {
+    pub fn label(self) -> &'static str {
+        match self {
+            Escalation::WriteWithoutAsking => "let agents change the workbook without asking",
+            Escalation::ExternalAgents => "let MCP clients outside Zenkai connect",
+        }
+    }
+}
+
+// What `to` allows agents to do that `from` did not.
+pub fn escalations(from: &Settings, to: &Settings) -> Vec<Escalation> {
+    let mut raised = Vec::new();
+    if to.agents.permission == PermissionMode::Automatic
+        && from.agents.permission != PermissionMode::Automatic
+    {
+        raised.push(Escalation::WriteWithoutAsking);
+    }
+    if to.agents.external_agents == ExternalAgents::Allowed
+        && from.agents.external_agents != ExternalAgents::Allowed
+    {
+        raised.push(Escalation::ExternalAgents);
+    }
+    raised
+}
+
+// A change to settings.json that gives agents more power, waiting for the user.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeldChange {
+    pub settings: Settings,
+    pub escalations: Vec<Escalation>,
+}
+
+// The settings in force. A file that stops parsing keeps the last good settings and
+// reports why, so a half-written edit never switches the agents off. Any program running
+// as the user can write settings.json, so a file change that gives agents more power is
+// held until the user confirms it in Zenkai; everything else in it applies at once.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SettingsState {
     pub current: Settings,
     pub problem: Option<SettingsError>,
+    pub held: Option<HeldChange>,
+    // A held change the user turned down; the same file content does not ask again.
+    declined: Option<Settings>,
 }
 
 impl SettingsState {
-    pub fn apply(&mut self, loaded: Result<Settings, SettingsError>) {
+    pub fn apply_file(&mut self, loaded: Result<Settings, SettingsError>) {
         match loaded {
             Ok(settings) => {
-                self.current = settings;
                 self.problem = None;
+                self.apply_with_approval(settings, &[]);
             }
             Err(problem) => self.problem = Some(problem),
+        }
+    }
+
+    // Settings written by Zenkai's own page: what the user clicked there is approved.
+    pub fn apply_from_page(&mut self, settings: Settings, approved: &[Escalation]) {
+        self.problem = None;
+        self.apply_with_approval(settings, approved);
+    }
+
+    fn apply_with_approval(&mut self, settings: Settings, approved: &[Escalation]) {
+        let raised: Vec<Escalation> = escalations(&self.current, &settings)
+            .into_iter()
+            .filter(|escalation| !approved.contains(escalation))
+            .collect();
+        if raised.is_empty() {
+            self.current = settings;
+            self.held = None;
+            self.declined = None;
+            return;
+        }
+        let mut safe = settings.clone();
+        if raised.contains(&Escalation::WriteWithoutAsking) {
+            safe.agents.permission = self.current.agents.permission;
+        }
+        if raised.contains(&Escalation::ExternalAgents) {
+            safe.agents.external_agents = self.current.agents.external_agents;
+        }
+        self.current = safe;
+        self.held = (self.declined.as_ref() != Some(&settings)).then_some(HeldChange {
+            settings,
+            escalations: raised,
+        });
+    }
+
+    pub fn accept_held(&mut self) {
+        if let Some(held) = self.held.take() {
+            self.current = held.settings;
+            self.declined = None;
+        }
+    }
+
+    pub fn decline_held(&mut self) {
+        if let Some(held) = self.held.take() {
+            self.declined = Some(held.settings);
         }
     }
 }
@@ -412,13 +499,102 @@ mod tests {
     #[test]
     fn a_broken_reload_keeps_the_last_good_settings() {
         let mut state = SettingsState::default();
-        state.apply(Settings::parse(FULL));
-        let good = state.current.clone();
-        state.apply(Settings::parse("{ \"agents\": "));
-        assert_eq!(state.current, good);
+        let good = Settings::parse(r#"{ "agents": { "permission": "read_only" } }"#);
+        state.apply_file(good.clone());
+        state.apply_file(Settings::parse("{ \"agents\": "));
+        assert_eq!(Ok(state.current.clone()), good);
         assert!(matches!(state.problem, Some(SettingsError::Parse { .. })));
-        state.apply(Settings::parse("{}"));
+        state.apply_file(Settings::parse("{}"));
         assert_eq!(state.current, Settings::default());
         assert_eq!(state.problem, None);
+    }
+
+    fn granting(text: &str) -> Settings {
+        Settings::parse(text).unwrap()
+    }
+
+    #[test]
+    fn a_file_that_grants_more_power_waits_for_the_user() {
+        let mut state = SettingsState::default();
+        let file = granting(FULL);
+        state.apply_file(Ok(file.clone()));
+        assert_eq!(
+            state.current.agents.permission,
+            PermissionMode::AskBeforeWrite
+        );
+        assert_eq!(
+            state.current.agents.external_agents,
+            ExternalAgents::Blocked
+        );
+        assert_eq!(state.current.agents.servers, file.agents.servers);
+        let held = state.held.clone().unwrap();
+        assert_eq!(
+            held.escalations,
+            [Escalation::WriteWithoutAsking, Escalation::ExternalAgents]
+        );
+        state.accept_held();
+        assert_eq!(state.current, file);
+        assert_eq!(state.held, None);
+    }
+
+    #[test]
+    fn a_declined_change_does_not_ask_again_until_the_file_changes() {
+        let mut state = SettingsState::default();
+        let automatic = granting(r#"{ "agents": { "permission": "automatic" } }"#);
+        state.apply_file(Ok(automatic.clone()));
+        state.decline_held();
+        assert_eq!(
+            state.current.agents.permission,
+            PermissionMode::AskBeforeWrite
+        );
+        state.apply_file(Ok(automatic));
+        assert_eq!(state.held, None);
+        let both = granting(
+            r#"{ "agents": { "permission": "automatic", "external_agents": "allowed" } }"#,
+        );
+        state.apply_file(Ok(both));
+        assert!(state.held.is_some());
+    }
+
+    #[test]
+    fn taking_power_away_applies_at_once() {
+        let mut state = SettingsState::default();
+        state.apply_from_page(
+            granting(
+                r#"{ "agents": { "permission": "automatic", "external_agents": "allowed" } }"#,
+            ),
+            &[Escalation::WriteWithoutAsking, Escalation::ExternalAgents],
+        );
+        assert_eq!(state.held, None);
+        state.apply_file(Ok(granting(
+            r#"{ "agents": { "permission": "read_only" } }"#,
+        )));
+        assert_eq!(state.held, None);
+        assert_eq!(state.current.agents.permission, PermissionMode::ReadOnly);
+        assert_eq!(
+            state.current.agents.external_agents,
+            ExternalAgents::Blocked
+        );
+    }
+
+    #[test]
+    fn the_settings_page_approves_only_what_the_user_clicked() {
+        let mut state = SettingsState::default();
+        let saved = granting(
+            r#"{ "agents": { "permission": "automatic", "external_agents": "allowed" } }"#,
+        );
+        state.apply_from_page(saved, &[Escalation::ExternalAgents]);
+        assert_eq!(
+            state.current.agents.external_agents,
+            ExternalAgents::Allowed
+        );
+        assert_eq!(
+            state.current.agents.permission,
+            PermissionMode::AskBeforeWrite
+        );
+        assert_eq!(
+            state.held.unwrap().escalations,
+            [Escalation::WriteWithoutAsking]
+        );
     }
 }

@@ -163,8 +163,8 @@ impl Render for SettingsPage {
                             .selected(is_default)
                             .on_click(move |_, _, cx| {
                                 let target = target.clone();
-                                agent_settings::change(cx, |settings| {
-                                    settings.agents.default = Some(target);
+                                agent_settings::change(cx, move |settings| {
+                                    settings.agents.default = Some(target.clone());
                                 });
                             }),
                     )

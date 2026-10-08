@@ -21,6 +21,11 @@ use zenkai_types::{
     StyleChange,
 };
 
+mod settings_gate;
+
+use settings_gate::HeldDecision;
+use zenkai_agent::settings::{HeldChange, PermissionMode as AgentPermission};
+
 use crate::actions::*;
 use crate::agent_settings::{self, AgentConfig};
 use crate::chart::{self, ChartKind};
@@ -150,6 +155,9 @@ pub struct Workspace {
     settings_page: Option<Entity<SettingsPage>>,
     // The settings problem already shown, so a reload with the same error stays quiet.
     shown_settings_problem: Option<SettingsError>,
+    // A settings.json change that gives agents more power, as last shown for confirmation.
+    shown_held: Option<HeldChange>,
+    held_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -190,7 +198,7 @@ impl Workspace {
                 agent_settings::reload(cx);
             }
         });
-        let settings = cx.observe_global::<AgentConfig>(Self::on_settings_changed);
+        let settings = cx.observe_global_in::<AgentConfig>(window, Self::on_settings_changed);
         let workbook = match Workbook::new_empty() {
             Ok(workbook) => workbook,
             Err(error) => exit_without_workbook(error),
@@ -236,6 +244,8 @@ impl Workspace {
             cell_refresh: CellRefresh::Idle,
             settings_page: None,
             shown_settings_problem: None,
+            shown_held: None,
+            held_focus: cx.focus_handle(),
             _subscriptions: vec![
                 subscription,
                 appearance,
@@ -2362,21 +2372,6 @@ impl Workspace {
         });
     }
 
-    fn on_settings_changed(&mut self, cx: &mut Context<Self>) {
-        let problem = cx.global::<AgentConfig>().state.problem.clone();
-        if problem == self.shown_settings_problem {
-            return;
-        }
-        if let Some(problem) = &problem {
-            self.notify(
-                Severity::Warning,
-                format!("{problem}. Zenkai keeps using the last valid settings."),
-                cx,
-            );
-        }
-        self.shown_settings_problem = problem;
-    }
-
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let page = self
             .settings_page
@@ -2906,10 +2901,19 @@ impl Workspace {
         } else {
             left = left.child(div().text_color(theme.muted_foreground).child("Ready"));
         }
+        let automatic = cx.global::<AgentConfig>().state.current.agents.permission
+            == AgentPermission::Automatic;
         let mut right = h_flex()
             .gap_4()
             .items_center()
-            .text_color(theme.muted_foreground);
+            .text_color(theme.muted_foreground)
+            .when(automatic, |this| {
+                this.child(
+                    div()
+                        .text_color(theme.warning)
+                        .child("⚠ Agents write without asking"),
+                )
+            });
         match self.stats {
             Some(stats) if stats.count > 1 => {
                 if let Some(avg) = stats.average() {
@@ -3316,9 +3320,16 @@ impl Render for Workspace {
                 settings_page::set_permission(PermissionMode::Automatic, cx)
             })
             .on_action(|_: &ToggleExternalAgents, _, cx| settings_page::toggle_external_agents(cx))
+            .on_action(cx.listener(|this, _: &ApplyHeldSettings, window, cx| {
+                this.decide_held_settings(HeldDecision::Apply, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &KeepCurrentSettings, window, cx| {
+                this.decide_held_settings(HeldDecision::Keep, window, cx)
+            }))
             .child(self.render_title_bar(cx))
             .child(toolbar::render(&self.active_style, &self.colors, cx))
             .child(self.render_formula_bar(cx))
+            .children(self.render_held_settings(cx))
             .children(self.render_find(cx))
             .child(
                 h_flex()

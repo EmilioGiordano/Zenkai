@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use gpui_kit::*;
 use zenkai_agent::detect::{self, Detection};
 use zenkai_agent::secrets::{SecretStatus, Secrets};
-use zenkai_agent::settings::{SecretName, Settings, SettingsState};
+use zenkai_agent::settings::{SecretName, Settings, SettingsState, escalations};
 use zenkai_agent::settings_file::{self, SettingsFileError, SettingsPaths, SettingsWatcher};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,7 +47,7 @@ pub fn init(cx: &mut App) {
             Ok((paths, loaded, watcher)) => {
                 config.paths = Some(paths);
                 match loaded {
-                    Ok(settings) => config.state.apply(Ok(settings)),
+                    Ok(settings) => config.state.apply_file(Ok(settings)),
                     Err(error) => {
                         tracing::warn!(%error, "could not prepare the settings folder");
                         config.failure = Some(error.to_string());
@@ -65,7 +65,7 @@ pub fn init(cx: &mut App) {
         });
         refresh_secrets(cx);
         while let Ok(loaded) = reloads.recv().await {
-            cx.update_global::<AgentConfig, _>(|config, _| config.state.apply(loaded));
+            cx.update_global::<AgentConfig, _>(|config, _| config.state.apply_file(loaded));
             refresh_secrets(cx);
         }
     })
@@ -89,7 +89,7 @@ pub fn reload(cx: &mut App) {
             .await;
         let changed = cx.update_global::<AgentConfig, _>(|config, _| {
             let before = config.state.clone();
-            config.state.apply(loaded);
+            config.state.apply_file(loaded);
             config.state != before
         });
         if changed {
@@ -145,10 +145,17 @@ fn secret_states(names: &[SecretName]) -> BTreeMap<SecretName, SecretState> {
         .collect()
 }
 
-pub fn change(cx: &mut App, edit: impl FnOnce(&mut Settings) + Send + 'static) {
-    let Some(paths) = cx.global::<AgentConfig>().paths.clone() else {
+// What the user clicked on the Settings page is their own choice, so a change that
+// gives agents more power is approved here and never held like a file edit.
+pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
+    let config = cx.global::<AgentConfig>();
+    let Some(paths) = config.paths.clone() else {
         return;
     };
+    let current = config.state.current.clone();
+    let mut edited = current.clone();
+    edit(&mut edited);
+    let approved = escalations(&current, &edited);
     cx.spawn(async move |cx| {
         let written = cx
             .background_executor()
@@ -156,7 +163,7 @@ pub fn change(cx: &mut App, edit: impl FnOnce(&mut Settings) + Send + 'static) {
             .await;
         cx.update_global::<AgentConfig, _>(|config, _| match written {
             Ok(settings) => {
-                config.state.apply(Ok(settings));
+                config.state.apply_from_page(settings, &approved);
                 config.failure = None;
             }
             Err(error) => config.failure = Some(format!("Settings were not changed: {error}")),

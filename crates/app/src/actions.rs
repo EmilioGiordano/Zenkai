@@ -114,6 +114,8 @@ actions!(
         ToggleExternalAgents,
         FocusNextControl,
         FocusPreviousControl,
+        ApplyHeldSettings,
+        KeepCurrentSettings,
     ]
 );
 
@@ -196,5 +198,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-e", ToggleExternalAgents, Some("SettingsPage")),
         KeyBinding::new("tab", FocusNextControl, Some("SettingsPage")),
         KeyBinding::new("shift-tab", FocusPreviousControl, Some("SettingsPage")),
+        KeyBinding::new("enter", KeepCurrentSettings, Some("HeldSettings")),
+        KeyBinding::new("escape", KeepCurrentSettings, Some("HeldSettings")),
+        KeyBinding::new("alt-a", ApplyHeldSettings, Some("HeldSettings")),
     ]);
 }
