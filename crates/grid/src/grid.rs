@@ -746,20 +746,28 @@ impl Grid {
             self.commit_edit(cx);
         }
         let range = self.selection.range();
+        let whole_rows = range.start.col == ColIdx::default() && range.end.col == ColIdx::LAST;
+        let whole_cols = range.start.row == RowIdx::default() && range.end.row == RowIdx::LAST;
         match self.hit(event.position) {
             Hit::Cell(pos) if !range.contains(pos) => self.select(pos, pos, cx),
-            Hit::RowHeader(row) if !range.contains(CellPos::new(row, range.start.col)) => self
-                .select(
+            Hit::RowHeader(row)
+                if !(whole_rows && (range.start.row..=range.end.row).contains(&row)) =>
+            {
+                self.select(
                     CellPos::new(row, ColIdx::default()),
                     CellPos::new(row, ColIdx::LAST),
                     cx,
-                ),
-            Hit::ColHeader(col) if !range.contains(CellPos::new(range.start.row, col)) => self
-                .select(
+                )
+            }
+            Hit::ColHeader(col)
+                if !(whole_cols && (range.start.col..=range.end.col).contains(&col)) =>
+            {
+                self.select(
                     CellPos::new(RowIdx::default(), col),
                     CellPos::new(RowIdx::LAST, col),
                     cx,
-                ),
+                )
+            }
             _ => {}
         }
     }
