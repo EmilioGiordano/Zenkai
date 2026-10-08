@@ -33,6 +33,8 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Bold", ToggleBold),
             item("Italic", ToggleItalic),
             item("Underline", ToggleUnderline),
+            item("No fill", NoFill),
+            item("Automatic font colour", AutomaticFontColor),
             item("Align left", AlignLeft),
             item("Center", AlignCenter),
             item("Align right", AlignRight),

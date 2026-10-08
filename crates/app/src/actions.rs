@@ -31,6 +31,8 @@ actions!(
         InterfaceSmaller,
         InterfaceReset,
         ToggleReduceMotion,
+        NoFill,
+        AutomaticFontColor,
         NextSheet,
         PreviousSheet,
         NewSheet,

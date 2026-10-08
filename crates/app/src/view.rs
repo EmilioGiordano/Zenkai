@@ -2147,6 +2147,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FormatGeneral, window, cx| {
                 this.style(StyleChange::NumberFormat(NumberFormat::General), window, cx)
             }))
+            .on_action(cx.listener(|this, _: &NoFill, window, cx| {
+                this.style(StyleChange::Fill(None), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AutomaticFontColor, window, cx| {
+                this.style(StyleChange::FontColor(None), window, cx)
+            }))
             .on_action(cx.listener(|this, _: &FormatNumber, window, cx| {
                 this.style(StyleChange::NumberFormat(NumberFormat::Number), window, cx)
             }))

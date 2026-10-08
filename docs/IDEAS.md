@@ -13,3 +13,6 @@ Functionality outside the current spec, proposed here instead of implemented.
 - Preserve page margins, page setup (without printer-settings parts), header/footer, tab
   colour and zoom on save by copying those elements from the original sheet XML, as
   `empty_rows.rs` does for rows. Needs care with sheet reordering and renamed sheets.
+- Pick a font or fill colour from the keyboard: an action that opens the toolbar picker
+  with focus on its swatches (today the palette has only "No fill" and "Automatic font
+  colour"; Excel itself has no default colour shortcut).
