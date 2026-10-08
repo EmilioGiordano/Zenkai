@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use zenkai_types::{MAX_COLS, MAX_ROWS};
 
+use crate::budget::{MAX_CELLS, MAX_OUTPUT_BYTES, estimated_output_bytes};
 use crate::date::Date;
 use crate::email::{EmailPlan, NamePart, NameSource};
 use crate::error::{ColumnProblem, DatagenError, TextField};
@@ -60,7 +61,15 @@ pub(crate) fn plan(spec: &GenerationSpec) -> Result<Vec<ColumnPlan>, DatagenErro
             limit: MAX_COLS,
         });
     }
-    spec.columns
+    let cells = u64::from(spec.rows) * spec.columns.len() as u64;
+    if cells > MAX_CELLS {
+        return Err(DatagenError::TooManyCells {
+            requested: cells,
+            limit: MAX_CELLS,
+        });
+    }
+    let plans = spec
+        .columns
         .iter()
         .enumerate()
         .map(|(position, column)| {
@@ -70,7 +79,15 @@ pub(crate) fn plan(spec: &GenerationSpec) -> Result<Vec<ColumnPlan>, DatagenErro
                 problem,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let estimated_bytes = estimated_output_bytes(spec);
+    if estimated_bytes > MAX_OUTPUT_BYTES {
+        return Err(DatagenError::OutputTooLarge {
+            estimated_bytes,
+            limit: MAX_OUTPUT_BYTES,
+        });
+    }
+    Ok(plans)
 }
 
 fn plan_column(spec: &GenerationSpec, column: &ColumnSpec) -> Result<ColumnPlan, ColumnProblem> {

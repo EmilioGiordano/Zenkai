@@ -136,3 +136,45 @@ fn control_characters_are_rejected_except_tab_and_line_break() {
     );
     assert_eq!(check("L", list_of("a\tb\nc")), Ok(()));
 }
+
+fn table(rows: u32, columns: usize, kind: ColumnKind) -> Result<(), DatagenError> {
+    validate(&GenerationSpec {
+        rows,
+        locale: Locale::SpanishArgentina,
+        seed: 1,
+        columns: (0..columns)
+            .map(|position| column(&format!("C{position}"), kind.clone()))
+            .collect(),
+    })
+}
+
+#[test]
+fn cell_budget_passes_at_the_limit_and_fails_above_it() {
+    assert_eq!(table(1_000_000, 5, ColumnKind::City {}), Ok(()));
+    assert_eq!(
+        table(1_000_001, 5, ColumnKind::City {}),
+        Err(DatagenError::TooManyCells {
+            requested: 5_000_005,
+            limit: 5_000_000
+        })
+    );
+}
+
+#[test]
+fn a_small_spec_cannot_ask_for_gigabytes() {
+    let lorem = ColumnKind::Lorem {
+        min_words: 200,
+        max_words: 200,
+    };
+    assert!(matches!(
+        table(1_000_000, 4, lorem),
+        Err(DatagenError::OutputTooLarge { .. })
+    ));
+    let long_pattern = ColumnKind::Pattern {
+        pattern: "A".repeat(256),
+    };
+    assert!(matches!(
+        table(1_000_000, 4, long_pattern),
+        Err(DatagenError::OutputTooLarge { .. })
+    ));
+}

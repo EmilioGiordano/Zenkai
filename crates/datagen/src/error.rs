@@ -10,6 +10,10 @@ pub enum DatagenError {
     TooManyRows { requested: u32, limit: u32 },
     #[error("{requested} columns do not fit in a sheet of {limit} columns")]
     TooManyColumns { requested: usize, limit: u16 },
+    #[error("{requested} cells exceed the limit of {limit} in one generation")]
+    TooManyCells { requested: u64, limit: u64 },
+    #[error("the rows would take up to {estimated_bytes} bytes; the limit is {limit}")]
+    OutputTooLarge { estimated_bytes: u64, limit: u64 },
     #[error("column {} \"{}\": {problem}", .position + 1, clip(.header))]
     Column {
         position: usize,

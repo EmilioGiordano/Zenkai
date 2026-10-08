@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod budget;
 mod date;
 mod detect;
 mod distinct;

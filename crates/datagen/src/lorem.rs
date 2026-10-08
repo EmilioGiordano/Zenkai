@@ -66,6 +66,19 @@ pub(crate) const WORDS: &[&str] = &[
 ];
 
 pub(crate) const MAX_WORDS: u16 = 200;
+pub(crate) const LONGEST_WORD: usize = longest_word();
+
+const fn longest_word() -> usize {
+    let mut longest = 0;
+    let mut index = 0;
+    while index < WORDS.len() {
+        if WORDS[index].len() > longest {
+            longest = WORDS[index].len();
+        }
+        index += 1;
+    }
+    longest
+}
 
 pub(crate) fn sentence<'a>(words: impl Iterator<Item = &'a str>) -> String {
     let mut text = String::new();
