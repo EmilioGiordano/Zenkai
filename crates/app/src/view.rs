@@ -203,6 +203,11 @@ impl Workspace {
             Ok(lock) => self.session_lock = Some(lock),
             Err(error) => {
                 tracing::warn!(%error, "could not lock the recovery session; autosave is off");
+                self.notify(
+                    Severity::Warning,
+                    format!("Autosave is off, the recovery folder is not usable: {error}"),
+                    cx,
+                );
                 return;
             }
         }
