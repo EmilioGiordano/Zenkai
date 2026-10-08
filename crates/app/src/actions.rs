@@ -79,6 +79,7 @@ actions!(
         Find,
         Replace,
         CloseFind,
+        CancelFormulaBar,
         TogglePalette,
         ClosePalette,
         RenameSheet,
@@ -170,5 +171,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-:", InsertTime, CONTEXT),
         KeyBinding::new("escape", CloseGoTo, Some("NameBox")),
         KeyBinding::new("escape", CloseFind, Some("FindBar")),
+        KeyBinding::new("escape", CancelFormulaBar, Some("FormulaBar")),
     ]);
 }

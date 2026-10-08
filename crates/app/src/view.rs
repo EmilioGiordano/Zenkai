@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
@@ -43,6 +44,12 @@ use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
+
+struct FormulaBarEdit {
+    input: Entity<InputState>,
+    pos: CellPos,
+    _events: Subscription,
+}
 
 #[derive(Clone)]
 struct InternalClip {
@@ -106,6 +113,7 @@ pub struct Workspace {
     // Interface scale, independent of the grid zoom: everything sized in rems.
     ui_scale: f32,
     show_formulas: bool,
+    formula_bar: Option<FormulaBarEdit>,
     // The last formatting change, which F4 repeats on the selection as in Excel.
     last_style: Option<StyleChange>,
     recent: Vec<PathBuf>,
@@ -171,6 +179,7 @@ impl Workspace {
             csv_request: 0,
             ui_scale: 1.0,
             show_formulas: false,
+            formula_bar: None,
             last_style: None,
             recent: Vec::new(),
             recent_saves: Arc::new(AtomicU64::new(0)),
@@ -821,19 +830,7 @@ impl Workspace {
                     grid.begin_edit(pos, text, EditMode::Edit, cx)
                 });
             }
-            GridEvent::Commit { pos, text } => {
-                let (sheet, pos, text) = (self.document.sheet, *pos, text.clone());
-                self.edit(window, cx, move |wb| {
-                    // Excel turns on wrap text for a cell typed with a line break.
-                    let wraps = text.contains('\n') && !text.starts_with('=');
-                    wb.set_input(sheet, pos, &text)?;
-                    if wraps {
-                        wb.apply_style(sheet, Range::single(pos), StyleChange::Wrap(true))?;
-                        grow_wrapped_rows(wb, sheet, Range::single(pos))?;
-                    }
-                    widen_for_numbers(wb, sheet, Range::single(pos))
-                });
-            }
+            GridEvent::Commit { pos, text } => self.commit_text(*pos, text.clone(), window, cx),
             GridEvent::CommitToSelection { pos, text, range } => {
                 let (sheet, pos, text, range) = (self.document.sheet, *pos, text.clone(), *range);
                 self.edit(window, cx, move |wb| wb.fill_with(sheet, pos, &text, range));
@@ -1831,7 +1828,6 @@ impl Workspace {
             Some(editor) => editor.text.clone().into(),
             None => self.active_input.clone(),
         };
-        let grid_entity = self.grid.clone();
         h_flex()
             .h(px(32.0))
             .px_2()
@@ -1872,33 +1868,43 @@ impl Workspace {
                     .px_1()
                     .child("fx"),
             )
-            .child(
+            .children(self.formula_bar.as_ref().map(|bar| {
                 div()
-                    .id("formula-content")
-                    .role(Role::TextInput)
-                    .aria_label("Formula bar")
-                    .aria_value(content.clone())
+                    .key_context("FormulaBar")
                     .flex_1()
-                    .h(px(24.0))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .border_1()
-                    .border_color(theme.border)
-                    .rounded_sm()
-                    .text_sm()
-                    .overflow_hidden()
-                    .cursor_text()
-                    .on_click(move |_, window, cx| {
-                        grid_entity.update(cx, |grid, cx| {
-                            window.focus(&grid.focus_handle(cx), cx);
-                            if grid.editor().is_none() {
-                                cx.emit(GridEvent::EditRequested(grid.selection().active));
+                    .child(Input::new(&bar.input))
+            }))
+            .when(self.formula_bar.is_none(), |row| {
+                row.child(
+                    div()
+                        .id("formula-content")
+                        .role(Role::TextInput)
+                        .aria_label("Formula bar")
+                        .aria_value(content.clone())
+                        .flex_1()
+                        .h(px(24.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .border_1()
+                        .border_color(theme.border)
+                        .rounded_sm()
+                        .text_sm()
+                        .overflow_hidden()
+                        .cursor_text()
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            // While the cell is being edited the bar shows that text; a click
+                            // then keeps editing in the cell.
+                            if this.grid.read(cx).editor().is_some() {
+                                let focus = this.grid.focus_handle(cx);
+                                window.focus(&focus, cx);
+                                return;
                             }
-                        });
-                    })
-                    .child(content),
-            )
+                            this.open_formula_bar(window, cx);
+                        }))
+                        .child(content),
+                )
+            })
     }
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2194,6 +2200,75 @@ impl Workspace {
                 .justify_center()
                 .child(format_dialog::render(dialog, preview, on_category, cx)),
         )
+    }
+
+    // What Enter does with typed text, from the cell or the formula bar.
+    fn commit_text(
+        &mut self,
+        pos: CellPos,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sheet = self.document.sheet;
+        self.edit(window, cx, move |wb| {
+            // Excel turns on wrap text for a cell typed with a line break.
+            let wraps = text.contains('\n') && !text.starts_with('=');
+            wb.set_input(sheet, pos, &text)?;
+            if wraps {
+                wb.apply_style(sheet, Range::single(pos), StyleChange::Wrap(true))?;
+                grow_wrapped_rows(wb, sheet, Range::single(pos))?;
+            }
+            widen_for_numbers(wb, sheet, Range::single(pos))
+        });
+    }
+
+    // Editing in the formula bar: Enter or leaving the bar enters the text in the
+    // cell, Esc leaves it unchanged (Excel's behaviour without point mode).
+    fn open_formula_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.formula_bar.is_some() || self.document.read_only {
+            return;
+        }
+        let pos = self.grid.read(cx).selection().active;
+        let text = self
+            .document
+            .workbook()
+            .map(|wb| wb.input(self.document.sheet, pos))
+            .unwrap_or_default();
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(text));
+        let events = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
+            InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                this.close_formula_bar(true, window, cx)
+            }
+            _ => {}
+        });
+        let focus = input.focus_handle(cx);
+        window.focus(&focus, cx);
+        self.formula_bar = Some(FormulaBarEdit {
+            input,
+            pos,
+            _events: events,
+        });
+        cx.notify();
+    }
+
+    fn close_formula_bar(&mut self, commit: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(bar) = self.formula_bar.take() else {
+            return;
+        };
+        if commit {
+            let text = bar.input.read(cx).value().to_string();
+            let unchanged = self
+                .document
+                .workbook()
+                .is_some_and(|wb| wb.input(self.document.sheet, bar.pos) == text);
+            if !unchanged {
+                self.commit_text(bar.pos, text, window, cx);
+            }
+        }
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
     }
 
     fn select_current_region(&mut self, cx: &mut Context<Self>) -> Range {
@@ -2710,6 +2785,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ClearAll, window, cx| {
                 let (sheet, range) = (this.document.sheet, this.selection(cx));
                 this.edit(window, cx, move |wb| wb.clear_all(sheet, range));
+            }))
+            .on_action(cx.listener(|this, _: &CancelFormulaBar, window, cx| {
+                this.close_formula_bar(false, window, cx)
             }))
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
