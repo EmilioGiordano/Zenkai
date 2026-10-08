@@ -10,7 +10,7 @@ use gpui_kit::*;
 
 use zenkai_engine::{Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
 use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout, SheetView};
-use zenkai_types::{CellPos, HAlign, NumberFormat, Range, SheetId, StyleChange};
+use zenkai_types::{CellPos, CellStyle, HAlign, NumberFormat, Range, SheetId, StyleChange};
 
 use crate::actions::*;
 use crate::clipboard;
@@ -18,6 +18,7 @@ use crate::document::{self, Document};
 use crate::files;
 use crate::jump::jump_target;
 use crate::stats::{self, SelectionStats};
+use crate::toolbar;
 
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
@@ -38,6 +39,8 @@ pub struct Workspace {
     document: Document,
     grid: Entity<Grid>,
     stats: Option<SelectionStats>,
+    active_input: SharedString,
+    active_style: CellStyle,
     notice: Option<Notice>,
     busy: Option<SharedString>,
     last_recalc: Option<Duration>,
@@ -58,6 +61,8 @@ impl Workspace {
             document: Document::new(workbook, None, Vec::new()),
             grid,
             stats: None,
+            active_input: SharedString::default(),
+            active_style: CellStyle::default(),
             notice: None,
             busy: None,
             last_recalc: None,
@@ -105,11 +110,13 @@ impl Workspace {
     }
 
     fn refresh_stats(&mut self, cx: &mut Context<Self>) {
-        let selection = self.grid.read(cx).selection().range();
-        self.stats = self
-            .document
-            .workbook()
-            .and_then(|wb| stats::compute(wb, self.document.sheet, selection));
+        let selection = self.grid.read(cx).selection();
+        let sheet = self.document.sheet;
+        if let Some(wb) = self.document.workbook() {
+            self.stats = stats::compute(wb, sheet, selection.range());
+            self.active_input = wb.input(sheet, selection.active).into();
+            self.active_style = wb.cell(sheet, selection.active).style;
+        }
         cx.notify();
     }
 
@@ -547,7 +554,7 @@ impl Workspace {
 
     fn toggle_flag(
         &mut self,
-        read: fn(&zenkai_types::CellStyle) -> bool,
+        read: fn(&CellStyle) -> bool,
         make: fn(bool) -> StyleChange,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -628,12 +635,7 @@ impl Workspace {
         let name = selection.active.to_string();
         let content: SharedString = match grid.editor() {
             Some(editor) => editor.text.clone().into(),
-            None => self
-                .document
-                .workbook()
-                .map(|wb| wb.input(self.document.sheet, selection.active))
-                .unwrap_or_default()
-                .into(),
+            None => self.active_input.clone(),
         };
         let grid_entity = self.grid.clone();
         h_flex()
@@ -897,6 +899,7 @@ impl Render for Workspace {
                 };
                 Theme::change(mode, Some(window), cx);
             }))
+            .child(toolbar::render(&self.active_style, cx))
             .child(self.render_formula_bar(cx))
             .child(div().flex_1().min_h_0().child(self.grid.clone()))
             .child(self.render_tabs(cx))
