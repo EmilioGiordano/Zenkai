@@ -61,6 +61,10 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Larger interface (menus, bars, dialogs)", InterfaceLarger),
             item("Smaller interface", InterfaceSmaller),
             item("Reset interface size", InterfaceReset),
+            item(
+                "Reduce motion on or off (spinners, dialog animations)",
+                ToggleReduceMotion,
+            ),
             item("Freeze or unfreeze panes at the active cell", FreezePanes),
             item("Next sheet", NextSheet),
             item("Previous sheet", PreviousSheet),

@@ -2119,6 +2119,12 @@ impl Render for Workspace {
                 this.set_ui_scale(this.ui_scale - UI_SCALE_STEP, cx);
             }))
             .on_action(cx.listener(|this, _: &InterfaceReset, _, cx| this.set_ui_scale(1.0, cx)))
+            .on_action(cx.listener(|this, _: &ToggleReduceMotion, _, cx| {
+                let reduce = !cx.reduce_motion();
+                cx.set_reduce_motion(reduce);
+                let state = if reduce { "on" } else { "off" };
+                this.notify(Severity::Info, format!("Reduce motion {state}"), cx);
+            }))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() + 0.1, cx));
                 this.refresh_cells(cx);
