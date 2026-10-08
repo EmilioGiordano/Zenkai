@@ -84,6 +84,8 @@ fn formula() -> impl Strategy<Value = String> {
         2 => Just("=SUM(total)*2".to_string()),
         1 => Just("=SUM(A1:T3)".to_string()),
         1 => Just("=SUM(Sheet2!B:B)".to_string()),
+        1 => Just("=SUMIF($A$1:$D$300,\">2\",$B$1:$E$300)".to_string()),
+        1 => Just("=COUNTIF(Sheet2!$A$1:$D$300,\"<5\")".to_string()),
     ]
 }
 
