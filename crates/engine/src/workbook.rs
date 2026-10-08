@@ -262,7 +262,7 @@ impl Engine for Workbook {
         let text = payload
             .get("csv")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
+            .ok_or_else(|| rejected("clipboard payload lacks csv".to_string()))?
             .to_string();
         Ok(Copied { text, payload })
     }

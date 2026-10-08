@@ -1,5 +1,5 @@
 use zenkai_engine::{Engine, Workbook};
-use zenkai_types::{CellPos, Range, SheetId, ValueKind};
+use zenkai_types::{Range, SheetId, ValueKind};
 
 const MAX_SCANNED: u64 = 2_000_000;
 
@@ -18,16 +18,9 @@ impl SelectionStats {
 
 pub fn compute(workbook: &Workbook, sheet: SheetId, selection: Range) -> Option<SelectionStats> {
     let end = workbook.used_end(sheet);
-    let clipped = Range::new(
-        selection.start,
-        CellPos::new(
-            selection.end.row.min(end.row),
-            selection.end.col.min(end.col),
-        ),
-    );
-    if selection.start.row > end.row || selection.start.col > end.col {
+    let Some(clipped) = selection.clip_to(end) else {
         return Some(SelectionStats::default());
-    }
+    };
     if clipped.cell_count() > MAX_SCANNED {
         return None;
     }

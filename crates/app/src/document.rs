@@ -114,16 +114,10 @@ impl Document {
             return HashMap::new();
         };
         let end = workbook.used_end(self.sheet);
-        let clipped = Range::new(
-            range.start,
-            CellPos::new(
-                range.end.row.min(end.row.offset(1)),
-                range.end.col.min(end.col.offset(1)),
-            ),
-        );
-        if clipped.start.row > clipped.end.row || clipped.start.col > clipped.end.col {
+        let Some(clipped) = range.clip_to(CellPos::new(end.row.offset(1), end.col.offset(1)))
+        else {
             return HashMap::new();
-        }
+        };
         clipped
             .positions()
             .filter_map(|pos| {

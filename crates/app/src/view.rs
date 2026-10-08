@@ -64,6 +64,7 @@ pub struct Workspace {
     chart: Option<ChartPanel>,
     find: Option<FindBar>,
     palette: Option<Entity<CommandState>>,
+    session_lock: Option<recovery::SessionLock>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -89,6 +90,7 @@ impl Workspace {
             chart: None,
             find: None,
             palette: None,
+            session_lock: None,
             _subscriptions: vec![subscription],
         };
         workspace.reset_grid(window, cx);
@@ -197,9 +199,16 @@ impl Workspace {
             return;
         };
         let own = recovery::own_file(&directory);
+        match recovery::lock_session(&directory) {
+            Ok(lock) => self.session_lock = Some(lock),
+            Err(error) => {
+                tracing::warn!(%error, "could not lock the recovery session; autosave is off");
+                return;
+            }
+        }
         let on_quit_file = own.clone();
         let quit = cx.on_app_quit(move |_, _| {
-            recovery::remove(&on_quit_file);
+            recovery::remove_with_lock(&on_quit_file);
             async {}
         });
         self._subscriptions.push(quit);
@@ -253,6 +262,11 @@ impl Workspace {
                 }
                 if let Err(error) = result {
                     tracing::warn!(%error, "autosave failed");
+                    this.notify(
+                        Severity::Warning,
+                        format!("Autosave failed, recovery is not protecting this work: {error}"),
+                        cx,
+                    );
                 }
                 this.flush_edits(cx);
             });
@@ -286,7 +300,9 @@ impl Workspace {
                 return;
             };
             if choice == 1 {
-                leftovers.iter().for_each(|path| recovery::remove(path));
+                leftovers
+                    .iter()
+                    .for_each(|path| recovery::remove_with_lock(path));
                 return;
             }
             let Some(newest) = leftovers
@@ -296,6 +312,26 @@ impl Workspace {
                 return;
             };
             let path = newest.clone();
+            let update = this.update_in(cx, |this, window, cx| {
+                this.confirm_discard(window, cx, move |this, window, cx| {
+                    this.load_recovered(path, own, window, cx)
+                })
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during recovery");
+            }
+        })
+        .detach();
+    }
+
+    fn load_recovered(
+        &mut self,
+        path: PathBuf,
+        own: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn_in(window, async move |this, cx| {
             let opened = cx
                 .background_executor()
                 .spawn(async move { open_xlsx(&path).map(|opened| (opened, path)) })
@@ -309,6 +345,7 @@ impl Workspace {
                     if let Err(error) = std::fs::rename(&path, &own) {
                         tracing::warn!(?path, %error, "could not adopt the recovery file");
                     }
+                    recovery::remove(&path.with_extension("lock"));
                     this.notify(Severity::Warning, "Recovered work. Save it to keep it.", cx);
                 }
                 Err(error) => {
@@ -1111,10 +1148,7 @@ impl Workspace {
             return;
         };
         let end = workbook.used_end(sheet);
-        let clipped = Range::new(
-            range.start,
-            CellPos::new(range.end.row.min(end.row), range.end.col.min(end.col)),
-        );
+        let clipped = range.clip_to(end).unwrap_or(Range::single(range.start));
         if clipped.cell_count() > clipboard::MAX_COPY_CELLS {
             self.notify(Severity::Warning, "The selection is too large to copy.", cx);
             return;

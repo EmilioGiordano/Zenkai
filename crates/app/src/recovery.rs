@@ -16,8 +16,42 @@ pub fn directory() -> Option<PathBuf> {
     Some(base.join("Zenkai").join("recovery"))
 }
 
+// Pid plus start time: a reused pid must never pick up a crashed session's file.
+fn session_name() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let started = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis());
+        format!("{}-{started}", std::process::id())
+    })
+}
+
 pub fn own_file(directory: &Path) -> PathBuf {
-    directory.join(format!("{PREFIX}{}.xlsx", std::process::id()))
+    directory.join(format!("{PREFIX}{}.xlsx", session_name()))
+}
+
+// Held for the whole session; an autosave whose lock can still be taken belongs to
+// a process that is gone, so only those are offered for recovery.
+pub struct SessionLock {
+    _file: std::fs::File,
+}
+
+pub fn lock_session(directory: &Path) -> std::io::Result<SessionLock> {
+    std::fs::create_dir_all(directory)?;
+    let file = std::fs::File::create(own_file(directory).with_extension("lock"))?;
+    file.try_lock().map_err(std::io::Error::other)?;
+    Ok(SessionLock { _file: file })
+}
+
+fn owner_is_alive(autosave: &Path) -> bool {
+    let Ok(file) = std::fs::OpenOptions::new()
+        .write(true)
+        .open(autosave.with_extension("lock"))
+    else {
+        return false;
+    };
+    matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
 }
 
 pub fn leftovers(directory: &Path) -> Vec<PathBuf> {
@@ -34,6 +68,7 @@ pub fn leftovers(directory: &Path) -> Vec<PathBuf> {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .is_some_and(|n| n.starts_with(PREFIX) && n.ends_with(".xlsx"))
+                && !owner_is_alive(path)
         })
         .collect();
     found.sort();
@@ -48,6 +83,11 @@ pub fn write(workbook: &Workbook, path: &Path) -> Result<(), EngineError> {
         })?;
     }
     save_xlsx_atomic(workbook, path)
+}
+
+pub fn remove_with_lock(path: &Path) {
+    remove(path);
+    remove(&path.with_extension("lock"));
 }
 
 pub fn remove(path: &Path) {
@@ -85,5 +125,17 @@ mod tests {
         remove(&other);
         remove(&other);
         assert!(leftovers(dir.path()).is_empty());
+
+        let _lock = lock_session(dir.path()).unwrap();
+        let live = dir.path().join("autosave-2.xlsx");
+        std::fs::copy(&own, &live).unwrap();
+        let live_lock = std::fs::File::create(live.with_extension("lock")).unwrap();
+        live_lock.lock().unwrap();
+        assert!(
+            leftovers(dir.path()).is_empty(),
+            "a live session is not a leftover"
+        );
+        drop(live_lock);
+        assert_eq!(leftovers(dir.path()), vec![live]);
     }
 }
