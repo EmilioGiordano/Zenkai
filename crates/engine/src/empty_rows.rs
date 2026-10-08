@@ -23,9 +23,7 @@ pub fn restore_empty_rows(model: &Model<'_>, xlsx: Vec<u8>) -> Result<Vec<u8>, E
         // last entry for a row wins, as in IronCalc's own export.
         let mut by_row = std::collections::BTreeMap::new();
         for row in &sheet.rows {
-            let valid = (1..=MAX_ROW).contains(&row.r)
-                && (0.0..=MAX_HEIGHT).contains(&row.height)
-                && !sheet.sheet_data.contains_key(&row.r);
+            let valid = (1..=MAX_ROW).contains(&row.r) && !sheet.sheet_data.contains_key(&row.r);
             if valid {
                 by_row.insert(row.r, row);
             }
@@ -47,7 +45,11 @@ pub fn restore_empty_rows(model: &Model<'_>, xlsx: Vec<u8>) -> Result<Vec<u8>, E
                 r#"<row r="{}" s="{}" ht="{}" customHeight="{}" customFormat="{}"{hidden}/>"#,
                 row.r,
                 row.s,
-                row.height,
+                if row.height.is_finite() {
+                    row.height.clamp(0.0, MAX_HEIGHT)
+                } else {
+                    15.0
+                },
                 i32::from(row.custom_height),
                 i32::from(row.custom_format),
             ));
