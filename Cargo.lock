@@ -9756,8 +9756,12 @@ dependencies = [
 name = "zenkai-agent"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
+ "futures-lite",
+ "getrandom 0.3.4",
  "keyring-core",
  "notify",
+ "rust_xlsxwriter",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -9766,6 +9770,8 @@ dependencies = [
  "tracing",
  "which",
  "windows-native-keyring-store",
+ "zenkai-engine",
+ "zenkai-types",
 ]
 
 [[package]]
