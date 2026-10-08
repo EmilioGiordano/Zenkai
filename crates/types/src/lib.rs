@@ -150,6 +150,19 @@ impl Range {
             && other.start.col <= self.end.col
     }
 
+    pub fn intersection(&self, other: &Range) -> Option<Range> {
+        self.intersects(other).then(|| Range {
+            start: CellPos::new(
+                self.start.row.max(other.start.row),
+                self.start.col.max(other.start.col),
+            ),
+            end: CellPos::new(
+                self.end.row.min(other.end.row),
+                self.end.col.min(other.end.col),
+            ),
+        })
+    }
+
     // Clipping must not go through `new`: sorting the corners would mirror a range
     // that starts past `end` onto unrelated cells.
     pub fn clip_to(&self, end: CellPos) -> Option<Range> {
@@ -244,6 +257,20 @@ pub enum ValueKind {
     Text,
     Bool,
     Error,
+}
+
+// What a cell holds, without the formatting work of a full read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Contents {
+    Empty,
+    Number(f64),
+    NonNumeric,
+}
+
+impl Contents {
+    pub fn is_filled(self) -> bool {
+        self != Contents::Empty
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -345,6 +372,16 @@ pub struct SheetSizes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ranges_intersect_only_where_they_overlap() {
+        let range = |text| Range::parse_a1(text).unwrap();
+        assert_eq!(
+            range("A1:C5000").intersection(&range("B2:J10")),
+            Some(range("B2:C10"))
+        );
+        assert_eq!(range("A1:B2").intersection(&range("C3:D4")), None);
+    }
 
     #[test]
     fn column_letters_round_trip() {

@@ -126,7 +126,15 @@ pub fn write_csv_file(path: &Path, rows: &[Vec<String>]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zenkai_types::{ColIdx, RowIdx};
+    use zenkai_types::{ColIdx, Contents, RowIdx};
+
+    fn number_at(workbook: &Workbook, col: u16) -> Option<f64> {
+        let pos = CellPos::new(RowIdx::clamped(0), ColIdx::clamped(i64::from(col)));
+        match workbook.contents(SheetId(0)).unwrap()(pos) {
+            Contents::Number(n) => Some(n),
+            _ => None,
+        }
+    }
 
     #[test]
     fn keeps_xlsx_and_never_drops_a_dotted_name() {
@@ -169,10 +177,7 @@ mod tests {
         let mut rows = vec![vec!["1.234,5".to_string(), "=A1*2".to_string()]];
         zenkai_formats::normalize_decimal_comma(&mut rows);
         let workbook = workbook_from_rows(rows).unwrap();
-        let doubled = workbook.number(
-            SheetId(0),
-            CellPos::new(RowIdx::clamped(0), ColIdx::clamped(1)),
-        );
+        let doubled = number_at(&workbook, 1);
         assert_eq!(doubled, Some(2469.0));
     }
 
@@ -181,12 +186,7 @@ mod tests {
         let mut rows = vec![vec!["08/10/2026".to_string(), "25/10/2026".to_string()]];
         zenkai_formats::normalize_day_first(&mut rows);
         let workbook = workbook_from_rows(rows).unwrap();
-        let serial = |col| {
-            workbook.number(
-                SheetId(0),
-                CellPos::new(RowIdx::clamped(0), ColIdx::clamped(col)),
-            )
-        };
+        let serial = |col| number_at(&workbook, col);
         // 8 October 2026 and 25 October 2026 as Excel serials.
         assert_eq!(serial(0), Some(46303.0));
         assert_eq!(serial(1), Some(46320.0));

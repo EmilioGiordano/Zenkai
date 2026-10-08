@@ -223,7 +223,14 @@ fn temp_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zenkai_types::{CellPos, SheetId};
+    use zenkai_types::{CellPos, Contents, Range, SheetId};
+
+    fn number_at(book: &Workbook, pos: CellPos) -> Option<f64> {
+        match book.contents(SheetId(0)).unwrap()(pos) {
+            Contents::Number(n) => Some(n),
+            _ => None,
+        }
+    }
 
     fn fixture(dir: &Path) -> PathBuf {
         let path = dir.join("book.xlsx");
@@ -435,7 +442,7 @@ line 2"
         );
         book.set_input(SheetId(0), CellPos::default(), "-5")
             .unwrap();
-        assert_eq!(book.number(SheetId(0), CellPos::default()), Some(-5.0));
+        assert_eq!(number_at(&book, CellPos::default()), Some(-5.0));
     }
 
     #[test]
@@ -761,7 +768,7 @@ line 2"
         book.set_input(SheetId(0), b1, "=A1*2").unwrap();
         let changes = vec![(a1, "5".to_string()), (c3, "hola".to_string())];
         book.set_scattered_inputs(SheetId(0), &changes).unwrap();
-        assert_eq!(book.number(SheetId(0), b1), Some(10.0));
+        assert_eq!(number_at(&book, b1), Some(10.0));
         assert_eq!(book.input(SheetId(0), c3), "hola");
         let deep = vec![(c3, format!("={}1{}", "(".repeat(300), ")".repeat(300)))];
         assert!(book.set_scattered_inputs(SheetId(0), &deep).is_err());
@@ -806,7 +813,7 @@ line 2"
 
     #[test]
     fn clear_formats_keeps_values_and_clear_all_empties() {
-        use zenkai_types::{Range, StyleChange};
+        use zenkai_types::StyleChange;
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::default();
         book.set_input(SheetId(0), a1, "7").unwrap();
@@ -880,6 +887,44 @@ line 2"
         assert_eq!(book.used_end(SheetId(0)), c5);
         book.set_input(SheetId(0), e9, "2").unwrap();
         assert_eq!(book.used_end(SheetId(0)), e9);
+    }
+
+    #[test]
+    fn contents_tell_values_and_formulas_from_styled_blanks() {
+        let mut book = Workbook::new_empty().unwrap();
+        let at = |text: &str| CellPos::parse_a1(text).unwrap();
+        book.set_input(SheetId(0), at("A1"), "1").unwrap();
+        book.set_input(SheetId(0), at("A2"), "=\"\"").unwrap();
+        book.apply_style(
+            SheetId(0),
+            zenkai_types::Range::single(at("A3")),
+            zenkai_types::StyleChange::Bold(true),
+        )
+        .unwrap();
+        let contents = book.contents(SheetId(0)).unwrap();
+        assert_eq!(contents(at("A1")), Contents::Number(1.0));
+        assert_eq!(contents(at("A2")), Contents::NonNumeric);
+        assert_eq!(contents(at("A3")), Contents::Empty);
+        assert_eq!(contents(at("A4")), Contents::Empty);
+    }
+
+    #[test]
+    fn contents_of_a_missing_sheet_is_an_error() {
+        let book = Workbook::new_empty().unwrap();
+        assert!(matches!(
+            book.contents(SheetId(7)),
+            Err(EngineError::UnknownSheet(SheetId(7)))
+        ));
+    }
+
+    #[test]
+    fn clearing_a_missing_sheet_is_an_error() {
+        let mut book = Workbook::new_empty().unwrap();
+        let range = Range::new(CellPos::default(), CellPos::default());
+        assert!(matches!(
+            book.clear(SheetId(7), range),
+            Err(EngineError::UnknownSheet(SheetId(7)))
+        ));
     }
 
     #[test]

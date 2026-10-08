@@ -1,7 +1,9 @@
 use std::io::Cursor;
 
 use ironcalc::base::expressions::types::Area;
-use ironcalc::base::types::{Cell, Color, HorizontalAlignment, Style, VerticalAlignment};
+use ironcalc::base::types::{
+    Cell, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
+};
 use ironcalc::base::{BorderArea, ClipboardData, UserModel};
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx_bytes;
@@ -9,8 +11,8 @@ use ironcalc::import::load_from_xlsx_bytes;
 use crate::error::EngineError;
 use crate::model::CachedModel;
 use zenkai_types::{
-    BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, HAlign, Range, Rgb, RowIdx,
-    SheetId, SheetInfo, SheetSizes, StyleChange, VAlign, ValueKind,
+    BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
+    RowIdx, SheetId, SheetInfo, SheetSizes, StyleChange, VAlign, ValueKind,
 };
 
 const LOCALE: &str = "en";
@@ -59,7 +61,7 @@ pub trait Engine: Send {
     fn sheets(&self) -> Vec<SheetInfo>;
     fn cell(&self, sheet: SheetId, pos: CellPos) -> CellView;
     fn input(&self, sheet: SheetId, pos: CellPos) -> String;
-    fn number(&self, sheet: SheetId, pos: CellPos) -> Option<f64>;
+    fn contents(&self, sheet: SheetId) -> Result<impl Fn(CellPos) -> Contents + Sync, EngineError>;
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError>;
     fn set_inputs(
         &mut self,
@@ -209,6 +211,24 @@ fn rejected(message: String) -> EngineError {
     EngineError::Rejected(message)
 }
 
+impl Workbook {
+    // The sheet is looked up once so a scan over thousands of cells only pays the cell
+    // lookups.
+    fn cell_lookup<'a>(
+        &'a self,
+        sheet: SheetId,
+    ) -> Result<impl Fn(CellPos) -> Option<&'a Cell> + Sync + 'a, EngineError> {
+        let sheet_data = &self
+            .model
+            .get_model()
+            .workbook
+            .worksheet(sheet.0)
+            .map_err(|_| EngineError::UnknownSheet(sheet))?
+            .sheet_data;
+        Ok(move |pos: CellPos| sheet_data.get(&row_i32(pos.row))?.get(&col_i32(pos.col)))
+    }
+}
+
 fn row_i32(row: RowIdx) -> i32 {
     row.get() as i32 + 1
 }
@@ -253,13 +273,17 @@ impl Workbook {
 
     // Cells holding contents (not just a style) inside `range`, read straight from the
     // sheet data: cheaper than `filled_cells`, which formats every input of the sheet.
-    fn content_cells_in(&self, sheet: SheetId, range: Range) -> Vec<CellPos> {
-        let Ok(ws) = self.model.get_model().workbook.worksheet(sheet.0) else {
-            return Vec::new();
-        };
+    fn content_cells_in(&self, sheet: SheetId, range: Range) -> Result<Vec<CellPos>, EngineError> {
+        let ws = self
+            .model
+            .get_model()
+            .workbook
+            .worksheet(sheet.0)
+            .map_err(|_| EngineError::UnknownSheet(sheet))?;
         let rows = row_i32(range.start.row)..=row_i32(range.end.row);
         let cols = col_i32(range.start.col)..=col_i32(range.end.col);
-        ws.sheet_data
+        Ok(ws
+            .sheet_data
             .iter()
             .filter(|(row, _)| rows.contains(*row))
             .flat_map(|(row, columns)| {
@@ -275,7 +299,7 @@ impl Workbook {
                         )
                     })
             })
-            .collect()
+            .collect())
     }
 
     // What Excel's AutoFill continues along one source line: numbers (two or more),
@@ -449,15 +473,30 @@ impl Engine for Workbook {
         }
     }
 
-    fn number(&self, sheet: SheetId, pos: CellPos) -> Option<f64> {
-        match self.model.get_model().get_cell_value_by_index(
-            sheet.0,
-            row_i32(pos.row),
-            col_i32(pos.col),
-        ) {
-            Ok(ironcalc::base::cell::CellValue::Number(n)) => Some(n),
-            _ => None,
-        }
+    // A formula returning "" counts as filled, as it does for Ctrl+Arrow in Excel. The
+    // stored value is read without formatting, so a scan over a column of hundreds of
+    // thousands of cells does not build a string per cell.
+    fn contents(&self, sheet: SheetId) -> Result<impl Fn(CellPos) -> Contents + Sync, EngineError> {
+        let cell_at = self.cell_lookup(sheet)?;
+        Ok(move |pos| match cell_at(pos) {
+            None | Some(Cell::EmptyCell { .. }) => Contents::Empty,
+            Some(
+                Cell::NumberCell { v, .. }
+                | Cell::CellFormula {
+                    v: FormulaValue::Number(v),
+                    ..
+                }
+                | Cell::ArrayFormula {
+                    v: FormulaValue::Number(v),
+                    ..
+                }
+                | Cell::SpillCell {
+                    v: SpillValue::Number(v),
+                    ..
+                },
+            ) => Contents::Number(*v),
+            Some(_) => Contents::NonNumeric,
+        })
     }
 
     fn input(&self, sheet: SheetId, pos: CellPos) -> String {
@@ -852,7 +891,7 @@ impl Engine for Workbook {
     // that the box is huge are cleared cell by cell. Nothing to clear writes nothing, so
     // no empty cells are created to grow the used area.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
-        let cells = self.content_cells_in(sheet, range);
+        let cells = self.content_cells_in(sheet, range)?;
         let Some(first) = cells.first() else {
             return Ok(());
         };

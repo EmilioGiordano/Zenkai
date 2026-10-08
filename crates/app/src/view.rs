@@ -15,7 +15,7 @@ use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
 };
 use zenkai_types::{
-    BorderPreset, CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, Rgb, SheetId,
+    BorderPreset, CellPos, CellStyle, ColIdx, Contents, HAlign, NumberFormat, Range, Rgb, SheetId,
     StyleChange,
 };
 
@@ -31,10 +31,11 @@ use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
 use crate::jump::jump_target;
 use crate::palette;
+use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
 use crate::region;
-use crate::stats::{self, SelectionStats};
+use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
 use crate::toolbar;
 use gpui_kit::component::Sizable;
@@ -100,6 +101,8 @@ pub struct Workspace {
     document: Document,
     grid: Entity<Grid>,
     stats: Option<SelectionStats>,
+    stats_request: u64,
+    stats_job: StatsJob,
     active_input: SharedString,
     active_style: CellStyle,
     notice: Option<Notice>,
@@ -134,10 +137,18 @@ pub struct Workspace {
     rename: Option<(Entity<InputState>, Subscription)>,
     go_to: Option<(Entity<InputState>, Subscription)>,
     pending_sheet: Option<SheetId>,
+    previews: TypedPreviews,
     last_tab_click: Option<(Instant, SheetId)>,
     memory_mb: u64,
     diagnostics_task: Option<Task<()>>,
+    cell_refresh: CellRefresh,
     _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CellRefresh {
+    Idle,
+    Scheduled,
 }
 
 impl Workspace {
@@ -174,6 +185,8 @@ impl Workspace {
             document: Document::new(workbook, None, Vec::new()),
             grid,
             stats: None,
+            stats_request: 0,
+            stats_job: StatsJob::default(),
             active_input: SharedString::default(),
             active_style: CellStyle::default(),
             notice: None,
@@ -202,9 +215,11 @@ impl Workspace {
             rename: None,
             go_to: None,
             pending_sheet: None,
+            previews: TypedPreviews::default(),
             last_tab_click: None,
             memory_mb: 0,
             diagnostics_task: None,
+            cell_refresh: CellRefresh::Idle,
             _subscriptions: vec![subscription, appearance, font_color, fill_color],
         };
         workspace.reset_grid(window, cx);
@@ -248,6 +263,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.clipboard_source = None;
+        self.previews.clear();
         self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
         self.discard_agreed_at = None;
         self.format_dialog = None;
@@ -278,6 +294,7 @@ impl Workspace {
             .map(|wb| {
                 let (frozen_rows, frozen_cols) = wb.frozen(sheet);
                 SheetView {
+                    used_end: wb.used_end(sheet),
                     layout: Layout::from_sizes(&wb.sizes(sheet)),
                     frozen_rows,
                     frozen_cols,
@@ -287,13 +304,36 @@ impl Workspace {
             .unwrap_or_default()
     }
 
+    // Mouse moves, wheel ticks and key repeats can outnumber frames; one read per frame,
+    // right before it is drawn, is all the screen can show.
+    fn schedule_cell_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cell_refresh == CellRefresh::Scheduled {
+            return;
+        }
+        self.cell_refresh = CellRefresh::Scheduled;
+        let this = cx.weak_entity();
+        window.on_next_frame(move |_, cx| {
+            this.update(cx, |this, cx| {
+                this.cell_refresh = CellRefresh::Idle;
+                this.refresh_cells(cx);
+            })
+            .ok();
+        });
+    }
+
     fn refresh_cells(&mut self, cx: &mut Context<Self>) {
         // While a recalculation holds the workbook the grid keeps showing the last values;
         // the recalculation refreshes the cells when it hands the workbook back.
         let ranges = self.grid.read(cx).cached_ranges();
-        let Some(cells) = self.document.cells(&ranges, self.show_formulas) else {
+        let Some(mut cells) = self.document.cells(&ranges, self.show_formulas) else {
             return;
         };
+        self.previews.apply(
+            self.document.generation(),
+            self.document.sheet,
+            &ranges,
+            &mut cells,
+        );
         self.grid.update(cx, |grid, cx| grid.set_cells(cells, cx));
     }
 
@@ -822,10 +862,21 @@ impl Workspace {
     }
 
     fn refresh_stats(&mut self, cx: &mut Context<Self>) {
+        self.stats_request += 1;
         let selection = self.grid.read(cx).selection();
         let sheet = self.document.sheet;
+        let range = selection.range();
+        let inline = range.cell_count() <= stats::INLINE_CELLS;
+        if !inline {
+            self.stats = None;
+            if self.stats_job.request() {
+                self.start_stats_job(cx);
+            }
+        }
         if let Some(wb) = self.document.workbook() {
-            self.stats = stats::compute(&wb, sheet, selection.range());
+            if inline {
+                self.stats = stats::compute(&wb, sheet, range);
+            }
             self.active_input = wb.input(sheet, selection.active).into();
             self.active_style = wb.cell(sheet, selection.active).style;
             let formula = self.active_input.clone();
@@ -838,6 +889,38 @@ impl Workspace {
                 .update(cx, |grid, _| grid.set_active_formula(formula));
         }
         cx.notify();
+    }
+
+    // A result is dropped when the selection or the document changed while it ran; a
+    // queued request then reruns on the selection as it is at that point.
+    fn start_stats_job(&mut self, cx: &mut Context<Self>) {
+        let sheet = self.document.sheet;
+        let range = self.grid.read(cx).selection().range();
+        let shared = self.document.begin_read();
+        let Some(shared) = shared.filter(|_| range.cell_count() > stats::INLINE_CELLS) else {
+            self.stats_job = StatsJob::Idle;
+            return;
+        };
+        let (request, generation) = (self.stats_request, self.document.generation());
+        cx.spawn(async move |this, cx| {
+            let stats = cx
+                .background_executor()
+                .spawn(async move { stats::compute(&document::read_shared(&shared), sheet, range) })
+                .await;
+            let update = this.update(cx, |this, cx| {
+                if this.stats_request == request && this.document.is_current(generation) {
+                    this.stats = stats;
+                    cx.notify();
+                }
+                if this.stats_job.finish() {
+                    this.start_stats_job(cx);
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during selection statistics");
+            }
+        })
+        .detach();
     }
 
     fn notify(
@@ -862,7 +945,7 @@ impl Workspace {
     ) {
         match event {
             GridEvent::SelectionChanged => self.refresh_stats(cx),
-            GridEvent::ViewportChanged => self.refresh_cells(cx),
+            GridEvent::ViewportChanged => self.schedule_cell_refresh(window, cx),
             GridEvent::EditChanged => cx.notify(),
             GridEvent::EditRequested(pos) => {
                 // Unknown while a recalculation holds the workbook: editing an empty
@@ -939,9 +1022,10 @@ impl Workspace {
             selection.active
         };
         let used_end = workbook.used_end(sheet);
-        let target = jump_target(from, direction, used_end, |pos| {
-            !workbook.cell(sheet, pos).text.is_empty()
-        });
+        let Some(contents) = document::contents_of(&workbook, sheet) else {
+            return;
+        };
+        let target = jump_target(from, direction, used_end, |pos| contents(pos).is_filled());
         self.grid.update(cx, |grid, cx| {
             let active = if extend { selection.active } else { target };
             grid.select(active, target, cx);
@@ -967,6 +1051,12 @@ impl Workspace {
     }
 
     fn show_typed(&mut self, range: Range, text: &str, cx: &mut Context<Self>) {
+        self.previews.add(
+            self.document.generation(),
+            self.document.sheet,
+            range,
+            text.to_string().into(),
+        );
         self.grid
             .update(cx, |grid, cx| grid.show_typed(range, text, cx));
     }
@@ -975,6 +1065,7 @@ impl Workspace {
         let Some((shared, edits)) = self.document.take_batch() else {
             return;
         };
+        self.previews.batch_started();
         self.busy = Some(CALCULATING.into());
         cx.notify();
         let started = Instant::now();
@@ -988,6 +1079,7 @@ impl Workspace {
                 let sheets_before = this.document.sheets.clone();
                 let sheet_before = this.document.sheet;
                 let pending_sheet = this.pending_sheet.take();
+                this.previews.batch_finished();
                 if !this.document.finish_batch(generation) {
                     this.clear_busy(CALCULATING, cx);
                     return;
@@ -2400,7 +2492,10 @@ impl Workspace {
         let Some(workbook) = self.document.workbook() else {
             return Range::single(active);
         };
-        let region = region::current_region(active, |pos| !workbook.input(sheet, pos).is_empty());
+        let Some(contents) = document::contents_of(&workbook, sheet) else {
+            return Range::single(active);
+        };
+        let region = region::current_region(active, |pos| contents(pos).is_filled());
         self.grid
             .update(cx, |grid, cx| grid.select(region.start, region.end, cx));
         region
@@ -2423,7 +2518,10 @@ impl Workspace {
         };
         let sheet = self.document.sheet;
         let active = self.grid.read(cx).selection().active;
-        let is_number = |pos: CellPos| workbook.number(sheet, pos).is_some();
+        let Some(contents) = document::contents_of(&workbook, sheet) else {
+            return;
+        };
+        let is_number = |pos: CellPos| matches!(contents(pos), Contents::Number(_));
         let run = |direction: Direction| {
             let mut first = None;
             let mut pos = active;

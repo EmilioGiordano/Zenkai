@@ -13,6 +13,7 @@ use crate::autocomplete;
 use crate::formula_refs;
 use crate::layout::Layout;
 use crate::paint::{self, Frame};
+use crate::scrollbar::{self, Axis, Bar, BarHit, Scroll, THICKNESS, Track};
 
 pub const HEADER_HEIGHT: f32 = 22.0;
 const MIN_ROW_HEADER_WIDTH: f32 = 48.0;
@@ -178,10 +179,19 @@ pub struct Grid {
     fill_target: Option<Range>,
     fill_hover: bool,
     suggestion: usize,
+    used_end: CellPos,
+    scroll_drag: Option<ScrollDrag>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScrollDrag {
+    axis: Axis,
+    grab: f32,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct SheetView {
+    pub used_end: CellPos,
     pub layout: Layout,
     pub frozen_rows: u32,
     pub frozen_cols: u16,
@@ -226,6 +236,8 @@ impl Grid {
             fill_target: None,
             fill_hover: false,
             suggestion: 0,
+            used_end: CellPos::default(),
+            scroll_drag: None,
         }
     }
 
@@ -266,19 +278,33 @@ impl Grid {
     }
 
     pub fn cached_ranges(&self) -> Vec<Range> {
+        let margin = if self.scroll_drag.is_some() {
+            0
+        } else {
+            self.visible_rows
+        };
         cached_ranges(
             self.scroll_origin(),
             self.visible_rows,
+            margin,
             self.visible_cols,
             self.frozen_rows,
             self.frozen_cols,
         )
     }
 
+    fn end_scroll_drag(&mut self, cx: &mut Context<Self>) {
+        if self.scroll_drag.take().is_some() {
+            cx.emit(GridEvent::ViewportChanged);
+            cx.notify();
+        }
+    }
+
     fn apply_view(&mut self, view: SheetView) {
         self.layout = Rc::new(view.layout);
         (self.frozen_rows, self.frozen_cols) = capped_frozen(view.frozen_rows, view.frozen_cols);
         self.merges = Rc::new(view.merges);
+        self.used_end = view.used_end;
     }
 
     pub fn reset(&mut self, view: SheetView, cx: &mut Context<Self>) {
@@ -522,12 +548,113 @@ impl Grid {
     fn recompute_viewport(&mut self, _cx: &mut Context<Self>) {
         let (frozen_w, frozen_h) = self.frozen_size();
         let origin = self.scroll_origin();
+        let bar = THICKNESS / self.zoom;
         let width =
-            (f32::from(self.bounds.size.width) / self.zoom - self.row_header() - frozen_w).max(0.0);
+            (f32::from(self.bounds.size.width) / self.zoom - self.row_header() - frozen_w - bar)
+                .max(0.0);
         let height =
-            (f32::from(self.bounds.size.height) / self.zoom - HEADER_HEIGHT - frozen_h).max(0.0);
+            (f32::from(self.bounds.size.height) / self.zoom - HEADER_HEIGHT - frozen_h - bar)
+                .max(0.0);
         self.visible_cols = self.layout.visible_cols(origin.col, width);
         self.visible_rows = self.layout.visible_rows(origin.row, height);
+    }
+
+    fn scroll_of(&self, axis: Axis) -> Scroll {
+        let origin = self.scroll_origin();
+        match axis {
+            Axis::Vertical => Scroll {
+                first: origin.row.get() - self.frozen_rows,
+                visible: self.visible_rows,
+                used: (self.used_end.row.get() + 1).saturating_sub(self.frozen_rows),
+            },
+            Axis::Horizontal => Scroll {
+                first: u32::from(origin.col.get() - self.frozen_cols),
+                visible: u32::from(self.visible_cols),
+                used: (u32::from(self.used_end.col.get()) + 1)
+                    .saturating_sub(u32::from(self.frozen_cols)),
+            },
+        }
+    }
+
+    fn track_of(&self, axis: Axis) -> Track {
+        match axis {
+            Axis::Vertical => Track::along(
+                f32::from(self.bounds.size.height),
+                HEADER_HEIGHT * self.zoom,
+            ),
+            Axis::Horizontal => Track::along(
+                f32::from(self.bounds.size.width),
+                self.row_header() * self.zoom,
+            ),
+        }
+    }
+
+    fn bar_of(&self, axis: Axis) -> Bar {
+        Bar {
+            scroll: self.scroll_of(axis),
+            track: self.track_of(axis),
+            dragging: self.scroll_drag.is_some_and(|drag| drag.axis == axis),
+        }
+    }
+
+    fn scroll_to(&mut self, axis: Axis, first: u32, cx: &mut Context<Self>) {
+        match axis {
+            Axis::Vertical => {
+                self.top = RowIdx::clamped(i64::from(first) + i64::from(self.frozen_rows));
+            }
+            Axis::Horizontal => {
+                self.left = ColIdx::clamped(i64::from(first) + i64::from(self.frozen_cols));
+            }
+        }
+        self.viewport_changed(cx);
+    }
+
+    // The scrollbars sit inside the grid, so a press there never reaches the cells.
+    fn on_scrollbar_down(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+        let local = (
+            f32::from(position.x - self.bounds.origin.x),
+            f32::from(position.y - self.bounds.origin.y),
+        );
+        let size = (
+            f32::from(self.bounds.size.width),
+            f32::from(self.bounds.size.height),
+        );
+        for axis in [Axis::Vertical, Axis::Horizontal] {
+            let scroll = self.scroll_of(axis);
+            match scrollbar::hit(axis, local, size, self.track_of(axis), scroll) {
+                Some(BarHit::Thumb { axis, grab }) => {
+                    self.scroll_drag = Some(ScrollDrag { axis, grab });
+                    cx.notify();
+                    return true;
+                }
+                Some(BarHit::Track { axis, page }) => {
+                    self.scroll_to(axis, scroll.paged(page), cx);
+                    return true;
+                }
+                None => {}
+            }
+        }
+        false
+    }
+
+    fn drag_scrollbar(
+        &mut self,
+        drag: ScrollDrag,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let track = self.track_of(drag.axis);
+        let along = match drag.axis {
+            Axis::Vertical => position.y - self.bounds.origin.y,
+            Axis::Horizontal => position.x - self.bounds.origin.x,
+        };
+        let thumb_start = f32::from(along) - track.start - drag.grab;
+        let first = self
+            .scroll_of(drag.axis)
+            .first_at(thumb_start, track.length);
+        if first != self.scroll_of(drag.axis).first {
+            self.scroll_to(drag.axis, first, cx);
+        }
     }
 
     fn frozen_size(&self) -> (f32, f32) {
@@ -717,6 +844,9 @@ impl Grid {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
+        if self.on_scrollbar_down(event.position, cx) {
+            return;
+        }
         if let Some((edge, start)) = self.edge_at(event.position) {
             match edge {
                 Edge::Column(col) if event.click_count >= 2 => {
@@ -817,6 +947,14 @@ impl Grid {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(drag) = self.scroll_drag {
+            if event.pressed_button == Some(MouseButton::Left) {
+                self.drag_scrollbar(drag, event.position, cx);
+            } else {
+                self.end_scroll_drag(cx);
+            }
+            return;
+        }
         if let Some(drag) = self.edge_drag {
             // Released outside the grid: end the drag where it is.
             if event.pressed_button != Some(MouseButton::Left) {
@@ -1138,6 +1276,7 @@ impl Render for Grid {
         };
         let weak = cx.entity().downgrade();
         let last_paint = self.last_paint.clone();
+        let (vertical, horizontal) = (self.bar_of(Axis::Vertical), self.bar_of(Axis::Horizontal));
         let active = self.selection.active;
         let active_text = self
             .cells
@@ -1319,6 +1458,7 @@ impl Render for Grid {
                 MouseButton::Left,
                 cx.listener(|g, _: &MouseUpEvent, _, cx| {
                     g.dragging = false;
+                    g.end_scroll_drag(cx);
                     g.finish_edge_drag(cx);
                     g.finish_fill_drag(cx);
                 }),
@@ -1363,6 +1503,7 @@ impl Render for Grid {
                     move |bounds, _, window, cx| {
                         let started = Instant::now();
                         paint::paint(&frame, bounds, window, cx);
+                        scrollbar::paint(vertical, horizontal, bounds, window, cx);
                         last_paint.set(started.elapsed());
                     },
                 )
@@ -1416,7 +1557,7 @@ impl Grid {
     }
 }
 
-const MAX_TYPED_PREVIEW_CELLS: u64 = 10_000;
+pub const MAX_TYPED_PREVIEW_CELLS: u64 = 10_000;
 // More frozen panes than any screen can show would only make every frame and refresh
 // walk panes that cannot be seen, as Excel stops them at the window size.
 const MAX_FROZEN_ROWS: u32 = 200;
@@ -1427,7 +1568,7 @@ fn capped_frozen(rows: u32, cols: u16) -> (u32, u16) {
 }
 
 // A formula keeps its last value: its typed text is not what the cell will show.
-fn typed_preview(existing: Option<&GridCell>, text: &SharedString) -> Option<GridCell> {
+pub fn typed_preview(existing: Option<&GridCell>, text: &SharedString) -> Option<GridCell> {
     if text.starts_with('=') {
         return None;
     }
@@ -1445,20 +1586,23 @@ fn typed_preview(existing: Option<&GridCell>, text: &SharedString) -> Option<Gri
     })
 }
 
-// One extra screen of rows above and below the viewport, so a short scroll while the
-// workbook is busy still lands on cached values.
+// A margin of rows above and below the viewport, so a short scroll while the workbook
+// is busy still lands on cached values.
 fn cached_ranges(
     origin: CellPos,
     visible_rows: u32,
+    margin_rows: u32,
     visible_cols: u16,
     frozen_rows: u32,
     frozen_cols: u16,
 ) -> Vec<Range> {
     let first_row = origin
         .row
-        .offset(-i64::from(visible_rows))
+        .offset(-i64::from(margin_rows))
         .max(RowIdx::clamped(i64::from(frozen_rows)));
-    let last_row = origin.row.offset(2 * i64::from(visible_rows));
+    let last_row = origin
+        .row
+        .offset(i64::from(visible_rows) + i64::from(margin_rows));
     let end_col = origin.col.offset(i64::from(visible_cols));
     let zero = CellPos::default();
     let mut ranges = vec![Range::new(
@@ -1523,17 +1667,23 @@ mod tests {
 
     #[test]
     fn cache_covers_a_screen_above_and_below() {
-        let ranges = cached_ranges(pos("C101"), 40, 10, 0, 0);
+        let ranges = cached_ranges(pos("C101"), 40, 40, 10, 0, 0);
         assert_eq!(ranges, vec![Range::new(pos("C61"), pos("M181"))]);
+    }
+
+    #[test]
+    fn cache_without_margin_covers_only_the_viewport() {
+        let ranges = cached_ranges(pos("C101"), 40, 0, 10, 0, 0);
+        assert_eq!(ranges, vec![Range::new(pos("C101"), pos("M141"))]);
     }
 
     #[test]
     fn cache_stops_at_the_first_row_and_below_the_frozen_rows() {
         assert_eq!(
-            cached_ranges(pos("A11"), 40, 10, 0, 0),
+            cached_ranges(pos("A11"), 40, 40, 10, 0, 0),
             vec![Range::new(pos("A1"), pos("K91"))]
         );
-        let ranges = cached_ranges(pos("A11"), 5, 10, 8, 0);
+        let ranges = cached_ranges(pos("A11"), 5, 5, 10, 8, 0);
         assert_eq!(ranges[0], Range::new(pos("A9"), pos("K21")));
     }
 
@@ -1548,7 +1698,7 @@ mod tests {
 
     #[test]
     fn cache_keeps_the_frozen_panes() {
-        let ranges = cached_ranges(pos("C101"), 40, 10, 2, 2);
+        let ranges = cached_ranges(pos("C101"), 40, 40, 10, 2, 2);
         assert_eq!(ranges.len(), 4);
         assert!(ranges.contains(&Range::new(pos("C1"), pos("M2"))));
         assert!(ranges.contains(&Range::new(pos("A61"), pos("B181"))));

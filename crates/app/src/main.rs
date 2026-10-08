@@ -13,6 +13,7 @@ mod find;
 mod format_dialog;
 mod jump;
 mod palette;
+mod previews;
 mod recent;
 mod recovery;
 mod region;
