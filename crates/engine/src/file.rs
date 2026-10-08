@@ -117,23 +117,36 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 // never truncated and survives any failure before the final rename.
 pub fn save_xlsx_atomic(workbook: &Workbook, path: &Path) -> Result<(), EngineError> {
     let bytes = workbook.to_xlsx()?;
-    Workbook::from_xlsx_bytes(&bytes, "verify")
-        .map_err(|e| EngineError::VerifyFailed(e.to_string()))?;
     let temp = temp_path(path);
     fs::write(&temp, &bytes).map_err(|source| EngineError::Write {
         path: temp.clone(),
         source,
     })?;
+    let verified = fs::read(&temp)
+        .map_err(|e| EngineError::VerifyFailed(e.to_string()))
+        .and_then(|written| {
+            Workbook::from_xlsx_bytes(&written, "verify")
+                .map(|_| ())
+                .map_err(|e| EngineError::VerifyFailed(e.to_string()))
+        });
+    if let Err(error) = verified {
+        remove_temp(&temp);
+        return Err(error);
+    }
     if let Err(source) = fs::rename(&temp, path) {
-        if let Err(cleanup) = fs::remove_file(&temp) {
-            tracing::warn!(?temp, %cleanup, "could not remove temp file after failed save");
-        }
+        remove_temp(&temp);
         return Err(EngineError::Write {
             path: path.to_path_buf(),
             source,
         });
     }
     Ok(())
+}
+
+fn remove_temp(temp: &Path) {
+    if let Err(error) = fs::remove_file(temp) {
+        tracing::warn!(?temp, %error, "could not remove temp file after failed save");
+    }
 }
 
 fn temp_path(path: &Path) -> PathBuf {
