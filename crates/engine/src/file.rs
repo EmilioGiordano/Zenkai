@@ -223,7 +223,7 @@ fn temp_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zenkai_types::{CellPos, Contents, SheetId};
+    use zenkai_types::{CellPos, Contents, Range, SheetId};
 
     fn number_at(book: &Workbook, pos: CellPos) -> Option<f64> {
         match book.contents(SheetId(0)).unwrap()(pos) {
@@ -813,7 +813,7 @@ line 2"
 
     #[test]
     fn clear_formats_keeps_values_and_clear_all_empties() {
-        use zenkai_types::{Range, StyleChange};
+        use zenkai_types::StyleChange;
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::default();
         book.set_input(SheetId(0), a1, "7").unwrap();
@@ -913,6 +913,16 @@ line 2"
         let book = Workbook::new_empty().unwrap();
         assert!(matches!(
             book.contents(SheetId(7)),
+            Err(EngineError::UnknownSheet(SheetId(7)))
+        ));
+    }
+
+    #[test]
+    fn clearing_a_missing_sheet_is_an_error() {
+        let mut book = Workbook::new_empty().unwrap();
+        let range = Range::new(CellPos::default(), CellPos::default());
+        assert!(matches!(
+            book.clear(SheetId(7), range),
             Err(EngineError::UnknownSheet(SheetId(7)))
         ));
     }

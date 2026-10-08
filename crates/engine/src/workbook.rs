@@ -273,13 +273,17 @@ impl Workbook {
 
     // Cells holding contents (not just a style) inside `range`, read straight from the
     // sheet data: cheaper than `filled_cells`, which formats every input of the sheet.
-    fn content_cells_in(&self, sheet: SheetId, range: Range) -> Vec<CellPos> {
-        let Ok(ws) = self.model.get_model().workbook.worksheet(sheet.0) else {
-            return Vec::new();
-        };
+    fn content_cells_in(&self, sheet: SheetId, range: Range) -> Result<Vec<CellPos>, EngineError> {
+        let ws = self
+            .model
+            .get_model()
+            .workbook
+            .worksheet(sheet.0)
+            .map_err(|_| EngineError::UnknownSheet(sheet))?;
         let rows = row_i32(range.start.row)..=row_i32(range.end.row);
         let cols = col_i32(range.start.col)..=col_i32(range.end.col);
-        ws.sheet_data
+        Ok(ws
+            .sheet_data
             .iter()
             .filter(|(row, _)| rows.contains(*row))
             .flat_map(|(row, columns)| {
@@ -295,7 +299,7 @@ impl Workbook {
                         )
                     })
             })
-            .collect()
+            .collect())
     }
 
     // What Excel's AutoFill continues along one source line: numbers (two or more),
@@ -887,7 +891,7 @@ impl Engine for Workbook {
     // that the box is huge are cleared cell by cell. Nothing to clear writes nothing, so
     // no empty cells are created to grow the used area.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
-        let cells = self.content_cells_in(sheet, range);
+        let cells = self.content_cells_in(sheet, range)?;
         let Some(first) = cells.first() else {
             return Ok(());
         };
