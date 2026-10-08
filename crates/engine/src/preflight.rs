@@ -42,7 +42,7 @@ pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
     for node in document.descendants().filter(roxmltree::Node::is_element) {
         match node.tag_name().name() {
             "f" | "formula" | "formula1" | "formula2" | "definedName" => check_formula(&node)?,
-            "conditionalFormatting" => features.conditional_formatting = true,
+            "hyperlinks" => features.hyperlinks = true,
             "dataValidations" => features.data_validation = true,
             _ => {}
         }
@@ -56,7 +56,7 @@ const CHECKED_ELEMENTS: [&[u8]; 7] = [
     b"formula1",
     b"formula2",
     b"definedName",
-    b"conditionalFormatting",
+    b"hyperlinks",
     b"dataValidations",
 ];
 
@@ -82,7 +82,7 @@ fn has_checked_element(bytes: &[u8]) -> bool {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SheetFeatures {
-    pub conditional_formatting: bool,
+    pub hyperlinks: bool,
     pub data_validation: bool,
 }
 
@@ -231,10 +231,10 @@ mod tests {
     }
 
     #[test]
-    fn reports_conditional_formatting_and_validation() {
-        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><conditionalFormatting sqref="A1"/><dataValidations count="0"/></worksheet>"#;
+    fn reports_hyperlinks_and_validation() {
+        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><dataValidations count="0"/><hyperlinks/></worksheet>"#;
         let features = check_part(xml.as_bytes()).unwrap();
-        assert!(features.conditional_formatting && features.data_validation);
+        assert!(features.hyperlinks && features.data_validation);
     }
 
     #[test]

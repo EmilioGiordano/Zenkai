@@ -61,6 +61,7 @@ pub trait Engine: Send {
     -> Result<(), EngineError>;
     fn merged(&self, sheet: SheetId) -> Vec<Range>;
     fn used_end(&self, sheet: SheetId) -> CellPos;
+    fn filled_cells(&self, sheet: SheetId) -> Vec<CellPos>;
     fn add_sheet(&mut self) -> Result<SheetId, EngineError>;
     fn rename_sheet(&mut self, sheet: SheetId, name: &str) -> Result<(), EngineError>;
     fn delete_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError>;
@@ -563,6 +564,26 @@ impl Engine for Workbook {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn filled_cells(&self, sheet: SheetId) -> Vec<CellPos> {
+        let Ok(ws) = self.model.get_model().workbook.worksheet(sheet.0) else {
+            return Vec::new();
+        };
+        let mut cells: Vec<CellPos> = ws
+            .sheet_data
+            .iter()
+            .flat_map(|(row, columns)| {
+                columns.keys().map(move |col| {
+                    CellPos::new(
+                        RowIdx::clamped(i64::from(*row) - 1),
+                        ColIdx::clamped(i64::from(*col) - 1),
+                    )
+                })
+            })
+            .collect();
+        cells.sort_by_key(|pos| (pos.row, pos.col));
+        cells
     }
 
     fn used_end(&self, sheet: SheetId) -> CellPos {

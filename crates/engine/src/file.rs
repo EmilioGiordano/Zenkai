@@ -13,7 +13,8 @@ pub enum Unsupported {
     PivotTables,
     Macros,
     Comments,
-    ConditionalFormatting,
+    Tables,
+    Hyperlinks,
     DataValidation,
     ExternalLinks,
 }
@@ -26,7 +27,8 @@ impl Unsupported {
             Unsupported::PivotTables => "pivot tables",
             Unsupported::Macros => "macros (VBA)",
             Unsupported::Comments => "comments",
-            Unsupported::ConditionalFormatting => "conditional formatting",
+            Unsupported::Tables => "Excel tables",
+            Unsupported::Hyperlinks => "hyperlinks",
             Unsupported::DataValidation => "data validation",
             Unsupported::ExternalLinks => "links to other workbooks",
         }
@@ -110,6 +112,7 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
             ("xl/comments", Unsupported::Comments),
             ("xl/threadedcomments/", Unsupported::Comments),
             ("xl/externallinks/", Unsupported::ExternalLinks),
+            ("xl/tables/", Unsupported::Tables),
         ];
         for (prefix, kind) in by_name {
             if name.starts_with(prefix) {
@@ -125,8 +128,8 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
             .read_to_end(&mut part)
             .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
         let features = preflight::check_part(&part)?;
-        if features.conditional_formatting {
-            found.push(Unsupported::ConditionalFormatting);
+        if features.hyperlinks {
+            found.push(Unsupported::Hyperlinks);
         }
         if features.data_validation {
             found.push(Unsupported::DataValidation);
