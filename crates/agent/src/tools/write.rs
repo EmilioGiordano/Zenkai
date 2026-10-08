@@ -1,6 +1,6 @@
 use zenkai_engine::{Engine, EngineError, Workbook};
 use zenkai_types::{
-    CellPos, ColIdx, MAX_COLS, MAX_ROWS, Range, RowIdx, SheetId, SheetInfo, StyleChange,
+    CellPos, ColIdx, MAX_COLS, MAX_ROWS, Range, Rgb, RowIdx, SheetId, SheetInfo, StyleChange,
 };
 
 use crate::tools::error::ToolError;
@@ -103,6 +103,30 @@ pub fn plan_write(request: &WriteRequest, sheets: &[SheetInfo]) -> Result<Planne
     })
 }
 
+fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
+}
+
+fn color_label(color: Option<Rgb>) -> String {
+    color.map_or_else(|| "none".to_string(), |Rgb(rgb)| format!("#{rgb:06X}"))
+}
+
+fn style_label(change: StyleChange) -> String {
+    match change {
+        StyleChange::Bold(on) => format!("bold {}", on_off(on)),
+        StyleChange::Italic(on) => format!("italic {}", on_off(on)),
+        StyleChange::Underline(on) => format!("underline {}", on_off(on)),
+        StyleChange::Strike(on) => format!("strikethrough {}", on_off(on)),
+        StyleChange::Wrap(on) => format!("wrap text {}", on_off(on)),
+        StyleChange::FontSize(points) => format!("font size {points}"),
+        StyleChange::Align(align) => format!("align {align:?}").to_lowercase(),
+        StyleChange::NumberFormat(format) => format!("number format {format:?}").to_lowercase(),
+        StyleChange::Borders(preset) => format!("borders {preset:?}").to_lowercase(),
+        StyleChange::Fill(color) => format!("fill {}", color_label(color)),
+        StyleChange::FontColor(color) => format!("font colour {}", color_label(color)),
+    }
+}
+
 impl PlannedWrite {
     pub fn sheet(&self) -> SheetId {
         self.sheet
@@ -124,7 +148,7 @@ impl PlannedWrite {
                 format!("Write \"{entry}\" in {place}")
             }
             Change::Inputs(_) => format!("Write {} cells in {place}", self.target.cell_count()),
-            Change::Style(change) => format!("Format {place}: {change:?}"),
+            Change::Style(change) => format!("Format {place}: {}", style_label(*change)),
         }
     }
 

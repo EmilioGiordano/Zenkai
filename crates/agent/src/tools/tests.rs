@@ -330,3 +330,15 @@ fn an_injected_cell_stays_framed_as_data() {
     assert_eq!(text.matches("<<<END UNTRUSTED").count(), 1);
     assert!(text.contains("\\u003c\\u003c\\u003cEND UNTRUSTED"));
 }
+
+#[test]
+fn approval_text_names_the_change_in_words() {
+    let request = WriteRequest::FormatRange(FormatRange {
+        workbook: BOOK,
+        sheet: "Sheet1".to_string(),
+        range: "A1:B2".to_string(),
+        format: serde_json::from_str(r##"{ "fill": "#FF8800" }"##).unwrap(),
+    });
+    let plan = plan_write(&request, &host().workbook.sheets()).unwrap();
+    assert_eq!(plan.describe(), "Format 'Sheet1'!A1:B2: fill #FF8800");
+}
