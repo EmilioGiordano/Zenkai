@@ -17,7 +17,8 @@ pub fn restore_empty_rows(model: &Model<'_>, xlsx: Vec<u8>) -> Result<Vec<u8>, E
         let mut rows: Vec<_> = sheet
             .rows
             .iter()
-            .filter(|row| !sheet.sheet_data.contains_key(&row.r))
+            // A non-finite height would write ht="NaN", which Excel reports as damaged.
+            .filter(|row| !sheet.sheet_data.contains_key(&row.r) && row.height.is_finite())
             .collect();
         if rows.is_empty() {
             continue;

@@ -439,6 +439,38 @@ line 2"
     }
 
     #[test]
+    fn empty_hidden_row_on_a_later_sheet_survives_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("two.xlsx");
+        let mut source = rust_xlsxwriter::Workbook::new();
+        source.add_worksheet().write_string(0, 0, "first").unwrap();
+        let second = source.add_worksheet();
+        second.write_string(0, 0, "second").unwrap();
+        second.set_row_hidden(4).unwrap();
+        second.set_row_height(6, 33).unwrap();
+        source.save(&path).unwrap();
+        let opened = open_xlsx(&path).unwrap();
+        let saved = opened.workbook.to_xlsx().unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(saved.clone())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet2.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        assert!(
+            xml.contains(r#"<row r="5""#) && xml.contains(r#"hidden="1""#),
+            "{xml}"
+        );
+        let reopened = Workbook::from_xlsx_bytes(&saved, "two").unwrap();
+        let sizes = reopened.sizes(SheetId(1));
+        let row = |r| zenkai_types::RowIdx::new(r).unwrap();
+        assert!(sizes.rows.iter().any(|(r, _)| *r == row(4)));
+        assert!(sizes.rows.iter().any(|(r, h)| *r == row(6) && *h == 44.0));
+        assert_eq!(reopened.input(SheetId(1), CellPos::default()), "second");
+    }
+
+    #[test]
     fn row_heights_survive_save_even_on_empty_rows() {
         let mut book = Workbook::new_empty().unwrap();
         // Row 4 stays empty: IronCalc alone drops the height of rows without cells.
