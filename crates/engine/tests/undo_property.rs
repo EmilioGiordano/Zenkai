@@ -1,5 +1,6 @@
 // Spec: any sequence of edits followed by as many undos leaves the workbook as it started,
 // and as many redos brings back the edited state.
+#![allow(clippy::unwrap_used)]
 
 use proptest::prelude::*;
 use zenkai_engine::{Engine, Workbook};
