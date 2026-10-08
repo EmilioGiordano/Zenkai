@@ -121,6 +121,7 @@ actions!(
         AllowAgentChange,
         DenyAgentChange,
         LetAgentsEdit,
+        CopyClaudeCommand,
     ]
 );
 
@@ -205,6 +206,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-tab", FocusPreviousControl, Some("SettingsPage")),
         KeyBinding::new("alt-d", CycleDefaultAgent, Some("SettingsPage")),
         KeyBinding::new("alt-s", SaveSecrets, Some("SettingsPage")),
+        KeyBinding::new("alt-m", CopyClaudeCommand, Some("SettingsPage")),
         KeyBinding::new("enter", KeepCurrentSettings, Some("HeldSettings")),
         KeyBinding::new("escape", KeepCurrentSettings, Some("HeldSettings")),
         KeyBinding::new("alt-a", ApplyHeldSettings, Some("HeldSettings")),

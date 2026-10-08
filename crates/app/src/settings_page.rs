@@ -33,13 +33,9 @@ pub struct SettingsPage {
 impl SettingsPage {
     pub fn new(cx: &mut Context<Self>) -> SettingsPage {
         agent_settings::detect_agents(cx);
-        let relay = std::env::current_exe()
-            .ok()
-            .map(|exe| exe.with_file_name(RELAY_EXE));
         SettingsPage {
             focus: cx.focus_handle(),
-            claude_command: relay
-                .map(|relay| format!("claude mcp add zenkai -- \"{}\"", relay.display())),
+            claude_command: claude_command(),
             secret_inputs: BTreeMap::new(),
             _config: cx.observe_global::<AgentConfig>(|_, cx| cx.notify()),
         }
@@ -353,7 +349,6 @@ impl Render for SettingsPage {
                     )
                     .child(muted(format!("Status: {bridge}"), cx))
                     .children(claude_command.map(|command| {
-                        let copied = command.clone();
                         v_flex()
                             .gap_1()
                             .child(muted("Add Zenkai to Claude Code with:", cx))
@@ -373,13 +368,14 @@ impl Render for SettingsPage {
                                             .child(command),
                                     )
                                     .child(
-                                        Button::new("copy-claude-command").label("Copy").on_click(
-                                            move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    copied.clone(),
-                                                ))
-                                            },
-                                        ),
+                                        Button::new("copy-claude-command")
+                                            .label("Copy (Alt+M)")
+                                            .on_click(|_, window, cx| {
+                                                window.dispatch_action(
+                                                    Box::new(CopyClaudeCommand),
+                                                    cx,
+                                                )
+                                            }),
                                     ),
                             )
                             .child(muted(
@@ -431,6 +427,17 @@ pub fn cycle_default_agent(cx: &mut App) {
         };
         agents.default = next.cloned();
     });
+}
+
+pub fn claude_command() -> Option<String> {
+    let relay = std::env::current_exe().ok()?.with_file_name(RELAY_EXE);
+    Some(format!("claude mcp add zenkai -- \"{}\"", relay.display()))
+}
+
+pub fn copy_claude_command(cx: &mut App) {
+    if let Some(command) = claude_command() {
+        cx.write_to_clipboard(ClipboardItem::new_string(command));
+    }
 }
 
 pub fn set_permission(mode: PermissionMode, cx: &mut App) {

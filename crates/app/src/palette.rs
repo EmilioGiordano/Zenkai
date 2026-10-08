@@ -126,6 +126,10 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Agents: write without asking", PermissionAutomatic),
             item("Allow or block external agents", ToggleExternalAgents),
             item(
+                "Copy the command that adds Zenkai to Claude Code",
+                CopyClaudeCommand,
+            ),
+            item(
                 "Make the next configured agent the default",
                 CycleDefaultAgent,
             ),

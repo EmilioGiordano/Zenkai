@@ -3344,6 +3344,7 @@ impl Render for Workspace {
             })
             .on_action(|_: &ToggleExternalAgents, _, cx| settings_page::toggle_external_agents(cx))
             .on_action(|_: &CycleDefaultAgent, _, cx| settings_page::cycle_default_agent(cx))
+            .on_action(|_: &CopyClaudeCommand, _, cx| settings_page::copy_claude_command(cx))
             .on_action(cx.listener(|this, _: &ApplyHeldSettings, window, cx| {
                 this.decide_held_settings(HeldDecision::Apply, window, cx)
             }))
