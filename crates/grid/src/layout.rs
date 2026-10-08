@@ -87,6 +87,10 @@ impl Layout {
     pub fn set_col_width(&mut self, col: ColIdx, width: f32) {
         self.columns.insert(col.get(), width);
     }
+
+    pub fn set_row_height(&mut self, row: RowIdx, height: f32) {
+        self.rows.insert(row.get(), height);
+    }
 }
 
 #[cfg(test)]

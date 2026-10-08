@@ -107,18 +107,26 @@ pub enum GridEvent {
     ClearRequested(Range),
     EndRequested { extend: bool },
     ColumnResized { col: ColIdx, width: f32 },
+    RowResized { row: RowIdx, height: f32 },
     AutoFitRequested(ColIdx),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edge {
+    Column(ColIdx),
+    Row(RowIdx),
+}
+
 #[derive(Clone, Copy, Debug)]
-struct ColumnDrag {
-    col: ColIdx,
-    start_x: f32,
-    start_width: f32,
+struct EdgeDrag {
+    edge: Edge,
+    start: f32,
+    start_size: f32,
 }
 
 const RESIZE_GRIP: f32 = 4.0;
 const MIN_COLUMN_WIDTH: f32 = 8.0;
+const MIN_ROW_HEIGHT: f32 = 4.0;
 
 pub struct Grid {
     focus: FocusHandle,
@@ -140,8 +148,8 @@ pub struct Grid {
     merges: Rc<Vec<Range>>,
     last_paint: Rc<Cell<Duration>>,
     active_formula: SharedString,
-    column_drag: Option<ColumnDrag>,
-    resize_hover: bool,
+    edge_drag: Option<EdgeDrag>,
+    resize_hover: Option<Edge>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -185,8 +193,8 @@ impl Grid {
             merges: Rc::new(Vec::new()),
             last_paint: Rc::new(Cell::new(Duration::ZERO)),
             active_formula: SharedString::default(),
-            column_drag: None,
-            resize_hover: false,
+            edge_drag: None,
+            resize_hover: None,
         }
     }
 
@@ -489,42 +497,70 @@ impl Grid {
         }
     }
 
-    // The column whose right edge is under the pointer in the header row, if any.
-    fn column_edge_at(&self, position: Point<Pixels>) -> Option<(ColIdx, f32)> {
+    // The column edge under the pointer in the column header, or the row edge under it in
+    // the row header, with the pointer coordinate along the axis that resizes.
+    fn edge_at(&self, position: Point<Pixels>) -> Option<(Edge, f32)> {
         let x = f32::from(position.x - self.bounds.origin.x) / self.zoom;
         let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
-        if !(0.0..HEADER_HEIGHT).contains(&y) {
-            return None;
-        }
         let origin = self.scroll_origin();
-        let frozen = (0..self.frozen_cols).map(|c| ColIdx::clamped(i64::from(c)));
-        let scrolled = (0..self.visible_cols).map(|c| origin.col.offset(i64::from(c)));
-        let mut edge = self.row_header();
-        for col in frozen.chain(scrolled) {
-            edge += self.layout.col_width(col);
-            if (x - edge).abs() <= RESIZE_GRIP {
-                return Some((col, x));
+        if (0.0..HEADER_HEIGHT).contains(&y) {
+            let frozen = (0..self.frozen_cols).map(|c| ColIdx::clamped(i64::from(c)));
+            let scrolled = (0..self.visible_cols).map(|c| origin.col.offset(i64::from(c)));
+            let mut edge = self.row_header();
+            for col in frozen.chain(scrolled) {
+                edge += self.layout.col_width(col);
+                if (x - edge).abs() <= RESIZE_GRIP {
+                    return Some((Edge::Column(col), x));
+                }
+                if edge > x + RESIZE_GRIP {
+                    return None;
+                }
             }
-            if edge > x + RESIZE_GRIP {
-                return None;
+        } else if (0.0..self.row_header()).contains(&x) {
+            let frozen = (0..self.frozen_rows).map(|r| RowIdx::clamped(i64::from(r)));
+            let scrolled = (0..self.visible_rows).map(|r| origin.row.offset(i64::from(r)));
+            let mut edge = HEADER_HEIGHT;
+            for row in frozen.chain(scrolled) {
+                edge += self.layout.row_height(row);
+                if (y - edge).abs() <= RESIZE_GRIP {
+                    return Some((Edge::Row(row), y));
+                }
+                if edge > y + RESIZE_GRIP {
+                    return None;
+                }
             }
         }
         None
     }
 
-    fn finish_column_drag(&mut self, cx: &mut Context<Self>) {
-        let Some(drag) = self.column_drag.take() else {
+    fn edge_size(&self, edge: Edge) -> f32 {
+        match edge {
+            Edge::Column(col) => self.layout.col_width(col),
+            Edge::Row(row) => self.layout.row_height(row),
+        }
+    }
+
+    fn set_edge_size(&mut self, edge: Edge, size: f32) {
+        let layout = Rc::make_mut(&mut self.layout);
+        match edge {
+            Edge::Column(col) => layout.set_col_width(col, size.max(MIN_COLUMN_WIDTH)),
+            Edge::Row(row) => layout.set_row_height(row, size.max(MIN_ROW_HEIGHT)),
+        }
+    }
+
+    fn finish_edge_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.edge_drag.take() else {
             return;
         };
-        let width = self.layout.col_width(drag.col);
+        let size = self.edge_size(drag.edge);
         // A click without movement is not an edit.
-        if (width - drag.start_width).abs() >= 0.5 {
-            cx.emit(GridEvent::ColumnResized {
-                col: drag.col,
-                width,
-            });
+        if (size - drag.start_size).abs() < 0.5 {
+            self.set_edge_size(drag.edge, drag.start_size);
         } else {
-            Rc::make_mut(&mut self.layout).set_col_width(drag.col, drag.start_width);
+            cx.emit(match drag.edge {
+                Edge::Column(col) => GridEvent::ColumnResized { col, width: size },
+                Edge::Row(row) => GridEvent::RowResized { row, height: size },
+            });
         }
         self.viewport_changed(cx);
     }
@@ -561,15 +597,18 @@ impl Grid {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
-        if let Some((col, x)) = self.column_edge_at(event.position) {
-            if event.click_count >= 2 {
-                cx.emit(GridEvent::AutoFitRequested(col));
-            } else {
-                self.column_drag = Some(ColumnDrag {
-                    col,
-                    start_x: x,
-                    start_width: self.layout.col_width(col),
-                });
+        if let Some((edge, start)) = self.edge_at(event.position) {
+            match edge {
+                Edge::Column(col) if event.click_count >= 2 => {
+                    cx.emit(GridEvent::AutoFitRequested(col));
+                }
+                _ => {
+                    self.edge_drag = Some(EdgeDrag {
+                        edge,
+                        start,
+                        start_size: self.edge_size(edge),
+                    });
+                }
             }
             return;
         }
@@ -615,20 +654,22 @@ impl Grid {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if let Some(drag) = self.column_drag {
+        if let Some(drag) = self.edge_drag {
             // Released outside the grid: end the drag where it is.
             if event.pressed_button != Some(MouseButton::Left) {
-                self.finish_column_drag(cx);
+                self.finish_edge_drag(cx);
                 return;
             }
-            let x = f32::from(event.position.x - self.bounds.origin.x) / self.zoom;
-            let width = (drag.start_width + x - drag.start_x).max(MIN_COLUMN_WIDTH);
-            Rc::make_mut(&mut self.layout).set_col_width(drag.col, width);
+            let now = match drag.edge {
+                Edge::Column(_) => f32::from(event.position.x - self.bounds.origin.x),
+                Edge::Row(_) => f32::from(event.position.y - self.bounds.origin.y),
+            } / self.zoom;
+            self.set_edge_size(drag.edge, drag.start_size + now - drag.start);
             self.recompute_viewport(cx);
             cx.notify();
             return;
         }
-        let hover = self.column_edge_at(event.position).is_some();
+        let hover = self.edge_at(event.position).map(|(edge, _)| edge);
         if hover != self.resize_hover {
             self.resize_hover = hover;
             cx.notify();
@@ -979,13 +1020,19 @@ impl Render for Grid {
                 MouseButton::Left,
                 cx.listener(|g, _: &MouseUpEvent, _, cx| {
                     g.dragging = false;
-                    g.finish_column_drag(cx);
+                    g.finish_edge_drag(cx);
                 }),
             )
             .on_scroll_wheel(cx.listener(Self::on_scroll))
-            .when(self.resize_hover || self.column_drag.is_some(), |grid| {
-                grid.cursor(CursorStyle::ResizeLeftRight)
-            })
+            .when_some(
+                self.edge_drag.map(|drag| drag.edge).or(self.resize_hover),
+                |grid, edge| {
+                    grid.cursor(match edge {
+                        Edge::Column(_) => CursorStyle::ResizeLeftRight,
+                        Edge::Row(_) => CursorStyle::ResizeUpDown,
+                    })
+                },
+            )
             .child(
                 div()
                     .id((

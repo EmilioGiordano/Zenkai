@@ -21,6 +21,8 @@ const CHAR_WIDTH_PADDING: f64 = 5.0;
 const PIXELS_PER_POINT: f64 = 4.0 / 3.0;
 // IronCalc's setter takes its own pixels: characters times this factor.
 const COLUMN_WIDTH_FACTOR: f64 = 9.0;
+// And its row height setter takes points times this factor.
+const ROW_HEIGHT_FACTOR: f64 = 1.5625;
 
 pub trait Engine: Send {
     fn sheets(&self) -> Vec<SheetInfo>;
@@ -57,6 +59,12 @@ pub trait Engine: Send {
         &mut self,
         sheet: SheetId,
         col: ColIdx,
+        pixels: f32,
+    ) -> Result<(), EngineError>;
+    fn set_row_height(
+        &mut self,
+        sheet: SheetId,
+        row: RowIdx,
         pixels: f32,
     ) -> Result<(), EngineError>;
     fn frozen(&self, sheet: SheetId) -> (u32, u16);
@@ -510,6 +518,23 @@ impl Engine for Workbook {
         let column = col_i32(col);
         self.model
             .set_columns_width(sheet.0, column, column, chars * COLUMN_WIDTH_FACTOR)
+            .map_err(rejected)
+    }
+
+    fn set_row_height(
+        &mut self,
+        sheet: SheetId,
+        row: RowIdx,
+        pixels: f32,
+    ) -> Result<(), EngineError> {
+        let row = row_i32(row);
+        self.model
+            .set_rows_height(
+                sheet.0,
+                row,
+                row,
+                f64::from(pixels) / PIXELS_PER_POINT * ROW_HEIGHT_FACTOR,
+            )
             .map_err(rejected)
     }
 
