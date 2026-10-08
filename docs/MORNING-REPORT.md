@@ -2,8 +2,8 @@
 
 ## En una línea
 
-Todo lo hecho está en la rama **`test/overnight-coverage`** (`9952315`): 156 commits
-lineales sobre `main`. Cada rama intermedia es un punto de esa misma pila. No hubo push ni merge;
+Todo lo hecho está en la rama **`fix/overnight-sweep`** (`6b44895`): 159 commits lineales
+sobre `main`. Cada rama intermedia es un punto de esa misma pila. No hubo push ni merge;
 `main` solo recibe este reporte.
 
 Cada tanda pasó por reviews de calidad, y de seguridad y rendimiento cuando correspondía,
@@ -14,7 +14,7 @@ real.
 ## Cómo probarlo
 
 ```powershell
-git checkout test/overnight-coverage
+git checkout fix/overnight-sweep
 cargo build --release -p zenkai -j 6
 .\target\release\zenkai.exe                 # libro vacío
 .\target\release\zenkai.exe ruta\libro.xlsx # o .xls/.ods/.csv
@@ -97,8 +97,13 @@ El detalle está en `README.md`. Las decisiones, con su porqué, están en `DECI
   mergear).
 - **Paneles.** Los clics atravesaban la vista previa de CSV y Formato de celdas y llegaban
   a la grilla.
-- **Pegar valores** podía leer una hoja que había cambiado desde la copia. Ahora cualquier
-  edición termina el modo copia, como en Excel.
+- **Pegar valores** podía leer una hoja o un libro que había cambiado desde la copia. Ahora
+  cualquier edición o cambio de documento termina el modo copia, como en Excel.
+- **Abrir mientras se edita.** Si un archivo terminaba de abrirse después de que editaras
+  el libro actual, lo reemplazaba sin volver a preguntar. Ahora pregunta, y una apertura
+  más vieja nunca gana sobre una más nueva.
+- **F2 durante un recálculo** abría el editor vacío, y Enter borraba la celda. Ahora
+  avisa y espera.
 - **Ahora hay tests de propiedad** que verifican que ninguna función que procesa texto o
   archivos entre en pánico con entradas arbitrarias, y que cualquier secuencia de
   ediciones se deshace y rehace exactamente.
@@ -108,7 +113,7 @@ El detalle está en `README.md`. Las decisiones, con su porqué, están en `DECI
 1. **Merge.** `feat/core-app` (la base de toda la pila) quedó estacionada tras tres rondas
    de seguridad. Los arreglos están commiteados y las reviews de seguridad posteriores
    sobre la pila dieron PASS, incluido un barrido final de todo el motor y los formatos.
-   Si te parece, mergeá `test/overnight-coverage` entera. `main` ya tiene el commit de
+   Si te parece, mergeá `fix/overnight-sweep` entera. `main` ya tiene el commit de
    este reporte, así que la pila no entra por fast-forward: hace falta un merge commit o
    un rebase.
 2. **Ctrl+0** ahora oculta columnas, como en Excel. Antes reseteaba el zoom, que sigue en
