@@ -12,6 +12,7 @@ mod files;
 mod find;
 mod format_dialog;
 mod jump;
+mod logging;
 mod palette;
 mod recent;
 mod recovery;
@@ -26,12 +27,7 @@ use std::path::PathBuf;
 use gpui_kit::*;
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    logging::init();
     let initial: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
 
     gpui_kit::application()
