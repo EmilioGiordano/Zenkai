@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use rust_xlsxwriter::{Color, Format, FormatAlign, FormatBorder, Formula, Workbook};
+use rust_xlsxwriter::{Color, DocProperties, Format, FormatAlign, FormatBorder, Formula, Workbook};
 
 const SEED: u64 = 0x5EED_2E4C_A1;
 const WORDS: [&str; 8] = [
@@ -120,6 +120,8 @@ fn rng() -> ChaCha8Rng {
 
 pub fn generate(fixture: Fixture, dir: &Path) -> Result<()> {
     let mut book = Workbook::new();
+    // logisheets 1.16.1 panics on the empty <dc:creator> rust_xlsxwriter writes by default.
+    book.set_properties(&DocProperties::new().set_author("Zenkai bench"));
     match fixture {
         Fixture::Values => write_values(&mut book)?,
         Fixture::SimpleFormulas => write_simple(&mut book)?,
