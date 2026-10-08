@@ -75,6 +75,17 @@ impl fmt::Display for Problem {
             Problem::Regressed {
                 fixture,
                 metric,
+                baseline: 0.0,
+                current,
+            } => write!(
+                f,
+                "{} {}: {current:.1} vs baseline 0.0",
+                fixture.file_name(),
+                metric.key()
+            ),
+            Problem::Regressed {
+                fixture,
+                metric,
                 baseline,
                 current,
             } => write!(
@@ -286,6 +297,16 @@ mod tests {
             })
             .collect();
         assert_eq!(checks, ["edit_ok", "correct", "merges"]);
+    }
+
+    #[test]
+    fn regression_from_a_zero_baseline_is_shown_without_a_percentage() {
+        let problems = compare(&[chain(Metric::IdleMb, 0.0)], &[chain(Metric::IdleMb, 2.0)]);
+        assert_eq!(problems.len(), 1);
+        assert_eq!(
+            problems[0].to_string(),
+            "4-chain.xlsx idle_mb: 2.0 vs baseline 0.0"
+        );
     }
 
     #[test]
