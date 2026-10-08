@@ -100,6 +100,10 @@ impl Workspace {
     pub fn new(initial: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
         let grid = cx.new(Grid::new);
         let subscription = cx.subscribe_in(&grid, window, Self::on_grid_event);
+        theme::follow_system(window, cx);
+        let appearance = cx.observe_window_appearance(window, |_, window, cx| {
+            theme::follow_system(window, cx);
+        });
         let workbook = match Workbook::new_empty() {
             Ok(workbook) => workbook,
             Err(error) => exit_without_workbook(error),
@@ -128,7 +132,7 @@ impl Workspace {
             last_tab_click: None,
             memory_mb: 0,
             diagnostics_task: None,
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, appearance],
         };
         workspace.reset_grid(window, cx);
         if let Some(path) = initial {

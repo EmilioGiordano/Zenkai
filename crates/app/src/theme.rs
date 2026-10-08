@@ -5,7 +5,22 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 use zenkai_grid::HighContrast;
 
+/// Set once the user picks a theme; from then on the system setting is not followed.
+struct ChosenTheme;
+
+impl Global for ChosenTheme {}
+
+/// Light or dark as the system is, unless the user chose a theme in this session.
+pub fn follow_system(window: &mut Window, cx: &mut App) {
+    if cx.has_global::<ChosenTheme>() {
+        return;
+    }
+    Theme::sync_system_appearance(Some(window), cx);
+    window.refresh();
+}
+
 pub fn cycle(window: &mut Window, cx: &mut App) {
+    cx.set_global(ChosenTheme);
     let high_contrast = cx.try_global::<HighContrast>().is_some_and(|h| h.0);
     if high_contrast {
         cx.set_global(HighContrast(false));
