@@ -44,9 +44,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.update_global::<AgentConfig, _>(|config, _| match decision {
-            HeldDecision::Apply => config.state.accept_held(),
-            HeldDecision::Keep => config.state.decline_held(),
+        // Apply only what the bar showed: a newer file change may have replaced it since.
+        let shown = self.shown_held.clone();
+        cx.update_global::<AgentConfig, _>(|config, _| {
+            if config.state.held != shown {
+                return;
+            }
+            match decision {
+                HeldDecision::Apply => config.state.accept_held(),
+                HeldDecision::Keep => config.state.decline_held(),
+            }
         });
         let previous = self.held_return_focus.take();
         self.release_focus_from_bar(&self.held_focus.clone(), previous, window, cx);
