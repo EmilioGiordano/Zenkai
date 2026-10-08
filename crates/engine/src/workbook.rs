@@ -769,14 +769,30 @@ impl Engine for Workbook {
     }
 
     fn clear_all(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
-        self.model
-            .range_clear_all(&area(sheet, range))
-            .map_err(rejected)
+        match range.clip_to(self.used_end(sheet)) {
+            // Within the used area one engine call clears both, in one undo step.
+            Some(used) if used == range => self
+                .model
+                .range_clear_all(&area(sheet, range))
+                .map_err(rejected),
+            used => {
+                self.clear_formats(sheet, range)?;
+                match used {
+                    Some(used) => self.clear(sheet, used),
+                    None => Ok(()),
+                }
+            }
+        }
     }
 
+    // IronCalc visits every cell of the range, so a whole sheet (17 billion cells) is
+    // clipped to the used area, the only place contents can be.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+        let Some(used) = range.clip_to(self.used_end(sheet)) else {
+            return Ok(());
+        };
         self.model
-            .range_clear_contents(&area(sheet, range))
+            .range_clear_contents(&area(sheet, used))
             .map_err(rejected)
     }
 

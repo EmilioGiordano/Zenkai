@@ -817,6 +817,13 @@ line 2"
         assert_eq!(book.input(SheetId(0), a1), "7");
         book.clear_all(SheetId(0), Range::single(a1)).unwrap();
         assert_eq!(book.input(SheetId(0), a1), "");
+        book.set_input(SheetId(0), a1, "8").unwrap();
+        let sheet = Range::parse_a1("A1:XFD1048576").unwrap();
+        book.clear(SheetId(0), sheet).unwrap();
+        assert_eq!(book.input(SheetId(0), a1), "");
+        book.set_input(SheetId(0), a1, "9").unwrap();
+        book.clear_all(SheetId(0), sheet).unwrap();
+        assert_eq!(book.input(SheetId(0), a1), "");
     }
 
     #[test]

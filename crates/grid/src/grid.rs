@@ -1233,6 +1233,7 @@ impl Render for Grid {
                 let Some(editor) = g.editor.take() else {
                     return;
                 };
+                g.tab_start = None;
                 cx.emit(GridEvent::CommitToSelection {
                     pos: editor.pos,
                     text: editor.text,
