@@ -34,7 +34,7 @@ impl Seen {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CellSnapshot {
     pub value: Seen,
-    pub formula: Option<String>,
+    pub formula: Result<Option<String>, String>,
 }
 
 pub struct SheetExtent {
@@ -121,7 +121,7 @@ pub fn count_same(
                 let a = before(extent.sheet, row, col);
                 let b = after(extent.sheet, row, col);
                 total += 1;
-                if a.value.same_as(&b.value) && a.formula == b.formula {
+                if a.value.same_as(&b.value) && a.formula.is_ok() && a.formula == b.formula {
                     same += 1;
                 }
             }

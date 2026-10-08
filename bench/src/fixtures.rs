@@ -6,7 +6,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use rust_xlsxwriter::{Color, DocProperties, Format, FormatAlign, FormatBorder, Formula, Workbook};
 
-const SEED: u64 = 0x5EED_2E4C_A1;
+const SEED: u64 = 0x005E_ED2E_4CA1;
 const WORDS: [&str; 8] = [
     "alpha", "beta", "gamma", "delta", "ñandú", "über", "東京", "zeta",
 ];
@@ -357,7 +357,7 @@ fn write_formatting(book: &mut Workbook) -> Result<()> {
         sheet.set_column_width(col, 8.0 + f64::from(col) * 2.5)?;
     }
     for row in 0..FORMAT_ROWS {
-        if row % MERGE_EVERY == 0 {
+        if row.is_multiple_of(MERGE_EVERY) {
             sheet.merge_range(
                 row,
                 0,
@@ -382,7 +382,7 @@ fn write_formatting(book: &mut Workbook) -> Result<()> {
 }
 
 pub fn bold_expected(row: u32, col: u16) -> bool {
-    if row % MERGE_EVERY == 0 {
+    if row.is_multiple_of(MERGE_EVERY) {
         return col <= 2;
     }
     matches!((row as usize + col as usize) % 8, 0 | 6)

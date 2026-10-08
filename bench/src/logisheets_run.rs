@@ -26,9 +26,8 @@ fn snapshot(book: &Workbook, sheet: u32, row: u32, col: u16) -> CellSnapshot {
     let formula = book
         .get_sheet_by_idx(sheet as usize)
         .and_then(|ws| ws.get_formula(row as usize, usize::from(col)))
-        .ok()
-        .filter(|f| !f.is_empty())
-        .map(|f| normalize_formula(&f));
+        .map(|f| (!f.is_empty()).then(|| normalize_formula(&f)))
+        .map_err(|e| format!("{e:?}"));
     CellSnapshot {
         value: seen(book, sheet, row, col),
         formula,

@@ -30,9 +30,7 @@ fn seen(model: &Model, sheet: u32, row: u32, col: u16) -> Seen {
 fn snapshot(model: &Model, sheet: u32, row: u32, col: u16) -> CellSnapshot {
     let formula = model
         .get_cell_formula(sheet, row as i32 + 1, i32::from(col) + 1)
-        .ok()
-        .flatten()
-        .map(|f| normalize_formula(&f));
+        .map(|f| f.map(|f| normalize_formula(&f)));
     CellSnapshot {
         value: seen(model, sheet, row, col),
         formula,
