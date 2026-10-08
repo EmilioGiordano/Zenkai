@@ -746,6 +746,10 @@ impl Workspace {
                 let (sheet, row, height) = (self.document.sheet, *row, *height);
                 self.edit(window, cx, move |wb| wb.set_row_height(sheet, row, height));
             }
+            GridEvent::FillRequested { source, target } => {
+                let (sheet, source, target) = (self.document.sheet, *source, *target);
+                self.edit(window, cx, move |wb| wb.extend(sheet, source, target));
+            }
             GridEvent::AutoFitRequested(col) => self.auto_fit(*col, window, cx),
             GridEvent::EndRequested { extend } => {
                 let Some(end) = self

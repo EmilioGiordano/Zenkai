@@ -71,6 +71,7 @@ pub struct Frame {
     pub active: CellPos,
     pub editor: Option<Editor>,
     pub marquee: Option<Range>,
+    pub fill_target: Option<Range>,
     pub zoom: f32,
     pub focused: bool,
     pub colors: Colors,
@@ -83,6 +84,8 @@ pub struct Frame {
 }
 
 // Excel's reference colours while editing a formula, in order of appearance.
+const FILL_HANDLE: f32 = 7.0;
+
 const REFERENCE_COLORS: [u32; 6] = [0x1F6FD1, 0xD0342C, 0x7A3FB5, 0x1E8C4E, 0xB5651D, 0xC2185B];
 
 struct Columns {
@@ -484,6 +487,31 @@ fn paint_selection(
                 px(border),
                 c.accent,
                 BorderStyle::Solid,
+            ));
+            if frame.editor.is_none() {
+                let side = px(FILL_HANDLE * z);
+                let corner = area.bottom_right() - point(side / 2.0, side / 2.0);
+                window.paint_quad(quad(
+                    Bounds::new(corner, size(side, side)),
+                    px(0.0),
+                    c.accent,
+                    px(1.0),
+                    c.background,
+                    BorderStyle::Solid,
+                ));
+            }
+        }
+        if let Some(target) = frame.fill_target
+            && target != frame.selection
+            && let Some(area) = range_rect(target, columns, rows, origin, z)
+        {
+            window.paint_quad(quad(
+                area,
+                px(0.0),
+                transparent_black(),
+                px(1.0),
+                c.frozen,
+                BorderStyle::Dashed,
             ));
         }
         if let Some(active) = range_rect(Range::single(frame.active), columns, rows, origin, z) {

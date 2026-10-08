@@ -108,6 +108,7 @@ pub enum GridEvent {
     EndRequested { extend: bool },
     ColumnResized { col: ColIdx, width: f32 },
     RowResized { row: RowIdx, height: f32 },
+    FillRequested { source: Range, target: Range },
     AutoFitRequested(ColIdx),
 }
 
@@ -127,6 +128,7 @@ struct EdgeDrag {
 const RESIZE_GRIP: f32 = 4.0;
 const MIN_COLUMN_WIDTH: f32 = 8.0;
 const MIN_ROW_HEIGHT: f32 = 4.0;
+const FILL_GRIP: f32 = 4.0;
 
 pub struct Grid {
     focus: FocusHandle,
@@ -150,6 +152,8 @@ pub struct Grid {
     active_formula: SharedString,
     edge_drag: Option<EdgeDrag>,
     resize_hover: Option<Edge>,
+    fill_target: Option<Range>,
+    fill_hover: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -195,6 +199,8 @@ impl Grid {
             active_formula: SharedString::default(),
             edge_drag: None,
             resize_hover: None,
+            fill_target: None,
+            fill_hover: false,
         }
     }
 
@@ -533,6 +539,76 @@ impl Grid {
         None
     }
 
+    // Right edge of a visible column and bottom edge of a visible row, in unzoomed grid
+    // coordinates.
+    fn col_right(&self, target: ColIdx) -> Option<f32> {
+        let origin = self.scroll_origin();
+        let frozen = (0..self.frozen_cols).map(|c| ColIdx::clamped(i64::from(c)));
+        let scrolled = (0..self.visible_cols).map(|c| origin.col.offset(i64::from(c)));
+        let mut edge = self.row_header();
+        for col in frozen.chain(scrolled) {
+            edge += self.layout.col_width(col);
+            if col == target {
+                return Some(edge);
+            }
+        }
+        None
+    }
+
+    fn row_bottom(&self, target: RowIdx) -> Option<f32> {
+        let origin = self.scroll_origin();
+        let frozen = (0..self.frozen_rows).map(|r| RowIdx::clamped(i64::from(r)));
+        let scrolled = (0..self.visible_rows).map(|r| origin.row.offset(i64::from(r)));
+        let mut edge = HEADER_HEIGHT;
+        for row in frozen.chain(scrolled) {
+            edge += self.layout.row_height(row);
+            if row == target {
+                return Some(edge);
+            }
+        }
+        None
+    }
+
+    // The fill handle: the small square at the bottom-right corner of the selection.
+    fn on_fill_handle(&self, position: Point<Pixels>) -> bool {
+        if self.editor.is_some() {
+            return false;
+        }
+        let end = self.selection.range().end;
+        let (Some(right), Some(bottom)) = (self.col_right(end.col), self.row_bottom(end.row))
+        else {
+            return false;
+        };
+        let x = f32::from(position.x - self.bounds.origin.x) / self.zoom;
+        let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
+        (x - right).abs() <= FILL_GRIP && (y - bottom).abs() <= FILL_GRIP
+    }
+
+    // Excel extends down when the pointer passes the last row, else right when it
+    // passes the last column; up and left are not supported yet.
+    fn fill_target_for(&self, pos: CellPos) -> Range {
+        let source = self.selection.range();
+        if pos.row > source.end.row {
+            Range::new(source.start, CellPos::new(pos.row, source.end.col))
+        } else if pos.col > source.end.col {
+            Range::new(source.start, CellPos::new(source.end.row, pos.col))
+        } else {
+            source
+        }
+    }
+
+    fn finish_fill_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(target) = self.fill_target.take() else {
+            return;
+        };
+        let source = self.selection.range();
+        if target != source {
+            cx.emit(GridEvent::FillRequested { source, target });
+            self.select(target.start, target.end, cx);
+        }
+        cx.notify();
+    }
+
     fn edge_size(&self, edge: Edge) -> f32 {
         match edge {
             Edge::Column(col) => self.layout.col_width(col),
@@ -610,6 +686,10 @@ impl Grid {
                     });
                 }
             }
+            return;
+        }
+        if self.on_fill_handle(event.position) {
+            self.fill_target = Some(self.selection.range());
             return;
         }
         let hit = self.hit(event.position);
@@ -699,6 +779,25 @@ impl Grid {
             self.recompute_viewport(cx);
             cx.notify();
             return;
+        }
+        if self.fill_target.is_some() {
+            if event.pressed_button != Some(MouseButton::Left) {
+                self.finish_fill_drag(cx);
+                return;
+            }
+            if let Hit::Cell(pos) = self.hit(event.position) {
+                let target = self.fill_target_for(pos);
+                if self.fill_target != Some(target) {
+                    self.fill_target = Some(target);
+                    cx.notify();
+                }
+            }
+            return;
+        }
+        let fill_hover = self.on_fill_handle(event.position);
+        if fill_hover != self.fill_hover {
+            self.fill_hover = fill_hover;
+            cx.notify();
         }
         let hover = self.edge_at(event.position).map(|(edge, _)| edge);
         if hover != self.resize_hover {
@@ -897,6 +996,7 @@ impl Render for Grid {
             active: self.selection.active,
             editor: self.editor.clone(),
             marquee: self.marquee,
+            fill_target: self.fill_target,
             zoom: self.zoom,
             focused: self.focus.is_focused(window),
             colors: paint::Colors::from_theme(cx),
@@ -1053,9 +1153,13 @@ impl Render for Grid {
                 cx.listener(|g, _: &MouseUpEvent, _, cx| {
                     g.dragging = false;
                     g.finish_edge_drag(cx);
+                    g.finish_fill_drag(cx);
                 }),
             )
             .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .when(self.fill_hover || self.fill_target.is_some(), |grid| {
+                grid.cursor(CursorStyle::Crosshair)
+            })
             .when_some(
                 self.edge_drag.map(|drag| drag.edge).or(self.resize_hover),
                 |grid, edge| {

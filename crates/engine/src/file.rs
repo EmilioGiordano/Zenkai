@@ -520,6 +520,63 @@ line 2"
     }
 
     #[test]
+    fn extend_continues_number_trends_repeats_the_rest_and_undoes_once() {
+        let mut book = Workbook::new_empty().unwrap();
+        let at = |r: i64, c: i64| {
+            CellPos::new(
+                zenkai_types::RowIdx::clamped(r),
+                zenkai_types::ColIdx::clamped(c),
+            )
+        };
+        let rows = vec![
+            vec!["1".to_string(), "=A1*10".to_string()],
+            vec!["2".to_string(), "=A2*10".to_string()],
+        ];
+        book.set_inputs(SheetId(0), at(0, 0), &rows).unwrap();
+        let source = zenkai_types::Range::new(at(0, 0), at(1, 1));
+        let target = zenkai_types::Range::new(at(0, 0), at(4, 1));
+        book.extend(SheetId(0), source, target).unwrap();
+        let column = |c| {
+            (0..5)
+                .map(|r| book.input(SheetId(0), at(r, c)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(column(0), ["1", "2", "3", "4", "5"]);
+        assert_eq!(
+            column(1),
+            ["=A1*10", "=A2*10", "=A3*10", "=A4*10", "=A5*10"]
+        );
+        book.undo().unwrap();
+        assert_eq!(book.input(SheetId(0), at(2, 0)), "");
+        let right = zenkai_types::Range::new(at(0, 0), at(1, 3));
+        book.extend(SheetId(0), source, right).unwrap();
+        assert_eq!(book.input(SheetId(0), at(0, 2)), "1");
+        assert_eq!(book.input(SheetId(0), at(1, 3)), "=C2*10");
+        book.undo().unwrap();
+        let tenths = vec![
+            vec!["0.1".to_string()],
+            vec!["0.2".to_string()],
+            vec!["x".to_string()],
+        ];
+        book.set_inputs(SheetId(0), at(0, 5), &tenths).unwrap();
+        let numbers = zenkai_types::Range::new(at(0, 5), at(1, 5));
+        book.extend(
+            SheetId(0),
+            numbers,
+            zenkai_types::Range::new(at(0, 5), at(2, 5)),
+        )
+        .unwrap();
+        assert_eq!(book.input(SheetId(0), at(2, 5)), "0.3");
+        let mixed = vec![vec!["a".to_string()], vec!["1".to_string()]];
+        book.set_inputs(SheetId(0), at(0, 7), &mixed).unwrap();
+        let source = zenkai_types::Range::new(at(0, 7), at(1, 7));
+        let target = zenkai_types::Range::new(at(0, 7), at(3, 7));
+        book.extend(SheetId(0), source, target).unwrap();
+        assert_eq!(book.input(SheetId(0), at(2, 7)), "a");
+        assert_eq!(book.input(SheetId(0), at(3, 7)), "1");
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

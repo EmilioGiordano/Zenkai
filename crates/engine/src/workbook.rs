@@ -38,6 +38,7 @@ pub trait Engine: Send {
     ) -> Result<(), EngineError>;
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError>;
+    fn extend(&mut self, sheet: SheetId, source: Range, target: Range) -> Result<(), EngineError>;
     fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError>;
     fn paste(
         &mut self,
@@ -156,6 +157,33 @@ fn area(sheet: SheetId, range: Range) -> Area {
 }
 
 impl Workbook {
+    // Least-squares line through a run of plain numbers, as Excel's AutoFill trend:
+    // the value at step k is first + slope * k.
+    fn trend(&self, sheet: SheetId, line: impl Iterator<Item = CellPos>) -> Option<(f64, f64)> {
+        let values = line
+            .map(|pos| {
+                let input = self.input(sheet, pos);
+                (!input.starts_with('='))
+                    .then(|| input.trim().parse::<f64>().ok())
+                    .flatten()
+            })
+            .collect::<Option<Vec<f64>>>()?;
+        if values.len() < 2 {
+            return None;
+        }
+        let n = values.len() as f64;
+        let mean_x = (n - 1.0) / 2.0;
+        let mean_y = values.iter().sum::<f64>() / n;
+        let (mut num, mut den) = (0.0, 0.0);
+        for (i, y) in values.iter().enumerate() {
+            let dx = i as f64 - mean_x;
+            num += dx * (y - mean_y);
+            den += dx * dx;
+        }
+        let slope = num / den;
+        Some((mean_y - slope * mean_x, slope))
+    }
+
     pub fn new_empty() -> Result<Workbook, EngineError> {
         let model =
             UserModel::new_empty("Book1", LOCALE, timezone(), LANGUAGE).map_err(rejected)?;
@@ -335,6 +363,97 @@ impl Engine for Workbook {
         );
         select(&mut self.model, sheet, Range::new(origin, end))?;
         self.model.paste_csv_string(&area, &tsv).map_err(rejected)
+    }
+
+    // The fill handle: the cells of `target` past `source` (below it or to its right)
+    // repeat the source pattern, formulas shifted, in one undo step.
+    fn extend(&mut self, sheet: SheetId, source: Range, target: Range) -> Result<(), EngineError> {
+        let down = target.end.row > source.end.row;
+        let rest = if down {
+            Range::new(
+                CellPos::new(source.end.row.offset(1), source.start.col),
+                CellPos::new(target.end.row, source.end.col),
+            )
+        } else if target.end.col > source.end.col {
+            Range::new(
+                CellPos::new(source.start.row, source.end.col.offset(1)),
+                CellPos::new(source.end.row, target.end.col),
+            )
+        } else {
+            return Ok(());
+        };
+        if rest.cell_count() > MAX_FILL_CELLS {
+            return Err(rejected(format!(
+                "filling {} cells at once is not supported",
+                rest.cell_count()
+            )));
+        }
+        // Excel continues a run of two or more plain numbers as a linear trend instead of
+        // repeating it; anything else (one number, text, formulas) repeats.
+        let lines: Vec<Option<(f64, f64)>> = if down {
+            (source.start.col.get()..=source.end.col.get())
+                .map(|col| {
+                    let line = (source.start.row.get()..=source.end.row.get()).map(|row| {
+                        CellPos::new(
+                            RowIdx::clamped(i64::from(row)),
+                            ColIdx::clamped(i64::from(col)),
+                        )
+                    });
+                    self.trend(sheet, line)
+                })
+                .collect()
+        } else {
+            (source.start.row.get()..=source.end.row.get())
+                .map(|row| {
+                    let line = (source.start.col.get()..=source.end.col.get()).map(|col| {
+                        CellPos::new(
+                            RowIdx::clamped(i64::from(row)),
+                            ColIdx::clamped(i64::from(col)),
+                        )
+                    });
+                    self.trend(sheet, line)
+                })
+                .collect()
+        };
+        let model = self.model.get_model();
+        let (source_rows, source_cols) = (source.rows(), u32::from(source.cols()));
+        let rows = (rest.start.row.get()..=rest.end.row.get())
+            .map(|row| {
+                (rest.start.col.get()..=rest.end.col.get())
+                    .map(|col| {
+                        let (line, step) = if down {
+                            (col - source.start.col.get(), row - source.start.row.get())
+                        } else {
+                            (
+                                u16::try_from(row - source.start.row.get()).unwrap_or(0),
+                                u32::from(col - source.start.col.get()),
+                            )
+                        };
+                        if let Some(Some((first, slope))) = lines.get(usize::from(line)) {
+                            return Ok(trend_text(first + slope * f64::from(step)));
+                        }
+                        let (from_row, from_col) = if down {
+                            let offset = (row - source.start.row.get()) % source_rows;
+                            (source.start.row.get() + offset, u32::from(col))
+                        } else {
+                            let offset =
+                                (u32::from(col) - u32::from(source.start.col.get())) % source_cols;
+                            (row, u32::from(source.start.col.get()) + offset)
+                        };
+                        model
+                            .extend_to(
+                                sheet.0,
+                                from_row as i32 + 1,
+                                from_col as i32 + 1,
+                                row as i32 + 1,
+                                i32::from(col) + 1,
+                            )
+                            .map_err(rejected)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.set_inputs(sheet, rest.start, &rows)
     }
 
     fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError> {
@@ -678,4 +797,10 @@ impl Engine for Workbook {
             .map_err(|e| rejected(format!("{e:?}")))?;
         crate::empty_rows::restore_empty_rows(self.model.get_model(), xlsx)
     }
+}
+
+// Twelve decimals hide binary noise such as 0.30000000000000004, as Excel's display does.
+fn trend_text(value: f64) -> String {
+    let rounded = (value * 1e12).round() / 1e12;
+    format!("{rounded}")
 }
