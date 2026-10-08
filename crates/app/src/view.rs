@@ -82,6 +82,9 @@ pub struct Workspace {
     find: Option<FindBar>,
     palette: Option<Entity<CommandState>>,
     csv_preview: Option<CsvPreview>,
+    // Bumped by every CSV read, re-parse, import and cancel; a background result is
+    // applied only if no newer request started meanwhile.
+    csv_request: u64,
     focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
     rename: Option<(Entity<InputState>, Subscription)>,
@@ -116,6 +119,7 @@ impl Workspace {
             find: None,
             palette: None,
             csv_preview: None,
+            csv_request: 0,
             focus: cx.focus_handle(),
             session_lock: None,
             rename: None,
@@ -829,6 +833,7 @@ impl Workspace {
         self.busy = Some(format!("Reading {}…", path.display()).into());
         cx.notify();
         let label = self.busy.clone().unwrap_or_default();
+        let request = self.next_csv_request();
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.clone();
             let result = cx
@@ -837,6 +842,9 @@ impl Workspace {
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(&label, cx);
+                if this.csv_request != request {
+                    return;
+                }
                 match result {
                     Ok((bytes, parsed)) => {
                         this.csv_preview = Some(CsvPreview::new(path, Arc::new(bytes), parsed));
@@ -858,18 +866,16 @@ impl Workspace {
             return;
         };
         let bytes = preview.bytes.clone();
-        let source = bytes.clone();
+        let request = self.next_csv_request();
         cx.spawn(async move |this, cx| {
             let parsed = cx
                 .background_executor()
                 .spawn(async move { parse_csv(&bytes, Some(delimiter)) })
                 .await;
             let update = this.update(cx, |this, cx| match parsed {
+                _ if this.csv_request != request => {}
                 Ok(parsed) => {
-                    // Only if the preview still shows the same file.
-                    if let Some(preview) = &mut this.csv_preview
-                        && Arc::ptr_eq(&preview.bytes, &source)
-                    {
+                    if let Some(preview) = &mut this.csv_preview {
                         preview.decimal_comma = csv_preview::guess_decimal_comma(&parsed);
                         preview.parsed = parsed;
                     }
@@ -888,6 +894,7 @@ impl Workspace {
         let Some(preview) = self.csv_preview.take() else {
             return;
         };
+        let request = self.next_csv_request();
         let summary = format!(
             "Imported {} ({}, {}). Save to keep it as .xlsx.",
             preview
@@ -899,16 +906,25 @@ impl Workspace {
         );
         self.busy = Some(IMPORTING.into());
         cx.notify();
-        let mut rows = preview.parsed.rows;
-        let decimal_comma = preview.decimal_comma;
+        let CsvPreview {
+            path,
+            bytes,
+            parsed,
+            decimal_comma,
+        } = preview;
+        let delimiter = parsed.delimiter;
+        let mut rows = parsed.rows;
         cx.spawn_in(window, async move |this, cx| {
+            let task_bytes = bytes.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move {
                     if decimal_comma {
                         normalize_decimal_comma(&mut rows);
                     }
+                    // On failure, parse again so the preview comes back as it was.
                     files::workbook_from_rows(rows)
+                        .map_err(|error| (error, parse_csv(&task_bytes, Some(delimiter)).ok()))
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
@@ -919,7 +935,17 @@ impl Workspace {
                         this.reset_grid(window, cx);
                         this.notify(Severity::Info, summary, cx);
                     }
-                    Err(error) => this.notify(Severity::Error, error, cx),
+                    Err((error, parsed)) => {
+                        if let Some(parsed) = parsed
+                            && this.csv_request == request
+                        {
+                            let mut preview = CsvPreview::new(path, bytes, parsed);
+                            preview.decimal_comma = decimal_comma;
+                            this.csv_preview = Some(preview);
+                            window.focus(&this.focus, cx);
+                        }
+                        this.notify(Severity::Error, error, cx);
+                    }
                 }
             });
             if let Err(error) = update {
@@ -927,6 +953,11 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    fn next_csv_request(&mut self) -> u64 {
+        self.csv_request += 1;
+        self.csv_request
     }
 
     fn render_csv_preview(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -2062,6 +2093,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &CancelCsvImport, window, cx| {
                 this.csv_preview = None;
+                this.next_csv_request();
                 let focus = this.grid.focus_handle(cx);
                 window.focus(&focus, cx);
                 cx.notify();

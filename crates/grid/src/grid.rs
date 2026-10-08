@@ -523,6 +523,8 @@ impl Grid {
                 col: drag.col,
                 width,
             });
+        } else {
+            Rc::make_mut(&mut self.layout).set_col_width(drag.col, drag.start_width);
         }
         self.viewport_changed(cx);
     }
