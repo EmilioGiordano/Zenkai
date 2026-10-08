@@ -1,5 +1,6 @@
 use crate::{
     cell::CellValue,
+    criteria_ranges::CriteriaRanges,
     dependency_index::{CellKey, DependencyIndex},
     expressions::{parser::Node, types::CellReferenceIndex},
     model::Model,
@@ -92,9 +93,11 @@ impl Model<'_> {
         self.clear_variable_stack();
         self.clear_lambdas();
         let circular_hits = self.circular_hits;
+        self.criteria_ranges = CriteriaRanges::on();
         for cell in &dirty {
             self.evaluate_cell(reference(*cell));
         }
+        self.criteria_ranges = CriteriaRanges::Off;
         // A formula that now spills writes into cells nothing was watching.
         if self.circular_hits != circular_hits
             || dirty.iter().any(|cell| self.is_array_formula(*cell))

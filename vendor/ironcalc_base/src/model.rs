@@ -34,6 +34,7 @@ use crate::{
     utils as common,
 };
 
+use crate::criteria_ranges::CriteriaRanges;
 use crate::incremental::{Dependencies, Recalculation};
 use crate::{cf_types::CfCellResult, tz::Tz};
 
@@ -229,6 +230,7 @@ pub struct Model<'a> {
     /// How many times a formula was reached again while it was being evaluated.
     pub(crate) circular_hits: u64,
     pub(crate) last_recalculation: Recalculation,
+    pub(crate) criteria_ranges: CriteriaRanges,
 }
 
 // FIXME: Maybe this should be the same as CellReference
@@ -1557,6 +1559,9 @@ impl<'a> Model<'a> {
 
                 // mark cell as evaluated
                 self.cells.insert(key, CellState::Evaluated);
+                if matches!(result, CalcResult::Array(_)) {
+                    self.criteria_ranges.forget_values();
+                }
 
                 // return the result of the evaluation.
                 match result {
@@ -1737,6 +1742,7 @@ impl<'a> Model<'a> {
             dependencies: None,
             circular_hits: 0,
             last_recalculation: Recalculation::Full,
+            criteria_ranges: CriteriaRanges::Off,
         };
 
         model.parse_formulas();
@@ -3058,6 +3064,7 @@ impl<'a> Model<'a> {
             retry = false;
             self.cells.clear();
             self.support.clear();
+            self.criteria_ranges = CriteriaRanges::on();
             self.clear_variable_stack();
             self.clear_lambdas();
 
@@ -3097,6 +3104,7 @@ impl<'a> Model<'a> {
                 column: cell.column,
             });
         }
+        self.criteria_ranges = CriteriaRanges::Off;
         self.evaluate_conditional_formatting();
     }
 

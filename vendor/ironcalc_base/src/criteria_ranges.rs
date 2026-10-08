@@ -1,0 +1,143 @@
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use crate::{calc_result::CalcResult, expressions::types::CellReferenceIndex, model::Model};
+
+// Smaller areas are cheaper to read again than to keep.
+const MIN_KEPT_CELLS: usize = 1024;
+// Bounds the memory one recalculation can spend on kept values.
+const MAX_KEPT_CELLS: usize = 4_000_000;
+
+// (sheet, first row, first column, height, width)
+type Area = (u32, i32, i32, i32, i32);
+
+// Values of the large areas that SUMIF, COUNTIF and the rest of the family read, kept
+// while one evaluation runs, so calls that differ only in their criterion read each area
+// once. Outside an evaluation cells may change, so nothing is kept.
+pub(crate) enum CriteriaRanges {
+    Off,
+    On {
+        // An area is kept on its second read, so one read by a single formula costs
+        // nothing extra.
+        seen: HashSet<Area>,
+        kept: HashMap<Area, Arc<[CalcResult]>>,
+        kept_cells: usize,
+    },
+}
+
+impl CriteriaRanges {
+    pub(crate) fn on() -> CriteriaRanges {
+        CriteriaRanges::On {
+            seen: HashSet::new(),
+            kept: HashMap::new(),
+            kept_cells: 0,
+        }
+    }
+
+    // A spill writes cells that kept values may hold as empty.
+    pub(crate) fn forget_values(&mut self) {
+        if let CriteriaRanges::On {
+            kept, kept_cells, ..
+        } = self
+        {
+            kept.clear();
+            *kept_cells = 0;
+        }
+    }
+}
+
+pub(crate) struct AreaValues {
+    sheet: u32,
+    row: i32,
+    column: i32,
+    width: i32,
+    kept: Option<Arc<[CalcResult]>>,
+}
+
+impl Model<'_> {
+    pub(crate) fn area_values(
+        &mut self,
+        sheet: u32,
+        row: i32,
+        column: i32,
+        height: i32,
+        width: i32,
+    ) -> AreaValues {
+        let kept = self.kept_values((sheet, row, column, height, width));
+        AreaValues {
+            sheet,
+            row,
+            column,
+            width,
+            kept,
+        }
+    }
+
+    pub(crate) fn area_value<'v>(
+        &mut self,
+        values: &'v AreaValues,
+        row_offset: i32,
+        column_offset: i32,
+    ) -> Cow<'v, CalcResult> {
+        let kept = values.kept.as_deref().and_then(|kept| {
+            let index = i64::from(row_offset) * i64::from(values.width) + i64::from(column_offset);
+            kept.get(usize::try_from(index).ok()?)
+        });
+        match kept {
+            Some(value) => Cow::Borrowed(value),
+            None => Cow::Owned(self.evaluate_cell(CellReferenceIndex {
+                sheet: values.sheet,
+                row: values.row + row_offset,
+                column: values.column + column_offset,
+            })),
+        }
+    }
+
+    fn kept_values(&mut self, area: Area) -> Option<Arc<[CalcResult]>> {
+        let (_, _, _, height, width) = area;
+        let cells = usize::try_from(height)
+            .ok()?
+            .checked_mul(usize::try_from(width).ok()?)?;
+        let CriteriaRanges::On {
+            seen,
+            kept,
+            kept_cells,
+        } = &mut self.criteria_ranges
+        else {
+            return None;
+        };
+        if let Some(values) = kept.get(&area) {
+            return Some(Arc::clone(values));
+        }
+        if cells < MIN_KEPT_CELLS
+            || kept_cells.saturating_add(cells) > MAX_KEPT_CELLS
+            || seen.insert(area)
+        {
+            return None;
+        }
+        let circular_hits = self.circular_hits;
+        let values: Arc<[CalcResult]> = self.read_area(area).into();
+        // A cell reached while it is being evaluated reads as #CIRC! only at that moment.
+        if self.circular_hits == circular_hits {
+            if let CriteriaRanges::On {
+                kept, kept_cells, ..
+            } = &mut self.criteria_ranges
+            {
+                kept.insert(area, Arc::clone(&values));
+                *kept_cells += cells;
+            }
+        }
+        Some(values)
+    }
+
+    fn read_area(&mut self, (sheet, row, column, height, width): Area) -> Vec<CalcResult> {
+        let mut values = Vec::new();
+        for row in row..row.saturating_add(height) {
+            for column in column..column.saturating_add(width) {
+                values.push(self.evaluate_cell(CellReferenceIndex { sheet, row, column }));
+            }
+        }
+        values
+    }
+}

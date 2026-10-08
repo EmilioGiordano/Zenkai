@@ -26,6 +26,7 @@ use crate::{
     utils::ParsedReference,
 };
 
+use crate::criteria_ranges::CriteriaRanges;
 use crate::incremental::Recalculation;
 use crate::tz::Tz;
 
@@ -699,6 +700,7 @@ impl<'a> Model<'a> {
             dependencies: None,
             circular_hits: 0,
             last_recalculation: Recalculation::Full,
+            criteria_ranges: CriteriaRanges::Off,
         };
         model.parse_formulas();
         model.evaluate_conditional_formatting();
