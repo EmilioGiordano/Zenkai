@@ -7,7 +7,6 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
 
 - Product spec: `docs/SPEC.md`
 - Rules for contributors and agents: `AGENTS.md`
-- Decision log: `DECISIONS.md`
 - Ideas backlog: `docs/IDEAS.md`
 
 ## What works

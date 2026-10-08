@@ -17,5 +17,8 @@ Thumbs.db
 # Claude Code per-machine settings
 .claude/settings.local.json
 
+# Decision log, kept local by the owner's choice
+/DECISIONS.md
+
 # Generated benchmark fixtures
 /bench/fixtures/
