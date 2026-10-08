@@ -2972,7 +2972,7 @@ impl<'a> Model<'a> {
 
     /// Returns all cells in the current spill area of a dynamic-formula anchor,
     /// including the anchor itself.
-    pub(crate) fn get_spill_area(&self, cell_ref: CellReferenceIndex) -> Vec<CellReferenceIndex> {
+    fn get_spill_area(&self, cell_ref: CellReferenceIndex) -> Vec<CellReferenceIndex> {
         let ws = match self.workbook.worksheet(cell_ref.sheet) {
             Ok(ws) => ws,
             Err(_) => return Vec::new(),

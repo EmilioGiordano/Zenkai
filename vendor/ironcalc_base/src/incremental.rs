@@ -15,10 +15,20 @@ pub enum Recalculation {
     Incremental,
 }
 
-/// A dynamic array anchor and the cells its result covered when the index was built.
+/// A dynamic formula and the (width, height) its result had when the index was built.
 pub(crate) struct Spill {
     anchor: CellKey,
-    area: Vec<CellKey>,
+    size: (i32, i32),
+}
+
+impl Spill {
+    fn covers(&self, (sheet, row, column): CellKey) -> bool {
+        let (anchor_sheet, anchor_row, anchor_column) = self.anchor;
+        let (width, height) = self.size;
+        sheet == anchor_sheet
+            && (anchor_row..anchor_row + height).contains(&row)
+            && (anchor_column..anchor_column + width).contains(&column)
+    }
 }
 
 /// What [`Model::evaluate_incremental`] needs from the last full evaluation.
@@ -119,12 +129,13 @@ impl Model<'_> {
                     }
                     if let Cell::ArrayFormula {
                         kind: ArrayKind::Dynamic,
+                        r,
                         ..
                     } = cell
                     {
                         spills.push(Spill {
                             anchor: key,
-                            area: self.spill_area(key),
+                            size: *r,
                         });
                     }
                 }
@@ -160,11 +171,20 @@ impl Model<'_> {
         )
     }
 
-    fn spill_area(&self, anchor: CellKey) -> Vec<CellKey> {
-        self.get_spill_area(reference(anchor))
-            .into_iter()
-            .map(|cell| (cell.sheet, cell.row, cell.column))
-            .collect()
+    fn spill_size(&self, (sheet, row, column): CellKey) -> Option<(i32, i32)> {
+        match self
+            .workbook
+            .worksheets
+            .get(sheet as usize)
+            .and_then(|worksheet| worksheet.cell(row, column))
+        {
+            Some(Cell::ArrayFormula {
+                kind: ArrayKind::Dynamic,
+                r,
+                ..
+            }) => Some(*r),
+            _ => None,
+        }
     }
 
     // Whether the edits may grow, shrink, block or unblock a spill.
@@ -177,8 +197,8 @@ impl Model<'_> {
         };
         spills.iter().any(|spill| {
             blocked(spill.anchor)
-                || self.spill_area(spill.anchor) != spill.area
-                || edited.iter().any(|cell| spill.area.contains(cell))
+                || self.spill_size(spill.anchor) != Some(spill.size)
+                || edited.iter().any(|cell| spill.covers(*cell))
         }) || edited.iter().any(|cell| self.is_array_formula(*cell))
     }
 }
