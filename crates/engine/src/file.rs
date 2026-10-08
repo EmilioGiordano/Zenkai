@@ -1,12 +1,11 @@
 use std::fs;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 
 use crate::error::EngineError;
+use crate::preflight;
 use crate::workbook::{Engine, Workbook};
-
-const MAX_ENTRIES: usize = 20_000;
-const MAX_SCANNED_XML: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Unsupported {
@@ -41,37 +40,72 @@ pub struct Opened {
 }
 
 pub fn open_xlsx(path: &Path) -> Result<Opened, EngineError> {
-    let bytes = fs::read(path).map_err(|source| EngineError::Read {
+    let read_error = |source| EngineError::Read {
         path: path.to_path_buf(),
         source,
-    })?;
+    };
+    let size = fs::metadata(path).map_err(read_error)?.len();
+    if size > preflight::MAX_FILE_BYTES {
+        return Err(EngineError::InvalidFile(format!(
+            "the file is {} MB, larger than the {} MB supported",
+            size / 1024 / 1024,
+            preflight::MAX_FILE_BYTES / 1024 / 1024
+        )));
+    }
+    let bytes = fs::read(path).map_err(read_error)?;
     let unsupported = scan_unsupported(&bytes)?;
     let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Book".to_string());
-    let workbook = Workbook::from_xlsx_bytes(&bytes, &name)?;
+    let workbook = load_guarded(&bytes, &name)?;
     Ok(Opened {
         workbook,
         unsupported,
     })
 }
 
+// The engine's importer can panic on malformed parts; a broken file must
+// become an error message, never take the application down.
+fn load_guarded(bytes: &[u8], name: &str) -> Result<Workbook, EngineError> {
+    match std::panic::catch_unwind(AssertUnwindSafe(|| Workbook::from_xlsx_bytes(bytes, name))) {
+        Ok(result) => result,
+        Err(_) => Err(EngineError::InvalidFile(
+            "the file is damaged and could not be read".to_string(),
+        )),
+    }
+}
+
 pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
-        .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
-    if archive.len() > MAX_ENTRIES {
+    let invalid = |e: zip::result::ZipError| EngineError::InvalidFile(e.to_string());
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(invalid)?;
+    if archive.len() > preflight::MAX_ENTRIES {
         return Err(EngineError::InvalidFile(format!(
             "{} entries in the archive",
             archive.len()
         )));
     }
-    let mut found = Vec::new();
-    let mut scanned = 0u64;
+    let mut total = 0u64;
     for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
+        let entry = archive.by_index(index).map_err(invalid)?;
+        if entry.size() > preflight::MAX_ENTRY_BYTES {
+            return Err(EngineError::InvalidFile(format!(
+                "part {} expands to {} MB",
+                entry.name(),
+                entry.size() / 1024 / 1024
+            )));
+        }
+        total = total.saturating_add(entry.size());
+    }
+    if total > preflight::MAX_TOTAL_BYTES {
+        return Err(EngineError::InvalidFile(format!(
+            "the workbook expands to {} MB",
+            total / 1024 / 1024
+        )));
+    }
+    let mut found = Vec::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(invalid)?;
         let name = entry.name().to_ascii_lowercase();
         let by_name = [
             ("xl/charts/", Unsupported::Charts),
@@ -88,18 +122,17 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
                 found.push(kind);
             }
         }
-        if name.starts_with("xl/worksheets/sheet") && scanned < MAX_SCANNED_XML {
-            let budget = MAX_SCANNED_XML - scanned;
+        if name.starts_with("xl/worksheets/") && name.ends_with(".xml") {
             let mut xml = Vec::new();
             (&mut entry)
-                .take(budget)
+                .take(preflight::MAX_ENTRY_BYTES)
                 .read_to_end(&mut xml)
                 .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
-            scanned += xml.len() as u64;
-            if contains(&xml, b"<conditionalFormatting") {
+            preflight::check_formulas(&xml)?;
+            if preflight::find(&xml, b"<conditionalFormatting").is_some() {
                 found.push(Unsupported::ConditionalFormatting);
             }
-            if contains(&xml, b"<dataValidations") {
+            if preflight::find(&xml, b"<dataValidations").is_some() {
                 found.push(Unsupported::DataValidation);
             }
         }
@@ -109,23 +142,21 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
     Ok(found)
 }
 
-fn contains(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack.windows(needle.len()).any(|w| w == needle)
-}
-
 // Write to a sibling temp file, prove it reopens, then replace: the original is
 // never truncated and survives any failure before the final rename.
 pub fn save_xlsx_atomic(workbook: &Workbook, path: &Path) -> Result<(), EngineError> {
     let bytes = workbook.to_xlsx()?;
     let temp = temp_path(path);
-    fs::write(&temp, &bytes).map_err(|source| EngineError::Write {
-        path: temp.clone(),
-        source,
-    })?;
+    if let Err(source) = write_new(&temp, &bytes) {
+        if source.kind() != std::io::ErrorKind::AlreadyExists {
+            remove_temp(&temp);
+        }
+        return Err(EngineError::Write { path: temp, source });
+    }
     let verified = fs::read(&temp)
         .map_err(|e| EngineError::VerifyFailed(e.to_string()))
         .and_then(|written| {
-            Workbook::from_xlsx_bytes(&written, "verify")
+            load_guarded(&written, "verify")
                 .map(|_| ())
                 .map_err(|e| EngineError::VerifyFailed(e.to_string()))
         });
@@ -141,6 +172,15 @@ pub fn save_xlsx_atomic(workbook: &Workbook, path: &Path) -> Result<(), EngineEr
         });
     }
     Ok(())
+}
+
+fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 fn remove_temp(temp: &Path) {

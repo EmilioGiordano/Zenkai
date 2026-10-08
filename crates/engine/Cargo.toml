@@ -15,6 +15,7 @@ tracing = "0.1"
 [dev-dependencies]
 rust_xlsxwriter = "0.92"
 tempfile = "3"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [lints]
 workspace = true

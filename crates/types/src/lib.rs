@@ -136,6 +136,20 @@ impl Range {
         }
     }
 
+    pub fn parse_a1(text: &str) -> Option<Range> {
+        match text.split_once(':') {
+            Some((a, b)) => Some(Range::new(CellPos::parse_a1(a)?, CellPos::parse_a1(b)?)),
+            None => CellPos::parse_a1(text).map(Range::single),
+        }
+    }
+
+    pub fn intersects(&self, other: &Range) -> bool {
+        self.start.row <= other.end.row
+            && other.start.row <= self.end.row
+            && self.start.col <= other.end.col
+            && other.start.col <= self.end.col
+    }
+
     pub fn single(pos: CellPos) -> Range {
         Range {
             start: pos,
@@ -306,5 +320,7 @@ mod tests {
             assert_eq!(CellPos::parse_a1(text), None, "{text}");
         }
         assert_eq!(CellPos::parse_a1("$b$7").unwrap().to_string(), "B7");
+        assert_eq!(Range::parse_a1("C3:A1").unwrap().to_string(), "A1:C3");
+        assert_eq!(Range::parse_a1("A1:"), None);
     }
 }

@@ -2,6 +2,7 @@
 
 mod error;
 mod file;
+mod preflight;
 mod workbook;
 
 pub use error::EngineError;
