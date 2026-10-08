@@ -9,7 +9,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericNamespaced, Stream};
 use serde_json::{Value, json};
-use zenkai_agent::bridge::{Bridge, MAX_LINE_BYTES, PIPE_VARIABLE, TOKEN_VARIABLE};
+use zenkai_agent::bridge::{Bridge, ENDPOINT_FILE, MAX_LINE_BYTES, PIPE_VARIABLE, TOKEN_VARIABLE};
 use zenkai_agent::tools::{AgentAccess, LocalHost, WorkbookId, channel};
 use zenkai_engine::{Engine, Workbook};
 use zenkai_types::{CellPos, Range, SheetId};
@@ -25,6 +25,25 @@ impl Client {
         let mut child = Command::new(env!("CARGO_BIN_EXE_zenkai-mcp"))
             .env(PIPE_VARIABLE, &bridge.address().pipe)
             .env(TOKEN_VARIABLE, token)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        Client {
+            child,
+            stdin,
+            stdout,
+        }
+    }
+
+    fn from_endpoint_file(local_app_data: &std::path::Path) -> Client {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_zenkai-mcp"))
+            .env_remove(PIPE_VARIABLE)
+            .env_remove(TOKEN_VARIABLE)
+            .env("LOCALAPPDATA", local_app_data)
+            .env("XDG_DATA_HOME", local_app_data)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -205,6 +224,22 @@ fn the_endpoint_file_exists_only_while_the_bridge_runs() {
     assert!(text.contains(&bridge.address().pipe));
     drop(bridge);
     assert!(!file.exists());
+}
+
+#[test]
+fn the_relay_finds_zenkai_through_the_endpoint_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("Zenkai").join(ENDPOINT_FILE);
+    let (endpoint, calls) = channel();
+    let server = std::thread::spawn(move || host().serve(calls));
+    let bridge = Bridge::start(endpoint, Some(&file)).unwrap();
+    let mut client = Client::from_endpoint_file(dir.path());
+    let info = client.initialize();
+    assert_eq!(info["result"]["serverInfo"]["name"], "zenkai");
+    client.child.kill().unwrap();
+    client.child.wait().unwrap();
+    drop(bridge);
+    server.join().unwrap();
 }
 
 #[test]
