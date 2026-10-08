@@ -4,7 +4,7 @@ use zenkai_engine::Unsupported;
 use zenkai_grid::ViewState;
 use zenkai_types::{SheetId, WorkbookId};
 
-use crate::document::Document;
+use crate::document::{Document, FileJob};
 use crate::spaces::SpaceId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,5 +136,13 @@ impl Document {
     // import that was never saved.
     pub fn needs_recovery(&self) -> bool {
         self.dirty || (self.path.is_none() && !self.is_pristine())
+    }
+
+    // A clean workbook with a file to come back from, doing nothing right now.
+    pub fn can_unload(&self) -> bool {
+        self.path.is_some()
+            && !self.needs_recovery()
+            && !self.has_pending()
+            && self.file_job() == FileJob::Idle
     }
 }

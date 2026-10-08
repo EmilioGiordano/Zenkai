@@ -15,6 +15,7 @@ mod find;
 mod format_dialog;
 mod jump;
 mod logging;
+mod memory;
 mod palette;
 mod previews;
 mod recent;

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use zenkai_engine::{Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
@@ -293,7 +294,9 @@ impl Documents {
             .position(|entry| entry.id() == id && entry.loaded().is_some())
         {
             Some(index) => {
+                self.active_mut().last_used = Instant::now();
                 self.active = index;
+                self.active_mut().last_used = Instant::now();
                 self.wanted = None;
                 true
             }
@@ -389,6 +392,24 @@ impl Documents {
             }
         }
         Installed::OnScreen
+    }
+
+    // A clean workbook off screen goes back to being a link; its saved view and sheet stay.
+    // Undo history is dropped with it.
+    pub fn unload(&mut self, id: WorkbookId) -> bool {
+        if id == self.active_id() || self.wanted() == Some(id) {
+            return false;
+        }
+        let Some(entry) = self.entry_mut(id) else {
+            return false;
+        };
+        match entry {
+            Entry::Loaded(document) if document.can_unload() => {
+                *entry = Entry::Link(document.to_link());
+                true
+            }
+            _ => false,
+        }
     }
 
     // The nearest loaded neighbour takes over: to the right first, then to the left.
@@ -956,6 +977,69 @@ mod tests {
         assert!(document.dirty);
         assert_eq!(document.unsupported, [Unsupported::Charts]);
         assert_eq!(document.path.as_deref(), Some(Path::new("a.xlsx")));
+    }
+
+    #[test]
+    fn an_idle_workbook_unloads_to_a_link_that_keeps_its_place_and_view() {
+        let mut documents = documents();
+        let a = open_file(&mut documents, "a.xlsx");
+        documents.active_mut().view.top = zenkai_types::RowIdx::clamped(40);
+        documents.active_mut().sheet = SheetId(0);
+        let b = open_file(&mut documents, "b.xlsx");
+        assert!(documents.unload(a));
+        assert!(documents.entry(a).unwrap().loaded().is_none());
+        assert_eq!(documents.active_id(), b);
+        assert_eq!(names(&documents), ["a.xlsx", "b.xlsx"]);
+        let Some(Entry::Link(link)) = documents.entry(a) else {
+            panic!("expected a link");
+        };
+        assert_eq!(link.view.top.get(), 40);
+        assert_eq!(link.status, LinkStatus::NotLoaded);
+    }
+
+    #[test]
+    fn the_workbook_on_screen_one_with_unsaved_work_and_one_being_waited_for_never_unload() {
+        let mut documents = documents();
+        let a = open_file(&mut documents, "a.xlsx");
+        let b = open_file(&mut documents, "b.xlsx");
+        assert!(!documents.unload(b));
+        documents.get_mut(a).unwrap().dirty = true;
+        assert!(!documents.unload(a));
+        documents.get_mut(a).unwrap().dirty = false;
+        documents.want(a, Intent::Switch);
+        assert!(!documents.unload(a));
+        assert!(documents.get(a).is_some() && documents.get(b).is_some());
+    }
+
+    #[test]
+    fn a_workbook_that_is_busy_or_has_no_file_never_unloads() {
+        let mut documents = documents();
+        let untitled = documents.create(blank());
+        documents
+            .get_mut(untitled)
+            .unwrap()
+            .queue(Box::new(|_| Ok(())));
+        let a = open_file(&mut documents, "a.xlsx");
+        open_file(&mut documents, "b.xlsx");
+        assert!(!documents.unload(untitled));
+        documents.get_mut(a).unwrap().queue(Box::new(|_| Ok(())));
+        assert!(!documents.unload(a));
+    }
+
+    #[test]
+    fn an_unloaded_workbook_comes_back_where_it_was() {
+        let mut documents = documents();
+        let a = open_file(&mut documents, "a.xlsx");
+        documents.active_mut().view.top = zenkai_types::RowIdx::clamped(40);
+        open_file(&mut documents, "b.xlsx");
+        documents.unload(a);
+        documents.want(a, Intent::Switch);
+        assert!(matches!(documents.install(loaded(a)), Installed::OnScreen));
+        assert_eq!(documents.active().view.top.get(), 40);
+        assert_eq!(
+            documents.active().path.as_deref(),
+            Some(Path::new("a.xlsx"))
+        );
     }
 
     #[test]

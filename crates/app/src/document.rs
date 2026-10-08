@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
+use std::time::Instant;
 
 use zenkai_engine::{Engine, EngineError, Unsupported, Workbook};
 use zenkai_grid::{GridCell, ViewState};
@@ -44,6 +45,7 @@ pub struct Document {
     pub pending_sheet: Option<SheetId>,
     pub view: ViewState,
     pub find: Option<FindBar>,
+    pub last_used: Instant,
 }
 
 impl Document {
@@ -75,6 +77,7 @@ impl Document {
             pending_sheet: None,
             view: ViewState::default(),
             find: None,
+            last_used: Instant::now(),
         }
     }
 

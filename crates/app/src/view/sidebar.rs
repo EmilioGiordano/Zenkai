@@ -146,9 +146,7 @@ impl Workspace {
     pub(super) fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sidebar.visible = !self.sidebar.visible;
         if self.sidebar.visible {
-            self.sync_memory_sampler(cx);
         } else {
-            self.sync_memory_sampler(cx);
             if self.sidebar.focus.contains_focused(window, cx) {
                 let focus = self.grid.focus_handle(cx);
                 window.focus(&focus, cx);
@@ -160,7 +158,6 @@ impl Workspace {
     pub(super) fn focus_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.sidebar.visible {
             self.sidebar.visible = true;
-            self.sync_memory_sampler(cx);
         }
         if self.sidebar.cursor.is_none() {
             self.sidebar.cursor = Some(Row::File(self.documents.active_id()));
@@ -231,7 +228,6 @@ impl Workspace {
 
     pub(super) fn new_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sidebar.visible = true;
-        self.sync_memory_sampler(cx);
         let id = self.documents.add_space(NEW_SPACE_NAME);
         self.sidebar.cursor = Some(Row::Space(id));
         self.begin_space_rename(id, window, cx);
@@ -242,7 +238,6 @@ impl Workspace {
             .sidebar_cursor_space()
             .unwrap_or_else(|| self.documents.active().space);
         self.sidebar.visible = true;
-        self.sync_memory_sampler(cx);
         self.begin_space_rename(target, window, cx);
     }
 

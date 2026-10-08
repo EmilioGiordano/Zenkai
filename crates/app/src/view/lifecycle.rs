@@ -94,7 +94,6 @@ impl Workspace {
         match loaded {
             Loaded::Restored(session) => {
                 self.sidebar.visible = session.sidebar_visible;
-                self.sync_memory_sampler(cx);
                 referenced = session
                     .recovery_files()
                     .into_iter()

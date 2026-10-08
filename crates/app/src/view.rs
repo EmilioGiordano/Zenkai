@@ -31,6 +31,7 @@ use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
 use crate::jump::jump_target;
+use crate::memory;
 use crate::palette;
 use crate::previews::TypedPreviews;
 use crate::recent;
@@ -41,6 +42,7 @@ use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
 use crate::toolbar;
 
+mod budget;
 mod lifecycle;
 mod sidebar;
 mod workbooks;
@@ -144,6 +146,8 @@ pub struct Workspace {
     last_tab_click: Option<(Instant, SheetId)>,
     memory_mb: u64,
     memory_sampler: Option<Task<()>>,
+    memory_budget_mb: u64,
+    last_unload: Option<Instant>,
     sidebar: SidebarState,
     lifecycle: Lifecycle,
     cell_refresh: CellRefresh,
@@ -216,6 +220,8 @@ impl Workspace {
             last_tab_click: None,
             memory_mb: 0,
             memory_sampler: None,
+            memory_budget_mb: memory::budget_mb(),
+            last_unload: None,
             sidebar: SidebarState::new(cx),
             lifecycle: Lifecycle::Running,
             cell_refresh: CellRefresh::Idle,
@@ -227,6 +233,7 @@ impl Workspace {
             let asked = this.update(cx, |this, cx| this.request_close(window, cx));
             asked.is_err()
         });
+        workspace.start_memory_sampler(cx);
         workspace.start_session(initial, window, cx);
         workspace.load_recent(cx);
         workspace
@@ -359,33 +366,6 @@ impl Workspace {
         if let Some(bar) = &mut self.documents.active_mut().find {
             bar.results = FindResults::default();
         }
-    }
-
-    // The reading runs while the diagnostics or the sidebar show it, and stops otherwise.
-    fn sync_memory_sampler(&mut self, cx: &mut Context<Self>) {
-        let wanted = self.diagnostics || self.sidebar.visible;
-        match (wanted, self.memory_sampler.is_some()) {
-            (true, false) => self.sample_memory(cx),
-            (false, true) => self.memory_sampler = None,
-            _ => {}
-        }
-    }
-
-    fn sample_memory(&mut self, cx: &mut Context<Self>) {
-        self.memory_sampler = Some(cx.spawn(async move |this, cx| {
-            loop {
-                let memory =
-                    memory_stats::memory_stats().map_or(0, |m| m.physical_mem / 1024 / 1024);
-                let update = this.update(cx, |this, cx| {
-                    this.memory_mb = u64::try_from(memory).unwrap_or(u64::MAX);
-                    cx.notify();
-                });
-                if update.is_err() {
-                    break;
-                }
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-            }
-        }));
     }
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2980,7 +2960,6 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleDiagnostics, _, cx| {
                 this.diagnostics = !this.diagnostics;
-                this.sync_memory_sampler(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| theme::cycle(window, cx)))
