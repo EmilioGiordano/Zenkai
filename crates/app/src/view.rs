@@ -115,6 +115,10 @@ pub struct Workspace {
     // applied only if no newer request started meanwhile.
     csv_request: u64,
     open_request: u64,
+    // Counts queued edits; with discard_agreed_at it tells whether the workbook changed
+    // after the user agreed to discard it.
+    edit_count: u64,
+    discard_agreed_at: Option<u64>,
     // Interface scale, independent of the grid zoom: everything sized in rems.
     ui_scale: f32,
     show_formulas: bool,
@@ -183,6 +187,8 @@ impl Workspace {
             csv_preview: None,
             csv_request: 0,
             open_request: 0,
+            edit_count: 0,
+            discard_agreed_at: None,
             ui_scale: 1.0,
             show_formulas: false,
             formula_bar: None,
@@ -218,13 +224,19 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.document.dirty {
-            self.confirm_discard(window, cx, move |this, window, cx| {
-                this.install_document(document, window, cx)
-            });
-        } else {
+        // Only edits made after the user already agreed to discard need a new question.
+        let edited_since = self.discard_agreed_at != Some(self.edit_count);
+        if !(self.document.dirty && edited_since) {
             self.install_document(document, window, cx);
+            return;
         }
+        let requests = (self.open_request, self.csv_request);
+        self.confirm_discard(window, cx, move |this, window, cx| {
+            // A newer open started while the question was up; this document is stale.
+            if (this.open_request, this.csv_request) == requests {
+                this.install_document(document, window, cx);
+            }
+        });
     }
 
     // Everything tied to the old workbook goes with it: a pending copy, the Format Cells
@@ -237,6 +249,7 @@ impl Workspace {
     ) {
         self.clipboard_source = None;
         self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
+        self.discard_agreed_at = None;
         self.format_dialog = None;
         self.formula_bar = None;
         self.document = document;
@@ -947,6 +960,7 @@ impl Workspace {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Workbook) -> Result<(), EngineError> + Send + 'static,
     ) {
+        self.edit_count += 1;
         // Any edit ends copy mode, as in Excel, so a later paste never reads cells or
         // sheets that changed since the copy.
         if self.clipboard_source.take().is_some() {
@@ -1325,6 +1339,7 @@ impl Workspace {
         then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) {
         if !self.document.dirty {
+            self.discard_agreed_at = Some(self.edit_count);
             then(self, window, cx);
             return;
         }
@@ -1337,7 +1352,10 @@ impl Workspace {
         );
         cx.spawn_in(window, async move |this, cx| {
             if answer.await == Ok(1)
-                && let Err(error) = this.update_in(cx, |this, window, cx| then(this, window, cx))
+                && let Err(error) = this.update_in(cx, |this, window, cx| {
+                    this.discard_agreed_at = Some(this.edit_count);
+                    then(this, window, cx)
+                })
             {
                 tracing::debug!(%error, "workspace closed during discard prompt");
             }
