@@ -52,6 +52,7 @@ const MAX_AUTOSUM_SCAN: usize = 10_000;
 const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 
+const UI_SCALE_STEP: f32 = 0.125;
 const IMPORTING: &str = "Importing…";
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
@@ -87,6 +88,8 @@ pub struct Workspace {
     // Bumped by every CSV read, re-parse, import and cancel; a background result is
     // applied only if no newer request started meanwhile.
     csv_request: u64,
+    // Interface scale, independent of the grid zoom: everything sized in rems.
+    ui_scale: f32,
     focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
     rename: Option<(Entity<InputState>, Subscription)>,
@@ -126,6 +129,7 @@ impl Workspace {
             palette: None,
             csv_preview: None,
             csv_request: 0,
+            ui_scale: 1.0,
             focus: cx.focus_handle(),
             session_lock: None,
             rename: None,
@@ -982,6 +986,16 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    fn set_ui_scale(&mut self, scale: f32, cx: &mut Context<Self>) {
+        self.ui_scale = scale.clamp(0.75, 2.0);
+        self.notify(
+            Severity::Info,
+            format!("Interface size {:.0}%", self.ui_scale * 100.0),
+            cx,
+        );
+        cx.notify();
     }
 
     fn next_csv_request(&mut self) -> u64 {
@@ -2045,7 +2059,8 @@ fn format_number(n: f64) -> String {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        window.set_rem_size(cx.theme().font_size * self.ui_scale);
         let theme = cx.theme();
         v_flex()
             .relative()
@@ -2103,6 +2118,13 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FormatDate, window, cx| {
                 this.style(StyleChange::NumberFormat(NumberFormat::Date), window, cx)
             }))
+            .on_action(cx.listener(|this, _: &InterfaceLarger, _, cx| {
+                this.set_ui_scale(this.ui_scale + UI_SCALE_STEP, cx);
+            }))
+            .on_action(cx.listener(|this, _: &InterfaceSmaller, _, cx| {
+                this.set_ui_scale(this.ui_scale - UI_SCALE_STEP, cx);
+            }))
+            .on_action(cx.listener(|this, _: &InterfaceReset, _, cx| this.set_ui_scale(1.0, cx)))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() + 0.1, cx));
                 this.refresh_cells(cx);
