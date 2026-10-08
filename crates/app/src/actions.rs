@@ -35,6 +35,8 @@ actions!(
         InterfaceReset,
         ToggleReduceMotion,
         NoFill,
+        SortAscending,
+        SortDescending,
         BordersAll,
         BordersOutside,
         BorderBottom,

@@ -1813,6 +1813,18 @@ impl Workspace {
         }
     }
 
+    // Excel sorts the current region when only one cell is selected; Zenkai sorts the
+    // selection, and a single cell has nothing to sort.
+    fn sort(&mut self, descending: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        if range.rows() < 2 {
+            self.notify(Severity::Info, "Select the rows to sort first.", cx);
+            return;
+        }
+        let key = self.grid.read(cx).selection().active.col;
+        self.edit(window, cx, move |wb| wb.sort(sheet, range, key, descending));
+    }
+
     fn fill(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
         let (sheet, range) = (self.document.sheet, self.selection(cx));
         self.edit(window, cx, move |wb| wb.fill(sheet, range, down));
@@ -2197,6 +2209,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &BordersNone, window, cx| {
                 this.style(StyleChange::Borders(BorderPreset::None), window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &SortAscending, window, cx| this.sort(false, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SortDescending, window, cx| this.sort(true, window, cx)),
+            )
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
             }))
@@ -2391,6 +2409,9 @@ fn cell_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
         .menu("Delete columns", Box::new(DeleteColumns))
         .separator()
         .menu("Clear contents", Box::new(DeleteForward))
+        .separator()
+        .menu("Sort A to Z", Box::new(SortAscending))
+        .menu("Sort Z to A", Box::new(SortDescending))
         .separator()
         .menu("Insert chart", Box::new(InsertChart))
 }

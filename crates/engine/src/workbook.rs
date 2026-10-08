@@ -39,6 +39,13 @@ pub trait Engine: Send {
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError>;
     fn extend(&mut self, sheet: SheetId, source: Range, target: Range) -> Result<(), EngineError>;
+    fn sort(
+        &mut self,
+        sheet: SheetId,
+        range: Range,
+        key: ColIdx,
+        descending: bool,
+    ) -> Result<(), EngineError>;
     fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError>;
     fn paste(
         &mut self,
@@ -413,6 +420,57 @@ impl Engine for Workbook {
 
     // The fill handle: the cells of `target` past `source` (below it or to its right)
     // repeat the source pattern, formulas shifted, in one undo step.
+    // Rows of `range` reordered by the `key` column, with Excel's order: numbers, text
+    // (ignoring case), logicals, errors, and blanks always last; ties keep their order.
+    // Formulas are rewritten for their new row, as Excel's sort does; formats stay put.
+    fn sort(
+        &mut self,
+        sheet: SheetId,
+        range: Range,
+        key: ColIdx,
+        descending: bool,
+    ) -> Result<(), EngineError> {
+        if range.cell_count() > MAX_FILL_CELLS {
+            return Err(rejected(format!(
+                "sorting {} cells at once is not supported",
+                range.cell_count()
+            )));
+        }
+        let rows: Vec<RowIdx> = (range.start.row.get()..=range.end.row.get())
+            .map(|row| RowIdx::clamped(i64::from(row)))
+            .collect();
+        let keys: Vec<SortKey> = rows
+            .iter()
+            .map(|row| SortKey::of(&self.cell(sheet, CellPos::new(*row, key))))
+            .collect();
+        let mut order: Vec<usize> = (0..rows.len()).collect();
+        order.sort_by(|a, b| SortKey::compare(&keys[*a], &keys[*b], descending));
+        if order.iter().enumerate().all(|(at, from)| at == *from) {
+            return Ok(());
+        }
+        let model = self.model.get_model();
+        let moved = order
+            .iter()
+            .zip(&rows)
+            .map(|(from, to)| {
+                (range.start.col.get()..=range.end.col.get())
+                    .map(|col| {
+                        model
+                            .extend_to(
+                                sheet.0,
+                                row_i32(rows[*from]),
+                                i32::from(col) + 1,
+                                row_i32(*to),
+                                i32::from(col) + 1,
+                            )
+                            .map_err(rejected)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.set_inputs(sheet, range.start, &moved)
+    }
+
     fn extend(&mut self, sheet: SheetId, source: Range, target: Range) -> Result<(), EngineError> {
         let down = target.end.row > source.end.row;
         let rest = if down {
@@ -843,6 +901,58 @@ impl Engine for Workbook {
             .map(Cursor::into_inner)
             .map_err(|e| rejected(format!("{e:?}")))?;
         crate::empty_rows::restore_empty_rows(self.model.get_model(), xlsx)
+    }
+}
+
+enum SortKey {
+    Number(f64),
+    Text(String),
+    Bool(bool),
+    Error,
+    Blank,
+}
+
+impl SortKey {
+    fn of(view: &CellView) -> SortKey {
+        match view.kind {
+            ValueKind::Number => view.number.map_or(SortKey::Blank, SortKey::Number),
+            ValueKind::Text => SortKey::Text(view.text.to_lowercase()),
+            ValueKind::Bool => SortKey::Bool(view.text.eq_ignore_ascii_case("true")),
+            ValueKind::Error => SortKey::Error,
+            ValueKind::Empty => SortKey::Blank,
+        }
+    }
+
+    fn rank(&self) -> u8 {
+        match self {
+            SortKey::Number(_) => 0,
+            SortKey::Text(_) => 1,
+            SortKey::Bool(_) => 2,
+            SortKey::Error => 3,
+            SortKey::Blank => 4,
+        }
+    }
+
+    fn compare(a: &SortKey, b: &SortKey, descending: bool) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        // Blanks stay last in both directions, as in Excel.
+        match (a, b) {
+            (SortKey::Blank, SortKey::Blank) => return Ordering::Equal,
+            (SortKey::Blank, _) => return Ordering::Greater,
+            (_, SortKey::Blank) => return Ordering::Less,
+            _ => {}
+        }
+        let ascending = match (a, b) {
+            (SortKey::Number(x), SortKey::Number(y)) => x.total_cmp(y),
+            (SortKey::Text(x), SortKey::Text(y)) => x.cmp(y),
+            (SortKey::Bool(x), SortKey::Bool(y)) => x.cmp(y),
+            _ => a.rank().cmp(&b.rank()),
+        };
+        if descending {
+            ascending.reverse()
+        } else {
+            ascending
+        }
     }
 }
 

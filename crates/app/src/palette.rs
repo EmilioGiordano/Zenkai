@@ -24,6 +24,8 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Find", Find),
             item("Fill down", FillDown),
             item("Fill right", FillRight),
+            item("Sort A to Z (by the active cell's column)", SortAscending),
+            item("Sort Z to A (by the active cell's column)", SortDescending),
             item("AutoSum", AutoSum),
             item("Insert today's date", InsertDate),
             item("Insert the current time", InsertTime),

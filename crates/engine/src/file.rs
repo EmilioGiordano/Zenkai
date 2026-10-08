@@ -652,6 +652,43 @@ line 2"
     }
 
     #[test]
+    fn sort_orders_rows_like_excel_and_moves_formulas() {
+        let mut book = Workbook::new_empty().unwrap();
+        let at = |r: i64, c: i64| {
+            CellPos::new(
+                zenkai_types::RowIdx::clamped(r),
+                zenkai_types::ColIdx::clamped(c),
+            )
+        };
+        let rows: Vec<Vec<String>> = [
+            ["banana", "=B1"],
+            ["", "x"],
+            ["10", "y"],
+            ["Apple", "z"],
+            ["2", "w"],
+        ]
+        .iter()
+        .map(|r| r.iter().map(ToString::to_string).collect())
+        .collect();
+        book.set_inputs(SheetId(0), at(0, 0), &rows).unwrap();
+        let range = zenkai_types::Range::new(at(0, 0), at(4, 1));
+        book.sort(SheetId(0), range, zenkai_types::ColIdx::clamped(0), false)
+            .unwrap();
+        let column = |book: &Workbook, c| {
+            (0..5)
+                .map(|r| book.input(SheetId(0), at(r, c)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(column(&book, 0), ["2", "10", "Apple", "banana", ""]);
+        assert_eq!(column(&book, 1), ["w", "y", "z", "=B4", "x"]);
+        book.undo().unwrap();
+        assert_eq!(book.input(SheetId(0), at(0, 0)), "banana");
+        book.sort(SheetId(0), range, zenkai_types::ColIdx::clamped(0), true)
+            .unwrap();
+        assert_eq!(column(&book, 0), ["banana", "Apple", "10", "2", ""]);
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
