@@ -83,8 +83,10 @@ cargo build --release -p zenkai-bench -j 6
 Compatibility corpus (`docs/COMPATIBILITY.md`):
 
 ```powershell
-.	argetelease\zenkai-bench.exe compat-generate fixtures\compat
-.	argetelease\zenkai-bench.exe compat fixtures\compat docs\COMPATIBILITY.md
+.	arget
+.\target\release\zenkai-bench.exe compat-generate fixtures\compat
+.	arget
+.\target\release\zenkai-bench.exe compat fixtures\compat docs\COMPATIBILITY.md
 ```
 
 Fixture 3 (20k lookups against 10k rows) takes several minutes per engine; see
