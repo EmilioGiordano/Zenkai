@@ -333,6 +333,11 @@ impl Workspace {
         )
     }
 
+    // Dropping the bridge removes the endpoint file, so no client finds a dead pipe.
+    pub(super) fn stop_bridge(&mut self) {
+        self.agent.bridge = BridgeState::Off;
+    }
+
     // The bridge runs only while the user allows external agents.
     pub(super) fn sync_bridge(&mut self, cx: &mut Context<Self>) {
         let wanted = cx

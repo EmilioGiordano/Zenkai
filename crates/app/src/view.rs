@@ -205,6 +205,10 @@ impl Workspace {
             }
         });
         let settings = cx.observe_global_in::<AgentConfig>(window, Self::on_settings_changed);
+        let quit = cx.on_app_quit(|this, _| {
+            this.stop_bridge();
+            async {}
+        });
         let workbook = match Workbook::new_empty() {
             Ok(workbook) => workbook,
             Err(error) => exit_without_workbook(error),
@@ -258,6 +262,7 @@ impl Workspace {
                 appearance,
                 activation,
                 settings,
+                quit,
                 font_color,
                 fill_color,
             ],
