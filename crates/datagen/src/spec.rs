@@ -2,6 +2,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::date::Date;
+use crate::limits::{
+    MAX_DOMAIN_CHARS, MAX_DOMAINS, MAX_HEADER_CHARS, MAX_OPTION_CHARS, MAX_OPTIONS,
+    MAX_PATTERN_CHARS,
+};
 use crate::percent::Percent;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -32,6 +36,7 @@ pub enum Locale {
 #[serde(deny_unknown_fields)]
 pub struct ColumnSpec {
     #[schemars(description = "Header text. Email columns refer to name columns by it.")]
+    #[schemars(length(max = MAX_HEADER_CHARS))]
     pub header: String,
     pub kind: ColumnKind,
     #[serde(default)]
@@ -80,11 +85,13 @@ pub enum ColumnKind {
         )]
         last_name_from: Option<String>,
         #[schemars(description = "Domains chosen at random, such as gmail.com.")]
+        #[schemars(length(min = 1, max = MAX_DOMAINS), inner(length(max = MAX_DOMAIN_CHARS)))]
         domains: Vec<String>,
     },
     #[schemars(description = "Phone number. In the pattern # is a digit; \\ escapes.")]
     Phone {
         #[schemars(example = "+54 9 11 ####-####")]
+        #[schemars(length(min = 1, max = MAX_PATTERN_CHARS))]
         pattern: String,
     },
     #[schemars(description = "Street and number.")]
@@ -112,6 +119,7 @@ pub enum ColumnKind {
     Boolean {},
     #[schemars(description = "One of the listed values, optionally weighted.")]
     OneOf {
+        #[schemars(length(min = 1, max = MAX_OPTIONS))]
         options: Vec<ListOption>,
     },
     #[schemars(description = "start, start + step, start + 2 * step, ... by row.")]
@@ -133,6 +141,7 @@ pub enum ColumnKind {
     )]
     Pattern {
         #[schemars(example = "AAA-####")]
+        #[schemars(length(min = 1, max = MAX_PATTERN_CHARS))]
         pattern: String,
     },
 }
@@ -170,6 +179,7 @@ pub enum EmailFormat {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListOption {
+    #[schemars(length(min = 1, max = MAX_OPTION_CHARS))]
     pub value: String,
     #[serde(default = "one_u32")]
     #[schemars(description = "Relative frequency; 2 appears twice as often as 1.")]

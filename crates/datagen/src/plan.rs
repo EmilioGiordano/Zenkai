@@ -4,7 +4,11 @@ use zenkai_types::{MAX_COLS, MAX_ROWS};
 
 use crate::date::Date;
 use crate::email::{EmailPlan, NamePart, NameSource};
-use crate::error::{ColumnProblem, DatagenError};
+use crate::error::{ColumnProblem, DatagenError, TextField};
+use crate::limits::{
+    MAX_DOMAIN_CHARS, MAX_DOMAINS, MAX_HEADER_CHARS, MAX_OPTION_CHARS, MAX_OPTIONS,
+    MAX_PATTERN_CHARS, check_text,
+};
 use crate::locale::{self, LocaleData};
 use crate::lorem;
 use crate::pattern::{Pattern, Placeholders};
@@ -70,6 +74,7 @@ pub(crate) fn plan(spec: &GenerationSpec) -> Result<Vec<ColumnPlan>, DatagenErro
 }
 
 fn plan_column(spec: &GenerationSpec, column: &ColumnSpec) -> Result<ColumnPlan, ColumnProblem> {
+    check_text(&column.header, TextField::Header, MAX_HEADER_CHARS)?;
     let rows = spec.rows as usize;
     let blanks = column.blanks.of(rows);
     let uniqueness = if column.unique {
@@ -123,12 +128,8 @@ fn column_values(
             )
             .map(Values::Email);
         }
-        ColumnKind::Phone { pattern } => {
-            ValueSet::Code(Pattern::parse(pattern, Placeholders::DigitsOnly)?)
-        }
-        ColumnKind::Pattern { pattern } => {
-            ValueSet::Code(Pattern::parse(pattern, Placeholders::LettersAndDigits)?)
-        }
+        ColumnKind::Phone { pattern } => code_set(pattern, Placeholders::DigitsOnly)?,
+        ColumnKind::Pattern { pattern } => code_set(pattern, Placeholders::LettersAndDigits)?,
         ColumnKind::StreetAddress {} => ValueSet::StreetAddress(locale),
         ColumnKind::City {} => ValueSet::City(locale.cities),
         ColumnKind::Company {} => ValueSet::Company(locale),
@@ -151,6 +152,11 @@ fn column_values(
         } => lorem_set(*min_words, *max_words)?,
     };
     Ok(Values::Set(set))
+}
+
+fn code_set(pattern: &str, placeholders: Placeholders) -> Result<ValueSet, ColumnProblem> {
+    check_text(pattern, TextField::Pattern, MAX_PATTERN_CHARS)?;
+    Ok(ValueSet::Code(Pattern::parse(pattern, placeholders)?))
 }
 
 fn check_precision(value: i128, shown: impl ToString) -> Result<(), ColumnProblem> {
@@ -228,8 +234,15 @@ fn one_of_set(options: &[ListOption], uniqueness: Uniqueness) -> Result<ValueSet
     if options.is_empty() {
         return Err(ColumnProblem::EmptyList);
     }
+    if options.len() > MAX_OPTIONS {
+        return Err(ColumnProblem::TooManyOptions {
+            count: options.len(),
+            limit: MAX_OPTIONS,
+        });
+    }
     let mut seen = HashSet::new();
     for option in options {
+        check_text(&option.value, TextField::ListValue, MAX_OPTION_CHARS)?;
         if option.value.is_empty() {
             return Err(ColumnProblem::EmptyOption);
         }
@@ -284,6 +297,15 @@ fn email_plan(
 ) -> Result<EmailPlan, ColumnProblem> {
     if domains.is_empty() {
         return Err(ColumnProblem::NoDomains);
+    }
+    if domains.len() > MAX_DOMAINS {
+        return Err(ColumnProblem::TooManyDomains {
+            count: domains.len(),
+            limit: MAX_DOMAINS,
+        });
+    }
+    for domain in domains {
+        check_text(domain, TextField::Domain, MAX_DOMAIN_CHARS)?;
     }
     if let Some(domain) = domains.iter().find(|domain| !is_valid_domain(domain)) {
         return Err(ColumnProblem::InvalidDomain {

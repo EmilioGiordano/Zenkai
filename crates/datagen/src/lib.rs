@@ -6,6 +6,7 @@ mod distinct;
 mod email;
 mod error;
 mod generate;
+mod limits;
 mod locale;
 mod lorem;
 mod pattern;
@@ -18,7 +19,7 @@ mod value_set;
 
 pub use date::{Date, InvalidDate};
 pub use detect::{detect_kind, detect_kinds};
-pub use error::{ColumnProblem, DatagenError};
+pub use error::{ColumnProblem, DatagenError, TextField};
 pub use generate::{generate, validate};
 pub use percent::{InvalidPercent, Percent};
 pub use spec::{

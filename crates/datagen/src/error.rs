@@ -1,3 +1,5 @@
+use std::fmt;
+
 use crate::text::clip;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -58,4 +60,35 @@ pub enum ColumnProblem {
     WeightsWithUnique,
     #[error("the word count must be between 1 and {limit}")]
     WordCountOutOfRange { limit: u16 },
+    #[error("the {field} has {chars} characters; the limit is {limit}")]
+    TextTooLong {
+        field: TextField,
+        chars: usize,
+        limit: usize,
+    },
+    #[error("the {field} has a control character other than tab or line break")]
+    ControlCharacter { field: TextField },
+    #[error("the list has {count} values; the limit is {limit}")]
+    TooManyOptions { count: usize, limit: usize },
+    #[error("{count} email domains are listed; the limit is {limit}")]
+    TooManyDomains { count: usize, limit: usize },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextField {
+    Header,
+    ListValue,
+    Pattern,
+    Domain,
+}
+
+impl fmt::Display for TextField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            TextField::Header => "header",
+            TextField::ListValue => "list value",
+            TextField::Pattern => "pattern",
+            TextField::Domain => "email domain",
+        })
+    }
 }

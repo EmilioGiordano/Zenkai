@@ -105,8 +105,11 @@
               "description": "Domains chosen at random, such as gmail.com.",
               "type": "array",
               "items": {
-                "type": "string"
-              }
+                "type": "string",
+                "maxLength": 253
+              },
+              "maxItems": 100,
+              "minItems": 1
             },
             "first_name_from": {
               "description": "Header of a first_name or full_name column that gives the first name.",
@@ -147,7 +150,9 @@
               "type": "string",
               "examples": [
                 "+54 9 11 ####-####"
-              ]
+              ],
+              "maxLength": 256,
+              "minLength": 1
             },
             "type": {
               "type": "string",
@@ -300,7 +305,9 @@
               "type": "array",
               "items": {
                 "$ref": "#/$defs/ListOption"
-              }
+              },
+              "maxItems": 10000,
+              "minItems": 1
             },
             "type": {
               "type": "string",
@@ -387,7 +394,9 @@
               "type": "string",
               "examples": [
                 "AAA-####"
-              ]
+              ],
+              "maxLength": 256,
+              "minLength": 1
             },
             "type": {
               "type": "string",
@@ -412,7 +421,8 @@
         },
         "header": {
           "description": "Header text. Email columns refer to name columns by it.",
-          "type": "string"
+          "type": "string",
+          "maxLength": 255
         },
         "kind": {
           "$ref": "#/$defs/ColumnKind"
@@ -482,7 +492,9 @@
       "type": "object",
       "properties": {
         "value": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 255,
+          "minLength": 1
         },
         "weight": {
           "description": "Relative frequency; 2 appears twice as often as 1.",
