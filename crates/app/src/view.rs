@@ -1904,7 +1904,11 @@ impl Workspace {
             return;
         };
         let view = workbook.cell(sheet, active);
-        let Some(code) = decimals::step_decimals(&view.style.num_fmt, &view.text, more) else {
+        let Some(code) = decimals::step_decimals(
+            &view.style.num_fmt,
+            (view.kind == zenkai_types::ValueKind::Number).then_some(view.text.as_str()),
+            more,
+        ) else {
             return;
         };
         self.edit(window, cx, move |wb| {
@@ -1934,6 +1938,9 @@ impl Workspace {
                     .find(|span| span.first <= col && col <= span.last)
                     .map_or(zenkai_types::DEFAULT_COL_WIDTH, |span| span.width)
             };
+            // The tallest wrapped cell sets each row, once.
+            let mut lines_per_row: std::collections::BTreeMap<zenkai_types::RowIdx, f32> =
+                Default::default();
             for pos in wb
                 .filled_cells(sheet)
                 .into_iter()
@@ -1942,12 +1949,27 @@ impl Workspace {
                 if sizes.rows.iter().any(|(row, _)| *row == pos.row) {
                     continue;
                 }
-                let chars = wb.cell(sheet, pos).text.chars().count() as f32;
+                let view = wb.cell(sheet, pos);
+                if view.kind != zenkai_types::ValueKind::Text {
+                    continue;
+                }
                 let per_line = ((width(pos.col) - 12.0) / AUTOFIT_CHAR_WIDTH).max(1.0);
                 // Breaking at word boundaries wastes part of each line.
-                let lines = (chars * 1.3 / per_line).ceil().clamp(1.0, 20.0);
+                let lines: f32 = view
+                    .text
+                    .split('\n')
+                    .map(|part| {
+                        (part.chars().count() as f32 * 1.3 / per_line)
+                            .ceil()
+                            .max(1.0)
+                    })
+                    .sum();
+                let entry = lines_per_row.entry(pos.row).or_insert(1.0);
+                *entry = entry.max(lines.min(20.0));
+            }
+            for (row, lines) in lines_per_row {
                 if lines > 1.0 {
-                    wb.set_row_height(sheet, pos.row, lines * 17.0 + 4.0)?;
+                    wb.set_row_height(sheet, row, lines * 17.0 + 4.0)?;
                 }
             }
             Ok(())

@@ -475,6 +475,7 @@ fn vertical_origin(valign: VAlign, bounds: Bounds<Pixels>, height: Pixels, zoom:
 
 // Wrapped text breaks at the cell width and stays inside the cell, as in Excel; lines
 // that do not fit the row height are clipped.
+// The text metrics are computed once by the caller and shared with the unwrapped path.
 #[allow(clippy::too_many_arguments)]
 fn paint_wrapped_text(
     frame: &Frame,
