@@ -788,6 +788,20 @@ line 2"
         assert_eq!(book.input(SheetId(1), CellPos::default()), "hola");
         book.undo().unwrap();
         assert_eq!(book.sheets().len(), 2);
+        book.redo().unwrap();
+        let row = zenkai_types::RowIdx::new(4).unwrap();
+        book.set_row_height(SheetId(1), row, 40.0).unwrap();
+        book.set_input(
+            SheetId(1),
+            CellPos::new(row, zenkai_types::ColIdx::clamped(1)),
+            "=A1",
+        )
+        .unwrap();
+        let reopened = Workbook::from_xlsx_bytes(&book.to_xlsx().unwrap(), "b").unwrap();
+        assert_eq!(reopened.sheets().len(), 3);
+        assert_eq!(reopened.input(SheetId(1), CellPos::default()), "hola");
+        let sizes = reopened.sizes(SheetId(1));
+        assert!(sizes.rows.iter().any(|(r, h)| *r == row && *h == 40.0));
     }
 
     #[test]
