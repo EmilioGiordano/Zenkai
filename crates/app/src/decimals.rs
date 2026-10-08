@@ -141,3 +141,34 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod no_panic {
+    use proptest::prelude::*;
+
+    const FORMAT_CHARS: [char; 24] = [
+        '0', '#', '?', '.', ',', ';', '%', '$', '"', '\\', '[', ']', 'A', 'd', 'y', 'm', 'h', 's',
+        'E', '+', '_', ' ', '/', '@',
+    ];
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 2_000, ..ProptestConfig::default() })]
+
+        #[test]
+        fn decimal_steps_accept_any_code(
+            code in prop_oneof![
+                any::<String>(),
+                prop::collection::vec(
+                    prop::sample::select(&FORMAT_CHARS[..]),
+                    0..30,
+                )
+                .prop_map(|chars| chars.into_iter().collect::<String>()),
+            ],
+            shown in any::<String>(),
+            more in any::<bool>(),
+        ) {
+            let _ = super::step_decimals(&code, Some(&shown), more);
+        }
+
+    }
+}

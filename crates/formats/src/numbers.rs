@@ -146,3 +146,19 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod no_panic {
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 2_000, ..ProptestConfig::default() })]
+
+        #[test]
+        fn number_rewrite_accepts_any_field(field in prop_oneof![any::<String>(), "[-+0-9.,%]{0,16}"]) {
+            let mut rows = vec![vec![field]];
+            let _ = super::detect_decimal_comma(&rows);
+            let _ = super::normalize_decimal_comma(&mut rows);
+        }
+    }
+}

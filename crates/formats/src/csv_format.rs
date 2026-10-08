@@ -285,3 +285,18 @@ mod tests {
         assert_eq!(parsed.rows, rows);
     }
 }
+
+// Any bytes a file may hold must parse or fail cleanly, never panic.
+#[cfg(test)]
+mod no_panic {
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 1_000, ..ProptestConfig::default() })]
+
+        #[test]
+        fn csv_accepts_any_bytes(bytes in prop::collection::vec(any::<u8>(), 0..512)) {
+            let _ = super::parse_csv(&bytes, None);
+        }
+    }
+}

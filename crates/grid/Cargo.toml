@@ -10,5 +10,8 @@ gpui-kit = "=0.7.1"
 zenkai-types = { path = "../types" }
 tracing = "0.1"
 
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
 [lints]
 workspace = true

@@ -167,3 +167,17 @@ mod tests {
         assert_eq!(results.status(), "2 of 2");
     }
 }
+
+#[cfg(test)]
+mod no_panic {
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 2_000, ..ProptestConfig::default() })]
+
+        #[test]
+        fn replace_accepts_any_text(text in any::<String>(), query in ".{1,4}", with in ".{0,4}") {
+            let _ = super::replace_ignoring_case(&text, &query, &with);
+        }
+    }
+}

@@ -21,6 +21,7 @@ zenkai-grid = { path = "../grid" }
 zenkai-types = { path = "../types" }
 
 [dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
 tempfile = "3"
 
 [lints]

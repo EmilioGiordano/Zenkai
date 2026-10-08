@@ -118,3 +118,19 @@ mod tests {
         assert!(shorter_spellings("0").is_empty());
     }
 }
+
+#[cfg(test)]
+mod no_panic {
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 2_000, ..ProptestConfig::default() })]
+
+        #[test]
+        fn spellings_accept_any_text(
+            text in prop_oneof![any::<String>(), r"-?[0-9]{0,20}(\.[0-9]{0,20})?(E[+-]?[0-9]{1,3})?"]
+        ) {
+            let _ = super::shorter_spellings(&text);
+        }
+    }
+}

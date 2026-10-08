@@ -206,3 +206,24 @@ mod cycle_tests {
         assert_eq!(cycle_reference("=A1", 1).unwrap().0, "=$A$1");
     }
 }
+
+// Whatever the user types, editing helpers must never panic.
+#[cfg(test)]
+mod no_panic {
+    use proptest::prelude::*;
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 2_000, ..ProptestConfig::default() })]
+
+        #[test]
+        fn reference_helpers_accept_any_text(
+            text in prop_oneof![any::<String>(), "=[A-Za-z$0-9:!(),.\"ñé +-]{0,24}"],
+            caret in 0usize..40,
+        ) {
+            let caret = caret.min(text.len());
+            let _ = super::cycle_reference(&text, caret);
+            let _ = super::references(&text);
+            let _ = crate::autocomplete::token_at(&text, caret);
+        }
+    }
+}

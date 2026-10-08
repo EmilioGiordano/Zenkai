@@ -9717,6 +9717,7 @@ dependencies = [
  "chrono",
  "gpui-kit",
  "memory-stats",
+ "proptest",
  "tempfile",
  "tracing",
  "tracing-subscriber",
@@ -9770,6 +9771,7 @@ dependencies = [
  "calamine",
  "csv",
  "encoding_rs",
+ "proptest",
  "tempfile",
  "thiserror 2.0.21",
  "zenkai-types",
@@ -9781,6 +9783,7 @@ name = "zenkai-grid"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
+ "proptest",
  "tracing",
  "zenkai-types",
 ]
