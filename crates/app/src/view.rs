@@ -862,6 +862,7 @@ impl Workspace {
             return;
         };
         let bytes = preview.bytes.clone();
+        let source = bytes.clone();
         cx.spawn(async move |this, cx| {
             let parsed = cx
                 .background_executor()
@@ -869,7 +870,10 @@ impl Workspace {
                 .await;
             let update = this.update(cx, |this, cx| match parsed {
                 Ok(parsed) => {
-                    if let Some(preview) = &mut this.csv_preview {
+                    // Only if the preview still shows the same file.
+                    if let Some(preview) = &mut this.csv_preview
+                        && Arc::ptr_eq(&preview.bytes, &source)
+                    {
                         preview.parsed = parsed;
                     }
                     cx.notify();
