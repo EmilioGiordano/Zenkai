@@ -715,8 +715,10 @@ impl Engine for Workbook {
     }
 
     fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError> {
-        select(&mut self.model, sheet, range)?;
-        let clipboard = self.model.copy_to_clipboard().map_err(rejected)?;
+        let clipboard = self.model.without_invalidation(|model| {
+            select(model, sheet, range)?;
+            model.copy_to_clipboard().map_err(rejected)
+        })?;
         let payload = serde_json::to_value(&clipboard).map_err(|e| rejected(e.to_string()))?;
         let text = payload
             .get("csv")

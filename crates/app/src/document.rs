@@ -223,10 +223,15 @@ pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError
     let mut guard = shared.write().unwrap_or_else(PoisonError::into_inner);
     let workbook: &mut Workbook = &mut guard;
     let run = zenkai_engine::run_with_engine_stack(|| {
-        Ok(edits
+        let errors = edits
             .into_iter()
             .filter_map(|edit| edit(workbook).err())
-            .collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        // Edits drop the cached used areas; rebuild them here so the UI thread never walks a sheet.
+        for sheet in workbook.sheets() {
+            workbook.used_end(sheet.id);
+        }
+        Ok(errors)
     });
     run.unwrap_or_else(|error| vec![error])
 }
