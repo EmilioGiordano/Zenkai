@@ -22,3 +22,6 @@ Thumbs.db
 
 # Generated benchmark fixtures
 /bench/fixtures/
+
+# Packaging output
+/dist/
