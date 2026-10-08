@@ -141,7 +141,14 @@ pub struct Workspace {
     last_tab_click: Option<(Instant, SheetId)>,
     memory_mb: u64,
     diagnostics_task: Option<Task<()>>,
+    cell_refresh: CellRefresh,
     _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CellRefresh {
+    Idle,
+    Scheduled,
 }
 
 impl Workspace {
@@ -212,6 +219,7 @@ impl Workspace {
             last_tab_click: None,
             memory_mb: 0,
             diagnostics_task: None,
+            cell_refresh: CellRefresh::Idle,
             _subscriptions: vec![subscription, appearance, font_color, fill_color],
         };
         workspace.reset_grid(window, cx);
@@ -294,6 +302,23 @@ impl Workspace {
                 }
             })
             .unwrap_or_default()
+    }
+
+    // Mouse moves, wheel ticks and key repeats can outnumber frames; one read per frame,
+    // right before it is drawn, is all the screen can show.
+    fn schedule_cell_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.cell_refresh == CellRefresh::Scheduled {
+            return;
+        }
+        self.cell_refresh = CellRefresh::Scheduled;
+        let this = cx.weak_entity();
+        window.on_next_frame(move |_, cx| {
+            this.update(cx, |this, cx| {
+                this.cell_refresh = CellRefresh::Idle;
+                this.refresh_cells(cx);
+            })
+            .ok();
+        });
     }
 
     fn refresh_cells(&mut self, cx: &mut Context<Self>) {
@@ -920,7 +945,7 @@ impl Workspace {
     ) {
         match event {
             GridEvent::SelectionChanged => self.refresh_stats(cx),
-            GridEvent::ViewportChanged => self.refresh_cells(cx),
+            GridEvent::ViewportChanged => self.schedule_cell_refresh(window, cx),
             GridEvent::EditChanged => cx.notify(),
             GridEvent::EditRequested(pos) => {
                 // Unknown while a recalculation holds the workbook: editing an empty
