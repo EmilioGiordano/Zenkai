@@ -44,6 +44,7 @@ use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
+use gpui_kit::component::spinner::Spinner;
 
 struct FormulaBarEdit {
     input: Entity<InputState>,
@@ -1048,7 +1049,7 @@ impl Workspace {
     fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         // A CSV read and an xlsx open replace the same document: the newer one wins.
         self.next_open_request();
-        self.busy = Some(format!("Reading {}…", path.display()).into());
+        self.busy = Some(format!("Reading {}…", file_label(&path)).into());
         cx.notify();
         let label = self.busy.clone().unwrap_or_default();
         let request = self.next_csv_request();
@@ -1283,7 +1284,7 @@ impl Workspace {
             self.import_csv(path, window, cx);
             return;
         }
-        self.busy = Some(format!("Opening {}…", path.display()).into());
+        self.busy = Some(format!("Opening {}…", file_label(&path)).into());
         cx.notify();
         let started = Instant::now();
         let request = self.next_open_request();
@@ -1376,7 +1377,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.busy = Some(format!("Reading values from {}…", path.display()).into());
+        self.busy = Some(format!("Reading values from {}…", file_label(&path)).into());
         let label = self.busy.clone().unwrap_or_default();
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
@@ -2659,6 +2660,46 @@ impl Workspace {
         self.edit(window, cx, move |wb| wb.move_sheet(sheet, target));
     }
 
+    // Opening a large file takes seconds; the status bar text alone went unnoticed.
+    // Recalculations stay in the status bar only: most last a frame and the pill would
+    // flash on every edit.
+    fn render_busy(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let busy = self
+            .busy
+            .clone()
+            .filter(|busy| busy.as_ref() != CALCULATING)?;
+        let theme = cx.theme();
+        let indicator = if cx.reduce_motion() {
+            div().child("…").into_any_element()
+        } else {
+            Spinner::new().color(theme.primary).into_any_element()
+        };
+        Some(
+            div()
+                .absolute()
+                .top(px(96.0))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .px_4()
+                        .py_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.popover)
+                        .text_color(theme.popover_foreground)
+                        .shadow_md()
+                        .child(indicator)
+                        .child(busy),
+                ),
+        )
+    }
+
     fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let mut left = h_flex().gap_3().items_center();
@@ -3099,9 +3140,17 @@ impl Render for Workspace {
             .child(self.render_tabs(cx))
             .child(self.render_status(cx))
             .children(self.render_palette())
+            .children(self.render_busy(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
     }
+}
+
+fn file_label(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 // Excel's cell context menu, trimmed to what Zenkai supports. Actions go to the grid so
