@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 ironcalc = "=0.8.3"
 roxmltree = "0.19"
+serde_json = "1"
 thiserror = "2"
 zenkai-types = { path = "../types" }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }

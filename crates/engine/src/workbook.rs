@@ -1,8 +1,8 @@
 use std::io::Cursor;
 
-use ironcalc::base::UserModel;
 use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::{Color, HorizontalAlignment, Style};
+use ironcalc::base::{ClipboardData, UserModel};
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx_bytes;
 
@@ -32,6 +32,14 @@ pub trait Engine: Send {
         rows: &[Vec<String>],
     ) -> Result<(), EngineError>;
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
+    fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError>;
+    fn paste(
+        &mut self,
+        sheet: SheetId,
+        at: CellPos,
+        copied: &Copied,
+        cut: bool,
+    ) -> Result<(), EngineError>;
     fn apply_style(
         &mut self,
         sheet: SheetId,
@@ -53,6 +61,29 @@ pub trait Engine: Send {
 
 pub struct Workbook {
     model: UserModel<'static>,
+}
+
+// What a copy produced: the text Excel and other apps understand, plus the engine's
+// own payload so a paste inside Zenkai keeps formulas (shifted) and styles.
+#[derive(Clone, Debug)]
+pub struct Copied {
+    pub text: String,
+    payload: serde_json::Value,
+}
+
+fn select(model: &mut UserModel<'static>, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+    model.set_selected_sheet(sheet.0).map_err(rejected)?;
+    model
+        .set_selected_cell(row_i32(range.start.row), col_i32(range.start.col))
+        .map_err(rejected)?;
+    model
+        .set_selected_range(
+            row_i32(range.start.row),
+            col_i32(range.start.col),
+            row_i32(range.end.row),
+            col_i32(range.end.col),
+        )
+        .map_err(rejected)
 }
 
 // Typed, pasted and imported text reaches the engine parser without going through
@@ -222,6 +253,43 @@ impl Engine for Workbook {
         self.model.resume_evaluation();
         self.model.evaluate();
         result
+    }
+
+    fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError> {
+        select(&mut self.model, sheet, range)?;
+        let clipboard = self.model.copy_to_clipboard().map_err(rejected)?;
+        let payload = serde_json::to_value(&clipboard).map_err(|e| rejected(e.to_string()))?;
+        let text = payload
+            .get("csv")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        Ok(Copied { text, payload })
+    }
+
+    fn paste(
+        &mut self,
+        sheet: SheetId,
+        at: CellPos,
+        copied: &Copied,
+        cut: bool,
+    ) -> Result<(), EngineError> {
+        let field = |name: &str| {
+            copied
+                .payload
+                .get(name)
+                .cloned()
+                .ok_or_else(|| rejected(format!("clipboard payload lacks {name}")))
+        };
+        let parse = |e: serde_json::Error| rejected(e.to_string());
+        let data: ClipboardData = serde_json::from_value(field("data")?).map_err(parse)?;
+        let source_sheet: u32 = serde_json::from_value(field("sheet")?).map_err(parse)?;
+        let source_range: (i32, i32, i32, i32) =
+            serde_json::from_value(field("range")?).map_err(parse)?;
+        select(&mut self.model, sheet, Range::single(at))?;
+        self.model
+            .paste_from_clipboard(source_sheet, source_range, &data, cut)
+            .map_err(rejected)
     }
 
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {

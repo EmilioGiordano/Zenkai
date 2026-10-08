@@ -287,6 +287,24 @@ mod tests {
     }
 
     #[test]
+    fn paste_inside_zenkai_shifts_relative_references() {
+        let mut book = Workbook::new_empty().unwrap();
+        let sheet = SheetId(0);
+        let rows = vec![
+            vec!["1".to_string(), "=A1*2".to_string()],
+            vec!["5".to_string(), String::new()],
+        ];
+        book.set_inputs(sheet, CellPos::default(), &rows).unwrap();
+        let b1 = CellPos::parse_a1("B1").unwrap();
+        let copied = book.copy(sheet, zenkai_types::Range::single(b1)).unwrap();
+        assert_eq!(copied.text.trim(), "2");
+        let b2 = CellPos::parse_a1("B2").unwrap();
+        book.paste(sheet, b2, &copied, false).unwrap();
+        assert_eq!(book.input(sheet, b2), "=A2*2");
+        assert_eq!(book.cell(sheet, b2).text, "10");
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
