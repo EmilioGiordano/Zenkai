@@ -16,8 +16,8 @@ impl PendingRecalculation {
 
     pub(crate) fn add_area(&mut self, area: &Area) {
         if let PendingRecalculation::Cells(cells) = self {
-            for row in area.row..area.row + area.height {
-                for column in area.column..area.column + area.width {
+            for row in area.row..area.row.saturating_add(area.height) {
+                for column in area.column..area.column.saturating_add(area.width) {
                     cells.push((area.sheet, row, column));
                 }
             }

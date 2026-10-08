@@ -52,7 +52,7 @@ impl References {
             if absolute {
                 value
             } else {
-                value + origin
+                value.saturating_add(origin)
             }
         };
         match node {
@@ -185,8 +185,8 @@ fn widen_to_largest_shape(references: &mut [Reference]) {
             ..
         } = reference
         {
-            height = height.max(last_row - first_row);
-            width = width.max(last_column - first_column);
+            height = height.max(last_row.saturating_sub(*first_row));
+            width = width.max(last_column.saturating_sub(*first_column));
         }
     }
     for reference in references.iter_mut() {
@@ -198,8 +198,8 @@ fn widen_to_largest_shape(references: &mut [Reference]) {
             ..
         } = reference
         {
-            *last_row = *first_row + height;
-            *last_column = *first_column + width;
+            *last_row = first_row.saturating_add(height);
+            *last_column = first_column.saturating_add(width);
         }
     }
 }
@@ -321,7 +321,7 @@ impl DependencyIndex {
                     first_column,
                     last_row,
                     last_column,
-                } if last_column - first_column < MAX_INDEXED_COLUMNS => {
+                } if last_column.saturating_sub(first_column) < MAX_INDEXED_COLUMNS => {
                     for column in first_column..=last_column {
                         self.column(sheet, column)
                             .ranges
@@ -410,7 +410,45 @@ impl DependencyIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::RowIntervals;
+    use super::{DependencyIndex, RowIntervals};
+    use crate::expressions::parser::Node;
+    use crate::functions::Function;
+
+    fn range(row1: i32, row2: i32, absolute: bool) -> Node {
+        Node::RangeKind {
+            sheet_name: None,
+            sheet_index: 0,
+            absolute_row1: absolute,
+            absolute_column1: absolute,
+            row1,
+            column1: row1,
+            absolute_row2: absolute,
+            absolute_column2: absolute,
+            row2,
+            column2: row2,
+        }
+    }
+
+    #[test]
+    fn extreme_offsets_saturate_instead_of_overflowing() {
+        let reference = Node::ReferenceKind {
+            sheet_name: None,
+            sheet_index: 0,
+            absolute_row: false,
+            absolute_column: false,
+            row: i32::MAX,
+            column: i32::MAX,
+        };
+        let sumif = Node::FunctionKind {
+            kind: Function::Sumif,
+            args: vec![range(i32::MIN, i32::MAX, true), range(i32::MAX, 1, false)],
+        };
+        let mut index = DependencyIndex::new();
+        index.add((0, i32::MAX, i32::MAX), &reference);
+        index.add((0, i32::MAX, i32::MAX), &sumif);
+        index.sort();
+        assert!(index.affected_by(&[(0, i32::MAX, i32::MAX)]).is_some());
+    }
 
     #[test]
     fn row_intervals_find_exactly_the_intervals_containing_a_row() {

@@ -26,8 +26,8 @@ impl Spill {
         let (anchor_sheet, anchor_row, anchor_column) = self.anchor;
         let (width, height) = self.size;
         sheet == anchor_sheet
-            && (anchor_row..anchor_row + height).contains(&row)
-            && (anchor_column..anchor_column + width).contains(&column)
+            && (anchor_row..anchor_row.saturating_add(height)).contains(&row)
+            && (anchor_column..anchor_column.saturating_add(width)).contains(&column)
     }
 }
 
