@@ -1263,7 +1263,11 @@ impl<'a> Model<'a> {
     }
 
     // Returns the 'single' value of a cell. Not arrays or ranges.
-    fn get_cell_value(&self, cell: &Cell, cell_reference: CellReferenceIndex) -> CalcResult {
+    pub(crate) fn get_cell_value(
+        &self,
+        cell: &Cell,
+        cell_reference: CellReferenceIndex,
+    ) -> CalcResult {
         use Cell::*;
         match cell {
             EmptyCell { .. } => CalcResult::EmptyCell,

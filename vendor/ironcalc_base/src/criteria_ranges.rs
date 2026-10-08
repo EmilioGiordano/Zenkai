@@ -1,8 +1,13 @@
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::{calc_result::CalcResult, expressions::types::CellReferenceIndex, model::Model};
+use crate::{
+    calc_result::CalcResult,
+    expressions::types::CellReferenceIndex,
+    model::{CellState, Model},
+    types::Cell,
+};
 
 // Smaller areas are cheaper to read again than to keep.
 const MIN_KEPT_CELLS: usize = 1024;
@@ -18,9 +23,6 @@ type Area = (u32, i32, i32, i32, i32);
 pub(crate) enum CriteriaRanges {
     Off,
     On {
-        // An area is kept on its second read, so one read by a single formula costs
-        // nothing extra.
-        seen: HashSet<Area>,
         kept: HashMap<Area, Arc<[CalcResult]>>,
         kept_cells: usize,
     },
@@ -29,7 +31,6 @@ pub(crate) enum CriteriaRanges {
 impl CriteriaRanges {
     pub(crate) fn on() -> CriteriaRanges {
         CriteriaRanges::On {
-            seen: HashSet::new(),
             kept: HashMap::new(),
             kept_cells: 0,
         }
@@ -99,31 +100,20 @@ impl Model<'_> {
         let cells = usize::try_from(height)
             .ok()?
             .checked_mul(usize::try_from(width).ok()?)?;
-        let CriteriaRanges::On {
-            seen,
-            kept,
-            kept_cells,
-        } = &mut self.criteria_ranges
-        else {
+        let CriteriaRanges::On { kept, kept_cells } = &self.criteria_ranges else {
             return None;
         };
         if let Some(values) = kept.get(&area) {
             return Some(Arc::clone(values));
         }
-        if cells < MIN_KEPT_CELLS
-            || kept_cells.saturating_add(cells) > MAX_KEPT_CELLS
-            || seen.insert(area)
-        {
+        if cells < MIN_KEPT_CELLS || kept_cells.saturating_add(cells) > MAX_KEPT_CELLS {
             return None;
         }
         let circular_hits = self.circular_hits;
         let values: Arc<[CalcResult]> = self.read_area(area).into();
         // A cell reached while it is being evaluated reads as #CIRC! only at that moment.
         if self.circular_hits == circular_hits {
-            if let CriteriaRanges::On {
-                kept, kept_cells, ..
-            } = &mut self.criteria_ranges
-            {
+            if let CriteriaRanges::On { kept, kept_cells } = &mut self.criteria_ranges {
                 kept.insert(area, Arc::clone(&values));
                 *kept_cells += cells;
             }
@@ -135,9 +125,36 @@ impl Model<'_> {
         let mut values = Vec::new();
         for row in row..row.saturating_add(height) {
             for column in column..column.saturating_add(width) {
-                values.push(self.evaluate_cell(CellReferenceIndex { sheet, row, column }));
+                let reference = CellReferenceIndex { sheet, row, column };
+                let value = match self.stored_value(reference) {
+                    Some(value) => value,
+                    None => self.evaluate_cell(reference),
+                };
+                values.push(value);
             }
         }
         values
+    }
+
+    // What `evaluate_cell` returns for a cell that needs no evaluation, without cloning
+    // the cell.
+    fn stored_value(&self, reference: CellReferenceIndex) -> Option<CalcResult> {
+        let CellReferenceIndex { sheet, row, column } = reference;
+        let cell = self
+            .workbook
+            .worksheets
+            .get(sheet as usize)?
+            .sheet_data
+            .get(&row)?
+            .get(&column)?;
+        let evaluated = match cell {
+            Cell::SpillCell { .. } | Cell::ArrayFormula { .. } => false,
+            Cell::CellFormula { .. } => matches!(
+                self.cells.get(&(sheet, row, column)),
+                Some(CellState::Evaluated)
+            ),
+            _ => true,
+        };
+        evaluated.then(|| self.get_cell_value(cell, reference))
     }
 }
