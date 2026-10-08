@@ -399,7 +399,13 @@ fn paint_cell_text(
         );
         return;
     }
-    let mut line = shape(cell.text.clone(), window);
+    // Like wrapped text, a single line never shows more than a couple of thousand
+    // characters, so a 32k-character cell is not shaped in full every frame.
+    let shown: SharedString = match cell.text.char_indices().nth(MAX_WRAPPED_CHARS) {
+        Some((cut, _)) => cell.text[..cut].to_string().into(),
+        None => cell.text.clone(),
+    };
+    let mut line = shape(shown, window);
     let fits = |width: Pixels| width + padding * 2.0 <= bounds.size.width;
     if cell.kind == ValueKind::Number && !fits(line.width) && cell.style.num_fmt == "general" {
         for spelling in crate::general::shorter_spellings(&cell.text) {
