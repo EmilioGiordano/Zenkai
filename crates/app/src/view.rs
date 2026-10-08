@@ -2006,10 +2006,12 @@ impl Workspace {
                 .child(
                     div()
                         .flex_1()
-                        .flex()
-                        .justify_center()
-                        .truncate()
-                        .child(self.document.title()),
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_center()
+                        .child(self.document.name_with_marker()),
                 )
                 .child(div().w(px(160.0))),
         )
