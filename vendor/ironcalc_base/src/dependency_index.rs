@@ -8,9 +8,9 @@ pub(crate) type CellKey = (u32, i32, i32);
 // Ranges wider than this are kept per sheet instead of once per column they cover.
 const MAX_INDEXED_COLUMNS: i32 = 16;
 
-// Nested ranges down a column (`=SUM($A$1:A9)` below `=SUM($A$1:A8)`...) make the
-// dependents visited grow with the square of the formulas; past this, a full evaluation
-// is the cheaper way.
+// Nested ranges down a column (`=SUM($A$1:A9)` below `=SUM($A$1:A8)`...), or many wide
+// ranges over a row that a large paste edits, make the entries examined grow with the
+// square of the formulas; past this, a full evaluation is the cheaper way.
 const MAX_DEPENDENT_VISITS: usize = 4_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -382,24 +382,36 @@ impl DependencyIndex {
         }
     }
 
-    fn for_each_dependent(&self, (sheet, row, column): CellKey, visit: &mut impl FnMut(CellKey)) {
+    // Returns the entries examined, including wide ranges over other columns of the row.
+    fn for_each_dependent(
+        &self,
+        (sheet, row, column): CellKey,
+        visit: &mut impl FnMut(CellKey),
+    ) -> usize {
+        let mut examined = 0;
         if let Some(dependents) = self.columns.get(&(sheet, column)) {
             let start = dependents.cells.partition_point(|(r, _)| *r < row);
             for (_, formula) in dependents.cells[start..]
                 .iter()
                 .take_while(|(r, _)| *r == row)
             {
+                examined += 1;
                 visit(*formula);
             }
-            dependents.ranges.for_each_containing(row, visit);
+            dependents.ranges.for_each_containing(row, &mut |formula| {
+                examined += 1;
+                visit(formula);
+            });
         }
         if let Some(wide) = self.wide_ranges.get(&sheet) {
             wide.for_each_containing(row, &mut |(first_column, last_column, formula)| {
+                examined += 1;
                 if (first_column..=last_column).contains(&column) {
                     visit(formula);
                 }
             });
         }
+        examined
     }
 
     // None when following the dependents would cost more than evaluating everything.
@@ -411,8 +423,7 @@ impl DependencyIndex {
             if !affected.insert(cell) {
                 continue;
             }
-            self.for_each_dependent(cell, &mut |formula| {
-                visits += 1;
+            visits += self.for_each_dependent(cell, &mut |formula| {
                 if !affected.contains(&formula) {
                     pending.push(formula);
                 }
