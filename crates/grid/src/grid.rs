@@ -1,5 +1,7 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
@@ -85,6 +87,7 @@ pub struct Grid {
     frozen_rows: u32,
     frozen_cols: u16,
     merges: Rc<Vec<Range>>,
+    last_paint: Rc<Cell<Duration>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -126,7 +129,12 @@ impl Grid {
             frozen_rows: 0,
             frozen_cols: 0,
             merges: Rc::new(Vec::new()),
+            last_paint: Rc::new(Cell::new(Duration::ZERO)),
         }
+    }
+
+    pub fn last_paint(&self) -> Duration {
+        self.last_paint.get()
     }
 
     pub fn selection(&self) -> Selection {
@@ -615,6 +623,7 @@ impl Render for Grid {
             font: cx.theme().font_family.clone(),
         };
         let weak = cx.entity().downgrade();
+        let last_paint = self.last_paint.clone();
         div()
             .id("grid")
             .key_context("Grid")
@@ -749,7 +758,11 @@ impl Render for Grid {
                         });
                         bounds
                     },
-                    move |bounds, _, window, cx| paint::paint(&frame, bounds, window, cx),
+                    move |bounds, _, window, cx| {
+                        let started = Instant::now();
+                        paint::paint(&frame, bounds, window, cx);
+                        last_paint.set(started.elapsed());
+                    },
                 )
                 .size_full(),
             )

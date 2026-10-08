@@ -68,6 +68,7 @@ pub struct Workspace {
     rename: Option<Entity<InputState>>,
     pending_sheet: Option<SheetId>,
     last_tab_click: Option<(Instant, SheetId)>,
+    memory_mb: u64,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -97,6 +98,7 @@ impl Workspace {
             rename: None,
             pending_sheet: None,
             last_tab_click: None,
+            memory_mb: 0,
             _subscriptions: vec![subscription],
         };
         workspace.reset_grid(window, cx);
@@ -205,6 +207,27 @@ impl Workspace {
         if let Some(bar) = &mut self.find {
             bar.results = FindResults::default();
         }
+    }
+
+    fn sample_diagnostics(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            loop {
+                let memory =
+                    memory_stats::memory_stats().map_or(0, |m| m.physical_mem / 1024 / 1024);
+                let keep_going = this
+                    .update(cx, |this, cx| {
+                        this.memory_mb = u64::try_from(memory).unwrap_or(u64::MAX);
+                        cx.notify();
+                        this.diagnostics
+                    })
+                    .unwrap_or(false);
+                if !keep_going {
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+            }
+        })
+        .detach();
     }
 
     fn start_autosave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1515,7 +1538,14 @@ impl Workspace {
             let recalc = self
                 .last_recalc
                 .map_or("-".to_string(), |d| format!("{} ms", d.as_millis()));
-            right = right.child(format!("Last recalc: {recalc}"));
+            let frame = self.grid.read(cx).last_paint();
+            right = right
+                .child(format!("Memory: {} MB", self.memory_mb))
+                .child(format!(
+                    "Grid paint: {:.1} ms",
+                    frame.as_secs_f64() * 1000.0
+                ))
+                .child(format!("Last recalc: {recalc}"));
         }
         h_flex()
             .h(px(26.0))
@@ -1672,6 +1702,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleDiagnostics, _, cx| {
                 this.diagnostics = !this.diagnostics;
+                if this.diagnostics {
+                    this.sample_diagnostics(cx);
+                }
                 cx.notify();
             }))
             .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| {
