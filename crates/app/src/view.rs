@@ -1369,11 +1369,17 @@ impl Workspace {
                         window.set_window_title(&this.document.title());
                         this.notify(Severity::Info, "Saved", cx);
                     }
-                    Err(error) => this.notify(
-                        Severity::Error,
-                        format!("{error}. Use Save As (F12) to pick another location."),
-                        cx,
-                    ),
+                    Err(error) => {
+                        this.notify(
+                            Severity::Error,
+                            format!("{error}. Pick another location to keep your changes."),
+                            cx,
+                        );
+                        this.flush_edits(cx);
+                        // Locked by another program or read-only: offer Save As right away.
+                        this.save_as(&SaveAs, window, cx);
+                        return;
+                    }
                 }
                 this.flush_edits(cx);
             });
