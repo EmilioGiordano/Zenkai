@@ -17,6 +17,7 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 tracing = "0.1"
 
 [dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
 rust_xlsxwriter = "0.92"
 tempfile = "3"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
