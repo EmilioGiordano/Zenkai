@@ -51,6 +51,7 @@ struct FormulaBarEdit {
     // The edit only lands where it started: same document, same sheet.
     sheet: SheetId,
     generation: u64,
+    original: String,
     _events: Subscription,
 }
 
@@ -833,7 +834,9 @@ impl Workspace {
                     grid.begin_edit(pos, text, EditMode::Edit, cx)
                 });
             }
-            GridEvent::Commit { pos, text } => self.commit_text(*pos, text.clone(), window, cx),
+            GridEvent::Commit { pos, text } => {
+                self.commit_text(self.document.sheet, *pos, text.clone(), window, cx)
+            }
             GridEvent::CommitToSelection { pos, text, range } => {
                 let (sheet, pos, text, range) = (self.document.sheet, *pos, text.clone(), *range);
                 self.edit(window, cx, move |wb| wb.fill_with(sheet, pos, &text, range));
@@ -1418,6 +1421,8 @@ impl Workspace {
     }
 
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
+        // Text typed in the formula bar is entered before saving, as in Excel.
+        self.close_formula_bar(true, window, cx);
         let must_rename = !self.document.unsupported.is_empty()
             || self.document.is_macro_enabled()
             || self.document.read_only;
@@ -1465,6 +1470,7 @@ impl Workspace {
     }
 
     fn save_as(&mut self, _: &SaveAs, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_formula_bar(true, window, cx);
         let directory = self
             .document
             .path
@@ -1873,7 +1879,10 @@ impl Workspace {
             )
             .children(self.formula_bar.as_ref().map(|bar| {
                 div()
+                    .id("formula-bar-edit")
                     .key_context("FormulaBar")
+                    .role(Role::Group)
+                    .aria_label("Formula bar")
                     .flex_1()
                     .child(Input::new(&bar.input))
             }))
@@ -2208,12 +2217,12 @@ impl Workspace {
     // What Enter does with typed text, from the cell or the formula bar.
     fn commit_text(
         &mut self,
+        sheet: SheetId,
         pos: CellPos,
         text: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let sheet = self.document.sheet;
         self.edit(window, cx, move |wb| {
             // Excel turns on wrap text for a cell typed with a line break.
             let wraps = text.contains('\n') && !text.starts_with('=');
@@ -2233,12 +2242,16 @@ impl Workspace {
             return;
         }
         let pos = self.grid.read(cx).selection().active;
-        let text = self
+        // While a recalculation has the workbook the cell's text is unknown; opening
+        // with an empty bar would then clear the cell on Enter.
+        let Some(original) = self
             .document
             .workbook()
             .map(|wb| wb.input(self.document.sheet, pos))
-            .unwrap_or_default();
-        let input = cx.new(|cx| InputState::new(window, cx).default_value(text));
+        else {
+            return;
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(original.clone()));
         let events = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
             InputEvent::PressEnter { .. } | InputEvent::Blur => {
                 this.close_formula_bar(true, window, cx)
@@ -2252,6 +2265,7 @@ impl Workspace {
             pos,
             sheet: self.document.sheet,
             generation: self.document.generation(),
+            original,
             _events: events,
         });
         cx.notify();
@@ -2261,16 +2275,12 @@ impl Workspace {
         let Some(bar) = self.formula_bar.take() else {
             return;
         };
-        let same_place =
-            bar.sheet == self.document.sheet && bar.generation == self.document.generation();
-        if commit && same_place {
+        // Switching sheets still enters the text in the sheet it was typed for, as in
+        // Excel; a different document never receives it.
+        if commit && bar.generation == self.document.generation() {
             let text = bar.input.read(cx).value().to_string();
-            let unchanged = self
-                .document
-                .workbook()
-                .is_some_and(|wb| wb.input(self.document.sheet, bar.pos) == text);
-            if !unchanged {
-                self.commit_text(bar.pos, text, window, cx);
+            if text != bar.original {
+                self.commit_text(bar.sheet, bar.pos, text, window, cx);
             }
         }
         let focus = self.grid.focus_handle(cx);
