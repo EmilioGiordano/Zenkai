@@ -100,7 +100,8 @@ current user and guarded by a token written to `%LOCALAPPDATA%\Zenkai\mcp-endpoi
 while the bridge runs. Tools: `list_workbooks`, `list_sheets`, `get_selection`,
 `read_range`, `find`, `write_cells`, `set_formula`, `format_range`. Writes ask for
 approval by default (Enter allows, Esc denies); files downloaded from the internet keep
-agents read-only, as Excel's Protected View does. Cell content reaches the agent marked as
+agents read-only, as Excel's Protected View does (Ctrl+Shift+E lifts it for the open
+file). Cell content reaches the agent marked as
 untrusted data.
 
 ## Packaging
