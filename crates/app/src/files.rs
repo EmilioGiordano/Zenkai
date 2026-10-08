@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use zenkai_engine::{Engine, EngineError, Workbook, run_with_engine_stack, write_atomic};
-use zenkai_formats::{Delimiter, parse_csv, read_values, write_csv};
+use zenkai_formats::{Delimiter, ParsedCsv, parse_csv, read_values, write_csv};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
 const REPLACED_EXTENSIONS: [&str; 4] = ["xlsm", "xls", "xlsb", "ods"];
@@ -37,26 +37,21 @@ pub fn is_delimited_text(path: &Path) -> bool {
     matches!(extension(path).as_deref(), Some("csv" | "tsv" | "txt"))
 }
 
-pub fn import_csv(path: &Path) -> Result<(Workbook, String), String> {
+pub fn read_csv(path: &Path) -> Result<(Vec<u8>, ParsedCsv), String> {
     let bytes =
         std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
     let hint = (extension(path).as_deref() == Some("tsv")).then_some(Delimiter::Tab);
     let parsed = parse_csv(&bytes, hint).map_err(|e| e.to_string())?;
-    let rows = parsed.rows;
-    let workbook = run_with_engine_stack(move || {
+    Ok((bytes, parsed))
+}
+
+pub fn workbook_from_rows(rows: Vec<Vec<String>>) -> Result<Workbook, String> {
+    run_with_engine_stack(move || {
         let mut workbook = Workbook::new_empty()?;
         workbook.set_inputs(SheetId(0), CellPos::default(), &rows)?;
         Ok(workbook)
     })
-    .map_err(|e| e.to_string())?;
-    let summary = format!(
-        "Imported {} ({}, {}). Save to keep it as .xlsx.",
-        path.file_name()
-            .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
-        parsed.delimiter.label(),
-        parsed.encoding.label()
-    );
-    Ok((workbook, summary))
+    .map_err(|e| e.to_string())
 }
 
 const MAX_VALUES_FILE_BYTES: u64 = 512 * 1024 * 1024;
@@ -152,8 +147,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("in.csv");
         std::fs::write(&source, "name;qty\nAna;3\nLuis;4\n").unwrap();
-        let (workbook, summary) = import_csv(&source).unwrap();
-        assert!(summary.contains("semicolon"), "{summary}");
+        let (_, parsed) = read_csv(&source).unwrap();
+        assert_eq!(parsed.delimiter, Delimiter::Semicolon);
+        let workbook = workbook_from_rows(parsed.rows).unwrap();
         let rows = sheet_rows(&workbook, SheetId(0));
         assert_eq!(
             rows,

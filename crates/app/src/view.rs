@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::base::{h_flex, v_flex};
@@ -9,6 +10,7 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
+use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_types::{CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, SheetId, StyleChange};
 
@@ -16,6 +18,7 @@ use crate::actions::*;
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
+use crate::csv_preview::{self, CsvPreview};
 use crate::document::{self, Document};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
@@ -47,6 +50,7 @@ const MAX_AUTOSUM_SCAN: usize = 10_000;
 const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 
+const IMPORTING: &str = "Importing…";
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
 const SEARCHING: &str = "Searching…";
@@ -77,6 +81,8 @@ pub struct Workspace {
     chart: Option<ChartPanel>,
     find: Option<FindBar>,
     palette: Option<Entity<CommandState>>,
+    csv_preview: Option<CsvPreview>,
+    focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
     rename: Option<(Entity<InputState>, Subscription)>,
     go_to: Option<(Entity<InputState>, Subscription)>,
@@ -109,6 +115,8 @@ impl Workspace {
             chart: None,
             find: None,
             palette: None,
+            csv_preview: None,
+            focus: cx.focus_handle(),
             session_lock: None,
             rename: None,
             go_to: None,
@@ -818,19 +826,88 @@ impl Workspace {
     }
 
     fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.busy = Some(format!("Importing {}…", path.display()).into());
+        self.busy = Some(format!("Reading {}…", path.display()).into());
         cx.notify();
         let label = self.busy.clone().unwrap_or_default();
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { files::import_csv(&task_path) })
+                .spawn(async move { files::read_csv(&task_path) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(&label, cx);
                 match result {
-                    Ok((workbook, summary)) => {
+                    Ok((bytes, parsed)) => {
+                        this.csv_preview = Some(CsvPreview {
+                            path,
+                            bytes: Arc::new(bytes),
+                            parsed,
+                        });
+                        window.focus(&this.focus, cx);
+                        cx.notify();
+                    }
+                    Err(error) => this.notify(Severity::Error, error, cx),
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed while reading a CSV");
+            }
+        })
+        .detach();
+    }
+
+    fn reparse_csv(&mut self, delimiter: Delimiter, cx: &mut Context<Self>) {
+        let Some(preview) = &self.csv_preview else {
+            return;
+        };
+        let bytes = preview.bytes.clone();
+        cx.spawn(async move |this, cx| {
+            let parsed = cx
+                .background_executor()
+                .spawn(async move { parse_csv(&bytes, Some(delimiter)) })
+                .await;
+            let update = this.update(cx, |this, cx| match parsed {
+                Ok(parsed) => {
+                    if let Some(preview) = &mut this.csv_preview {
+                        preview.parsed = parsed;
+                    }
+                    cx.notify();
+                }
+                Err(error) => this.notify(Severity::Error, error.to_string(), cx),
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed while parsing a CSV");
+            }
+        })
+        .detach();
+    }
+
+    fn confirm_csv_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(preview) = self.csv_preview.take() else {
+            return;
+        };
+        let summary = format!(
+            "Imported {} ({}, {}). Save to keep it as .xlsx.",
+            preview
+                .path
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
+            preview.parsed.delimiter.label(),
+            preview.parsed.encoding.label()
+        );
+        self.busy = Some(IMPORTING.into());
+        cx.notify();
+        let rows = preview.parsed.rows;
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { files::workbook_from_rows(rows) })
+                .await;
+            let update = this.update_in(cx, |this, window, cx| {
+                this.clear_busy(IMPORTING, cx);
+                match result {
+                    Ok(workbook) => {
                         this.document = Document::new(workbook, None, Vec::new());
                         this.reset_grid(window, cx);
                         this.notify(Severity::Info, summary, cx);
@@ -843,6 +920,27 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    fn render_csv_preview(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let preview = self.csv_preview.as_ref()?;
+        let entity = cx.entity().downgrade();
+        let on_event = move |event: csv_preview::PreviewEvent, _: &mut Window, cx: &mut App| {
+            let csv_preview::PreviewEvent::Delimiter(delimiter) = event;
+            if let Err(error) = entity.update(cx, |this, cx| this.reparse_csv(delimiter, cx)) {
+                tracing::debug!(%error, "workspace dropped");
+            }
+        };
+        Some(
+            div()
+                .absolute()
+                .top(px(96.0))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(csv_preview::render(preview, &self.focus, on_event, cx)),
+        )
     }
 
     fn export_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -1944,6 +2042,15 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &RenameSheet, window, cx| this.open_rename(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ConfirmCsvImport, window, cx| {
+                this.confirm_csv_import(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CancelCsvImport, window, cx| {
+                this.csv_preview = None;
+                let focus = this.grid.focus_handle(cx);
+                window.focus(&focus, cx);
+                cx.notify();
+            }))
             .on_action(cx.listener(|this, _: &GoTo, window, cx| this.open_go_to(window, cx)))
             .on_action(cx.listener(|this, _: &FillDown, window, cx| this.fill(true, window, cx)))
             .on_action(cx.listener(|this, _: &FillRight, window, cx| this.fill(false, window, cx)))
@@ -2045,5 +2152,6 @@ impl Render for Workspace {
             .child(self.render_tabs(cx))
             .child(self.render_status(cx))
             .children(self.render_palette())
+            .children(self.render_csv_preview(cx))
     }
 }

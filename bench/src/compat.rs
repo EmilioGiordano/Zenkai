@@ -405,7 +405,9 @@ mod tests {
             let row = check(&path);
             assert_eq!(row.opens, "yes", "{}", row.file);
             for counts in [&row.cached, &row.round_trip] {
-                let (same, total) = counts.split_once('/').unwrap();
+                let (same, total) = counts
+                    .split_once('/')
+                    .unwrap_or_else(|| panic!("{}: {counts}", row.file));
                 assert_eq!(same, total, "{}: {counts}", row.file);
             }
             assert!(

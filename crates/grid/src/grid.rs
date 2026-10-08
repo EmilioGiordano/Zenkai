@@ -512,6 +512,21 @@ impl Grid {
         None
     }
 
+    fn finish_column_drag(&mut self, cx: &mut Context<Self>) {
+        let Some(drag) = self.column_drag.take() else {
+            return;
+        };
+        let width = self.layout.col_width(drag.col);
+        // A click without movement is not an edit.
+        if (width - drag.start_width).abs() >= 0.5 {
+            cx.emit(GridEvent::ColumnResized {
+                col: drag.col,
+                width,
+            });
+        }
+        self.viewport_changed(cx);
+    }
+
     fn hit(&self, position: Point<Pixels>) -> Hit {
         let x = f32::from(position.x - self.bounds.origin.x) / self.zoom;
         let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
@@ -599,6 +614,11 @@ impl Grid {
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(drag) = self.column_drag {
+            // Released outside the grid: end the drag where it is.
+            if event.pressed_button != Some(MouseButton::Left) {
+                self.finish_column_drag(cx);
+                return;
+            }
             let x = f32::from(event.position.x - self.bounds.origin.x) / self.zoom;
             let width = (drag.start_width + x - drag.start_x).max(MIN_COLUMN_WIDTH);
             Rc::make_mut(&mut self.layout).set_col_width(drag.col, width);
@@ -957,14 +977,7 @@ impl Render for Grid {
                 MouseButton::Left,
                 cx.listener(|g, _: &MouseUpEvent, _, cx| {
                     g.dragging = false;
-                    if let Some(drag) = g.column_drag.take() {
-                        let width = g.layout.col_width(drag.col);
-                        cx.emit(GridEvent::ColumnResized {
-                            col: drag.col,
-                            width,
-                        });
-                        g.viewport_changed(cx);
-                    }
+                    g.finish_column_drag(cx);
                 }),
             )
             .on_scroll_wheel(cx.listener(Self::on_scroll))
