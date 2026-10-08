@@ -150,6 +150,18 @@ impl Range {
             && other.start.col <= self.end.col
     }
 
+    // Clipping must not go through `new`: sorting the corners would mirror a range
+    // that starts past `end` onto unrelated cells.
+    pub fn clip_to(&self, end: CellPos) -> Option<Range> {
+        if self.start.row > end.row || self.start.col > end.col {
+            return None;
+        }
+        Some(Range {
+            start: self.start,
+            end: CellPos::new(self.end.row.min(end.row), self.end.col.min(end.col)),
+        })
+    }
+
     pub fn single(pos: CellPos) -> Range {
         Range {
             start: pos,
@@ -322,5 +334,10 @@ mod tests {
         assert_eq!(CellPos::parse_a1("$b$7").unwrap().to_string(), "B7");
         assert_eq!(Range::parse_a1("C3:A1").unwrap().to_string(), "A1:C3");
         assert_eq!(Range::parse_a1("A1:"), None);
+        let used = CellPos::parse_a1("B2").unwrap();
+        let past = Range::parse_a1("C1:F3").unwrap();
+        assert_eq!(past.clip_to(used), None);
+        let overlapping = Range::parse_a1("A2:F9").unwrap();
+        assert_eq!(overlapping.clip_to(used).unwrap().to_string(), "A2:B2");
     }
 }
