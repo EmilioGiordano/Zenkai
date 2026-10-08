@@ -234,8 +234,17 @@ Esta fase avanza en este orden, cada paso útil por sí solo:
 5. **Chat de agentes** sobre ACP (Agent Client Protocol).
 6. **Menciones de contexto** (`[Ventas!A1:N200]`).
 7. **Capa de revisión**: resaltar cambios del agente, aceptar o rechazar, paso de deshacer con nombre.
+8. **Generar datos** (diseño aprobado: los artboards Generate* de `spaces-mock/project/` y el artifact claude.ai/artifact/XYUMggmNUzgnraYvWceNNh):
+   - Entradas: clic derecho sobre una selección, la paleta de comandos y Ctrl+Alt+G (configurable).
+   - La selección define las columnas: solo encabezados, se agregan N filas debajo; encabezados y filas, se llenan las filas seleccionadas; una sola celda, se detecta la región alrededor; columnas vacías, el usuario las nombra. El rango es editable en el diálogo.
+   - Por columna: encabezado editable (vacío o no) y tipo detectado del texto del encabezado. Las opciones de cada tipo se abren en un popover (por ejemplo, email: formato, columnas de origen, dominios y quitar acentos). Cada columna tiene además un % de vacíos y una marca de únicos.
+   - Ajustes globales: cantidad de filas, ubicación, configuración regional de los datos (por ejemplo es-AR) y una semilla para reproducir el resultado.
+   - Vista previa en vivo.
+   - Nada se escribe hasta confirmar: Generar aplica los encabezados renombrados y las filas en un solo paso de deshacer; "Guardar solo encabezados" aparece cuando cambió un encabezado; Cancelar deja la hoja intacta; una columna renombrada muestra "Encabezado sin guardar" con la acción Descartar.
+   - Solo local: sin IA y sin red.
+   - Gancho para IA a futuro: la configuración de generación es un tipo serializable con JSON Schema. Una herramienta de agente puede producir la configuración, no los datos, lo que ahorra tokens al usuario, y el generador local produce las filas. Cuando conviene, el agente puede generar los datos él mismo.
 
-Los pasos 4 a 7 se aprueban por separado. Las herramientas identifican el libro con un `WorkbookId` tipado desde el primer día, para que su forma no cambie cuando lleguen las pestañas. El resto de las ideas (Ctrl+K, auditoría, carpeta como espacio de trabajo) sigue en `docs/IDEAS.md`.
+Los pasos 4 a 8 se aprueban por separado. Las herramientas identifican el libro con un `WorkbookId` tipado desde el primer día, para que su forma no cambie cuando lleguen las pestañas. El resto de las ideas (Ctrl+K, auditoría, carpeta como espacio de trabajo) sigue en `docs/IDEAS.md`.
 
 ### Arquitectura
 
@@ -290,6 +299,7 @@ La amenaza principal es la misma que en el resto de Zenkai, un archivo malicioso
 | `feat/mcp-bridge` | `rmcp` en un hilo de tokio, named pipe restringido, relé `zenkai-mcp`, comando `claude mcp add` en Configuración, prueba de punta a punta |
 | Pestañas, espacios y sesión | Paso 4; diseño visual a definir |
 | `feat/agent-chat` y siguientes | Pasos 5 a 7: chat ACP, menciones y capa de revisión; se aprueban por separado |
+| Generar datos | Paso 8: núcleo del generador en un crate de Rust puro; el diálogo llega después de las pestañas |
 
 ## Proceso de trabajo para el agente
 
