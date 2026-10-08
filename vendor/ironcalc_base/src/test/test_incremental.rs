@@ -99,6 +99,32 @@ fn nested_ranges_past_the_visit_limit_evaluate_everything() {
 }
 
 #[test]
+fn wide_ranges_walked_past_the_visit_limit_evaluate_everything() {
+    let mut model = new_empty_model();
+    for row in 1..=2100 {
+        model._set(&format!("AB{row}"), "=SUM($A$1:$Z$1)");
+    }
+    model.evaluate_indexed();
+    let few: Vec<(u32, i32, i32)> = (29..39).map(|column| (0, 1, column)).collect();
+    for &(sheet, row, column) in &few {
+        model
+            .set_user_input(sheet, row, column, "1".to_string())
+            .unwrap();
+    }
+    model.evaluate_incremental(&few);
+    assert_eq!(model.last_recalculation(), Recalculation::Incremental);
+    let many: Vec<(u32, i32, i32)> = (29..2129).map(|column| (0, 1, column)).collect();
+    for &(sheet, row, column) in &many {
+        model
+            .set_user_input(sheet, row, column, "2".to_string())
+            .unwrap();
+    }
+    model.evaluate_incremental(&many);
+    assert_eq!(model.last_recalculation(), Recalculation::Full);
+    assert_eq!(model._get_text("AB2100"), "0");
+}
+
+#[test]
 fn circular_reference_made_by_an_edit() {
     let mut model = new_empty_model();
     model._set("A1", "=B1+1");

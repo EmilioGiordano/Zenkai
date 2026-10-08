@@ -12,7 +12,7 @@ the root `Cargo.toml`. Run its tests with:
 cargo test --manifest-path vendor\ironcalc_base\Cargo.toml --target-dir target\vendor
 ```
 
-Meant for upstream (each is self-contained and has tests):
+Meant for upstream, each with tests. Unless noted, each stands on its own:
 
 - Incremental recalculation: `src/dependency_index.rs`, `src/incremental.rs`,
   `src/user_model/recalculation.rs` and the hooks in `src/model.rs`, `src/new_empty.rs`,
@@ -24,7 +24,20 @@ Meant for upstream (each is self-contained and has tests):
 - `Model::support` recorded only when the workbook has spills (`src/model.rs`,
   `record_support`).
 - Hiding or showing rows recalculates what reads them, for SUBTOTAL
-  (`src/user_model/common.rs`, `src/user_model/undo_redo.rs`).
+  (`src/user_model/common.rs`, `src/user_model/undo_redo.rs`). Needs the incremental
+  recalculation: it records the row's cells as edited.
+- Text criteria as in Excel: `<=` and `>=` compared the wrong way round, and `<>text`
+  skipped non-text cells (`src/functions/util.rs`). Tests:
+  `src/test/test_criteria_semantics.rs`.
+- Text criteria matched without allocating per cell (`src/functions/util.rs`).
+- SUMIF, COUNTIF and the rest of the family read each large range once per
+  recalculation (`src/criteria_ranges.rs`, `src/functions/statistical/if_ifs.rs`). Tests:
+  `src/test/test_criteria_ranges.rs`. Needs the incremental recalculation for
+  `Model::circular_hits` and for turning the cache on around `evaluate_incremental`;
+  without it, only the hooks in `Model::evaluate` remain.
+- COUNTIFS over a whole-sheet range like `A:XFD` counted its blank tail in i32, which
+  overflowed (`src/functions/statistical/if_ifs.rs`). Tests:
+  `src/test/test_criteria_semantics.rs`.
 
 Zenkai-only, not for upstream:
 

@@ -50,6 +50,7 @@ mod arithmetic;
 mod cast;
 mod conditional_formatting;
 mod constants;
+mod criteria_ranges;
 mod cut_paste;
 mod dependency_index;
 mod functions;

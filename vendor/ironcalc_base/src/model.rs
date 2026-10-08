@@ -34,6 +34,7 @@ use crate::{
     utils as common,
 };
 
+use crate::criteria_ranges::CriteriaRanges;
 use crate::incremental::{Dependencies, Recalculation};
 use crate::{cf_types::CfCellResult, tz::Tz};
 
@@ -229,6 +230,7 @@ pub struct Model<'a> {
     /// How many times a formula was reached again while it was being evaluated.
     pub(crate) circular_hits: u64,
     pub(crate) last_recalculation: Recalculation,
+    pub(crate) criteria_ranges: CriteriaRanges,
 }
 
 // FIXME: Maybe this should be the same as CellReference
@@ -916,6 +918,10 @@ impl<'a> Model<'a> {
             } => Some((true, (r.0, r.1))),
             _ => None,
         };
+        // An array result or an array formula writes, grows, shrinks or clears spill cells.
+        if original_range.is_some() || matches!(result, CalcResult::Array(_)) {
+            self.criteria_ranges.forget_values();
+        }
         let s = cell.get_style();
         let formula = match cell.get_formula() {
             Some(f) => f,
@@ -1261,7 +1267,11 @@ impl<'a> Model<'a> {
     }
 
     // Returns the 'single' value of a cell. Not arrays or ranges.
-    fn get_cell_value(&self, cell: &Cell, cell_reference: CellReferenceIndex) -> CalcResult {
+    pub(crate) fn get_cell_value(
+        &self,
+        cell: &Cell,
+        cell_reference: CellReferenceIndex,
+    ) -> CalcResult {
         use Cell::*;
         match cell {
             EmptyCell { .. } => CalcResult::EmptyCell,
@@ -1474,6 +1484,7 @@ impl<'a> Model<'a> {
                     ..
                 } = &original_cell
                 {
+                    self.criteria_ranges.forget_values();
                     let (width, height) = *r;
                     let ws = match self.workbook.worksheet_mut(cell_reference.sheet) {
                         Ok(ws) => ws,
@@ -1737,6 +1748,7 @@ impl<'a> Model<'a> {
             dependencies: None,
             circular_hits: 0,
             last_recalculation: Recalculation::Full,
+            criteria_ranges: CriteriaRanges::Off,
         };
 
         model.parse_formulas();
@@ -3058,6 +3070,7 @@ impl<'a> Model<'a> {
             retry = false;
             self.cells.clear();
             self.support.clear();
+            self.criteria_ranges = CriteriaRanges::on();
             self.clear_variable_stack();
             self.clear_lambdas();
 
@@ -3097,6 +3110,7 @@ impl<'a> Model<'a> {
                 column: cell.column,
             });
         }
+        self.criteria_ranges = CriteriaRanges::Off;
         self.evaluate_conditional_formatting();
     }
 

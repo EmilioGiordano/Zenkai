@@ -1,4 +1,7 @@
+use std::borrow::Cow;
+
 use crate::constants::{LAST_COLUMN, LAST_ROW};
+use crate::criteria_ranges::AreaValues;
 use crate::expressions::types::CellReferenceIndex;
 use crate::functions::util::build_criteria;
 use crate::{
@@ -114,50 +117,37 @@ impl<'a> Model<'a> {
 
         let open_row = left_row == 1 && right_row == LAST_ROW;
         let open_column = left_column == 1 && right_column == LAST_COLUMN;
+        // Past the used area of an open range every cell is empty: counted once below.
+        let last_row = if open_row { max_row } else { right_row };
+        let last_column = if open_column {
+            max_column
+        } else {
+            right_column
+        };
+        let height = (last_row - left_row + 1).max(0);
+        let width = (last_column - left_column + 1).max(0);
+        let empty_matches = fn_criteria
+            .iter()
+            .all(|fn_criterion| fn_criterion(&CalcResult::EmptyCell));
 
-        for row in left_row..right_row + 1 {
-            if open_row && row > max_row {
-                // If the row is larger than the max row in the sheet then all cells are empty.
-                // We compute it only once
+        let values: Vec<AreaValues> = ranges
+            .iter()
+            .map(|range| {
+                self.area_values(
+                    range.left.sheet,
+                    range.left.row,
+                    range.left.column,
+                    height,
+                    width,
+                )
+            })
+            .collect();
+        for row_offset in 0..height {
+            for column_offset in 0..width {
                 let mut is_true = true;
-                for fn_criterion in fn_criteria.iter() {
-                    if !fn_criterion(&CalcResult::EmptyCell) {
-                        is_true = false;
-                        break;
-                    }
-                }
-                if is_true {
-                    total += ((LAST_ROW - max_row) * (right_column - left_column + 1)) as f64;
-                }
-                break;
-            }
-            for column in left_column..right_column + 1 {
-                if open_column && column > max_column {
-                    // If the column is larger than the max column in the sheet then all cells are empty.
-                    // We compute it only once
-                    let mut is_true = true;
-                    for fn_criterion in fn_criteria.iter() {
-                        if !fn_criterion(&CalcResult::EmptyCell) {
-                            is_true = false;
-                            break;
-                        }
-                    }
-                    if is_true {
-                        total += (LAST_COLUMN - max_column) as f64;
-                    }
-                    break;
-                }
-                let mut is_true = true;
-                for case_index in 0..case_count {
+                for (values, fn_criterion) in values.iter().zip(fn_criteria.iter()) {
                     // We check if value in range n meets criterion n
-                    let range = &ranges[case_index];
-                    let fn_criterion = &fn_criteria[case_index];
-                    let value = self.evaluate_cell(CellReferenceIndex {
-                        sheet: range.left.sheet,
-                        row: range.left.row + row - first_range.left.row,
-                        column: range.left.column + column - first_range.left.column,
-                    });
-                    if !fn_criterion(&value) {
+                    if !fn_criterion(&self.area_value(values, row_offset, column_offset)) {
                         is_true = false;
                         break;
                     }
@@ -166,6 +156,13 @@ impl<'a> Model<'a> {
                     total += 1.0;
                 }
             }
+            if open_column && right_column > max_column && empty_matches {
+                total += (LAST_COLUMN - max_column) as f64;
+            }
+        }
+        if open_row && right_row > max_row && empty_matches {
+            // In f64: a whole sheet holds more cells than an i32 counts.
+            total += f64::from(LAST_ROW - max_row) * f64::from(right_column - left_column + 1);
         }
         CalcResult::Number(total)
     }
@@ -292,30 +289,36 @@ impl<'a> Model<'a> {
             };
         }
 
-        for row in left_row..right_row + 1 {
-            for column in left_column..right_column + 1 {
+        let height = right_row - left_row + 1;
+        let width = right_column - left_column + 1;
+        let sums = self.area_values(sum_range.left.sheet, left_row, left_column, height, width);
+        let values: Vec<AreaValues> = ranges
+            .iter()
+            .map(|range| {
+                self.area_values(
+                    range.left.sheet,
+                    range.left.row,
+                    range.left.column,
+                    height,
+                    width,
+                )
+            })
+            .collect();
+        for row_offset in 0..height {
+            for column_offset in 0..width {
                 let mut is_true = true;
-                for (range, fn_criterion) in ranges.iter().zip(fn_criteria.iter()) {
+                for (values, fn_criterion) in values.iter().zip(fn_criteria.iter()) {
                     // We check if value in range n meets criterion n
-                    let value = self.evaluate_cell(CellReferenceIndex {
-                        sheet: range.left.sheet,
-                        row: range.left.row + row - sum_range.left.row,
-                        column: range.left.column + column - sum_range.left.column,
-                    });
-                    if !fn_criterion(&value) {
+                    if !fn_criterion(&self.area_value(values, row_offset, column_offset)) {
                         is_true = false;
                         break;
                     }
                 }
                 if is_true {
-                    let v = self.evaluate_cell(CellReferenceIndex {
-                        sheet: sum_range.left.sheet,
-                        row,
-                        column,
-                    });
-                    match v {
-                        CalcResult::Number(n) => apply(n),
-                        CalcResult::Error { .. } => return Err(v),
+                    match self.area_value(&sums, row_offset, column_offset) {
+                        Cow::Borrowed(CalcResult::Number(n)) => apply(*n),
+                        Cow::Owned(CalcResult::Number(n)) => apply(n),
+                        v if v.is_error() => return Err(v.into_owned()),
                         _ => {}
                     }
                 }
