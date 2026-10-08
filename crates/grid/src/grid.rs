@@ -1206,7 +1206,9 @@ impl Render for Grid {
                 cx.notify();
             }))
             .on_action(cx.listener(|g, _: &CycleReference, _, cx| {
+                // Outside the editor F4 is Excel's "repeat", which the app handles.
                 let Some(editor) = &mut g.editor else {
+                    cx.propagate();
                     return;
                 };
                 if let Some((text, caret)) =

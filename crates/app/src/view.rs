@@ -11,7 +11,9 @@ use gpui_kit::*;
 
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
 use zenkai_formats::{Delimiter, parse_csv};
-use zenkai_grid::{DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView};
+use zenkai_grid::{
+    CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
+};
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, Rgb, SheetId,
     StyleChange,
@@ -104,6 +106,8 @@ pub struct Workspace {
     // Interface scale, independent of the grid zoom: everything sized in rems.
     ui_scale: f32,
     show_formulas: bool,
+    // The last formatting change, which F4 repeats on the selection as in Excel.
+    last_style: Option<StyleChange>,
     recent: Vec<PathBuf>,
     recent_saves: Arc<AtomicU64>,
     format_dialog: Option<FormatDialog>,
@@ -167,6 +171,7 @@ impl Workspace {
             csv_request: 0,
             ui_scale: 1.0,
             show_formulas: false,
+            last_style: None,
             recent: Vec::new(),
             recent_saves: Arc::new(AtomicU64::new(0)),
             format_dialog: None,
@@ -1635,6 +1640,7 @@ impl Workspace {
     }
 
     fn style(&mut self, change: StyleChange, window: &mut Window, cx: &mut Context<Self>) {
+        self.last_style = Some(change);
         let (sheet, range) = (self.document.sheet, self.selection(cx));
         self.edit(window, cx, move |wb| {
             wb.apply_style(sheet, range, change)?;
@@ -2712,6 +2718,11 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &OpenRecent5, window, cx| this.open_recent(4, window, cx)),
             )
+            .on_action(cx.listener(|this, _: &CycleReference, window, cx| {
+                if let Some(change) = this.last_style {
+                    this.style(change, window, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
             }))
