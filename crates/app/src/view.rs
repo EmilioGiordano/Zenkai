@@ -1156,6 +1156,7 @@ impl Workspace {
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(IMPORTING, cx);
                 match result {
+                    Ok(_) if this.csv_request != request => {}
                     Ok(workbook) => {
                         let document = Document::new(workbook, None, Vec::new());
                         this.replace_document(document, window, cx);
@@ -1717,6 +1718,9 @@ impl Workspace {
     }
 
     fn replace_with_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // An open still in flight must not replace the new workbook.
+        self.next_open_request();
+        self.next_csv_request();
         match Workbook::new_empty() {
             Ok(workbook) => {
                 self.install_document(Document::new(workbook, None, Vec::new()), window, cx)
