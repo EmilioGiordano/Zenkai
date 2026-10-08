@@ -2487,6 +2487,15 @@ impl Render for Workspace {
         v_flex()
             .relative()
             .key_context("Workspace")
+            // A file dropped on the window opens like File > Open, after the unsaved-changes
+            // question.
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                if let Some(path) = paths.paths().first().cloned() {
+                    this.confirm_discard(window, cx, move |this, window, cx| {
+                        this.open_path(path, window, cx)
+                    });
+                }
+            }))
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
