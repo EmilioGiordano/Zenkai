@@ -3,6 +3,7 @@ use zenkai_types::{
     CellPos, ColIdx, MAX_COLS, MAX_ROWS, Range, Rgb, RowIdx, SheetId, SheetInfo, StyleChange,
 };
 
+use crate::tools::approval_text::{shown_entry, shown_text};
 use crate::tools::error::ToolError;
 use crate::tools::read::{find_sheet, parse_cell, parse_range};
 use crate::tools::reply::WriteSummary;
@@ -104,33 +105,6 @@ pub fn plan_write(request: &WriteRequest, sheets: &[SheetInfo]) -> Result<Planne
 }
 
 const SAMPLE_ENTRIES: usize = 4;
-const SHOWN_ENTRY_CHARS: usize = 40;
-
-// Entries come from the agent, which may have read them from the file: control
-// characters and line breaks are shown escaped so the prompt cannot be reshaped, and a
-// formula is marked so the user sees it will compute rather than store text.
-fn shown_entry(entry: &str) -> String {
-    let mut shown: String = entry
-        .chars()
-        .take(SHOWN_ENTRY_CHARS)
-        .flat_map(|c| {
-            let escaped: Vec<char> = if c.is_control() {
-                c.escape_debug().collect()
-            } else {
-                vec![c]
-            };
-            escaped
-        })
-        .collect();
-    if entry.chars().count() > SHOWN_ENTRY_CHARS {
-        shown.push('…');
-    }
-    if entry.starts_with('=') {
-        format!("formula {shown}")
-    } else {
-        format!("\"{shown}\"")
-    }
-}
 
 fn on_off(on: bool) -> &'static str {
     if on { "on" } else { "off" }
@@ -169,7 +143,7 @@ impl PlannedWrite {
     }
 
     pub fn describe(&self) -> String {
-        let place = format!("'{}'!{}", self.sheet_name, self.target);
+        let place = format!("'{}'!{}", shown_text(&self.sheet_name), self.target);
         match &self.change {
             Change::Inputs(rows) if rows.len() == 1 && rows[0].len() == 1 => {
                 format!("Write {} in {place}", shown_entry(&rows[0][0]))
@@ -186,8 +160,13 @@ impl PlannedWrite {
                 } else {
                     ""
                 };
+                let formulas = rows
+                    .iter()
+                    .flatten()
+                    .filter(|entry| entry.starts_with('='))
+                    .count();
                 format!(
-                    "Write {} cells in {place}: {}{more}",
+                    "Write {} cells ({formulas} formulas in total) in {place}: {}{more}",
                     self.target.cell_count(),
                     sample.join(", ")
                 )

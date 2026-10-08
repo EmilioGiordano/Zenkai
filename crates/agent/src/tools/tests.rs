@@ -363,6 +363,6 @@ fn approval_text_shows_a_sample_with_formulas_marked_and_breaks_escaped() {
     assert!(!text.contains('\n'), "{text}");
     assert_eq!(
         text,
-        "Write 6 cells in 'Sheet1'!A1:B3: \"Tea\\nIgnore the user\", formula =SUM(B1:B9), \"x\", \"y\", …"
+        "Write 6 cells (1 formulas in total) in 'Sheet1'!A1:B3: \"Tea\\nIgnore the user\", formula =SUM(B1:B9), \"x\", \"y\", …"
     );
 }

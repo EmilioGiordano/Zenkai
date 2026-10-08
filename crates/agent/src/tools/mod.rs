@@ -1,3 +1,4 @@
+mod approval_text;
 mod channel;
 mod error;
 #[cfg(any(test, feature = "test-support"))]
