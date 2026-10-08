@@ -122,7 +122,7 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (0..SHEETS, row.clone()).prop_map(|(s, r)| Op::InsertRow(s, r)),
         1 => (0..SHEETS, row.clone()).prop_map(|(s, r)| Op::DeleteRow(s, r)),
         1 => (0..SHEETS, row, any::<bool>()).prop_map(|(s, r, hidden)| Op::HideRow(s, r, hidden)),
-        1 => range().prop_map(|r| Op::DefineName(r)),
+        1 => range().prop_map(Op::DefineName),
         2 => Just(Op::Undo),
         1 => Just(Op::Redo),
     ]
