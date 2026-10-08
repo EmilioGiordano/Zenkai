@@ -775,22 +775,20 @@ impl Engine for Workbook {
                 .model
                 .range_clear_all(&area(sheet, range))
                 .map_err(rejected),
-            used => {
+            _ => {
                 self.clear_formats(sheet, range)?;
-                match used {
-                    Some(used) => self.clear(sheet, used),
-                    None => Ok(()),
-                }
+                self.clear(sheet, range)
             }
         }
     }
 
     // IronCalc visits every cell of the range, so a whole sheet (17 billion cells) is
-    // clipped to the used area, the only place contents can be.
+    // clipped to the used area, the only place contents can be. A range past it still
+    // clears its first cell, so every Delete is one undo step, as in Excel.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
-        let Some(used) = range.clip_to(self.used_end(sheet)) else {
-            return Ok(());
-        };
+        let used = range
+            .clip_to(self.used_end(sheet))
+            .unwrap_or(Range::single(range.start));
         self.model
             .range_clear_contents(&area(sheet, used))
             .map_err(rejected)
