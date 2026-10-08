@@ -1,13 +1,18 @@
 use encoding_rs::{UTF_16BE, UTF_16LE, WINDOWS_1252};
+use zenkai_types::{MAX_COLS, MAX_ROWS};
 
 pub const MAX_CSV_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_FIELD_BYTES: usize = 32_767;
+// About 1 GB of parsed rows at worst (empty fields); 100k x 20 typical imports use 2M.
+pub const MAX_CSV_FIELDS: usize = 40_000_000;
 const SNIFF_LINES: usize = 50;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CsvError {
     #[error("the file is {0} MB, larger than the 512 MB supported for CSV")]
     TooLarge(usize),
+    #[error("the CSV has more than {MAX_ROWS} rows, {MAX_COLS} columns or {MAX_CSV_FIELDS} cells")]
+    TooManyCells,
     #[error("the CSV could not be read: {0}")]
     Malformed(String),
 }
@@ -144,8 +149,18 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
         .delimiter(delimiter.byte())
         .from_reader(text.as_bytes());
     let mut rows = Vec::new();
+    let mut fields = 0usize;
     for record in reader.records() {
         let record = record.map_err(|e| CsvError::Malformed(e.to_string()))?;
+        // Checked before the row is allocated, so a file of bare separators cannot
+        // build billions of empty strings.
+        fields += record.len();
+        if rows.len() >= MAX_ROWS as usize
+            || record.len() > usize::from(MAX_COLS)
+            || fields > MAX_CSV_FIELDS
+        {
+            return Err(CsvError::TooManyCells);
+        }
         let row = record
             .iter()
             .map(|field| {
@@ -202,6 +217,17 @@ pub fn write_csv(rows: &[Vec<String>], delimiter: Delimiter) -> Result<Vec<u8>, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refuses_more_columns_than_a_sheet_holds() {
+        let wide = ",".repeat(usize::from(MAX_COLS));
+        assert!(matches!(
+            parse_csv(wide.as_bytes(), Some(Delimiter::Comma)),
+            Err(CsvError::TooManyCells)
+        ));
+        let fits = ",".repeat(usize::from(MAX_COLS) - 1);
+        assert!(parse_csv(fits.as_bytes(), Some(Delimiter::Comma)).is_ok());
+    }
 
     #[test]
     fn detects_semicolon_and_quoted_newlines() {
