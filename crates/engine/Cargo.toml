@@ -1,0 +1,26 @@
+[package]
+name = "zenkai-engine"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+csv = "1"
+ironcalc = "=0.8.3"
+iana-time-zone = "0.1"
+roxmltree = "0.19"
+serde_json = "1"
+thiserror = "2"
+zenkai-types = { path = "../types" }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+tracing = "0.1"
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+rust_xlsxwriter = "0.92"
+tempfile = "3"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,267 @@
+use zenkai_types::Range;
+
+use crate::error::EngineError;
+
+pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+pub const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const MAX_ENTRIES: usize = 20_000;
+// Excel's own limit; it also bounds how deep any formula's syntax tree can get.
+pub const MAX_FORMULA_CHARS: usize = 8_192;
+pub const MAX_FORMULA_DEPTH: usize = 256;
+pub const MAX_FORMULA_AREA: u64 = 1_000_000;
+// Engine parsing and evaluation recurse on the formula tree; a dedicated stack
+// this large keeps any formula within MAX_FORMULA_CHARS far from overflowing.
+pub const ENGINE_STACK_BYTES: usize = 256 * 1024 * 1024;
+
+fn reject(reason: String) -> EngineError {
+    EngineError::Unsafe(reason)
+}
+
+// Every XML part is checked, wherever it lives: the engine follows relationship
+// targets to any path and also parses formulas outside worksheets (defined names,
+// conditional-format rules, validations). Parts that are not XML are left to the engine.
+pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
+    let mut features = SheetFeatures::default();
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Ok(features);
+    };
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    if !has_checked_element(text.as_bytes()) {
+        return Ok(features);
+    }
+    // The engine reads parts with this same roxmltree, so a part it cannot parse can
+    // never feed it a formula; rejecting here would only refuse valid files (VML).
+    let document = match roxmltree::Document::parse(text) {
+        Ok(document) => document,
+        Err(error) => {
+            tracing::debug!(%error, "skipping a part that is not well-formed XML");
+            return Ok(features);
+        }
+    };
+    for node in document.descendants().filter(roxmltree::Node::is_element) {
+        match node.tag_name().name() {
+            "f" | "formula" | "formula1" | "formula2" | "definedName" => check_formula(&node)?,
+            "hyperlinks" => features.hyperlinks = true,
+            "dataValidations" => features.data_validation = true,
+            "autoFilter" => features.auto_filter = true,
+            "sheetProtection" => features.protection = true,
+            _ => {}
+        }
+    }
+    Ok(features)
+}
+
+const CHECKED_ELEMENTS: [&[u8]; 9] = [
+    b"f",
+    b"formula",
+    b"formula1",
+    b"formula2",
+    b"definedName",
+    b"hyperlinks",
+    b"dataValidations",
+    b"autoFilter",
+    b"sheetProtection",
+];
+
+// XML forbids entities or whitespace between '<' and an element name, so a part with
+// no '<name' or '<prefix:name' start tag for these names cannot contain them; the
+// full parse is skipped for it. Text that only looks like a tag merely costs a parse.
+fn has_checked_element(bytes: &[u8]) -> bool {
+    let mut rest = bytes;
+    while let Some(at) = rest.iter().position(|b| *b == b'<') {
+        rest = &rest[at + 1..];
+        let name_end = rest
+            .iter()
+            .position(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/' | b'<'))
+            .unwrap_or(rest.len());
+        let name = &rest[..name_end];
+        let local = name.rsplit(|b| *b == b':').next().unwrap_or(name);
+        if CHECKED_ELEMENTS.contains(&local) {
+            return true;
+        }
+    }
+    false
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SheetFeatures {
+    pub hyperlinks: bool,
+    pub data_validation: bool,
+    pub auto_filter: bool,
+    pub protection: bool,
+}
+
+fn check_formula(node: &roxmltree::Node<'_, '_>) -> Result<(), EngineError> {
+    if let Some(area) = node.attribute("ref")
+        && let Some(range) = Range::parse_a1(area)
+        && range.cell_count() > MAX_FORMULA_AREA
+    {
+        return Err(reject(format!(
+            "a formula covers {} cells, more than the {MAX_FORMULA_AREA} supported",
+            range.cell_count()
+        )));
+    }
+    check_formula_text(node.text().unwrap_or_default()).map_err(reject)
+}
+
+pub fn check_formula_text(formula: &str) -> Result<(), String> {
+    let chars = formula.chars().count();
+    if chars > MAX_FORMULA_CHARS {
+        return Err(format!(
+            "a formula has {chars} characters, more than the {MAX_FORMULA_CHARS} Excel allows"
+        ));
+    }
+    let depth = max_depth(formula);
+    if depth > MAX_FORMULA_DEPTH {
+        return Err(format!(
+            "a formula is nested {depth} levels deep, more than the {MAX_FORMULA_DEPTH} supported"
+        ));
+    }
+    Ok(())
+}
+
+fn max_depth(formula: &str) -> usize {
+    let mut depth = 0usize;
+    let mut deepest = 0usize;
+    for c in formula.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    deepest
+}
+
+pub fn run_with_engine_stack<T: Send>(
+    job: impl FnOnce() -> Result<T, EngineError> + Send,
+) -> Result<T, EngineError> {
+    std::thread::scope(|scope| {
+        let handle = std::thread::Builder::new()
+            .name("zenkai-engine".to_string())
+            .stack_size(ENGINE_STACK_BYTES)
+            .spawn_scoped(scope, job)
+            .map_err(|e| {
+                EngineError::Rejected(format!("could not start the engine thread: {e}"))
+            })?;
+        handle.join().unwrap_or_else(|_| {
+            Err(EngineError::InvalidFile(
+                "the engine stopped on this workbook; the file may be damaged".to_string(),
+            ))
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sheet(cell: &str) -> String {
+        format!(
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1">{cell}</row></sheetData></worksheet>"#
+        )
+    }
+
+    #[test]
+    fn rejects_deep_nesting_in_any_spelling() {
+        let deep = sheet(&format!(
+            "<c r=\"A1\"><f>{}1{}</f></c>",
+            "(".repeat(300),
+            ")".repeat(300)
+        ));
+        assert!(check_part(deep.as_bytes()).is_err());
+        let encoded = sheet(&format!("<c r=\"A1\"><f>{}1</f></c>", "&#40;".repeat(300)));
+        assert!(check_part(encoded.as_bytes()).is_err());
+        let prefixed = format!(
+            r#"<x:worksheet xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:sheetData><x:row r="1"><x:c r="A1"><x:f>{}1</x:f></x:c></x:row></x:sheetData></x:worksheet>"#,
+            "(".repeat(300)
+        );
+        assert!(check_part(prefixed.as_bytes()).is_err());
+        let fine = sheet(&format!(
+            "<c r=\"A1\"><f>{}1{}</f></c>",
+            "(".repeat(64),
+            ")".repeat(64)
+        ));
+        assert!(check_part(fine.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn rejects_long_operator_chains_and_huge_areas() {
+        let long = sheet(&format!("<c r=\"A1\"><f>{}1</f></c>", "1+".repeat(5_000)));
+        assert!(check_part(long.as_bytes()).is_err());
+        let huge = sheet("<c r=\"A1\"><f\n t='array' ref='A1:XFD1048576'>1</f></c>");
+        assert!(check_part(huge.as_bytes()).is_err());
+        let small = sheet(r#"<c r="A1"><f t="shared" ref="A1:A100" si="0">B1*2</f></c>"#);
+        assert!(check_part(small.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn checks_defined_names_and_skips_binary_parts() {
+        let workbook = format!(
+            r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="Foo">{}1</definedName></definedNames></workbook>"#,
+            "1+".repeat(5_000)
+        );
+        assert!(check_part(workbook.as_bytes()).is_err());
+        assert!(check_part(&[0x89, b'P', b'N', b'G', 0xFF, 0x00]).is_ok());
+    }
+
+    #[test]
+    fn prefilter_finds_formula_tags_in_any_spelling() {
+        assert!(has_checked_element(b"<c><f>1</f></c>"));
+        assert!(has_checked_element(b"<x:c><x:f t='array'>1</x:f></x:c>"));
+        assert!(has_checked_element(
+            b"<f
+ t=\"shared\">1</f>"
+        ));
+        assert!(has_checked_element(
+            b"<definedNames><definedName name=\"a\">1</definedName>"
+        ));
+        assert!(has_checked_element("<ñ:f>1</ñ:f>".as_bytes()));
+        assert!(has_checked_element(b"<f>1</f"));
+        assert!(!has_checked_element(
+            b"<row r=\"1\"><c r=\"A1\"><v>12</v></c><font/><fill/></row>"
+        ));
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_skip_the_check() {
+        let deep = format!(
+            "\u{feff}{}",
+            sheet(&format!("<c r=\"A1\"><f>{}1</f></c>", "(".repeat(300)))
+        );
+        assert!(check_part(deep.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn reports_hyperlinks_and_validation() {
+        let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><sheetProtection sheet="1"/><autoFilter ref="A1:B2"/><dataValidations count="0"/><hyperlinks/></worksheet>"#;
+        let features = check_part(xml.as_bytes()).unwrap();
+        assert!(features.hyperlinks && features.data_validation);
+        assert!(features.auto_filter && features.protection);
+    }
+
+    #[test]
+    fn engine_stack_survives_the_longest_allowed_chain() {
+        let formula = format!("={}1", "1+".repeat((MAX_FORMULA_CHARS - 2) / 2));
+        let result = run_with_engine_stack(move || {
+            let mut book = crate::Workbook::new_empty()?;
+            crate::Engine::set_input(
+                &mut book,
+                zenkai_types::SheetId(0),
+                zenkai_types::CellPos::default(),
+                &formula,
+            )?;
+            Ok(crate::Engine::cell(
+                &book,
+                zenkai_types::SheetId(0),
+                zenkai_types::CellPos::default(),
+            )
+            .text)
+        });
+        assert_eq!(result.unwrap(), "4096");
+    }
+}
