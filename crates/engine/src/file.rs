@@ -383,6 +383,20 @@ line 2"
     }
 
     #[test]
+    fn column_width_round_trips_in_pixels() {
+        let mut book = Workbook::new_empty().unwrap();
+        let col = zenkai_types::ColIdx::new(2).unwrap();
+        book.set_column_width(SheetId(0), col, 145.0).unwrap();
+        let sizes = book.sizes(SheetId(0));
+        let span = sizes
+            .columns
+            .iter()
+            .find(|s| s.first <= col && col <= s.last)
+            .unwrap();
+        assert!((span.width - 145.0).abs() < 1.0, "{}", span.width);
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
