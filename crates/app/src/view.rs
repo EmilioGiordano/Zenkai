@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -28,6 +28,7 @@ use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
 use crate::jump::jump_target;
 use crate::palette;
+use crate::recent;
 use crate::recovery;
 use crate::region;
 use crate::stats::{self, SelectionStats};
@@ -102,6 +103,7 @@ pub struct Workspace {
     // Interface scale, independent of the grid zoom: everything sized in rems.
     ui_scale: f32,
     show_formulas: bool,
+    recent: Vec<PathBuf>,
     format_dialog: Option<FormatDialog>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
@@ -163,6 +165,7 @@ impl Workspace {
             csv_request: 0,
             ui_scale: 1.0,
             show_formulas: false,
+            recent: Vec::new(),
             format_dialog: None,
             colors,
             focus: cx.focus_handle(),
@@ -180,6 +183,7 @@ impl Workspace {
             workspace.open_path(path, window, cx);
         }
         workspace.start_autosave(window, cx);
+        workspace.load_recent(cx);
         workspace
     }
 
@@ -263,7 +267,7 @@ impl Workspace {
                 .justify_center()
                 .child(
                     div().w(px(560.0)).shadow_lg().child(
-                        palette::groups()
+                        palette::groups(&self.recent)
                             .into_iter()
                             .fold(Command::new(state), Command::group)
                             .placeholder("Type a command")
@@ -1196,6 +1200,7 @@ impl Workspace {
                 match result {
                     Ok(opened) => {
                         let unsupported = opened.unsupported.clone();
+                        this.remember_recent(&path, cx);
                         this.document =
                             Document::new(opened.workbook, Some(path), opened.unsupported);
                         this.reset_grid(window, cx);
@@ -1298,6 +1303,49 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    // The list is read and written off the UI thread; a failure only loses the list.
+    fn load_recent(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let recent = cx
+                .background_executor()
+                .spawn(async { recent::load() })
+                .await;
+            if let Err(error) = this.update(cx, |this, cx| {
+                // Files opened while the list was loading stay in front.
+                this.recent = this
+                    .recent
+                    .iter()
+                    .rev()
+                    .fold(recent, |list, path| recent::with(&list, path));
+                cx.notify();
+            }) {
+                tracing::debug!(%error, "workspace closed while loading recent files");
+            }
+        })
+        .detach();
+    }
+
+    fn remember_recent(&mut self, path: &Path, cx: &mut Context<Self>) {
+        self.recent = recent::with(&self.recent, path);
+        let list = self.recent.clone();
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(error) = recent::save(&list) {
+                    tracing::warn!(%error, "could not save the recent files list");
+                }
+            })
+            .detach();
+    }
+
+    fn open_recent(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(path) = self.recent.get(index).cloned() else {
+            return;
+        };
+        self.confirm_discard(window, cx, move |this, window, cx| {
+            this.open_path(path, window, cx)
+        });
     }
 
     fn open(&mut self, _: &Open, window: &mut Window, cx: &mut Context<Self>) {
@@ -2620,6 +2668,21 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CloseFormatDialog, window, cx| {
                 this.close_format_dialog(window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &OpenRecent1, window, cx| this.open_recent(0, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &OpenRecent2, window, cx| this.open_recent(1, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &OpenRecent3, window, cx| this.open_recent(2, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &OpenRecent4, window, cx| this.open_recent(3, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &OpenRecent5, window, cx| this.open_recent(4, window, cx)),
+            )
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
             }))

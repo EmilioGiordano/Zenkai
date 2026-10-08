@@ -7,8 +7,21 @@ fn item(label: &'static str, action: impl Action) -> CommandItem {
     CommandItem::new().label(label).action(Box::new(action))
 }
 
-pub fn groups() -> Vec<CommandGroup> {
+pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
+    let open_recent: [Box<dyn Action>; crate::recent::MAX_RECENT] = [
+        Box::new(OpenRecent1),
+        Box::new(OpenRecent2),
+        Box::new(OpenRecent3),
+        Box::new(OpenRecent4),
+        Box::new(OpenRecent5),
+    ];
+    let recent_items = recent.iter().zip(open_recent).map(|(path, action)| {
+        CommandItem::new()
+            .label(format!("Open recent: {}", crate::recent::label(path)))
+            .action(action)
+    });
     vec![
+        CommandGroup::new().label("Recent").items(recent_items),
         CommandGroup::new().label("File").items([
             item("New workbook", NewWorkbook),
             item("Open…", Open),
