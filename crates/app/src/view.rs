@@ -35,7 +35,7 @@ use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
 use crate::region;
-use crate::stats::{self, SelectionStats};
+use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
 use crate::toolbar;
 use gpui_kit::component::Sizable;
@@ -102,6 +102,7 @@ pub struct Workspace {
     grid: Entity<Grid>,
     stats: Option<SelectionStats>,
     stats_request: u64,
+    stats_job: StatsJob,
     active_input: SharedString,
     active_style: CellStyle,
     notice: Option<Notice>,
@@ -178,6 +179,7 @@ impl Workspace {
             grid,
             stats: None,
             stats_request: 0,
+            stats_job: StatsJob::default(),
             active_input: SharedString::default(),
             active_style: CellStyle::default(),
             notice: None,
@@ -842,7 +844,9 @@ impl Workspace {
         let inline = range.cell_count() <= stats::INLINE_CELLS;
         if !inline {
             self.stats = None;
-            self.compute_stats_in_background(sheet, range, cx);
+            if self.stats_job.request() {
+                self.start_stats_job(cx);
+            }
         }
         if let Some(wb) = self.document.workbook() {
             if inline {
@@ -862,9 +866,14 @@ impl Workspace {
         cx.notify();
     }
 
-    // A result is dropped when the selection or the document changed while it ran.
-    fn compute_stats_in_background(&self, sheet: SheetId, range: Range, cx: &mut Context<Self>) {
-        let Some(shared) = self.document.begin_read() else {
+    // A result is dropped when the selection or the document changed while it ran; a
+    // queued request then reruns on the selection as it is at that point.
+    fn start_stats_job(&mut self, cx: &mut Context<Self>) {
+        let sheet = self.document.sheet;
+        let range = self.grid.read(cx).selection().range();
+        let shared = self.document.begin_read();
+        let Some(shared) = shared.filter(|_| range.cell_count() > stats::INLINE_CELLS) else {
+            self.stats_job = StatsJob::Idle;
             return;
         };
         let (request, generation) = (self.stats_request, self.document.generation());
@@ -877,6 +886,9 @@ impl Workspace {
                 if this.stats_request == request && this.document.is_current(generation) {
                     this.stats = stats;
                     cx.notify();
+                }
+                if this.stats_job.finish() {
+                    this.start_stats_job(cx);
                 }
             });
             if let Err(error) = update {

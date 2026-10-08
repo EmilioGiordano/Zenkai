@@ -11,6 +11,37 @@ const PARALLEL_CELLS: u64 = 5_000;
 // Selections up to this size are summed on the UI thread; larger ones go to the background.
 pub const INLINE_CELLS: u64 = 50_000;
 
+// At most one background job runs; requests that arrive meanwhile collapse into one rerun
+// on the latest selection.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum StatsJob {
+    #[default]
+    Idle,
+    Running,
+    Queued,
+}
+
+impl StatsJob {
+    pub fn request(&mut self) -> bool {
+        match self {
+            Self::Idle => {
+                *self = Self::Running;
+                true
+            }
+            Self::Running | Self::Queued => {
+                *self = Self::Queued;
+                false
+            }
+        }
+    }
+
+    pub fn finish(&mut self) -> bool {
+        let rerun = *self == Self::Queued;
+        *self = if rerun { Self::Running } else { Self::Idle };
+        rerun
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SelectionStats {
     pub count: u64,
@@ -99,6 +130,18 @@ fn tally(band: Range, contents: &(impl Fn(CellPos) -> Contents + Sync)) -> Selec
 mod tests {
     use super::*;
     use zenkai_types::SheetId;
+
+    #[test]
+    fn requests_during_a_job_collapse_into_one_rerun() {
+        let mut job = StatsJob::default();
+        assert!(job.request());
+        assert!(!job.request());
+        assert!(!job.request());
+        assert!(job.finish());
+        assert!(!job.finish());
+        assert_eq!(job, StatsJob::Idle);
+        assert!(job.request());
+    }
 
     #[test]
     fn a_small_selection_is_summed_without_threads() {
