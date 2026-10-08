@@ -60,6 +60,7 @@ const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 
 const UI_SCALE_STEP: f32 = 0.125;
+const MAX_REPLACE_CELLS: usize = 100_000;
 const FONT_SIZES: [u16; 16] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 const IMPORTING: &str = "Importing…";
 const SAVING: &str = "Saving…";
@@ -528,6 +529,14 @@ impl Workspace {
             if changes.is_empty() {
                 return Err(EngineError::Rejected(format!(
                     "no cell contains \"{query}\""
+                )));
+            }
+            // Every replaced cell is one undo entry, so huge replacements are refused
+            // whole rather than cut short.
+            if changes.len() > MAX_REPLACE_CELLS {
+                return Err(EngineError::Rejected(format!(
+                    "{} cells match; Replace All handles up to {MAX_REPLACE_CELLS} at once",
+                    changes.len()
                 )));
             }
             wb.set_scattered_inputs(sheet, &changes)

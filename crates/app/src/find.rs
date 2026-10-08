@@ -91,7 +91,6 @@ pub fn replacements(
             let replaced = replace_ignoring_case(&input, query, replacement);
             (replaced != input).then_some((pos, replaced))
         })
-        .take(MAX_MATCHES)
         .collect()
 }
 
