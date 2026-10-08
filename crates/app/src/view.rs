@@ -1644,26 +1644,35 @@ impl Workspace {
             .border_color(theme.border)
             .bg(theme.tab_bar)
             .child(
-                TabBar::new("sheets")
-                    .children(tabs)
-                    .selected_index(self.document.sheet.0 as usize)
-                    .on_click(move |index, window, cx| {
-                        let sheet = SheetId(u32::try_from(*index).unwrap_or(0));
-                        if let Err(error) = entity.update(cx, |this, cx| {
-                            // A second click on the active tab within the double-click time renames it.
-                            let now = Instant::now();
-                            let double = this.last_tab_click.is_some_and(|(at, tab)| {
-                                tab == sheet && now.duration_since(at) < Duration::from_millis(450)
-                            });
-                            this.last_tab_click = Some((now, sheet));
-                            if double && sheet == this.document.sheet {
-                                this.open_rename(window, cx);
-                            } else {
-                                this.switch_sheet(sheet, window, cx);
-                            }
-                        }) {
-                            tracing::debug!(%error, "workspace dropped");
-                        }
+                div()
+                    .id("sheet-tabs")
+                    .child(
+                        TabBar::new("sheets")
+                            .children(tabs)
+                            .selected_index(self.document.sheet.0 as usize)
+                            .on_click(move |index, window, cx| {
+                                let sheet = SheetId(u32::try_from(*index).unwrap_or(0));
+                                if let Err(error) = entity.update(cx, |this, cx| {
+                                    // A second click on the active tab within the double-click time renames it.
+                                    let now = Instant::now();
+                                    let double = this.last_tab_click.is_some_and(|(at, tab)| {
+                                        tab == sheet
+                                            && now.duration_since(at) < Duration::from_millis(450)
+                                    });
+                                    this.last_tab_click = Some((now, sheet));
+                                    if double && sheet == this.document.sheet {
+                                        this.open_rename(window, cx);
+                                    } else {
+                                        this.switch_sheet(sheet, window, cx);
+                                    }
+                                }) {
+                                    tracing::debug!(%error, "workspace dropped");
+                                }
+                            }),
+                    )
+                    .context_menu({
+                        let grid_focus = self.grid.focus_handle(cx);
+                        move |menu, _, _| sheet_menu(menu, grid_focus.clone())
                     }),
             )
             .child(
@@ -2291,4 +2300,15 @@ fn cell_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
         .menu("Clear contents", Box::new(DeleteForward))
         .separator()
         .menu("Insert chart", Box::new(InsertChart))
+}
+
+// Excel's sheet tab menu; it acts on the active sheet.
+fn sheet_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
+    menu.action_context(grid_focus)
+        .menu("Insert sheet", Box::new(NewSheet))
+        .menu("Rename", Box::new(RenameSheet))
+        .menu("Delete", Box::new(DeleteSheet))
+        .separator()
+        .menu("Move left", Box::new(MoveSheetLeft))
+        .menu("Move right", Box::new(MoveSheetRight))
 }
