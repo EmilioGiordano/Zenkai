@@ -107,7 +107,8 @@ fn select(model: &mut UserModel<'static>, sheet: SheetId, range: Range) -> Resul
 // Typed, pasted and imported text reaches the engine parser without going through
 // the file preflight, so formulas get the same limits here.
 fn check_input(text: &str) -> Result<(), EngineError> {
-    if text.starts_with('=') {
+    // The engine, like Excel, turns "+1+2" and "-1+2" into formulas too.
+    if text.starts_with(['=', '+', '-']) {
         crate::preflight::check_formula_text(text).map_err(EngineError::Rejected)?;
     }
     Ok(())

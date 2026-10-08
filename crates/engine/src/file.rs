@@ -411,6 +411,24 @@ line 2"
     }
 
     #[test]
+    fn plus_and_minus_formulas_get_the_formula_limits() {
+        let mut book = Workbook::new_empty().unwrap();
+        let deep = format!("+{}1{}", "(".repeat(300), ")".repeat(300));
+        assert!(
+            book.set_input(SheetId(0), CellPos::default(), &deep)
+                .is_err()
+        );
+        let rows = vec![vec![deep.replacen('+', "-", 1)]];
+        assert!(
+            book.set_inputs(SheetId(0), CellPos::default(), &rows)
+                .is_err()
+        );
+        book.set_input(SheetId(0), CellPos::default(), "-5")
+            .unwrap();
+        assert_eq!(book.number(SheetId(0), CellPos::default()), Some(-5.0));
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
