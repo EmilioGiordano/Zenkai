@@ -22,3 +22,6 @@ Thumbs.db
 
 # Generated benchmark fixtures
 /bench/fixtures/
+
+# Output of the benchmark baseline check
+/bench-current.csv

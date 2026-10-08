@@ -35,6 +35,11 @@ Risks that come with IronCalc, to manage rather than to block:
 (seeded, reproducible) and measures each engine/fixture pair in its own process. Single
 pieces: `generate <dir>`, `measure <engine> <file> <dir>`, `coverage`.
 
+Regression baseline: `bench/baseline.csv` (`fixture,metric,value`, IronCalc medians for
+fixtures 1, 2, 4 and 5). `check <dir> <baseline.csv> <current.csv> [runs]` fails when a
+time or memory metric is more than 15% worse or missing, or when any run gets wrong values
+or loses data on round trip; CI runs it (see `README.md`).
+
 - Times: wall clock around the engine call. Open includes parsing; for IronCalc the full
   recalc is measured separately (`evaluate()`); logisheets recalculates on load.
 - Memory: heap bytes through a counting global allocator (`peak_alloc`), not process RSS.
