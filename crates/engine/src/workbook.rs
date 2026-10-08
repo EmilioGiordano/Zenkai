@@ -54,6 +54,8 @@ pub trait Engine: Send {
     fn clear_all(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError>;
     fn extend(&mut self, sheet: SheetId, source: Range, target: Range) -> Result<(), EngineError>;
+    fn fill_with(&mut self, sheet: SheetId, from: CellPos, range: Range)
+    -> Result<(), EngineError>;
     fn sort(
         &mut self,
         sheet: SheetId,
@@ -529,6 +531,41 @@ impl Engine for Workbook {
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.set_inputs(sheet, range.start, &moved)
+    }
+
+    // Ctrl+Enter: the content typed at `from` goes into every cell of `range`, formulas
+    // shifted for each cell, in one undo step.
+    fn fill_with(
+        &mut self,
+        sheet: SheetId,
+        from: CellPos,
+        range: Range,
+    ) -> Result<(), EngineError> {
+        if range.cell_count() > MAX_FILL_CELLS {
+            return Err(rejected(format!(
+                "filling {} cells at once is not supported",
+                range.cell_count()
+            )));
+        }
+        let model = self.model.get_model();
+        let rows = (range.start.row.get()..=range.end.row.get())
+            .map(|row| {
+                (range.start.col.get()..=range.end.col.get())
+                    .map(|col| {
+                        model
+                            .extend_to(
+                                sheet.0,
+                                row_i32(from.row),
+                                col_i32(from.col),
+                                row as i32 + 1,
+                                i32::from(col) + 1,
+                            )
+                            .map_err(rejected)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.set_inputs(sheet, range.start, &rows)
     }
 
     // The fill handle: the cells of `target` past `source` (below it or to its right)

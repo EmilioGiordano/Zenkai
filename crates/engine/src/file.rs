@@ -820,6 +820,20 @@ line 2"
     }
 
     #[test]
+    fn fill_with_puts_one_entry_in_every_cell_shifting_formulas() {
+        let mut book = Workbook::new_empty().unwrap();
+        let range = zenkai_types::Range::parse_a1("B1:C2").unwrap();
+        let b1 = CellPos::parse_a1("B1").unwrap();
+        book.set_input(SheetId(0), b1, "=A1*2").unwrap();
+        book.fill_with(SheetId(0), b1, range).unwrap();
+        let at = |a1: &str| book.input(SheetId(0), CellPos::parse_a1(a1).unwrap());
+        assert_eq!(
+            (at("B2"), at("C1"), at("C2")),
+            ("=A2*2".into(), "=B1*2".into(), "=B2*2".into())
+        );
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

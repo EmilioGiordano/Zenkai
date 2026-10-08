@@ -103,13 +103,35 @@ pub enum GridEvent {
     ViewportChanged,
     EditRequested(CellPos),
     EditChanged,
-    Commit { pos: CellPos, text: String },
-    Jump { direction: Direction, extend: bool },
+    Commit {
+        pos: CellPos,
+        text: String,
+    },
+    Jump {
+        direction: Direction,
+        extend: bool,
+    },
     ClearRequested(Range),
-    EndRequested { extend: bool },
-    ColumnResized { col: ColIdx, width: f32 },
-    RowResized { row: RowIdx, height: f32 },
-    FillRequested { source: Range, target: Range },
+    EndRequested {
+        extend: bool,
+    },
+    ColumnResized {
+        col: ColIdx,
+        width: f32,
+    },
+    RowResized {
+        row: RowIdx,
+        height: f32,
+    },
+    FillRequested {
+        source: Range,
+        target: Range,
+    },
+    CommitToSelection {
+        pos: CellPos,
+        text: String,
+        range: Range,
+    },
     AutoFitRequested(ColIdx),
 }
 
@@ -1203,6 +1225,20 @@ impl Render for Grid {
                     corner: CellPos::new(g.selection.corner.row, ColIdx::LAST),
                 };
                 cx.emit(GridEvent::SelectionChanged);
+                cx.notify();
+            }))
+            .on_action(cx.listener(|g, _: &ConfirmInSelection, _, cx| {
+                // Excel's Ctrl+Enter: the entry goes into every selected cell and the
+                // selection stays.
+                let Some(editor) = g.editor.take() else {
+                    return;
+                };
+                cx.emit(GridEvent::CommitToSelection {
+                    pos: editor.pos,
+                    text: editor.text,
+                    range: g.selection.range(),
+                });
+                cx.emit(GridEvent::EditChanged);
                 cx.notify();
             }))
             .on_action(cx.listener(|g, _: &InsertLineBreak, _, cx| {
