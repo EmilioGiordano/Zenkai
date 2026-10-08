@@ -2416,7 +2416,7 @@ impl Workspace {
         let Some(workbook) = self.document.workbook() else {
             return Range::single(active);
         };
-        let region = region::current_region(active, |pos| !workbook.input(sheet, pos).is_empty());
+        let region = region::current_region(active, workbook.filled(sheet));
         self.grid
             .update(cx, |grid, cx| grid.select(region.start, region.end, cx));
         region
