@@ -49,6 +49,11 @@ actions!(
         MoveSheetLeft,
         MoveSheetRight,
         GoTo,
+        InsertRows,
+        DeleteRows,
+        InsertColumns,
+        DeleteColumns,
+        FreezePanes,
         CloseGoTo,
     ]
 );

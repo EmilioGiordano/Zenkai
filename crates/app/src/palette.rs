@@ -39,6 +39,10 @@ pub fn groups() -> Vec<CommandGroup> {
         ]),
         CommandGroup::new().label("Insert").items([
             item("Chart of the selection", InsertChart),
+            item("Insert rows above", InsertRows),
+            item("Insert columns to the left", InsertColumns),
+            item("Delete selected rows", DeleteRows),
+            item("Delete selected columns", DeleteColumns),
             item("New sheet", NewSheet),
             item("Rename sheet", RenameSheet),
             item("Delete sheet", DeleteSheet),
@@ -49,6 +53,7 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Zoom in", ZoomIn),
             item("Zoom out", ZoomOut),
             item("Reset zoom", ZoomReset),
+            item("Freeze or unfreeze panes at the active cell", FreezePanes),
             item("Next sheet", NextSheet),
             item("Previous sheet", PreviousSheet),
             item("Light or dark theme", ToggleTheme),

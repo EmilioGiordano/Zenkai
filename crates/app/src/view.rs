@@ -34,6 +34,15 @@ struct InternalClip {
     range: Range,
 }
 
+#[derive(Clone, Copy)]
+enum StructureEdit {
+    InsertRows,
+    DeleteRows,
+    InsertColumns,
+    DeleteColumns,
+    FreezePanes,
+}
+
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
 const SEARCHING: &str = "Searching…";
@@ -69,6 +78,7 @@ pub struct Workspace {
     go_to: Option<(Entity<InputState>, Subscription)>,
     pending_sheet: Option<SheetId>,
     last_tab_click: Option<(Instant, SheetId)>,
+    structure_changed: bool,
     memory_mb: u64,
     diagnostics_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -101,6 +111,7 @@ impl Workspace {
             go_to: None,
             pending_sheet: None,
             last_tab_click: None,
+            structure_changed: false,
             memory_mb: 0,
             diagnostics_task: None,
             _subscriptions: vec![subscription],
@@ -758,7 +769,8 @@ impl Workspace {
                     this.document.sheet = target;
                 }
                 let sheet_changed = this.document.sheet != sheet_before
-                    || this.document.sheets.len() != sheets_before.len();
+                    || this.document.sheets.len() != sheets_before.len()
+                    || std::mem::take(&mut this.structure_changed);
                 if sheet_changed {
                     this.load_sheet_view(cx);
                 }
@@ -1402,6 +1414,62 @@ impl Workspace {
             )
     }
 
+    fn structure_edit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        action: StructureEdit,
+    ) {
+        let sheet = self.document.sheet;
+        let selection = self.selection(cx);
+        let active = self.grid.read(cx).selection().active;
+        let rows = selection.rows();
+        let cols = selection.cols();
+        let whole_sheet_rows = rows == zenkai_types::MAX_ROWS;
+        let whole_sheet_cols = cols == zenkai_types::MAX_COLS;
+        let refused = match action {
+            StructureEdit::InsertRows | StructureEdit::DeleteRows => whole_sheet_rows,
+            StructureEdit::InsertColumns | StructureEdit::DeleteColumns => whole_sheet_cols,
+            StructureEdit::FreezePanes => false,
+        };
+        if refused {
+            self.notify(
+                Severity::Warning,
+                "Select whole rows or columns, not the entire sheet, to insert or delete.",
+                cx,
+            );
+            return;
+        }
+        match action {
+            StructureEdit::InsertRows => self.edit(window, cx, move |wb| {
+                wb.insert_rows(sheet, selection.start.row, rows)
+            }),
+            StructureEdit::DeleteRows => self.edit(window, cx, move |wb| {
+                wb.delete_rows(sheet, selection.start.row, rows)
+            }),
+            StructureEdit::InsertColumns => self.edit(window, cx, move |wb| {
+                wb.insert_columns(sheet, selection.start.col, cols)
+            }),
+            StructureEdit::DeleteColumns => self.edit(window, cx, move |wb| {
+                wb.delete_columns(sheet, selection.start.col, cols)
+            }),
+            StructureEdit::FreezePanes => {
+                let frozen = self
+                    .document
+                    .workbook()
+                    .map(|wb| wb.frozen(sheet))
+                    .unwrap_or_default();
+                let (rows, cols) = if frozen == (0, 0) {
+                    (active.row.get(), active.col.get())
+                } else {
+                    (0, 0)
+                };
+                self.edit(window, cx, move |wb| wb.set_frozen(sheet, rows, cols));
+            }
+        }
+        self.structure_changed = true;
+    }
+
     fn add_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_sheet = Some(SheetId(
             u32::try_from(self.document.sheets.len()).unwrap_or(0),
@@ -1730,6 +1798,21 @@ impl Render for Workspace {
                 cx.listener(|this, _: &RenameSheet, window, cx| this.open_rename(window, cx)),
             )
             .on_action(cx.listener(|this, _: &GoTo, window, cx| this.open_go_to(window, cx)))
+            .on_action(cx.listener(|this, _: &InsertRows, window, cx| {
+                this.structure_edit(window, cx, StructureEdit::InsertRows)
+            }))
+            .on_action(cx.listener(|this, _: &DeleteRows, window, cx| {
+                this.structure_edit(window, cx, StructureEdit::DeleteRows)
+            }))
+            .on_action(cx.listener(|this, _: &InsertColumns, window, cx| {
+                this.structure_edit(window, cx, StructureEdit::InsertColumns)
+            }))
+            .on_action(cx.listener(|this, _: &DeleteColumns, window, cx| {
+                this.structure_edit(window, cx, StructureEdit::DeleteColumns)
+            }))
+            .on_action(cx.listener(|this, _: &FreezePanes, window, cx| {
+                this.structure_edit(window, cx, StructureEdit::FreezePanes)
+            }))
             .on_action(cx.listener(|this, _: &CloseGoTo, window, cx| this.close_go_to(window, cx)))
             .on_action(
                 cx.listener(|this, _: &CloseRename, window, cx| this.close_rename(window, cx)),
