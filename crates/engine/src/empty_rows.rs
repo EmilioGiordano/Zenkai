@@ -11,19 +11,35 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::error::EngineError;
 
+const MAX_ROW: i32 = 1_048_576;
+// Excel's tallest row, in points.
+const MAX_HEIGHT: f64 = 409.5;
+
 pub fn restore_empty_rows(model: &Model<'_>, xlsx: Vec<u8>) -> Result<Vec<u8>, EngineError> {
     let mut missing: Vec<(String, String)> = Vec::new();
     for (index, sheet) in model.workbook.worksheets.iter().enumerate() {
-        let mut rows: Vec<_> = sheet
-            .rows
-            .iter()
-            // A non-finite height would write ht="NaN", which Excel reports as damaged.
-            .filter(|row| !sheet.sheet_data.contains_key(&row.r) && row.height.is_finite())
-            .collect();
-        if rows.is_empty() {
+        // The file's values are not validated on import: rows outside Excel's grid, odd
+        // heights or a repeated row would make the saved file "damaged" for Excel. The
+        // last entry for a row wins, as in IronCalc's own export.
+        let mut by_row = std::collections::BTreeMap::new();
+        for row in &sheet.rows {
+            let valid = (1..=MAX_ROW).contains(&row.r)
+                && (0.0..=MAX_HEIGHT).contains(&row.height)
+                && !sheet.sheet_data.contains_key(&row.r);
+            if valid {
+                by_row.insert(row.r, row);
+            }
+        }
+        let rows: Vec<_> = by_row.into_values().collect();
+        // IronCalc exports rows it imported even when they are outside the grid or too
+        // tall; those sheets are rewritten too, and merge_rows drops or clamps them.
+        let odd = sheet.sheet_data.keys().any(|r| !(1..=MAX_ROW).contains(r))
+            || sheet.rows.iter().any(|row| {
+                sheet.sheet_data.contains_key(&row.r) && !(0.0..=MAX_HEIGHT).contains(&row.height)
+            });
+        if rows.is_empty() && !odd {
             continue;
         }
-        rows.sort_by_key(|row| row.r);
         let mut xml = String::new();
         for row in rows {
             let hidden = if row.hidden { r#" hidden="1""# } else { "" };
@@ -105,15 +121,40 @@ fn merge_rows(sheet: &str, rows: &str) -> Result<String, String> {
         added.push((row_number(row)?, row));
         rest = &rest[end + 2..];
     }
-    let mut all: Vec<(i32, &str)> = written.into_iter().chain(added).collect();
+    let mut all: Vec<(i32, String)> = written
+        .into_iter()
+        .chain(added)
+        .filter(|(r, _)| (1..=MAX_ROW).contains(r))
+        .map(|(r, row)| (r, clamp_height(row)))
+        .collect();
     all.sort_by_key(|(r, _)| *r);
     let mut out = String::with_capacity(sheet.len() + rows.len());
     out.push_str(&sheet[..open]);
-    for (_, row) in all {
+    for (_, row) in &all {
         out.push_str(row);
     }
     out.push_str(&sheet[close..]);
     Ok(out)
+}
+
+// A row tag with ht outside Excel's 0..=409.5 points gets the nearest valid height.
+fn clamp_height(row: &str) -> String {
+    let Some(start) = row.find(" ht=\"").map(|at| at + " ht=\"".len()) else {
+        return row.to_string();
+    };
+    let Some(len) = row[start..].find('"') else {
+        return row.to_string();
+    };
+    let height = row[start..start + len].parse::<f64>().unwrap_or(f64::NAN);
+    if (0.0..=MAX_HEIGHT).contains(&height) {
+        return row.to_string();
+    }
+    let valid = if height.is_finite() {
+        height.clamp(0.0, MAX_HEIGHT)
+    } else {
+        15.0
+    };
+    format!("{}{valid}{}", &row[..start], &row[start + len..])
 }
 
 fn row_number(row: &str) -> Result<i32, String> {

@@ -874,7 +874,8 @@ impl Engine for Workbook {
             StyleChange::Underline(on) => ("font.u", flag(on)),
             StyleChange::Strike(on) => ("font.strike", flag(on)),
             StyleChange::Wrap(on) => ("alignment.wrap_text", flag(on)),
-            StyleChange::FontSize(points) => ("font.size", points.to_string()),
+            // Excel's font sizes run from 1 to 409 points.
+            StyleChange::FontSize(points) => ("font.size", points.clamp(1, 409).to_string()),
             StyleChange::Borders(preset) => return self.apply_borders(sheet, range, preset),
             StyleChange::FontColor(color) => ("font.color", hex(color)),
             StyleChange::Fill(color) => ("fill.fg_color", hex(color)),
@@ -1008,7 +1009,13 @@ impl Engine for Workbook {
         col: ColIdx,
         pixels: f32,
     ) -> Result<(), EngineError> {
-        let chars = ((f64::from(pixels) - CHAR_WIDTH_PADDING) / PIXELS_PER_CHAR).max(0.0);
+        // Excel's widest column is 255 characters; a non-finite drag maps to zero.
+        let pixels = if pixels.is_finite() {
+            f64::from(pixels)
+        } else {
+            0.0
+        };
+        let chars = ((pixels - CHAR_WIDTH_PADDING) / PIXELS_PER_CHAR).clamp(0.0, 255.0);
         let column = col_i32(col);
         self.model
             .set_columns_width(sheet.0, column, column, chars * COLUMN_WIDTH_FACTOR)
@@ -1027,7 +1034,14 @@ impl Engine for Workbook {
                 sheet.0,
                 row,
                 row,
-                f64::from(pixels) / PIXELS_PER_POINT * ROW_HEIGHT_FACTOR,
+                // Excel's tallest row is 409.5 points.
+                (if pixels.is_finite() {
+                    f64::from(pixels)
+                } else {
+                    0.0
+                } / PIXELS_PER_POINT)
+                    .clamp(0.0, 409.5)
+                    * ROW_HEIGHT_FACTOR,
             )
             .map_err(rejected)
     }
