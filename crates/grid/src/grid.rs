@@ -275,11 +275,14 @@ impl Grid {
         )
     }
 
-    pub fn reset(&mut self, view: SheetView, cx: &mut Context<Self>) {
+    fn apply_view(&mut self, view: SheetView) {
         self.layout = Rc::new(view.layout);
-        self.frozen_rows = view.frozen_rows;
-        self.frozen_cols = view.frozen_cols;
+        (self.frozen_rows, self.frozen_cols) = capped_frozen(view.frozen_rows, view.frozen_cols);
         self.merges = Rc::new(view.merges);
+    }
+
+    pub fn reset(&mut self, view: SheetView, cx: &mut Context<Self>) {
+        self.apply_view(view);
         self.cells = Rc::new(HashMap::new());
         self.top = RowIdx::default();
         self.left = ColIdx::default();
@@ -294,10 +297,7 @@ impl Grid {
     }
 
     pub fn update_view(&mut self, view: SheetView, cx: &mut Context<Self>) {
-        self.layout = Rc::new(view.layout);
-        self.frozen_rows = view.frozen_rows;
-        self.frozen_cols = view.frozen_cols;
-        self.merges = Rc::new(view.merges);
+        self.apply_view(view);
         self.viewport_changed(cx);
     }
 
@@ -1417,6 +1417,14 @@ impl Grid {
 }
 
 const MAX_TYPED_PREVIEW_CELLS: u64 = 10_000;
+// More frozen panes than any screen can show would only make every frame and refresh
+// walk panes that cannot be seen, as Excel stops them at the window size.
+const MAX_FROZEN_ROWS: u32 = 200;
+const MAX_FROZEN_COLS: u16 = 100;
+
+fn capped_frozen(rows: u32, cols: u16) -> (u32, u16) {
+    (rows.min(MAX_FROZEN_ROWS), cols.min(MAX_FROZEN_COLS))
+}
 
 // A formula keeps its last value: its typed text is not what the cell will show.
 fn typed_preview(existing: Option<&GridCell>, text: &SharedString) -> Option<GridCell> {
@@ -1486,8 +1494,8 @@ fn cached_ranges(
 #[cfg(test)]
 mod tests {
     use super::{
-        Direction, GridCell, cached_ranges, cycle_within, next_boundary, prev_boundary,
-        typed_preview,
+        Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, cached_ranges, capped_frozen,
+        cycle_within, next_boundary, prev_boundary, typed_preview,
     };
     use zenkai_types::{CellPos, CellStyle, Range, ValueKind};
 
@@ -1527,6 +1535,15 @@ mod tests {
         );
         let ranges = cached_ranges(pos("A11"), 5, 10, 8, 0);
         assert_eq!(ranges[0], Range::new(pos("A9"), pos("K21")));
+    }
+
+    #[test]
+    fn frozen_panes_are_capped_to_what_fits_on_screen() {
+        assert_eq!(capped_frozen(2, 3), (2, 3));
+        assert_eq!(
+            capped_frozen(1_048_575, 16_383),
+            (MAX_FROZEN_ROWS, MAX_FROZEN_COLS)
+        );
     }
 
     #[test]
