@@ -6,14 +6,14 @@ use crate::{expressions::parser::Node, functions::Function};
 pub(crate) type CellKey = (u32, i32, i32);
 
 // Ranges wider than this are kept per sheet instead of once per column they cover.
-const MAX_INDEXED_COLUMNS: i32 = 64;
+const MAX_INDEXED_COLUMNS: i32 = 16;
 
 // Nested ranges down a column (`=SUM($A$1:A9)` below `=SUM($A$1:A8)`...) make the
 // dependents visited grow with the square of the formulas; past this, a full evaluation
 // is the cheaper way.
 const MAX_DEPENDENT_VISITS: usize = 4_000_000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Reference {
     Cell(CellKey),
     Range {
@@ -306,7 +306,9 @@ impl DependencyIndex {
 
     // Lookups need a `sort` after the last `add`.
     pub(crate) fn add(&mut self, formula: CellKey, node: &Node) {
-        let references = References::of(node, formula);
+        let mut references = References::of(node, formula);
+        references.found.sort_unstable();
+        references.found.dedup();
         if references.volatile {
             self.volatile.insert(formula);
         }
