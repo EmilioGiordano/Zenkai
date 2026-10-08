@@ -130,3 +130,22 @@ fn a_spill_into_a_shared_range_is_seen() {
     assert_eq!(model.get_formatted_cell_value(0, 5, 10).unwrap(), "0");
     assert_eq!(model.get_formatted_cell_value(0, 6, 10).unwrap(), "0");
 }
+
+#[test]
+fn a_criteria_range_inside_a_spill_whose_anchor_is_outside() {
+    let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 2, "=SEQUENCE(2000)").unwrap();
+    model
+        .set_user_input(0, 1, 4, "=COUNTIF($B$5:$B$1504,\">1000\")")
+        .unwrap();
+    model
+        .set_user_input(0, 2, 4, "=SUMIF($B$5:$B$1504,\">1000\")")
+        .unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 1, 4).unwrap(), "504");
+    assert_eq!(model.get_formatted_cell_value(0, 2, 4).unwrap(), "631260");
+    model.set_user_input(0, 1, 2, "=SEQUENCE(1000)").unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 1, 4).unwrap(), "0");
+    assert_eq!(model.get_formatted_cell_value(0, 2, 4).unwrap(), "0");
+    model.set_user_input(0, 1, 2, "=SEQUENCE(1200)*2").unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 1, 4).unwrap(), "700");
+}
