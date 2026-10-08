@@ -58,6 +58,10 @@ impl Document {
         self.pending.push(edit);
     }
 
+    pub fn workbook_mut(&mut self) -> Option<&mut Workbook> {
+        self.workbook.as_mut()
+    }
+
     pub fn take(&mut self) -> Option<Workbook> {
         self.workbook.take()
     }

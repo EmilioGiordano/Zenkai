@@ -8,7 +8,7 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
-use zenkai_engine::{Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
+use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
 use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_types::{CellPos, CellStyle, HAlign, NumberFormat, Range, SheetId, StyleChange};
 
@@ -25,6 +25,13 @@ use crate::stats::{self, SelectionStats};
 use crate::toolbar;
 use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+
+#[derive(Clone)]
+struct InternalClip {
+    copied: Copied,
+    cut: bool,
+    range: Range,
+}
 
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
@@ -52,7 +59,7 @@ pub struct Workspace {
     busy: Option<SharedString>,
     last_recalc: Option<Duration>,
     diagnostics: bool,
-    clipboard_source: Option<(Range, String)>,
+    clipboard_source: Option<InternalClip>,
     chart: Option<ChartPanel>,
     find: Option<FindBar>,
     palette: Option<Entity<CommandState>>,
@@ -961,17 +968,32 @@ impl Workspace {
 
     fn copy(&mut self, cut: bool, cx: &mut Context<Self>) {
         let range = self.selection(cx);
-        let Some(workbook) = self.document.workbook() else {
+        let sheet = self.document.sheet;
+        let Some(workbook) = self.document.workbook_mut() else {
+            self.notify(
+                Severity::Warning,
+                "Still calculating, try again in a moment.",
+                cx,
+            );
             return;
         };
-        match clipboard::copy_tsv(workbook, self.document.sheet, range) {
-            Some(text) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-                self.clipboard_source = cut.then_some((range, text));
+        let end = workbook.used_end(sheet);
+        let clipped = Range::new(
+            range.start,
+            CellPos::new(range.end.row.min(end.row), range.end.col.min(end.col)),
+        );
+        if clipped.cell_count() > clipboard::MAX_COPY_CELLS {
+            self.notify(Severity::Warning, "The selection is too large to copy.", cx);
+            return;
+        }
+        match workbook.copy(sheet, clipped) {
+            Ok(copied) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(copied.text.clone()));
+                self.clipboard_source = Some(InternalClip { copied, cut, range });
                 self.grid
                     .update(cx, |grid, cx| grid.set_marquee(Some(range), cx));
             }
-            None => self.notify(Severity::Warning, "The selection is too large to copy.", cx),
+            Err(error) => self.notify(Severity::Error, error.to_string(), cx),
         }
     }
 
@@ -979,23 +1001,30 @@ impl Workspace {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        let rows = clipboard::parse_tsv(&text);
         let sheet = self.document.sheet;
         let origin = self.grid.read(cx).selection().active;
-        let cut_source = self
+        let internal = self
             .clipboard_source
-            .take()
-            .filter(|(_, cut_text)| *cut_text == text)
-            .map(|(range, _)| range);
-        let height = u32::try_from(rows.len()).unwrap_or(u32::MAX);
-        let width = rows.iter().map(Vec::len).max().unwrap_or(0);
-        let width = u16::try_from(width).unwrap_or(u16::MAX);
-        self.edit(window, cx, move |wb| {
-            if let Some(source) = cut_source {
-                wb.clear(sheet, source)?;
+            .take_if(|clip| clip.copied.text == text);
+        let (height, width) = match &internal {
+            Some(clip) => (clip.range.rows(), clip.range.cols()),
+            None => {
+                let rows = clipboard::parse_tsv(&text);
+                let height = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+                let width =
+                    u16::try_from(rows.iter().map(Vec::len).max().unwrap_or(0)).unwrap_or(u16::MAX);
+                self.edit(window, cx, move |wb| wb.set_inputs(sheet, origin, &rows));
+                (height, width)
             }
-            wb.set_inputs(sheet, origin, &rows)
-        });
+        };
+        if let Some(clip) = internal {
+            if !clip.cut {
+                self.clipboard_source = Some(clip.clone());
+            }
+            self.edit(window, cx, move |wb| {
+                wb.paste(sheet, origin, &clip.copied, clip.cut)
+            });
+        }
         let end = CellPos::new(
             origin.row.offset(i64::from(height.saturating_sub(1))),
             origin.col.offset(i64::from(width.saturating_sub(1))),
