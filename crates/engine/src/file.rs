@@ -305,6 +305,24 @@ mod tests {
     }
 
     #[test]
+    fn inserting_a_row_shifts_formulas_like_excel() {
+        let mut book = Workbook::new_empty().unwrap();
+        let sheet = SheetId(0);
+        let rows = vec![vec!["2".to_string()], vec!["=A1*3".to_string()]];
+        book.set_inputs(sheet, CellPos::default(), &rows).unwrap();
+        book.insert_rows(sheet, zenkai_types::RowIdx::default(), 1)
+            .unwrap();
+        let a3 = CellPos::parse_a1("A3").unwrap();
+        assert_eq!(book.input(sheet, a3), "=A2*3");
+        assert_eq!(book.cell(sheet, a3).text, "6");
+        book.delete_columns(sheet, zenkai_types::ColIdx::default(), 1)
+            .unwrap();
+        assert_eq!(book.cell(sheet, a3).text, "");
+        book.set_frozen(sheet, 1, 2).unwrap();
+        assert_eq!(book.frozen(sheet), (1, 2));
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

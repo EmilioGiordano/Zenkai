@@ -50,6 +50,13 @@ pub trait Engine: Send {
     fn redo(&mut self) -> Result<(), EngineError>;
     fn sizes(&self, sheet: SheetId) -> SheetSizes;
     fn frozen(&self, sheet: SheetId) -> (u32, u16);
+    fn set_frozen(&mut self, sheet: SheetId, rows: u32, cols: u16) -> Result<(), EngineError>;
+    fn insert_rows(&mut self, sheet: SheetId, at: RowIdx, count: u32) -> Result<(), EngineError>;
+    fn delete_rows(&mut self, sheet: SheetId, at: RowIdx, count: u32) -> Result<(), EngineError>;
+    fn insert_columns(&mut self, sheet: SheetId, at: ColIdx, count: u16)
+    -> Result<(), EngineError>;
+    fn delete_columns(&mut self, sheet: SheetId, at: ColIdx, count: u16)
+    -> Result<(), EngineError>;
     fn merged(&self, sheet: SheetId) -> Vec<Range>;
     fn used_end(&self, sheet: SheetId) -> CellPos;
     fn add_sheet(&mut self) -> Result<SheetId, EngineError>;
@@ -373,6 +380,52 @@ impl Engine for Workbook {
             u32::try_from(rows).unwrap_or(0),
             u16::try_from(cols).unwrap_or(0),
         )
+    }
+
+    fn set_frozen(&mut self, sheet: SheetId, rows: u32, cols: u16) -> Result<(), EngineError> {
+        let rows = i32::try_from(rows).map_err(|e| rejected(e.to_string()))?;
+        self.model
+            .set_frozen_rows_count(sheet.0, rows)
+            .map_err(rejected)?;
+        self.model
+            .set_frozen_columns_count(sheet.0, i32::from(cols))
+            .map_err(rejected)
+    }
+
+    fn insert_rows(&mut self, sheet: SheetId, at: RowIdx, count: u32) -> Result<(), EngineError> {
+        let count = i32::try_from(count).map_err(|e| rejected(e.to_string()))?;
+        self.model
+            .insert_rows(sheet.0, row_i32(at), count)
+            .map_err(rejected)
+    }
+
+    fn delete_rows(&mut self, sheet: SheetId, at: RowIdx, count: u32) -> Result<(), EngineError> {
+        let count = i32::try_from(count).map_err(|e| rejected(e.to_string()))?;
+        self.model
+            .delete_rows(sheet.0, row_i32(at), count)
+            .map_err(rejected)
+    }
+
+    fn insert_columns(
+        &mut self,
+        sheet: SheetId,
+        at: ColIdx,
+        count: u16,
+    ) -> Result<(), EngineError> {
+        self.model
+            .insert_columns(sheet.0, col_i32(at), i32::from(count))
+            .map_err(rejected)
+    }
+
+    fn delete_columns(
+        &mut self,
+        sheet: SheetId,
+        at: ColIdx,
+        count: u16,
+    ) -> Result<(), EngineError> {
+        self.model
+            .delete_columns(sheet.0, col_i32(at), i32::from(count))
+            .map_err(rejected)
     }
 
     fn merged(&self, sheet: SheetId) -> Vec<Range> {
