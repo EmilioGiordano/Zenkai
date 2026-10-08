@@ -20,6 +20,9 @@ zenkai-formats = { path = "../formats" }
 zenkai-grid = { path = "../grid" }
 zenkai-types = { path = "../types" }
 
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
 tempfile = "3"
