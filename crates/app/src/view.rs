@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::base::{h_flex, v_flex};
@@ -104,6 +105,7 @@ pub struct Workspace {
     ui_scale: f32,
     show_formulas: bool,
     recent: Vec<PathBuf>,
+    recent_saves: Arc<AtomicU64>,
     format_dialog: Option<FormatDialog>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
@@ -166,6 +168,7 @@ impl Workspace {
             ui_scale: 1.0,
             show_formulas: false,
             recent: Vec::new(),
+            recent_saves: Arc::new(AtomicU64::new(0)),
             format_dialog: None,
             colors,
             focus: cx.focus_handle(),
@@ -1319,11 +1322,15 @@ impl Workspace {
                 .await;
             if let Err(error) = this.update(cx, |this, cx| {
                 // Files opened while the list was loading stay in front.
+                let opened_meanwhile = !this.recent.is_empty();
                 this.recent = this
                     .recent
                     .iter()
                     .rev()
                     .fold(recent, |list, path| recent::with(&list, path));
+                if opened_meanwhile {
+                    this.save_recent(cx);
+                }
                 cx.notify();
             }) {
                 tracing::debug!(%error, "workspace closed while loading recent files");
@@ -1334,10 +1341,18 @@ impl Workspace {
 
     fn remember_recent(&mut self, path: &Path, cx: &mut Context<Self>) {
         self.recent = recent::with(&self.recent, path);
+        self.save_recent(cx);
+    }
+
+    // Saves can finish out of order; each carries a generation and only the newest
+    // one is written.
+    fn save_recent(&mut self, cx: &mut Context<Self>) {
+        let generation = self.recent_saves.fetch_add(1, Ordering::SeqCst) + 1;
+        let latest = self.recent_saves.clone();
         let list = self.recent.clone();
         cx.background_executor()
             .spawn(async move {
-                if let Err(error) = recent::save(&list) {
+                if let Err(error) = recent::save(&list, generation, &latest) {
                     tracing::warn!(%error, "could not save the recent files list");
                 }
             })
@@ -1763,7 +1778,8 @@ impl Workspace {
                 )
             }
         };
-        let keep = self.clipboard_source.clone();
+        // A cut ends with its first paste, as in Excel; a copy stays ready.
+        let keep = self.clipboard_source.clone().filter(|clip| !clip.cut);
         self.edit(window, cx, move |wb| {
             let rows = match source {
                 Some((from, range)) => clipboard::cell_values(wb, from, range),

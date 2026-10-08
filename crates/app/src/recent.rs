@@ -37,8 +37,13 @@ pub fn with(recent: &[PathBuf], path: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-// Written beside the list and renamed over it, so a crash never leaves half a list.
-pub fn save(recent: &[PathBuf]) -> std::io::Result<()> {
+// Written beside the list and renamed over it, so a crash never leaves half a list; a
+// save overtaken by a newer one (`latest`) gives way.
+pub fn save(
+    recent: &[PathBuf],
+    generation: u64,
+    latest: &std::sync::atomic::AtomicU64,
+) -> std::io::Result<()> {
     let Some(file) = file() else {
         return Ok(());
     };
@@ -49,8 +54,11 @@ pub fn save(recent: &[PathBuf]) -> std::io::Result<()> {
         .iter()
         .map(|path| format!("{}\n", path.display()))
         .collect();
-    let temp = file.with_extension("txt.tmp");
+    let temp = file.with_extension(format!("{generation}.tmp"));
     std::fs::write(&temp, text)?;
+    if latest.load(std::sync::atomic::Ordering::SeqCst) != generation {
+        return std::fs::remove_file(&temp);
+    }
     std::fs::rename(&temp, &file)
 }
 
