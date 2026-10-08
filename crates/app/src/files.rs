@@ -124,6 +124,7 @@ pub fn write_csv_file(path: &Path, rows: &[Vec<String>]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zenkai_types::{ColIdx, RowIdx};
 
     #[test]
     fn keeps_xlsx_and_never_drops_a_dotted_name() {
@@ -159,6 +160,18 @@ mod tests {
         write_csv_file(&target, &rows).unwrap();
         let written = std::fs::read(&target).unwrap();
         assert_eq!(&written[3..], b"name,qty\r\nAna,3\r\nLuis,4\r\n");
+    }
+
+    #[test]
+    fn decimal_comma_fields_import_as_numbers() {
+        let mut rows = vec![vec!["1.234,5".to_string(), "=A1*2".to_string()]];
+        zenkai_formats::normalize_decimal_comma(&mut rows);
+        let workbook = workbook_from_rows(rows).unwrap();
+        let doubled = workbook.number(
+            SheetId(0),
+            CellPos::new(RowIdx::clamped(0), ColIdx::clamped(1)),
+        );
+        assert_eq!(doubled, Some(2469.0));
     }
 
     #[test]

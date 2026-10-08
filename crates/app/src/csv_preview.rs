@@ -6,7 +6,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use zenkai_formats::{Delimiter, ParsedCsv};
+use zenkai_formats::{Delimiter, ParsedCsv, detect_decimal_comma};
 
 use crate::actions::{CancelCsvImport, ConfirmCsvImport};
 
@@ -23,10 +23,28 @@ pub struct CsvPreview {
     pub path: PathBuf,
     pub bytes: Arc<Vec<u8>>,
     pub parsed: ParsedCsv,
+    pub decimal_comma: bool,
+}
+
+impl CsvPreview {
+    pub fn new(path: PathBuf, bytes: Arc<Vec<u8>>, parsed: ParsedCsv) -> Self {
+        let decimal_comma = guess_decimal_comma(&parsed);
+        Self {
+            path,
+            bytes,
+            parsed,
+            decimal_comma,
+        }
+    }
+}
+
+pub fn guess_decimal_comma(parsed: &ParsedCsv) -> bool {
+    parsed.delimiter != Delimiter::Comma && detect_decimal_comma(&parsed.rows)
 }
 
 pub enum PreviewEvent {
     Delimiter(Delimiter),
+    DecimalComma(bool),
 }
 
 pub fn render(
@@ -77,6 +95,15 @@ pub fn render(
             .selected(preview.parsed.delimiter == delimiter)
             .on_click(move |_, window, cx| on_event(PreviewEvent::Delimiter(delimiter), window, cx))
     });
+    let decimal_buttons = [(false, "1.5"), (true, "1,5")].map(|(comma, label)| {
+        let on_event = on_event.clone();
+        Button::new(label)
+            .ghost()
+            .compact()
+            .label(label)
+            .selected(preview.decimal_comma == comma)
+            .on_click(move |_, window, cx| on_event(PreviewEvent::DecimalComma(comma), window, cx))
+    });
     v_flex()
         .key_context("CsvPreview")
         .track_focus(focus)
@@ -101,6 +128,9 @@ pub fn render(
                 .text_sm()
                 .child(div().text_color(theme.muted_foreground).child("Separator"))
                 .children(delimiter_buttons)
+                .child(div().w(px(12.0)))
+                .child(div().text_color(theme.muted_foreground).child("Decimal"))
+                .children(decimal_buttons)
                 .child(div().flex_1())
                 .child(div().text_color(theme.muted_foreground).child(format!(
                     "{} · {} rows · {} columns",

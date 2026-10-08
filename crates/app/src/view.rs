@@ -10,7 +10,7 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
-use zenkai_formats::{Delimiter, parse_csv};
+use zenkai_formats::{Delimiter, normalize_decimal_comma, parse_csv};
 use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_types::{CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, SheetId, StyleChange};
 
@@ -839,11 +839,7 @@ impl Workspace {
                 this.clear_busy(&label, cx);
                 match result {
                     Ok((bytes, parsed)) => {
-                        this.csv_preview = Some(CsvPreview {
-                            path,
-                            bytes: Arc::new(bytes),
-                            parsed,
-                        });
+                        this.csv_preview = Some(CsvPreview::new(path, Arc::new(bytes), parsed));
                         window.focus(&this.focus, cx);
                         cx.notify();
                     }
@@ -874,6 +870,7 @@ impl Workspace {
                     if let Some(preview) = &mut this.csv_preview
                         && Arc::ptr_eq(&preview.bytes, &source)
                     {
+                        preview.decimal_comma = csv_preview::guess_decimal_comma(&parsed);
                         preview.parsed = parsed;
                     }
                     cx.notify();
@@ -902,11 +899,17 @@ impl Workspace {
         );
         self.busy = Some(IMPORTING.into());
         cx.notify();
-        let rows = preview.parsed.rows;
+        let mut rows = preview.parsed.rows;
+        let decimal_comma = preview.decimal_comma;
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { files::workbook_from_rows(rows) })
+                .spawn(async move {
+                    if decimal_comma {
+                        normalize_decimal_comma(&mut rows);
+                    }
+                    files::workbook_from_rows(rows)
+                })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(IMPORTING, cx);
@@ -930,8 +933,16 @@ impl Workspace {
         let preview = self.csv_preview.as_ref()?;
         let entity = cx.entity().downgrade();
         let on_event = move |event: csv_preview::PreviewEvent, _: &mut Window, cx: &mut App| {
-            let csv_preview::PreviewEvent::Delimiter(delimiter) = event;
-            if let Err(error) = entity.update(cx, |this, cx| this.reparse_csv(delimiter, cx)) {
+            let result = entity.update(cx, |this, cx| match event {
+                csv_preview::PreviewEvent::Delimiter(delimiter) => this.reparse_csv(delimiter, cx),
+                csv_preview::PreviewEvent::DecimalComma(comma) => {
+                    if let Some(preview) = &mut this.csv_preview {
+                        preview.decimal_comma = comma;
+                        cx.notify();
+                    }
+                }
+            });
+            if let Err(error) = result {
                 tracing::debug!(%error, "workspace dropped");
             }
         };
