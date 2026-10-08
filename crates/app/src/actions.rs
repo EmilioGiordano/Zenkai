@@ -1,0 +1,70 @@
+use gpui_kit::{App, KeyBinding, actions};
+
+actions!(
+    zenkai,
+    [
+        NewWorkbook,
+        Open,
+        Save,
+        SaveAs,
+        Quit,
+        Undo,
+        Redo,
+        Copy,
+        Cut,
+        Paste,
+        ToggleBold,
+        ToggleItalic,
+        ToggleUnderline,
+        AlignLeft,
+        AlignCenter,
+        AlignRight,
+        FormatGeneral,
+        FormatNumber,
+        FormatCurrency,
+        FormatPercent,
+        FormatDate,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset,
+        NextSheet,
+        PreviousSheet,
+        NewSheet,
+        ToggleTheme,
+        ToggleDiagnostics,
+    ]
+);
+
+const CONTEXT: Option<&str> = Some("Workspace");
+
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("ctrl-n", NewWorkbook, CONTEXT),
+        KeyBinding::new("ctrl-o", Open, CONTEXT),
+        KeyBinding::new("ctrl-s", Save, CONTEXT),
+        KeyBinding::new("f12", SaveAs, CONTEXT),
+        KeyBinding::new("ctrl-shift-s", SaveAs, CONTEXT),
+        KeyBinding::new("alt-f4", Quit, CONTEXT),
+        KeyBinding::new("ctrl-z", Undo, CONTEXT),
+        KeyBinding::new("ctrl-y", Redo, CONTEXT),
+        KeyBinding::new("ctrl-c", Copy, CONTEXT),
+        KeyBinding::new("ctrl-x", Cut, CONTEXT),
+        KeyBinding::new("ctrl-v", Paste, CONTEXT),
+        KeyBinding::new("ctrl-b", ToggleBold, CONTEXT),
+        KeyBinding::new("ctrl-i", ToggleItalic, CONTEXT),
+        KeyBinding::new("ctrl-u", ToggleUnderline, CONTEXT),
+        KeyBinding::new("ctrl-shift-~", FormatGeneral, CONTEXT),
+        KeyBinding::new("ctrl-shift-!", FormatNumber, CONTEXT),
+        KeyBinding::new("ctrl-shift-$", FormatCurrency, CONTEXT),
+        KeyBinding::new("ctrl-shift-%", FormatPercent, CONTEXT),
+        KeyBinding::new("ctrl-shift-#", FormatDate, CONTEXT),
+        KeyBinding::new("ctrl-=", ZoomIn, CONTEXT),
+        KeyBinding::new("ctrl-+", ZoomIn, CONTEXT),
+        KeyBinding::new("ctrl--", ZoomOut, CONTEXT),
+        KeyBinding::new("ctrl-0", ZoomReset, CONTEXT),
+        KeyBinding::new("ctrl-pagedown", NextSheet, CONTEXT),
+        KeyBinding::new("ctrl-pageup", PreviousSheet, CONTEXT),
+        KeyBinding::new("shift-f11", NewSheet, CONTEXT),
+        KeyBinding::new("ctrl-shift-d", ToggleDiagnostics, CONTEXT),
+    ]);
+}
