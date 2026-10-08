@@ -278,13 +278,26 @@ impl Grid {
     }
 
     pub fn cached_ranges(&self) -> Vec<Range> {
+        let margin = if self.scroll_drag.is_some() {
+            0
+        } else {
+            self.visible_rows
+        };
         cached_ranges(
             self.scroll_origin(),
             self.visible_rows,
+            margin,
             self.visible_cols,
             self.frozen_rows,
             self.frozen_cols,
         )
+    }
+
+    fn end_scroll_drag(&mut self, cx: &mut Context<Self>) {
+        if self.scroll_drag.take().is_some() {
+            cx.emit(GridEvent::ViewportChanged);
+            cx.notify();
+        }
     }
 
     fn apply_view(&mut self, view: SheetView) {
@@ -938,8 +951,7 @@ impl Grid {
             if event.pressed_button == Some(MouseButton::Left) {
                 self.drag_scrollbar(drag, event.position, cx);
             } else {
-                self.scroll_drag = None;
-                cx.notify();
+                self.end_scroll_drag(cx);
             }
             return;
         }
@@ -1446,9 +1458,7 @@ impl Render for Grid {
                 MouseButton::Left,
                 cx.listener(|g, _: &MouseUpEvent, _, cx| {
                     g.dragging = false;
-                    if g.scroll_drag.take().is_some() {
-                        cx.notify();
-                    }
+                    g.end_scroll_drag(cx);
                     g.finish_edge_drag(cx);
                     g.finish_fill_drag(cx);
                 }),
@@ -1576,20 +1586,23 @@ pub fn typed_preview(existing: Option<&GridCell>, text: &SharedString) -> Option
     })
 }
 
-// One extra screen of rows above and below the viewport, so a short scroll while the
-// workbook is busy still lands on cached values.
+// A margin of rows above and below the viewport, so a short scroll while the workbook
+// is busy still lands on cached values.
 fn cached_ranges(
     origin: CellPos,
     visible_rows: u32,
+    margin_rows: u32,
     visible_cols: u16,
     frozen_rows: u32,
     frozen_cols: u16,
 ) -> Vec<Range> {
     let first_row = origin
         .row
-        .offset(-i64::from(visible_rows))
+        .offset(-i64::from(margin_rows))
         .max(RowIdx::clamped(i64::from(frozen_rows)));
-    let last_row = origin.row.offset(2 * i64::from(visible_rows));
+    let last_row = origin
+        .row
+        .offset(i64::from(visible_rows) + i64::from(margin_rows));
     let end_col = origin.col.offset(i64::from(visible_cols));
     let zero = CellPos::default();
     let mut ranges = vec![Range::new(
@@ -1654,17 +1667,23 @@ mod tests {
 
     #[test]
     fn cache_covers_a_screen_above_and_below() {
-        let ranges = cached_ranges(pos("C101"), 40, 10, 0, 0);
+        let ranges = cached_ranges(pos("C101"), 40, 40, 10, 0, 0);
         assert_eq!(ranges, vec![Range::new(pos("C61"), pos("M181"))]);
+    }
+
+    #[test]
+    fn cache_without_margin_covers_only_the_viewport() {
+        let ranges = cached_ranges(pos("C101"), 40, 0, 10, 0, 0);
+        assert_eq!(ranges, vec![Range::new(pos("C101"), pos("M141"))]);
     }
 
     #[test]
     fn cache_stops_at_the_first_row_and_below_the_frozen_rows() {
         assert_eq!(
-            cached_ranges(pos("A11"), 40, 10, 0, 0),
+            cached_ranges(pos("A11"), 40, 40, 10, 0, 0),
             vec![Range::new(pos("A1"), pos("K91"))]
         );
-        let ranges = cached_ranges(pos("A11"), 5, 10, 8, 0);
+        let ranges = cached_ranges(pos("A11"), 5, 5, 10, 8, 0);
         assert_eq!(ranges[0], Range::new(pos("A9"), pos("K21")));
     }
 
@@ -1679,7 +1698,7 @@ mod tests {
 
     #[test]
     fn cache_keeps_the_frozen_panes() {
-        let ranges = cached_ranges(pos("C101"), 40, 10, 2, 2);
+        let ranges = cached_ranges(pos("C101"), 40, 40, 10, 2, 2);
         assert_eq!(ranges.len(), 4);
         assert!(ranges.contains(&Range::new(pos("C1"), pos("M2"))));
         assert!(ranges.contains(&Range::new(pos("A61"), pos("B181"))));
