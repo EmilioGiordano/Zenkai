@@ -18,12 +18,15 @@ use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
 use crate::document::{self, Document};
 use crate::files;
+use crate::find::{self, FindBar, FindResults};
 use crate::jump::jump_target;
 use crate::stats::{self, SelectionStats};
 use crate::toolbar;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
+const SEARCHING: &str = "Searching…";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Severity {
@@ -49,6 +52,7 @@ pub struct Workspace {
     diagnostics: bool,
     clipboard_source: Option<(Range, String)>,
     chart: Option<ChartPanel>,
+    find: Option<FindBar>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -72,6 +76,7 @@ impl Workspace {
             diagnostics: false,
             clipboard_source: None,
             chart: None,
+            find: None,
             _subscriptions: vec![subscription],
         };
         workspace.reset_grid(window, cx);
@@ -117,6 +122,135 @@ impl Workspace {
         if let (Some(panel), Some(wb)) = (&mut self.chart, self.document.workbook()) {
             panel.refresh(wb);
         }
+    }
+
+    fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = match &self.find {
+            Some(bar) => bar.input.clone(),
+            None => {
+                let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in sheet"));
+                let subscription = cx.subscribe_in(&input, window, Self::on_find_event);
+                self._subscriptions.push(subscription);
+                self.find = Some(FindBar {
+                    input: input.clone(),
+                    results: FindResults::default(),
+                });
+                input
+            }
+        };
+        let focus = input.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find = None;
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn on_find_event(
+        &mut self,
+        input: &Entity<InputState>,
+        event: &InputEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let InputEvent::PressEnter { shift, .. } = event else {
+            return;
+        };
+        let query = input.read(cx).value().to_string();
+        let Some(bar) = &mut self.find else {
+            return;
+        };
+        if bar.results.query == query {
+            if let Some(pos) = bar.results.step(*shift) {
+                self.grid.update(cx, |grid, cx| grid.select(pos, pos, cx));
+            }
+            cx.notify();
+            return;
+        }
+        self.run_find(query, cx);
+    }
+
+    fn run_find(&mut self, query: String, cx: &mut Context<Self>) {
+        let Some(workbook) = self.document.take() else {
+            self.notify(
+                Severity::Warning,
+                "Still calculating, try again in a moment.",
+                cx,
+            );
+            return;
+        };
+        let (sheet, generation) = (self.document.sheet, self.document.generation());
+        self.busy = Some(SEARCHING.into());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let task_query = query.clone();
+            let (workbook, matches) = cx
+                .background_executor()
+                .spawn(async move {
+                    let matches = find::search(&workbook, sheet, &task_query);
+                    (workbook, matches)
+                })
+                .await;
+            let update = this.update(cx, |this, cx| {
+                this.clear_busy(SEARCHING, cx);
+                if !this.document.restore(workbook, generation) {
+                    return;
+                }
+                if let Some(bar) = &mut this.find {
+                    bar.results = FindResults {
+                        query,
+                        matches,
+                        current: 0,
+                    };
+                    if let Some(pos) = bar.results.matches.first().copied() {
+                        this.grid.update(cx, |grid, cx| grid.select(pos, pos, cx));
+                    }
+                }
+                this.flush_edits(cx);
+                cx.notify();
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during search");
+            }
+        })
+        .detach();
+    }
+
+    fn render_find(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let bar = self.find.as_ref()?;
+        let theme = cx.theme();
+        Some(
+            h_flex()
+                .key_context("FindBar")
+                .h(px(36.0))
+                .px_2()
+                .gap_2()
+                .items_center()
+                .border_b_1()
+                .border_color(theme.border)
+                .bg(theme.background)
+                .child(div().w(px(320.0)).child(Input::new(&bar.input)))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme.muted_foreground)
+                        .child(bar.results.status()),
+                )
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .id("close-find")
+                        .px_2()
+                        .cursor_pointer()
+                        .text_color(theme.muted_foreground)
+                        .child("✕")
+                        .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))),
+                ),
+        )
     }
 
     fn insert_chart(&mut self, cx: &mut Context<Self>) {
@@ -172,7 +306,9 @@ impl Workspace {
             let target = chosen.clone();
             let written = cx
                 .background_executor()
-                .spawn(async move { std::fs::write(&target, svg) })
+                .spawn(
+                    async move { zenkai_engine::write_atomic(&target, svg.as_bytes(), |_| Ok(())) },
+                )
                 .await;
             let update = this.update(cx, |this, cx| match written {
                 Ok(()) => this.notify(
@@ -457,7 +593,38 @@ impl Workspace {
         .detach();
     }
 
+    fn confirm_discard(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        if !self.document.dirty {
+            then(self, window, cx);
+            return;
+        }
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Discard unsaved changes?",
+            Some("The current workbook has changes that are not saved."),
+            &["Cancel", "Discard"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await == Ok(1)
+                && let Err(error) = this.update_in(cx, |this, window, cx| then(this, window, cx))
+            {
+                tracing::debug!(%error, "workspace closed during discard prompt");
+            }
+        })
+        .detach();
+    }
+
     fn open(&mut self, _: &Open, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_discard(window, cx, Self::pick_and_open);
+    }
+
+    fn pick_and_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -688,6 +855,10 @@ impl Workspace {
     }
 
     fn new_workbook(&mut self, _: &NewWorkbook, window: &mut Window, cx: &mut Context<Self>) {
+        self.confirm_discard(window, cx, Self::replace_with_empty);
+    }
+
+    fn replace_with_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match Workbook::new_empty() {
             Ok(workbook) => {
                 self.document = Document::new(workbook, None, Vec::new());
@@ -1036,6 +1207,8 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &NewSheet, window, cx| this.add_sheet(window, cx)))
             .on_action(cx.listener(|this, _: &InsertChart, _, cx| this.insert_chart(cx)))
+            .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &CloseFind, window, cx| this.close_find(window, cx)))
             .on_action(cx.listener(|this, _: &ChartColumn, _, cx| {
                 this.set_chart_kind(ChartKind::Column, cx)
             }))
@@ -1069,6 +1242,7 @@ impl Render for Workspace {
             }))
             .child(toolbar::render(&self.active_style, cx))
             .child(self.render_formula_bar(cx))
+            .children(self.render_find(cx))
             .child(
                 h_flex()
                     .flex_1()

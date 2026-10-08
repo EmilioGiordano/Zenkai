@@ -39,6 +39,8 @@ actions!(
         ExportChartSvg,
         CopyChartMermaid,
         CloseChart,
+        Find,
+        CloseFind,
     ]
 );
 
@@ -74,5 +76,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-f11", NewSheet, CONTEXT),
         KeyBinding::new("ctrl-shift-d", ToggleDiagnostics, CONTEXT),
         KeyBinding::new("alt-f1", InsertChart, CONTEXT),
+        KeyBinding::new("ctrl-f", Find, CONTEXT),
+        KeyBinding::new("escape", CloseFind, Some("FindBar")),
     ]);
 }

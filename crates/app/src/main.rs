@@ -7,6 +7,7 @@ mod chart_panel;
 mod clipboard;
 mod document;
 mod files;
+mod find;
 mod jump;
 mod stats;
 mod toolbar;
