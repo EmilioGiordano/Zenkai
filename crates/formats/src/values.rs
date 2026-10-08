@@ -3,9 +3,11 @@ use std::path::Path;
 use calamine::{Data, DataRef, Reader, Sheets, open_workbook_auto};
 
 pub const MAX_CELLS: usize = 20_000_000;
-// A block is written to the engine as one dense rectangle; sparse sheets become
-// several blocks so two far-apart cells never allocate the space between them.
-const MAX_BLOCK_CELLS: u64 = 1_000_000;
+// Rows are cut into runs wherever more than MAX_GAP empty cells separate two values,
+// so the cells allocated stay within (MAX_GAP + 1) times the populated ones, and a
+// global cap bounds the total; scattered cells can never inflate into dense blocks.
+const MAX_GAP: u32 = 8;
+const MAX_ALLOCATED_CELLS: usize = 40_000_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ValuesError {
@@ -116,43 +118,45 @@ fn sheet_cells<RS: std::io::Read + std::io::Seek>(
     Ok(())
 }
 
-fn into_blocks(mut cells: Vec<(u32, u32, String)>) -> Vec<Block> {
+fn into_blocks(mut cells: Vec<(u32, u32, String)>) -> Result<Vec<Block>, ValuesError> {
     cells.sort_by_key(|(row, col, _)| (*row, *col));
-    let mut blocks = Vec::new();
-    let mut start = 0;
-    while start < cells.len() {
-        let first_row = cells[start].0;
-        let (mut min_col, mut max_col) = (cells[start].1, cells[start].1);
-        let mut end = start;
-        while end < cells.len() {
-            let (row, col, _) = cells[end];
-            let (lo, hi) = (min_col.min(col), max_col.max(col));
-            let area = u64::from(row - first_row + 1) * u64::from(hi - lo + 1);
-            if area > MAX_BLOCK_CELLS && end > start {
-                break;
-            }
-            min_col = lo;
-            max_col = hi;
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut allocated = 0usize;
+    let mut index = 0;
+    while index < cells.len() {
+        let (row, first_col) = (cells[index].0, cells[index].1);
+        let mut end = index + 1;
+        while end < cells.len()
+            && cells[end].0 == row
+            && cells[end].1 - cells[end - 1].1 <= MAX_GAP + 1
+        {
             end += 1;
         }
-        let last_row = cells[end - 1].0;
-        let width = (max_col - min_col + 1) as usize;
-        let mut rows = vec![Vec::new(); (last_row - first_row + 1) as usize];
-        for (row, col, input) in cells[start..end].iter_mut() {
-            let line = &mut rows[(*row - first_row) as usize];
-            if line.is_empty() {
-                line.resize(width, String::new());
-            }
-            line[(*col - min_col) as usize] = std::mem::take(input);
+        let width = (cells[end - 1].1 - first_col + 1) as usize;
+        allocated += width;
+        if allocated > MAX_ALLOCATED_CELLS {
+            return Err(ValuesError::TooLarge);
         }
-        blocks.push(Block {
-            first_row,
-            first_col: min_col,
-            rows,
+        let mut run = vec![String::new(); width];
+        for (_, col, input) in cells[index..end].iter_mut() {
+            run[(*col - first_col) as usize] = std::mem::take(input);
+        }
+        let continues = blocks.last().is_some_and(|block| {
+            block.first_col == first_col
+                && block.rows.first().map(Vec::len) == Some(width)
+                && block.first_row + block.rows.len() as u32 == row
         });
-        start = end;
+        match blocks.last_mut() {
+            Some(block) if continues => block.rows.push(run),
+            _ => blocks.push(Block {
+                first_row: row,
+                first_col,
+                rows: vec![run],
+            }),
+        }
+        index = end;
     }
-    blocks
+    Ok(blocks)
 }
 
 pub fn read_values(path: &Path) -> Result<Vec<SheetValues>, ValuesError> {
@@ -164,7 +168,7 @@ pub fn read_values(path: &Path) -> Result<Vec<SheetValues>, ValuesError> {
     };
     for name in workbook.sheet_names() {
         sheet_cells(&mut workbook, &name, &mut sink)?;
-        let blocks = into_blocks(std::mem::take(&mut sink.cells));
+        let blocks = into_blocks(std::mem::take(&mut sink.cells))?;
         sheets.push(SheetValues { name, blocks });
     }
     Ok(sheets)
@@ -188,24 +192,34 @@ mod tests {
         let cells = vec![
             (0, 0, "a".to_string()),
             (1_048_575, 16_383, "z".to_string()),
-            (1, 1, "b".to_string()),
+            (0, 1, "b".to_string()),
         ];
-        let blocks = into_blocks(cells);
-        let total: usize = blocks
-            .iter()
-            .map(|b| b.rows.iter().map(Vec::len).sum::<usize>())
-            .sum();
-        assert!(total < 10, "no dense block spans the gap: {total}");
-        assert_eq!(
-            blocks[0].rows,
-            vec![
-                vec!["a".to_string(), String::new()],
-                vec![String::new(), "b".to_string()]
-            ]
-        );
+        let blocks = into_blocks(cells).unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].rows, vec![vec!["a".to_string(), "b".to_string()]]);
         assert_eq!(
             (blocks[1].first_row, blocks[1].first_col),
             (1_048_575, 16_383)
         );
+    }
+
+    #[test]
+    fn scattered_cells_allocate_only_small_runs() {
+        let cells: Vec<_> = (0..50_000u32)
+            .map(|i| (i * 2, (i * 997) % 16_384, "x".to_string()))
+            .collect();
+        let blocks = into_blocks(cells).unwrap();
+        let allocated: usize = blocks.iter().flat_map(|b| &b.rows).map(Vec::len).sum();
+        assert_eq!(allocated, 50_000);
+    }
+
+    #[test]
+    fn dense_rows_merge_into_one_block() {
+        let cells: Vec<_> = (0..100u32)
+            .flat_map(|r| (0..5u32).map(move |c| (r, c, format!("{r}-{c}"))))
+            .collect();
+        let blocks = into_blocks(cells).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].rows.len(), 100);
     }
 }
