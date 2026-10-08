@@ -66,12 +66,14 @@ impl TypedPreviews {
             if preview.generation != generation || preview.sheet != sheet {
                 continue;
             }
-            for pos in preview.range.positions() {
-                if !ranges.iter().any(|range| range.contains(pos)) {
-                    continue;
-                }
-                if let Some(cell) = typed_preview(cells.get(&pos), &preview.text) {
-                    cells.insert(pos, cell);
+            for visible in ranges
+                .iter()
+                .filter_map(|range| preview.range.intersection(range))
+            {
+                for pos in visible.positions() {
+                    if let Some(cell) = typed_preview(cells.get(&pos), &preview.text) {
+                        cells.insert(pos, cell);
+                    }
                 }
             }
         }
@@ -138,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn clearing_leaves_no_ghost_after_undo_or_a_sheet_change() {
+    fn clearing_leaves_no_ghost_after_a_document_change() {
         let mut previews = TypedPreviews::default();
         typed(&mut previews, "A1", "a");
         previews.clear();
@@ -150,6 +152,40 @@ mod tests {
         let mut previews = TypedPreviews::default();
         typed(&mut previews, "Z99", "a");
         assert!(shown(&previews, 1, 0).is_empty());
+    }
+
+    #[test]
+    fn only_the_visible_part_of_a_large_preview_is_laid_down() {
+        let mut previews = TypedPreviews::default();
+        previews.add(
+            1,
+            SheetId(0),
+            Range::parse_a1("A1:C3000").unwrap(),
+            "a".into(),
+        );
+        let cells = shown(&previews, 1, 0);
+        assert_eq!(cells.len(), 30);
+        assert!(cells.contains_key(&pos("C10")));
+        assert!(!cells.contains_key(&pos("A11")));
+    }
+
+    #[test]
+    fn a_preview_waits_for_its_sheet_while_another_is_shown() {
+        let mut previews = TypedPreviews::default();
+        typed(&mut previews, "A1", "a");
+        assert!(shown(&previews, 1, 1).is_empty());
+        assert_eq!(shown(&previews, 1, 0)[&pos("A1")].text.as_ref(), "a");
+    }
+
+    #[test]
+    fn an_edit_queued_behind_a_running_batch_keeps_the_earlier_previews_until_it_ends() {
+        let mut previews = TypedPreviews::default();
+        typed(&mut previews, "A1", "a");
+        previews.batch_started();
+        typed(&mut previews, "B1", "b");
+        assert_eq!(shown(&previews, 1, 0).len(), 2);
+        previews.batch_finished();
+        assert_eq!(shown(&previews, 1, 0).len(), 1);
     }
 
     #[test]

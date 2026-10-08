@@ -251,6 +251,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.clipboard_source = None;
+        self.previews.clear();
         self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
         self.discard_agreed_at = None;
         self.format_dialog = None;
@@ -268,7 +269,6 @@ impl Workspace {
     }
 
     fn load_sheet_view(&mut self, cx: &mut Context<Self>) {
-        self.previews.clear();
         self.forget_find_results();
         let view = self.sheet_view();
         self.grid.update(cx, |grid, cx| grid.reset(view, cx));
@@ -2826,14 +2826,12 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::new_workbook))
-            .on_action(cx.listener(|this, _: &Undo, window, cx| {
-                this.previews.clear();
-                this.edit(window, cx, |wb| wb.undo())
-            }))
-            .on_action(cx.listener(|this, _: &Redo, window, cx| {
-                this.previews.clear();
-                this.edit(window, cx, |wb| wb.redo())
-            }))
+            .on_action(
+                cx.listener(|this, _: &Undo, window, cx| this.edit(window, cx, |wb| wb.undo())),
+            )
+            .on_action(
+                cx.listener(|this, _: &Redo, window, cx| this.edit(window, cx, |wb| wb.redo())),
+            )
             .on_action(cx.listener(|this, _: &Copy, _, cx| this.copy(false, cx)))
             .on_action(cx.listener(|this, _: &Cut, _, cx| this.copy(true, cx)))
             .on_action(cx.listener(|this, _: &Paste, window, cx| this.paste(window, cx)))
