@@ -29,8 +29,7 @@ struct RecoveryWrite {
 }
 
 impl Workspace {
-    // Opens the previous session next to the blank workbook, then the file asked for on the
-    // command line, which wins the screen.
+    // A file on the command line wins the screen over the restored workbook.
     pub(super) fn start_session(
         &mut self,
         initial: Option<PathBuf>,
@@ -247,11 +246,10 @@ impl Workspace {
                     // Kept as this document's own recovery copy until the work is saved.
                     if let Some(directory) = &this.recovery_dir
                         && let Err(error) =
-                            std::fs::rename(&path, recovery::document_file(directory, id))
+                            recovery::adopt(&path, &recovery::document_file(directory, id))
                     {
                         tracing::warn!(?path, %error, "could not adopt the recovery file");
                     }
-                    recovery::remove_with_lock(&path);
                     this.notify(Severity::Warning, "Recovered work. Save it to keep it.", cx);
                 }
                 Err(error) => {
@@ -375,6 +373,11 @@ impl Workspace {
             self.ask_to_quit_anyway("Autosave is off, so nothing can be kept.", window, cx);
             return;
         }
+        self.write_session_and_quit(cx);
+    }
+
+    // The spaces and links are kept even when unsaved work could not be.
+    fn write_session_and_quit(&mut self, cx: &mut Context<Self>) {
         let directory = self.recovery_dir.clone();
         let session = self.documents.snapshot(self.sidebar.visible, |id| {
             directory
@@ -427,7 +430,7 @@ impl Workspace {
             let quit = answer.await == Ok(1);
             let update = this.update(cx, |this, cx| {
                 if quit {
-                    cx.quit();
+                    this.write_session_and_quit(cx);
                 } else {
                     this.lifecycle = Lifecycle::Running;
                     this.clear_busy(CLOSING, cx);

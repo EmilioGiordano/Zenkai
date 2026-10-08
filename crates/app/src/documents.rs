@@ -324,7 +324,6 @@ impl Documents {
         self.entries[target].id()
     }
 
-    // The link to load, unless it is loading already.
     pub fn start_loading(&mut self, id: WorkbookId) -> Option<Link> {
         let Entry::Link(link) = self.entry_mut(id)? else {
             return None;
@@ -433,8 +432,8 @@ impl Documents {
         None
     }
 
-    // Spaces and links come back from the session; the startup blank joins the first space
-    // and stays on screen until the active workbook has loaded.
+    // The startup blank joins the first space and stays on screen until the active workbook
+    // has loaded.
     pub fn restore(
         &mut self,
         session: &Session,
@@ -472,7 +471,6 @@ impl Documents {
         active
     }
 
-    // Loaded workbooks that hold unsaved work are listed with the recovery copy that keeps it.
     pub fn snapshot(
         &self,
         sidebar_visible: bool,

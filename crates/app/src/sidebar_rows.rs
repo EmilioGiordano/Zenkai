@@ -26,7 +26,6 @@ pub struct SpaceRows {
     pub files: Vec<WorkbookId>,
 }
 
-// The rows the keyboard walks, top to bottom, exactly as they are drawn.
 pub fn rows(spaces: &[SpaceRows], recent: usize, recent_open: bool) -> Vec<Row> {
     let mut rows = vec![Row::NewWorkbook];
     for space in spaces {

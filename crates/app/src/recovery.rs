@@ -104,9 +104,24 @@ pub fn write(workbook: &Workbook, path: &Path) -> Result<(), EngineError> {
     save_xlsx_atomic(workbook, path)
 }
 
+// Moves a dead session's copy under this session's name; the copy stays where it was when the
+// move fails, since it may be the only one holding the work.
+pub fn adopt(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::rename(from, to)?;
+    remove_stale_lock(from);
+    Ok(())
+}
+
+// A lock still held belongs to a running session, this one included, and stays.
+fn remove_stale_lock(path: &Path) {
+    if !owner_is_alive(path) {
+        remove(&lock_of(path));
+    }
+}
+
 pub fn remove_with_lock(path: &Path) {
     remove(path);
-    remove(&lock_of(path));
+    remove_stale_lock(path);
 }
 
 pub fn remove(path: &Path) {
@@ -158,5 +173,36 @@ mod tests {
         );
         drop(live_lock);
         assert_eq!(leftovers(dir.path()), vec![live.clone()]);
+    }
+
+    #[test]
+    fn discarding_a_leftover_never_deletes_the_lock_of_a_live_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let _lock = lock_session(dir.path()).unwrap();
+        let closed = document_file(dir.path(), WorkbookId(3));
+        let open = document_file(dir.path(), WorkbookId(4));
+        std::fs::write(&closed, b"x").unwrap();
+        std::fs::write(&open, b"x").unwrap();
+        remove_with_lock(&closed);
+        assert!(!closed.exists());
+        assert!(owner_is_alive(&open));
+        assert!(leftovers(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn adopting_moves_the_copy_and_keeps_it_when_the_move_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("autosave-1-1-0.xlsx");
+        std::fs::write(&old, b"work").unwrap();
+        let target = dir.path().join("autosave-2-2-0.xlsx");
+        adopt(&old, &target).unwrap();
+        assert!(!old.exists());
+        assert_eq!(std::fs::read(&target).unwrap(), b"work");
+
+        let kept = dir.path().join("autosave-3-3-0.xlsx");
+        std::fs::write(&kept, b"work").unwrap();
+        let impossible = dir.path().join("missing-folder").join("copy.xlsx");
+        assert!(adopt(&kept, &impossible).is_err());
+        assert!(kept.exists());
     }
 }

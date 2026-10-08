@@ -69,8 +69,6 @@ pub enum LoadFailure {
     Unreadable { reason: String, fallback: String },
 }
 
-// The one way a workbook file is read, for opening it and for loading a link: the engine
-// first, the values-only plan B when the engine cannot read it.
 pub fn load_workbook(path: &Path) -> Result<FileLoad, LoadFailure> {
     match open_xlsx(path) {
         Ok(opened) => Ok(FileLoad {

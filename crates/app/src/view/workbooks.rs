@@ -31,11 +31,10 @@ fn read_link(link: &Link, adopt_as: Option<PathBuf>) -> LinkLoad {
         match open_xlsx(copy) {
             Ok(opened) => {
                 if let Some(target) = adopt_as
-                    && let Err(error) = std::fs::rename(copy, target)
+                    && let Err(error) = recovery::adopt(copy, &target)
                 {
                     tracing::warn!(?copy, %error, "could not adopt the recovery file");
                 }
-                recovery::remove_with_lock(copy);
                 return LinkLoad::Loaded {
                     file: Box::new(FileLoad {
                         workbook: opened.workbook,
@@ -434,7 +433,6 @@ impl Workspace {
         }
     }
 
-    // Whether each listed file still exists and how big it is, read off the UI thread.
     pub(super) fn probe_links(&mut self, cx: &mut Context<Self>) {
         let probes: Vec<(WorkbookId, PathBuf)> = self
             .documents

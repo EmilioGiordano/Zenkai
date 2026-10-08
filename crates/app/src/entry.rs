@@ -14,8 +14,6 @@ pub enum LinkStatus {
     Missing,
 }
 
-// A workbook listed in a space without being in memory. It keeps what the sidebar shows and
-// what a reload needs, so loading it again puts the user back where they were.
 #[derive(Clone, Debug)]
 pub struct Link {
     pub id: WorkbookId,
