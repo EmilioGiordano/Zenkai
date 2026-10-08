@@ -15,7 +15,7 @@ use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
 };
 use zenkai_types::{
-    BorderPreset, CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, Rgb, SheetId,
+    BorderPreset, CellPos, CellStyle, ColIdx, Contents, HAlign, NumberFormat, Range, Rgb, SheetId,
     StyleChange,
 };
 
@@ -949,7 +949,8 @@ impl Workspace {
             selection.active
         };
         let used_end = workbook.used_end(sheet);
-        let target = jump_target(from, direction, used_end, workbook.filled(sheet));
+        let contents = workbook.contents(sheet);
+        let target = jump_target(from, direction, used_end, |pos| contents(pos).is_filled());
         self.grid.update(cx, |grid, cx| {
             let active = if extend { selection.active } else { target };
             grid.select(active, target, cx);
@@ -2416,7 +2417,8 @@ impl Workspace {
         let Some(workbook) = self.document.workbook() else {
             return Range::single(active);
         };
-        let region = region::current_region(active, workbook.filled(sheet));
+        let contents = workbook.contents(sheet);
+        let region = region::current_region(active, |pos| contents(pos).is_filled());
         self.grid
             .update(cx, |grid, cx| grid.select(region.start, region.end, cx));
         region
@@ -2439,7 +2441,8 @@ impl Workspace {
         };
         let sheet = self.document.sheet;
         let active = self.grid.read(cx).selection().active;
-        let is_number = |pos: CellPos| workbook.number(sheet, pos).is_some();
+        let contents = workbook.contents(sheet);
+        let is_number = |pos: CellPos| matches!(contents(pos), Contents::Number(_));
         let run = |direction: Direction| {
             let mut first = None;
             let mut pos = active;

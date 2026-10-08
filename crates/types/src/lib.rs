@@ -246,6 +246,20 @@ pub enum ValueKind {
     Error,
 }
 
+// What a cell holds, without the formatting work of a full read.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Contents {
+    Empty,
+    Number(f64),
+    Other,
+}
+
+impl Contents {
+    pub fn is_filled(self) -> bool {
+        self != Contents::Empty
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct CellStyle {
     pub bold: bool,
