@@ -55,7 +55,7 @@ impl CachedModel {
 
     // Only for access that never changes cell content, such as moving the selection
     // to copy; it keeps the cached ends so the next read does not walk the sheet.
-    pub fn without_invalidation<T>(
+    pub(crate) fn select_without_invalidation<T>(
         &mut self,
         access: impl FnOnce(&mut UserModel<'static>) -> T,
     ) -> T {
@@ -94,7 +94,7 @@ mod tests {
         let mut model = model();
         model.used_end(SheetId(0));
         assert_eq!(model.cache().len(), 1);
-        model.without_invalidation(|_| ());
+        model.select_without_invalidation(|_| ());
         assert_eq!(model.cache().len(), 1);
         let _ = &mut *model;
         assert!(model.cache().is_empty());

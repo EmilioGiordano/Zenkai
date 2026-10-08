@@ -715,7 +715,7 @@ impl Engine for Workbook {
     }
 
     fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError> {
-        let clipboard = self.model.without_invalidation(|model| {
+        let clipboard = self.model.select_without_invalidation(|model| {
             select(model, sheet, range)?;
             model.copy_to_clipboard().map_err(rejected)
         })?;
