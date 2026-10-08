@@ -2587,6 +2587,13 @@ impl Workspace {
             None => right = right.child("Selection too large to summarize"),
             _ => {}
         }
+        // Modes that change what the sheet shows or allows are named, never only implied.
+        if self.show_formulas {
+            right = right.child("Showing formulas");
+        }
+        if self.document.read_only {
+            right = right.child("Read-only");
+        }
         let zoom = self.grid.read(cx).zoom();
         right = right.child(format!("{:.0}%", zoom * 100.0));
         if self.diagnostics {
