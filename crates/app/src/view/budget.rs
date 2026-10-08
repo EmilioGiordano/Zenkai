@@ -8,8 +8,6 @@ use crate::memory::{self, Candidate};
 const SAMPLE_EVERY: Duration = Duration::from_secs(1);
 
 impl Workspace {
-    // The reading is cheap and always on: the sidebar and the diagnostics show it, and the
-    // budget below acts on it.
     pub(super) fn start_memory_sampler(&mut self, cx: &mut Context<Self>) {
         self.memory_sampler = Some(cx.spawn(async move |this, cx| {
             loop {
@@ -30,8 +28,7 @@ impl Workspace {
         }));
     }
 
-    // Over the budget, the workbook unused for longest that is clean and off screen goes back
-    // to being a link; it loads again when it is opened. Workbooks with unsaved work never do.
+    // Workbooks with unsaved work are never unloaded.
     fn enforce_memory_budget(&mut self, cx: &mut Context<Self>) {
         if self.memory_mb <= self.memory_budget_mb {
             return;

@@ -6,7 +6,6 @@ pub const DEFAULT_BUDGET_MB: u64 = 4096;
 pub const BUDGET_VARIABLE: &str = "ZENKAI_MEMORY_BUDGET_MB";
 const COOLDOWN: Duration = Duration::from_secs(15);
 
-// The budget the process may use before idle workbooks are unloaded.
 pub fn budget_mb() -> u64 {
     parse_budget(std::env::var(BUDGET_VARIABLE).ok().as_deref())
 }

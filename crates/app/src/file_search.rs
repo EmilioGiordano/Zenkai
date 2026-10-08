@@ -26,8 +26,7 @@ pub struct Group {
     pub hits: Vec<Hit>,
 }
 
-// What the search overlay can reach: every workbook listed in a space, the recent files that
-// are not listed, and the sheets of the workbooks in memory (a link has not read its sheets).
+// A link has not read its sheets, so only workbooks in memory contribute sheets.
 pub fn collect(documents: &Documents, recent: &[PathBuf]) -> Vec<Group> {
     let workbooks = documents
         .spaces()

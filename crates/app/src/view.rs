@@ -3028,7 +3028,6 @@ impl Render for Workspace {
     }
 }
 
-// The command palette and the file search sit at the same place, one at a time.
 fn command_overlay(command: Command) -> impl IntoElement {
     div()
         .absolute()
