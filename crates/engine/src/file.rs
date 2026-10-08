@@ -446,6 +446,23 @@ line 2"
     }
 
     #[test]
+    fn hidden_sheets_report_their_visibility() {
+        let mut source = rust_xlsxwriter::Workbook::new();
+        source.add_worksheet().write_string(0, 0, "shown").unwrap();
+        source.add_worksheet().set_hidden(true);
+        let bytes = source.save_to_buffer().unwrap();
+        let book = Workbook::from_xlsx_bytes(&bytes, "hidden").unwrap();
+        let visibility: Vec<_> = book.sheets().iter().map(|s| s.visibility).collect();
+        assert_eq!(
+            visibility,
+            [
+                zenkai_types::SheetVisibility::Visible,
+                zenkai_types::SheetVisibility::Hidden
+            ]
+        );
+    }
+
+    #[test]
     fn empty_hidden_row_on_a_later_sheet_survives_save() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("two.xlsx");

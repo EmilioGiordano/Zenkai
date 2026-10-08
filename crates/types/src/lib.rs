@@ -300,10 +300,19 @@ pub struct CellView {
     pub style: CellStyle,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SheetVisibility {
+    #[default]
+    Visible,
+    Hidden,
+    VeryHidden,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SheetInfo {
     pub id: SheetId,
     pub name: String,
+    pub visibility: SheetVisibility,
 }
 
 // Excel's quick border buttons; borders are thin and automatic colour.
