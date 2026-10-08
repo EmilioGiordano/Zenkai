@@ -180,33 +180,52 @@ impl Workbook {
             .map_err(rejected)
     }
 
-    // Least-squares line through a run of plain numbers, as Excel's AutoFill trend:
-    // the value at step k is first + slope * k.
-    fn trend(&self, sheet: SheetId, line: impl Iterator<Item = CellPos>) -> Option<(f64, f64)> {
-        let values = line
-            .map(|pos| {
-                let input = self.input(sheet, pos);
-                // Rust also parses "inf", "nan" and "1e999", which Excel keeps as text.
-                (!input.starts_with('='))
-                    .then(|| input.trim().parse::<f64>().ok())
-                    .flatten()
-                    .filter(|value| value.is_finite() && value.abs() < 1e290)
-            })
-            .collect::<Option<Vec<f64>>>()?;
-        if values.len() < 2 {
+    // What Excel's AutoFill continues along one source line: numbers (two or more),
+    // dates (one or more, a day apart when alone) and text ending in a number ("Item 1").
+    // Anything else repeats.
+    fn series(&self, sheet: SheetId, line: impl Iterator<Item = CellPos>) -> Option<Series> {
+        let cells: Vec<(String, CellView)> = line
+            .map(|pos| (self.input(sheet, pos), self.cell(sheet, pos)))
+            .collect();
+        if cells.iter().any(|(input, _)| input.starts_with('=')) {
             return None;
         }
-        let n = values.len() as f64;
-        let mean_x = (n - 1.0) / 2.0;
-        let mean_y = values.iter().sum::<f64>() / n;
-        let (mut num, mut den) = (0.0, 0.0);
-        for (i, y) in values.iter().enumerate() {
-            let dx = i as f64 - mean_x;
-            num += dx * (y - mean_y);
-            den += dx * dx;
+        // Rust also parses "inf", "nan" and "1e999", which Excel keeps as text.
+        let plain = |input: &str| {
+            input
+                .trim()
+                .parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite() && value.abs() < 1e290)
+        };
+        if let Some(values) = cells
+            .iter()
+            .map(|(input, _)| plain(input))
+            .collect::<Option<Vec<_>>>()
+        {
+            return (values.len() >= 2).then(|| Series::Numbers(Trend::fit(&values)));
         }
-        let slope = num / den;
-        Some((mean_y - slope * mean_x, slope))
+        let dates = cells
+            .iter()
+            .map(|(_, view)| view.number.filter(|_| is_date_format(&view.style.num_fmt)))
+            .collect::<Option<Vec<f64>>>();
+        if let Some(serials) = dates {
+            return Some(Series::Dates(Trend::fit_or_step(&serials)));
+        }
+        let parts = cells
+            .iter()
+            .map(|(input, _)| split_trailing_number(input))
+            .collect::<Option<Vec<_>>>()?;
+        let (prefix, _, width) = parts[0].clone();
+        if parts.iter().any(|(p, _, _)| *p != prefix) {
+            return None;
+        }
+        let numbers: Vec<f64> = parts.iter().map(|(_, n, _)| *n as f64).collect();
+        Some(Series::Text {
+            prefix,
+            width,
+            trend: Trend::fit_or_step(&numbers),
+        })
     }
 
     pub fn new_empty() -> Result<Workbook, EngineError> {
@@ -415,9 +434,7 @@ impl Engine for Workbook {
                 rest.cell_count()
             )));
         }
-        // Excel continues a run of two or more plain numbers as a linear trend instead of
-        // repeating it; anything else (one number, text, formulas) repeats.
-        let lines: Vec<Option<(f64, f64)>> = if down {
+        let lines: Vec<Option<Series>> = if down {
             (source.start.col.get()..=source.end.col.get())
                 .map(|col| {
                     let line = (source.start.row.get()..=source.end.row.get()).map(|row| {
@@ -426,7 +443,7 @@ impl Engine for Workbook {
                             ColIdx::clamped(i64::from(col)),
                         )
                     });
-                    self.trend(sheet, line)
+                    self.series(sheet, line)
                 })
                 .collect()
         } else {
@@ -438,7 +455,7 @@ impl Engine for Workbook {
                             ColIdx::clamped(i64::from(col)),
                         )
                     });
-                    self.trend(sheet, line)
+                    self.series(sheet, line)
                 })
                 .collect()
         };
@@ -456,8 +473,8 @@ impl Engine for Workbook {
                                 u32::from(col - source.start.col.get()),
                             )
                         };
-                        if let Some(Some((first, slope))) = lines.get(usize::from(line)) {
-                            return Ok(trend_text(first + slope * f64::from(step)));
+                        if let Some(Some(series)) = lines.get(usize::from(line)) {
+                            return Ok(series.at(f64::from(step)));
                         }
                         let (from_row, from_col) = if down {
                             let offset = (row - source.start.row.get()) % source_rows;
@@ -829,8 +846,110 @@ impl Engine for Workbook {
     }
 }
 
-// Twelve decimals hide binary noise such as 0.30000000000000004, as Excel's display does.
-fn trend_text(value: f64) -> String {
-    let rounded = (value * 1e12).round() / 1e12;
-    format!("{rounded}")
+// A least-squares line, as Excel's AutoFill trend: the value at step k is first + slope * k.
+#[derive(Clone, Copy, Debug)]
+struct Trend {
+    first: f64,
+    slope: f64,
+}
+
+impl Trend {
+    fn fit(values: &[f64]) -> Trend {
+        let n = values.len() as f64;
+        let mean_x = (n - 1.0) / 2.0;
+        let mean_y = values.iter().sum::<f64>() / n;
+        let (mut num, mut den) = (0.0, 0.0);
+        for (i, y) in values.iter().enumerate() {
+            let dx = i as f64 - mean_x;
+            num += dx * (y - mean_y);
+            den += dx * dx;
+        }
+        let slope = if den == 0.0 { 0.0 } else { num / den };
+        Trend {
+            first: mean_y - slope * mean_x,
+            slope,
+        }
+    }
+
+    // A single value counts up by one, as Excel does for a date or "Item 1".
+    fn fit_or_step(values: &[f64]) -> Trend {
+        match values {
+            [only] => Trend {
+                first: *only,
+                slope: 1.0,
+            },
+            _ => Trend::fit(values),
+        }
+    }
+
+    fn at(self, step: f64) -> f64 {
+        self.first + self.slope * step
+    }
+}
+
+#[derive(Clone, Debug)]
+enum Series {
+    Numbers(Trend),
+    Dates(Trend),
+    Text {
+        prefix: String,
+        width: usize,
+        trend: Trend,
+    },
+}
+
+impl Series {
+    fn at(&self, step: f64) -> String {
+        match self {
+            // Twelve decimals hide binary noise such as 0.30000000000000004.
+            Series::Numbers(trend) => {
+                let rounded = (trend.at(step) * 1e12).round() / 1e12;
+                format!("{rounded}")
+            }
+            // Written as an ISO date, which the engine reads back as a date.
+            Series::Dates(trend) => iso_date(trend.at(step).round() as i64),
+            Series::Text {
+                prefix,
+                width,
+                trend,
+            } => {
+                let number = trend.at(step).round().max(0.0) as u64;
+                format!("{prefix}{number:0width$}")
+            }
+        }
+    }
+}
+
+fn is_date_format(code: &str) -> bool {
+    let lower = code.to_ascii_lowercase();
+    lower != "general" && (lower.contains('d') || lower.contains('y'))
+}
+
+// "Item 007" splits into ("Item ", 7, 3); text without trailing digits does not split.
+fn split_trailing_number(text: &str) -> Option<(String, u64, usize)> {
+    let digits = text.len() - text.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    if digits == 0 || digits > 15 || digits == text.len() {
+        return None;
+    }
+    let (prefix, number) = text.split_at(text.len() - digits);
+    Some((prefix.to_string(), number.parse().ok()?, digits))
+}
+
+// Excel serial (days since 1899-12-30) to yyyy-mm-dd, by the civil-from-days algorithm.
+fn iso_date(serial: i64) -> String {
+    let days = serial - 25_569 + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
 }

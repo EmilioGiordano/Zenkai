@@ -624,6 +624,34 @@ line 2"
     }
 
     #[test]
+    fn autofill_counts_up_dates_and_numbered_text() {
+        let mut book = Workbook::new_empty().unwrap();
+        let at = |r: i64, c: i64| {
+            CellPos::new(
+                zenkai_types::RowIdx::clamped(r),
+                zenkai_types::ColIdx::clamped(c),
+            )
+        };
+        let rows = vec![vec![
+            "2026-12-30".to_string(),
+            "Item 9".to_string(),
+            "Q01".to_string(),
+            "hola".to_string(),
+        ]];
+        book.set_inputs(SheetId(0), at(0, 0), &rows).unwrap();
+        let source = zenkai_types::Range::new(at(0, 0), at(0, 3));
+        let target = zenkai_types::Range::new(at(0, 0), at(3, 3));
+        book.extend(SheetId(0), source, target).unwrap();
+        let row = |r| {
+            (0..4)
+                .map(|c| book.cell(SheetId(0), at(r, c)).text)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(row(1), ["2026-12-31", "Item 10", "Q02", "hola"]);
+        assert_eq!(row(3), ["2027-01-02", "Item 12", "Q04", "hola"]);
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
