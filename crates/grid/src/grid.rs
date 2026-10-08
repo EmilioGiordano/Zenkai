@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
@@ -105,7 +106,19 @@ pub enum GridEvent {
     Jump { direction: Direction, extend: bool },
     ClearRequested(Range),
     EndRequested { extend: bool },
+    ColumnResized { col: ColIdx, width: f32 },
+    AutoFitRequested(ColIdx),
 }
+
+#[derive(Clone, Copy, Debug)]
+struct ColumnDrag {
+    col: ColIdx,
+    start_x: f32,
+    start_width: f32,
+}
+
+const RESIZE_GRIP: f32 = 4.0;
+const MIN_COLUMN_WIDTH: f32 = 8.0;
 
 pub struct Grid {
     focus: FocusHandle,
@@ -127,6 +140,8 @@ pub struct Grid {
     merges: Rc<Vec<Range>>,
     last_paint: Rc<Cell<Duration>>,
     active_formula: SharedString,
+    column_drag: Option<ColumnDrag>,
+    resize_hover: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -170,6 +185,8 @@ impl Grid {
             merges: Rc::new(Vec::new()),
             last_paint: Rc::new(Cell::new(Duration::ZERO)),
             active_formula: SharedString::default(),
+            column_drag: None,
+            resize_hover: false,
         }
     }
 
@@ -472,6 +489,29 @@ impl Grid {
         }
     }
 
+    // The column whose right edge is under the pointer in the header row, if any.
+    fn column_edge_at(&self, position: Point<Pixels>) -> Option<(ColIdx, f32)> {
+        let x = f32::from(position.x - self.bounds.origin.x) / self.zoom;
+        let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
+        if !(0.0..HEADER_HEIGHT).contains(&y) {
+            return None;
+        }
+        let origin = self.scroll_origin();
+        let frozen = (0..self.frozen_cols).map(|c| ColIdx::clamped(i64::from(c)));
+        let scrolled = (0..self.visible_cols).map(|c| origin.col.offset(i64::from(c)));
+        let mut edge = self.row_header();
+        for col in frozen.chain(scrolled) {
+            edge += self.layout.col_width(col);
+            if (x - edge).abs() <= RESIZE_GRIP {
+                return Some((col, x));
+            }
+            if edge > x + RESIZE_GRIP {
+                return None;
+            }
+        }
+        None
+    }
+
     fn hit(&self, position: Point<Pixels>) -> Hit {
         let x = f32::from(position.x - self.bounds.origin.x) / self.zoom;
         let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
@@ -504,6 +544,18 @@ impl Grid {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
+        if let Some((col, x)) = self.column_edge_at(event.position) {
+            if event.click_count >= 2 {
+                cx.emit(GridEvent::AutoFitRequested(col));
+            } else {
+                self.column_drag = Some(ColumnDrag {
+                    col,
+                    start_x: x,
+                    start_width: self.layout.col_width(col),
+                });
+            }
+            return;
+        }
         let hit = self.hit(event.position);
         if let (Some(editor), Hit::Cell(pos)) = (&mut self.editor, hit)
             && editor.can_point()
@@ -546,6 +598,19 @@ impl Grid {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(drag) = self.column_drag {
+            let x = f32::from(event.position.x - self.bounds.origin.x) / self.zoom;
+            let width = (drag.start_width + x - drag.start_x).max(MIN_COLUMN_WIDTH);
+            Rc::make_mut(&mut self.layout).set_col_width(drag.col, width);
+            self.recompute_viewport(cx);
+            cx.notify();
+            return;
+        }
+        let hover = self.column_edge_at(event.position).is_some();
+        if hover != self.resize_hover {
+            self.resize_hover = hover;
+            cx.notify();
+        }
         if !self.dragging || event.pressed_button != Some(MouseButton::Left) {
             self.dragging = false;
             return;
@@ -890,9 +955,22 @@ impl Render for Grid {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|g, _: &MouseUpEvent, _, _| g.dragging = false),
+                cx.listener(|g, _: &MouseUpEvent, _, cx| {
+                    g.dragging = false;
+                    if let Some(drag) = g.column_drag.take() {
+                        let width = g.layout.col_width(drag.col);
+                        cx.emit(GridEvent::ColumnResized {
+                            col: drag.col,
+                            width,
+                        });
+                        g.viewport_changed(cx);
+                    }
+                }),
             )
             .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .when(self.resize_hover || self.column_drag.is_some(), |grid| {
+                grid.cursor(CursorStyle::ResizeLeftRight)
+            })
             .child(
                 div()
                     .id((

@@ -10,7 +10,7 @@ use gpui_kit::*;
 
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
 use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout, SheetView};
-use zenkai_types::{CellPos, CellStyle, HAlign, NumberFormat, Range, SheetId, StyleChange};
+use zenkai_types::{CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, SheetId, StyleChange};
 
 use crate::actions::*;
 use crate::chart::{self, ChartKind};
@@ -44,6 +44,8 @@ enum StructureEdit {
 }
 
 const MAX_AUTOSUM_SCAN: usize = 10_000;
+const MAX_AUTOFIT_CELLS: usize = 100_000;
+const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
@@ -692,6 +694,11 @@ impl Workspace {
                 self.edit(window, cx, move |wb| wb.clear(sheet, range));
             }
             GridEvent::Jump { direction, extend } => self.jump(*direction, *extend, cx),
+            GridEvent::ColumnResized { col, width } => {
+                let (sheet, col, width) = (self.document.sheet, *col, *width);
+                self.edit(window, cx, move |wb| wb.set_column_width(sheet, col, width));
+            }
+            GridEvent::AutoFitRequested(col) => self.auto_fit(*col, window, cx),
             GridEvent::EndRequested { extend } => {
                 let Some(end) = self
                     .document
@@ -1590,6 +1597,23 @@ impl Workspace {
                 Range::single(active),
                 StyleChange::NumberFormat(NumberFormat::Time),
             )
+        });
+    }
+
+    // Double-click on a header edge: as wide as the longest displayed text in the column.
+    fn auto_fit(&mut self, col: ColIdx, window: &mut Window, cx: &mut Context<Self>) {
+        let sheet = self.document.sheet;
+        self.edit(window, cx, move |wb| {
+            let longest = wb
+                .filled_cells(sheet)
+                .into_iter()
+                .filter(|pos| pos.col == col)
+                .take(MAX_AUTOFIT_CELLS)
+                .map(|pos| wb.cell(sheet, pos).text.chars().count())
+                .max()
+                .unwrap_or(0);
+            let width = (longest as f32 * AUTOFIT_CHAR_WIDTH + 12.0).clamp(24.0, 600.0);
+            wb.set_column_width(sheet, col, width)
         });
     }
 
