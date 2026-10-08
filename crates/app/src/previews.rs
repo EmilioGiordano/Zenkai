@@ -40,19 +40,24 @@ impl TypedPreviews {
         });
     }
 
-    pub fn batch_started(&mut self) {
-        for preview in &mut self.previews {
+    pub fn batch_started(&mut self, generation: u64) {
+        for preview in self
+            .previews
+            .iter_mut()
+            .filter(|p| p.generation == generation)
+        {
             preview.stage = Stage::Running;
         }
     }
 
-    pub fn batch_finished(&mut self) {
+    pub fn batch_finished(&mut self, generation: u64) {
         self.previews
-            .retain(|preview| preview.stage == Stage::Queued);
+            .retain(|preview| preview.generation != generation || preview.stage == Stage::Queued);
     }
 
-    pub fn clear(&mut self) {
-        self.previews.clear();
+    pub fn forget(&mut self, generation: u64) {
+        self.previews
+            .retain(|preview| preview.generation != generation);
     }
 
     pub fn apply(
@@ -106,9 +111,9 @@ mod tests {
     fn queued_previews_survive_the_refresh_after_an_earlier_batch() {
         let mut previews = TypedPreviews::default();
         typed(&mut previews, "A1", "a");
-        previews.batch_started();
+        previews.batch_started(1);
         typed(&mut previews, "B1", "a");
-        previews.batch_finished();
+        previews.batch_finished(1);
         let cells = shown(&previews, 1, 0);
         assert!(!cells.contains_key(&pos("A1")));
         assert_eq!(cells[&pos("B1")].text.as_ref(), "a");
@@ -118,8 +123,8 @@ mod tests {
     fn a_preview_is_dropped_when_its_batch_finishes_even_if_it_failed() {
         let mut previews = TypedPreviews::default();
         typed(&mut previews, "A1", "a");
-        previews.batch_started();
-        previews.batch_finished();
+        previews.batch_started(1);
+        previews.batch_finished(1);
         assert!(shown(&previews, 1, 0).is_empty());
     }
 
@@ -140,10 +145,10 @@ mod tests {
     }
 
     #[test]
-    fn clearing_leaves_no_ghost_after_a_document_change() {
+    fn forgetting_a_document_leaves_no_ghost() {
         let mut previews = TypedPreviews::default();
         typed(&mut previews, "A1", "a");
-        previews.clear();
+        previews.forget(1);
         assert!(shown(&previews, 1, 0).is_empty());
     }
 
@@ -181,11 +186,22 @@ mod tests {
     fn an_edit_queued_behind_a_running_batch_keeps_the_earlier_previews_until_it_ends() {
         let mut previews = TypedPreviews::default();
         typed(&mut previews, "A1", "a");
-        previews.batch_started();
+        previews.batch_started(1);
         typed(&mut previews, "B1", "b");
         assert_eq!(shown(&previews, 1, 0).len(), 2);
-        previews.batch_finished();
+        previews.batch_finished(1);
         assert_eq!(shown(&previews, 1, 0).len(), 1);
+    }
+
+    #[test]
+    fn a_batch_of_one_document_leaves_the_previews_of_another() {
+        let mut previews = TypedPreviews::default();
+        previews.add(2, SheetId(0), Range::single(pos("A1")), "a".into());
+        previews.batch_started(1);
+        previews.batch_finished(1);
+        assert_eq!(shown(&previews, 2, 0).len(), 1);
+        previews.forget(1);
+        assert_eq!(shown(&previews, 2, 0).len(), 1);
     }
 
     #[test]

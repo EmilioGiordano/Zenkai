@@ -8,6 +8,7 @@ mod clipboard;
 mod csv_preview;
 mod decimals;
 mod document;
+mod documents;
 mod files;
 mod find;
 mod format_dialog;

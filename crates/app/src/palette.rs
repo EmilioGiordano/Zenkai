@@ -25,6 +25,10 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
         CommandGroup::new().label("File").items([
             item("New workbook", NewWorkbook),
             item("Open…", Open),
+            item("Close workbook", CloseDocument),
+            item("Reopen closed workbook", ReopenClosedDocument),
+            item("Next workbook", NextDocument),
+            item("Previous workbook", PreviousDocument),
             item("Save", Save),
             item("Save As…", SaveAs),
         ]),

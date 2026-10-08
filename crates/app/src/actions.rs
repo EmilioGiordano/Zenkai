@@ -102,6 +102,10 @@ actions!(
         InsertDate,
         InsertTime,
         CloseGoTo,
+        NextDocument,
+        PreviousDocument,
+        CloseDocument,
+        ReopenClosedDocument,
     ]
 );
 
@@ -150,6 +154,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-alt--", InterfaceSmaller, CONTEXT),
         KeyBinding::new("ctrl-alt-0", InterfaceReset, CONTEXT),
         KeyBinding::new("ctrl-alt-m", ToggleReduceMotion, CONTEXT),
+        KeyBinding::new("ctrl-tab", NextDocument, CONTEXT),
+        KeyBinding::new("ctrl-shift-tab", PreviousDocument, CONTEXT),
+        KeyBinding::new("ctrl-w", CloseDocument, CONTEXT),
+        KeyBinding::new("ctrl-shift-t", ReopenClosedDocument, CONTEXT),
         KeyBinding::new("ctrl-pagedown", NextSheet, CONTEXT),
         KeyBinding::new("ctrl-pageup", PreviousSheet, CONTEXT),
         KeyBinding::new("shift-f11", NewSheet, CONTEXT),

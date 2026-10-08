@@ -9,14 +9,16 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
+use zenkai_engine::{
+    Copied, Engine, EngineError, Opened, Unsupported, Workbook, open_xlsx, save_xlsx_atomic,
+};
 use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
 };
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, ColIdx, Contents, HAlign, NumberFormat, Range, Rgb, SheetId,
-    StyleChange,
+    StyleChange, WorkbookId,
 };
 
 use crate::actions::*;
@@ -26,6 +28,7 @@ use crate::clipboard;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, Document, FileJob};
+use crate::documents::{Documents, Step};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
@@ -99,7 +102,7 @@ struct Notice {
 }
 
 pub struct Workspace {
-    document: Document,
+    documents: Documents,
     grid: Entity<Grid>,
     stats: Option<SelectionStats>,
     stats_request: u64,
@@ -112,17 +115,11 @@ pub struct Workspace {
     diagnostics: bool,
     clipboard_source: Option<InternalClip>,
     chart: Option<ChartPanel>,
-    find: Option<FindBar>,
     palette: Option<Entity<CommandState>>,
     csv_preview: Option<CsvPreview>,
     // Bumped by every CSV read, re-parse, import and cancel; a background result is
     // applied only if no newer request started meanwhile.
     csv_request: u64,
-    open_request: u64,
-    // Counts queued edits; with discard_agreed_at it tells whether the workbook changed
-    // after the user agreed to discard it.
-    edit_count: u64,
-    discard_agreed_at: Option<u64>,
     // Interface scale, independent of the grid zoom: everything sized in rems.
     ui_scale: f32,
     show_formulas: bool,
@@ -135,9 +132,9 @@ pub struct Workspace {
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
+    recovery_dir: Option<PathBuf>,
     rename: Option<(Entity<InputState>, Subscription)>,
     go_to: Option<(Entity<InputState>, Subscription)>,
-    pending_sheet: Option<SheetId>,
     previews: TypedPreviews,
     last_tab_click: Option<(Instant, SheetId)>,
     memory_mb: u64,
@@ -178,12 +175,8 @@ impl Workspace {
         let appearance = cx.observe_window_appearance(window, |_, window, cx| {
             theme::follow_system(window, cx);
         });
-        let workbook = match Workbook::new_empty() {
-            Ok(workbook) => workbook,
-            Err(error) => exit_without_workbook(error),
-        };
         let mut workspace = Workspace {
-            document: Document::new(workbook, None, Vec::new()),
+            documents: Documents::new(empty_workbook()),
             grid,
             stats: None,
             stats_request: 0,
@@ -196,13 +189,9 @@ impl Workspace {
             diagnostics: false,
             clipboard_source: None,
             chart: None,
-            find: None,
             palette: None,
             csv_preview: None,
             csv_request: 0,
-            open_request: 0,
-            edit_count: 0,
-            discard_agreed_at: None,
             ui_scale: 1.0,
             show_formulas: false,
             formula_bar: None,
@@ -213,9 +202,9 @@ impl Workspace {
             colors,
             focus: cx.focus_handle(),
             session_lock: None,
+            recovery_dir: None,
             rename: None,
             go_to: None,
-            pending_sheet: None,
             previews: TypedPreviews::default(),
             last_tab_click: None,
             memory_mb: 0,
@@ -232,51 +221,159 @@ impl Workspace {
         workspace
     }
 
-    // A file that finishes opening after the user edited the current workbook asks again
-    // before replacing it; the question asked before the open covered the old state only.
-    fn replace_document(
+    fn open_document(
         &mut self,
-        document: Document,
+        workbook: Workbook,
+        path: Option<PathBuf>,
+        unsupported: Vec<Unsupported>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        // Only edits made after the user already agreed to discard need a new question.
-        let edited_since = self.discard_agreed_at != Some(self.edit_count);
-        if !(self.document.dirty && edited_since) {
-            self.install_document(document, window, cx);
-            return;
-        }
-        let requests = (self.open_request, self.csv_request);
-        self.confirm_discard(window, cx, move |this, window, cx| {
-            // A newer open started while the question was up; this document is stale.
-            if (this.open_request, this.csv_request) == requests {
-                this.install_document(document, window, cx);
-            }
-        });
+    ) -> WorkbookId {
+        self.park_active(window, cx);
+        let id = self.documents.open(workbook, path, unsupported);
+        self.present_active(window, cx);
+        id
     }
 
-    // Everything tied to the old workbook goes with it: a pending copy, the Format Cells
-    // dialog and a formula bar edit would otherwise act on the new one.
-    fn install_document(
-        &mut self,
-        document: Document,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn create_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match Workbook::new_empty() {
+            Ok(workbook) => {
+                self.park_active(window, cx);
+                self.documents.create(workbook);
+                self.present_active(window, cx);
+            }
+            Err(error) => self.notify(Severity::Error, error.to_string(), cx),
+        }
+    }
+
+    fn switch_to(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        if id == self.documents.active_id() {
+            return;
+        }
+        self.park_active(window, cx);
+        if self.documents.activate(id) {
+            self.present_active(window, cx);
+        }
+    }
+
+    fn step_document(&mut self, step: Step, window: &mut Window, cx: &mut Context<Self>) {
+        if self.documents.len() < 2 {
+            return;
+        }
+        self.park_active(window, cx);
+        self.documents.step(step);
+        self.present_active(window, cx);
+        let position = self.documents.position_of(self.documents.active_id());
+        self.notify(
+            Severity::Info,
+            format!(
+                "{} ({position} of {})",
+                self.documents.active().name_with_marker(),
+                self.documents.len()
+            ),
+            cx,
+        );
+    }
+
+    // Everything tied to the workbook on screen is put away or dropped: a pending copy,
+    // the Format Cells dialog and open bars would otherwise act on the next one.
+    fn park_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_formula_bar(true, window, cx);
+        if let Some((pos, text)) = self.grid.update(cx, |grid, cx| grid.take_edit(cx)) {
+            self.commit_text(self.documents.active().sheet, pos, text, window, cx);
+        }
+        let view = self.grid.read(cx).view_state();
+        self.documents.active_mut().view = view;
         self.clipboard_source = None;
-        self.previews.clear();
         self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
-        self.discard_agreed_at = None;
         self.format_dialog = None;
-        self.formula_bar = None;
-        self.document = document;
+        self.chart = None;
+        self.rename = None;
+        self.go_to = None;
+    }
+
+    fn present_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let view = self.documents.active().view;
         self.reset_grid(window, cx);
+        self.grid.update(cx, |grid, cx| grid.restore_view(view, cx));
+        self.refresh_cells(cx);
+    }
+
+    fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_document(self.documents.active_id(), window, cx);
+    }
+
+    fn close_document(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(document) = self.documents.get(id) else {
+            return;
+        };
+        if !document.dirty {
+            self.finish_close(id, window, cx);
+            return;
+        }
+        let edits = document.edit_count();
+        let detail = format!(
+            "{} has changes that are not saved.",
+            document.name_with_marker().trim_start_matches("• ")
+        );
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Discard unsaved changes?",
+            Some(&detail),
+            &["Cancel", "Discard"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await != Ok(1) {
+                return;
+            }
+            let update = this.update_in(cx, |this, window, cx| {
+                match this.documents.get(id).map(Document::edit_count) {
+                    Some(count) if count == edits => this.finish_close(id, window, cx),
+                    // Edited while the question was up: the answer covered older work.
+                    Some(_) => this.close_document(id, window, cx),
+                    None => {}
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during discard prompt");
+            }
+        })
+        .detach();
+    }
+
+    fn finish_close(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        let was_active = id == self.documents.active_id();
+        if was_active {
+            self.park_active(window, cx);
+        }
+        if let Some(generation) = self.documents.get(id).map(Document::generation) {
+            self.previews.forget(generation);
+        }
+        if let Some(directory) = &self.recovery_dir {
+            let file = recovery::document_file(directory, id);
+            cx.background_executor()
+                .spawn(async move { recovery::remove(&file) })
+                .detach();
+        }
+        self.documents.close(id, empty_workbook);
+        if was_active {
+            self.present_active(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn reopen_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.documents.take_reopenable() {
+            Some(path) => self.open_path(path, window, cx),
+            None => self.notify(Severity::Info, "No closed workbook to reopen.", cx),
+        }
     }
 
     fn reset_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.load_sheet_view(cx);
         self.refresh_stats(cx);
-        window.set_window_title(&self.document.title());
+        window.set_window_title(&self.documents.active().title());
         let focus = self.grid.focus_handle(cx);
         window.focus(&focus, cx);
     }
@@ -289,8 +386,9 @@ impl Workspace {
     }
 
     fn sheet_view(&self) -> SheetView {
-        let sheet = self.document.sheet;
-        self.document
+        let sheet = self.documents.active().sheet;
+        self.documents
+            .active()
             .workbook()
             .map(|wb| {
                 let (frozen_rows, frozen_cols) = wb.frozen(sheet);
@@ -326,12 +424,12 @@ impl Workspace {
         // While a recalculation holds the workbook the grid keeps showing the last values;
         // the recalculation refreshes the cells when it hands the workbook back.
         let ranges = self.grid.read(cx).cached_ranges();
-        let Some(mut cells) = self.document.cells(&ranges, self.show_formulas) else {
+        let Some(mut cells) = self.documents.active().cells(&ranges, self.show_formulas) else {
             return;
         };
         self.previews.apply(
-            self.document.generation(),
-            self.document.sheet,
+            self.documents.active().generation(),
+            self.documents.active().sheet,
             &ranges,
             &mut cells,
         );
@@ -339,7 +437,7 @@ impl Workspace {
     }
 
     fn refresh_chart(&mut self) {
-        if let (Some(panel), Some(wb)) = (&mut self.chart, self.document.workbook()) {
+        if let (Some(panel), Some(wb)) = (&mut self.chart, self.documents.active().workbook()) {
             panel.refresh(&wb);
         }
     }
@@ -396,7 +494,7 @@ impl Workspace {
     }
 
     fn forget_find_results(&mut self) {
-        if let Some(bar) = &mut self.find {
+        if let Some(bar) = &mut self.documents.active_mut().find {
             bar.results = FindResults::default();
         }
     }
@@ -423,7 +521,6 @@ impl Workspace {
             tracing::warn!("no data directory for recovery files; autosave is off");
             return;
         };
-        let own = recovery::own_file(&directory);
         match recovery::lock_session(&directory) {
             Ok(lock) => self.session_lock = Some(lock),
             Err(error) => {
@@ -436,18 +533,18 @@ impl Workspace {
                 return;
             }
         }
-        let on_quit_file = own.clone();
+        self.recovery_dir = Some(directory.clone());
+        let on_quit_directory = directory.clone();
         let quit = cx.on_app_quit(move |_, _| {
-            recovery::remove_with_lock(&on_quit_file);
+            recovery::remove_session(&on_quit_directory);
             async {}
         });
         self._subscriptions.push(quit);
         let leftovers = recovery::leftovers(&directory);
-        let own_for_recovery = own.clone();
         cx.spawn_in(window, async move |this, cx| {
             if !leftovers.is_empty()
                 && let Err(error) = this.update_in(cx, |this, window, cx| {
-                    this.offer_recovery(leftovers, own_for_recovery, window, cx)
+                    this.offer_recovery(leftovers, window, cx)
                 })
             {
                 tracing::debug!(%error, "workspace closed before recovery");
@@ -456,8 +553,7 @@ impl Workspace {
                 cx.background_executor()
                     .timer(recovery::AUTOSAVE_EVERY)
                     .await;
-                let own = own.clone();
-                if this.update(cx, |this, cx| this.autosave(own, cx)).is_err() {
+                if this.update(cx, |this, cx| this.autosave_all(cx)).is_err() {
                     break;
                 }
             }
@@ -465,24 +561,42 @@ impl Workspace {
         .detach();
     }
 
-    fn autosave(&mut self, own: PathBuf, cx: &mut Context<Self>) {
-        if !self.document.dirty {
-            recovery::remove(&own);
-            return;
+    fn autosave_all(&mut self, cx: &mut Context<Self>) {
+        let ids: Vec<WorkbookId> = self.documents.iter().map(|document| document.id).collect();
+        for id in ids {
+            self.autosave(id, cx);
         }
-        let Some(shared) = self.document.begin_file_job(FileJob::Autosaving) else {
+    }
+
+    fn autosave(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
+        let Some(directory) = self.recovery_dir.clone() else {
             return;
         };
-        let generation = self.document.generation();
+        let Some(document) = self.documents.get_mut(id) else {
+            return;
+        };
+        let target = recovery::document_file(&directory, id);
+        if !document.dirty {
+            cx.background_executor()
+                .spawn(async move { recovery::remove(&target) })
+                .detach();
+            return;
+        }
+        let Some(shared) = document.begin_file_job(FileJob::Autosaving) else {
+            return;
+        };
+        let generation = document.generation();
         cx.spawn(async move |this, cx| {
-            let target = own.clone();
             let result = cx
                 .background_executor()
                 .spawn(async move { recovery::write(&document::read_shared(&shared), &target) })
                 .await;
             let update = this.update(cx, |this, cx| {
-                this.document.end_file_job(generation);
-                if !this.document.is_current(generation) {
+                let Some(document) = this.documents.get_mut(id) else {
+                    return;
+                };
+                document.end_file_job(generation);
+                if !document.is_current(generation) {
                     return;
                 }
                 if let Err(error) = result {
@@ -504,12 +618,11 @@ impl Workspace {
     fn offer_recovery(
         &mut self,
         leftovers: Vec<PathBuf>,
-        own: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let detail = format!(
-            "Zenkai closed unexpectedly and kept {} unsaved workbook(s). Open the most recent one?",
+            "Zenkai closed unexpectedly and kept {} unsaved workbook(s). Open them?",
             leftovers.len()
         );
         let answer = window.prompt(
@@ -529,17 +642,10 @@ impl Workspace {
                     .for_each(|path| recovery::remove_with_lock(path));
                 return;
             }
-            let Some(newest) = leftovers
-                .iter()
-                .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok())
-            else {
-                return;
-            };
-            let path = newest.clone();
             let update = this.update_in(cx, |this, window, cx| {
-                this.confirm_discard(window, cx, move |this, window, cx| {
-                    this.load_recovered(path, own, window, cx)
-                })
+                for path in leftovers {
+                    this.load_recovered(path, window, cx);
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during recovery");
@@ -548,13 +654,7 @@ impl Workspace {
         .detach();
     }
 
-    fn load_recovered(
-        &mut self,
-        path: PathBuf,
-        own: PathBuf,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn load_recovered(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         cx.spawn_in(window, async move |this, cx| {
             let opened = cx
                 .background_executor()
@@ -562,14 +662,20 @@ impl Workspace {
                 .await;
             let update = this.update_in(cx, |this, window, cx| match opened {
                 Ok((opened, path)) => {
-                    let mut document = Document::new(opened.workbook, None, opened.unsupported);
-                    document.dirty = true;
-                    this.install_document(document, window, cx);
-                    // Kept as this session's own recovery copy until the work is saved.
-                    if let Err(error) = std::fs::rename(&path, &own) {
+                    let id =
+                        this.open_document(opened.workbook, None, opened.unsupported, window, cx);
+                    if let Some(document) = this.documents.get_mut(id) {
+                        document.dirty = true;
+                        window.set_window_title(&document.title());
+                    }
+                    // Kept as this document's own recovery copy until the work is saved.
+                    if let Some(directory) = &this.recovery_dir
+                        && let Err(error) =
+                            std::fs::rename(&path, recovery::document_file(directory, id))
+                    {
                         tracing::warn!(?path, %error, "could not adopt the recovery file");
                     }
-                    recovery::remove(&path.with_extension("lock"));
+                    recovery::remove_with_lock(&path);
                     this.notify(Severity::Warning, "Recovered work. Save it to keep it.", cx);
                 }
                 Err(error) => {
@@ -585,13 +691,13 @@ impl Workspace {
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
-        let input = match &self.find {
+        let input = match &self.documents.active().find {
             Some(bar) => bar.input.clone(),
             None => {
                 let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in sheet"));
                 let subscription = cx.subscribe_in(&input, window, Self::on_find_event);
                 self._subscriptions.push(subscription);
-                self.find = Some(FindBar {
+                self.documents.active_mut().find = Some(FindBar {
                     input: input.clone(),
                     replace: None,
                     results: FindResults::default(),
@@ -606,7 +712,7 @@ impl Workspace {
 
     fn open_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.open_find(window, cx);
-        let Some(bar) = &mut self.find else {
+        let Some(bar) = &mut self.documents.active_mut().find else {
             return;
         };
         if bar.replace.is_none() {
@@ -623,7 +729,7 @@ impl Workspace {
     }
 
     fn replace_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(bar) = &self.find else {
+        let Some(bar) = &self.documents.active().find else {
             return;
         };
         let query = bar.input.read(cx).value().to_string();
@@ -635,7 +741,7 @@ impl Workspace {
         if query.is_empty() {
             return;
         }
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         // The scan reads every filled cell, so it runs with the edit, off the UI thread.
         self.edit(window, cx, move |wb| {
             let changes = find::replacements(wb, sheet, &query, &replacement);
@@ -657,7 +763,7 @@ impl Workspace {
     }
 
     fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.find = None;
+        self.documents.active_mut().find = None;
         let focus = self.grid.focus_handle(cx);
         window.focus(&focus, cx);
         cx.notify();
@@ -674,7 +780,7 @@ impl Workspace {
             return;
         };
         let query = input.read(cx).value().to_string();
-        let Some(bar) = &mut self.find else {
+        let Some(bar) = &mut self.documents.active_mut().find else {
             return;
         };
         if bar.results.query == query {
@@ -688,7 +794,7 @@ impl Workspace {
     }
 
     fn run_find(&mut self, query: String, cx: &mut Context<Self>) {
-        if self.document.has_pending() {
+        if self.documents.active().has_pending() {
             self.notify(
                 Severity::Warning,
                 "Still calculating, try again in a moment.",
@@ -696,7 +802,7 @@ impl Workspace {
             );
             return;
         }
-        let Some(shared) = self.document.begin_read() else {
+        let Some(shared) = self.documents.active().begin_read() else {
             self.notify(
                 Severity::Warning,
                 "Still calculating, try again in a moment.",
@@ -704,7 +810,8 @@ impl Workspace {
             );
             return;
         };
-        let (sheet, generation) = (self.document.sheet, self.document.generation());
+        let document = self.documents.active();
+        let (id, sheet, generation) = (document.id, document.sheet, document.generation());
         self.busy = Some(SEARCHING.into());
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -717,16 +824,21 @@ impl Workspace {
                     .await;
             let update = this.update(cx, |this, cx| {
                 this.clear_busy(SEARCHING, cx);
-                if !this.document.is_current(generation) {
+                let shown = this.documents.active_id() == id;
+                let Some(document) = this.documents.get_mut(id) else {
+                    return;
+                };
+                if !document.is_current(generation) {
                     return;
                 }
-                if let Some(bar) = &mut this.find {
+                if let Some(bar) = &mut document.find {
                     bar.results = FindResults {
                         query,
                         matches,
                         current: 0,
                     };
-                    if let Some(pos) = bar.results.matches.first().copied() {
+                    let first = bar.results.matches.first().copied();
+                    if let Some(pos) = first.filter(|_| shown) {
                         this.grid.update(cx, |grid, cx| grid.select(pos, pos, cx));
                     }
                 }
@@ -740,7 +852,7 @@ impl Workspace {
     }
 
     fn render_find(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let bar = self.find.as_ref()?;
+        let bar = self.documents.active().find.as_ref()?;
         let theme = cx.theme();
         Some(
             h_flex()
@@ -787,11 +899,15 @@ impl Workspace {
     }
 
     fn insert_chart(&mut self, cx: &mut Context<Self>) {
-        let Some(workbook) = self.document.workbook() else {
+        let Some(workbook) = self.documents.active().workbook() else {
             return;
         };
         let source = self.grid.read(cx).selection().range();
-        self.chart = Some(ChartPanel::new(&workbook, self.document.sheet, source));
+        self.chart = Some(ChartPanel::new(
+            &workbook,
+            self.documents.active().sheet,
+            source,
+        ));
         cx.notify();
     }
 
@@ -816,7 +932,8 @@ impl Workspace {
         };
         let svg = chart::to_svg(&panel.data, panel.kind);
         let directory = self
-            .document
+            .documents
+            .active()
             .path
             .as_ref()
             .and_then(|p| p.parent().map(PathBuf::from))
@@ -865,7 +982,7 @@ impl Workspace {
     fn refresh_stats(&mut self, cx: &mut Context<Self>) {
         self.stats_request += 1;
         let selection = self.grid.read(cx).selection();
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         let range = selection.range();
         let inline = range.cell_count() <= stats::INLINE_CELLS;
         if !inline {
@@ -874,7 +991,7 @@ impl Workspace {
                 self.start_stats_job(cx);
             }
         }
-        if let Some(wb) = self.document.workbook() {
+        if let Some(wb) = self.documents.active().workbook() {
             if inline {
                 self.stats = stats::compute(&wb, sheet, range);
             }
@@ -895,21 +1012,21 @@ impl Workspace {
     // A result is dropped when the selection or the document changed while it ran; a
     // queued request then reruns on the selection as it is at that point.
     fn start_stats_job(&mut self, cx: &mut Context<Self>) {
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         let range = self.grid.read(cx).selection().range();
-        let shared = self.document.begin_read();
+        let shared = self.documents.active().begin_read();
         let Some(shared) = shared.filter(|_| range.cell_count() > stats::INLINE_CELLS) else {
             self.stats_job = StatsJob::Idle;
             return;
         };
-        let (request, generation) = (self.stats_request, self.document.generation());
+        let (request, generation) = (self.stats_request, self.documents.active().generation());
         cx.spawn(async move |this, cx| {
             let stats = cx
                 .background_executor()
                 .spawn(async move { stats::compute(&document::read_shared(&shared), sheet, range) })
                 .await;
             let update = this.update(cx, |this, cx| {
-                if this.stats_request == request && this.document.is_current(generation) {
+                if this.stats_request == request && this.documents.active().is_current(generation) {
                     this.stats = stats;
                     cx.notify();
                 }
@@ -952,9 +1069,10 @@ impl Workspace {
                 // Unknown while a recalculation holds the workbook: editing an empty
                 // text would clear the cell on Enter.
                 let Some(text) = self
-                    .document
+                    .documents
+                    .active()
                     .workbook()
-                    .map(|wb| wb.input(self.document.sheet, *pos))
+                    .map(|wb| wb.input(self.documents.active().sheet, *pos))
                 else {
                     self.notify(
                         Severity::Warning,
@@ -968,37 +1086,43 @@ impl Workspace {
                     grid.begin_edit(pos, text, EditMode::Edit, cx)
                 });
             }
-            GridEvent::Commit { pos, text } => {
-                self.commit_text(self.document.sheet, *pos, text.clone(), window, cx)
-            }
+            GridEvent::Commit { pos, text } => self.commit_text(
+                self.documents.active().sheet,
+                *pos,
+                text.clone(),
+                window,
+                cx,
+            ),
             GridEvent::CommitToSelection { pos, text, range } => {
-                let (sheet, pos, text, range) = (self.document.sheet, *pos, text.clone(), *range);
+                let (sheet, pos, text, range) =
+                    (self.documents.active().sheet, *pos, text.clone(), *range);
                 self.show_typed(range, &text, cx);
                 self.edit(window, cx, move |wb| wb.fill_with(sheet, pos, &text, range));
             }
             GridEvent::ClearRequested(range) => {
-                let (sheet, range) = (self.document.sheet, *range);
+                let (sheet, range) = (self.documents.active().sheet, *range);
                 self.edit(window, cx, move |wb| wb.clear(sheet, range));
             }
             GridEvent::Jump { direction, extend } => self.jump(*direction, *extend, cx),
             GridEvent::ColumnResized { col, width } => {
-                let (sheet, col, width) = (self.document.sheet, *col, *width);
+                let (sheet, col, width) = (self.documents.active().sheet, *col, *width);
                 self.edit(window, cx, move |wb| wb.set_column_width(sheet, col, width));
             }
             GridEvent::RowResized { row, height } => {
-                let (sheet, row, height) = (self.document.sheet, *row, *height);
+                let (sheet, row, height) = (self.documents.active().sheet, *row, *height);
                 self.edit(window, cx, move |wb| wb.set_row_height(sheet, row, height));
             }
             GridEvent::FillRequested { source, target } => {
-                let (sheet, source, target) = (self.document.sheet, *source, *target);
+                let (sheet, source, target) = (self.documents.active().sheet, *source, *target);
                 self.edit(window, cx, move |wb| wb.extend(sheet, source, target));
             }
             GridEvent::AutoFitRequested(col) => self.auto_fit(*col, window, cx),
             GridEvent::EndRequested { extend } => {
                 let Some(end) = self
-                    .document
+                    .documents
+                    .active()
                     .workbook()
-                    .map(|wb| wb.used_end(self.document.sheet))
+                    .map(|wb| wb.used_end(self.documents.active().sheet))
                 else {
                     return;
                 };
@@ -1012,10 +1136,10 @@ impl Workspace {
     }
 
     fn jump(&mut self, direction: Direction, extend: bool, cx: &mut Context<Self>) {
-        let Some(workbook) = self.document.workbook() else {
+        let Some(workbook) = self.documents.active().workbook() else {
             return;
         };
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         let selection = self.grid.read(cx).selection();
         let from = if extend {
             selection.corner
@@ -1039,22 +1163,23 @@ impl Workspace {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Workbook) -> Result<(), EngineError> + Send + 'static,
     ) {
-        self.edit_count += 1;
         // Any edit ends copy mode, as in Excel, so a later paste never reads cells or
         // sheets that changed since the copy.
         if self.clipboard_source.take().is_some() {
             self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
         }
-        self.document.queue(Box::new(edit));
-        self.document.dirty = true;
-        window.set_window_title(&self.document.title());
-        self.flush_edits(cx);
+        let document = self.documents.active_mut();
+        document.queue(Box::new(edit));
+        document.dirty = true;
+        let id = document.id;
+        window.set_window_title(&document.title());
+        self.flush_edits(id, cx);
     }
 
     fn show_typed(&mut self, range: Range, text: &str, cx: &mut Context<Self>) {
         self.previews.add(
-            self.document.generation(),
-            self.document.sheet,
+            self.documents.active().generation(),
+            self.documents.active().sheet,
             range,
             text.to_string().into(),
         );
@@ -1062,60 +1187,77 @@ impl Workspace {
             .update(cx, |grid, cx| grid.show_typed(range, text, cx));
     }
 
-    fn flush_edits(&mut self, cx: &mut Context<Self>) {
-        let Some((shared, edits)) = self.document.take_batch() else {
+    fn flush_edits(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
+        let Some(document) = self.documents.get_mut(id) else {
             return;
         };
-        self.previews.batch_started();
+        let Some((shared, edits)) = document.take_batch() else {
+            return;
+        };
+        let generation = document.generation();
+        self.previews.batch_started(generation);
         self.busy = Some(CALCULATING.into());
         cx.notify();
         let started = Instant::now();
-        let generation = self.document.generation();
         cx.spawn(async move |this, cx| {
             let errors = cx
                 .background_executor()
                 .spawn(async move { document::run_batch(&shared, edits) })
                 .await;
             let update = this.update(cx, |this, cx| {
-                let sheets_before = this.document.sheets.clone();
-                let sheet_before = this.document.sheet;
-                let pending_sheet = this.pending_sheet.take();
-                this.previews.batch_finished();
-                if !this.document.finish_batch(generation) {
-                    this.clear_busy(CALCULATING, cx);
+                this.previews.batch_finished(generation);
+                let shown = this.documents.active_id() == id;
+                let Some(document) = this.documents.get_mut(id) else {
+                    this.clear_calculating(cx);
+                    return;
+                };
+                let sheets_before = document.sheets.len();
+                let sheet_before = document.sheet;
+                let pending_sheet = document.pending_sheet.take();
+                if !document.finish_batch(generation) {
+                    this.clear_calculating(cx);
                     return;
                 }
                 if let Some(target) = pending_sheet
                     && errors.is_empty()
                 {
-                    this.document.sheet = target;
+                    document.sheet = target;
                 }
-                let sheet_changed = this.document.sheet != sheet_before
-                    || this.document.sheets.len() != sheets_before.len();
-                if sheet_changed {
-                    this.load_sheet_view(cx);
-                } else {
-                    // Edits can insert rows, resize, merge or freeze; refresh the layout
-                    // without moving the selection.
-                    let view = this.sheet_view();
-                    this.grid.update(cx, |grid, cx| grid.update_view(view, cx));
-                }
+                let sheet_changed =
+                    document.sheet != sheet_before || document.sheets.len() != sheets_before;
                 this.last_recalc = Some(started.elapsed());
-                this.clear_busy(CALCULATING, cx);
                 if let Some(error) = errors.first() {
                     this.notify(Severity::Error, error.to_string(), cx);
                 }
-                this.refresh_cells(cx);
-                this.refresh_stats(cx);
-                this.refresh_chart();
-                this.forget_find_results();
-                this.flush_edits(cx);
+                if shown {
+                    if sheet_changed {
+                        this.load_sheet_view(cx);
+                    } else {
+                        // Edits can insert rows, resize, merge or freeze; refresh the
+                        // layout without moving the selection.
+                        let view = this.sheet_view();
+                        this.grid.update(cx, |grid, cx| grid.update_view(view, cx));
+                    }
+                    this.refresh_cells(cx);
+                    this.refresh_stats(cx);
+                    this.refresh_chart();
+                    this.forget_find_results();
+                }
+                this.clear_calculating(cx);
+                this.flush_edits(id, cx);
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during recalc");
             }
         })
         .detach();
+    }
+
+    // Another document may still be recalculating; the label stays until all are done.
+    fn clear_calculating(&mut self, cx: &mut Context<Self>) {
+        if !self.documents.iter().any(Document::has_pending) {
+            self.clear_busy(CALCULATING, cx);
+        }
     }
 
     fn clear_busy(&mut self, label: &str, cx: &mut Context<Self>) {
@@ -1130,8 +1272,6 @@ impl Workspace {
     }
 
     fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        // A CSV read and an xlsx open replace the same document: the newer one wins.
-        self.next_open_request();
         self.busy = Some(format!("Reading {}…", file_label(&path)).into());
         cx.notify();
         let label = self.busy.clone().unwrap_or_default();
@@ -1247,8 +1387,7 @@ impl Workspace {
                 match result {
                     Ok(_) if this.csv_request != request => {}
                     Ok(workbook) => {
-                        let document = Document::new(workbook, None, Vec::new());
-                        this.replace_document(document, window, cx);
+                        this.open_document(workbook, None, Vec::new(), window, cx);
                         this.notify(Severity::Info, summary, cx);
                     }
                     Err((error, parsed)) => {
@@ -1282,11 +1421,6 @@ impl Workspace {
             cx,
         );
         cx.notify();
-    }
-
-    fn next_open_request(&mut self) -> u64 {
-        self.open_request += 1;
-        self.open_request
     }
 
     fn next_csv_request(&mut self) -> u64 {
@@ -1329,8 +1463,17 @@ impl Workspace {
         )
     }
 
-    fn export_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(workbook) = self.document.workbook() else {
+    fn export_csv(
+        &mut self,
+        id: WorkbookId,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(document) = self.documents.get(id) else {
+            return;
+        };
+        let Some(workbook) = document.workbook() else {
             self.notify(
                 Severity::Warning,
                 "Still calculating, try again in a moment.",
@@ -1338,8 +1481,8 @@ impl Workspace {
             );
             return;
         };
-        let rows = files::sheet_rows(&workbook, self.document.sheet);
-        let sheets = self.document.sheets.len();
+        let rows = files::sheet_rows(&workbook, document.sheet);
+        let sheets = document.sheets.len();
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
             let written = cx
@@ -1367,11 +1510,13 @@ impl Workspace {
             self.import_csv(path, window, cx);
             return;
         }
+        if let Some(open) = self.documents.find_by_path(&path) {
+            self.switch_to(open, window, cx);
+            return;
+        }
         self.busy = Some(format!("Opening {}…", file_label(&path)).into());
         cx.notify();
         let started = Instant::now();
-        let request = self.next_open_request();
-        self.next_csv_request();
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.clone();
             let result: Result<Opened, EngineError> = cx
@@ -1380,17 +1525,21 @@ impl Workspace {
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.busy = None;
-                // A newer open started meanwhile; this result is out of date.
-                if this.open_request != request {
-                    return;
-                }
                 match result {
                     Ok(opened) => {
                         let unsupported = opened.unsupported.clone();
                         this.remember_recent(&path, cx);
-                        let document =
-                            Document::new(opened.workbook, Some(path), opened.unsupported);
-                        this.replace_document(document, window, cx);
+                        if let Some(open) = this.documents.find_by_path(&path) {
+                            this.switch_to(open, window, cx);
+                            return;
+                        }
+                        this.open_document(
+                            opened.workbook,
+                            Some(path),
+                            opened.unsupported,
+                            window,
+                            cx,
+                        );
                         if unsupported.is_empty() {
                             this.notify(
                                 Severity::Info,
@@ -1422,37 +1571,6 @@ impl Workspace {
         .detach();
     }
 
-    fn confirm_discard(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        then: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
-    ) {
-        if !self.document.dirty {
-            self.discard_agreed_at = Some(self.edit_count);
-            then(self, window, cx);
-            return;
-        }
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Discard unsaved changes?",
-            Some("The current workbook has changes that are not saved."),
-            &["Cancel", "Discard"],
-            cx,
-        );
-        cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(1)
-                && let Err(error) = this.update_in(cx, |this, window, cx| {
-                    this.discard_agreed_at = Some(this.edit_count);
-                    then(this, window, cx)
-                })
-            {
-                tracing::debug!(%error, "workspace closed during discard prompt");
-            }
-        })
-        .detach();
-    }
-
     fn open_values(
         &mut self,
         path: PathBuf,
@@ -1473,9 +1591,10 @@ impl Workspace {
                 this.clear_busy(&label, cx);
                 match result {
                     Ok(workbook) => {
-                        let mut document = Document::new(workbook, Some(path), Vec::new());
-                        document.read_only = true;
-                        this.replace_document(document, window, cx);
+                        let id = this.open_document(workbook, Some(path), Vec::new(), window, cx);
+                        if let Some(document) = this.documents.get_mut(id) {
+                            document.read_only = true;
+                        }
                         this.notify(
                             Severity::Warning,
                             "Opened read-only: values only, without formulas or formatting. Save As keeps a copy.",
@@ -1546,13 +1665,11 @@ impl Workspace {
         let Some(path) = self.recent.get(index).cloned() else {
             return;
         };
-        self.confirm_discard(window, cx, move |this, window, cx| {
-            this.open_path(path, window, cx)
-        });
+        self.open_path(path, window, cx);
     }
 
     fn open(&mut self, _: &Open, window: &mut Window, cx: &mut Context<Self>) {
-        self.confirm_discard(window, cx, Self::pick_and_open);
+        self.pick_and_open(window, cx);
     }
 
     fn pick_and_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1588,29 +1705,27 @@ impl Workspace {
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
         // Text typed in the formula bar is entered before saving, as in Excel.
         self.close_formula_bar(true, window, cx);
-        let must_rename = !self.document.unsupported.is_empty()
-            || self.document.is_macro_enabled()
-            || self.document.read_only;
-        match self.document.path.clone() {
-            Some(path) if !must_rename => self.save_to(path, window, cx),
+        let document = self.documents.active();
+        let id = document.id;
+        let must_rename =
+            !document.unsupported.is_empty() || document.is_macro_enabled() || document.read_only;
+        match document.path.clone() {
+            Some(path) if !must_rename => self.save_to(id, path, window, cx),
             Some(_) => {
-                let detail = if self.document.read_only {
+                let detail = if document.read_only {
                     "This file was opened read-only with its values only. Save a copy with a new name; the original is never overwritten.".to_string()
-                } else if self.document.is_macro_enabled() {
+                } else if document.is_macro_enabled() {
                     let mut text =
                         "Macros are not kept. The original .xlsm file will not be overwritten."
                             .to_string();
-                    if !self.document.unsupported.is_empty() {
-                        text.push_str(&format!(
-                            " Also lost: {}.",
-                            self.document.unsupported_labels()
-                        ));
+                    if !document.unsupported.is_empty() {
+                        text.push_str(&format!(" Also lost: {}.", document.unsupported_labels()));
                     }
                     text
                 } else {
                     format!(
                         "Saving will lose: {}. Save a copy with a new name to keep the original intact.",
-                        self.document.unsupported_labels()
+                        document.unsupported_labels()
                     )
                 };
                 let answer = window.prompt(
@@ -1622,34 +1737,44 @@ impl Workspace {
                 );
                 cx.spawn_in(window, async move |this, cx| {
                     if answer.await == Ok(0)
-                        && let Err(error) =
-                            this.update_in(cx, |this, window, cx| this.save_as(&SaveAs, window, cx))
+                        && let Err(error) = this
+                            .update_in(cx, |this, window, cx| this.save_as_dialog(id, window, cx))
                     {
                         tracing::debug!(%error, "workspace closed during save prompt");
                     }
                 })
                 .detach();
             }
-            None => self.save_as(&SaveAs, window, cx),
+            None => self.save_as_dialog(id, window, cx),
         }
     }
 
     fn save_as(&mut self, _: &SaveAs, window: &mut Window, cx: &mut Context<Self>) {
         self.close_formula_bar(true, window, cx);
-        let directory = self
-            .document
+        self.save_as_dialog(self.documents.active_id(), window, cx);
+    }
+
+    fn save_as_dialog(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(document) = self.documents.get(id) else {
+            return;
+        };
+        let directory = document
             .path
             .as_ref()
             .and_then(|p| p.parent().map(PathBuf::from))
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
-        let suggested = self
-            .document
+        let suggested = document
             .path
             .as_ref()
             .and_then(|p| p.file_stem())
             .map_or_else(
-                || "Book1".to_string(),
+                || {
+                    document
+                        .name_with_marker()
+                        .trim_start_matches("• ")
+                        .to_string()
+                },
                 |s| format!("{} (Zenkai)", s.to_string_lossy()),
             );
         let path = cx.prompt_for_new_path(&directory, Some(&format!("{suggested}.xlsx")));
@@ -1667,8 +1792,9 @@ impl Workspace {
                 }
             };
             if let Some(path) = chosen
-                && let Err(error) =
-                    this.update_in(cx, |this, window, cx| this.confirm_target(path, window, cx))
+                && let Err(error) = this.update_in(cx, |this, window, cx| {
+                    this.confirm_target(id, path, window, cx)
+                })
             {
                 tracing::debug!(%error, "workspace closed during save dialog");
             }
@@ -1676,46 +1802,53 @@ impl Workspace {
         .detach();
     }
 
-    fn confirm_target(&mut self, chosen: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    fn confirm_target(
+        &mut self,
+        id: WorkbookId,
+        chosen: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if files::is_delimited_text(&chosen) {
-            self.export_csv(chosen, window, cx);
+            self.export_csv(id, chosen, window, cx);
             return;
         }
+        let Some(document) = self.documents.get(id) else {
+            return;
+        };
         let path = files::xlsx_target(&chosen);
         let renamed = path != chosen;
-        let replaces_source = self
-            .document
+        let replaces_source = document
             .path
             .as_ref()
             .is_some_and(|source| files::same_file(source, &path));
-        let (title, detail) =
-            if replaces_source && (self.document.is_macro_enabled() || self.document.read_only) {
-                self.notify(
-                    Severity::Error,
-                    "This original is never overwritten. Choose a new name.",
-                    cx,
-                );
-                return;
-            } else if replaces_source && !self.document.unsupported.is_empty() {
-                (
-                    "Replace the original file?",
-                    format!(
-                        "Replacing the original loses: {}. This cannot be undone.",
-                        self.document.unsupported_labels()
-                    ),
-                )
-            } else if renamed && path.exists() {
-                (
-                    "Replace the existing file?",
-                    format!(
-                        "Zenkai saves as .xlsx, so the workbook goes to {}, which already exists.",
-                        path.display()
-                    ),
-                )
-            } else {
-                self.save_to(path, window, cx);
-                return;
-            };
+        let never_overwritten = document.is_macro_enabled() || document.read_only;
+        let lost = document.unsupported_labels();
+        let loses_content = !document.unsupported.is_empty();
+        let (title, detail) = if replaces_source && never_overwritten {
+            self.notify(
+                Severity::Error,
+                "This original is never overwritten. Choose a new name.",
+                cx,
+            );
+            return;
+        } else if replaces_source && loses_content {
+            (
+                "Replace the original file?",
+                format!("Replacing the original loses: {lost}. This cannot be undone."),
+            )
+        } else if renamed && path.exists() {
+            (
+                "Replace the existing file?",
+                format!(
+                    "Zenkai saves as .xlsx, so the workbook goes to {}, which already exists.",
+                    path.display()
+                ),
+            )
+        } else {
+            self.save_to(id, path, window, cx);
+            return;
+        };
         let answer = window.prompt(
             PromptLevel::Critical,
             title,
@@ -1726,7 +1859,7 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             if answer.await == Ok(1)
                 && let Err(error) =
-                    this.update_in(cx, |this, window, cx| this.save_to(path, window, cx))
+                    this.update_in(cx, |this, window, cx| this.save_to(id, path, window, cx))
             {
                 tracing::debug!(%error, "workspace closed during replace prompt");
             }
@@ -1734,19 +1867,28 @@ impl Workspace {
         .detach();
     }
 
-    fn save_to(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(shared) = self.document.begin_file_job(FileJob::Saving) else {
-            let reason = match self.document.file_job() {
+    fn save_to(
+        &mut self,
+        id: WorkbookId,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(document) = self.documents.get_mut(id) else {
+            return;
+        };
+        let Some(shared) = document.begin_file_job(FileJob::Saving) else {
+            let reason = match document.file_job() {
                 FileJob::Idle => "Still calculating, try again in a moment.",
                 FileJob::Saving | FileJob::Autosaving => "Still saving, try again in a moment.",
             };
             self.notify(Severity::Warning, reason, cx);
             return;
         };
+        let edits_at_start = document.edit_count();
+        let generation = document.generation();
         self.busy = Some(SAVING.into());
         cx.notify();
-        let edits_at_start = self.edit_count;
-        let generation = self.document.generation();
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
             let result = cx
@@ -1754,9 +1896,13 @@ impl Workspace {
                 .spawn(async move { save_xlsx_atomic(&document::read_shared(&shared), &target) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.document.end_file_job(generation);
-                if !this.document.is_current(generation) {
-                    this.clear_busy(SAVING, cx);
+                this.clear_busy(SAVING, cx);
+                let shown = this.documents.active_id() == id;
+                let current = this.documents.get_mut(id).is_some_and(|document| {
+                    document.end_file_job(generation);
+                    document.is_current(generation)
+                });
+                let Some(document) = this.documents.get_mut(id).filter(|_| current) else {
                     if let Err(error) = result {
                         this.notify(
                             Severity::Error,
@@ -1765,34 +1911,36 @@ impl Workspace {
                         );
                     }
                     return;
-                }
-                this.clear_busy(SAVING, cx);
+                };
                 match result {
                     Ok(()) => {
-                        if this.document.path.as_ref() != Some(&path) {
-                            this.document.unsupported.clear();
+                        if document.path.as_ref() != Some(&path) {
+                            document.unsupported.clear();
                         }
-                        this.document.path = Some(path);
-                        this.document.dirty = this.edit_count != edits_at_start;
-                        window.set_window_title(&this.document.title());
+                        document.path = Some(path);
+                        document.dirty = document.edit_count() != edits_at_start;
+                        if shown {
+                            window.set_window_title(&document.title());
+                        }
                         this.notify(Severity::Info, "Saved", cx);
                     }
                     Err(error) => {
+                        let asks_again = document.path.as_ref() == Some(&path);
                         this.notify(
                             Severity::Error,
                             format!("{error}. Pick another location to keep your changes."),
                             cx,
                         );
-                        this.flush_edits(cx);
+                        this.flush_edits(id, cx);
                         // Locked by another program or read-only: offer Save As right away,
                         // unless this already was a new location picked in Save As.
-                        if this.document.path.as_ref() == Some(&path) {
-                            this.save_as(&SaveAs, window, cx);
+                        if asks_again && shown {
+                            this.save_as_dialog(id, window, cx);
                         }
                         return;
                     }
                 }
-                this.flush_edits(cx);
+                this.flush_edits(id, cx);
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during save");
@@ -1802,19 +1950,7 @@ impl Workspace {
     }
 
     fn new_workbook(&mut self, _: &NewWorkbook, window: &mut Window, cx: &mut Context<Self>) {
-        self.confirm_discard(window, cx, Self::replace_with_empty);
-    }
-
-    fn replace_with_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // An open still in flight must not replace the new workbook.
-        self.next_open_request();
-        self.next_csv_request();
-        match Workbook::new_empty() {
-            Ok(workbook) => {
-                self.install_document(Document::new(workbook, None, Vec::new()), window, cx)
-            }
-            Err(error) => self.notify(Severity::Error, error.to_string(), cx),
-        }
+        self.create_document(window, cx);
     }
 
     fn selection(&self, cx: &App) -> Range {
@@ -1823,7 +1959,7 @@ impl Workspace {
 
     fn style(&mut self, change: StyleChange, window: &mut Window, cx: &mut Context<Self>) {
         self.last_style = Some(change);
-        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        let (sheet, range) = (self.documents.active().sheet, self.selection(cx));
         self.edit(window, cx, move |wb| {
             wb.apply_style(sheet, range, change)?;
             if matches!(change, StyleChange::NumberFormat(_)) {
@@ -1842,9 +1978,10 @@ impl Workspace {
     ) {
         let active = self.grid.read(cx).selection().active;
         let current = self
-            .document
+            .documents
+            .active()
             .workbook()
-            .is_some_and(|wb| read(&wb.cell(self.document.sheet, active).style));
+            .is_some_and(|wb| read(&wb.cell(self.documents.active().sheet, active).style));
         self.style(make(!current), window, cx);
     }
 
@@ -1852,9 +1989,14 @@ impl Workspace {
     fn step_font_size(&mut self, grow: bool, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.grid.read(cx).selection().active;
         let current = self
-            .document
+            .documents
+            .active()
             .workbook()
-            .and_then(|wb| wb.cell(self.document.sheet, active).style.font_size)
+            .and_then(|wb| {
+                wb.cell(self.documents.active().sheet, active)
+                    .style
+                    .font_size
+            })
             .unwrap_or(11.0);
         let next = if grow {
             FONT_SIZES.iter().find(|size| f32::from(**size) > current)
@@ -1871,8 +2013,8 @@ impl Workspace {
 
     fn copy(&mut self, cut: bool, cx: &mut Context<Self>) {
         let range = self.selection(cx);
-        let sheet = self.document.sheet;
-        let outcome = self.document.workbook_mut().map(|mut workbook| {
+        let sheet = self.documents.active().sheet;
+        let outcome = self.documents.active().workbook_mut().map(|mut workbook| {
             let end = workbook.used_end(sheet);
             let clipped = range.clip_to(end).unwrap_or(Range::single(range.start));
             if clipped.cell_count() > clipboard::MAX_COPY_CELLS {
@@ -1908,7 +2050,7 @@ impl Workspace {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         let origin = self.grid.read(cx).selection().active;
         let internal = self
             .clipboard_source
@@ -1948,7 +2090,7 @@ impl Workspace {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         let origin = self.grid.read(cx).selection().active;
         // A copy made here pastes the cells' own values (full precision, dates as serial
         // numbers, as Excel does); text from other programs is pasted as shown.
@@ -1988,10 +2130,12 @@ impl Workspace {
     }
 
     fn switch_sheet(&mut self, sheet: SheetId, window: &mut Window, cx: &mut Context<Self>) {
-        if sheet.0 as usize >= self.document.sheets.len() || sheet == self.document.sheet {
+        if sheet.0 as usize >= self.documents.active().sheets.len()
+            || sheet == self.documents.active().sheet
+        {
             return;
         }
-        self.document.sheet = sheet;
+        self.documents.active_mut().sheet = sheet;
         self.reset_grid(window, cx);
     }
 
@@ -2011,7 +2155,7 @@ impl Workspace {
                         .text_ellipsis()
                         .whitespace_nowrap()
                         .text_center()
-                        .child(self.document.name_with_marker()),
+                        .child(self.documents.active().name_with_marker()),
                 )
                 .child(div().w(px(160.0))),
         )
@@ -2111,7 +2255,7 @@ impl Workspace {
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let entity = cx.entity().downgrade();
-        let tabs = self.document.sheets.iter().map(|sheet| {
+        let tabs = self.documents.active().sheets.iter().map(|sheet| {
             let entity = entity.clone();
             let id = sheet.id;
             // Excel activates a tab on right click, so its menu acts on that sheet.
@@ -2138,7 +2282,7 @@ impl Workspace {
                     .child(
                         TabBar::new("sheets")
                             .children(tabs)
-                            .selected_index(self.document.sheet.0 as usize)
+                            .selected_index(self.documents.active().sheet.0 as usize)
                             .on_click(move |index, window, cx| {
                                 let sheet = SheetId(u32::try_from(*index).unwrap_or(0));
                                 if let Err(error) = entity.update(cx, |this, cx| {
@@ -2149,7 +2293,7 @@ impl Workspace {
                                             && now.duration_since(at) < Duration::from_millis(450)
                                     });
                                     this.last_tab_click = Some((now, sheet));
-                                    if double && sheet == this.document.sheet {
+                                    if double && sheet == this.documents.active().sheet {
                                         this.open_rename(window, cx);
                                     } else {
                                         this.switch_sheet(sheet, window, cx);
@@ -2181,7 +2325,7 @@ impl Workspace {
         cx: &mut Context<Self>,
         action: StructureEdit,
     ) {
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         let selection = self.selection(cx);
         let active = self.grid.read(cx).selection().active;
         let rows = selection.rows();
@@ -2216,7 +2360,8 @@ impl Workspace {
             }),
             StructureEdit::FreezePanes => {
                 let frozen = self
-                    .document
+                    .documents
+                    .active()
                     .workbook()
                     .map(|wb| wb.frozen(sheet))
                     .unwrap_or_default();
@@ -2241,7 +2386,7 @@ impl Workspace {
 
     // With a single cell selected, Excel sorts its current region.
     fn sort(&mut self, descending: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         // Taken before the region is selected, which moves the active cell to its corner.
         let key = self.grid.read(cx).selection().active.col;
         let mut range = self.selection(cx);
@@ -2263,10 +2408,11 @@ impl Workspace {
     fn step_decimals(&mut self, more: bool, window: &mut Window, cx: &mut Context<Self>) {
         // Not expressible as a repeatable StyleChange; F4 must not repeat an older one.
         self.last_style = None;
-        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        let (sheet, range) = (self.documents.active().sheet, self.selection(cx));
         let active = self.grid.read(cx).selection().active;
         let Some(view) = self
-            .document
+            .documents
+            .active()
             .workbook()
             .map(|workbook| workbook.cell(sheet, active))
         else {
@@ -2291,10 +2437,11 @@ impl Workspace {
     }
 
     fn toggle_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        let (sheet, range) = (self.documents.active().sheet, self.selection(cx));
         let active = self.grid.read(cx).selection().active;
         let Some(wrapped) = self
-            .document
+            .documents
+            .active()
             .workbook()
             .map(|wb| wb.cell(sheet, active).style.wrap)
         else {
@@ -2317,7 +2464,7 @@ impl Workspace {
 
     // The rows (or columns) the selection touches, as Excel's Hide and Unhide.
     fn hide(&mut self, rows: bool, hidden: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        let (sheet, range) = (self.documents.active().sheet, self.selection(cx));
         let whole_sheet = if rows {
             range.rows() == zenkai_types::MAX_ROWS
         } else {
@@ -2344,9 +2491,10 @@ impl Workspace {
     fn open_format_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.grid.read(cx).selection().active;
         let view = self
-            .document
+            .documents
+            .active()
             .workbook()
-            .map(|wb| wb.cell(self.document.sheet, active))
+            .map(|wb| wb.cell(self.documents.active().sheet, active))
             .unwrap_or_default();
         let code = view.style.num_fmt.clone();
         let input = cx.new(|cx| InputState::new(window, cx).default_value(code));
@@ -2361,8 +2509,8 @@ impl Workspace {
             code: input,
             sample: view.number.unwrap_or(1234.5678),
             range: self.selection(cx),
-            sheet: self.document.sheet,
-            generation: self.document.generation(),
+            sheet: self.documents.active().sheet,
+            generation: self.documents.active().generation(),
             focus,
             _refresh: refresh,
         });
@@ -2387,7 +2535,9 @@ impl Workspace {
             return;
         }
         // Applied where it was opened, never to another sheet or document.
-        if dialog.sheet != self.document.sheet || dialog.generation != self.document.generation() {
+        if dialog.sheet != self.documents.active().sheet
+            || dialog.generation != self.documents.active().generation()
+        {
             self.close_format_dialog(window, cx);
             self.notify(
                 Severity::Warning,
@@ -2396,7 +2546,7 @@ impl Workspace {
             );
             return;
         }
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         self.edit(window, cx, move |wb| {
             wb.set_number_format(sheet, range, &code)?;
             widen_for_numbers(wb, sheet, range)
@@ -2441,7 +2591,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if sheet == self.document.sheet {
+        if sheet == self.documents.active().sheet {
             self.show_typed(Range::single(pos), &text, cx);
         }
         self.edit(window, cx, move |wb| {
@@ -2459,16 +2609,17 @@ impl Workspace {
     // Editing in the formula bar: Enter or leaving the bar enters the text in the
     // cell, Esc leaves it unchanged (Excel's behaviour without point mode).
     fn open_formula_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.formula_bar.is_some() || self.document.read_only {
+        if self.formula_bar.is_some() || self.documents.active().read_only {
             return;
         }
         let pos = self.grid.read(cx).selection().active;
         // While a recalculation has the workbook the cell's text is unknown; opening
         // with an empty bar would then clear the cell on Enter.
         let Some(original) = self
-            .document
+            .documents
+            .active()
             .workbook()
-            .map(|wb| wb.input(self.document.sheet, pos))
+            .map(|wb| wb.input(self.documents.active().sheet, pos))
         else {
             return;
         };
@@ -2484,8 +2635,8 @@ impl Workspace {
         self.formula_bar = Some(FormulaBarEdit {
             input,
             pos,
-            sheet: self.document.sheet,
-            generation: self.document.generation(),
+            sheet: self.documents.active().sheet,
+            generation: self.documents.active().generation(),
             original,
             _events: events,
         });
@@ -2498,7 +2649,7 @@ impl Workspace {
         };
         // Switching sheets still enters the text in the sheet it was typed for, as in
         // Excel; a different document never receives it.
-        if commit && bar.generation == self.document.generation() {
+        if commit && bar.generation == self.documents.active().generation() {
             let text = bar.input.read(cx).value().to_string();
             if text != bar.original {
                 self.commit_text(bar.sheet, bar.pos, text, window, cx);
@@ -2511,8 +2662,8 @@ impl Workspace {
 
     fn select_current_region(&mut self, cx: &mut Context<Self>) -> Range {
         let active = self.grid.read(cx).selection().active;
-        let sheet = self.document.sheet;
-        let Some(workbook) = self.document.workbook() else {
+        let sheet = self.documents.active().sheet;
+        let Some(workbook) = self.documents.active().workbook() else {
             return Range::single(active);
         };
         let Some(contents) = document::contents_of(&workbook, sheet) else {
@@ -2525,21 +2676,21 @@ impl Workspace {
     }
 
     fn freeze(&mut self, rows: u32, cols: u16, window: &mut Window, cx: &mut Context<Self>) {
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         self.edit(window, cx, move |wb| wb.set_frozen(sheet, rows, cols));
     }
 
     fn fill(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        let (sheet, range) = (self.documents.active().sheet, self.selection(cx));
         self.edit(window, cx, move |wb| wb.fill(sheet, range, down));
     }
 
     // Alt+= proposes =SUM over the numbers right above (or to the left), in edit mode.
     fn auto_sum(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(workbook) = self.document.workbook() else {
+        let Some(workbook) = self.documents.active().workbook() else {
             return;
         };
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         let active = self.grid.read(cx).selection().active;
         let Some(contents) = document::contents_of(&workbook, sheet) else {
             return;
@@ -2568,7 +2719,10 @@ impl Workspace {
 
     fn insert_now(&mut self, time: bool, window: &mut Window, cx: &mut Context<Self>) {
         let now = chrono::Local::now().naive_local();
-        let (sheet, active) = (self.document.sheet, self.grid.read(cx).selection().active);
+        let (sheet, active) = (
+            self.documents.active().sheet,
+            self.grid.read(cx).selection().active,
+        );
         if !time {
             // An ISO date is recognised and formatted by the engine in one undo step.
             let text = now.format("%Y-%m-%d").to_string();
@@ -2594,7 +2748,7 @@ impl Workspace {
 
     // Double-click on a header edge: as wide as the longest displayed text in the column.
     fn auto_fit(&mut self, col: ColIdx, window: &mut Window, cx: &mut Context<Self>) {
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         self.edit(window, cx, move |wb| {
             let longest = wb
                 .filled_cells(sheet)
@@ -2610,14 +2764,14 @@ impl Workspace {
     }
 
     fn duplicate_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let sheet = self.document.sheet;
-        self.pending_sheet = Some(SheetId(sheet.0 + 1));
+        let sheet = self.documents.active().sheet;
+        self.documents.active_mut().pending_sheet = Some(SheetId(sheet.0 + 1));
         self.edit(window, cx, move |wb| wb.duplicate_sheet(sheet));
     }
 
     fn add_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.pending_sheet = Some(SheetId(
-            u32::try_from(self.document.sheets.len()).unwrap_or(0),
+        self.documents.active_mut().pending_sheet = Some(SheetId(
+            u32::try_from(self.documents.active().sheets.len()).unwrap_or(0),
         ));
         self.edit(window, cx, |wb| wb.add_sheet().map(|_| ()));
     }
@@ -2666,9 +2820,10 @@ impl Workspace {
     fn open_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
         let current = self
-            .document
+            .documents
+            .active()
             .sheets
-            .get(self.document.sheet.0 as usize)
+            .get(self.documents.active().sheet.0 as usize)
             .map(|s| s.name.clone())
             .unwrap_or_default();
         let input = cx.new(|cx| {
@@ -2681,7 +2836,7 @@ impl Workspace {
                 let name = input.read(cx).value().trim().to_string();
                 this.close_rename(window, cx);
                 if !name.is_empty() {
-                    let sheet = this.document.sheet;
+                    let sheet = this.documents.active().sheet;
                     this.edit(window, cx, move |wb| wb.rename_sheet(sheet, &name));
                 }
             }
@@ -2724,7 +2879,7 @@ impl Workspace {
     }
 
     fn delete_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.document.sheets.len() < 2 {
+        if self.documents.active().sheets.len() < 2 {
             self.notify(
                 Severity::Warning,
                 "A workbook must contain at least one sheet.",
@@ -2732,9 +2887,10 @@ impl Workspace {
             );
             return;
         }
-        let sheet = self.document.sheet;
+        let sheet = self.documents.active().sheet;
         let name = self
-            .document
+            .documents
+            .active()
             .sheets
             .get(sheet.0 as usize)
             .map(|s| s.name.clone())
@@ -2751,8 +2907,10 @@ impl Workspace {
                 && let Err(error) = this.update_in(cx, |this, window, cx| {
                     // Excel shows the sheet that takes the deleted one's place.
                     let last_after =
-                        u32::try_from(this.document.sheets.len().saturating_sub(2)).unwrap_or(0);
-                    this.pending_sheet = Some(SheetId(sheet.0.min(last_after)));
+                        u32::try_from(this.documents.active().sheets.len().saturating_sub(2))
+                            .unwrap_or(0);
+                    this.documents.active_mut().pending_sheet =
+                        Some(SheetId(sheet.0.min(last_after)));
                     this.edit(window, cx, move |wb| wb.delete_sheet(sheet));
                 })
             {
@@ -2763,8 +2921,9 @@ impl Workspace {
     }
 
     fn move_sheet(&mut self, left: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let sheet = self.document.sheet;
-        let last = u32::try_from(self.document.sheets.len().saturating_sub(1)).unwrap_or(0);
+        let sheet = self.documents.active().sheet;
+        let last =
+            u32::try_from(self.documents.active().sheets.len().saturating_sub(1)).unwrap_or(0);
         let target = if left {
             sheet.0.checked_sub(1)
         } else {
@@ -2773,7 +2932,7 @@ impl Workspace {
         let Some(target) = target else {
             return;
         };
-        self.pending_sheet = Some(SheetId(target));
+        self.documents.active_mut().pending_sheet = Some(SheetId(target));
         self.edit(window, cx, move |wb| wb.move_sheet(sheet, target));
     }
 
@@ -2858,7 +3017,7 @@ impl Workspace {
         if self.show_formulas {
             right = right.child("Showing formulas");
         }
-        if self.document.read_only {
+        if self.documents.active().read_only {
             right = right.child("Read-only");
         }
         let zoom = self.grid.read(cx).zoom();
@@ -2890,9 +3049,11 @@ impl Workspace {
     }
 }
 
-fn exit_without_workbook(error: EngineError) -> Workbook {
-    tracing::error!(%error, "could not create an empty workbook");
-    std::process::exit(1)
+fn empty_workbook() -> Workbook {
+    Workbook::new_empty().unwrap_or_else(|error| {
+        tracing::error!(%error, "could not create an empty workbook");
+        std::process::exit(1)
+    })
 }
 
 fn format_number(n: f64) -> String {
@@ -2911,13 +3072,10 @@ impl Render for Workspace {
         v_flex()
             .relative()
             .key_context("Workspace")
-            // A file dropped on the window opens like File > Open, after the unsaved-changes
-            // question.
+            // A file dropped on the window opens like File > Open.
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 if let Some(path) = paths.paths().first().cloned() {
-                    this.confirm_discard(window, cx, move |this, window, cx| {
-                        this.open_path(path, window, cx)
-                    });
+                    this.open_path(path, window, cx);
                 }
             }))
             .size_full()
@@ -2927,6 +3085,18 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::new_workbook))
+            .on_action(cx.listener(|this, _: &NextDocument, window, cx| {
+                this.step_document(Step::Next, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PreviousDocument, window, cx| {
+                this.step_document(Step::Previous, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &CloseDocument, window, cx| this.close_active(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ReopenClosedDocument, window, cx| {
+                this.reopen_closed(window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &Undo, window, cx| this.edit(window, cx, |wb| wb.undo())),
             )
@@ -3070,11 +3240,11 @@ impl Render for Workspace {
                 }),
             )
             .on_action(cx.listener(|this, _: &ClearFormats, window, cx| {
-                let (sheet, range) = (this.document.sheet, this.selection(cx));
+                let (sheet, range) = (this.documents.active().sheet, this.selection(cx));
                 this.edit(window, cx, move |wb| wb.clear_formats(sheet, range));
             }))
             .on_action(cx.listener(|this, _: &ClearAll, window, cx| {
-                let (sheet, range) = (this.document.sheet, this.selection(cx));
+                let (sheet, range) = (this.documents.active().sheet, this.selection(cx));
                 this.edit(window, cx, move |wb| wb.clear_all(sheet, range));
             }))
             .on_action(cx.listener(|this, _: &CancelFormulaBar, window, cx| {
@@ -3128,11 +3298,11 @@ impl Render for Workspace {
                 this.refresh_cells(cx);
             }))
             .on_action(cx.listener(|this, _: &NextSheet, window, cx| {
-                let next = SheetId(this.document.sheet.0 + 1);
+                let next = SheetId(this.documents.active().sheet.0 + 1);
                 this.switch_sheet(next, window, cx);
             }))
             .on_action(cx.listener(|this, _: &PreviousSheet, window, cx| {
-                let previous = SheetId(this.document.sheet.0.saturating_sub(1));
+                let previous = SheetId(this.documents.active().sheet.0.saturating_sub(1));
                 this.switch_sheet(previous, window, cx);
             }))
             .on_action(cx.listener(|this, _: &NewSheet, window, cx| this.add_sheet(window, cx)))
