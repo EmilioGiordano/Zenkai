@@ -1170,7 +1170,6 @@ fn iso_date(serial: i64) -> String {
     format!("{year:04}-{month:02}-{day:02}")
 }
 
-/// How `value` looks with the number format `code`, as the engine would show it.
 pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
     let locale = ironcalc::base::locale::get_locale(LOCALE).map_err(rejected)?;
     let formatted = ironcalc::base::formatter::format::format_number(value, code, locale);

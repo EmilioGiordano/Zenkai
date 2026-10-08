@@ -817,7 +817,7 @@ impl Workspace {
                 let (sheet, pos, text) = (self.document.sheet, *pos, text.clone());
                 self.edit(window, cx, move |wb| {
                     wb.set_input(sheet, pos, &text)?;
-                    widen_for_number(wb, sheet, pos)
+                    widen_for_numbers(wb, sheet, Range::single(pos))
                 });
             }
             GridEvent::ClearRequested(range) => {
@@ -882,6 +882,11 @@ impl Workspace {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Workbook) -> Result<(), EngineError> + Send + 'static,
     ) {
+        // Any edit ends copy mode, as in Excel, so a later paste never reads cells or
+        // sheets that changed since the copy.
+        if self.clipboard_source.take().is_some() {
+            self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
+        }
         self.document.queue(Box::new(edit));
         self.document.dirty = true;
         window.set_window_title(&self.document.title());
@@ -1716,12 +1721,12 @@ impl Workspace {
             }
         };
         if let Some(clip) = internal {
-            if !clip.cut {
-                self.clipboard_source = Some(clip.clone());
-            }
+            let keep = (!clip.cut).then(|| clip.clone());
             self.edit(window, cx, move |wb| {
                 wb.paste(sheet, origin, &clip.copied, clip.cut)
             });
+            // Pasting a copy keeps copy mode, so the same cells can be pasted again.
+            self.clipboard_source = keep;
         }
         let end = CellPos::new(
             origin.row.offset(i64::from(height.saturating_sub(1))),
@@ -1758,6 +1763,7 @@ impl Workspace {
                 )
             }
         };
+        let keep = self.clipboard_source.clone();
         self.edit(window, cx, move |wb| {
             let rows = match source {
                 Some((from, range)) => clipboard::cell_values(wb, from, range),
@@ -1765,6 +1771,7 @@ impl Workspace {
             };
             wb.set_inputs(sheet, origin, &rows)
         });
+        self.clipboard_source = keep;
         let end = CellPos::new(
             origin.row.offset(height.saturating_sub(1)),
             origin.col.offset(width.saturating_sub(1)),
@@ -2129,9 +2136,13 @@ impl Workspace {
             .unwrap_or_default();
         let code = view.style.num_fmt.clone();
         let input = cx.new(|cx| InputState::new(window, cx).default_value(code));
-        let refresh = cx.observe(&input, |_, _, cx| cx.notify());
+        let refresh = cx.subscribe_in(&input, window, |this, _, event, window, cx| match event {
+            InputEvent::PressEnter { .. } => this.apply_format_dialog(window, cx),
+            _ => cx.notify(),
+        });
         let focus = cx.focus_handle();
-        window.focus(&focus, cx);
+        let input_focus = input.focus_handle(cx);
+        window.focus(&input_focus, cx);
         self.format_dialog = Some(FormatDialog {
             code: input,
             sample: view.number.unwrap_or(1234.5678),
@@ -2148,7 +2159,9 @@ impl Workspace {
         };
         let code = dialog.code.read(cx).value().trim().to_string();
         let range = dialog.range;
-        if let Err(error) = zenkai_engine::format_preview(dialog.sample, &code) {
+        // A fixed in-range sample: a date code is valid even when the active cell holds
+        // a number no date can show, as Excel accepts it and shows ####.
+        if let Err(error) = zenkai_engine::format_preview(1234.5678, &code) {
             self.notify(
                 Severity::Warning,
                 format!("Invalid number format: {error}"),
@@ -2251,7 +2264,7 @@ impl Workspace {
             let text = now.format("%Y-%m-%d").to_string();
             self.edit(window, cx, move |wb| {
                 wb.set_input(sheet, active, &text)?;
-                widen_for_number(wb, sheet, active)
+                widen_for_numbers(wb, sheet, Range::single(active))
             });
             return;
         }
@@ -2907,20 +2920,21 @@ fn rgb_of(color: Hsla) -> Rgb {
 // Excel widens a column that still has the default width when a formatted number or date
 // typed into it would only show as ####. General numbers are shortened when painted
 // instead, and text keeps overflowing.
-fn widen_for_number(wb: &mut Workbook, sheet: SheetId, pos: CellPos) -> Result<(), EngineError> {
-    widen_for_numbers(wb, sheet, Range::single(pos))
-}
-
 // Each default-width column of `range` grows to its widest formatted number, once.
 fn widen_for_numbers(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<(), EngineError> {
     let sizes = wb.sizes(sheet);
     let mut needed: std::collections::BTreeMap<ColIdx, f32> = Default::default();
-    let cells = wb.filled_cells(sheet);
-    for pos in cells
-        .into_iter()
-        .filter(|pos| range.contains(*pos))
-        .take(MAX_AUTOFIT_CELLS)
-    {
+    // Small ranges are read cell by cell; large ones only where the sheet has content.
+    let cells: Vec<CellPos> = if range.cell_count() <= MAX_AUTOFIT_CELLS as u64 {
+        range.positions().collect()
+    } else {
+        wb.filled_cells(sheet)
+            .into_iter()
+            .filter(|pos| range.contains(*pos))
+            .take(MAX_AUTOFIT_CELLS)
+            .collect()
+    };
+    for pos in cells {
         let custom = sizes
             .columns
             .iter()
