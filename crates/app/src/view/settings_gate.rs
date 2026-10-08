@@ -19,8 +19,8 @@ impl Workspace {
         self.sync_bridge(cx);
         let state = cx.global::<AgentConfig>().state.clone();
         if state.held != self.shown_held {
-            if state.held.is_some() {
-                window.focus(&self.held_focus, cx);
+            if state.held.is_some() && self.shown_held.is_none() {
+                self.held_return_focus = self.take_focus_for_bar(&self.held_focus, window, cx);
             }
             self.shown_held = state.held.clone();
             cx.notify();
@@ -48,8 +48,9 @@ impl Workspace {
             HeldDecision::Apply => config.state.accept_held(),
             HeldDecision::Keep => config.state.decline_held(),
         });
-        let focus = self.grid.focus_handle(cx);
-        window.focus(&focus, cx);
+        let previous = self.held_return_focus.take();
+        self.release_focus_from_bar(&self.held_focus.clone(), previous, window, cx);
+        cx.notify();
     }
 
     pub(super) fn render_held_settings(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {

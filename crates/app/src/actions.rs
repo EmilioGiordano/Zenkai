@@ -210,7 +210,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", KeepCurrentSettings, Some("HeldSettings")),
         KeyBinding::new("escape", KeepCurrentSettings, Some("HeldSettings")),
         KeyBinding::new("alt-a", ApplyHeldSettings, Some("HeldSettings")),
-        KeyBinding::new("enter", AllowAgentChange, Some("AgentApproval")),
+        KeyBinding::new("enter", DenyAgentChange, Some("AgentApproval")),
+        KeyBinding::new("alt-y", AllowAgentChange, Some("AgentApproval")),
         KeyBinding::new("escape", DenyAgentChange, Some("AgentApproval")),
         KeyBinding::new("ctrl-shift-e", LetAgentsEdit, CONTEXT),
     ]);

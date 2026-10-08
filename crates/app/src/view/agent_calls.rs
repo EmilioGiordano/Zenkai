@@ -32,6 +32,7 @@ pub(super) struct PendingWrite {
     plan: PlannedWrite,
     generation: u64,
     focus: FocusHandle,
+    return_focus: Option<FocusHandle>,
 }
 
 pub(super) enum BridgeState {
@@ -229,7 +230,7 @@ impl Workspace {
         tools::check_workbook(open, id)?;
         self.agent_access(cx).check_write()?;
         // An agent write landing under the user's typing would mix the two edits.
-        if self.formula_bar.is_some() || self.grid.read(cx).editor().is_some() {
+        if self.user_is_editing(cx) {
             return Err(ToolError::UserEditing);
         }
         tools::plan_write(request, &self.document.sheets)
@@ -252,12 +253,13 @@ impl Workspace {
             return;
         }
         let focus = cx.focus_handle();
-        window.focus(&focus, cx);
+        let return_focus = self.take_focus_for_bar(&focus, window, cx);
         self.agent.pending = Some(PendingWrite {
             call,
             plan,
             generation: self.document.generation(),
             focus,
+            return_focus,
         });
         cx.notify();
     }
@@ -301,8 +303,7 @@ impl Workspace {
         let Some(pending) = self.agent.pending.take() else {
             return;
         };
-        let focus = self.grid.focus_handle(cx);
-        window.focus(&focus, cx);
+        self.release_focus_from_bar(&pending.focus, pending.return_focus.clone(), window, cx);
         cx.notify();
         if decision == Decision::Deny {
             pending.call.respond(Err(ToolError::Declined));
@@ -343,22 +344,53 @@ impl Workspace {
                         .text_color(theme.muted_foreground)
                         .child("Not saved; Ctrl+Z undoes it."),
                 )
-                .child(
-                    Button::new("agent-allow")
-                        .primary()
-                        .label("Allow (Enter)")
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(AllowAgentChange), cx)
-                        }),
-                )
+                .child(Button::new("agent-allow").label("Allow (Alt+Y)").on_click(
+                    |_, window, cx| window.dispatch_action(Box::new(AllowAgentChange), cx),
+                ))
                 .child(
                     Button::new("agent-deny")
-                        .label("Deny (Esc)")
+                        .primary()
+                        .label("Deny (Enter)")
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(DenyAgentChange), cx)
                         }),
                 ),
         )
+    }
+
+    pub(super) fn user_is_editing(&self, cx: &App) -> bool {
+        self.formula_bar.is_some() || self.grid.read(cx).editor().is_some()
+    }
+
+    // A bar that asks the user something takes the keyboard only when the user is not
+    // typing, so a keystroke meant for a cell never answers it; the focus it took goes
+    // back where it was.
+    pub(super) fn take_focus_for_bar(
+        &self,
+        bar: &FocusHandle,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<FocusHandle> {
+        if self.user_is_editing(cx) {
+            return None;
+        }
+        let previous = window.focused(cx);
+        window.focus(bar, cx);
+        previous
+    }
+
+    pub(super) fn release_focus_from_bar(
+        &self,
+        bar: &FocusHandle,
+        previous: Option<FocusHandle>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if !bar.is_focused(window) {
+            return;
+        }
+        let target = previous.unwrap_or_else(|| self.grid.focus_handle(cx));
+        window.focus(&target, cx);
     }
 
     // A change approved after its document was replaced would land in the new one.

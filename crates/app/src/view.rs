@@ -163,6 +163,7 @@ pub struct Workspace {
     // A settings.json change that gives agents more power, as last shown for confirmation.
     shown_held: Option<HeldChange>,
     held_focus: FocusHandle,
+    held_return_focus: Option<FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -256,6 +257,7 @@ impl Workspace {
             shown_settings_problem: None,
             shown_held: None,
             held_focus: cx.focus_handle(),
+            held_return_focus: None,
             _subscriptions: vec![
                 subscription,
                 appearance,
