@@ -120,6 +120,7 @@ pub struct Grid {
     frozen_cols: u16,
     merges: Rc<Vec<Range>>,
     last_paint: Rc<Cell<Duration>>,
+    active_formula: SharedString,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -162,7 +163,12 @@ impl Grid {
             frozen_cols: 0,
             merges: Rc::new(Vec::new()),
             last_paint: Rc::new(Cell::new(Duration::ZERO)),
+            active_formula: SharedString::default(),
         }
+    }
+
+    pub fn set_active_formula(&mut self, formula: SharedString) {
+        self.active_formula = formula;
     }
 
     pub fn last_paint(&self) -> Duration {
@@ -699,8 +705,21 @@ impl Render for Grid {
         };
         let weak = cx.entity().downgrade();
         let last_paint = self.last_paint.clone();
+        let active = self.selection.active;
+        let active_text = self
+            .cells
+            .get(&active)
+            .map(|cell| cell.text.clone())
+            .unwrap_or_default();
+        let active_label = if active_text.is_empty() {
+            format!("{active}, blank")
+        } else {
+            format!("{active}, {active_text}")
+        };
         div()
             .id("grid")
+            .role(Role::Grid)
+            .aria_label("Sheet")
             .key_context("Grid")
             .track_focus(&self.focus)
             .size_full()
@@ -825,6 +844,19 @@ impl Render for Grid {
                 cx.listener(|g, _: &MouseUpEvent, _, _| g.dragging = false),
             )
             .on_scroll_wheel(cx.listener(Self::on_scroll))
+            .child(
+                div()
+                    .id((
+                        "active-cell",
+                        active.row.get() as u64 * 16_384 + u64::from(active.col.get()),
+                    ))
+                    .role(Role::Cell)
+                    .aria_label(active_label)
+                    .aria_description(self.active_formula.clone())
+                    .aria_selected(true)
+                    .absolute()
+                    .size_0(),
+            )
             .child(
                 canvas(
                     move |bounds, _, cx| {

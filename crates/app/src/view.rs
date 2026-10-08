@@ -622,6 +622,14 @@ impl Workspace {
             self.stats = stats::compute(wb, sheet, selection.range());
             self.active_input = wb.input(sheet, selection.active).into();
             self.active_style = wb.cell(sheet, selection.active).style;
+            let formula = self.active_input.clone();
+            let formula = if formula.starts_with('=') {
+                formula
+            } else {
+                SharedString::default()
+            };
+            self.grid
+                .update(cx, |grid, _| grid.set_active_formula(formula));
         }
         cx.notify();
     }
@@ -1292,6 +1300,8 @@ impl Workspace {
                     .into_any_element(),
                 None => div()
                     .id("name-box")
+                    .role(Role::Button)
+                    .aria_label(format!("Name box, {name}, press to go to a cell"))
                     .w(px(96.0))
                     .h(px(24.0))
                     .px_2()
@@ -1317,6 +1327,9 @@ impl Workspace {
             .child(
                 div()
                     .id("formula-content")
+                    .role(Role::TextInput)
+                    .aria_label("Formula bar")
+                    .aria_value(content.clone())
                     .flex_1()
                     .h(px(24.0))
                     .px_2()
