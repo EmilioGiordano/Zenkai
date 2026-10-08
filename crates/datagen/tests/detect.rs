@@ -38,13 +38,13 @@ fn detects_spanish_and_english_synonyms_ignoring_case_and_accents() {
         is(header, |kind| matches!(kind, ColumnKind::Pattern { .. }));
     }
     for header in ["Ciudad", "City"] {
-        is(header, |kind| matches!(kind, ColumnKind::City));
+        is(header, |kind| matches!(kind, ColumnKind::City {}));
     }
     for header in ["Dirección", "direccion", "Address"] {
-        is(header, |kind| matches!(kind, ColumnKind::StreetAddress));
+        is(header, |kind| matches!(kind, ColumnKind::StreetAddress {}));
     }
     for header in ["Empresa", "Company", "Compañía"] {
-        is(header, |kind| matches!(kind, ColumnKind::Company));
+        is(header, |kind| matches!(kind, ColumnKind::Company {}));
     }
     for header in ["", "Notas", "Apellido materno", "nombre de usuario"] {
         assert_eq!(detected(header), None, "{header}");

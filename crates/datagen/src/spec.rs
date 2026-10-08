@@ -88,10 +88,10 @@ pub enum ColumnKind {
         pattern: String,
     },
     #[schemars(description = "Street and number.")]
-    StreetAddress,
-    City,
+    StreetAddress {},
+    City {},
     #[schemars(description = "Made-up company name with a legal suffix.")]
-    Company,
+    Company {},
     #[schemars(description = "Whole number between min and max, both included.")]
     Integer {
         min: i64,
@@ -109,7 +109,7 @@ pub enum ColumnKind {
         to: Date,
     },
     #[schemars(description = "TRUE or FALSE.")]
-    Boolean,
+    Boolean {},
     #[schemars(description = "One of the listed values, optionally weighted.")]
     OneOf {
         options: Vec<ListOption>,
@@ -122,7 +122,7 @@ pub enum ColumnKind {
         step: i64,
     },
     #[schemars(description = "Random version 4 UUID.")]
-    Uuid,
+    Uuid {},
     #[schemars(description = "Lorem ipsum sentence with a word count in the range.")]
     Lorem {
         min_words: u16,

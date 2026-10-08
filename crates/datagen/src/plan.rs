@@ -129,13 +129,13 @@ fn column_values(
         ColumnKind::Pattern { pattern } => {
             ValueSet::Code(Pattern::parse(pattern, Placeholders::LettersAndDigits)?)
         }
-        ColumnKind::StreetAddress => ValueSet::StreetAddress(locale),
-        ColumnKind::City => ValueSet::City(locale.cities),
-        ColumnKind::Company => ValueSet::Company(locale),
+        ColumnKind::StreetAddress {} => ValueSet::StreetAddress(locale),
+        ColumnKind::City {} => ValueSet::City(locale.cities),
+        ColumnKind::Company {} => ValueSet::Company(locale),
         ColumnKind::Integer { min, max } => integer_set(*min, *max)?,
         ColumnKind::Decimal { min, max, places } => decimal_set(*min, *max, *places)?,
         ColumnKind::Date { from, to } => date_set(*from, *to)?,
-        ColumnKind::Boolean => ValueSet::Boolean,
+        ColumnKind::Boolean {} => ValueSet::Boolean,
         ColumnKind::OneOf { options } => one_of_set(options, uniqueness)?,
         ColumnKind::SequentialId { start, step } => {
             check_sequence(*start, *step, spec.rows)?;
@@ -144,7 +144,7 @@ fn column_values(
                 step: *step,
             });
         }
-        ColumnKind::Uuid => ValueSet::Uuid,
+        ColumnKind::Uuid {} => ValueSet::Uuid,
         ColumnKind::Lorem {
             min_words,
             max_words,

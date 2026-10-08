@@ -171,8 +171,8 @@ fn default_kind(detected: Detected, locale: Locale) -> ColumnKind {
         Detected::Code => ColumnKind::Pattern {
             pattern: "AAA-####".to_string(),
         },
-        Detected::City => ColumnKind::City,
-        Detected::Address => ColumnKind::StreetAddress,
-        Detected::Company => ColumnKind::Company,
+        Detected::City => ColumnKind::City {},
+        Detected::Address => ColumnKind::StreetAddress {},
+        Detected::Company => ColumnKind::Company {},
     }
 }

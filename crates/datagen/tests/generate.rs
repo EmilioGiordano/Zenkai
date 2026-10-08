@@ -80,9 +80,9 @@ fn every_kind() -> Vec<ColumnSpec> {
                 last_names: LastNameCount::Two,
             },
         ),
-        column("Dirección", ColumnKind::StreetAddress),
-        column("Ciudad", ColumnKind::City),
-        column("Empresa", ColumnKind::Company),
+        column("Dirección", ColumnKind::StreetAddress {}),
+        column("Ciudad", ColumnKind::City {}),
+        column("Empresa", ColumnKind::Company {}),
         column("Edad", ColumnKind::Integer { min: -5, max: 90 }),
         column(
             "Precio",
@@ -92,7 +92,7 @@ fn every_kind() -> Vec<ColumnSpec> {
                 places: 2,
             },
         ),
-        column("Activo", ColumnKind::Boolean),
+        column("Activo", ColumnKind::Boolean {}),
         column(
             "Producto",
             ColumnKind::OneOf {
@@ -115,7 +115,7 @@ fn every_kind() -> Vec<ColumnSpec> {
                 step: 5,
             },
         ),
-        column("Clave", ColumnKind::Uuid),
+        column("Clave", ColumnKind::Uuid {}),
         column(
             "Notas",
             ColumnKind::Lorem {
@@ -173,7 +173,7 @@ const PINNED_ROWS: [[&str; 5]; 2] = [
 fn adding_a_column_leaves_the_others_unchanged() {
     let before = generate(&spec(50, people_columns())).unwrap();
     let mut columns = people_columns();
-    columns.push(column("Ciudad", ColumnKind::City));
+    columns.push(column("Ciudad", ColumnKind::City {}));
     let after = generate(&spec(50, columns)).unwrap();
     for (old, new) in before.iter().zip(&after) {
         assert_eq!(old[..], new[..5]);
@@ -227,7 +227,7 @@ fn unique_columns_never_repeat_even_when_the_domain_is_exhausted() {
     let es_ar_cities = 50;
     let rows = generate(&spec(
         es_ar_cities,
-        vec![unique(column("Ciudad", ColumnKind::City))],
+        vec![unique(column("Ciudad", ColumnKind::City {}))],
     ))
     .unwrap();
     assert_eq!(distinct_values(&rows, 0), es_ar_cities as usize);
@@ -241,7 +241,7 @@ fn unique_columns_never_repeat_even_when_the_domain_is_exhausted() {
     let rows = generate(&spec(260, vec![codes])).unwrap();
     assert_eq!(distinct_values(&rows, 0), 260);
 
-    let mut booleans = unique(column("Activo", ColumnKind::Boolean));
+    let mut booleans = unique(column("Activo", ColumnKind::Boolean {}));
     booleans.blanks = Percent::new(50).unwrap();
     let rows = generate(&spec(4, vec![booleans])).unwrap();
     assert_eq!(distinct_values(&rows, 0), 2);
@@ -254,7 +254,7 @@ fn unique_columns_never_repeat_even_when_the_domain_is_exhausted() {
 
 #[test]
 fn too_small_domains_fail_before_generating() {
-    let mut bools = column("Activo", ColumnKind::Boolean);
+    let mut bools = column("Activo", ColumnKind::Boolean {});
     bools.unique = true;
     assert_eq!(
         generate(&spec(3, vec![bools.clone()])),
@@ -480,7 +480,7 @@ fn invalid_specs_name_the_column_and_the_problem() {
     );
     assert_eq!(
         problem_of(vec![
-            column("Nombre", ColumnKind::City),
+            column("Nombre", ColumnKind::City {}),
             email_from("Nombre")
         ]),
         ColumnProblem::NotFirstNameSource {
@@ -636,14 +636,20 @@ fn invalid_specs_name_the_column_and_the_problem() {
 fn spec_level_limits() {
     assert_eq!(validate(&spec(10, vec![])), Err(DatagenError::NoColumns));
     assert_eq!(
-        validate(&spec(1_048_576, vec![column("Ciudad", ColumnKind::City)])),
+        validate(&spec(
+            1_048_576,
+            vec![column("Ciudad", ColumnKind::City {})]
+        )),
         Err(DatagenError::TooManyRows {
             requested: 1_048_576,
             limit: 1_048_575
         })
     );
     assert_eq!(
-        validate(&spec(1_048_575, vec![column("Ciudad", ColumnKind::City)])),
+        validate(&spec(
+            1_048_575,
+            vec![column("Ciudad", ColumnKind::City {})]
+        )),
         Ok(())
     );
     let sequence = column(

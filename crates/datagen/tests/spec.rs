@@ -70,6 +70,15 @@ fn malformed_json_is_rejected_with_a_reason() {
     let unknown_column_field =
         one_column(r#"{ "header": "A", "kind": { "type": "city" }, "nulls": 5 }"#);
     assert!(parse_error(&unknown_column_field).contains("unknown field `nulls`"));
+    for kind in ["street_address", "city", "company", "boolean", "uuid"] {
+        let unknown_field = one_column(&format!(
+            r#"{{ "header": "A", "kind": {{ "type": "{kind}", "unique": true }} }}"#
+        ));
+        assert!(
+            parse_error(&unknown_field).contains("unknown field `unique`"),
+            "{kind}"
+        );
+    }
     let unknown_kind = one_column(r#"{ "header": "A", "kind": { "type": "ssn" } }"#);
     assert!(parse_error(&unknown_kind).contains("unknown variant `ssn`"));
     let bad_percent = one_column(r#"{ "header": "A", "kind": { "type": "city" }, "blanks": 120 }"#);
