@@ -58,7 +58,7 @@ impl Selection {
 #[derive(Clone, Debug)]
 pub enum GridEvent {
     SelectionChanged,
-    ViewportChanged(Range),
+    ViewportChanged,
     EditRequested(CellPos),
     EditChanged,
     Commit { pos: CellPos, text: String },
@@ -81,6 +81,17 @@ pub struct Grid {
     zoom: f32,
     dragging: bool,
     marquee: Option<Range>,
+    frozen_rows: u32,
+    frozen_cols: u16,
+    merges: Rc<Vec<Range>>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SheetView {
+    pub layout: Layout,
+    pub frozen_rows: u32,
+    pub frozen_cols: u16,
+    pub merges: Vec<Range>,
 }
 
 impl EventEmitter<GridEvent> for Grid {}
@@ -110,6 +121,9 @@ impl Grid {
             zoom: 1.0,
             dragging: false,
             marquee: None,
+            frozen_rows: 0,
+            frozen_cols: 0,
+            merges: Rc::new(Vec::new()),
         }
     }
 
@@ -125,18 +139,52 @@ impl Grid {
         self.zoom
     }
 
-    pub fn visible_range(&self) -> Range {
-        Range::new(
-            CellPos::new(self.top, self.left),
-            CellPos::new(
-                self.top.offset(i64::from(self.visible_rows)),
-                self.left.offset(i64::from(self.visible_cols)),
-            ),
+    fn scroll_origin(&self) -> CellPos {
+        CellPos::new(
+            self.top.max(RowIdx::clamped(i64::from(self.frozen_rows))),
+            self.left.max(ColIdx::clamped(i64::from(self.frozen_cols))),
         )
     }
 
-    pub fn reset(&mut self, layout: Layout, cx: &mut Context<Self>) {
-        self.layout = Rc::new(layout);
+    pub fn visible_ranges(&self) -> Vec<Range> {
+        let origin = self.scroll_origin();
+        let end = CellPos::new(
+            origin.row.offset(i64::from(self.visible_rows)),
+            origin.col.offset(i64::from(self.visible_cols)),
+        );
+        let mut ranges = vec![Range::new(origin, end)];
+        let zero = CellPos::default();
+        if self.frozen_rows > 0 {
+            let last = RowIdx::clamped(i64::from(self.frozen_rows) - 1);
+            ranges.push(Range::new(
+                CellPos::new(zero.row, origin.col),
+                CellPos::new(last, end.col),
+            ));
+        }
+        if self.frozen_cols > 0 {
+            let last = ColIdx::clamped(i64::from(self.frozen_cols) - 1);
+            ranges.push(Range::new(
+                CellPos::new(origin.row, zero.col),
+                CellPos::new(end.row, last),
+            ));
+        }
+        if self.frozen_rows > 0 && self.frozen_cols > 0 {
+            ranges.push(Range::new(
+                zero,
+                CellPos::new(
+                    RowIdx::clamped(i64::from(self.frozen_rows) - 1),
+                    ColIdx::clamped(i64::from(self.frozen_cols) - 1),
+                ),
+            ));
+        }
+        ranges
+    }
+
+    pub fn reset(&mut self, view: SheetView, cx: &mut Context<Self>) {
+        self.layout = Rc::new(view.layout);
+        self.frozen_rows = view.frozen_rows;
+        self.frozen_cols = view.frozen_cols;
+        self.merges = Rc::new(view.merges);
         self.cells = Rc::new(HashMap::new());
         self.top = RowIdx::default();
         self.left = ColIdx::default();
@@ -293,7 +341,7 @@ impl Grid {
 
     fn viewport_changed(&mut self, cx: &mut Context<Self>) {
         self.recompute_viewport(cx);
-        cx.emit(GridEvent::ViewportChanged(self.visible_range()));
+        cx.emit(GridEvent::ViewportChanged);
         cx.notify();
     }
 
@@ -314,8 +362,25 @@ impl Grid {
     fn hit(&self, position: Point<Pixels>) -> Hit {
         let x = f32::from(position.x - self.bounds.origin.x) / self.zoom;
         let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
-        let row = self.layout.row_at(self.top, y - HEADER_HEIGHT);
-        let col = self.layout.col_at(self.left, x - ROW_HEADER_WIDTH);
+        let frozen_h: f32 = (0..self.frozen_rows)
+            .map(|r| self.layout.row_height(RowIdx::clamped(i64::from(r))))
+            .sum();
+        let frozen_w: f32 = (0..self.frozen_cols)
+            .map(|c| self.layout.col_width(ColIdx::clamped(i64::from(c))))
+            .sum();
+        let origin = self.scroll_origin();
+        let body_y = y - HEADER_HEIGHT;
+        let body_x = x - ROW_HEADER_WIDTH;
+        let row = if body_y < frozen_h {
+            self.layout.row_at(RowIdx::default(), body_y)
+        } else {
+            self.layout.row_at(origin.row, body_y - frozen_h)
+        };
+        let col = if body_x < frozen_w {
+            self.layout.col_at(ColIdx::default(), body_x)
+        } else {
+            self.layout.col_at(origin.col, body_x - frozen_w)
+        };
         match (x < ROW_HEADER_WIDTH, y < HEADER_HEIGHT) {
             (true, true) => Hit::Corner,
             (true, false) => Hit::RowHeader(row),
@@ -424,6 +489,10 @@ impl Grid {
         cx.emit(GridEvent::EditChanged);
         cx.stop_propagation();
         cx.notify();
+    }
+
+    pub fn merge_at(&self, pos: CellPos) -> Option<Range> {
+        self.merges.iter().find(|m| m.contains(pos)).copied()
     }
 
     fn select_all(&mut self, cx: &mut Context<Self>) {
@@ -537,6 +606,9 @@ impl Render for Grid {
             zoom: self.zoom,
             focused: self.focus.is_focused(window),
             colors: paint::Colors::from_theme(cx),
+            frozen_rows: self.frozen_rows,
+            frozen_cols: self.frozen_cols,
+            merges: self.merges.clone(),
             font: cx.theme().font_family.clone(),
         };
         let weak = cx.entity().downgrade();

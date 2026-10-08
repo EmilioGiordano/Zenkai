@@ -6,5 +6,7 @@ mod layout;
 mod paint;
 
 pub use actions::bind_keys;
-pub use grid::{Direction, EditMode, Editor, Grid, GridCell, GridEvent, Selection, step};
+pub use grid::{
+    Direction, EditMode, Editor, Grid, GridCell, GridEvent, Selection, SheetView, step,
+};
 pub use layout::Layout;

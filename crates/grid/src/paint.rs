@@ -24,22 +24,30 @@ pub struct Colors {
     accent: Hsla,
     selection: Hsla,
     error: Hsla,
+    frozen: Hsla,
 }
 
 impl Colors {
     pub fn from_theme(cx: &App) -> Colors {
         let theme = cx.theme();
+        // Excel's selection green; a lighter tone keeps contrast on dark backgrounds.
+        let accent: Hsla = if theme.mode.is_dark() {
+            rgb(0x4C_AF_7A).into()
+        } else {
+            rgb(0x21_73_46).into()
+        };
         Colors {
             background: theme.background,
             foreground: theme.foreground,
             gridline: theme.border.opacity(0.6),
             header: theme.table_head,
             header_text: theme.muted_foreground,
-            header_active: theme.accent,
-            header_active_text: theme.accent_foreground,
-            accent: theme.primary,
-            selection: theme.primary.opacity(0.12),
+            header_active: theme.border,
+            header_active_text: accent,
+            accent,
+            selection: accent.opacity(0.14),
             error: theme.danger,
+            frozen: theme.muted_foreground.opacity(0.6),
         }
     }
 }
@@ -59,6 +67,9 @@ pub struct Frame {
     pub focused: bool,
     pub colors: Colors,
     pub font: SharedString,
+    pub frozen_rows: u32,
+    pub frozen_cols: u16,
+    pub merges: Rc<Vec<Range>>,
 }
 
 struct Columns {
@@ -98,51 +109,82 @@ fn rect(origin: Point<Pixels>, x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels>
     )
 }
 
+fn columns(frame: &Frame, width: f32) -> Columns {
+    let z = frame.zoom;
+    let mut x = ROW_HEADER_WIDTH * z;
+    let mut xs = Vec::with_capacity(usize::from(frame.cols) + 1);
+    let frozen = (0..frame.frozen_cols).map(|c| ColIdx::clamped(i64::from(c)));
+    let start = frame
+        .left
+        .max(ColIdx::clamped(i64::from(frame.frozen_cols)));
+    let scrolled = (start.get()..=ColIdx::LAST.get()).map(|c| ColIdx::clamped(i64::from(c)));
+    for col in frozen.chain(scrolled) {
+        if x >= width {
+            break;
+        }
+        let w = frame.layout.col_width(col) * z;
+        xs.push((col, x, w));
+        x += w;
+    }
+    Columns { xs }
+}
+
+fn rows(frame: &Frame, height: f32) -> Rows {
+    let z = frame.zoom;
+    let mut y = HEADER_HEIGHT * z;
+    let mut ys = Vec::with_capacity(frame.rows as usize + 1);
+    let frozen = (0..frame.frozen_rows).map(|r| RowIdx::clamped(i64::from(r)));
+    let start = frame.top.max(RowIdx::clamped(i64::from(frame.frozen_rows)));
+    let scrolled = (start.get()..=RowIdx::LAST.get()).map(|r| RowIdx::clamped(i64::from(r)));
+    for row in frozen.chain(scrolled) {
+        if y >= height {
+            break;
+        }
+        let h = frame.layout.row_height(row) * z;
+        ys.push((row, y, h));
+        y += h;
+    }
+    Rows { ys }
+}
+
 pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
     let z = frame.zoom;
     let c = frame.colors;
     let origin = bounds.origin;
     window.paint_quad(fill(bounds, c.background));
 
-    let mut x = ROW_HEADER_WIDTH * z;
-    let mut xs = Vec::with_capacity(usize::from(frame.cols) + 1);
-    let mut col = frame.left;
-    while x < f32::from(bounds.size.width) {
-        let w = frame.layout.col_width(col) * z;
-        xs.push((col, x, w));
-        x += w;
-        if col == ColIdx::LAST {
-            break;
-        }
-        col = col.offset(1);
-    }
-    let columns = Columns { xs };
-
-    let mut y = HEADER_HEIGHT * z;
-    let mut ys = Vec::with_capacity(frame.rows as usize + 1);
-    let mut row = frame.top;
-    while y < f32::from(bounds.size.height) {
-        let h = frame.layout.row_height(row) * z;
-        ys.push((row, y, h));
-        y += h;
-        if row == RowIdx::LAST {
-            break;
-        }
-        row = row.offset(1);
-    }
-    let rows = Rows { ys };
-    let right = x;
-    let bottom = y;
+    let columns = columns(frame, f32::from(bounds.size.width));
+    let rows = rows(frame, f32::from(bounds.size.height));
+    let right = columns.xs.last().map_or(0.0, |(_, x, w)| x + w);
+    let bottom = rows.ys.last().map_or(0.0, |(_, y, h)| y + h);
 
     let font_size = BASE_FONT_SIZE * z;
     let line_height = px(font_size * 1.3);
     let editing = frame.editor.as_ref().map(|e| e.pos);
+    let visible = match (
+        columns.xs.first(),
+        columns.xs.last(),
+        rows.ys.first(),
+        rows.ys.last(),
+    ) {
+        (Some(c0), Some(c1), Some(r0), Some(r1)) => Some(Range::new(
+            CellPos::new(r0.0, c0.0),
+            CellPos::new(r1.0, c1.0),
+        )),
+        _ => None,
+    };
+    let merges: Vec<Range> = frame
+        .merges
+        .iter()
+        .filter(|m| visible.is_some_and(|v| v.intersects(m)))
+        .copied()
+        .collect();
+    let merged = |pos: CellPos| merges.iter().any(|m| m.contains(pos));
 
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (row, y, h) in &rows.ys {
             for (col, x, w) in &columns.xs {
-                let pos = CellPos::new(*row, *col);
-                let Some(cell) = frame.cells.get(&pos) else {
+                let Some(cell) = frame.cells.get(&CellPos::new(*row, *col)) else {
                     continue;
                 };
                 if let Some(fill_color) = cell.style.fill {
@@ -164,10 +206,31 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
             ));
         }
 
+        for merge in &merges {
+            let Some(area) = range_rect(*merge, &columns, &rows, origin, z) else {
+                continue;
+            };
+            let cell = frame.cells.get(&merge.start);
+            let background = cell
+                .and_then(|cell| cell.style.fill)
+                .map_or(c.background, rgb_to_hsla);
+            let inner = Bounds::new(
+                area.origin,
+                size(area.size.width - px(1.0), area.size.height - px(1.0)),
+            );
+            window.paint_quad(fill(inner, background));
+            if let Some(cell) = cell
+                && !cell.text.is_empty()
+                && Some(merge.start) != editing
+            {
+                paint_cell_text(frame, cell, area, area.size.width, window, cx);
+            }
+        }
+
         for (row, y, h) in &rows.ys {
-            for (col, x, w) in &columns.xs {
+            for (col_index, (col, x, w)) in columns.xs.iter().enumerate() {
                 let pos = CellPos::new(*row, *col);
-                if Some(pos) == editing {
+                if Some(pos) == editing || merged(pos) {
                     continue;
                 }
                 let Some(cell) = frame.cells.get(&pos) else {
@@ -182,8 +245,34 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
                 if cell.text.is_empty() {
                     continue;
                 }
-                paint_cell_text(frame, cell, rect(origin, *x, *y, *w, *h), window, cx);
+                let overflow = if overflows_right(cell) {
+                    columns.xs[col_index + 1..]
+                        .iter()
+                        .take_while(|(next, _, _)| {
+                            let next = CellPos::new(*row, *next);
+                            !frame.cells.get(&next).is_some_and(|n| !n.text.is_empty())
+                                && !merged(next)
+                                && Some(next) != editing
+                        })
+                        .map(|(_, _, w)| *w)
+                        .sum::<f32>()
+                } else {
+                    0.0
+                };
+                let area = rect(origin, *x, *y, *w, *h);
+                paint_cell_text(frame, cell, area, px(w + overflow), window, cx);
             }
+        }
+
+        if frame.frozen_rows > 0
+            && let Some((_, y, h)) = rows.ys.get(frame.frozen_rows as usize - 1)
+        {
+            window.paint_quad(fill(rect(origin, 0.0, y + h - 1.0, right, 1.0), c.frozen));
+        }
+        if frame.frozen_cols > 0
+            && let Some((_, x, w)) = columns.xs.get(usize::from(frame.frozen_cols) - 1)
+        {
+            window.paint_quad(fill(rect(origin, x + w - 1.0, 0.0, 1.0, bottom), c.frozen));
         }
 
         paint_selection(frame, &columns, &rows, origin, bounds, window);
@@ -201,6 +290,10 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
             paint_editor(frame, editor, &columns, &rows, origin, window, cx);
         }
     });
+}
+
+fn overflows_right(cell: &GridCell) -> bool {
+    cell.kind == ValueKind::Text && matches!(cell.style.align, HAlign::General | HAlign::Left)
 }
 
 fn text_run(frame: &Frame, cell: &GridCell, len: usize, color: Hsla) -> TextRun {
@@ -232,6 +325,7 @@ fn paint_cell_text(
     frame: &Frame,
     cell: &GridCell,
     bounds: Bounds<Pixels>,
+    max_width: Pixels,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -244,11 +338,22 @@ fn paint_cell_text(
     let points = cell.style.font_size.unwrap_or(DEFAULT_POINTS);
     let font_size = px(BASE_FONT_SIZE * points / DEFAULT_POINTS * frame.zoom);
     let line_height = font_size * 1.3;
-    let run = text_run(frame, cell, cell.text.len(), color);
-    let line = window
-        .text_system()
-        .shape_line(cell.text.clone(), font_size, &[run], None);
     let padding = px(CELL_PADDING * frame.zoom);
+    let shape = |text: SharedString, window: &mut Window| {
+        let run = text_run(frame, cell, text.len(), color);
+        window
+            .text_system()
+            .shape_line(text, font_size, &[run], None)
+    };
+    let mut line = shape(cell.text.clone(), window);
+    // Excel never truncates a number: one that does not fit shows as #### instead.
+    if cell.kind == ValueKind::Number && line.width + padding * 2.0 > bounds.size.width {
+        let hash = shape("#".into(), window).width.max(px(1.0));
+        let count = ((bounds.size.width - padding * 2.0) / hash)
+            .floor()
+            .max(1.0) as usize;
+        line = shape("#".repeat(count).into(), window);
+    }
     let width = line.width;
     let align = match cell.style.align {
         HAlign::Left => HAlign::Left,
@@ -266,9 +371,28 @@ fn paint_cell_text(
         HAlign::Left | HAlign::General => bounds.origin.x + padding,
     };
     let y = bounds.origin.y + bounds.size.height - line_height - px(2.0 * frame.zoom);
+    let needed = width + padding * 2.0;
+    let clip_width = if needed > bounds.size.width && max_width > bounds.size.width {
+        let spill_width = needed.min(max_width);
+        let spill = Bounds::new(
+            point(
+                bounds.origin.x + bounds.size.width - px(1.0),
+                bounds.origin.y,
+            ),
+            size(
+                spill_width - bounds.size.width,
+                bounds.size.height - px(1.0),
+            ),
+        );
+        let background = cell.style.fill.map_or(frame.colors.background, rgb_to_hsla);
+        window.paint_quad(fill(spill, background));
+        spill_width
+    } else {
+        bounds.size.width
+    };
     let clip = Bounds::new(
         bounds.origin,
-        size(bounds.size.width - px(1.0), bounds.size.height - px(1.0)),
+        size(clip_width - px(1.0), bounds.size.height - px(1.0)),
     );
     window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
         if let Err(error) = line.paint(point(x, y), line_height, TextAlign::Left, None, window, cx)

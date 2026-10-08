@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -8,7 +9,7 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
 use zenkai_engine::{Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
-use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout};
+use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_types::{CellPos, HAlign, NumberFormat, Range, SheetId, StyleChange};
 
 use crate::actions::*;
@@ -72,12 +73,21 @@ impl Workspace {
     }
 
     fn reset_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let layout = self
+        let sheet = self.document.sheet;
+        let view = self
             .document
             .workbook()
-            .map(|wb| Layout::from_sizes(&wb.sizes(self.document.sheet)))
+            .map(|wb| {
+                let (frozen_rows, frozen_cols) = wb.frozen(sheet);
+                SheetView {
+                    layout: Layout::from_sizes(&wb.sizes(sheet)),
+                    frozen_rows,
+                    frozen_cols,
+                    merges: wb.merged(sheet),
+                }
+            })
             .unwrap_or_default();
-        self.grid.update(cx, |grid, cx| grid.reset(layout, cx));
+        self.grid.update(cx, |grid, cx| grid.reset(view, cx));
         window.set_window_title(&self.document.title());
         let focus = self.grid.focus_handle(cx);
         window.focus(&focus, cx);
@@ -85,8 +95,11 @@ impl Workspace {
     }
 
     fn refresh_cells(&mut self, cx: &mut Context<Self>) {
-        let range = self.grid.read(cx).visible_range();
-        let cells = self.document.cells(range);
+        let ranges = self.grid.read(cx).visible_ranges();
+        let mut cells = HashMap::new();
+        for range in ranges {
+            cells.extend(self.document.cells(range));
+        }
         self.grid.update(cx, |grid, cx| grid.set_cells(cells, cx));
         self.refresh_stats(cx);
     }
@@ -122,7 +135,7 @@ impl Workspace {
     ) {
         match event {
             GridEvent::SelectionChanged => self.refresh_stats(cx),
-            GridEvent::ViewportChanged(_) => self.refresh_cells(cx),
+            GridEvent::ViewportChanged => self.refresh_cells(cx),
             GridEvent::EditChanged => cx.notify(),
             GridEvent::EditRequested(pos) => {
                 let text = self
@@ -612,15 +625,7 @@ impl Workspace {
         let theme = cx.theme();
         let grid = self.grid.read(cx);
         let selection = grid.selection();
-        let name = if selection.range().cell_count() > 1 && grid.editor().is_none() {
-            format!(
-                "{}R x {}C",
-                selection.range().rows(),
-                selection.range().cols()
-            )
-        } else {
-            selection.active.to_string()
-        };
+        let name = selection.active.to_string();
         let content: SharedString = match grid.editor() {
             Some(editor) => editor.text.clone().into(),
             None => self
