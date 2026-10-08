@@ -111,6 +111,7 @@ impl Workspace {
 
     fn reset_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.load_sheet_view(cx);
+        self.refresh_stats(cx);
         window.set_window_title(&self.document.title());
         let focus = self.grid.focus_handle(cx);
         window.focus(&focus, cx);
@@ -143,7 +144,6 @@ impl Workspace {
             cells.extend(self.document.cells(range));
         }
         self.grid.update(cx, |grid, cx| grid.set_cells(cells, cx));
-        self.refresh_stats(cx);
     }
 
     fn refresh_chart(&mut self) {
@@ -757,6 +757,7 @@ impl Workspace {
                     this.notify(Severity::Error, error.to_string(), cx);
                 }
                 this.refresh_cells(cx);
+                this.refresh_stats(cx);
                 this.refresh_chart();
                 this.forget_find_results();
                 this.flush_edits(cx);

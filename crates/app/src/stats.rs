@@ -1,7 +1,7 @@
 use zenkai_engine::{Engine, Workbook};
 use zenkai_types::{Range, SheetId, ValueKind};
 
-const MAX_SCANNED: u64 = 2_000_000;
+const MAX_SCANNED: u64 = 500_000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SelectionStats {
