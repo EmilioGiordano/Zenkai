@@ -17,7 +17,11 @@ use zenkai_types::{
 
 const LOCALE: &str = "en";
 const MAX_FILL_CELLS: u64 = 1_000_000;
-const MAX_STYLED_CELLS: u64 = 3_000_000;
+// IronCalc's undo history keeps about 1.5 KB per styled cell (measured: 2.8M cells cost
+// 4.3 GB, 6.4 GB peak on undo), so styling is capped by memory, not by what the sheet holds.
+const STYLE_HISTORY_BYTES_PER_CELL: u64 = 1536;
+const STYLE_HISTORY_BUDGET_BYTES: u64 = 1536 * 1024 * 1024;
+const MAX_STYLED_CELLS: u64 = STYLE_HISTORY_BUDGET_BYTES / STYLE_HISTORY_BYTES_PER_CELL;
 const LANGUAGE: &str = "en";
 // Stored widths are in Excel characters and heights in points; these give Excel's pixels.
 const PIXELS_PER_CHAR: f64 = 7.0;
@@ -249,11 +253,11 @@ fn area(sheet: SheetId, range: Range) -> Area {
 }
 
 impl Workbook {
-    // Up to MAX_FILL_CELLS the range is styled as selected, so a cell typed into later
+    // Up to MAX_STYLED_CELLS the range is styled as selected, so a cell typed into later
     // keeps the format as in Excel. A bigger one is cut to the used area, which holds
     // every cell that exists; `None` means the range lies wholly beyond it.
     fn style_target(&self, sheet: SheetId, range: Range) -> Result<Option<Range>, EngineError> {
-        if whole_lines(range) || range.cell_count() <= MAX_FILL_CELLS {
+        if whole_lines(range) || range.cell_count() <= MAX_STYLED_CELLS {
             return Ok(Some(range));
         }
         let Some(used) = range.clip_to(self.used_end(sheet)) else {
