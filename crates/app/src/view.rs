@@ -78,7 +78,6 @@ pub struct Workspace {
     go_to: Option<(Entity<InputState>, Subscription)>,
     pending_sheet: Option<SheetId>,
     last_tab_click: Option<(Instant, SheetId)>,
-    structure_changed: bool,
     memory_mb: u64,
     diagnostics_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -111,7 +110,6 @@ impl Workspace {
             go_to: None,
             pending_sheet: None,
             last_tab_click: None,
-            structure_changed: false,
             memory_mb: 0,
             diagnostics_task: None,
             _subscriptions: vec![subscription],
@@ -134,9 +132,14 @@ impl Workspace {
 
     fn load_sheet_view(&mut self, cx: &mut Context<Self>) {
         self.forget_find_results();
+        let view = self.sheet_view();
+        self.grid.update(cx, |grid, cx| grid.reset(view, cx));
+        self.refresh_cells(cx);
+    }
+
+    fn sheet_view(&self) -> SheetView {
         let sheet = self.document.sheet;
-        let view = self
-            .document
+        self.document
             .workbook()
             .map(|wb| {
                 let (frozen_rows, frozen_cols) = wb.frozen(sheet);
@@ -147,9 +150,7 @@ impl Workspace {
                     merges: wb.merged(sheet),
                 }
             })
-            .unwrap_or_default();
-        self.grid.update(cx, |grid, cx| grid.reset(view, cx));
-        self.refresh_cells(cx);
+            .unwrap_or_default()
     }
 
     fn refresh_cells(&mut self, cx: &mut Context<Self>) {
@@ -769,10 +770,14 @@ impl Workspace {
                     this.document.sheet = target;
                 }
                 let sheet_changed = this.document.sheet != sheet_before
-                    || this.document.sheets.len() != sheets_before.len()
-                    || std::mem::take(&mut this.structure_changed);
+                    || this.document.sheets.len() != sheets_before.len();
                 if sheet_changed {
                     this.load_sheet_view(cx);
+                } else {
+                    // Edits can insert rows, resize, merge or freeze; refresh the layout
+                    // without moving the selection.
+                    let view = this.sheet_view();
+                    this.grid.update(cx, |grid, cx| grid.update_view(view, cx));
                 }
                 this.last_recalc = Some(started.elapsed());
                 this.clear_busy(CALCULATING, cx);
@@ -1467,7 +1472,6 @@ impl Workspace {
                 self.edit(window, cx, move |wb| wb.set_frozen(sheet, rows, cols));
             }
         }
-        self.structure_changed = true;
     }
 
     fn add_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {

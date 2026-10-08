@@ -257,6 +257,14 @@ impl Grid {
         cx.emit(GridEvent::SelectionChanged);
     }
 
+    pub fn update_view(&mut self, view: SheetView, cx: &mut Context<Self>) {
+        self.layout = Rc::new(view.layout);
+        self.frozen_rows = view.frozen_rows;
+        self.frozen_cols = view.frozen_cols;
+        self.merges = Rc::new(view.merges);
+        self.viewport_changed(cx);
+    }
+
     pub fn set_cells(&mut self, cells: HashMap<CellPos, GridCell>, cx: &mut Context<Self>) {
         self.cells = Rc::new(cells);
         cx.notify();
