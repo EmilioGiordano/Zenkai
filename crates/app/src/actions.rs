@@ -35,6 +35,7 @@ actions!(
         InterfaceReset,
         ToggleReduceMotion,
         NoFill,
+        ToggleWrapText,
         IncreaseDecimal,
         DecreaseDecimal,
         SortAscending,

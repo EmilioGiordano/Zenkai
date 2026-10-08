@@ -1851,6 +1851,48 @@ impl Workspace {
         });
     }
 
+    // Excel grows default-height rows to show every wrapped line; the line count is
+    // estimated from the text length and column width, like the column autofit.
+    fn toggle_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        let active = self.grid.read(cx).selection().active;
+        let wrap = !self
+            .document
+            .workbook()
+            .is_some_and(|wb| wb.cell(sheet, active).style.wrap);
+        self.edit(window, cx, move |wb| {
+            wb.apply_style(sheet, range, StyleChange::Wrap(wrap))?;
+            if !wrap || range.cell_count() > MAX_AUTOFIT_CELLS as u64 {
+                return Ok(());
+            }
+            let sizes = wb.sizes(sheet);
+            let width = |col: ColIdx| {
+                sizes
+                    .columns
+                    .iter()
+                    .find(|span| span.first <= col && col <= span.last)
+                    .map_or(zenkai_types::DEFAULT_COL_WIDTH, |span| span.width)
+            };
+            for pos in wb
+                .filled_cells(sheet)
+                .into_iter()
+                .filter(|pos| range.contains(*pos))
+            {
+                if sizes.rows.iter().any(|(row, _)| *row == pos.row) {
+                    continue;
+                }
+                let chars = wb.cell(sheet, pos).text.chars().count() as f32;
+                let per_line = ((width(pos.col) - 12.0) / AUTOFIT_CHAR_WIDTH).max(1.0);
+                // Breaking at word boundaries wastes part of each line.
+                let lines = (chars * 1.3 / per_line).ceil().clamp(1.0, 20.0);
+                if lines > 1.0 {
+                    wb.set_row_height(sheet, pos.row, lines * 17.0 + 4.0)?;
+                }
+            }
+            Ok(())
+        });
+    }
+
     fn select_current_region(&mut self, cx: &mut Context<Self>) -> Range {
         let active = self.grid.read(cx).selection().active;
         let sheet = self.document.sheet;
@@ -2275,6 +2317,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &DecreaseDecimal, window, cx| {
                 this.step_decimals(false, window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &ToggleWrapText, window, cx| this.toggle_wrap(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
             }))

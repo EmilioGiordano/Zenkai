@@ -207,6 +207,15 @@ impl fmt::Display for Range {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u32);
 
+// Excel's default is bottom.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum VAlign {
+    Top,
+    Center,
+    #[default]
+    Bottom,
+}
+
 impl Rgb {
     pub fn parse_hex(text: &str) -> Option<Rgb> {
         let hex = text.trim_start_matches('#');
@@ -247,6 +256,8 @@ pub struct CellStyle {
     pub font_color: Option<Rgb>,
     pub fill: Option<Rgb>,
     pub align: HAlign,
+    pub valign: VAlign,
+    pub wrap: bool,
     pub border_top: bool,
     pub border_left: bool,
     pub border_bottom: bool,
@@ -288,6 +299,7 @@ pub enum StyleChange {
     NumberFormat(NumberFormat),
     FontColor(Option<Rgb>),
     Borders(BorderPreset),
+    Wrap(bool),
     Fill(Option<Rgb>),
 }
 

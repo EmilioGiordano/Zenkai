@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
-use zenkai_types::{CellPos, ColIdx, HAlign, Range, Rgb, RowIdx, ValueKind};
+use zenkai_types::{CellPos, ColIdx, HAlign, Range, Rgb, RowIdx, VAlign, ValueKind};
 
 use crate::grid::{EditMode, Editor, GridCell, HEADER_HEIGHT};
 use crate::layout::Layout;
@@ -326,7 +326,9 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
 }
 
 fn overflows_right(cell: &GridCell) -> bool {
-    cell.kind == ValueKind::Text && matches!(cell.style.align, HAlign::General | HAlign::Left)
+    cell.kind == ValueKind::Text
+        && !cell.style.wrap
+        && matches!(cell.style.align, HAlign::General | HAlign::Left)
 }
 
 fn text_run(frame: &Frame, cell: &GridCell, len: usize, color: Hsla) -> TextRun {
@@ -382,6 +384,20 @@ fn paint_cell_text(
             .text_system()
             .shape_line(text, font_size, &[run], None)
     };
+    if cell.style.wrap && cell.kind == ValueKind::Text {
+        paint_wrapped_text(
+            frame,
+            cell,
+            bounds,
+            color,
+            font_size,
+            line_height,
+            padding,
+            window,
+            cx,
+        );
+        return;
+    }
     let mut line = shape(cell.text.clone(), window);
     let fits = |width: Pixels| width + padding * 2.0 <= bounds.size.width;
     if cell.kind == ValueKind::Number && !fits(line.width) && cell.style.num_fmt == "general" {
@@ -417,7 +433,7 @@ fn paint_cell_text(
         HAlign::Center => bounds.origin.x + (bounds.size.width - width) / 2.0,
         HAlign::Left | HAlign::General => bounds.origin.x + padding,
     };
-    let y = bounds.origin.y + bounds.size.height - line_height - px(2.0 * frame.zoom);
+    let y = vertical_origin(cell.style.valign, bounds, line_height, frame.zoom);
     let needed = width + padding * 2.0;
     let clip_width = if needed > bounds.size.width && max_width > bounds.size.width {
         let spill_width = needed.min(max_width);
@@ -445,6 +461,75 @@ fn paint_cell_text(
         if let Err(error) = line.paint(point(x, y), line_height, TextAlign::Left, None, window, cx)
         {
             tracing::warn!(%error, "failed to paint cell text");
+        }
+    });
+}
+
+fn vertical_origin(valign: VAlign, bounds: Bounds<Pixels>, height: Pixels, zoom: f32) -> Pixels {
+    match valign {
+        VAlign::Top => bounds.origin.y + px(1.0 * zoom),
+        VAlign::Center => bounds.origin.y + (bounds.size.height - height) / 2.0,
+        VAlign::Bottom => bounds.origin.y + bounds.size.height - height - px(2.0 * zoom),
+    }
+}
+
+// Wrapped text breaks at the cell width and stays inside the cell, as in Excel; lines
+// that do not fit the row height are clipped.
+#[allow(clippy::too_many_arguments)]
+fn paint_wrapped_text(
+    frame: &Frame,
+    cell: &GridCell,
+    bounds: Bounds<Pixels>,
+    color: Hsla,
+    font_size: Pixels,
+    line_height: Pixels,
+    padding: Pixels,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let width = (bounds.size.width - padding * 2.0).max(px(1.0));
+    let run = text_run(frame, cell, cell.text.len(), color);
+    let lines = match window.text_system().shape_text(
+        cell.text.clone(),
+        font_size,
+        &[run],
+        Some(width),
+        None,
+    ) {
+        Ok(lines) => lines,
+        Err(error) => {
+            tracing::warn!(%error, "failed to shape wrapped cell text");
+            return;
+        }
+    };
+    let height = lines
+        .iter()
+        .map(|line| line.size(line_height).height)
+        .fold(px(0.0), |total, h| total + h);
+    let align = match cell.style.align {
+        HAlign::Center => TextAlign::Center,
+        HAlign::Right => TextAlign::Right,
+        HAlign::Left | HAlign::General => TextAlign::Left,
+    };
+    let mut y = vertical_origin(cell.style.valign, bounds, height, frame.zoom).max(bounds.origin.y);
+    let clip = Bounds::new(
+        bounds.origin,
+        size(bounds.size.width - px(1.0), bounds.size.height - px(1.0)),
+    );
+    window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+        for line in &lines {
+            let origin = point(bounds.origin.x + padding, y);
+            if let Err(error) = line.paint(
+                origin,
+                line_height,
+                align,
+                Some(Bounds::new(origin, size(width, line_height))),
+                window,
+                cx,
+            ) {
+                tracing::warn!(%error, "failed to paint wrapped cell text");
+            }
+            y += line.size(line_height).height;
         }
     });
 }

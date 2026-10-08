@@ -118,6 +118,7 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
             )
             .selected(style.align == HAlign::Right),
         )
+        .child(tool("wrap", IconName::TextWrap, "Wrap text", ToggleWrapText).selected(style.wrap))
         .child(separator(cx))
         .child(tool(
             "general",

@@ -708,6 +708,29 @@ line 2"
     }
 
     #[test]
+    fn wrap_and_vertical_alignment_load_and_toggle() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wrap.xlsx");
+        let mut source = rust_xlsxwriter::Workbook::new();
+        let format = rust_xlsxwriter::Format::new()
+            .set_text_wrap()
+            .set_align(rust_xlsxwriter::FormatAlign::Top);
+        source
+            .add_worksheet()
+            .write_string_with_format(0, 0, "long header", &format)
+            .unwrap();
+        source.save(&path).unwrap();
+        let mut book = open_xlsx(&path).unwrap().workbook;
+        let style = book.cell(SheetId(0), CellPos::default()).style;
+        assert!(style.wrap);
+        assert_eq!(style.valign, zenkai_types::VAlign::Top);
+        let a1 = zenkai_types::Range::single(CellPos::default());
+        book.apply_style(SheetId(0), a1, zenkai_types::StyleChange::Wrap(false))
+            .unwrap();
+        assert!(!book.cell(SheetId(0), CellPos::default()).style.wrap);
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

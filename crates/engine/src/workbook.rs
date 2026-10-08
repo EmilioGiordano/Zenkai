@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
 use ironcalc::base::expressions::types::Area;
-use ironcalc::base::types::{Color, HorizontalAlignment, Style};
+use ironcalc::base::types::{Color, HorizontalAlignment, Style, VerticalAlignment};
 use ironcalc::base::{BorderArea, ClipboardData, UserModel};
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx_bytes;
@@ -9,7 +9,7 @@ use ironcalc::import::load_from_xlsx_bytes;
 use crate::error::EngineError;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, HAlign, Range, Rgb, RowIdx,
-    SheetId, SheetInfo, SheetSizes, StyleChange, ValueKind,
+    SheetId, SheetInfo, SheetSizes, StyleChange, VAlign, ValueKind,
 };
 
 const LOCALE: &str = "en";
@@ -274,7 +274,14 @@ impl Workbook {
             Some(HorizontalAlignment::Right) => HAlign::Right,
             _ => HAlign::General,
         };
+        let valign = match style.alignment.as_ref().map(|a| &a.vertical) {
+            Some(VerticalAlignment::Top) => VAlign::Top,
+            Some(VerticalAlignment::Center) => VAlign::Center,
+            _ => VAlign::Bottom,
+        };
         CellStyle {
+            valign,
+            wrap: style.alignment.as_ref().is_some_and(|a| a.wrap_text),
             bold: style.font.b,
             italic: style.font.i,
             underline: style.font.u,
@@ -691,6 +698,7 @@ impl Engine for Workbook {
             StyleChange::Italic(on) => ("font.i", flag(on)),
             StyleChange::Underline(on) => ("font.u", flag(on)),
             StyleChange::Strike(on) => ("font.strike", flag(on)),
+            StyleChange::Wrap(on) => ("alignment.wrap_text", flag(on)),
             StyleChange::FontSize(points) => ("font.size", points.to_string()),
             StyleChange::Borders(preset) => return self.apply_borders(sheet, range, preset),
             StyleChange::FontColor(color) => ("font.color", hex(color)),

@@ -51,6 +51,7 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Align left", AlignLeft),
             item("Center", AlignCenter),
             item("Align right", AlignRight),
+            item("Wrap text", ToggleWrapText),
             item("General number format", FormatGeneral),
             item("Number format", FormatNumber),
             item("Currency format", FormatCurrency),
