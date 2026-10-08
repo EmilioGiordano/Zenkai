@@ -49,7 +49,7 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   to scientific notation, formatted numbers and dates widen a default-width column.
 - Formula point mode: while typing a formula, arrows or clicks insert references, which
   are coloured in the formula and in the grid.
-- Formula AutoComplete (Tab inserts the function), show formulas (Ctrl+`), find and
+- Formula AutoComplete (Tab inserts the function), F4 cycles $ references, show formulas (Ctrl+`), find and
   replace (Ctrl+H), paste values (Ctrl+Shift+V), hide/unhide rows and columns.
 - Format Cells (Ctrl+1) for number formats with a live sample; recent files in the
   command palette; drop a file on the window to open it.
