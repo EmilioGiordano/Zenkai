@@ -48,6 +48,9 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 struct FormulaBarEdit {
     input: Entity<InputState>,
     pos: CellPos,
+    // The edit only lands where it started: same document, same sheet.
+    sheet: SheetId,
+    generation: u64,
     _events: Subscription,
 }
 
@@ -2247,6 +2250,8 @@ impl Workspace {
         self.formula_bar = Some(FormulaBarEdit {
             input,
             pos,
+            sheet: self.document.sheet,
+            generation: self.document.generation(),
             _events: events,
         });
         cx.notify();
@@ -2256,7 +2261,9 @@ impl Workspace {
         let Some(bar) = self.formula_bar.take() else {
             return;
         };
-        if commit {
+        let same_place =
+            bar.sheet == self.document.sheet && bar.generation == self.document.generation();
+        if commit && same_place {
             let text = bar.input.read(cx).value().to_string();
             let unchanged = self
                 .document
