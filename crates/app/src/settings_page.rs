@@ -64,6 +64,13 @@ impl SettingsPage {
         input.update(cx, |state, cx| state.set_value("", window, cx));
         agent_settings::store_secret(cx, name, value);
     }
+
+    fn save_typed_secrets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let names: Vec<SecretName> = self.secret_inputs.keys().cloned().collect();
+        for name in names {
+            self.save_secret(name, window, cx);
+        }
+    }
 }
 
 fn section(title: &'static str) -> Div {
@@ -158,7 +165,7 @@ impl Render for SettingsPage {
                             .label(if is_default {
                                 "✓ Default"
                             } else {
-                                "Make default"
+                                "Make default (Alt+D)"
                             })
                             .selected(is_default)
                             .on_click(move |_, _, cx| {
@@ -240,7 +247,7 @@ impl Render for SettingsPage {
                     .child(div().flex_1().child(Input::new(&input)))
                     .child(
                         Button::new(SharedString::from(format!("secret-{name}")))
-                            .label("Save")
+                            .label("Save (Alt+S)")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.save_secret(target.clone(), window, cx)
                             })),
@@ -265,6 +272,11 @@ impl Render for SettingsPage {
             .rounded_lg()
             .shadow_lg()
             .on_action(|_: &FocusNextControl, window, cx| window.focus_next(cx))
+            .on_action(
+                cx.listener(|this, _: &SaveSecrets, window, cx| {
+                    this.save_typed_secrets(window, cx)
+                }),
+            )
             .on_action(|_: &FocusPreviousControl, window, cx| window.focus_prev(cx))
             .child(
                 h_flex()
@@ -340,6 +352,23 @@ pub fn add_preset(preset: Preset, cx: &mut App) {
         if agents.default.is_none() {
             agents.default = Some(preset.agent_id());
         }
+    });
+}
+
+// The keyboard way to pick the default agent: each press moves to the next one.
+pub fn cycle_default_agent(cx: &mut App) {
+    agent_settings::change(cx, |settings| {
+        let agents = &mut settings.agents;
+        let ids: Vec<_> = agents.servers.keys().cloned().collect();
+        let next = match &agents.default {
+            Some(current) => ids
+                .iter()
+                .skip_while(|id| *id != current)
+                .nth(1)
+                .or(ids.first()),
+            None => ids.first(),
+        };
+        agents.default = next.cloned();
     });
 }
 

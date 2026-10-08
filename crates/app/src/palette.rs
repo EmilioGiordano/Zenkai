@@ -126,6 +126,10 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Agents: write without asking", PermissionAutomatic),
             item("Allow or block external agents", ToggleExternalAgents),
             item(
+                "Make the next configured agent the default",
+                CycleDefaultAgent,
+            ),
+            item(
                 "Apply the settings.json change waiting for you",
                 ApplyHeldSettings,
             ),
