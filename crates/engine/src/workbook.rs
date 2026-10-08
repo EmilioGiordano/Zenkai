@@ -157,6 +157,29 @@ fn area(sheet: SheetId, range: Range) -> Area {
 }
 
 impl Workbook {
+    fn apply_borders(
+        &mut self,
+        sheet: SheetId,
+        range: Range,
+        preset: BorderPreset,
+    ) -> Result<(), EngineError> {
+        let kind = match preset {
+            BorderPreset::All => "All",
+            BorderPreset::Outside => "Outer",
+            BorderPreset::Bottom => "Bottom",
+            BorderPreset::None => "None",
+        };
+        // BorderArea's fields are private to ironcalc; its serde form is public.
+        let border: BorderArea = serde_json::from_value(serde_json::json!({
+            "item": { "style": "thin" },
+            "type": kind,
+        }))
+        .map_err(|e| rejected(e.to_string()))?;
+        self.model
+            .set_area_with_border(&area(sheet, range), &border)
+            .map_err(rejected)
+    }
+
     // Least-squares line through a run of plain numbers, as Excel's AutoFill trend:
     // the value at step k is first + slope * k.
     fn trend(&self, sheet: SheetId, line: impl Iterator<Item = CellPos>) -> Option<(f64, f64)> {
@@ -569,23 +592,6 @@ impl Engine for Workbook {
         range: Range,
         change: StyleChange,
     ) -> Result<(), EngineError> {
-        if let StyleChange::Borders(preset) = change {
-            let kind = match preset {
-                BorderPreset::All => "All",
-                BorderPreset::Outside => "Outer",
-                BorderPreset::Bottom => "Bottom",
-                BorderPreset::None => "None",
-            };
-            let border: BorderArea = serde_json::from_value(serde_json::json!({
-                "item": { "style": "thin" },
-                "type": kind,
-            }))
-            .map_err(|e| rejected(e.to_string()))?;
-            return self
-                .model
-                .set_area_with_border(&area(sheet, range), &border)
-                .map_err(rejected);
-        }
         let flag = |on: bool| if on { "true" } else { "false" }.to_string();
         let hex = |color: Option<Rgb>| color.map_or_else(String::new, |c| format!("#{:06X}", c.0));
         let (path, value) = match change {
@@ -594,7 +600,7 @@ impl Engine for Workbook {
             StyleChange::Underline(on) => ("font.u", flag(on)),
             StyleChange::Strike(on) => ("font.strike", flag(on)),
             StyleChange::FontSize(points) => ("font.size", points.to_string()),
-            StyleChange::Borders(_) => return Ok(()),
+            StyleChange::Borders(preset) => return self.apply_borders(sheet, range, preset),
             StyleChange::FontColor(color) => ("font.color", hex(color)),
             StyleChange::Fill(color) => ("fill.fg_color", hex(color)),
             StyleChange::Align(align) => (

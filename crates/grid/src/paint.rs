@@ -254,15 +254,18 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
                 };
                 // Top and left lines sit on the neighbour's bottom and right pixel, so a
                 // border two adjacent cells share stays one pixel thin.
+                // The first row and column have no neighbour pixel: that one is the header's.
+                let top = if *y > HEADER_HEIGHT { y - 1.0 } else { *y };
+                let left = if *x > frame.row_header { x - 1.0 } else { *x };
                 if cell.style.border_top {
                     window.paint_quad(fill(
-                        rect(origin, *x - 1.0, y - 1.0, w + 1.0, 1.0),
+                        rect(origin, left, top, w + x - left, 1.0),
                         c.foreground,
                     ));
                 }
                 if cell.style.border_left {
                     window.paint_quad(fill(
-                        rect(origin, x - 1.0, y - 1.0, 1.0, h + 1.0),
+                        rect(origin, left, top, 1.0, h + y - top),
                         c.foreground,
                     ));
                 }
