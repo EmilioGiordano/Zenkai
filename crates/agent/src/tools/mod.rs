@@ -20,12 +20,12 @@ pub use reply::{
 };
 pub use request::{
     Alignment, Borders, Find, FormatChange, FormatRange, GetSelection, ListSheets, ListWorkbooks,
-    NumberFormatName, ReadRange, ReadRequest, SetFormula, ToolRequest, WorkbookId, WriteCells,
-    WriteRequest,
+    NumberFormatName, ReadRange, ReadRequest, SetFormula, ToolRequest, WriteCells, WriteRequest,
 };
 pub use write::{MAX_CELL_CHARS, MAX_FORMAT_CELLS, MAX_WRITE_CELLS, PlannedWrite, plan_write};
 
 use zenkai_types::SheetInfo;
+pub use zenkai_types::WorkbookId;
 
 // A call names the workbook it means; anything but the open document is refused, so a
 // call made before the user opened another file never lands in the new one.

@@ -1,19 +1,9 @@
-use std::fmt;
-
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use zenkai_types::{BorderPreset, HAlign, NumberFormat, Rgb, StyleChange};
+use serde::Deserialize;
+use zenkai_types::{BorderPreset, HAlign, NumberFormat, Rgb, StyleChange, WorkbookId};
 
-// Identifies one open document for its whole life: a document opened or created later
-// gets a new id, so a call naming a replaced document fails instead of touching the new one.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[serde(transparent)]
-pub struct WorkbookId(pub u64);
-
-impl fmt::Display for WorkbookId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
+fn workbook_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<WorkbookId, D::Error> {
+    u64::deserialize(deserializer).map(WorkbookId)
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
@@ -23,21 +13,24 @@ pub struct ListWorkbooks {}
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListSheets {
-    #[schemars(description = "Id from list_workbooks.")]
+    #[serde(deserialize_with = "workbook_id")]
+    #[schemars(with = "u64", description = "Id from list_workbooks.")]
     pub workbook: WorkbookId,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GetSelection {
-    #[schemars(description = "Id from list_workbooks.")]
+    #[serde(deserialize_with = "workbook_id")]
+    #[schemars(with = "u64", description = "Id from list_workbooks.")]
     pub workbook: WorkbookId,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReadRange {
-    #[schemars(description = "Id from list_workbooks.")]
+    #[serde(deserialize_with = "workbook_id")]
+    #[schemars(with = "u64", description = "Id from list_workbooks.")]
     pub workbook: WorkbookId,
     #[schemars(description = "Sheet name, as list_sheets returns it.")]
     pub sheet: String,
@@ -51,7 +44,8 @@ pub struct ReadRange {
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Find {
-    #[schemars(description = "Id from list_workbooks.")]
+    #[serde(deserialize_with = "workbook_id")]
+    #[schemars(with = "u64", description = "Id from list_workbooks.")]
     pub workbook: WorkbookId,
     #[schemars(description = "Text to look for in the shown cell values, ignoring case.")]
     pub text: String,
@@ -63,7 +57,8 @@ pub struct Find {
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WriteCells {
-    #[schemars(description = "Id from list_workbooks.")]
+    #[serde(deserialize_with = "workbook_id")]
+    #[schemars(with = "u64", description = "Id from list_workbooks.")]
     pub workbook: WorkbookId,
     pub sheet: String,
     #[schemars(description = "Top-left cell of the block, such as \"B2\".")]
@@ -77,7 +72,8 @@ pub struct WriteCells {
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SetFormula {
-    #[schemars(description = "Id from list_workbooks.")]
+    #[serde(deserialize_with = "workbook_id")]
+    #[schemars(with = "u64", description = "Id from list_workbooks.")]
     pub workbook: WorkbookId,
     pub sheet: String,
     #[schemars(description = "Cell such as \"C7\".")]
@@ -89,7 +85,8 @@ pub struct SetFormula {
 #[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FormatRange {
-    #[schemars(description = "Id from list_workbooks.")]
+    #[serde(deserialize_with = "workbook_id")]
+    #[schemars(with = "u64", description = "Id from list_workbooks.")]
     pub workbook: WorkbookId,
     pub sheet: String,
     pub range: String,

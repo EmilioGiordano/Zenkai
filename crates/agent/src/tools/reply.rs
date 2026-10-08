@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId, SheetVisibility};
 
 use crate::tools::error::{AgentAccess, ToolError};
-use crate::tools::request::WorkbookId;
+use zenkai_types::WorkbookId;
 
 const LISTED_POSITIONS: usize = 20;
 
@@ -161,7 +161,7 @@ impl ToolReply {
                         &mut text,
                         format!(
                             "Workbook id {}: {} sheet(s), {}.",
-                            book.id,
+                            book.id.0,
                             book.sheets,
                             access_label(book.access)
                         ),

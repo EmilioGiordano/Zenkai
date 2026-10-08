@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::tools::request::WorkbookId;
+use zenkai_types::WorkbookId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadOnlyReason {
@@ -40,7 +40,7 @@ impl AgentAccess {
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum ToolError {
-    #[error("no open workbook has id {0}; call list_workbooks for the current ids")]
+    #[error("no open workbook has id {}; call list_workbooks for the current ids", .0.0)]
     UnknownWorkbook(WorkbookId),
     #[error("the workbook has no sheet named \"{0}\"; call list_sheets")]
     UnknownSheet(String),

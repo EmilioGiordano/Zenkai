@@ -5,8 +5,9 @@ use zenkai_types::{Range, SheetId};
 use crate::tools::channel::{ToolCall, ToolResult};
 use crate::tools::error::{AgentAccess, ToolError};
 use crate::tools::reply::ToolReply;
-use crate::tools::request::{ToolRequest, WorkbookId};
+use crate::tools::request::ToolRequest;
 use crate::tools::{check_workbook, plan_write, read, workbook_summary};
+use zenkai_types::WorkbookId;
 
 // Serves tools straight on a workbook, writes approved automatically: what Zenkai's
 // UI thread does, minus the window, so tools can be tested without one.
