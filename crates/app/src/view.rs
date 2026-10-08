@@ -1469,6 +1469,15 @@ impl Workspace {
                 } else {
                     (0, 0)
                 };
+                let (visible_rows, visible_cols) = self.grid.read(cx).visible_counts();
+                if rows >= visible_rows || cols >= visible_cols {
+                    self.notify(
+                        Severity::Warning,
+                        "Pick a cell inside the visible area to freeze the rows above and columns to its left.",
+                        cx,
+                    );
+                    return;
+                }
                 self.edit(window, cx, move |wb| wb.set_frozen(sheet, rows, cols));
             }
         }

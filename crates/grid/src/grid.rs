@@ -205,6 +205,10 @@ impl Grid {
         )
     }
 
+    pub fn visible_counts(&self) -> (u32, u16) {
+        (self.visible_rows, self.visible_cols)
+    }
+
     pub fn visible_ranges(&self) -> Vec<Range> {
         let origin = self.scroll_origin();
         let end = CellPos::new(
