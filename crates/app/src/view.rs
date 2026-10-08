@@ -97,8 +97,7 @@ const IMPORTING: &str = "Importing…";
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
 const SEARCHING: &str = "Searching…";
-const PROTECTED_VIEW: &str =
-    "This file came from the internet: agents may only read it (Protected View).";
+const PROTECTED_VIEW: &str = "This file came from the internet: agents may only read it (Protected View). Ctrl+Shift+E lets them edit it.";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Severity {
@@ -3350,6 +3349,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &KeepCurrentSettings, window, cx| {
                 this.decide_held_settings(HeldDecision::Keep, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.let_agents_edit(cx)))
             .on_action(cx.listener(|this, _: &AllowAgentChange, window, cx| {
                 this.decide_agent_change(Decision::Allow, window, cx)
             }))

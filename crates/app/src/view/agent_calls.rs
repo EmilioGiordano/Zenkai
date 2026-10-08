@@ -338,6 +338,18 @@ impl Workspace {
         self.agent.bridge = BridgeState::Off;
     }
 
+    // As Excel's Enable Editing: the user vouches for this file, for this session only.
+    pub(super) fn let_agents_edit(&mut self, cx: &mut Context<Self>) {
+        if self.document.origin == FileOrigin::Internet {
+            self.document.origin = FileOrigin::Local;
+            self.notify(
+                Severity::Info,
+                "Agents may now edit this file (until it is closed).",
+                cx,
+            );
+        }
+    }
+
     // The bridge runs only while the user allows external agents.
     pub(super) fn sync_bridge(&mut self, cx: &mut Context<Self>) {
         let wanted = cx

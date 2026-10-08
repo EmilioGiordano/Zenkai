@@ -136,6 +136,10 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Keep the current agent settings", KeepCurrentSettings),
             item("Allow the change an agent asked for", AllowAgentChange),
             item("Deny the change an agent asked for", DenyAgentChange),
+            item(
+                "Let agents edit this file (leave Protected View)",
+                LetAgentsEdit,
+            ),
         ]),
     ]
 }
