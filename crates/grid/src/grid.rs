@@ -653,6 +653,37 @@ impl Grid {
         }
     }
 
+    // Like Excel, a right click outside the selection first selects what is under the
+    // pointer, so the context menu acts on it; inside the selection it keeps it.
+    fn on_right_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus, cx);
+        if self.editor.is_some() {
+            self.commit_edit(cx);
+        }
+        let range = self.selection.range();
+        match self.hit(event.position) {
+            Hit::Cell(pos) if !range.contains(pos) => self.select(pos, pos, cx),
+            Hit::RowHeader(row) if !range.contains(CellPos::new(row, range.start.col)) => self
+                .select(
+                    CellPos::new(row, ColIdx::default()),
+                    CellPos::new(row, ColIdx::LAST),
+                    cx,
+                ),
+            Hit::ColHeader(col) if !range.contains(CellPos::new(range.start.row, col)) => self
+                .select(
+                    CellPos::new(RowIdx::default(), col),
+                    CellPos::new(RowIdx::LAST, col),
+                    cx,
+                ),
+            _ => {}
+        }
+    }
+
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(drag) = self.edge_drag {
             // Released outside the grid: end the drag where it is.
@@ -1015,6 +1046,7 @@ impl Render for Grid {
             }))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::on_right_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
                 MouseButton::Left,

@@ -10,7 +10,7 @@ use gpui_kit::*;
 
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
 use zenkai_formats::{Delimiter, parse_csv};
-use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout, SheetView};
+use zenkai_grid::{DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_types::{CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, SheetId, StyleChange};
 
 use crate::actions::*;
@@ -29,6 +29,7 @@ use crate::theme;
 use crate::toolbar;
 use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 
 #[derive(Clone)]
 struct InternalClip {
@@ -2248,7 +2249,18 @@ impl Render for Workspace {
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(div().flex_1().min_w_0().h_full().child(self.grid.clone()))
+                    .child(
+                        div()
+                            .id("grid-area")
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(self.grid.clone())
+                            .context_menu({
+                                let grid_focus = self.grid.focus_handle(cx);
+                                move |menu, _, _| cell_menu(menu, grid_focus.clone())
+                            }),
+                    )
                     .children(
                         self.chart
                             .as_ref()
@@ -2261,4 +2273,22 @@ impl Render for Workspace {
             .children(self.render_palette())
             .children(self.render_csv_preview(cx))
     }
+}
+
+// Excel's cell context menu, trimmed to what Zenkai supports. Actions go to the grid so
+// they act on the selection the right click just set.
+fn cell_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
+    menu.action_context(grid_focus)
+        .menu("Cut", Box::new(Cut))
+        .menu("Copy", Box::new(Copy))
+        .menu("Paste", Box::new(Paste))
+        .separator()
+        .menu("Insert rows above", Box::new(InsertRows))
+        .menu("Insert columns to the left", Box::new(InsertColumns))
+        .menu("Delete rows", Box::new(DeleteRows))
+        .menu("Delete columns", Box::new(DeleteColumns))
+        .separator()
+        .menu("Clear contents", Box::new(DeleteForward))
+        .separator()
+        .menu("Insert chart", Box::new(InsertChart))
 }
