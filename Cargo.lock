@@ -9733,7 +9733,9 @@ dependencies = [
  "calamine",
  "csv",
  "encoding_rs",
+ "tempfile",
  "thiserror 2.0.21",
+ "zip 0.6.6",
 ]
 
 [[package]]
