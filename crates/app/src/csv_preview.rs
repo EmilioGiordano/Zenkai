@@ -65,6 +65,7 @@ pub fn guess(parsed: &ParsedCsv) -> Guess {
     }
 }
 
+#[derive(Clone, Copy)]
 pub enum PreviewEvent {
     Delimiter(Delimiter),
     DecimalComma(bool),
@@ -111,36 +112,45 @@ pub fn render(
                         .child(row.get(col).cloned().unwrap_or_default())
                 }))
         }));
-    let delimiter_buttons = DELIMITERS.into_iter().map(|delimiter| {
+    let choice = |label: &'static str, selected: bool, event: PreviewEvent| {
         let on_event = on_event.clone();
-        Button::new(delimiter.label())
-            .ghost()
-            .compact()
-            .label(delimiter.label())
-            .selected(preview.parsed.delimiter == delimiter)
-            .on_click(move |_, window, cx| on_event(PreviewEvent::Delimiter(delimiter), window, cx))
-    });
-    let decimal_buttons = [(false, "1.5"), (true, "1,5")].map(|(comma, label)| {
-        let on_event = on_event.clone();
+        // The check mark keeps the choice readable without colour.
+        let text = if selected {
+            format!("✓ {label}")
+        } else {
+            label.to_string()
+        };
         Button::new(label)
             .ghost()
             .compact()
-            .label(label)
-            .selected(preview.guess.decimal_comma == comma)
-            .on_click(move |_, window, cx| on_event(PreviewEvent::DecimalComma(comma), window, cx))
+            .label(text)
+            .selected(selected)
+            .on_click(move |_, window, cx| on_event(event, window, cx))
+    };
+    let delimiter_buttons = DELIMITERS.map(|delimiter| {
+        choice(
+            delimiter.label(),
+            preview.parsed.delimiter == delimiter,
+            PreviewEvent::Delimiter(delimiter),
+        )
+    });
+    let decimal_buttons = [(false, "1.5"), (true, "1,5")].map(|(comma, label)| {
+        choice(
+            label,
+            preview.guess.decimal_comma == comma,
+            PreviewEvent::DecimalComma(comma),
+        )
     });
     let date_buttons = [
         (DateOrder::DayFirst, "d/m/y"),
         (DateOrder::MonthFirst, "m/d/y"),
     ]
     .map(|(order, label)| {
-        let on_event = on_event.clone();
-        Button::new(label)
-            .ghost()
-            .compact()
-            .label(label)
-            .selected(preview.guess.date_order == order)
-            .on_click(move |_, window, cx| on_event(PreviewEvent::DateOrder(order), window, cx))
+        choice(
+            label,
+            preview.guess.date_order == order,
+            PreviewEvent::DateOrder(order),
+        )
     });
     v_flex()
         .key_context("CsvPreview")
