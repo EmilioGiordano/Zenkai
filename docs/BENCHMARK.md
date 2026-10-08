@@ -37,7 +37,8 @@ pieces: `generate <dir>`, `measure <engine> <file> <dir>`, `coverage`.
 
 Regression baseline: `bench/baseline.csv` (`fixture,metric,value`, IronCalc medians for
 fixtures 1, 2, 4 and 5). `check <dir> <baseline.csv> <current.csv> [runs]` fails when a
-time or memory metric is more than 15% worse or missing; CI runs it (see `README.md`).
+time or memory metric is more than 15% worse or missing, or when any run gets wrong values
+or loses data on round trip; CI runs it (see `README.md`).
 
 - Times: wall clock around the engine call. Open includes parsing; for IronCalc the full
   recalc is measured separately (`evaluate()`); logisheets recalculates on load.

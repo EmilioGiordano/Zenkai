@@ -107,7 +107,8 @@ Fixture 3 (20k lookups against 10k rows) takes several minutes per engine; see
 `docs/BENCHMARK.md`.
 
 Regression check against the saved baseline (IronCalc, median of 5 runs; exits non-zero
-if a time or memory metric is more than 15% worse, or missing):
+if a time or memory metric is more than 15% worse or missing, or if any run computes wrong
+values or loses data on round trip):
 
 ```powershell
 .\target\release\zenkai-bench.exe check bench\fixtures bench\baseline.csv bench-current.csv
