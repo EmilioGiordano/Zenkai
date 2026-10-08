@@ -240,7 +240,7 @@ Los pasos 4 a 7 se aprueban por separado. Las herramientas identifican el libro 
 ### Arquitectura
 
 - `crates/agent` (`zenkai-agent`, biblioteca): configuración, capa de herramientas y puente MCP. Depende de `engine` y `types`, nunca de GPUI, para poder probarse sin ventana. Errores con `thiserror`.
-- `crates/mcp-relay` (binario `zenkai-mcp`): relé mínimo, solo `std`, que copia stdin al pipe y el pipe a stdout. No tiene lógica MCP. Lo lanzan los agentes como servidor MCP por stdio, el único transporte que todos soportan.
+- `crates/mcp-relay` (binario `zenkai-mcp`): relé mínimo, con `std` y solo el cliente de pipes de `interprocess` (un handle síncrono de `std` serializa lectura y escritura simultáneas), que copia stdin al pipe y el pipe a stdout. No tiene lógica MCP. Lo lanzan los agentes como servidor MCP por stdio, el único transporte que todos soportan.
 - `crates/app`: une la capa de herramientas con `Document` y `Workspace::edit`, y dibuja la página de Configuración y la aprobación de escrituras.
 - El servidor MCP usa `rmcp`, que necesita tokio: corre en un único hilo dedicado con un runtime `current_thread`. El hilo de UI nunca espera a tokio.
 - Flujo de una llamada: el agente → `zenkai-mcp` → named pipe → `rmcp` en el hilo de tokio → solicitud tipada por un canal → bucle de `Workspace` en el hilo de UI → lectura en segundo plano o escritura por `Workspace::edit` → respuesta tipada por el mismo canal.
