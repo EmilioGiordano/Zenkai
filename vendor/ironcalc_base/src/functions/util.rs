@@ -430,10 +430,8 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_less_or_equal_than_number(x, f))
                 } else {
-                    {
-                        let target = v.to_lowercase();
-                        Box::new(move |x| result_is_less_or_equal_than_string(x, &target))
-                    }
+                    let target = v.to_lowercase();
+                    Box::new(move |x| result_is_less_or_equal_than_string(x, &target))
                 }
             } else if let Some(v) = s.strip_prefix(">=") {
                 // TODO: I am not implementing >= ERROR or >= BOOLEAN
@@ -444,10 +442,8 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_greater_or_equal_than_number(x, f))
                 } else {
-                    {
-                        let target = v.to_lowercase();
-                        Box::new(move |x| result_is_greater_or_equal_than_string(x, &target))
-                    }
+                    let target = v.to_lowercase();
+                    Box::new(move |x| result_is_greater_or_equal_than_string(x, &target))
                 }
             } else if let Some(v) = s.strip_prefix("<>") {
                 if let Ok(f) = v.parse::<f64>() {
@@ -464,10 +460,8 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_not_equal_to_number(x, f))
                 } else {
-                    {
-                        let target = v.to_lowercase();
-                        Box::new(move |x| result_is_not_equal_to_string(x, &target))
-                    }
+                    let target = v.to_lowercase();
+                    Box::new(move |x| result_is_not_equal_to_string(x, &target))
                 }
             } else if let Some(v) = s.strip_prefix('<') {
                 // TODO: I am not implementing < ERROR or < BOOLEAN
@@ -478,10 +472,8 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_less_than_number(x, f))
                 } else {
-                    {
-                        let target = v.to_lowercase();
-                        Box::new(move |x| result_is_less_than_string(x, &target))
-                    }
+                    let target = v.to_lowercase();
+                    Box::new(move |x| result_is_less_than_string(x, &target))
                 }
             } else if let Some(v) = s.strip_prefix('>') {
                 // TODO: I am not implementing > ERROR or > BOOLEAN
@@ -492,10 +484,8 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_greater_than_number(x, f))
                 } else {
-                    {
-                        let target = v.to_lowercase();
-                        Box::new(move |x| result_is_greater_than_string(x, &target))
-                    }
+                    let target = v.to_lowercase();
+                    Box::new(move |x| result_is_greater_than_string(x, &target))
                 }
             } else {
                 let v = if let Some(a) = s.strip_prefix('=') {
@@ -515,10 +505,8 @@ pub(crate) fn build_criteria<'a>(
                 } else if let Some(f) = parse_date_criterion(v, locale) {
                     Box::new(move |x| result_is_equal_to_number(x, f))
                 } else {
-                    {
-                        let target = v.to_lowercase();
-                        Box::new(move |x| result_is_equal_to_string(x, &target))
-                    }
+                    let target = v.to_lowercase();
+                    Box::new(move |x| result_is_equal_to_string(x, &target))
                 }
             }
         }
