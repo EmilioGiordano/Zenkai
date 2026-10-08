@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod actions;
+mod formula_refs;
 mod grid;
 mod layout;
 mod paint;

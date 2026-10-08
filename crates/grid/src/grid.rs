@@ -8,6 +8,7 @@ use gpui_kit::*;
 use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
 use crate::actions::*;
+use crate::formula_refs;
 use crate::layout::Layout;
 use crate::paint::{self, Frame};
 
@@ -43,6 +44,34 @@ pub struct Editor {
     pub text: String,
     pub caret: usize,
     pub mode: EditMode,
+    pub point: Option<PointRef>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PointRef {
+    pub anchor: CellPos,
+    pub corner: CellPos,
+    pub text_start: usize,
+}
+
+impl Editor {
+    fn insert_reference(&mut self, anchor: CellPos, corner: CellPos) {
+        let text_start = self.point.map_or(self.text.len(), |p| p.text_start);
+        self.text.truncate(text_start);
+        self.text
+            .push_str(&formula_refs::reference_text(anchor, corner));
+        self.caret = self.text.len();
+        self.point = Some(PointRef {
+            anchor,
+            corner,
+            text_start,
+        });
+    }
+
+    fn can_point(&self) -> bool {
+        self.mode == EditMode::Enter
+            && (self.point.is_some() || formula_refs::accepts_reference(&self.text, self.caret))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,6 +286,7 @@ impl Grid {
             text,
             caret,
             mode,
+            point: None,
         });
         cx.emit(GridEvent::EditChanged);
         cx.notify();
@@ -294,6 +324,24 @@ impl Grid {
 
     fn navigate(&mut self, direction: Direction, extend: bool, cx: &mut Context<Self>) {
         if let Some(editor) = &mut self.editor {
+            if editor.can_point() {
+                let (anchor, corner) = match editor.point {
+                    Some(point) if extend => (point.anchor, step(point.corner, direction, 1)),
+                    Some(point) => {
+                        let moved = step(point.corner, direction, 1);
+                        (moved, moved)
+                    }
+                    None => {
+                        let first = step(editor.pos, direction, 1);
+                        (first, first)
+                    }
+                };
+                editor.insert_reference(anchor, corner);
+                self.scroll_into_view(corner, cx);
+                cx.emit(GridEvent::EditChanged);
+                cx.notify();
+                return;
+            }
             if editor.mode == EditMode::Edit {
                 match direction {
                     Direction::Left => editor.caret = prev_boundary(&editor.text, editor.caret),
@@ -407,6 +455,20 @@ impl Grid {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.focus, cx);
+        let hit = self.hit(event.position);
+        if let (Some(editor), Hit::Cell(pos)) = (&mut self.editor, hit)
+            && editor.can_point()
+        {
+            let anchor = match editor.point {
+                Some(point) if event.modifiers.shift => point.anchor,
+                _ => pos,
+            };
+            editor.insert_reference(anchor, pos);
+            self.dragging = true;
+            cx.emit(GridEvent::EditChanged);
+            cx.notify();
+            return;
+        }
         if self.editor.is_some() {
             self.commit_edit(cx);
         }
@@ -437,6 +499,17 @@ impl Grid {
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         if !self.dragging || event.pressed_button != Some(MouseButton::Left) {
             self.dragging = false;
+            return;
+        }
+        let hit = self.hit(event.position);
+        if let (Some(editor), Hit::Cell(pos)) = (&mut self.editor, hit)
+            && let Some(point) = editor.point
+        {
+            if point.corner != pos {
+                editor.insert_reference(point.anchor, pos);
+                cx.emit(GridEvent::EditChanged);
+                cx.notify();
+            }
             return;
         }
         if let Hit::Cell(pos) = self.hit(event.position)
@@ -486,6 +559,7 @@ impl Grid {
             Some(editor) => {
                 editor.text.insert_str(editor.caret, typed);
                 editor.caret += typed.len();
+                editor.point = None;
             }
             None => {
                 let pos = self.selection.active;
@@ -494,6 +568,7 @@ impl Grid {
                     text: typed.clone(),
                     caret: typed.len(),
                     mode: EditMode::Enter,
+                    point: None,
                 });
             }
         }
@@ -621,6 +696,11 @@ impl Render for Grid {
             frozen_cols: self.frozen_cols,
             merges: self.merges.clone(),
             font: cx.theme().font_family.clone(),
+            formula_refs: self
+                .editor
+                .as_ref()
+                .map(|editor| formula_refs::references(&editor.text))
+                .unwrap_or_default(),
         };
         let weak = cx.entity().downgrade();
         let last_paint = self.last_paint.clone();
@@ -725,6 +805,7 @@ impl Render for Grid {
                         let start = prev_boundary(&editor.text, editor.caret);
                         editor.text.replace_range(start..editor.caret, "");
                         editor.caret = start;
+                        editor.point = None;
                     }
                     None => {
                         let pos = g.selection.active;
@@ -733,6 +814,7 @@ impl Render for Grid {
                             text: String::new(),
                             caret: 0,
                             mode: EditMode::Enter,
+                            point: None,
                         });
                     }
                 }

@@ -70,7 +70,11 @@ pub struct Frame {
     pub frozen_rows: u32,
     pub frozen_cols: u16,
     pub merges: Rc<Vec<Range>>,
+    pub formula_refs: Vec<Range>,
 }
+
+// Excel's reference colours while editing a formula, in order of appearance.
+const REFERENCE_COLORS: [u32; 6] = [0x1F6FD1, 0xD0342C, 0x7A3FB5, 0x1E8C4E, 0xB5651D, 0xC2185B];
 
 struct Columns {
     xs: Vec<(ColIdx, f32, f32)>,
@@ -478,6 +482,20 @@ fn paint_selection(
                 c.accent,
                 BorderStyle::Solid,
             ));
+        }
+        for (index, reference) in frame.formula_refs.iter().enumerate() {
+            if let Some(area) = range_rect(*reference, columns, rows, origin, z) {
+                let color: Hsla = rgb(REFERENCE_COLORS[index % REFERENCE_COLORS.len()]).into();
+                window.paint_quad(fill(area, color.opacity(0.08)));
+                window.paint_quad(quad(
+                    area,
+                    px(0.0),
+                    transparent_black(),
+                    px(2.0),
+                    color,
+                    BorderStyle::Solid,
+                ));
+            }
         }
         if let Some(marquee) = frame.marquee
             && let Some(area) = range_rect(marquee, columns, rows, origin, z)
