@@ -86,7 +86,7 @@ impl Editor {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Selection {
     pub active: CellPos,
     pub corner: CellPos,
@@ -152,6 +152,13 @@ struct EdgeDrag {
 const RESIZE_GRIP: f32 = 4.0;
 const MIN_COLUMN_WIDTH: f32 = 8.0;
 const MIN_ROW_HEIGHT: f32 = 4.0;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ViewState {
+    pub selection: Selection,
+    pub top: RowIdx,
+    pub left: ColIdx,
+}
+
 const FILL_GRIP: f32 = 4.0;
 
 pub struct Grid {
@@ -322,6 +329,23 @@ impl Grid {
         cx.emit(GridEvent::SelectionChanged);
     }
 
+    pub fn view_state(&self) -> ViewState {
+        ViewState {
+            selection: self.selection,
+            top: self.top,
+            left: self.left,
+        }
+    }
+
+    pub fn restore_view(&mut self, state: ViewState, cx: &mut Context<Self>) {
+        self.selection = state.selection;
+        self.top = state.top;
+        self.left = state.left;
+        self.tab_start = None;
+        self.viewport_changed(cx);
+        cx.emit(GridEvent::SelectionChanged);
+    }
+
     pub fn update_view(&mut self, view: SheetView, cx: &mut Context<Self>) {
         self.apply_view(view);
         self.viewport_changed(cx);
@@ -412,6 +436,12 @@ impl Grid {
             cx.emit(GridEvent::EditChanged);
             cx.notify();
         }
+    }
+
+    pub fn take_edit(&mut self, cx: &mut Context<Self>) -> Option<(CellPos, String)> {
+        let editor = self.editor.take()?;
+        cx.emit(GridEvent::EditChanged);
+        Some((editor.pos, editor.text))
     }
 
     fn commit_edit(&mut self, cx: &mut Context<Self>) {
