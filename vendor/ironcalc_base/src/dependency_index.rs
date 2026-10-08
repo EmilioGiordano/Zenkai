@@ -227,9 +227,14 @@ impl<T: Copy + Ord> RowIntervals<T> {
     fn sort(&mut self) {
         self.intervals.sort();
         self.intervals.dedup();
-        self.intervals.shrink_to_fit();
-        self.max_last_row = vec![i32::MIN; self.intervals.len()];
+        self.max_last_row.clear();
+        self.max_last_row.resize(self.intervals.len(), i32::MIN);
         self.compute_max_last_row(0, self.intervals.len());
+    }
+
+    fn shrink_to_fit(&mut self) {
+        self.intervals.shrink_to_fit();
+        self.max_last_row.shrink_to_fit();
     }
 
     fn compute_max_last_row(&mut self, start: usize, end: usize) -> i32 {
@@ -351,12 +356,22 @@ impl DependencyIndex {
         self.volatile.remove(&formula);
     }
 
+    // Only once built: shrinking after each edit would reallocate a large column twice.
+    pub(crate) fn shrink_to_fit(&mut self) {
+        for column in self.columns.values_mut() {
+            column.cells.shrink_to_fit();
+            column.ranges.shrink_to_fit();
+        }
+        for ranges in self.wide_ranges.values_mut() {
+            ranges.shrink_to_fit();
+        }
+    }
+
     pub(crate) fn sort(&mut self) {
         for key in self.unsorted_columns.drain() {
             if let Some(column) = self.columns.get_mut(&key) {
                 column.cells.sort();
                 column.cells.dedup();
-                column.cells.shrink_to_fit();
                 column.ranges.sort();
             }
         }

@@ -137,6 +137,7 @@ impl Model<'_> {
             }
         }
         index.sort();
+        index.shrink_to_fit();
         Dependencies { index, spills }
     }
 
