@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::mem::size_of;
 use std::sync::{Arc, OnceLock};
 
 use crate::{
@@ -11,11 +12,14 @@ use crate::{
 
 // Smaller areas are cheaper to read again than to keep.
 const MIN_KEPT_CELLS: usize = 1024;
-// Bounds the memory one recalculation can spend on kept values.
-const MAX_KEPT_CELLS: usize = 4_000_000;
+// Bounds the memory one evaluation spends on kept values, slots and text included. Past
+// it, cells are read one by one as without keeping.
+const KEPT_BYTES: usize = 128 << 20;
 
 // (sheet, first row, first column, height, width)
 type Area = (u32, i32, i32, i32, i32);
+
+type Slots = Arc<[OnceLock<CalcResult>]>;
 
 // Values of the large areas that SUMIF, COUNTIF and the rest of the family read, kept
 // while one evaluation runs, so calls that differ only in their criterion read each cell
@@ -25,25 +29,48 @@ type Area = (u32, i32, i32, i32, i32);
 pub(crate) enum CriteriaRanges {
     Off,
     On {
-        kept: HashMap<Area, Arc<[OnceLock<CalcResult>]>>,
-        kept_cells: usize,
+        kept: HashMap<Area, Slots>,
+        // Never refunded during an evaluation: running calls may still hold forgotten
+        // values.
+        bytes_left: usize,
     },
 }
 
 impl CriteriaRanges {
     pub(crate) fn on() -> CriteriaRanges {
+        CriteriaRanges::with_budget(KEPT_BYTES)
+    }
+
+    fn with_budget(bytes: usize) -> CriteriaRanges {
         CriteriaRanges::On {
             kept: HashMap::new(),
-            kept_cells: 0,
+            bytes_left: bytes,
         }
     }
 
-    // A spill writes cells that kept values may hold as empty.
+    // A spill writes or clears cells that kept values may hold.
     pub(crate) fn forget_values(&mut self) {
-        if let CriteriaRanges::On { kept, kept_cells } = self {
+        if let CriteriaRanges::On { kept, .. } = self {
             kept.clear();
-            *kept_cells = 0;
         }
+    }
+
+    fn spend(&mut self, bytes: usize) -> bool {
+        match self {
+            CriteriaRanges::On { bytes_left, .. } if *bytes_left >= bytes => {
+                *bytes_left -= bytes;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+fn heap_bytes(value: &CalcResult) -> usize {
+    match value {
+        CalcResult::String(text) => text.capacity(),
+        CalcResult::Error { message, .. } => message.capacity(),
+        _ => 0,
     }
 }
 
@@ -52,7 +79,7 @@ pub(crate) struct AreaValues {
     row: i32,
     column: i32,
     width: i32,
-    kept: Option<Arc<[OnceLock<CalcResult>]>>,
+    kept: Option<Slots>,
 }
 
 impl Model<'_> {
@@ -98,30 +125,35 @@ impl Model<'_> {
         let circular_hits = self.circular_hits;
         let value = self.read_cell(reference);
         // A cell reached while it is being evaluated reads as #CIRC! only at that moment.
-        if self.circular_hits == circular_hits {
+        if self.circular_hits == circular_hits && self.criteria_ranges.spend(heap_bytes(&value)) {
             Cow::Borrowed(slot.get_or_init(|| value))
         } else {
             Cow::Owned(value)
         }
     }
 
-    fn kept_values(&mut self, area: Area) -> Option<Arc<[OnceLock<CalcResult>]>> {
+    fn kept_values(&mut self, area: Area) -> Option<Slots> {
         let (_, _, _, height, width) = area;
         let cells = usize::try_from(height)
             .ok()?
             .checked_mul(usize::try_from(width).ok()?)?;
-        let CriteriaRanges::On { kept, kept_cells } = &mut self.criteria_ranges else {
+        let CriteriaRanges::On { kept, .. } = &self.criteria_ranges else {
             return None;
         };
         if let Some(values) = kept.get(&area) {
             return Some(Arc::clone(values));
         }
-        if cells < MIN_KEPT_CELLS || kept_cells.saturating_add(cells) > MAX_KEPT_CELLS {
+        if cells < MIN_KEPT_CELLS
+            || !self
+                .criteria_ranges
+                .spend(cells.checked_mul(size_of::<OnceLock<CalcResult>>())?)
+        {
             return None;
         }
-        let values: Arc<[OnceLock<CalcResult>]> = (0..cells).map(|_| OnceLock::new()).collect();
-        kept.insert(area, Arc::clone(&values));
-        *kept_cells += cells;
+        let values: Slots = (0..cells).map(|_| OnceLock::new()).collect();
+        if let CriteriaRanges::On { kept, .. } = &mut self.criteria_ranges {
+            kept.insert(area, Arc::clone(&values));
+        }
         Some(values)
     }
 
@@ -152,5 +184,45 @@ impl Model<'_> {
             _ => true,
         };
         evaluated.then(|| self.get_cell_value(cell, reference))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use std::mem::size_of;
+    use std::sync::OnceLock;
+
+    use super::CriteriaRanges;
+    use crate::calc_result::CalcResult;
+    use crate::test::util::new_empty_model;
+
+    #[test]
+    fn an_area_whose_slots_exceed_the_budget_is_not_kept() {
+        let mut model = new_empty_model();
+        model.criteria_ranges = CriteriaRanges::on();
+        let values = model.area_values(0, 1, 1, 4_000_000, 1);
+        assert!(values.kept.is_none());
+    }
+
+    #[test]
+    fn long_text_stops_being_kept_at_the_budget() {
+        let mut model = new_empty_model();
+        let text = "x".repeat(32_000);
+        for row in 1..=1100 {
+            model._set(&format!("A{row}"), &text);
+        }
+        model.evaluate();
+        let slots = 1100 * size_of::<OnceLock<CalcResult>>();
+        model.criteria_ranges = CriteriaRanges::with_budget(slots + 10 * 32_000);
+        let values = model.area_values(0, 1, 1, 1100, 1);
+        for row_offset in 0..1100 {
+            let value = model.area_value(&values, row_offset, 0);
+            assert!(matches!(value.as_ref(), CalcResult::String(s) if *s == text));
+        }
+        let kept = values.kept.as_deref().unwrap();
+        let filled = kept.iter().filter(|slot| slot.get().is_some()).count();
+        assert_eq!(filled, 10);
     }
 }
