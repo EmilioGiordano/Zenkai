@@ -56,6 +56,8 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Currency format", FormatCurrency),
             item("Percent format", FormatPercent),
             item("Date format", FormatDate),
+            item("Increase decimal", IncreaseDecimal),
+            item("Decrease decimal", DecreaseDecimal),
         ]),
         CommandGroup::new().label("Insert").items([
             item("Chart of the selection", InsertChart),

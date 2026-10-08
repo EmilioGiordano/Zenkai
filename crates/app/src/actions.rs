@@ -35,6 +35,8 @@ actions!(
         InterfaceReset,
         ToggleReduceMotion,
         NoFill,
+        IncreaseDecimal,
+        DecreaseDecimal,
         SortAscending,
         SelectCurrentRegion,
         FreezeTopRow,

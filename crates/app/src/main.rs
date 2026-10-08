@@ -6,6 +6,7 @@ mod chart;
 mod chart_panel;
 mod clipboard;
 mod csv_preview;
+mod decimals;
 mod document;
 mod files;
 mod find;

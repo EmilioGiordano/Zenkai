@@ -21,6 +21,7 @@ use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
 use crate::csv_preview::{self, CsvPreview};
+use crate::decimals;
 use crate::document::{self, Document};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
@@ -1834,6 +1835,22 @@ impl Workspace {
         self.edit(window, cx, move |wb| wb.sort(sheet, range, key, descending));
     }
 
+    // The new format comes from the active cell, as in Excel, and applies to the selection.
+    fn step_decimals(&mut self, more: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        let active = self.grid.read(cx).selection().active;
+        let Some(workbook) = self.document.workbook() else {
+            return;
+        };
+        let view = workbook.cell(sheet, active);
+        let Some(code) = decimals::step_decimals(&view.style.num_fmt, &view.text, more) else {
+            return;
+        };
+        self.edit(window, cx, move |wb| {
+            wb.set_number_format(sheet, range, &code)
+        });
+    }
+
     fn select_current_region(&mut self, cx: &mut Context<Self>) -> Range {
         let active = self.grid.read(cx).selection().active;
         let sheet = self.document.sheet;
@@ -2252,6 +2269,12 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &SortDescending, window, cx| this.sort(true, window, cx)),
             )
+            .on_action(cx.listener(|this, _: &IncreaseDecimal, window, cx| {
+                this.step_decimals(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DecreaseDecimal, window, cx| {
+                this.step_decimals(false, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
             }))

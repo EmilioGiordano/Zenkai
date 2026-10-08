@@ -126,6 +126,18 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
             FormatGeneral,
         ))
         .child(tool(
+            "more-decimals",
+            IconName::DecimalsArrowRight,
+            "Increase decimal",
+            IncreaseDecimal,
+        ))
+        .child(tool(
+            "fewer-decimals",
+            IconName::DecimalsArrowLeft,
+            "Decrease decimal",
+            DecreaseDecimal,
+        ))
+        .child(tool(
             "number",
             IconName::Hash,
             "Number (Ctrl+Shift+!)",

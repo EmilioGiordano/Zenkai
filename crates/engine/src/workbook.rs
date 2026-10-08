@@ -60,6 +60,12 @@ pub trait Engine: Send {
         range: Range,
         change: StyleChange,
     ) -> Result<(), EngineError>;
+    fn set_number_format(
+        &mut self,
+        sheet: SheetId,
+        range: Range,
+        code: &str,
+    ) -> Result<(), EngineError>;
     fn undo(&mut self) -> Result<(), EngineError>;
     fn redo(&mut self) -> Result<(), EngineError>;
     fn sizes(&self, sheet: SheetId) -> SheetSizes;
@@ -692,6 +698,17 @@ impl Engine for Workbook {
         };
         self.model
             .update_range_style(&area(sheet, range), path, &value)
+            .map_err(rejected)
+    }
+
+    fn set_number_format(
+        &mut self,
+        sheet: SheetId,
+        range: Range,
+        code: &str,
+    ) -> Result<(), EngineError> {
+        self.model
+            .update_range_style(&area(sheet, range), "num_fmt", code)
             .map_err(rejected)
     }
 
