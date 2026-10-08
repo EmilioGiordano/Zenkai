@@ -108,7 +108,13 @@ pub fn update(
 // an agent) never sees half a file.
 fn write_atomic(path: &Path, text: &str) -> Result<(), SettingsFileError> {
     let temp = path.with_extension(format!("{}.tmp", std::process::id()));
-    let written = std::fs::write(&temp, text).and_then(|()| std::fs::rename(&temp, path));
+    let written = std::fs::File::create(&temp)
+        .and_then(|mut file| {
+            std::io::Write::write_all(&mut file, text.as_bytes())?;
+            // On disk before the rename, so a crash never leaves an empty settings file.
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temp, path));
     if written.is_err()
         && temp.exists()
         && let Err(error) = std::fs::remove_file(&temp)
