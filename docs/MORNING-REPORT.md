@@ -39,7 +39,7 @@ Windows.
 - **Grilla.**
   - Formatos de Excel, celdas combinadas, paneles inmovilizados, desborde de texto.
   - Barra de fórmulas editable (Enter confirma, Esc cancela).
-  - La barra de estado nombra los modos "Mostrando fórmulas" y "Solo lectura".
+  - La barra de estado nombra los modos ("Showing formulas", "Read-only").
   - Ajuste de texto y alineación vertical.
   - Números en formato General que no entran se acortan o pasan a notación científica.
   - Redimensionar columnas y filas; autoajuste de columnas.
