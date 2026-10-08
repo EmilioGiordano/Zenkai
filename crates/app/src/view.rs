@@ -888,6 +888,7 @@ impl Workspace {
             }
             GridEvent::CommitToSelection { pos, text, range } => {
                 let (sheet, pos, text, range) = (self.document.sheet, *pos, text.clone(), *range);
+                self.show_typed(range, &text, cx);
                 self.edit(window, cx, move |wb| wb.fill_with(sheet, pos, &text, range));
             }
             GridEvent::ClearRequested(range) => {
@@ -962,6 +963,11 @@ impl Workspace {
         self.document.dirty = true;
         window.set_window_title(&self.document.title());
         self.flush_edits(cx);
+    }
+
+    fn show_typed(&mut self, range: Range, text: &str, cx: &mut Context<Self>) {
+        self.grid
+            .update(cx, |grid, cx| grid.show_typed(range, text, cx));
     }
 
     fn flush_edits(&mut self, cx: &mut Context<Self>) {
@@ -2318,6 +2324,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if sheet == self.document.sheet {
+            self.show_typed(Range::single(pos), &text, cx);
+        }
         self.edit(window, cx, move |wb| {
             // Excel turns on wrap text for a cell typed with a line break.
             let wraps = text.contains('\n') && !text.starts_with('=');

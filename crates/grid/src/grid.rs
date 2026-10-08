@@ -318,6 +318,19 @@ impl Grid {
         cx.notify();
     }
 
+    // Typed text shows at once while a recalculation runs; the recalculation's own
+    // refresh of the cache replaces it, so it never outlives the document or sheet.
+    pub fn show_typed(&mut self, range: Range, text: &str, cx: &mut Context<Self>) {
+        if range.cell_count() > MAX_TYPED_PREVIEW_CELLS {
+            return;
+        }
+        let changes: Vec<_> = range
+            .positions()
+            .filter_map(|pos| Some((pos, typed_preview(self.cells.get(&pos), text)?)))
+            .collect();
+        self.update_cells(changes, cx);
+    }
+
     pub fn set_marquee(&mut self, range: Option<Range>, cx: &mut Context<Self>) {
         self.marquee = range;
         cx.notify();
@@ -1402,6 +1415,27 @@ impl Grid {
     }
 }
 
+const MAX_TYPED_PREVIEW_CELLS: u64 = 10_000;
+
+// A formula keeps its last value: its typed text is not what the cell will show.
+fn typed_preview(existing: Option<&GridCell>, text: &str) -> Option<GridCell> {
+    if text.starts_with('=') {
+        return None;
+    }
+    let kind = if text.is_empty() {
+        ValueKind::Empty
+    } else if text.trim().parse::<f64>().is_ok() {
+        ValueKind::Number
+    } else {
+        ValueKind::Text
+    };
+    Some(GridCell {
+        text: text.to_string().into(),
+        kind,
+        style: existing.map(|cell| cell.style.clone()).unwrap_or_default(),
+    })
+}
+
 // One extra screen of rows above and below the viewport, so a short scroll while the
 // workbook is busy still lands on cached values.
 fn cached_ranges(
@@ -1450,8 +1484,11 @@ fn cached_ranges(
 
 #[cfg(test)]
 mod tests {
-    use super::{Direction, cached_ranges, cycle_within, next_boundary, prev_boundary};
-    use zenkai_types::{CellPos, Range};
+    use super::{
+        Direction, GridCell, cached_ranges, cycle_within, next_boundary, prev_boundary,
+        typed_preview,
+    };
+    use zenkai_types::{CellPos, CellStyle, Range, ValueKind};
 
     fn pos(text: &str) -> CellPos {
         CellPos::parse_a1(text).unwrap()
@@ -1498,5 +1535,26 @@ mod tests {
         assert!(ranges.contains(&Range::new(pos("C1"), pos("M2"))));
         assert!(ranges.contains(&Range::new(pos("A61"), pos("B181"))));
         assert!(ranges.contains(&Range::new(pos("A1"), pos("B2"))));
+    }
+
+    #[test]
+    fn typed_text_replaces_the_value_and_keeps_the_style() {
+        let mut existing = GridCell {
+            text: "Cliente 2301".into(),
+            kind: ValueKind::Text,
+            style: CellStyle::default(),
+        };
+        existing.style.bold = true;
+        let preview = typed_preview(Some(&existing), "a").unwrap();
+        assert_eq!(preview.text.as_ref(), "a");
+        assert_eq!(preview.kind, ValueKind::Text);
+        assert!(preview.style.bold);
+        assert_eq!(typed_preview(None, "12.5").unwrap().kind, ValueKind::Number);
+        assert_eq!(typed_preview(None, "").unwrap().kind, ValueKind::Empty);
+    }
+
+    #[test]
+    fn a_typed_formula_keeps_the_last_value() {
+        assert!(typed_preview(None, "=A1+1").is_none());
     }
 }
