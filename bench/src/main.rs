@@ -68,34 +68,48 @@ fn check(dir: &Path, baseline_path: &Path, current_path: &Path, runs: usize) -> 
     ensure_fixtures(dir)?;
     let exe = std::env::current_exe()?;
     let mut current = Vec::new();
+    let mut problems = Vec::new();
     for fixture in baseline::fixtures(&baseline) {
         let samples: Result<Vec<_>> = (0..runs)
             .map(|_| measure_subprocess(&exe, BASELINE_ENGINE, fixture, dir))
             .collect();
         match samples {
-            Ok(samples) => current.extend(baseline::Metric::ALL.into_iter().filter_map(|metric| {
-                median(&samples, metric.key()).map(|value| baseline::Measurement {
-                    fixture,
-                    metric,
-                    value,
-                })
-            })),
+            Ok(samples) => {
+                for sample in &samples {
+                    for problem in baseline::wrong_results(fixture, sample) {
+                        if !problems.contains(&problem) {
+                            problems.push(problem);
+                        }
+                    }
+                }
+                current.extend(baseline::Metric::ALL.into_iter().filter_map(|metric| {
+                    median(&samples, metric.key()).map(|value| baseline::Measurement {
+                        fixture,
+                        metric,
+                        value,
+                    })
+                }));
+            }
             Err(e) => eprintln!("{} FAILED: {e:#}", fixture.file_name()),
         }
     }
     std::fs::write(current_path, baseline::to_csv(&current))
         .with_context(|| format!("writing {}", current_path.display()))?;
     print!("{}", baseline::to_csv(&current));
-    let problems = baseline::compare(&baseline, &current);
+    problems.extend(baseline::compare(&baseline, &current));
     if !problems.is_empty() {
         let list: Vec<String> = problems.iter().map(ToString::to_string).collect();
         bail!(
-            "{} metric(s) regressed more than 15% or are missing:\n{}",
+            "{} problem(s): wrong results, a metric more than 15% worse, or a metric missing:
+{}",
             problems.len(),
-            list.join("\n")
+            list.join(
+                "
+"
+            )
         );
     }
-    println!("no metric regressed more than 15% against the baseline");
+    println!("results correct and no metric regressed more than 15% against the baseline");
     Ok(())
 }
 

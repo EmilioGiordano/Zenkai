@@ -62,6 +62,11 @@ pub enum Problem {
         fixture: Fixture,
         metric: Metric,
     },
+    Wrong {
+        fixture: Fixture,
+        check: String,
+        seen: String,
+    },
 }
 
 impl fmt::Display for Problem {
@@ -85,6 +90,11 @@ impl fmt::Display for Problem {
                 fixture.file_name(),
                 metric.key()
             ),
+            Problem::Wrong {
+                fixture,
+                check,
+                seen,
+            } => write!(f, "{} {check}={seen}: wrong results", fixture.file_name()),
         }
     }
 }
@@ -159,6 +169,28 @@ pub fn compare(baseline: &[Measurement], current: &[Measurement]) -> Vec<Problem
         .collect()
 }
 
+pub fn wrong_results(fixture: Fixture, sample: &[(String, String)]) -> Vec<Problem> {
+    sample
+        .iter()
+        .filter(|(check, seen)| is_wrong(check, seen))
+        .map(|(check, seen)| Problem::Wrong {
+            fixture,
+            check: check.clone(),
+            seen: seen.clone(),
+        })
+        .collect()
+}
+
+fn is_wrong(check: &str, seen: &str) -> bool {
+    match check {
+        "edit_ok" => seen == "false",
+        "correct" | "roundtrip" | "styles" | "merges" => {
+            seen != "-" && seen.split_once('/').is_none_or(|(ok, total)| ok != total)
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +248,44 @@ mod tests {
                 metric: Metric::EditMs,
             }]
         );
+    }
+
+    fn sample(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn correct_sample_has_no_wrong_results() {
+        let clean = sample(&[
+            ("open_ms", "48.0"),
+            ("edit_ok", "true"),
+            ("correct", "10000/10000"),
+            ("roundtrip", "10000/10000"),
+            ("styles", "-"),
+            ("merges", "-"),
+        ]);
+        assert!(wrong_results(Fixture::Chain, &clean).is_empty());
+    }
+
+    #[test]
+    fn wrong_edit_values_or_round_trip_are_reported() {
+        let broken = sample(&[
+            ("edit_ok", "false"),
+            ("correct", "9999/10000"),
+            ("roundtrip", "10000/10000"),
+            ("merges", "garbled"),
+        ]);
+        let checks: Vec<String> = wrong_results(Fixture::Chain, &broken)
+            .into_iter()
+            .map(|p| match p {
+                Problem::Wrong { check, .. } => check,
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(checks, ["edit_ok", "correct", "merges"]);
     }
 
     #[test]
