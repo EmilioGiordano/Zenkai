@@ -1,0 +1,18 @@
+[package]
+name = "zenkai-datagen"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+schemars = "1.2"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+zenkai-types = { path = "../types" }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

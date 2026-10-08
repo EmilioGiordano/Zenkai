@@ -9746,6 +9746,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zenkai-datagen"
+version = "0.1.0"
+dependencies = [
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "zenkai-types",
+]
+
+[[package]]
 name = "zenkai-engine"
 version = "0.1.0"
 dependencies = [
