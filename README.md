@@ -76,13 +76,32 @@ Requirements: Windows 10/11, the MSVC build tools (Visual Studio Build Tools wit
 `rust-toolchain.toml` and installs itself on the first build.
 
 ```powershell
-cargo build --release -p zenkai -j 6
+cargo build --release -p zenkai -p zenkai-mcp -j 6
 .\target\release\zenkai.exe                    # empty workbook
 .\target\release\zenkai.exe path\to\book.xlsx  # open a file
 ```
 
 `-j 6` keeps the first build (GPUI is large) from saturating the machine; drop it on a
 dedicated build box. The release binary is `target\release\zenkai.exe`.
+
+## Agents over MCP
+
+Zenkai can let an MCP client, such as Claude Code, read and edit the workbook that is open,
+live: changes recalculate, show at once and undo with Ctrl+Z; nothing is saved by the
+agent. Turn on Settings (Ctrl+,) > "Allow MCP clients outside Zenkai", then register the
+relay that ships next to `zenkai.exe` (the Settings page shows the exact command):
+
+```powershell
+claude mcp add zenkai -- "C:\path\to\zenkai-mcp.exe"
+```
+
+`zenkai-mcp.exe` only relays stdio to a named pipe that is random per run, limited to the
+current user and guarded by a token written to `%LOCALAPPDATA%\Zenkai\mcp-endpoint.txt`
+while the bridge runs. Tools: `list_workbooks`, `list_sheets`, `get_selection`,
+`read_range`, `find`, `write_cells`, `set_formula`, `format_range`. Writes ask for
+approval by default (Enter allows, Esc denies); files downloaded from the internet keep
+agents read-only, as Excel's Protected View does. Cell content reaches the agent marked as
+untrusted data.
 
 ## Packaging
 
