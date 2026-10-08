@@ -136,7 +136,32 @@ fn merge_rows(sheet: &str, rows: &str) -> Result<String, String> {
         out.push_str(row);
     }
     out.push_str(&sheet[close..]);
-    Ok(out)
+    Ok(drop_odd_dimension(out))
+}
+
+// IronCalc derives <dimension> from every imported row, so rows outside the grid leave a
+// reference like "A0:A2000000000". The element is optional and Excel recomputes it, so an
+// out-of-grid one is removed.
+fn drop_odd_dimension(sheet: String) -> String {
+    let Some(start) = sheet.find("<dimension ") else {
+        return sheet;
+    };
+    let Some(len) = sheet[start..].find("/>") else {
+        return sheet;
+    };
+    let element = &sheet[start..start + len + 2];
+    let rows_ok = element
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|digits| !digits.is_empty())
+        .all(|digits| {
+            digits
+                .parse::<i64>()
+                .is_ok_and(|r| (1..=i64::from(MAX_ROW)).contains(&r))
+        });
+    if rows_ok {
+        return sheet;
+    }
+    format!("{}{}", &sheet[..start], &sheet[start + len + 2..])
 }
 
 // A row tag with ht outside Excel's 0..=409.5 points gets the nearest valid height.
@@ -171,6 +196,17 @@ fn row_number(row: &str) -> Result<i32, String> {
 #[cfg(test)]
 mod tests {
     use super::{clamp_height, merge_rows};
+
+    #[test]
+    fn drops_only_an_out_of_grid_dimension() {
+        let odd = r#"<worksheet><dimension ref="A0:A2000000000"/><sheetData/></worksheet>"#;
+        assert_eq!(
+            super::drop_odd_dimension(odd.to_string()),
+            "<worksheet><sheetData/></worksheet>"
+        );
+        let fine = r#"<worksheet><dimension ref="A1:C9"/><sheetData/></worksheet>"#;
+        assert_eq!(super::drop_odd_dimension(fine.to_string()), fine);
+    }
 
     #[test]
     fn clamps_only_the_row_height_attribute() {

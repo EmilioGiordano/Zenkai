@@ -150,4 +150,5 @@ fn odd_empty_rows_in_a_file_never_reach_the_saved_file() {
     assert!(!sheet.contains(r#"<row r="2000000000""#), "{sheet}");
     assert!(!sheet.contains(r#"ht="5000""#), "{sheet}");
     assert_eq!(sheet.matches(r#"<row r="7""#).count(), 1, "{sheet}");
+    assert!(!sheet.contains("2000000000"), "{sheet}");
 }
