@@ -1115,6 +1115,7 @@ impl Render for Grid {
             .on_action(cx.listener(|g, _: &ConfirmRight, _, cx| g.confirm(Direction::Right, cx)))
             .on_action(cx.listener(|g, _: &ConfirmLeft, _, cx| g.confirm(Direction::Left, cx)))
             .on_action(cx.listener(|g, _: &Cancel, _, cx| {
+                g.fill_target = None;
                 g.cancel_edit(cx);
                 g.set_marquee(None, cx);
             }))

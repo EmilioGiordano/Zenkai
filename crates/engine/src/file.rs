@@ -574,6 +574,12 @@ line 2"
         book.extend(SheetId(0), source, target).unwrap();
         assert_eq!(book.input(SheetId(0), at(2, 7)), "a");
         assert_eq!(book.input(SheetId(0), at(3, 7)), "1");
+        let words = vec![vec!["inf".to_string()], vec!["nan".to_string()]];
+        book.set_inputs(SheetId(0), at(0, 9), &words).unwrap();
+        let source = zenkai_types::Range::new(at(0, 9), at(1, 9));
+        let target = zenkai_types::Range::new(at(0, 9), at(2, 9));
+        book.extend(SheetId(0), source, target).unwrap();
+        assert_eq!(book.input(SheetId(0), at(2, 9)), "inf");
     }
 
     #[test]

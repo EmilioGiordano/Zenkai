@@ -163,9 +163,11 @@ impl Workbook {
         let values = line
             .map(|pos| {
                 let input = self.input(sheet, pos);
+                // Rust also parses "inf", "nan" and "1e999", which Excel keeps as text.
                 (!input.starts_with('='))
                     .then(|| input.trim().parse::<f64>().ok())
                     .flatten()
+                    .filter(|value| value.is_finite() && value.abs() < 1e290)
             })
             .collect::<Option<Vec<f64>>>()?;
         if values.len() < 2 {

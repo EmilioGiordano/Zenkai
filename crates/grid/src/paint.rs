@@ -83,9 +83,9 @@ pub struct Frame {
     pub row_header: f32,
 }
 
-// Excel's reference colours while editing a formula, in order of appearance.
 const FILL_HANDLE: f32 = 7.0;
 
+// Excel's reference colours while editing a formula, in order of appearance.
 const REFERENCE_COLORS: [u32; 6] = [0x1F6FD1, 0xD0342C, 0x7A3FB5, 0x1E8C4E, 0xB5651D, 0xC2185B];
 
 struct Columns {
@@ -488,7 +488,12 @@ fn paint_selection(
                 c.accent,
                 BorderStyle::Solid,
             ));
-            if frame.editor.is_none() {
+            // Only where it can be grabbed: the selection's own corner, not a clipped edge.
+            let end = frame.selection.end;
+            if frame.editor.is_none()
+                && columns.find(end.col).is_some()
+                && rows.find(end.row).is_some()
+            {
                 let side = px(FILL_HANDLE * z);
                 let corner = area.bottom_right() - point(side / 2.0, side / 2.0);
                 window.paint_quad(quad(
