@@ -4,6 +4,7 @@
 mod actions;
 mod clipboard;
 mod document;
+mod files;
 mod jump;
 mod stats;
 mod view;

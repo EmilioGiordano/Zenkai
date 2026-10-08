@@ -10,13 +10,15 @@ name = "zenkai"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1"
 gpui-kit = "=0.7.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zenkai-engine = { path = "../engine" }
 zenkai-grid = { path = "../grid" }
 zenkai-types = { path = "../types" }
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

@@ -9625,8 +9625,8 @@ dependencies = [
 name = "zenkai"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "gpui-kit",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
  "zenkai-engine",

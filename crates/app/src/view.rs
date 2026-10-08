@@ -14,8 +14,12 @@ use zenkai_types::{CellPos, HAlign, NumberFormat, Range, SheetId, StyleChange};
 use crate::actions::*;
 use crate::clipboard;
 use crate::document::{self, Document};
+use crate::files;
 use crate::jump::jump_target;
 use crate::stats::{self, SelectionStats};
+
+const SAVING: &str = "Saving…";
+const CALCULATING: &str = "Calculating…";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Severity {
@@ -194,7 +198,7 @@ impl Workspace {
         let Some((mut workbook, edits)) = self.document.take_batch() else {
             return;
         };
-        self.busy = Some("Calculating…".into());
+        self.busy = Some(CALCULATING.into());
         cx.notify();
         let started = Instant::now();
         let generation = self.document.generation();
@@ -208,11 +212,11 @@ impl Workspace {
                 .await;
             let update = this.update(cx, |this, cx| {
                 if !this.document.restore(workbook, generation) {
-                    this.clear_stale_busy(cx);
+                    this.clear_busy(CALCULATING, cx);
                     return;
                 }
                 this.last_recalc = Some(started.elapsed());
-                this.busy = None;
+                this.clear_busy(CALCULATING, cx);
                 if let Some(error) = errors.first() {
                     this.notify(Severity::Error, error.to_string(), cx);
                 }
@@ -226,8 +230,12 @@ impl Workspace {
         .detach();
     }
 
-    fn clear_stale_busy(&mut self, cx: &mut Context<Self>) {
-        if self.document.workbook().is_some() {
+    fn clear_busy(&mut self, label: &str, cx: &mut Context<Self>) {
+        if self
+            .busy
+            .as_ref()
+            .is_some_and(|busy| busy.as_ref() == label)
+        {
             self.busy = None;
             cx.notify();
         }
@@ -315,8 +323,16 @@ impl Workspace {
             Some(path) if !must_rename => self.save_to(path, window, cx),
             Some(_) => {
                 let detail = if self.document.is_macro_enabled() {
-                    "Macros are not kept. The original .xlsm file will not be overwritten."
-                        .to_string()
+                    let mut text =
+                        "Macros are not kept. The original .xlsm file will not be overwritten."
+                            .to_string();
+                    if !self.document.unsupported.is_empty() {
+                        text.push_str(&format!(
+                            " Also lost: {}.",
+                            self.document.unsupported_labels()
+                        ));
+                    }
+                    text
                 } else {
                     format!(
                         "Saving will lose: {}. Save a copy with a new name to keep the original intact.",
@@ -364,7 +380,7 @@ impl Workspace {
         let path = cx.prompt_for_new_path(&directory, Some(&format!("{suggested}.xlsx")));
         cx.spawn_in(window, async move |this, cx| {
             let chosen = match path.await {
-                Ok(Ok(Some(path))) => Some(path.with_extension("xlsx")),
+                Ok(Ok(Some(path))) => Some(path),
                 Ok(Ok(None)) => None,
                 Ok(Err(error)) => {
                     tracing::warn!(%error, "save dialog failed");
@@ -385,19 +401,44 @@ impl Workspace {
         .detach();
     }
 
-    fn confirm_target(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let replaces_source = self.document.path.as_ref() == Some(&path);
-        if !replaces_source || self.document.unsupported.is_empty() {
+    fn confirm_target(&mut self, chosen: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let path = files::xlsx_target(&chosen);
+        let renamed = path != chosen;
+        let replaces_source = self
+            .document
+            .path
+            .as_ref()
+            .is_some_and(|source| files::same_file(source, &path));
+        let (title, detail) = if replaces_source && self.document.is_macro_enabled() {
+            self.notify(
+                Severity::Error,
+                "Macro-enabled workbooks are never overwritten. Choose a new name.",
+                cx,
+            );
+            return;
+        } else if replaces_source && !self.document.unsupported.is_empty() {
+            (
+                "Replace the original file?",
+                format!(
+                    "Replacing the original loses: {}. This cannot be undone.",
+                    self.document.unsupported_labels()
+                ),
+            )
+        } else if renamed && path.exists() {
+            (
+                "Replace the existing file?",
+                format!(
+                    "Zenkai saves as .xlsx, so the workbook goes to {}, which already exists.",
+                    path.display()
+                ),
+            )
+        } else {
             self.save_to(path, window, cx);
             return;
-        }
-        let detail = format!(
-            "Replacing the original loses: {}. This cannot be undone.",
-            self.document.unsupported_labels()
-        );
+        };
         let answer = window.prompt(
             PromptLevel::Critical,
-            "Replace the original file?",
+            title,
             Some(&detail),
             &["Cancel", "Replace"],
             cx,
@@ -422,7 +463,7 @@ impl Workspace {
             );
             return;
         };
-        self.busy = Some("Saving…".into());
+        self.busy = Some(SAVING.into());
         cx.notify();
         let generation = self.document.generation();
         cx.spawn_in(window, async move |this, cx| {
@@ -436,10 +477,17 @@ impl Workspace {
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 if !this.document.restore(workbook, generation) {
-                    this.clear_stale_busy(cx);
+                    this.clear_busy(SAVING, cx);
+                    if let Err(error) = result {
+                        this.notify(
+                            Severity::Error,
+                            format!("Saving {} failed: {error}", path.display()),
+                            cx,
+                        );
+                    }
                     return;
                 }
-                this.busy = None;
+                this.clear_busy(SAVING, cx);
                 match result {
                     Ok(()) => {
                         if this.document.path.as_ref() != Some(&path) {
