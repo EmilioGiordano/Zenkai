@@ -95,3 +95,15 @@ fn engine_panic_on_incomplete_workbook_becomes_an_error() {
     let error = open_bytes(workbook_with_sheet(&sheet(cell))).unwrap_err();
     assert!(error.contains("damaged"), "{error}");
 }
+
+#[test]
+fn worksheet_outside_the_usual_folder_is_still_checked() {
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::FileOptions::default();
+    let body = sheet(&format!(r#"<c r="A1"><f>{}1</f></c>"#, "1+".repeat(20_000)));
+    zip.start_file("data/worksheets/s1.xml", options).unwrap();
+    zip.write_all(body.as_bytes()).unwrap();
+    let bytes = zip.finish().unwrap().into_inner();
+    let error = open_bytes(bytes).unwrap_err();
+    assert!(error.contains("characters"), "{error}");
+}

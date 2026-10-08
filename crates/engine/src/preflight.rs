@@ -18,15 +18,22 @@ fn reject(reason: String) -> EngineError {
     EngineError::InvalidFile(reason)
 }
 
-pub fn check_worksheet(xml: &[u8]) -> Result<SheetFeatures, EngineError> {
-    let text =
-        std::str::from_utf8(xml).map_err(|e| reject(format!("worksheet is not UTF-8: {e}")))?;
-    let document = roxmltree::Document::parse(text)
-        .map_err(|e| reject(format!("worksheet XML is malformed: {e}")))?;
+// Every XML part is checked, wherever it lives: the engine follows relationship
+// targets to any path and also parses formulas outside worksheets (defined names,
+// conditional formats, validations). Parts that are not XML are left to the engine.
+pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
     let mut features = SheetFeatures::default();
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Ok(features);
+    };
+    if !text.trim_start().starts_with('<') {
+        return Ok(features);
+    }
+    let document = roxmltree::Document::parse(text)
+        .map_err(|e| reject(format!("an XML part is malformed: {e}")))?;
     for node in document.descendants().filter(roxmltree::Node::is_element) {
         match node.tag_name().name() {
-            "f" => check_formula(&node)?,
+            "f" | "formula" | "formula1" | "formula2" | "definedName" => check_formula(&node)?,
             "conditionalFormatting" => features.conditional_formatting = true,
             "dataValidations" => features.data_validation = true,
             _ => {}
@@ -119,36 +126,46 @@ mod tests {
             "(".repeat(300),
             ")".repeat(300)
         ));
-        assert!(check_worksheet(deep.as_bytes()).is_err());
+        assert!(check_part(deep.as_bytes()).is_err());
         let encoded = sheet(&format!("<c r=\"A1\"><f>{}1</f></c>", "&#40;".repeat(300)));
-        assert!(check_worksheet(encoded.as_bytes()).is_err());
+        assert!(check_part(encoded.as_bytes()).is_err());
         let prefixed = format!(
             r#"<x:worksheet xmlns:x="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><x:sheetData><x:row r="1"><x:c r="A1"><x:f>{}1</x:f></x:c></x:row></x:sheetData></x:worksheet>"#,
             "(".repeat(300)
         );
-        assert!(check_worksheet(prefixed.as_bytes()).is_err());
+        assert!(check_part(prefixed.as_bytes()).is_err());
         let fine = sheet(&format!(
             "<c r=\"A1\"><f>{}1{}</f></c>",
             "(".repeat(64),
             ")".repeat(64)
         ));
-        assert!(check_worksheet(fine.as_bytes()).is_ok());
+        assert!(check_part(fine.as_bytes()).is_ok());
     }
 
     #[test]
     fn rejects_long_operator_chains_and_huge_areas() {
         let long = sheet(&format!("<c r=\"A1\"><f>{}1</f></c>", "1+".repeat(5_000)));
-        assert!(check_worksheet(long.as_bytes()).is_err());
+        assert!(check_part(long.as_bytes()).is_err());
         let huge = sheet("<c r=\"A1\"><f\n t='array' ref='A1:XFD1048576'>1</f></c>");
-        assert!(check_worksheet(huge.as_bytes()).is_err());
+        assert!(check_part(huge.as_bytes()).is_err());
         let small = sheet(r#"<c r="A1"><f t="shared" ref="A1:A100" si="0">B1*2</f></c>"#);
-        assert!(check_worksheet(small.as_bytes()).is_ok());
+        assert!(check_part(small.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn checks_defined_names_and_skips_binary_parts() {
+        let workbook = format!(
+            r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><definedNames><definedName name="Foo">{}1</definedName></definedNames></workbook>"#,
+            "1+".repeat(5_000)
+        );
+        assert!(check_part(workbook.as_bytes()).is_err());
+        assert!(check_part(&[0x89, b'P', b'N', b'G', 0xFF, 0x00]).is_ok());
     }
 
     #[test]
     fn reports_conditional_formatting_and_validation() {
         let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><conditionalFormatting sqref="A1"/><dataValidations count="0"/></worksheet>"#;
-        let features = check_worksheet(xml.as_bytes()).unwrap();
+        let features = check_part(xml.as_bytes()).unwrap();
         assert!(features.conditional_formatting && features.data_validation);
     }
 

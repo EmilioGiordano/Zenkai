@@ -116,19 +116,20 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
                 found.push(kind);
             }
         }
-        if name.starts_with("xl/worksheets/") && name.ends_with(".xml") {
-            let mut xml = Vec::new();
-            (&mut entry)
-                .take(preflight::MAX_ENTRY_BYTES)
-                .read_to_end(&mut xml)
-                .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
-            let features = preflight::check_worksheet(&xml)?;
-            if features.conditional_formatting {
-                found.push(Unsupported::ConditionalFormatting);
-            }
-            if features.data_validation {
-                found.push(Unsupported::DataValidation);
-            }
+        if entry.is_dir() {
+            continue;
+        }
+        let mut part = Vec::new();
+        (&mut entry)
+            .take(preflight::MAX_ENTRY_BYTES)
+            .read_to_end(&mut part)
+            .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
+        let features = preflight::check_part(&part)?;
+        if features.conditional_formatting {
+            found.push(Unsupported::ConditionalFormatting);
+        }
+        if features.data_validation {
+            found.push(Unsupported::DataValidation);
         }
     }
     found.sort();
