@@ -46,6 +46,13 @@ impl Date {
         Date::from_ymd(i64::from(number(year)?), number(month)?, number(day)?).ok_or_else(invalid)
     }
 
+    // No range check: only for literal dates known to be valid.
+    pub(crate) const fn known(year: i64, month: u32, day: u32) -> Date {
+        Date {
+            days_since_epoch: days_from_civil(year, month, day),
+        }
+    }
+
     pub(crate) fn days_until(self, later: Date) -> i64 {
         later.days_since_epoch - self.days_since_epoch
     }

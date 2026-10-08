@@ -353,4 +353,6 @@ pub(super) const DATA: LocaleData = LocaleData {
         "Calden",
     ],
     company_suffixes: &["S.A.", "S.R.L.", "S.A.S.", "e Hijos", "Hnos."],
+    phone_pattern: "+54 9 11 ####-####",
+    email_domains: &["gmail.com", "hotmail.com", "outlook.com", "yahoo.com.ar"],
 };

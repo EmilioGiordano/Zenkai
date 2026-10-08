@@ -335,4 +335,6 @@ pub(super) const DATA: LocaleData = LocaleData {
         "Brookstone",
     ],
     company_suffixes: &["Inc.", "LLC", "Group", "Co.", "Partners"],
+    phone_pattern: "(###) ###-####",
+    email_domains: &["gmail.com", "yahoo.com", "outlook.com", "hotmail.com"],
 };

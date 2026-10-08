@@ -20,6 +20,8 @@ pub(crate) struct LocaleData {
     pub(crate) street_order: StreetOrder,
     pub(crate) company_words: &'static [&'static str],
     pub(crate) company_suffixes: &'static [&'static str],
+    pub(crate) phone_pattern: &'static str,
+    pub(crate) email_domains: &'static [&'static str],
 }
 
 pub(crate) fn data(locale: Locale) -> &'static LocaleData {
@@ -61,6 +63,7 @@ mod tests {
                 locale.streets,
                 locale.company_words,
                 locale.company_suffixes,
+                locale.email_domains,
             ] {
                 assert!(list.len() >= 4);
                 assert_distinct(list);

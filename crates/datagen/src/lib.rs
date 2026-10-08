@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod date;
+mod detect;
 mod distinct;
 mod email;
 mod error;
@@ -16,6 +17,7 @@ mod text;
 mod value_set;
 
 pub use date::{Date, InvalidDate};
+pub use detect::{detect_kind, detect_kinds};
 pub use error::{ColumnProblem, DatagenError};
 pub use generate::{generate, validate};
 pub use percent::{InvalidPercent, Percent};
