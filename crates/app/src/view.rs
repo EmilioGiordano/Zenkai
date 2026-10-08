@@ -9,9 +9,7 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use zenkai_engine::{
-    Copied, Engine, EngineError, Opened, Unsupported, Workbook, open_xlsx, save_xlsx_atomic,
-};
+use zenkai_engine::{Copied, Engine, EngineError, Workbook, save_xlsx_atomic};
 use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
@@ -43,7 +41,9 @@ use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
 use crate::toolbar;
 
+mod lifecycle;
 mod sidebar;
+mod workbooks;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::Button;
@@ -52,6 +52,7 @@ use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::spinner::Spinner;
+use lifecycle::Lifecycle;
 use sidebar::SidebarState;
 
 struct FormulaBarEdit {
@@ -144,6 +145,7 @@ pub struct Workspace {
     memory_mb: u64,
     memory_sampler: Option<Task<()>>,
     sidebar: SidebarState,
+    lifecycle: Lifecycle,
     cell_refresh: CellRefresh,
     _subscriptions: Vec<Subscription>,
 }
@@ -215,165 +217,19 @@ impl Workspace {
             memory_mb: 0,
             memory_sampler: None,
             sidebar: SidebarState::new(cx),
+            lifecycle: Lifecycle::Running,
             cell_refresh: CellRefresh::Idle,
             _subscriptions: vec![subscription, appearance, font_color, fill_color],
         };
         workspace.reset_grid(window, cx);
-        if let Some(path) = initial {
-            workspace.open_path(path, window, cx);
-        }
-        workspace.start_autosave(window, cx);
+        let this = cx.weak_entity();
+        window.on_window_should_close(cx, move |window, cx| {
+            let asked = this.update(cx, |this, cx| this.request_close(window, cx));
+            asked.is_err()
+        });
+        workspace.start_session(initial, window, cx);
         workspace.load_recent(cx);
         workspace
-    }
-
-    fn open_document(
-        &mut self,
-        workbook: Workbook,
-        path: Option<PathBuf>,
-        unsupported: Vec<Unsupported>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> WorkbookId {
-        self.park_active(window, cx);
-        let id = self.documents.open(workbook, path, unsupported);
-        self.present_active(window, cx);
-        id
-    }
-
-    fn create_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match Workbook::new_empty() {
-            Ok(workbook) => {
-                self.park_active(window, cx);
-                self.documents.create(workbook);
-                self.present_active(window, cx);
-            }
-            Err(error) => self.notify(Severity::Error, error.to_string(), cx),
-        }
-    }
-
-    fn switch_to(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
-        if id == self.documents.active_id() {
-            return;
-        }
-        self.park_active(window, cx);
-        if self.documents.activate(id) {
-            self.present_active(window, cx);
-        }
-    }
-
-    fn step_document(&mut self, step: Step, window: &mut Window, cx: &mut Context<Self>) {
-        if self.documents.len() < 2 {
-            return;
-        }
-        self.park_active(window, cx);
-        self.documents.step(step);
-        self.present_active(window, cx);
-        let position = self.documents.position_of(self.documents.active_id());
-        self.notify(
-            Severity::Info,
-            format!(
-                "{} ({position} of {})",
-                self.documents.active().name_with_marker(),
-                self.documents.len()
-            ),
-            cx,
-        );
-    }
-
-    // Everything tied to the workbook on screen is put away or dropped: a pending copy,
-    // the Format Cells dialog and open bars would otherwise act on the next one.
-    fn park_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_formula_bar(true, window, cx);
-        if let Some((pos, text)) = self.grid.update(cx, |grid, cx| grid.take_edit(cx)) {
-            self.commit_text(self.documents.active().sheet, pos, text, window, cx);
-        }
-        let view = self.grid.read(cx).view_state();
-        self.documents.active_mut().view = view;
-        self.clipboard_source = None;
-        self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
-        self.format_dialog = None;
-        self.chart = None;
-        self.rename = None;
-        self.go_to = None;
-    }
-
-    fn present_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let view = self.documents.active().view;
-        self.reset_grid(window, cx);
-        self.grid.update(cx, |grid, cx| grid.restore_view(view, cx));
-        self.refresh_cells(cx);
-    }
-
-    fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_document(self.documents.active_id(), window, cx);
-    }
-
-    fn close_document(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(document) = self.documents.get(id) else {
-            return;
-        };
-        if !document.dirty {
-            self.finish_close(id, window, cx);
-            return;
-        }
-        let edits = document.edit_count();
-        let detail = format!(
-            "{} has changes that are not saved.",
-            document.name_with_marker().trim_start_matches("• ")
-        );
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Discard unsaved changes?",
-            Some(&detail),
-            &["Cancel", "Discard"],
-            cx,
-        );
-        cx.spawn_in(window, async move |this, cx| {
-            if answer.await != Ok(1) {
-                return;
-            }
-            let update = this.update_in(cx, |this, window, cx| {
-                match this.documents.get(id).map(Document::edit_count) {
-                    Some(count) if count == edits => this.finish_close(id, window, cx),
-                    // Edited while the question was up: the answer covered older work.
-                    Some(_) => this.close_document(id, window, cx),
-                    None => {}
-                }
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed during discard prompt");
-            }
-        })
-        .detach();
-    }
-
-    fn finish_close(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
-        let was_active = id == self.documents.active_id();
-        if was_active {
-            self.park_active(window, cx);
-        }
-        if let Some(generation) = self.documents.get(id).map(Document::generation) {
-            self.previews.forget(generation);
-        }
-        if let Some(directory) = &self.recovery_dir {
-            let file = recovery::document_file(directory, id);
-            cx.background_executor()
-                .spawn(async move { recovery::remove(&file) })
-                .detach();
-        }
-        self.documents.close(id, empty_workbook);
-        if was_active {
-            self.present_active(window, cx);
-        }
-        cx.notify();
-    }
-
-    fn reopen_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.documents.take_reopenable() {
-            Some(path) => self.open_path(path, window, cx),
-            None => self.notify(Severity::Info, "No closed workbook to reopen.", cx),
-        }
     }
 
     fn reset_grid(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -530,179 +386,6 @@ impl Workspace {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
             }
         }));
-    }
-
-    fn start_autosave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(directory) = recovery::directory() else {
-            tracing::warn!("no data directory for recovery files; autosave is off");
-            return;
-        };
-        match recovery::lock_session(&directory) {
-            Ok(lock) => self.session_lock = Some(lock),
-            Err(error) => {
-                tracing::warn!(%error, "could not lock the recovery session; autosave is off");
-                self.notify(
-                    Severity::Warning,
-                    format!("Autosave is off, the recovery folder is not usable: {error}"),
-                    cx,
-                );
-                return;
-            }
-        }
-        self.recovery_dir = Some(directory.clone());
-        let on_quit_directory = directory.clone();
-        let quit = cx.on_app_quit(move |_, _| {
-            recovery::remove_session(&on_quit_directory);
-            async {}
-        });
-        self._subscriptions.push(quit);
-        let leftovers = recovery::leftovers(&directory);
-        cx.spawn_in(window, async move |this, cx| {
-            if !leftovers.is_empty()
-                && let Err(error) = this.update_in(cx, |this, window, cx| {
-                    this.offer_recovery(leftovers, window, cx)
-                })
-            {
-                tracing::debug!(%error, "workspace closed before recovery");
-            }
-            loop {
-                cx.background_executor()
-                    .timer(recovery::AUTOSAVE_EVERY)
-                    .await;
-                if this.update(cx, |this, cx| this.autosave_all(cx)).is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
-    }
-
-    fn autosave_all(&mut self, cx: &mut Context<Self>) {
-        let ids: Vec<WorkbookId> = self.documents.iter().map(|document| document.id).collect();
-        for id in ids {
-            self.autosave(id, cx);
-        }
-    }
-
-    fn autosave(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
-        let Some(directory) = self.recovery_dir.clone() else {
-            return;
-        };
-        let Some(document) = self.documents.get_mut(id) else {
-            return;
-        };
-        let target = recovery::document_file(&directory, id);
-        if !document.dirty {
-            cx.background_executor()
-                .spawn(async move { recovery::remove(&target) })
-                .detach();
-            return;
-        }
-        let Some(shared) = document.begin_file_job(FileJob::Autosaving) else {
-            return;
-        };
-        let generation = document.generation();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { recovery::write(&document::read_shared(&shared), &target) })
-                .await;
-            let update = this.update(cx, |this, cx| {
-                let Some(document) = this.documents.get_mut(id) else {
-                    return;
-                };
-                document.end_file_job(generation);
-                if !document.is_current(generation) {
-                    return;
-                }
-                if let Err(error) = result {
-                    tracing::warn!(%error, "autosave failed");
-                    this.notify(
-                        Severity::Warning,
-                        format!("Autosave failed, recovery is not protecting this work: {error}"),
-                        cx,
-                    );
-                }
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed during autosave");
-            }
-        })
-        .detach();
-    }
-
-    fn offer_recovery(
-        &mut self,
-        leftovers: Vec<PathBuf>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let detail = format!(
-            "Zenkai closed unexpectedly and kept {} unsaved workbook(s). Open them?",
-            leftovers.len()
-        );
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "Recover unsaved work?",
-            Some(&detail),
-            &["Open recovered", "Discard"],
-            cx,
-        );
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(choice) = answer.await else {
-                return;
-            };
-            if choice == 1 {
-                leftovers
-                    .iter()
-                    .for_each(|path| recovery::remove_with_lock(path));
-                return;
-            }
-            let update = this.update_in(cx, |this, window, cx| {
-                for path in leftovers {
-                    this.load_recovered(path, window, cx);
-                }
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed during recovery");
-            }
-        })
-        .detach();
-    }
-
-    fn load_recovered(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        cx.spawn_in(window, async move |this, cx| {
-            let opened = cx
-                .background_executor()
-                .spawn(async move { open_xlsx(&path).map(|opened| (opened, path)) })
-                .await;
-            let update = this.update_in(cx, |this, window, cx| match opened {
-                Ok((opened, path)) => {
-                    let id =
-                        this.open_document(opened.workbook, None, opened.unsupported, window, cx);
-                    if let Some(document) = this.documents.get_mut(id) {
-                        document.dirty = true;
-                        window.set_window_title(&document.title());
-                    }
-                    // Kept as this document's own recovery copy until the work is saved.
-                    if let Some(directory) = &this.recovery_dir
-                        && let Err(error) =
-                            std::fs::rename(&path, recovery::document_file(directory, id))
-                    {
-                        tracing::warn!(?path, %error, "could not adopt the recovery file");
-                    }
-                    recovery::remove_with_lock(&path);
-                    this.notify(Severity::Warning, "Recovered work. Save it to keep it.", cx);
-                }
-                Err(error) => {
-                    this.notify(Severity::Error, format!("Could not recover: {error}"), cx)
-                }
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed during recovery");
-            }
-        })
-        .detach();
     }
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1516,116 +1199,6 @@ impl Workspace {
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during export");
-            }
-        })
-        .detach();
-    }
-
-    fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        if files::is_delimited_text(&path) {
-            self.import_csv(path, window, cx);
-            return;
-        }
-        if let Some(open) = self.documents.find_by_path(&path) {
-            self.switch_to(open, window, cx);
-            return;
-        }
-        self.busy = Some(format!("Opening {}…", file_label(&path)).into());
-        cx.notify();
-        let started = Instant::now();
-        cx.spawn_in(window, async move |this, cx| {
-            let task_path = path.clone();
-            let result: Result<Opened, EngineError> = cx
-                .background_executor()
-                .spawn(async move { open_xlsx(&task_path) })
-                .await;
-            let update = this.update_in(cx, |this, window, cx| {
-                this.busy = None;
-                match result {
-                    Ok(opened) => {
-                        let unsupported = opened.unsupported.clone();
-                        this.remember_recent(&path, cx);
-                        if let Some(open) = this.documents.find_by_path(&path) {
-                            this.switch_to(open, window, cx);
-                            return;
-                        }
-                        this.open_document(
-                            opened.workbook,
-                            Some(path),
-                            opened.unsupported,
-                            window,
-                            cx,
-                        );
-                        if unsupported.is_empty() {
-                            this.notify(
-                                Severity::Info,
-                                format!("Opened in {} ms", started.elapsed().as_millis()),
-                                cx,
-                            );
-                        } else {
-                            let list: Vec<&str> = unsupported.iter().map(|u| u.label()).collect();
-                            this.notify(
-                                Severity::Warning,
-                                format!(
-                                    "This file has content Zenkai does not keep yet ({}). Saving will ask for a new name.",
-                                    list.join(", ")
-                                ),
-                                cx,
-                            );
-                        }
-                    }
-                    Err(EngineError::InvalidFile(reason)) => {
-                        this.open_values(path, reason, window, cx)
-                    }
-                    Err(error) => this.notify(Severity::Error, error.to_string(), cx),
-                }
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed during open");
-            }
-        })
-        .detach();
-    }
-
-    fn open_values(
-        &mut self,
-        path: PathBuf,
-        reason: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.busy = Some(format!("Reading values from {}…", file_label(&path)).into());
-        let label = self.busy.clone().unwrap_or_default();
-        cx.notify();
-        cx.spawn_in(window, async move |this, cx| {
-            let task_path = path.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move { files::open_values(&task_path) })
-                .await;
-            let update = this.update_in(cx, |this, window, cx| {
-                this.clear_busy(&label, cx);
-                match result {
-                    Ok(workbook) => {
-                        let id = this.open_document(workbook, Some(path), Vec::new(), window, cx);
-                        if let Some(document) = this.documents.get_mut(id) {
-                            document.read_only = true;
-                        }
-                        this.notify(
-                            Severity::Warning,
-                            "Opened read-only: values only, without formulas or formatting. Save As keeps a copy.",
-                            cx,
-                        );
-                    }
-                    Err(fallback) => this.notify(
-                        Severity::Error,
-                        format!("The file could not be opened: {reason}. Reading its values also failed: {fallback}"),
-                        cx,
-                    ),
-                }
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed during read-only open");
             }
         })
         .detach();
@@ -3101,6 +2674,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::new_workbook))
+            .on_action(cx.listener(|this, _: &Quit, window, cx| this.request_close(window, cx)))
             .on_action(cx.listener(|this, _: &NextDocument, window, cx| {
                 this.step_document(Step::Next, window, cx)
             }))

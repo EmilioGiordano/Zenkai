@@ -122,6 +122,7 @@ actions!(
         SidebarOpen,
         LeaveSidebar,
         CloseSpaceRename,
+        SidebarDelete,
     ]
 );
 
@@ -188,7 +189,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("enter", SidebarOpen, Some("Sidebar && !SpaceRename")),
         KeyBinding::new("escape", LeaveSidebar, Some("Sidebar && !SpaceRename")),
         KeyBinding::new("f2", RenameSpace, Some("Sidebar && !SpaceRename")),
-        KeyBinding::new("delete", DeleteSpace, Some("Sidebar && !SpaceRename")),
+        KeyBinding::new("delete", SidebarDelete, Some("Sidebar && !SpaceRename")),
         KeyBinding::new(
             "alt-up",
             MoveToPreviousSpace,

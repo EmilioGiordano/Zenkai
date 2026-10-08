@@ -9,6 +9,7 @@ mod csv_preview;
 mod decimals;
 mod document;
 mod documents;
+mod entry;
 mod files;
 mod find;
 mod format_dialog;
@@ -19,6 +20,8 @@ mod previews;
 mod recent;
 mod recovery;
 mod region;
+mod session;
+mod sidebar_item;
 mod sidebar_rows;
 mod spaces;
 mod stats;
@@ -40,7 +43,6 @@ fn main() {
             gpui_kit::init(cx);
             zenkai_grid::bind_keys(cx);
             actions::bind_keys(cx);
-            cx.on_action(|_: &actions::Quit, cx| cx.quit());
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.0), px(800.0)), cx)),

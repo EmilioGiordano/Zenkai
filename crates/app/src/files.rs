@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use zenkai_engine::{Engine, EngineError, Workbook, run_with_engine_stack, write_atomic};
+use zenkai_engine::{
+    Engine, EngineError, Unsupported, Workbook, open_xlsx, run_with_engine_stack, write_atomic,
+};
 use zenkai_formats::{Delimiter, ParsedCsv, parse_csv, read_values, write_csv};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
@@ -53,6 +55,42 @@ pub fn workbook_from_rows(rows: Vec<Vec<String>>) -> Result<Workbook, String> {
         Ok(workbook)
     })
     .map_err(|e| e.to_string())
+}
+
+pub struct FileLoad {
+    pub workbook: Workbook,
+    pub unsupported: Vec<Unsupported>,
+    pub read_only: bool,
+}
+
+pub enum LoadFailure {
+    Missing,
+    Engine(EngineError),
+    Unreadable { reason: String, fallback: String },
+}
+
+// The one way a workbook file is read, for opening it and for loading a link: the engine
+// first, the values-only plan B when the engine cannot read it.
+pub fn load_workbook(path: &Path) -> Result<FileLoad, LoadFailure> {
+    match open_xlsx(path) {
+        Ok(opened) => Ok(FileLoad {
+            workbook: opened.workbook,
+            unsupported: opened.unsupported,
+            read_only: false,
+        }),
+        Err(EngineError::InvalidFile(reason)) => match open_values(path) {
+            Ok(workbook) => Ok(FileLoad {
+                workbook,
+                unsupported: Vec::new(),
+                read_only: true,
+            }),
+            Err(fallback) => Err(LoadFailure::Unreadable { reason, fallback }),
+        },
+        Err(EngineError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Err(LoadFailure::Missing)
+        }
+        Err(error) => Err(LoadFailure::Engine(error)),
+    }
 }
 
 const MAX_VALUES_FILE_BYTES: u64 = 512 * 1024 * 1024;

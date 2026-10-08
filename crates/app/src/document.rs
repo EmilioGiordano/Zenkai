@@ -7,6 +7,7 @@ use zenkai_engine::{Engine, EngineError, Unsupported, Workbook};
 use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
+use crate::entry::display_name;
 use crate::find::FindBar;
 use crate::spaces::SpaceId;
 
@@ -77,13 +78,17 @@ impl Document {
         }
     }
 
+    pub fn name(&self) -> String {
+        display_name(self.path.as_deref(), self.untitled)
+    }
+
+    pub fn untitled(&self) -> u32 {
+        self.untitled
+    }
+
     pub fn name_with_marker(&self) -> String {
-        let name = self.path.as_ref().and_then(|p| p.file_name()).map_or_else(
-            || format!("Book{}", self.untitled),
-            |n| n.to_string_lossy().into_owned(),
-        );
         let marker = if self.dirty { "• " } else { "" };
-        format!("{marker}{name}")
+        format!("{marker}{}", self.name())
     }
 
     pub fn title(&self) -> String {

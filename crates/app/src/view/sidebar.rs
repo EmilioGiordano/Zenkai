@@ -1,10 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState, SelectAll};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -12,7 +13,8 @@ use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
 use crate::actions::*;
-use crate::document::Document;
+use crate::entry::Entry;
+use crate::sidebar_item::{self, FileItem, FileState};
 use crate::sidebar_rows::{self, Move, Row, SpaceRows};
 use crate::spaces::{NEW_SPACE_NAME, Neighbour, Space, SpaceId};
 
@@ -80,29 +82,29 @@ struct NavRow {
     keys: &'static str,
 }
 
-struct FileItem {
-    id: WorkbookId,
-    name: SharedString,
-    place: SharedString,
-    dirty: bool,
-    active: bool,
-}
-
-fn folder_name(path: &Path) -> Option<String> {
-    path.parent()?
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-}
-
-fn place_of(document: &Document) -> SharedString {
-    let folder = document
-        .path
-        .as_deref()
-        .and_then(folder_name)
-        .unwrap_or_else(|| "not saved".to_string());
-    let count = document.sheets.len();
-    let sheets = if count == 1 { "sheet" } else { "sheets" };
-    format!("{folder} · {count} {sheets}").into()
+fn state_mark(state: FileState, cx: &App) -> Option<AnyElement> {
+    let theme = cx.theme();
+    match state {
+        FileState::Ready => None,
+        FileState::Dirty => Some(div().child("•").into_any_element()),
+        FileState::NotLoaded => Some(
+            div()
+                .text_color(theme.muted_foreground)
+                .child("○")
+                .into_any_element(),
+        ),
+        FileState::Loading => Some(
+            Spinner::new()
+                .color(theme.muted_foreground)
+                .into_any_element(),
+        ),
+        FileState::Missing => Some(
+            Icon::new(IconName::TriangleAlert)
+                .size_3()
+                .text_color(theme.danger)
+                .into_any_element(),
+        ),
+    }
 }
 
 fn entity_update(
@@ -131,11 +133,7 @@ impl Workspace {
             .map(|space| SpaceRows {
                 id: space.id,
                 collapsed: space.collapsed,
-                files: self
-                    .documents
-                    .members(space.id)
-                    .map(|document| document.id)
-                    .collect(),
+                files: self.documents.members(space.id).map(Entry::id).collect(),
             })
             .collect();
         sidebar_rows::rows(
@@ -222,6 +220,13 @@ impl Workspace {
             None => {}
         }
         cx.notify();
+    }
+
+    fn sidebar_delete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.sidebar.cursor {
+            Some(Row::File(id)) => self.close_document(id, window, cx),
+            _ => self.delete_space(cx),
+        }
     }
 
     pub(super) fn new_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -358,7 +363,7 @@ impl Workspace {
                 (
                     path.file_name()
                         .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
-                    folder_name(path).unwrap_or_default(),
+                    sidebar_item::folder_name(path).unwrap_or_default(),
                 )
             })
             .collect();
@@ -404,6 +409,9 @@ impl Workspace {
                 .on_action(
                     cx.listener(|this, _: &SidebarOpen, window, cx| this.sidebar_open(window, cx)),
                 )
+                .on_action(cx.listener(|this, _: &SidebarDelete, window, cx| {
+                    this.sidebar_delete(window, cx)
+                }))
                 .on_action(
                     cx.listener(|this, _: &LeaveSidebar, window, cx| {
                         this.leave_sidebar(window, cx)
@@ -505,17 +513,7 @@ impl Workspace {
         let files: Vec<FileItem> = self
             .documents
             .members(id)
-            .map(|document| FileItem {
-                id: document.id,
-                name: document
-                    .name_with_marker()
-                    .trim_start_matches("• ")
-                    .to_string()
-                    .into(),
-                place: place_of(document),
-                dirty: document.dirty,
-                active: document.id == paint.active,
-            })
+            .map(|entry| sidebar_item::describe(entry, entry.id() == paint.active))
             .collect();
         let count = files.len();
         let renaming = self
@@ -605,7 +603,7 @@ impl Workspace {
         let id = file.id;
         let ghost = DraggedWorkbook {
             id,
-            label: file.name.clone(),
+            label: file.name.clone().into(),
         };
         let others: Vec<(SpaceId, String)> = paint
             .spaces
@@ -613,6 +611,10 @@ impl Workspace {
             .filter(|other| other.id != space)
             .map(|other| (other.id, other.name.clone()))
             .collect();
+        let close_label = match file.state {
+            FileState::Ready | FileState::Dirty => "Close",
+            _ => "Remove from sidebar",
+        };
         let entity = paint.entity.clone();
         self.row_frame(("file", id.0), Row::File(id), paint, cx)
             .flex_col()
@@ -633,7 +635,7 @@ impl Workspace {
                             .when(file.active, |name| name.font_weight(FontWeight::MEDIUM))
                             .child(file.name),
                     )
-                    .when(file.dirty, |row| row.child(div().child("•"))),
+                    .children(state_mark(file.state, cx)),
             )
             .child(
                 h_flex()
@@ -657,6 +659,12 @@ impl Workspace {
                 }),
             )
             .context_menu(move |menu, _, _| {
+                let close = entity.clone();
+                let menu = menu.item(PopupMenuItem::new(close_label).on_click(
+                    move |_, window, cx| {
+                        entity_update(&close, cx, |this, cx| this.close_document(id, window, cx))
+                    },
+                ));
                 others.iter().fold(menu, |menu, (target, name)| {
                     let entity = entity.clone();
                     let target = *target;

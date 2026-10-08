@@ -4,6 +4,10 @@ use std::time::Duration;
 use zenkai_engine::{EngineError, Workbook, save_xlsx_atomic};
 use zenkai_types::WorkbookId;
 
+pub fn session_directory() -> Option<PathBuf> {
+    Some(directory()?.parent()?.to_path_buf())
+}
+
 pub const AUTOSAVE_EVERY: Duration = Duration::from_secs(60);
 const PREFIX: &str = "autosave-";
 
@@ -105,19 +109,6 @@ pub fn remove_with_lock(path: &Path) {
     remove(&lock_of(path));
 }
 
-pub fn remove_session(directory: &Path) {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return;
-    };
-    let own_lock = lock_file(directory);
-    entries
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| is_autosave(path) && lock_of(path) == own_lock)
-        .for_each(|path| remove(&path));
-    remove(&own_lock);
-}
-
 pub fn remove(path: &Path) {
     match std::fs::remove_file(path) {
         Ok(()) => {}
@@ -167,7 +158,5 @@ mod tests {
         );
         drop(live_lock);
         assert_eq!(leftovers(dir.path()), vec![live.clone()]);
-        remove_session(dir.path());
-        assert!(!own.exists() && !sibling.exists() && live.exists());
     }
 }
