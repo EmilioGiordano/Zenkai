@@ -12,6 +12,14 @@ pub enum SecretState {
     Unavailable(String),
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum BridgeStatus {
+    #[default]
+    Off,
+    Listening,
+    Failed(String),
+}
+
 // The agent settings in force for the whole app, kept up to date by the file watcher.
 #[derive(Default)]
 pub struct AgentConfig {
@@ -21,6 +29,7 @@ pub struct AgentConfig {
     pub secrets: BTreeMap<SecretName, SecretState>,
     // The last failure of something the user asked for (saving, storing a secret).
     pub failure: Option<String>,
+    pub bridge: BridgeStatus,
     watcher: Option<SettingsWatcher>,
 }
 

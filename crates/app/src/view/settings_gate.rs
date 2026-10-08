@@ -16,6 +16,7 @@ pub(super) enum HeldDecision {
 
 impl Workspace {
     pub(super) fn on_settings_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_bridge(cx);
         let state = cx.global::<AgentConfig>().state.clone();
         if state.held != self.shown_held {
             if state.held.is_some() {

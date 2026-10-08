@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 
+use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{Engine, EngineError, Unsupported, Workbook};
 use zenkai_grid::GridCell;
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo};
@@ -31,6 +32,8 @@ pub struct Document {
     pub sheets: Vec<SheetInfo>,
     pub unsupported: Vec<Unsupported>,
     pub read_only: bool,
+    // Where the file came from; a download keeps agents read-only, as Excel's Protected View.
+    pub origin: FileOrigin,
     pending: Vec<Edit>,
     generation: u64,
 }
@@ -52,19 +55,22 @@ impl Document {
             sheets,
             unsupported,
             read_only: false,
+            origin: FileOrigin::Local,
             pending: Vec::new(),
             generation: GENERATION.fetch_add(1, Ordering::Relaxed),
         }
     }
 
-    pub fn name_with_marker(&self) -> String {
-        let name = self
-            .path
+    pub fn name(&self) -> String {
+        self.path
             .as_ref()
             .and_then(|p| p.file_name())
-            .map_or_else(|| "Book1".to_string(), |n| n.to_string_lossy().into_owned());
+            .map_or_else(|| "Book1".to_string(), |n| n.to_string_lossy().into_owned())
+    }
+
+    pub fn name_with_marker(&self) -> String {
         let marker = if self.dirty { "• " } else { "" };
-        format!("{marker}{name}")
+        format!("{marker}{}", self.name())
     }
 
     pub fn title(&self) -> String {

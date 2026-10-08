@@ -21,9 +21,12 @@ use zenkai_types::{
     StyleChange,
 };
 
+mod agent_calls;
 mod settings_gate;
 
+use agent_calls::{AgentLink, Decision};
 use settings_gate::HeldDecision;
+use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_agent::settings::{HeldChange, PermissionMode as AgentPermission};
 
 use crate::actions::*;
@@ -94,6 +97,8 @@ const IMPORTING: &str = "Importing…";
 const SAVING: &str = "Saving…";
 const CALCULATING: &str = "Calculating…";
 const SEARCHING: &str = "Searching…";
+const PROTECTED_VIEW: &str =
+    "This file came from the internet: agents may only read it (Protected View).";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Severity {
@@ -153,6 +158,7 @@ pub struct Workspace {
     diagnostics_task: Option<Task<()>>,
     cell_refresh: CellRefresh,
     settings_page: Option<Entity<SettingsPage>>,
+    agent: AgentLink,
     // The settings problem already shown, so a reload with the same error stays quiet.
     shown_settings_problem: Option<SettingsError>,
     // A settings.json change that gives agents more power, as last shown for confirmation.
@@ -243,6 +249,7 @@ impl Workspace {
             diagnostics_task: None,
             cell_refresh: CellRefresh::Idle,
             settings_page: None,
+            agent: Self::start_tool_service(window, cx),
             shown_settings_problem: None,
             shown_held: None,
             held_focus: cx.focus_handle(),
@@ -1263,15 +1270,18 @@ impl Workspace {
         } = preview;
         let delimiter = parsed.delimiter;
         let mut rows = parsed.rows;
+        let origin_path = path.clone();
         cx.spawn_in(window, async move |this, cx| {
             let task_bytes = bytes.clone();
-            let result = cx
+            let (result, origin) = cx
                 .background_executor()
                 .spawn(async move {
+                    let origin = file_origin(&origin_path);
                     csv_preview::apply(guess, &mut rows);
                     // On failure, parse again so the preview comes back as it was.
-                    files::workbook_from_rows(rows)
-                        .map_err(|error| (error, parse_csv(&task_bytes, Some(delimiter)).ok()))
+                    let result = files::workbook_from_rows(rows)
+                        .map_err(|error| (error, parse_csv(&task_bytes, Some(delimiter)).ok()));
+                    (result, origin)
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
@@ -1279,7 +1289,8 @@ impl Workspace {
                 match result {
                     Ok(_) if this.csv_request != request => {}
                     Ok(workbook) => {
-                        let document = Document::new(workbook, None, Vec::new());
+                        let mut document = Document::new(workbook, None, Vec::new());
+                        document.origin = origin;
                         this.replace_document(document, window, cx);
                         this.notify(Severity::Info, summary, cx);
                     }
@@ -1406,9 +1417,9 @@ impl Workspace {
         self.next_csv_request();
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.clone();
-            let result: Result<Opened, EngineError> = cx
+            let (result, origin): (Result<Opened, EngineError>, FileOrigin) = cx
                 .background_executor()
-                .spawn(async move { open_xlsx(&task_path) })
+                .spawn(async move { (open_xlsx(&task_path), file_origin(&task_path)) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.busy = None;
@@ -1420,10 +1431,13 @@ impl Workspace {
                     Ok(opened) => {
                         let unsupported = opened.unsupported.clone();
                         this.remember_recent(&path, cx);
-                        let document =
+                        let mut document =
                             Document::new(opened.workbook, Some(path), opened.unsupported);
+                        document.origin = origin;
                         this.replace_document(document, window, cx);
-                        if unsupported.is_empty() {
+                        if unsupported.is_empty() && origin == FileOrigin::Internet {
+                            this.notify(Severity::Warning, PROTECTED_VIEW, cx);
+                        } else if unsupported.is_empty() {
                             this.notify(
                                 Severity::Info,
                                 format!("Opened in {} ms", started.elapsed().as_millis()),
@@ -1497,9 +1511,9 @@ impl Workspace {
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.clone();
-            let result = cx
+            let (result, origin) = cx
                 .background_executor()
-                .spawn(async move { files::open_values(&task_path) })
+                .spawn(async move { (files::open_values(&task_path), file_origin(&task_path)) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(&label, cx);
@@ -1507,6 +1521,7 @@ impl Workspace {
                     Ok(workbook) => {
                         let mut document = Document::new(workbook, Some(path), Vec::new());
                         document.read_only = true;
+                        document.origin = origin;
                         this.replace_document(document, window, cx);
                         this.notify(
                             Severity::Warning,
@@ -2913,6 +2928,9 @@ impl Workspace {
                         .text_color(theme.warning)
                         .child("⚠ Agents write without asking"),
                 )
+            })
+            .when(self.document.origin == FileOrigin::Internet, |this| {
+                this.child("Protected View: agents read only")
             });
         match self.stats {
             Some(stats) if stats.count > 1 => {
@@ -3327,11 +3345,18 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &KeepCurrentSettings, window, cx| {
                 this.decide_held_settings(HeldDecision::Keep, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &AllowAgentChange, window, cx| {
+                this.decide_agent_change(Decision::Allow, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DenyAgentChange, window, cx| {
+                this.decide_agent_change(Decision::Deny, window, cx)
+            }))
             .child(self.render_title_bar(cx))
             .child(toolbar::render(&self.active_style, &self.colors, cx))
             .child(self.render_formula_bar(cx))
             .children(self.render_held_settings(cx))
             .children(self.render_find(cx))
+            .children(self.render_agent_approval(cx))
             .child(
                 h_flex()
                     .flex_1()

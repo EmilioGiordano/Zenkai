@@ -13,10 +13,19 @@ use zenkai_agent::secrets::SecretStatus;
 use zenkai_agent::settings::{ExternalAgents, PermissionMode, SecretName};
 
 use crate::actions::*;
-use crate::agent_settings::{self, AgentConfig, SecretState};
+use crate::agent_settings::{self, AgentConfig, BridgeStatus, SecretState};
+
+const RELAY_EXE: &str = if cfg!(windows) {
+    "zenkai-mcp.exe"
+} else {
+    "zenkai-mcp"
+};
 
 pub struct SettingsPage {
     focus: FocusHandle,
+    // The command that registers Zenkai in Claude Code, pointing at the relay shipped
+    // next to this executable.
+    claude_command: Option<String>,
     secret_inputs: BTreeMap<SecretName, Entity<InputState>>,
     _config: Subscription,
 }
@@ -24,8 +33,13 @@ pub struct SettingsPage {
 impl SettingsPage {
     pub fn new(cx: &mut Context<Self>) -> SettingsPage {
         agent_settings::detect_agents(cx);
+        let relay = std::env::current_exe()
+            .ok()
+            .map(|exe| exe.with_file_name(RELAY_EXE));
         SettingsPage {
             focus: cx.focus_handle(),
+            claude_command: relay
+                .map(|relay| format!("claude mcp add zenkai -- \"{}\"", relay.display())),
             secret_inputs: BTreeMap::new(),
             _config: cx.observe_global::<AgentConfig>(|_, cx| cx.notify()),
         }
@@ -119,6 +133,14 @@ impl Render for SettingsPage {
         let detection = config.detection.clone();
         let detected = detection_rows(detection.as_ref(), cx);
         let secrets = config.secrets.clone();
+        let bridge = match &config.bridge {
+            BridgeStatus::Off => "Off".to_string(),
+            BridgeStatus::Listening => {
+                "On: MCP clients with the command below can connect".to_string()
+            }
+            BridgeStatus::Failed(why) => format!("Could not start: {why}"),
+        };
+        let claude_command = self.claude_command.clone();
         let file = config
             .paths
             .as_ref()
@@ -320,14 +342,53 @@ impl Render for SettingsPage {
                     )),
             )
             .child(
-                section("External agents").child(
-                    Switch::new("external-agents")
-                        .checked(agents.external_agents == ExternalAgents::Allowed)
-                        .label("Allow MCP clients outside Zenkai, such as Claude Code (Alt+E)")
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(ToggleExternalAgents), cx)
-                        }),
-                ),
+                section("External agents")
+                    .child(
+                        Switch::new("external-agents")
+                            .checked(agents.external_agents == ExternalAgents::Allowed)
+                            .label("Allow MCP clients outside Zenkai, such as Claude Code (Alt+E)")
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(ToggleExternalAgents), cx)
+                            }),
+                    )
+                    .child(muted(format!("Status: {bridge}"), cx))
+                    .children(claude_command.map(|command| {
+                        let copied = command.clone();
+                        v_flex()
+                            .gap_1()
+                            .child(muted("Add Zenkai to Claude Code with:", cx))
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .px_2()
+                                            .py_1()
+                                            .border_1()
+                                            .border_color(cx.theme().border)
+                                            .rounded_md()
+                                            .font_family("monospace")
+                                            .text_sm()
+                                            .child(command),
+                                    )
+                                    .child(
+                                        Button::new("copy-claude-command").label("Copy").on_click(
+                                            move |_, _, cx| {
+                                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                                    copied.clone(),
+                                                ))
+                                            },
+                                        ),
+                                    ),
+                            )
+                            .child(muted(
+                                "Agents only see the open workbook: no files, no terminal, no \
+                                 saving. They cannot turn off their own tools, such as Claude \
+                                 Code's terminal, so review what they ask to run.",
+                                cx,
+                            ))
+                    })),
             )
             .when(!secret_rows.is_empty(), |this| {
                 this.child(
