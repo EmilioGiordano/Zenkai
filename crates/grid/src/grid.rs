@@ -265,38 +265,14 @@ impl Grid {
         (self.visible_rows, self.visible_cols)
     }
 
-    pub fn visible_ranges(&self) -> Vec<Range> {
-        let origin = self.scroll_origin();
-        let end = CellPos::new(
-            origin.row.offset(i64::from(self.visible_rows)),
-            origin.col.offset(i64::from(self.visible_cols)),
-        );
-        let mut ranges = vec![Range::new(origin, end)];
-        let zero = CellPos::default();
-        if self.frozen_rows > 0 {
-            let last = RowIdx::clamped(i64::from(self.frozen_rows) - 1);
-            ranges.push(Range::new(
-                CellPos::new(zero.row, origin.col),
-                CellPos::new(last, end.col),
-            ));
-        }
-        if self.frozen_cols > 0 {
-            let last = ColIdx::clamped(i64::from(self.frozen_cols) - 1);
-            ranges.push(Range::new(
-                CellPos::new(origin.row, zero.col),
-                CellPos::new(end.row, last),
-            ));
-        }
-        if self.frozen_rows > 0 && self.frozen_cols > 0 {
-            ranges.push(Range::new(
-                zero,
-                CellPos::new(
-                    RowIdx::clamped(i64::from(self.frozen_rows) - 1),
-                    ColIdx::clamped(i64::from(self.frozen_cols) - 1),
-                ),
-            ));
-        }
-        ranges
+    pub fn cached_ranges(&self) -> Vec<Range> {
+        cached_ranges(
+            self.scroll_origin(),
+            self.visible_rows,
+            self.visible_cols,
+            self.frozen_rows,
+            self.frozen_cols,
+        )
     }
 
     pub fn reset(&mut self, view: SheetView, cx: &mut Context<Self>) {
@@ -1426,9 +1402,55 @@ impl Grid {
     }
 }
 
+// One extra screen of rows above and below the viewport, so a short scroll while the
+// workbook is busy still lands on cached values.
+fn cached_ranges(
+    origin: CellPos,
+    visible_rows: u32,
+    visible_cols: u16,
+    frozen_rows: u32,
+    frozen_cols: u16,
+) -> Vec<Range> {
+    let first_row = origin
+        .row
+        .offset(-i64::from(visible_rows))
+        .max(RowIdx::clamped(i64::from(frozen_rows)));
+    let last_row = origin.row.offset(2 * i64::from(visible_rows));
+    let end_col = origin.col.offset(i64::from(visible_cols));
+    let zero = CellPos::default();
+    let mut ranges = vec![Range::new(
+        CellPos::new(first_row, origin.col),
+        CellPos::new(last_row, end_col),
+    )];
+    if frozen_rows > 0 {
+        let last = RowIdx::clamped(i64::from(frozen_rows) - 1);
+        ranges.push(Range::new(
+            CellPos::new(zero.row, origin.col),
+            CellPos::new(last, end_col),
+        ));
+    }
+    if frozen_cols > 0 {
+        let last = ColIdx::clamped(i64::from(frozen_cols) - 1);
+        ranges.push(Range::new(
+            CellPos::new(first_row, zero.col),
+            CellPos::new(last_row, last),
+        ));
+    }
+    if frozen_rows > 0 && frozen_cols > 0 {
+        ranges.push(Range::new(
+            zero,
+            CellPos::new(
+                RowIdx::clamped(i64::from(frozen_rows) - 1),
+                ColIdx::clamped(i64::from(frozen_cols) - 1),
+            ),
+        ));
+    }
+    ranges
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Direction, cycle_within, next_boundary, prev_boundary};
+    use super::{Direction, cached_ranges, cycle_within, next_boundary, prev_boundary};
     use zenkai_types::{CellPos, Range};
 
     fn pos(text: &str) -> CellPos {
@@ -1451,5 +1473,30 @@ mod tests {
         assert_eq!(prev_boundary(text, 3), 1);
         assert_eq!(prev_boundary(text, 0), 0);
         assert_eq!(next_boundary(text, text.len()), text.len());
+    }
+
+    #[test]
+    fn cache_covers_a_screen_above_and_below() {
+        let ranges = cached_ranges(pos("C101"), 40, 10, 0, 0);
+        assert_eq!(ranges, vec![Range::new(pos("C61"), pos("M181"))]);
+    }
+
+    #[test]
+    fn cache_stops_at_the_first_row_and_below_the_frozen_rows() {
+        assert_eq!(
+            cached_ranges(pos("A11"), 40, 10, 0, 0),
+            vec![Range::new(pos("A1"), pos("K91"))]
+        );
+        let ranges = cached_ranges(pos("A11"), 5, 10, 8, 0);
+        assert_eq!(ranges[0], Range::new(pos("A9"), pos("K21")));
+    }
+
+    #[test]
+    fn cache_keeps_the_frozen_panes() {
+        let ranges = cached_ranges(pos("C101"), 40, 10, 2, 2);
+        assert_eq!(ranges.len(), 4);
+        assert!(ranges.contains(&Range::new(pos("C1"), pos("M2"))));
+        assert!(ranges.contains(&Range::new(pos("A61"), pos("B181"))));
+        assert!(ranges.contains(&Range::new(pos("A1"), pos("B2"))));
     }
 }

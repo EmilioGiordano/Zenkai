@@ -294,7 +294,7 @@ impl Workspace {
         if self.document.workbook().is_none() {
             return;
         }
-        let ranges = self.grid.read(cx).visible_ranges();
+        let ranges = self.grid.read(cx).cached_ranges();
         let mut cells = HashMap::new();
         for range in ranges {
             cells.extend(self.document.cells(range, self.show_formulas));
