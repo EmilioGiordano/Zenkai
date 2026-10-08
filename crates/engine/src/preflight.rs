@@ -26,7 +26,7 @@ pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return Ok(features);
     };
-    if !text.trim_start().starts_with('<') {
+    if !text.trim_start().starts_with('<') || !has_checked_element(bytes) {
         return Ok(features);
     }
     let document = roxmltree::Document::parse(text)
@@ -40,6 +40,36 @@ pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
         }
     }
     Ok(features)
+}
+
+const CHECKED_ELEMENTS: [&[u8]; 7] = [
+    b"f",
+    b"formula",
+    b"formula1",
+    b"formula2",
+    b"definedName",
+    b"conditionalFormatting",
+    b"dataValidations",
+];
+
+// XML forbids entities or whitespace between '<' and an element name, so a part with
+// no '<name' or '<prefix:name' start tag for these names cannot contain them; the
+// full parse is skipped for it. Text that only looks like a tag merely costs a parse.
+fn has_checked_element(bytes: &[u8]) -> bool {
+    let mut rest = bytes;
+    while let Some(at) = rest.iter().position(|b| *b == b'<') {
+        rest = &rest[at + 1..];
+        let name_end = rest
+            .iter()
+            .position(|b| !(b.is_ascii_alphanumeric() || matches!(b, b':' | b'_' | b'-' | b'.')))
+            .unwrap_or(rest.len());
+        let name = &rest[..name_end];
+        let local = name.rsplit(|b| *b == b':').next().unwrap_or(name);
+        if CHECKED_ELEMENTS.contains(&local) {
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -163,6 +193,22 @@ mod tests {
         );
         assert!(check_part(workbook.as_bytes()).is_err());
         assert!(check_part(&[0x89, b'P', b'N', b'G', 0xFF, 0x00]).is_ok());
+    }
+
+    #[test]
+    fn prefilter_finds_formula_tags_in_any_spelling() {
+        assert!(has_checked_element(b"<c><f>1</f></c>"));
+        assert!(has_checked_element(b"<x:c><x:f t='array'>1</x:f></x:c>"));
+        assert!(has_checked_element(
+            b"<f
+ t=\"shared\">1</f>"
+        ));
+        assert!(has_checked_element(
+            b"<definedNames><definedName name=\"a\">1</definedName>"
+        ));
+        assert!(!has_checked_element(
+            b"<row r=\"1\"><c r=\"A1\"><v>12</v></c><font/><fill/></row>"
+        ));
     }
 
     #[test]
