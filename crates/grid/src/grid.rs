@@ -925,10 +925,14 @@ impl Grid {
         cx.notify();
     }
 
+    // Only while the edited cell is on screen, so keys never act on a list nobody sees.
     fn suggestions(&self) -> Vec<&'static str> {
         let Some(editor) = &self.editor else {
             return Vec::new();
         };
+        if self.col_right(editor.pos.col).is_none() || self.row_bottom(editor.pos.row).is_none() {
+            return Vec::new();
+        }
         autocomplete::token_at(&editor.text, editor.caret)
             .map(|(_, prefix)| autocomplete::suggestions(prefix))
             .unwrap_or_default()
@@ -937,7 +941,8 @@ impl Grid {
     // Tab with the list open inserts the highlighted function and its "(", as in Excel.
     fn accept_suggestion(&mut self, cx: &mut Context<Self>) -> bool {
         let suggestions = self.suggestions();
-        let Some(name) = suggestions.get(self.suggestion).copied() else {
+        let index = self.suggestion.min(suggestions.len().saturating_sub(1));
+        let Some(name) = suggestions.get(index).copied() else {
             return false;
         };
         let Some(editor) = &mut self.editor else {
@@ -966,6 +971,7 @@ impl Grid {
         let bottom = self.row_bottom(editor.pos.row)?;
         let left = right - self.layout.col_width(editor.pos.col);
         let theme = cx.theme();
+        let highlighted = self.suggestion.min(suggestions.len() - 1);
         Some(
             div()
                 .absolute()
@@ -983,7 +989,7 @@ impl Grid {
                 .children(suggestions.into_iter().enumerate().map(|(index, name)| {
                     div()
                         .px_2()
-                        .when(index == self.suggestion, |row| {
+                        .when(index == highlighted, |row| {
                             row.bg(theme.accent).text_color(theme.accent_foreground)
                         })
                         .child(name)

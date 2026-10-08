@@ -59,6 +59,7 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Currency format", FormatCurrency),
             item("Percent format", FormatPercent),
             item("Date format", FormatDate),
+            item("Format cells (number format)…", FormatCells),
             item("Increase decimal", IncreaseDecimal),
             item("Decrease decimal", DecreaseDecimal),
         ]),

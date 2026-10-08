@@ -25,6 +25,7 @@ use crate::decimals;
 use crate::document::{self, Document};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
+use crate::format_dialog::{self, FormatDialog};
 use crate::jump::jump_target;
 use crate::palette;
 use crate::recovery;
@@ -44,6 +45,7 @@ struct InternalClip {
     copied: Copied,
     cut: bool,
     range: Range,
+    sheet: SheetId,
 }
 
 #[derive(Clone, Copy)]
@@ -100,6 +102,7 @@ pub struct Workspace {
     // Interface scale, independent of the grid zoom: everything sized in rems.
     ui_scale: f32,
     show_formulas: bool,
+    format_dialog: Option<FormatDialog>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
@@ -160,6 +163,7 @@ impl Workspace {
             csv_request: 0,
             ui_scale: 1.0,
             show_formulas: false,
+            format_dialog: None,
             colors,
             focus: cx.focus_handle(),
             session_lock: None,
@@ -1564,7 +1568,13 @@ impl Workspace {
 
     fn style(&mut self, change: StyleChange, window: &mut Window, cx: &mut Context<Self>) {
         let (sheet, range) = (self.document.sheet, self.selection(cx));
-        self.edit(window, cx, move |wb| wb.apply_style(sheet, range, change));
+        self.edit(window, cx, move |wb| {
+            wb.apply_style(sheet, range, change)?;
+            if matches!(change, StyleChange::NumberFormat(_)) {
+                widen_for_numbers(wb, sheet, range)?;
+            }
+            Ok(())
+        });
     }
 
     fn toggle_flag(
@@ -1623,7 +1633,13 @@ impl Workspace {
         match workbook.copy(sheet, clipped) {
             Ok(copied) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(copied.text.clone()));
-                self.clipboard_source = Some(InternalClip { copied, cut, range });
+                let sheet = self.document.sheet;
+                self.clipboard_source = Some(InternalClip {
+                    copied,
+                    cut,
+                    range,
+                    sheet,
+                });
                 self.grid
                     .update(cx, |grid, cx| grid.set_marquee(Some(range), cx));
             }
@@ -1677,10 +1693,30 @@ impl Workspace {
         };
         let sheet = self.document.sheet;
         let origin = self.grid.read(cx).selection().active;
-        let rows = clipboard::values_only(&text);
-        let height = i64::try_from(rows.len()).unwrap_or(i64::MAX);
-        let width = i64::try_from(rows.iter().map(Vec::len).max().unwrap_or(0)).unwrap_or(i64::MAX);
-        self.edit(window, cx, move |wb| wb.set_inputs(sheet, origin, &rows));
+        // A copy made here pastes the cells' own values (full precision, dates as serial
+        // numbers, as Excel does); text from other programs is pasted as shown.
+        let source = self
+            .clipboard_source
+            .as_ref()
+            .filter(|clip| clip.copied.text == text)
+            .map(|clip| (clip.sheet, clip.range));
+        let (height, width) = match source {
+            Some((_, range)) => (i64::from(range.rows()), i64::from(range.cols())),
+            None => {
+                let rows = clipboard::values_only(&text);
+                (
+                    i64::try_from(rows.len()).unwrap_or(i64::MAX),
+                    i64::try_from(rows.iter().map(Vec::len).max().unwrap_or(0)).unwrap_or(i64::MAX),
+                )
+            }
+        };
+        self.edit(window, cx, move |wb| {
+            let rows = match source {
+                Some((from, range)) => clipboard::cell_values(wb, from, range),
+                None => clipboard::values_only(&text),
+            };
+            wb.set_inputs(sheet, origin, &rows)
+        });
         let end = CellPos::new(
             origin.row.offset(height.saturating_sub(1)),
             origin.col.offset(width.saturating_sub(1)),
@@ -1945,7 +1981,8 @@ impl Workspace {
             return;
         };
         self.edit(window, cx, move |wb| {
-            wb.set_number_format(sheet, range, &code)
+            wb.set_number_format(sheet, range, &code)?;
+            widen_for_numbers(wb, sheet, range)
         });
     }
 
@@ -2032,6 +2069,79 @@ impl Workspace {
                 wb.set_columns_hidden(sheet, range, hidden)
             }
         });
+    }
+
+    // Excel's Ctrl+1, Number tab: categories, a custom code and a sample of the active cell.
+    fn open_format_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active = self.grid.read(cx).selection().active;
+        let view = self
+            .document
+            .workbook()
+            .map(|wb| wb.cell(self.document.sheet, active))
+            .unwrap_or_default();
+        let code = view.style.num_fmt.clone();
+        let input = cx.new(|cx| InputState::new(window, cx).default_value(code));
+        let refresh = cx.observe(&input, |_, _, cx| cx.notify());
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        self.format_dialog = Some(FormatDialog {
+            code: input,
+            sample: view.number.unwrap_or(1234.5678),
+            range: self.selection(cx),
+            focus,
+            _refresh: refresh,
+        });
+        cx.notify();
+    }
+
+    fn apply_format_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(dialog) = &self.format_dialog else {
+            return;
+        };
+        let code = dialog.code.read(cx).value().trim().to_string();
+        let range = dialog.range;
+        if let Err(error) = zenkai_engine::format_preview(dialog.sample, &code) {
+            self.notify(
+                Severity::Warning,
+                format!("Invalid number format: {error}"),
+                cx,
+            );
+            return;
+        }
+        let sheet = self.document.sheet;
+        self.edit(window, cx, move |wb| {
+            wb.set_number_format(sheet, range, &code)?;
+            widen_for_numbers(wb, sheet, range)
+        });
+        self.close_format_dialog(window, cx);
+    }
+
+    fn close_format_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.format_dialog = None;
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn render_format_dialog(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let dialog = self.format_dialog.as_ref()?;
+        let code = dialog.code.read(cx).value().to_string();
+        let preview = zenkai_engine::format_preview(dialog.sample, &code)
+            .unwrap_or_else(|_| "Invalid format".to_string());
+        let input = dialog.code.clone();
+        let on_category = move |code: &'static str, window: &mut Window, cx: &mut App| {
+            input.update(cx, |state, cx| state.set_value(code, window, cx));
+        };
+        Some(
+            div()
+                .absolute()
+                .top(px(96.0))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(format_dialog::render(dialog, preview, on_category, cx)),
+        )
     }
 
     fn select_current_region(&mut self, cx: &mut Context<Self>) -> Range {
@@ -2475,11 +2585,32 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleFormulas, _, cx| {
                 this.show_formulas = !this.show_formulas;
+                let shown = if this.show_formulas {
+                    "formulas"
+                } else {
+                    "values"
+                };
+                this.notify(
+                    Severity::Info,
+                    format!("Showing {shown} (Ctrl+` to switch)"),
+                    cx,
+                );
                 this.refresh_cells(cx);
             }))
             .on_action(
                 cx.listener(|this, _: &PasteValues, window, cx| this.paste_values(window, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &FormatCells, window, cx| {
+                    this.open_format_dialog(window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &ApplyNumberFormat, window, cx| {
+                this.apply_format_dialog(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseFormatDialog, window, cx| {
+                this.close_format_dialog(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
             }))
@@ -2658,6 +2789,7 @@ impl Render for Workspace {
             .child(self.render_status(cx))
             .children(self.render_palette())
             .children(self.render_csv_preview(cx))
+            .children(self.render_format_dialog(cx))
     }
 }
 
@@ -2704,18 +2836,65 @@ fn rgb_of(color: Hsla) -> Rgb {
 // typed into it would only show as ####. General numbers are shortened when painted
 // instead, and text keeps overflowing.
 fn widen_for_number(wb: &mut Workbook, sheet: SheetId, pos: CellPos) -> Result<(), EngineError> {
-    let view = wb.cell(sheet, pos);
-    if view.number.is_none() || view.style.num_fmt == "general" {
-        return Ok(());
+    widen_for_numbers(wb, sheet, Range::single(pos))
+}
+
+// Each default-width column of `range` grows to its widest formatted number, once.
+fn widen_for_numbers(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+    let sizes = wb.sizes(sheet);
+    let mut needed: std::collections::BTreeMap<ColIdx, f32> = Default::default();
+    let cells = wb.filled_cells(sheet);
+    for pos in cells
+        .into_iter()
+        .filter(|pos| range.contains(*pos))
+        .take(MAX_AUTOFIT_CELLS)
+    {
+        let custom = sizes
+            .columns
+            .iter()
+            .any(|span| span.first <= pos.col && pos.col <= span.last);
+        let view = wb.cell(sheet, pos);
+        if custom || view.number.is_none() || view.style.num_fmt == "general" {
+            continue;
+        }
+        let width = view.text.chars().count() as f32 * AUTOFIT_CHAR_WIDTH + 12.0;
+        let entry = needed.entry(pos.col).or_insert(0.0);
+        *entry = entry.max(width);
     }
-    let custom = wb
-        .sizes(sheet)
-        .columns
-        .iter()
-        .any(|span| span.first <= pos.col && pos.col <= span.last);
-    let needed = view.text.chars().count() as f32 * AUTOFIT_CHAR_WIDTH + 12.0;
-    if custom || needed <= zenkai_types::DEFAULT_COL_WIDTH {
-        return Ok(());
+    for (col, width) in needed {
+        if width > zenkai_types::DEFAULT_COL_WIDTH {
+            wb.set_column_width(sheet, col, width)?;
+        }
     }
-    wb.set_column_width(sheet, pos.col, needed)
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::widen_for_numbers;
+    use zenkai_engine::{Engine, Workbook};
+    use zenkai_types::{CellPos, Range, SheetId};
+
+    #[test]
+    fn formatting_a_number_that_no_longer_fits_widens_its_column() {
+        let mut wb = Workbook::new_empty().unwrap();
+        let a1 = CellPos::default();
+        wb.set_input(SheetId(0), a1, "1234.5").unwrap();
+        let range = Range::single(a1);
+        wb.set_number_format(SheetId(0), range, "$#,##0.00")
+            .unwrap();
+        eprintln!(
+            "PROBE text={:?} fmt={:?} sizes={:?}",
+            wb.cell(SheetId(0), a1).text,
+            wb.cell(SheetId(0), a1).style.num_fmt,
+            wb.sizes(SheetId(0)).columns
+        );
+        widen_for_numbers(&mut wb, SheetId(0), range).unwrap();
+        let widened = wb
+            .sizes(SheetId(0))
+            .columns
+            .iter()
+            .any(|span| span.first == a1.col && span.width > zenkai_types::DEFAULT_COL_WIDTH);
+        assert!(widened, "{:?}", wb.sizes(SheetId(0)).columns);
+    }
 }

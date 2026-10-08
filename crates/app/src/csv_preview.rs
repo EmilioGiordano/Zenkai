@@ -155,6 +155,8 @@ pub fn render(
     v_flex()
         .key_context("CsvPreview")
         .track_focus(focus)
+        // Clicks on the preview must not reach the grid underneath.
+        .occlude()
         .w(px(920.0))
         .p_4()
         .gap_3()

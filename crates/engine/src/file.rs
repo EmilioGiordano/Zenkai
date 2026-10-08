@@ -768,6 +768,13 @@ line 2"
     }
 
     #[test]
+    fn format_preview_matches_excel_codes() {
+        use crate::workbook::format_preview;
+        assert_eq!(format_preview(1234.5, "#,##0.00").unwrap(), "1,234.50");
+        assert_eq!(format_preview(0.256, "0.0%").unwrap(), "25.6%");
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
