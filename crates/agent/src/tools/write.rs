@@ -103,6 +103,35 @@ pub fn plan_write(request: &WriteRequest, sheets: &[SheetInfo]) -> Result<Planne
     })
 }
 
+const SAMPLE_ENTRIES: usize = 4;
+const SHOWN_ENTRY_CHARS: usize = 40;
+
+// Entries come from the agent, which may have read them from the file: control
+// characters and line breaks are shown escaped so the prompt cannot be reshaped, and a
+// formula is marked so the user sees it will compute rather than store text.
+fn shown_entry(entry: &str) -> String {
+    let mut shown: String = entry
+        .chars()
+        .take(SHOWN_ENTRY_CHARS)
+        .flat_map(|c| {
+            let escaped: Vec<char> = if c.is_control() {
+                c.escape_debug().collect()
+            } else {
+                vec![c]
+            };
+            escaped
+        })
+        .collect();
+    if entry.chars().count() > SHOWN_ENTRY_CHARS {
+        shown.push('…');
+    }
+    if entry.starts_with('=') {
+        format!("formula {shown}")
+    } else {
+        format!("\"{shown}\"")
+    }
+}
+
 fn on_off(on: bool) -> &'static str {
     if on { "on" } else { "off" }
 }
@@ -144,10 +173,26 @@ impl PlannedWrite {
         let place = format!("'{}'!{}", self.sheet_name, self.target);
         match &self.change {
             Change::Inputs(rows) if rows.len() == 1 && rows[0].len() == 1 => {
-                let entry: String = rows[0][0].chars().take(80).collect();
-                format!("Write \"{entry}\" in {place}")
+                format!("Write {} in {place}", shown_entry(&rows[0][0]))
             }
-            Change::Inputs(_) => format!("Write {} cells in {place}", self.target.cell_count()),
+            Change::Inputs(rows) => {
+                let sample: Vec<String> = rows
+                    .iter()
+                    .flatten()
+                    .take(SAMPLE_ENTRIES)
+                    .map(|entry| shown_entry(entry))
+                    .collect();
+                let more = if self.target.cell_count() > SAMPLE_ENTRIES as u64 {
+                    ", …"
+                } else {
+                    ""
+                };
+                format!(
+                    "Write {} cells in {place}: {}{more}",
+                    self.target.cell_count(),
+                    sample.join(", ")
+                )
+            }
             Change::Style(change) => format!("Format {place}: {}", style_label(*change)),
         }
     }
