@@ -10,3 +10,6 @@ Functionality outside the current spec, proposed here instead of implemented.
 ## Next candidates
 
 - Chart series with several columns, chart titles and axis labels, PNG export.
+- Preserve page margins, page setup (without printer-settings parts), header/footer, tab
+  colour and zoom on save by copying those elements from the original sheet XML, as
+  `empty_rows.rs` does for rows. Needs care with sheet reordering and renamed sheets.

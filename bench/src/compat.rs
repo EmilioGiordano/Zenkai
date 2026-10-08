@@ -151,6 +151,24 @@ pub fn generate(dir: &Path) -> Result<()> {
         .write_formula(2, 0, Formula::new("=Seven*2").set_result("14"))?;
     save(&mut book, dir, "hyperlink-and-defined-name.xlsx")?;
 
+    let mut book = Workbook::new();
+    let sheet = book.add_worksheet().set_name("Layout")?;
+    sheet.write_string(0, 0, "Region")?;
+    sheet.write_string(0, 1, "Total")?;
+    sheet.write_string(1, 0, "North")?;
+    sheet.write_number(1, 1, 10.0)?;
+    sheet.write_string(4, 0, "after blank rows")?;
+    sheet.set_row_height(2, 40)?;
+    sheet.set_row_hidden(3)?;
+    sheet.autofilter(0, 0, 1, 1)?;
+    sheet.set_tab_color("#FF0000");
+    sheet.set_landscape();
+    sheet.set_header("&CQuarterly report");
+    sheet.set_zoom(150);
+    sheet.set_screen_gridlines(false);
+    sheet.protect();
+    save(&mut book, dir, "layout-print-protection.xlsx")?;
+
     Ok(())
 }
 
@@ -279,6 +297,16 @@ fn dropped_parts(original: &[u8], saved: &[u8]) -> String {
         ("<definedName ", "defined names"),
         ("<mergeCell ", "merged cells"),
         ("<pane ", "frozen panes"),
+        ("<autoFilter", "autofilter"),
+        ("<sheetProtection", "sheet protection"),
+        ("<pageMargins", "page margins"),
+        ("<pageSetup", "page setup"),
+        ("<headerFooter", "header/footer"),
+        ("<tabColor", "tab colour"),
+        ("zoomScale=", "zoom"),
+        ("showGridLines=\"0\"", "hidden gridlines"),
+        ("customHeight=\"1\"", "row heights"),
+        ("hidden=\"1\"", "hidden rows/columns"),
     ];
     let (before, after) = match (parts(original), parts(saved)) {
         (Ok(before), Ok(after)) => (before, after),
