@@ -102,6 +102,18 @@ actions!(
         InsertDate,
         InsertTime,
         CloseGoTo,
+        OpenSettings,
+        CloseSettings,
+        DetectAgents,
+        AddClaudeAgent,
+        AddGeminiAgent,
+        AddCodexAgent,
+        PermissionReadOnly,
+        PermissionAskBeforeWrite,
+        PermissionAutomatic,
+        ToggleExternalAgents,
+        FocusNextControl,
+        FocusPreviousControl,
     ]
 );
 
@@ -172,5 +184,17 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", CloseGoTo, Some("NameBox")),
         KeyBinding::new("escape", CloseFind, Some("FindBar")),
         KeyBinding::new("escape", CancelFormulaBar, Some("FormulaBar")),
+        KeyBinding::new("ctrl-,", OpenSettings, CONTEXT),
+        KeyBinding::new("escape", CloseSettings, Some("SettingsPage")),
+        KeyBinding::new("f5", DetectAgents, Some("SettingsPage")),
+        KeyBinding::new("alt-c", AddClaudeAgent, Some("SettingsPage")),
+        KeyBinding::new("alt-g", AddGeminiAgent, Some("SettingsPage")),
+        KeyBinding::new("alt-x", AddCodexAgent, Some("SettingsPage")),
+        KeyBinding::new("alt-r", PermissionReadOnly, Some("SettingsPage")),
+        KeyBinding::new("alt-a", PermissionAskBeforeWrite, Some("SettingsPage")),
+        KeyBinding::new("alt-u", PermissionAutomatic, Some("SettingsPage")),
+        KeyBinding::new("alt-e", ToggleExternalAgents, Some("SettingsPage")),
+        KeyBinding::new("tab", FocusNextControl, Some("SettingsPage")),
+        KeyBinding::new("shift-tab", FocusPreviousControl, Some("SettingsPage")),
     ]);
 }

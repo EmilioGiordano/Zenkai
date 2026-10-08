@@ -9,6 +9,8 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use zenkai_agent::presets;
+use zenkai_agent::settings::{PermissionMode, SettingsError};
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
 use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{
@@ -20,6 +22,7 @@ use zenkai_types::{
 };
 
 use crate::actions::*;
+use crate::agent_settings::{self, AgentConfig};
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
@@ -35,6 +38,7 @@ use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
 use crate::region;
+use crate::settings_page::{self, SettingsPage};
 use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
 use crate::toolbar;
@@ -143,6 +147,9 @@ pub struct Workspace {
     memory_mb: u64,
     diagnostics_task: Option<Task<()>>,
     cell_refresh: CellRefresh,
+    settings_page: Option<Entity<SettingsPage>>,
+    // The settings problem already shown, so a reload with the same error stays quiet.
+    shown_settings_problem: Option<SettingsError>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -178,6 +185,12 @@ impl Workspace {
         let appearance = cx.observe_window_appearance(window, |_, window, cx| {
             theme::follow_system(window, cx);
         });
+        let activation = cx.observe_window_activation(window, |_, window, cx| {
+            if window.is_window_active() {
+                agent_settings::reload(cx);
+            }
+        });
+        let settings = cx.observe_global::<AgentConfig>(Self::on_settings_changed);
         let workbook = match Workbook::new_empty() {
             Ok(workbook) => workbook,
             Err(error) => exit_without_workbook(error),
@@ -221,7 +234,16 @@ impl Workspace {
             memory_mb: 0,
             diagnostics_task: None,
             cell_refresh: CellRefresh::Idle,
-            _subscriptions: vec![subscription, appearance, font_color, fill_color],
+            settings_page: None,
+            shown_settings_problem: None,
+            _subscriptions: vec![
+                subscription,
+                appearance,
+                activation,
+                settings,
+                font_color,
+                fill_color,
+            ],
         };
         workspace.reset_grid(window, cx);
         if let Some(path) = initial {
@@ -2341,6 +2363,52 @@ impl Workspace {
     }
 
     // Excel's Ctrl+1, Number tab: categories, a custom code and a sample of the active cell.
+    fn on_settings_changed(&mut self, cx: &mut Context<Self>) {
+        let problem = cx.global::<AgentConfig>().state.problem.clone();
+        if problem == self.shown_settings_problem {
+            return;
+        }
+        if let Some(problem) = &problem {
+            self.notify(
+                Severity::Warning,
+                format!("{problem}. Zenkai keeps using the last valid settings."),
+                cx,
+            );
+        }
+        self.shown_settings_problem = problem;
+    }
+
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let page = self
+            .settings_page
+            .get_or_insert_with(|| cx.new(SettingsPage::new))
+            .clone();
+        let focus = page.read(cx).focus_handle();
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_page = None;
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn render_settings(&self) -> Option<impl IntoElement> {
+        let page = self.settings_page.clone()?;
+        Some(
+            div()
+                .absolute()
+                .top(px(64.0))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(page),
+        )
+    }
+
     fn open_format_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.grid.read(cx).selection().active;
         let view = self
@@ -3228,6 +3296,26 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| theme::cycle(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CloseSettings, window, cx| this.close_settings(window, cx)),
+            )
+            .on_action(|_: &DetectAgents, _, cx| agent_settings::detect_agents(cx))
+            .on_action(|_: &AddClaudeAgent, _, cx| settings_page::add_preset(presets::CLAUDE, cx))
+            .on_action(|_: &AddGeminiAgent, _, cx| settings_page::add_preset(presets::GEMINI, cx))
+            .on_action(|_: &AddCodexAgent, _, cx| settings_page::add_preset(presets::CODEX, cx))
+            .on_action(|_: &PermissionReadOnly, _, cx| {
+                settings_page::set_permission(PermissionMode::ReadOnly, cx)
+            })
+            .on_action(|_: &PermissionAskBeforeWrite, _, cx| {
+                settings_page::set_permission(PermissionMode::AskBeforeWrite, cx)
+            })
+            .on_action(|_: &PermissionAutomatic, _, cx| {
+                settings_page::set_permission(PermissionMode::Automatic, cx)
+            })
+            .on_action(|_: &ToggleExternalAgents, _, cx| settings_page::toggle_external_agents(cx))
             .child(self.render_title_bar(cx))
             .child(toolbar::render(&self.active_style, &self.colors, cx))
             .child(self.render_formula_bar(cx))
@@ -3261,6 +3349,7 @@ impl Render for Workspace {
             .children(self.render_busy(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
+            .children(self.render_settings())
     }
 }
 

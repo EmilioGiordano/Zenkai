@@ -115,5 +115,16 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Theme: light, dark, high contrast", ToggleTheme),
             item("Diagnostics in the status bar", ToggleDiagnostics),
         ]),
+        CommandGroup::new().label("Agents").items([
+            item("Settings…", OpenSettings),
+            item("Detect installed agents", DetectAgents),
+            item("Add the Claude agent", AddClaudeAgent),
+            item("Add the Gemini CLI agent", AddGeminiAgent),
+            item("Add the Codex agent", AddCodexAgent),
+            item("Agents: read only", PermissionReadOnly),
+            item("Agents: ask before writing", PermissionAskBeforeWrite),
+            item("Agents: write without asking", PermissionAutomatic),
+            item("Allow or block external agents", ToggleExternalAgents),
+        ]),
     ]
 }

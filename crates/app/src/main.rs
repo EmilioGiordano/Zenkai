@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
+mod agent_settings;
 mod chart;
 mod chart_panel;
 mod clipboard;
@@ -18,6 +19,7 @@ mod previews;
 mod recent;
 mod recovery;
 mod region;
+mod settings_page;
 mod stats;
 mod theme;
 mod toolbar;
@@ -37,6 +39,7 @@ fn main() {
             gpui_kit::init(cx);
             zenkai_grid::bind_keys(cx);
             actions::bind_keys(cx);
+            agent_settings::init(cx);
             cx.on_action(|_: &actions::Quit, cx| cx.quit());
 
             let options = WindowOptions {
