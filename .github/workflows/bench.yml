@@ -1,0 +1,54 @@
+name: Benchmark
+
+on:
+  pull_request:
+    paths:
+      - "bench/**"
+      - "crates/engine/**"
+      - "crates/formats/**"
+      - "crates/grid/**"
+      - "crates/types/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/bench.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  regression:
+    name: Regression gate (Windows, release)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the benchmark in release
+        run: cargo build --release -p zenkai-bench
+
+      - name: Compare against bench/baseline.csv
+        run: .\target\release\zenkai-bench.exe check bench\fixtures bench\baseline.csv bench-current.csv 5
+
+      - name: Upload this run's numbers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-current
+          path: bench-current.csv
+          if-no-files-found: warn
