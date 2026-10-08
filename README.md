@@ -51,6 +51,8 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   are coloured in the formula and in the grid.
 - Formula AutoComplete (Tab inserts the function), show formulas (Ctrl+`), find and
   replace (Ctrl+H), paste values (Ctrl+Shift+V), hide/unhide rows and columns.
+- Format Cells (Ctrl+1) for number formats with a live sample; recent files in the
+  command palette; drop a file on the window to open it.
 - Light, dark and high-contrast themes; follows the system light/dark setting until one is
   picked. Interface size (Ctrl+Alt+= / - / 0) is independent of the grid zoom.
 - Screen readers: the sheet, the active cell (address, value, formula), the name box and
