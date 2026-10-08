@@ -163,6 +163,26 @@ fn user_model_edits_undo_and_redo_are_incremental() {
 }
 
 #[test]
+fn empty_formula_result_matches_a_full_evaluation() {
+    let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 3, "=ISBLANK(B1)").unwrap();
+    model.set_user_input(0, 1, 2, "=A1").unwrap();
+    assert_eq!(
+        model.get_model().last_recalculation(),
+        Recalculation::Incremental
+    );
+    let mut fresh = UserModel::from_bytes(&model.to_bytes(), "en").unwrap();
+    fresh.evaluate();
+    for column in 1..=3 {
+        assert_eq!(
+            model.get_formatted_cell_value(0, 1, column).unwrap(),
+            fresh.get_formatted_cell_value(0, 1, column).unwrap()
+        );
+    }
+    assert_eq!(model.get_formatted_cell_value(0, 1, 3).unwrap(), "FALSE");
+}
+
+#[test]
 fn structural_changes_evaluate_the_whole_workbook() {
     let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
     model.set_user_input(0, 1, 1, "1").unwrap();
