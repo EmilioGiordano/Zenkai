@@ -8,6 +8,11 @@ pub(crate) type CellKey = (u32, i32, i32);
 // Ranges wider than this are kept per sheet instead of once per column they cover.
 const MAX_INDEXED_COLUMNS: i32 = 64;
 
+// Nested ranges down a column (`=SUM($A$1:A9)` below `=SUM($A$1:A8)`...) make the
+// dependents visited grow with the square of the formulas; past this, a full evaluation
+// is the cheaper way.
+const MAX_DEPENDENT_VISITS: usize = 4_000_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Reference {
     Cell(CellKey),
@@ -380,15 +385,26 @@ impl DependencyIndex {
         }
     }
 
-    pub(crate) fn affected_by(&self, edited: &[CellKey]) -> HashSet<CellKey> {
+    // None when following the dependents would cost more than evaluating everything.
+    pub(crate) fn affected_by(&self, edited: &[CellKey]) -> Option<HashSet<CellKey>> {
         let mut affected = HashSet::new();
         let mut pending: Vec<CellKey> = edited.iter().chain(&self.volatile).copied().collect();
+        let mut visits = 0usize;
         while let Some(cell) = pending.pop() {
-            if affected.insert(cell) {
-                self.for_each_dependent(cell, &mut |formula| pending.push(formula));
+            if !affected.insert(cell) {
+                continue;
+            }
+            self.for_each_dependent(cell, &mut |formula| {
+                visits += 1;
+                if !affected.contains(&formula) {
+                    pending.push(formula);
+                }
+            });
+            if visits > MAX_DEPENDENT_VISITS {
+                return None;
             }
         }
-        affected
+        Some(affected)
     }
 }
 

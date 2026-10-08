@@ -70,9 +70,11 @@ impl Model<'_> {
         }
         dependencies.index.sort();
 
-        let mut dirty: Vec<CellKey> = dependencies
-            .index
-            .affected_by(edited)
+        let Some(affected) = dependencies.index.affected_by(edited) else {
+            self.evaluate_indexed();
+            return;
+        };
+        let mut dirty: Vec<CellKey> = affected
             .into_iter()
             .filter(|cell| self.formula_node(*cell).is_some())
             .collect();

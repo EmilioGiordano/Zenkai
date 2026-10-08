@@ -81,6 +81,24 @@ fn wide_and_tall_ranges() {
 }
 
 #[test]
+fn nested_ranges_past_the_visit_limit_evaluate_everything() {
+    let mut model = new_empty_model();
+    model._set("B1", "1");
+    for row in 2..=3000 {
+        let previous = row - 1;
+        model._set(
+            &format!("B{row}"),
+            &format!("=IF(FALSE,SUM($B$1:B{previous}),B{previous})"),
+        );
+    }
+    model.evaluate_indexed();
+    let edited = set(&mut model, "B1", "7");
+    model.evaluate_incremental(&[edited]);
+    assert_eq!(model.last_recalculation(), Recalculation::Full);
+    assert_eq!(model._get_text("B3000"), "7");
+}
+
+#[test]
 fn circular_reference_made_by_an_edit() {
     let mut model = new_empty_model();
     model._set("A1", "=B1+1");
