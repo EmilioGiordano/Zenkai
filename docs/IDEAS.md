@@ -16,6 +16,3 @@ Functionality outside the current spec, proposed here instead of implemented.
 - Pick a font or fill colour from the keyboard: an action that opens the toolbar picker
   with focus on its swatches (today the palette has only "No fill" and "Automatic font
   colour"; Excel itself has no default colour shortcut).
-- General-format numbers that do not fit should switch to scientific notation
-  (1.23457E+11) like Excel instead of showing ####; only formatted numbers and dates
-  should show ####.

@@ -383,8 +383,18 @@ fn paint_cell_text(
             .shape_line(text, font_size, &[run], None)
     };
     let mut line = shape(cell.text.clone(), window);
-    // Excel never truncates a number: one that does not fit shows as #### instead.
-    if cell.kind == ValueKind::Number && line.width + padding * 2.0 > bounds.size.width {
+    let fits = |width: Pixels| width + padding * 2.0 <= bounds.size.width;
+    if cell.kind == ValueKind::Number && !fits(line.width) && cell.style.num_fmt == "general" {
+        for spelling in crate::general::shorter_spellings(&cell.text) {
+            let shorter = shape(spelling.into(), window);
+            if fits(shorter.width) {
+                line = shorter;
+                break;
+            }
+        }
+    }
+    // Excel never truncates a number: one that still does not fit shows as #### instead.
+    if cell.kind == ValueKind::Number && !fits(line.width) {
         let hash = shape("#".into(), window).width.max(px(1.0));
         let count = ((bounds.size.width - padding * 2.0) / hash)
             .floor()

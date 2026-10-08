@@ -2,6 +2,7 @@
 
 mod actions;
 mod formula_refs;
+mod general;
 mod grid;
 mod layout;
 mod paint;
