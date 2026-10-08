@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod empty_rows;
 mod error;
 mod file;
 mod preflight;

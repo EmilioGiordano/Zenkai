@@ -429,6 +429,27 @@ line 2"
     }
 
     #[test]
+    fn row_heights_survive_save_even_on_empty_rows() {
+        let mut book = Workbook::new_empty().unwrap();
+        // Row 4 stays empty: IronCalc alone drops the height of rows without cells.
+        let empty = zenkai_types::RowIdx::new(3).unwrap();
+        let filled = zenkai_types::RowIdx::new(9).unwrap();
+        book.set_row_height(SheetId(0), empty, 48.0).unwrap();
+        book.set_row_height(SheetId(0), filled, 30.0).unwrap();
+        let a = |row| CellPos::new(row, zenkai_types::ColIdx::clamped(0));
+        book.set_input(SheetId(0), a(filled), "x").unwrap();
+        book.set_input(SheetId(0), CellPos::default(), "top")
+            .unwrap();
+        let reopened = Workbook::from_xlsx_bytes(&book.to_xlsx().unwrap(), "Book1").unwrap();
+        let sizes = reopened.sizes(SheetId(0));
+        let height = |row| sizes.rows.iter().find(|(r, _)| *r == row).map(|(_, h)| *h);
+        assert_eq!(height(empty), Some(48.0));
+        assert_eq!(height(filled), Some(30.0));
+        assert_eq!(reopened.input(SheetId(0), a(filled)), "x");
+        assert_eq!(reopened.input(SheetId(0), CellPos::default()), "top");
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

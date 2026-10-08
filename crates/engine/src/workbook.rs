@@ -669,8 +669,9 @@ impl Engine for Workbook {
     }
 
     fn to_xlsx(&self) -> Result<Vec<u8>, EngineError> {
-        save_xlsx_to_writer(self.model.get_model(), Cursor::new(Vec::new()))
+        let xlsx = save_xlsx_to_writer(self.model.get_model(), Cursor::new(Vec::new()))
             .map(Cursor::into_inner)
-            .map_err(|e| rejected(format!("{e:?}")))
+            .map_err(|e| rejected(format!("{e:?}")))?;
+        crate::empty_rows::restore_empty_rows(self.model.get_model(), xlsx)
     }
 }
