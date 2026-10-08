@@ -44,7 +44,8 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
 - Right-click menus on cells and sheet tabs, as in Excel; duplicate a sheet from its tab.
 - Formatting: font and fill colour pickers, borders (bottom, all, outside, none;
   Ctrl+Shift+& / Ctrl+Shift+_), strikethrough (Ctrl+5), font size steps
-  (Ctrl+Shift+> / <), increase/decrease decimal, wrap text and vertical alignment.
+  (Ctrl+Shift+> / <), increase/decrease decimal, wrap text and vertical alignment, clear
+  formats or clear all.
 - Numbers behave like Excel when they do not fit: General numbers lose decimals or switch
   to scientific notation, formatted numbers and dates widen a default-width column.
 - Formula point mode: while typing a formula, arrows or clicks insert references, which
