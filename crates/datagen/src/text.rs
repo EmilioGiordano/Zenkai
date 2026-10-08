@@ -61,7 +61,7 @@ pub(crate) fn literal_input(text: String) -> String {
     let starts_with_letter = text.chars().next().is_some_and(char::is_alphabetic);
     let is_boolean = text.eq_ignore_ascii_case("true") || text.eq_ignore_ascii_case("false");
     let may_be_date = text.contains(|c: char| c.is_ascii_digit()) && !text.contains(' ');
-    if starts_with_letter && !is_boolean && !may_be_date {
+    if text.is_empty() || (starts_with_letter && !is_boolean && !may_be_date) {
         text
     } else {
         format!("'{text}")

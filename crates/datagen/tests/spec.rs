@@ -1,7 +1,7 @@
 // Test helpers outside #[test] functions; clippy only exempts the functions themselves.
 #![allow(clippy::unwrap_used)]
 
-use zenkai_datagen::{ColumnKind, GenerationSpec, Percent, generate};
+use zenkai_datagen::{ColumnKind, ColumnSpec, GenerationSpec, Percent, generate};
 
 const AGENT_SPEC: &str = r#"{
   "rows": 1000,
@@ -100,4 +100,23 @@ fn schema_matches_the_committed_snapshot() {
         generated, committed,
         "the spec changed: update crates/datagen/generation-spec.schema.json"
     );
+}
+
+#[test]
+fn header_input_never_becomes_a_formula() {
+    let header_input = |header: &str| {
+        ColumnSpec {
+            header: header.to_string(),
+            kind: ColumnKind::City {},
+            blanks: Percent::ZERO,
+            unique: false,
+        }
+        .header_input()
+    };
+    for header in ["=SUM(A1:A9)", "+54", "-1+2", "@cmd", "TRUE", "2024"] {
+        assert_eq!(header_input(header), format!("'{header}"));
+    }
+    for header in ["Nombre", "Teléfono", "Precio 2024", ""] {
+        assert_eq!(header_input(header), header);
+    }
 }

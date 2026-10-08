@@ -7,6 +7,7 @@ use crate::limits::{
     MAX_PATTERN_CHARS,
 };
 use crate::percent::Percent;
+use crate::text::literal_input;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -184,6 +185,13 @@ pub struct ListOption {
     #[serde(default = "one_u32")]
     #[schemars(description = "Relative frequency; 2 appears twice as often as 1.")]
     pub weight: u32,
+}
+
+impl ColumnSpec {
+    // What the caller writes to the header cell: "=Total" or "+54" must stay text.
+    pub fn header_input(&self) -> String {
+        literal_input(self.header.clone())
+    }
 }
 
 fn one_i64() -> i64 {
