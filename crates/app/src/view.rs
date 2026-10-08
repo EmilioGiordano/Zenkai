@@ -282,6 +282,7 @@ impl Workspace {
             .map(|wb| {
                 let (frozen_rows, frozen_cols) = wb.frozen(sheet);
                 SheetView {
+                    used_end: wb.used_end(sheet),
                     layout: Layout::from_sizes(&wb.sizes(sheet)),
                     frozen_rows,
                     frozen_cols,

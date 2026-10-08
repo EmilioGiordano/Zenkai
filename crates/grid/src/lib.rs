@@ -7,6 +7,7 @@ mod general;
 mod grid;
 mod layout;
 mod paint;
+mod scrollbar;
 
 pub use actions::{CycleReference, DeleteForward, bind_keys};
 pub use grid::{
