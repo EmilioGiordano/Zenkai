@@ -287,6 +287,8 @@ La amenaza principal es la misma que en el resto de Zenkai, un archivo malicioso
 - **Contenido oculto a la vista.** Cuando una herramienta lee de hojas, filas o columnas ocultas, o celdas de texto muy largo, el resultado lo dice, para que el usuario pueda verlo.
 - **Canal local cerrado.** El pipe tiene un nombre aleatorio por sesión, rechaza clientes remotos, solo admite al usuario actual y exige un token aleatorio de 256 bits como primera línea, comparado en tiempo constante. Solo existe mientras "Permitir agentes externos" está encendido o hay una sesión del chat abierta.
 - **Procesos.** Al cerrar una sesión se termina todo el árbol de procesos del agente con `taskkill /T`, sin código `unsafe`.
+- **Configuración como interruptor.** Cualquier programa del usuario puede escribir `settings.json`. Un cambio que da más poder a los agentes (escribir sin preguntar, permitir agentes externos) no se aplica hasta que el usuario lo confirma en Zenkai, también al iniciar; quitar poder se aplica en el acto.
+- **Comandos de agentes desde el archivo.** Antes de que el chat lance un agente, todo cambio en `agents.servers.*.command` o `args` que llegue desde el archivo (no desde la página de Configuración) se muestra y requiere confirmación. Zenkai nunca lanza agentes a través de shims `.cmd` o `.bat`: ejecuta `node` y el punto de entrada del paquete directamente, o valida cada argumento.
 - **Riesgo residual.** Zenkai no puede apagar las herramientas propias de un agente (por ejemplo la terminal de Claude Code). La interfaz lo dice.
 
 ### Plan de ramas
