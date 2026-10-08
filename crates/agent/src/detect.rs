@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -142,23 +142,29 @@ pub fn detect(
 }
 
 // npm installs global command shims in %APPDATA%\npm, which a fresh login has on PATH
-// but a process started before the install may not.
+// but a process started before the install may not. Relative entries are dropped: they
+// would resolve against whatever folder the search runs in, where anyone could plant a
+// node.exe.
+pub fn search_folders(path: &OsStr, appdata: Option<&OsStr>) -> Vec<PathBuf> {
+    std::env::split_paths(path)
+        .chain(appdata.map(|appdata| PathBuf::from(appdata).join("npm")))
+        .filter(|folder| folder.is_absolute())
+        .collect()
+}
+
 pub fn search_path() -> OsString {
     let path = std::env::var_os("PATH").unwrap_or_default();
-    let Some(appdata) = std::env::var_os("APPDATA") else {
-        return path;
-    };
-    let folders = std::env::split_paths(&path).chain([PathBuf::from(appdata).join("npm")]);
+    let folders = search_folders(&path, std::env::var_os("APPDATA").as_deref());
     match std::env::join_paths(folders) {
         Ok(joined) => joined,
         Err(error) => {
-            tracing::warn!(%error, "could not add the npm folder to the agent search path");
-            path
+            tracing::warn!(%error, "agent search path has an unusable folder; detection is skipped");
+            OsString::new()
         }
     }
 }
 
-pub fn find_in(search_path: &OsString, name: &str) -> Option<PathBuf> {
+pub fn find_in(search_path: &OsStr, name: &str) -> Option<PathBuf> {
     let cwd = std::env::temp_dir();
     which::which_in(name, Some(search_path), cwd).ok()
 }
@@ -253,6 +259,16 @@ mod tests {
             garbage.node_problem(20),
             Some(NodeProblem::Unreadable(_))
         ));
+    }
+
+    #[test]
+    fn relative_path_entries_are_never_searched() {
+        let absolute = std::env::temp_dir();
+        let path =
+            std::env::join_paths([PathBuf::from("."), PathBuf::from("bin"), absolute.clone()])
+                .unwrap();
+        let folders = search_folders(&path, None);
+        assert_eq!(folders, [absolute]);
     }
 
     #[test]
