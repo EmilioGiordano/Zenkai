@@ -49,7 +49,7 @@ jobs:
       - name: Install the Metal toolchain if Xcode lacks it (macOS)
         if: runner.os == 'macOS'
         run: |
-          if ! xcrun -sdk macosx -f metal >/dev/null 2>&1; then
+          if ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then
             xcodebuild -downloadComponent MetalToolchain
           fi
 
