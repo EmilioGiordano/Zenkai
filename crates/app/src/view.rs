@@ -288,6 +288,11 @@ impl Workspace {
     }
 
     fn refresh_cells(&mut self, cx: &mut Context<Self>) {
+        // While a recalculation holds the workbook the grid keeps showing the last values;
+        // the recalculation refreshes the cells when it hands the workbook back.
+        if self.document.workbook().is_none() {
+            return;
+        }
         let ranges = self.grid.read(cx).visible_ranges();
         let mut cells = HashMap::new();
         for range in ranges {
