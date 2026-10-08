@@ -1601,6 +1601,9 @@ impl<'a> Model<'a> {
                             }
                         }
                     }
+                    // Stored as 0 by `set_cells_with_result`; a later read of the cell
+                    // must not observe a different value than this first one.
+                    CalcResult::EmptyCell | CalcResult::EmptyArg => CalcResult::Number(0.0),
                     _ => result,
                 }
             }
