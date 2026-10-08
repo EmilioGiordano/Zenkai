@@ -324,9 +324,10 @@ impl Grid {
         if range.cell_count() > MAX_TYPED_PREVIEW_CELLS {
             return;
         }
+        let text: SharedString = text.to_string().into();
         let changes: Vec<_> = range
             .positions()
-            .filter_map(|pos| Some((pos, typed_preview(self.cells.get(&pos), text)?)))
+            .filter_map(|pos| Some((pos, typed_preview(self.cells.get(&pos), &text)?)))
             .collect();
         self.update_cells(changes, cx);
     }
@@ -1418,19 +1419,19 @@ impl Grid {
 const MAX_TYPED_PREVIEW_CELLS: u64 = 10_000;
 
 // A formula keeps its last value: its typed text is not what the cell will show.
-fn typed_preview(existing: Option<&GridCell>, text: &str) -> Option<GridCell> {
+fn typed_preview(existing: Option<&GridCell>, text: &SharedString) -> Option<GridCell> {
     if text.starts_with('=') {
         return None;
     }
     let kind = if text.is_empty() {
         ValueKind::Empty
-    } else if text.trim().parse::<f64>().is_ok() {
+    } else if text.trim().parse::<f64>().is_ok_and(f64::is_finite) {
         ValueKind::Number
     } else {
         ValueKind::Text
     };
     Some(GridCell {
-        text: text.to_string().into(),
+        text: text.clone(),
         kind,
         style: existing.map(|cell| cell.style.clone()).unwrap_or_default(),
     })
@@ -1545,16 +1546,37 @@ mod tests {
             style: CellStyle::default(),
         };
         existing.style.bold = true;
-        let preview = typed_preview(Some(&existing), "a").unwrap();
+        let preview = typed_preview(Some(&existing), &"a".into()).unwrap();
         assert_eq!(preview.text.as_ref(), "a");
         assert_eq!(preview.kind, ValueKind::Text);
         assert!(preview.style.bold);
-        assert_eq!(typed_preview(None, "12.5").unwrap().kind, ValueKind::Number);
-        assert_eq!(typed_preview(None, "").unwrap().kind, ValueKind::Empty);
+        assert_eq!(
+            typed_preview(None, &"12.5".into()).unwrap().kind,
+            ValueKind::Number
+        );
+        assert_eq!(
+            typed_preview(None, &"".into()).unwrap().kind,
+            ValueKind::Empty
+        );
+    }
+
+    #[test]
+    fn only_finite_numbers_preview_as_numbers() {
+        for text in ["inf", "-inf", "nan", "infinity", "NaN"] {
+            assert_eq!(
+                typed_preview(None, &text.into()).unwrap().kind,
+                ValueKind::Text,
+                "{text}"
+            );
+        }
+        assert_eq!(
+            typed_preview(None, &"-1e3".into()).unwrap().kind,
+            ValueKind::Number
+        );
     }
 
     #[test]
     fn a_typed_formula_keeps_the_last_value() {
-        assert!(typed_preview(None, "=A1+1").is_none());
+        assert!(typed_preview(None, &"=A1+1".into()).is_none());
     }
 }
