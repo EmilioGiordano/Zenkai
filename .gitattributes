@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.xlsx binary
+*.xlsm binary
+*.xls binary
+*.ods binary
