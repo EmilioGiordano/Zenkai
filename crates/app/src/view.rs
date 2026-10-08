@@ -31,6 +31,7 @@ use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
 use crate::jump::jump_target;
 use crate::palette;
+use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
 use crate::region;
@@ -134,6 +135,7 @@ pub struct Workspace {
     rename: Option<(Entity<InputState>, Subscription)>,
     go_to: Option<(Entity<InputState>, Subscription)>,
     pending_sheet: Option<SheetId>,
+    previews: TypedPreviews,
     last_tab_click: Option<(Instant, SheetId)>,
     memory_mb: u64,
     diagnostics_task: Option<Task<()>>,
@@ -202,6 +204,7 @@ impl Workspace {
             rename: None,
             go_to: None,
             pending_sheet: None,
+            previews: TypedPreviews::default(),
             last_tab_click: None,
             memory_mb: 0,
             diagnostics_task: None,
@@ -265,6 +268,7 @@ impl Workspace {
     }
 
     fn load_sheet_view(&mut self, cx: &mut Context<Self>) {
+        self.previews.clear();
         self.forget_find_results();
         let view = self.sheet_view();
         self.grid.update(cx, |grid, cx| grid.reset(view, cx));
@@ -291,9 +295,15 @@ impl Workspace {
         // While a recalculation holds the workbook the grid keeps showing the last values;
         // the recalculation refreshes the cells when it hands the workbook back.
         let ranges = self.grid.read(cx).cached_ranges();
-        let Some(cells) = self.document.cells(&ranges, self.show_formulas) else {
+        let Some(mut cells) = self.document.cells(&ranges, self.show_formulas) else {
             return;
         };
+        self.previews.apply(
+            self.document.generation(),
+            self.document.sheet,
+            &ranges,
+            &mut cells,
+        );
         self.grid.update(cx, |grid, cx| grid.set_cells(cells, cx));
     }
 
@@ -967,6 +977,12 @@ impl Workspace {
     }
 
     fn show_typed(&mut self, range: Range, text: &str, cx: &mut Context<Self>) {
+        self.previews.add(
+            self.document.generation(),
+            self.document.sheet,
+            range,
+            text.to_string().into(),
+        );
         self.grid
             .update(cx, |grid, cx| grid.show_typed(range, text, cx));
     }
@@ -975,6 +991,7 @@ impl Workspace {
         let Some((shared, edits)) = self.document.take_batch() else {
             return;
         };
+        self.previews.batch_started();
         self.busy = Some(CALCULATING.into());
         cx.notify();
         let started = Instant::now();
@@ -988,6 +1005,7 @@ impl Workspace {
                 let sheets_before = this.document.sheets.clone();
                 let sheet_before = this.document.sheet;
                 let pending_sheet = this.pending_sheet.take();
+                this.previews.batch_finished();
                 if !this.document.finish_batch(generation) {
                     this.clear_busy(CALCULATING, cx);
                     return;
@@ -2806,12 +2824,14 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::new_workbook))
-            .on_action(
-                cx.listener(|this, _: &Undo, window, cx| this.edit(window, cx, |wb| wb.undo())),
-            )
-            .on_action(
-                cx.listener(|this, _: &Redo, window, cx| this.edit(window, cx, |wb| wb.redo())),
-            )
+            .on_action(cx.listener(|this, _: &Undo, window, cx| {
+                this.previews.clear();
+                this.edit(window, cx, |wb| wb.undo())
+            }))
+            .on_action(cx.listener(|this, _: &Redo, window, cx| {
+                this.previews.clear();
+                this.edit(window, cx, |wb| wb.redo())
+            }))
             .on_action(cx.listener(|this, _: &Copy, _, cx| this.copy(false, cx)))
             .on_action(cx.listener(|this, _: &Cut, _, cx| this.copy(true, cx)))
             .on_action(cx.listener(|this, _: &Paste, window, cx| this.paste(window, cx)))

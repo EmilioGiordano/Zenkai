@@ -1416,7 +1416,7 @@ impl Grid {
     }
 }
 
-const MAX_TYPED_PREVIEW_CELLS: u64 = 10_000;
+pub const MAX_TYPED_PREVIEW_CELLS: u64 = 10_000;
 // More frozen panes than any screen can show would only make every frame and refresh
 // walk panes that cannot be seen, as Excel stops them at the window size.
 const MAX_FROZEN_ROWS: u32 = 200;
@@ -1427,7 +1427,7 @@ fn capped_frozen(rows: u32, cols: u16) -> (u32, u16) {
 }
 
 // A formula keeps its last value: its typed text is not what the cell will show.
-fn typed_preview(existing: Option<&GridCell>, text: &SharedString) -> Option<GridCell> {
+pub fn typed_preview(existing: Option<&GridCell>, text: &SharedString) -> Option<GridCell> {
     if text.starts_with('=') {
         return None;
     }
