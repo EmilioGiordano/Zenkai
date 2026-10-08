@@ -48,6 +48,8 @@ actions!(
         DeleteSheet,
         MoveSheetLeft,
         MoveSheetRight,
+        GoTo,
+        CloseGoTo,
     ]
 );
 
@@ -86,6 +88,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-f", Find, CONTEXT),
         KeyBinding::new("ctrl-shift-p", TogglePalette, CONTEXT),
         KeyBinding::new("escape", CloseRename, Some("RenameBar")),
+        KeyBinding::new("ctrl-g", GoTo, CONTEXT),
+        KeyBinding::new("f5", GoTo, CONTEXT),
+        KeyBinding::new("escape", CloseGoTo, Some("NameBox")),
         KeyBinding::new("escape", CloseFind, Some("FindBar")),
     ]);
 }

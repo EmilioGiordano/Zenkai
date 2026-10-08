@@ -66,6 +66,7 @@ pub struct Workspace {
     palette: Option<Entity<CommandState>>,
     session_lock: Option<recovery::SessionLock>,
     rename: Option<Entity<InputState>>,
+    go_to: Option<Entity<InputState>>,
     pending_sheet: Option<SheetId>,
     last_tab_click: Option<(Instant, SheetId)>,
     memory_mb: u64,
@@ -96,6 +97,7 @@ impl Workspace {
             palette: None,
             session_lock: None,
             rename: None,
+            go_to: None,
             pending_sheet: None,
             last_tab_click: None,
             memory_mb: 0,
@@ -1282,8 +1284,14 @@ impl Workspace {
             .border_b_1()
             .border_color(theme.border)
             .bg(theme.background)
-            .child(
-                div()
+            .child(match &self.go_to {
+                Some(input) => div()
+                    .key_context("NameBox")
+                    .w(px(120.0))
+                    .child(Input::new(input))
+                    .into_any_element(),
+                None => div()
+                    .id("name-box")
                     .w(px(96.0))
                     .h(px(24.0))
                     .px_2()
@@ -1293,8 +1301,11 @@ impl Workspace {
                     .border_color(theme.border)
                     .rounded_sm()
                     .text_sm()
-                    .child(name),
-            )
+                    .cursor_text()
+                    .on_click(cx.listener(|this, _, window, cx| this.open_go_to(window, cx)))
+                    .child(name)
+                    .into_any_element(),
+            })
             .child(
                 div()
                     .text_sm()
@@ -1382,6 +1393,39 @@ impl Workspace {
             u32::try_from(self.document.sheets.len()).unwrap_or(0),
         ));
         self.edit(window, cx, |wb| wb.add_sheet().map(|_| ()));
+    }
+
+    fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.palette = None;
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("A1 or A1:C10"));
+        let subscription = cx.subscribe_in(&input, window, |this, input, event, window, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                let target = input.read(cx).value().to_string();
+                this.close_go_to(window, cx);
+                match Range::parse_a1(&target) {
+                    Some(range) => this
+                        .grid
+                        .update(cx, |grid, cx| grid.select(range.start, range.end, cx)),
+                    None => this.notify(
+                        Severity::Warning,
+                        format!("\"{target}\" is not a cell or range reference"),
+                        cx,
+                    ),
+                }
+            }
+        });
+        self._subscriptions.push(subscription);
+        let focus = input.focus_handle(cx);
+        window.focus(&focus, cx);
+        self.go_to = Some(input);
+        cx.notify();
+    }
+
+    fn close_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.go_to = None;
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
     }
 
     fn open_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1661,6 +1705,8 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &RenameSheet, window, cx| this.open_rename(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &GoTo, window, cx| this.open_go_to(window, cx)))
+            .on_action(cx.listener(|this, _: &CloseGoTo, window, cx| this.close_go_to(window, cx)))
             .on_action(
                 cx.listener(|this, _: &CloseRename, window, cx| this.close_rename(window, cx)),
             )

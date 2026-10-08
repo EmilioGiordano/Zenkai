@@ -22,6 +22,7 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Cut", Cut),
             item("Paste", Paste),
             item("Find", Find),
+            item("Go to…", GoTo),
         ]),
         CommandGroup::new().label("Format").items([
             item("Bold", ToggleBold),
