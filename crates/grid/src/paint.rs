@@ -334,10 +334,14 @@ fn paint_cell_text(
     cx: &mut App,
 ) {
     let c = frame.colors;
+    // Files store automatic text as black; on a dark sheet it follows the theme,
+    // unless the cell has its own fill, which was designed for the file's colours.
+    let automatic_black = matches!(cell.style.font_color, None | Some(Rgb(0)));
     let color = match (cell.kind, cell.style.font_color) {
         (ValueKind::Error, _) => c.error,
+        _ if automatic_black && cell.style.fill.is_none() => c.foreground,
         (_, Some(rgb_color)) => rgb_to_hsla(rgb_color),
-        (_, None) => c.foreground,
+        (_, None) => rgb(0x000000).into(),
     };
     let points = cell.style.font_size.unwrap_or(DEFAULT_POINTS);
     let font_size = px(BASE_FONT_SIZE * points / DEFAULT_POINTS * frame.zoom);
