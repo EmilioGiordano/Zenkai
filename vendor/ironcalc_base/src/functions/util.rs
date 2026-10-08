@@ -286,7 +286,7 @@ fn result_is_not_equal_to_string(calc_result: &CalcResult, target: &str) -> bool
             }
             false
         }
-        _ => false,
+        _ => true,
     }
 }
 
@@ -301,7 +301,7 @@ fn result_is_less_or_equal_than_string(calc_result: &CalcResult, target: &str) -
     match calc_result {
         CalcResult::String(s) => {
             let lower_case = &s.to_lowercase();
-            target.cmp(lower_case) == std::cmp::Ordering::Less || lower_case == target
+            target.cmp(lower_case) == std::cmp::Ordering::Greater || lower_case == target
         }
         _ => false,
     }
@@ -318,7 +318,7 @@ fn result_is_greater_or_equal_than_string(calc_result: &CalcResult, target: &str
     match calc_result {
         CalcResult::String(s) => {
             let lower_case = &s.to_lowercase();
-            target.cmp(lower_case) == std::cmp::Ordering::Greater || lower_case == target
+            target.cmp(lower_case) == std::cmp::Ordering::Less || lower_case == target
         }
         _ => false,
     }
