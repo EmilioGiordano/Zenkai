@@ -9,6 +9,9 @@ use crate::tools::request::{Find, ReadRange, ReadRequest};
 
 pub const MAX_READ_CELLS: u64 = 2_000;
 pub const MAX_FIND_RESULTS: usize = 200;
+// A find holds the workbook read lock, so the user's edits wait for it; past this many
+// cells it stops and says the result is partial.
+pub const MAX_FIND_SCANNED: u64 = 2_000_000;
 // Longer than a cell shows on screen even in a wide column: the user sees only a part.
 pub const LONG_TEXT_CHARS: usize = 1_000;
 
@@ -166,10 +169,20 @@ fn find(request: &Find, workbook: &Workbook) -> Result<FindResult, ToolError> {
     let mut found = Vec::new();
     let mut hidden = Vec::new();
     let mut truncated = false;
+    let mut budget = MAX_FIND_SCANNED;
     for sheet in searched {
-        let mut matches: Vec<CellPos> = workbook
-            .filled_cells(sheet.id)
-            .into_iter()
+        let used = Range::new(CellPos::default(), workbook.used_end(sheet.id));
+        let scanned = used.cell_count().min(budget);
+        truncated |= scanned < used.cell_count();
+        budget -= scanned;
+        let contents = workbook
+            .contents(sheet.id)
+            .map_err(|error| ToolError::Engine(error.to_string()))?;
+        let room = MAX_FIND_RESULTS - found.len();
+        let mut matches: Vec<CellPos> = used
+            .positions()
+            .take(usize::try_from(scanned).unwrap_or(usize::MAX))
+            .filter(|pos| contents(*pos).is_filled())
             .filter(|pos| {
                 workbook
                     .cell(sheet.id, *pos)
@@ -177,9 +190,8 @@ fn find(request: &Find, workbook: &Workbook) -> Result<FindResult, ToolError> {
                     .to_lowercase()
                     .contains(&needle)
             })
+            .take(room + 1)
             .collect();
-        matches.sort_by_key(|pos| (pos.row, pos.col));
-        let room = MAX_FIND_RESULTS - found.len();
         truncated |= matches.len() > room;
         matches.truncate(room);
         if let (Some(first), Some(last)) = (matches.first(), matches.last()) {
