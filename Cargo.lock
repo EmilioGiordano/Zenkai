@@ -3736,8 +3736,6 @@ dependencies = [
 [[package]]
 name = "ironcalc_base"
 version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce1dd83cada7da742782076daccda92e33162e9f4396a958ae3e7c5bb64e6a01"
 dependencies = [
  "bitcode",
  "chrono",

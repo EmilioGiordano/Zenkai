@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["bench", "crates/types", "crates/engine", "crates/formats", "crates/grid", "crates/app"]
+# Third-party code patched for Zenkai: built as a dependency, outside our fmt and clippy gates.
+exclude = ["vendor"]
 
 [workspace.package]
 edition = "2024"
@@ -16,3 +18,6 @@ expect_used = "warn"
 
 [profile.release]
 debug = "line-tables-only"
+
+[patch.crates-io]
+ironcalc_base = { path = "vendor/ironcalc_base" }
