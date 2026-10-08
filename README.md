@@ -79,6 +79,26 @@ cargo build --release -p zenkai -j 6
 `-j 6` keeps the first build (GPUI is large) from saturating the machine; drop it on a
 dedicated build box. The release binary is `target\release\zenkai.exe`.
 
+## Packaging
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
+```
+
+Builds with the `dist` profile (fat LTO, one codegen unit, stripped; slower than
+`--release`, which stays the profile for development and the benchmark) and writes to
+`dist\`:
+
+- `zenkai-<version>-windows-x64.zip`: portable, the exe plus `LICENSE` and `README.md`.
+- `zenkai-<version>-windows-x64-setup.exe`: only when `iscc` (Inno Setup 6.3 or later)
+  is on PATH. Installs per user without admin rights, adds a Start Menu entry, and
+  optionally a desktop icon and an "Open with" entry for `.xlsx` and `.csv` (it never
+  becomes the default program). The uninstaller keeps `%LOCALAPPDATA%\Zenkai` (recovery files).
+
+The version comes from `crates/app/Cargo.toml`; the icon (`crates/app/zenkai.ico`) is a
+placeholder. Release builds have no console window and log to
+`%LOCALAPPDATA%\Zenkai\zenkai.log` (`RUST_LOG` sets the level).
+
 ## Tests and checks
 
 ```powershell

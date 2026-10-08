@@ -7,6 +7,7 @@ use zenkai_types::{CellPos, ColIdx, HAlign, Range, Rgb, RowIdx, VAlign, ValueKin
 
 use crate::grid::{EditMode, Editor, GridCell, HEADER_HEIGHT};
 use crate::layout::Layout;
+use crate::paint_failure::PaintFailure;
 
 const CELL_PADDING: f32 = 4.0;
 const BASE_FONT_SIZE: f32 = 13.0;
@@ -466,6 +467,7 @@ fn paint_cell_text(
     );
     window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
         if let Err(error) = line.paint(point(x, y), line_height, TextAlign::Left, None, window, cx)
+            && PaintFailure::CellText.first_occurrence()
         {
             tracing::warn!(%error, "failed to paint cell text");
         }
@@ -508,7 +510,9 @@ fn paint_wrapped_text(
     {
         Ok(lines) => lines,
         Err(error) => {
-            tracing::warn!(%error, "failed to shape wrapped cell text");
+            if PaintFailure::WrappedShape.first_occurrence() {
+                tracing::warn!(%error, "failed to shape wrapped cell text");
+            }
             return;
         }
     };
@@ -539,7 +543,8 @@ fn paint_wrapped_text(
                 Some(Bounds::new(origin, size(width, line_height))),
                 window,
                 cx,
-            ) {
+            ) && PaintFailure::WrappedText.first_occurrence()
+            {
                 tracing::warn!(%error, "failed to paint wrapped cell text");
             }
             y += line.size(line_height).height;
@@ -813,7 +818,9 @@ fn centered_label(
     );
     let x = area.origin.x + (area.size.width - line.width) / 2.0;
     let y = area.origin.y + (area.size.height - line_height) / 2.0;
-    if let Err(error) = line.paint(point(x, y), line_height, TextAlign::Left, None, window, cx) {
+    if let Err(error) = line.paint(point(x, y), line_height, TextAlign::Left, None, window, cx)
+        && PaintFailure::HeaderLabel.first_occurrence()
+    {
         tracing::warn!(%error, "failed to paint header label");
     }
 }
@@ -863,7 +870,9 @@ fn paint_editor(
         editor_area.origin.x + padding,
         editor_area.origin.y + editor_area.size.height - line_height - px(2.0 * frame.zoom),
     );
-    if let Err(error) = line.paint(text_origin, line_height, TextAlign::Left, None, window, cx) {
+    if let Err(error) = line.paint(text_origin, line_height, TextAlign::Left, None, window, cx)
+        && PaintFailure::EditorText.first_occurrence()
+    {
         tracing::warn!(%error, "failed to paint editor text");
     }
     let caret_x = text_origin.x + line.x_for_index(editor.caret);

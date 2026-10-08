@@ -16,3 +16,12 @@ expect_used = "warn"
 
 [profile.release]
 debug = "line-tables-only"
+
+# Shipped builds only: fat LTO over the GPUI tree is too slow for the release dev loop and
+# the benchmark. Unwinding stays on because engine panics are caught at a thread join.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+debug = false
+strip = true

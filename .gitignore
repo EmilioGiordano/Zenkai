@@ -25,3 +25,6 @@ Thumbs.db
 
 # Output of the benchmark baseline check
 /bench-current.csv
+
+# Packaging output
+/dist/
