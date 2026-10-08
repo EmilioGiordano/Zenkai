@@ -13,7 +13,13 @@ use crate::layout::Layout;
 use crate::paint::{self, Frame};
 
 pub const HEADER_HEIGHT: f32 = 22.0;
-pub const ROW_HEADER_WIDTH: f32 = 48.0;
+const MIN_ROW_HEADER_WIDTH: f32 = 48.0;
+
+// Wide enough for the largest row number in view, as Excel widens its row headers.
+pub fn row_header_width(last_visible_row: RowIdx) -> f32 {
+    let digits = (last_visible_row.get() + 1).to_string().len() as f32;
+    MIN_ROW_HEADER_WIDTH.max(digits * 8.0 + 14.0)
+}
 const MIN_ZOOM: f32 = 0.5;
 const MAX_ZOOM: f32 = 3.0;
 
@@ -185,6 +191,11 @@ impl Grid {
 
     pub fn zoom(&self) -> f32 {
         self.zoom
+    }
+
+    fn row_header(&self) -> f32 {
+        let origin = self.scroll_origin();
+        row_header_width(origin.row.offset(i64::from(self.visible_rows)))
     }
 
     fn scroll_origin(&self) -> CellPos {
@@ -406,7 +417,7 @@ impl Grid {
     }
 
     fn recompute_viewport(&mut self, _cx: &mut Context<Self>) {
-        let width = (f32::from(self.bounds.size.width) / self.zoom - ROW_HEADER_WIDTH).max(0.0);
+        let width = (f32::from(self.bounds.size.width) / self.zoom - self.row_header()).max(0.0);
         let height = (f32::from(self.bounds.size.height) / self.zoom - HEADER_HEIGHT).max(0.0);
         self.visible_cols = self.layout.visible_cols(self.left, width);
         self.visible_rows = self.layout.visible_rows(self.top, height);
@@ -430,7 +441,7 @@ impl Grid {
             .sum();
         let origin = self.scroll_origin();
         let body_y = y - HEADER_HEIGHT;
-        let body_x = x - ROW_HEADER_WIDTH;
+        let body_x = x - self.row_header();
         let row = if body_y < frozen_h {
             self.layout.row_at(RowIdx::default(), body_y)
         } else {
@@ -441,7 +452,7 @@ impl Grid {
         } else {
             self.layout.col_at(origin.col, body_x - frozen_w)
         };
-        match (x < ROW_HEADER_WIDTH, y < HEADER_HEIGHT) {
+        match (x < self.row_header(), y < HEADER_HEIGHT) {
             (true, true) => Hit::Corner,
             (true, false) => Hit::RowHeader(row),
             (false, true) => Hit::ColHeader(col),
@@ -693,6 +704,7 @@ impl Render for Grid {
             zoom: self.zoom,
             focused: self.focus.is_focused(window),
             colors: paint::Colors::from_theme(cx),
+            row_header: self.row_header(),
             frozen_rows: self.frozen_rows,
             frozen_cols: self.frozen_cols,
             merges: self.merges.clone(),

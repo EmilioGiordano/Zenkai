@@ -5,7 +5,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 use zenkai_types::{CellPos, ColIdx, HAlign, Range, Rgb, RowIdx, ValueKind};
 
-use crate::grid::{EditMode, Editor, GridCell, HEADER_HEIGHT, ROW_HEADER_WIDTH};
+use crate::grid::{EditMode, Editor, GridCell, HEADER_HEIGHT};
 use crate::layout::Layout;
 
 const CELL_PADDING: f32 = 4.0;
@@ -71,6 +71,7 @@ pub struct Frame {
     pub frozen_cols: u16,
     pub merges: Rc<Vec<Range>>,
     pub formula_refs: Vec<Range>,
+    pub row_header: f32,
 }
 
 // Excel's reference colours while editing a formula, in order of appearance.
@@ -115,7 +116,7 @@ fn rect(origin: Point<Pixels>, x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels>
 
 fn columns(frame: &Frame, width: f32) -> Columns {
     let z = frame.zoom;
-    let mut x = ROW_HEADER_WIDTH * z;
+    let mut x = frame.row_header * z;
     let mut xs = Vec::with_capacity(usize::from(frame.cols) + 1);
     let frozen = (0..frame.frozen_cols).map(|c| ColIdx::clamped(i64::from(c)));
     let start = frame
@@ -205,7 +206,7 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
         }
         for (_, y, h) in &rows.ys {
             window.paint_quad(fill(
-                rect(origin, ROW_HEADER_WIDTH * z, y + h - 1.0, right, 1.0),
+                rect(origin, frame.row_header * z, y + h - 1.0, right, 1.0),
                 c.gridline,
             ));
         }
@@ -429,7 +430,7 @@ fn range_rect(
     }
     let x0 = columns
         .find(range.start.col)
-        .map_or(ROW_HEADER_WIDTH * z - 2.0, |(x, _)| x);
+        .map_or(first_col.1 - 2.0, |(x, _)| x);
     let x1 = columns
         .find(range.end.col)
         .map_or(last_col.1 + last_col.2 + 2.0, |(x, w)| x + w);
@@ -454,11 +455,11 @@ fn paint_selection(
     let z = frame.zoom;
     let body = Bounds::new(
         point(
-            origin.x + px(ROW_HEADER_WIDTH * z),
+            origin.x + px(frame.row_header * z),
             origin.y + px(HEADER_HEIGHT * z),
         ),
         size(
-            bounds.size.width - px(ROW_HEADER_WIDTH * z),
+            bounds.size.width - px(frame.row_header * z),
             bounds.size.height - px(HEADER_HEIGHT * z),
         ),
     );
@@ -530,7 +531,7 @@ fn paint_headers(
     let c = frame.colors;
     let z = frame.zoom;
     let header_h = HEADER_HEIGHT * z;
-    let header_w = ROW_HEADER_WIDTH * z;
+    let header_w = frame.row_header * z;
     window.paint_quad(fill(
         rect(origin, 0.0, 0.0, f32::from(bounds.size.width), header_h),
         c.header,
