@@ -55,6 +55,15 @@ pub struct Workbook {
     model: UserModel<'static>,
 }
 
+// Typed, pasted and imported text reaches the engine parser without going through
+// the file preflight, so formulas get the same limits here.
+fn check_input(text: &str) -> Result<(), EngineError> {
+    if text.starts_with('=') {
+        crate::preflight::check_formula_text(text).map_err(EngineError::Rejected)?;
+    }
+    Ok(())
+}
+
 fn rejected(message: String) -> EngineError {
     EngineError::Rejected(message)
 }
@@ -179,6 +188,7 @@ impl Engine for Workbook {
     }
 
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError> {
+        check_input(text)?;
         self.model
             .set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
             .map_err(rejected)
@@ -193,6 +203,7 @@ impl Engine for Workbook {
         self.model.pause_evaluation();
         let result = (0i64..).zip(rows).try_for_each(|(r, row)| {
             (0i64..).zip(row).try_for_each(|(c, text)| {
+                check_input(text)?;
                 let pos = CellPos::new(origin.row.offset(r), origin.col.offset(c));
                 self.model
                     .set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)

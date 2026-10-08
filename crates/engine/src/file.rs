@@ -249,6 +249,21 @@ mod tests {
     }
 
     #[test]
+    fn oversized_typed_formula_is_rejected() {
+        let mut book = Workbook::new_empty().unwrap();
+        let formula = format!("={}1", "1+".repeat(5_000));
+        assert!(
+            book.set_input(SheetId(0), CellPos::default(), &formula)
+                .is_err()
+        );
+        let rows = vec![vec![formula]];
+        assert!(
+            book.set_inputs(SheetId(0), CellPos::default(), &rows)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

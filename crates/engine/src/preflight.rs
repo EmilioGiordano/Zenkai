@@ -58,18 +58,21 @@ fn check_formula(node: &roxmltree::Node<'_, '_>) -> Result<(), EngineError> {
             range.cell_count()
         )));
     }
-    let formula = node.text().unwrap_or_default();
+    check_formula_text(node.text().unwrap_or_default()).map_err(reject)
+}
+
+pub fn check_formula_text(formula: &str) -> Result<(), String> {
     let chars = formula.chars().count();
     if chars > MAX_FORMULA_CHARS {
-        return Err(reject(format!(
+        return Err(format!(
             "a formula has {chars} characters, more than the {MAX_FORMULA_CHARS} Excel allows"
-        )));
+        ));
     }
     let depth = max_depth(formula);
     if depth > MAX_FORMULA_DEPTH {
-        return Err(reject(format!(
+        return Err(format!(
             "a formula is nested {depth} levels deep, more than the {MAX_FORMULA_DEPTH} supported"
-        )));
+        ));
     }
     Ok(())
 }
