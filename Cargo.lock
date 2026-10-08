@@ -9701,12 +9701,17 @@ name = "zenkai-bench"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "calamine",
  "ironcalc",
  "logisheets-rs",
  "peak_alloc",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
  "rust_xlsxwriter",
+ "zenkai-engine",
+ "zenkai-formats",
+ "zenkai-types",
+ "zip 0.6.6",
 ]
 
 [[package]]

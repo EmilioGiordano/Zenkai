@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod compat;
 mod coverage;
 mod fixtures;
 mod ironcalc_run;
@@ -28,10 +29,12 @@ fn main() -> Result<()> {
         ["generate", dir] => generate(Path::new(dir)),
         ["measure", engine, file, dir] => measure_one(engine, file, Path::new(dir)),
         ["coverage"] => print_coverage(),
+        ["compat-generate", dir] => compat::generate(Path::new(dir)),
+        ["compat", dir, report] => compat::report(Path::new(dir), Path::new(report)),
         ["run", dir] => run_all(Path::new(dir), 5),
         ["run", dir, runs] => run_all(Path::new(dir), runs.parse()?),
         _ => bail!(
-            "usage: zenkai-bench generate <dir> | measure <engine> <fixture file> <dir> | coverage | run <dir> [runs]"
+            "usage: zenkai-bench generate <dir> | measure <engine> <fixture file> <dir> | coverage | run <dir> [runs] | compat-generate <dir> | compat <dir> <report.md>"
         ),
     }
 }

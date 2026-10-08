@@ -25,7 +25,7 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   Average/Sum/Count of the selection.
 - Live chart of the selection (Alt+F1): column, line or pie, export as SVG or copy as
   Mermaid.
-- Unsupported content (charts, pivots, macros, comments, conditional formatting,
+- Unsupported content (charts, images, pivots, macros, comments, Excel tables, hyperlinks,
   validation, external links) is detected on open; saving asks for a new name instead of
   silently dropping it. `.xlsm` originals are never overwritten.
 - Autosave every minute to a recovery folder and a recovery offer after a crash.
