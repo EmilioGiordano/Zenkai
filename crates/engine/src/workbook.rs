@@ -28,6 +28,23 @@ const MAX_DATE_SERIAL: f64 = 2_958_465.0;
 // Excel's own limit for a number format code.
 const MAX_FORMAT_CODE: usize = 255;
 
+fn whole_lines(range: Range) -> bool {
+    (range.start.row == RowIdx::default() && range.end.row == RowIdx::LAST)
+        || (range.start.col == ColIdx::default() && range.end.col == ColIdx::LAST)
+}
+
+// IronCalc formats whole rows and columns as row and column styles, but any other range
+// cell by cell; a huge partial range would run for minutes.
+fn check_style_range(range: Range) -> Result<(), EngineError> {
+    if !whole_lines(range) && range.cell_count() > MAX_FILL_CELLS {
+        return Err(rejected(format!(
+            "formatting {} cells at once is not supported; select whole rows or columns",
+            range.cell_count()
+        )));
+    }
+    Ok(())
+}
+
 fn check_format_code(code: &str) -> Result<(), EngineError> {
     if code.chars().count() > MAX_FORMAT_CODE {
         return Err(rejected(format!(
@@ -763,34 +780,59 @@ impl Engine for Workbook {
     }
 
     fn clear_formats(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+        check_style_range(range)?;
         self.model
             .range_clear_formatting(&area(sheet, range))
             .map_err(rejected)
     }
 
     fn clear_all(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
-        match range.clip_to(self.used_end(sheet)) {
-            // Within the used area one engine call clears both, in one undo step.
-            Some(used) if used == range => self
-                .model
-                .range_clear_all(&area(sheet, range))
-                .map_err(rejected),
-            _ => {
-                self.clear_formats(sheet, range)?;
-                self.clear(sheet, range)
-            }
+        // Whole rows or columns can carry row or column styles, which are not cells, so
+        // they need the formatting pass too (a second undo step). Otherwise one call on
+        // the used part clears everything there is, in one step.
+        if whole_lines(range) {
+            self.clear_formats(sheet, range)?;
+            return self.clear(sheet, range);
         }
+        check_style_range(range)?;
+        let Some(used) = range.clip_to(self.used_end(sheet)) else {
+            return Ok(());
+        };
+        self.model
+            .range_clear_all(&area(sheet, used))
+            .map_err(rejected)
     }
 
-    // IronCalc visits every cell of the range, so a whole sheet (17 billion cells) is
-    // clipped to the used area, the only place contents can be. A range past it still
-    // clears its first cell, so every Delete is one undo step, as in Excel.
+    // IronCalc visits every cell of the range it clears, so only the box around the
+    // contents inside the range is cleared (a whole sheet has 17 billion cells, and a
+    // formatted far cell makes the used area that big). Contents scattered so far apart
+    // that the box is huge are cleared cell by cell. Nothing to clear writes nothing, so
+    // no empty cells are created to grow the used area.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
-        let used = range
-            .clip_to(self.used_end(sheet))
-            .unwrap_or(Range::single(range.start));
+        let cells: Vec<CellPos> = self
+            .filled_cells(sheet)
+            .into_iter()
+            .filter(|pos| range.contains(*pos))
+            .collect();
+        let Some(first) = cells.first() else {
+            return Ok(());
+        };
+        let (mut top, mut left, mut bottom, mut right) =
+            (first.row, first.col, first.row, first.col);
+        for pos in &cells {
+            top = top.min(pos.row);
+            bottom = bottom.max(pos.row);
+            left = left.min(pos.col);
+            right = right.max(pos.col);
+        }
+        let bounds = Range::new(CellPos::new(top, left), CellPos::new(bottom, right));
+        if bounds.cell_count() > MAX_FILL_CELLS {
+            let empties: Vec<(CellPos, String)> =
+                cells.into_iter().map(|pos| (pos, String::new())).collect();
+            return self.set_scattered_inputs(sheet, &empties);
+        }
         self.model
-            .range_clear_contents(&area(sheet, used))
+            .range_clear_contents(&area(sheet, bounds))
             .map_err(rejected)
     }
 
@@ -800,6 +842,7 @@ impl Engine for Workbook {
         range: Range,
         change: StyleChange,
     ) -> Result<(), EngineError> {
+        check_style_range(range)?;
         let flag = |on: bool| if on { "true" } else { "false" }.to_string();
         let hex = |color: Option<Rgb>| color.map_or_else(String::new, |c| format!("#{:06X}", c.0));
         let (path, value) = match change {
@@ -836,6 +879,7 @@ impl Engine for Workbook {
         code: &str,
     ) -> Result<(), EngineError> {
         check_format_code(code)?;
+        check_style_range(range)?;
         self.model
             .update_range_style(&area(sheet, range), "num_fmt", code)
             .map_err(rejected)

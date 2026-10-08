@@ -67,7 +67,18 @@ fn apply(book: &mut Workbook, op: &Op) -> bool {
     let result = match op {
         Op::Set(r, c, v) => book.set_input(SHEET, pos(*r, *c), v),
         Op::Block(r, c, rows) => book.set_inputs(SHEET, pos(*r, *c), rows),
-        Op::Clear(a, b, c, d) => book.clear(SHEET, range(*a, *b, *c, *d)),
+        // A clear over cells without contents changes nothing and records no undo step.
+        Op::Clear(a, b, c, d) => {
+            let target = range(*a, *b, *c, *d);
+            if !book
+                .filled_cells(SHEET)
+                .iter()
+                .any(|pos| target.contains(*pos))
+            {
+                return false;
+            }
+            book.clear(SHEET, target)
+        }
         Op::Fill(a, b, c, d, down) => book.fill(SHEET, range(*a, *b, *c, *d), *down),
         Op::Bold(a, b, c, d, on) => {
             book.apply_style(SHEET, range(*a, *b, *c, *d), StyleChange::Bold(*on))

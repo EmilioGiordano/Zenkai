@@ -824,6 +824,30 @@ line 2"
         book.set_input(SheetId(0), a1, "9").unwrap();
         book.clear_all(SheetId(0), sheet).unwrap();
         assert_eq!(book.input(SheetId(0), a1), "");
+        // Clearing far past the data must not create cells that grow the used area.
+        book.set_input(SheetId(0), a1, "1").unwrap();
+        let before = book.used_end(SheetId(0));
+        let far = Range::parse_a1("XFD1048576").unwrap();
+        book.clear(SheetId(0), far).unwrap();
+        book.clear_all(SheetId(0), far).unwrap();
+        assert_eq!(book.used_end(SheetId(0)), before);
+        // A formatted far cell makes the used area the whole sheet; Delete over it must
+        // still only touch the contents.
+        book.apply_style(SheetId(0), far, StyleChange::Bold(true))
+            .unwrap();
+        book.set_input(SheetId(0), CellPos::parse_a1("XFD1048576").unwrap(), "far")
+            .unwrap();
+        book.clear(SheetId(0), sheet).unwrap();
+        assert_eq!(book.input(SheetId(0), a1), "");
+        assert_eq!(
+            book.input(SheetId(0), CellPos::parse_a1("XFD1048576").unwrap()),
+            ""
+        );
+        let huge = Range::parse_a1("B2:XFD1048576").unwrap();
+        assert!(
+            book.apply_style(SheetId(0), huge, StyleChange::Bold(true))
+                .is_err()
+        );
     }
 
     #[test]
