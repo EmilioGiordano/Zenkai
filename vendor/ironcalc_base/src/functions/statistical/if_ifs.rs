@@ -161,7 +161,8 @@ impl<'a> Model<'a> {
             }
         }
         if open_row && right_row > max_row && empty_matches {
-            total += ((LAST_ROW - max_row) * (right_column - left_column + 1)) as f64;
+            // In f64: a whole sheet holds more cells than an i32 counts.
+            total += f64::from(LAST_ROW - max_row) * f64::from(right_column - left_column + 1);
         }
         CalcResult::Number(total)
     }

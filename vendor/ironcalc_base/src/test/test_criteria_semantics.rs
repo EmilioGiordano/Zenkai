@@ -79,6 +79,22 @@ fn booleans() {
 }
 
 #[test]
+fn blanks_of_the_whole_sheet() {
+    let mut model = new_empty_model();
+    model.new_sheet();
+    model._set("A1", "x");
+    model._set("Sheet2!A1", "=COUNTIF(Sheet1!A:XFD,\"\")");
+    model._set(
+        "Sheet2!A2",
+        "=COUNTIFS(Sheet1!A:XFD,\"\",Sheet1!A:XFD,\"<>x\")",
+    );
+    model.evaluate();
+    let all_but_one = (1_048_576_i64 * 16_384 - 1).to_string();
+    assert_eq!(model._get_text("Sheet2!A1"), all_but_one);
+    assert_eq!(model._get_text("Sheet2!A2"), all_but_one);
+}
+
+#[test]
 fn empty_cells() {
     assert_eq!(count("\"\""), "1");
     assert_eq!(count("\"<>\""), "9");
