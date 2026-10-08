@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
@@ -26,6 +25,7 @@ use crate::jump::jump_target;
 use crate::palette;
 use crate::recovery;
 use crate::stats::{self, SelectionStats};
+use crate::theme;
 use crate::toolbar;
 use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -2141,14 +2141,7 @@ impl Render for Workspace {
                 }
                 cx.notify();
             }))
-            .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| {
-                let mode = if cx.theme().mode.is_dark() {
-                    ThemeMode::Light
-                } else {
-                    ThemeMode::Dark
-                };
-                Theme::change(mode, Some(window), cx);
-            }))
+            .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| theme::cycle(window, cx)))
             .child(toolbar::render(&self.active_style, cx))
             .child(self.render_formula_bar(cx))
             .children(self.render_find(cx))

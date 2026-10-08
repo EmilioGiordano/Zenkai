@@ -139,7 +139,7 @@ pub fn render(style: &CellStyle, cx: &App) -> impl IntoElement {
         .child(tool(
             "theme",
             IconName::SunMoon,
-            "Light or dark theme",
+            "Theme: light, dark, high contrast",
             ToggleTheme,
         ))
 }

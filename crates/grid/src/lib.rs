@@ -11,3 +11,4 @@ pub use grid::{
     Direction, EditMode, Editor, Grid, GridCell, GridEvent, Selection, SheetView, step,
 };
 pub use layout::Layout;
+pub use paint::HighContrast;

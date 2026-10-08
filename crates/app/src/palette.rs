@@ -61,7 +61,7 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Freeze or unfreeze panes at the active cell", FreezePanes),
             item("Next sheet", NextSheet),
             item("Previous sheet", PreviousSheet),
-            item("Light or dark theme", ToggleTheme),
+            item("Theme: light, dark, high contrast", ToggleTheme),
             item("Diagnostics in the status bar", ToggleDiagnostics),
         ]),
     ]

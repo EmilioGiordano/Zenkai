@@ -12,6 +12,11 @@ const CELL_PADDING: f32 = 4.0;
 const BASE_FONT_SIZE: f32 = 13.0;
 const DEFAULT_POINTS: f32 = 11.0;
 
+/// Set by the app while the high-contrast theme is active.
+pub struct HighContrast(pub bool);
+
+impl Global for HighContrast {}
+
 #[derive(Clone, Copy)]
 pub struct Colors {
     background: Hsla,
@@ -31,7 +36,10 @@ impl Colors {
     pub fn from_theme(cx: &App) -> Colors {
         let theme = cx.theme();
         // Excel's selection green; a lighter tone keeps contrast on dark backgrounds.
-        let accent: Hsla = if theme.mode.is_dark() {
+        let high_contrast = cx.try_global::<HighContrast>().is_some_and(|h| h.0);
+        let accent: Hsla = if high_contrast {
+            rgb(0xFF_FF_00).into()
+        } else if theme.mode.is_dark() {
             rgb(0x4C_AF_7A).into()
         } else {
             rgb(0x21_73_46).into()
@@ -45,7 +53,7 @@ impl Colors {
             header_active: theme.border,
             header_active_text: accent,
             accent,
-            selection: accent.opacity(0.14),
+            selection: accent.opacity(if high_contrast { 0.3 } else { 0.14 }),
             error: theme.danger,
             frozen: theme.muted_foreground.opacity(0.6),
         }

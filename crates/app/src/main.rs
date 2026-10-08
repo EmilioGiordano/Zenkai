@@ -13,6 +13,7 @@ mod jump;
 mod palette;
 mod recovery;
 mod stats;
+mod theme;
 mod toolbar;
 mod view;
 
