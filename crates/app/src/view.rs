@@ -2362,7 +2362,6 @@ impl Workspace {
         });
     }
 
-    // Excel's Ctrl+1, Number tab: categories, a custom code and a sample of the active cell.
     fn on_settings_changed(&mut self, cx: &mut Context<Self>) {
         let problem = cx.global::<AgentConfig>().state.problem.clone();
         if problem == self.shown_settings_problem {
@@ -2409,6 +2408,7 @@ impl Workspace {
         )
     }
 
+    // Excel's Ctrl+1, Number tab: categories, a custom code and a sample of the active cell.
     fn open_format_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.grid.read(cx).selection().active;
         let view = self
