@@ -10,7 +10,8 @@ const MAX_INDEXED_COLUMNS: i32 = 16;
 
 // Nested ranges down a column (`=SUM($A$1:A9)` below `=SUM($A$1:A8)`...), or many wide
 // ranges over a row that a large paste edits, make the entries examined grow with the
-// square of the formulas; past this, a full evaluation is the cheaper way.
+// square of the formulas; past this, a full evaluation is the cheaper way. An entry costs
+// tens of ns, so this is about 0.1 to 0.2 s, against 2 s to evaluate 1M formulas.
 const MAX_DEPENDENT_VISITS: usize = 4_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

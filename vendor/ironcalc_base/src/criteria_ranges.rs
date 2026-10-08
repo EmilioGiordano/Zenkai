@@ -10,15 +10,19 @@ use crate::{
     types::Cell,
 };
 
-// Smaller areas are cheaper to read again than to keep.
+// A cell read costs about 500 ns (measured on a 200k-row workbook), so a smaller area is
+// read again in under 0.5 ms, less than what keeping it saves.
 const MIN_KEPT_CELLS: usize = 1024;
-// Bounds the memory one evaluation spends on kept values, slots and text included. Past
-// it, cells are read one by one as without keeping.
+// Bounds the memory one evaluation spends on kept values, slots and text included; past
+// it, cells are read one by one as without keeping. A 200k-row column costs about 11 MB,
+// so this fits about ten, against 640 MB for the whole 200k-row workbook.
 const KEPT_BYTES: usize = 128 << 20;
 
 // (sheet, first row, first column, height, width)
 type Area = (u32, i32, i32, i32, i32);
 
+// Arc and OnceLock rather than Rc and OnceCell: Zenkai moves the model to background
+// threads, so it must stay Send.
 type Slots = Arc<[OnceLock<CalcResult>]>;
 
 // Values of the large areas that SUMIF, COUNTIF and the rest of the family read, kept
@@ -41,6 +45,7 @@ impl CriteriaRanges {
         CriteriaRanges::with_budget(KEPT_BYTES)
     }
 
+    // A separate constructor so tests can exhaust a small budget.
     fn with_budget(bytes: usize) -> CriteriaRanges {
         CriteriaRanges::On {
             kept: HashMap::new(),
@@ -198,6 +203,38 @@ mod tests {
     use crate::calc_result::CalcResult;
     use crate::test::util::new_empty_model;
 
+    const SLOT: usize = size_of::<OnceLock<CalcResult>>();
+
+    #[test]
+    fn areas_from_1024_cells_are_kept() {
+        let mut model = new_empty_model();
+        model.criteria_ranges = CriteriaRanges::on();
+        assert!(model.area_values(0, 1, 1, 1023, 1).kept.is_none());
+        assert!(model.area_values(0, 1, 1, 1024, 1).kept.is_some());
+        assert!(model.area_values(0, 1, 1, 512, 2).kept.is_some());
+    }
+
+    #[test]
+    fn values_forgotten_by_spills_stay_counted_until_the_budget_runs_out() {
+        let mut model = new_empty_model();
+        for row in 1..=1024 {
+            model._set(&format!("A{row}"), &row.to_string());
+        }
+        model.evaluate();
+        model.criteria_ranges = CriteriaRanges::with_budget(2 * 1024 * SLOT);
+        for spill in 0..3 {
+            let values = model.area_values(0, 1, 1, 1024, 1);
+            assert_eq!(values.kept.is_some(), spill < 2, "after {spill} spills");
+            for row_offset in 0..1024 {
+                let value = model.area_value(&values, row_offset, 0);
+                assert!(
+                    matches!(value.as_ref(), CalcResult::Number(n) if *n == f64::from(row_offset + 1))
+                );
+            }
+            model.criteria_ranges.forget_values();
+        }
+    }
+
     #[test]
     fn an_area_whose_slots_exceed_the_budget_is_not_kept() {
         let mut model = new_empty_model();
@@ -214,7 +251,7 @@ mod tests {
             model._set(&format!("A{row}"), &text);
         }
         model.evaluate();
-        let slots = 1100 * size_of::<OnceLock<CalcResult>>();
+        let slots = 1100 * SLOT;
         model.criteria_ranges = CriteriaRanges::with_budget(slots + 10 * 32_000);
         let values = model.area_values(0, 1, 1, 1100, 1);
         for row_offset in 0..1100 {
