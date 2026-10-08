@@ -56,7 +56,10 @@ pub struct PointRef {
 
 impl Editor {
     fn insert_reference(&mut self, anchor: CellPos, corner: CellPos) {
-        let text_start = self.point.map_or(self.text.len(), |p| p.text_start);
+        let text_start = self
+            .point
+            .map_or(self.text.len(), |p| p.text_start)
+            .min(self.text.len());
         self.text.truncate(text_start);
         self.text
             .push_str(&formula_refs::reference_text(anchor, corner));
@@ -290,14 +293,6 @@ impl Grid {
         });
         cx.emit(GridEvent::EditChanged);
         cx.notify();
-    }
-
-    pub fn set_editor_text(&mut self, text: String, cx: &mut Context<Self>) {
-        if let Some(editor) = &mut self.editor {
-            editor.caret = text.len();
-            editor.text = text;
-            cx.notify();
-        }
     }
 
     fn cancel_edit(&mut self, cx: &mut Context<Self>) {
@@ -793,6 +788,7 @@ impl Render for Grid {
                     Some(editor) => {
                         let end = next_boundary(&editor.text, editor.caret);
                         editor.text.replace_range(editor.caret..end, "");
+                        editor.point = None;
                         cx.emit(GridEvent::EditChanged);
                         cx.notify();
                     }

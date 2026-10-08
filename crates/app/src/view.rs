@@ -70,6 +70,7 @@ pub struct Workspace {
     pending_sheet: Option<SheetId>,
     last_tab_click: Option<(Instant, SheetId)>,
     memory_mb: u64,
+    diagnostics_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -101,6 +102,7 @@ impl Workspace {
             pending_sheet: None,
             last_tab_click: None,
             memory_mb: 0,
+            diagnostics_task: None,
             _subscriptions: vec![subscription],
         };
         workspace.reset_grid(window, cx);
@@ -212,24 +214,20 @@ impl Workspace {
     }
 
     fn sample_diagnostics(&mut self, cx: &mut Context<Self>) {
-        cx.spawn(async move |this, cx| {
+        self.diagnostics_task = Some(cx.spawn(async move |this, cx| {
             loop {
                 let memory =
                     memory_stats::memory_stats().map_or(0, |m| m.physical_mem / 1024 / 1024);
-                let keep_going = this
-                    .update(cx, |this, cx| {
-                        this.memory_mb = u64::try_from(memory).unwrap_or(u64::MAX);
-                        cx.notify();
-                        this.diagnostics
-                    })
-                    .unwrap_or(false);
-                if !keep_going {
+                let update = this.update(cx, |this, cx| {
+                    this.memory_mb = u64::try_from(memory).unwrap_or(u64::MAX);
+                    cx.notify();
+                });
+                if update.is_err() {
                     break;
                 }
                 cx.background_executor().timer(Duration::from_secs(1)).await;
             }
-        })
-        .detach();
+        }));
     }
 
     fn start_autosave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -745,7 +743,9 @@ impl Workspace {
                     this.clear_busy(CALCULATING, cx);
                     return;
                 }
-                if let Some(target) = this.pending_sheet.take() {
+                if let Some(target) = this.pending_sheet.take()
+                    && errors.is_empty()
+                {
                     this.document.sheet = target;
                 }
                 let sheet_changed = this.document.sheet != sheet_before
@@ -1515,7 +1515,10 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             if answer.await == Ok(1)
                 && let Err(error) = this.update_in(cx, |this, window, cx| {
-                    this.pending_sheet = Some(SheetId(sheet.0.saturating_sub(1)));
+                    // Excel shows the sheet that takes the deleted one's place.
+                    let last_after =
+                        u32::try_from(this.document.sheets.len().saturating_sub(2)).unwrap_or(0);
+                    this.pending_sheet = Some(SheetId(sheet.0.min(last_after)));
                     this.edit(window, cx, move |wb| wb.delete_sheet(sheet));
                 })
             {
@@ -1751,6 +1754,8 @@ impl Render for Workspace {
                 this.diagnostics = !this.diagnostics;
                 if this.diagnostics {
                     this.sample_diagnostics(cx);
+                } else {
+                    this.diagnostics_task = None;
                 }
                 cx.notify();
             }))
