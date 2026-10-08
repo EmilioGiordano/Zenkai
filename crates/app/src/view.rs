@@ -950,7 +950,9 @@ impl Workspace {
             selection.active
         };
         let used_end = workbook.used_end(sheet);
-        let contents = workbook.contents(sheet);
+        let Some(contents) = document::contents_of(&workbook, sheet) else {
+            return;
+        };
         let target = jump_target(from, direction, used_end, |pos| contents(pos).is_filled());
         self.grid.update(cx, |grid, cx| {
             let active = if extend { selection.active } else { target };
@@ -2418,7 +2420,9 @@ impl Workspace {
         let Some(workbook) = self.document.workbook() else {
             return Range::single(active);
         };
-        let contents = workbook.contents(sheet);
+        let Some(contents) = document::contents_of(&workbook, sheet) else {
+            return Range::single(active);
+        };
         let region = region::current_region(active, |pos| contents(pos).is_filled());
         self.grid
             .update(cx, |grid, cx| grid.select(region.start, region.end, cx));
@@ -2442,7 +2446,9 @@ impl Workspace {
         };
         let sheet = self.document.sheet;
         let active = self.grid.read(cx).selection().active;
-        let contents = workbook.contents(sheet);
+        let Some(contents) = document::contents_of(&workbook, sheet) else {
+            return;
+        };
         let is_number = |pos: CellPos| matches!(contents(pos), Contents::Number(_));
         let run = |direction: Direction| {
             let mut first = None;

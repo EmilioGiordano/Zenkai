@@ -1,6 +1,7 @@
 use std::num::NonZero;
 use std::thread;
 
+use crate::document::contents_of;
 use zenkai_engine::{Engine, Workbook};
 use zenkai_types::{CellPos, Contents, Range, RowIdx, SheetId};
 
@@ -37,7 +38,7 @@ pub fn compute(workbook: &Workbook, sheet: SheetId, selection: Range) -> Option<
     if clipped.cell_count() > MAX_SCANNED {
         return None;
     }
-    let contents = workbook.contents(sheet);
+    let contents = contents_of(workbook, sheet)?;
     let workers = if clipped.cell_count() < PARALLEL_CELLS {
         1
     } else {
@@ -83,7 +84,7 @@ fn tally(band: Range, contents: &(impl Fn(CellPos) -> Contents + Sync)) -> Selec
                 stats.numbers += 1;
                 stats.sum += n;
             }
-            Contents::Other => stats.count += 1,
+            Contents::NonNumeric => stats.count += 1,
         }
     }
     stats
@@ -93,6 +94,15 @@ fn tally(band: Range, contents: &(impl Fn(CellPos) -> Contents + Sync)) -> Selec
 mod tests {
     use super::*;
     use zenkai_types::SheetId;
+
+    #[test]
+    fn a_missing_sheet_has_no_stats() {
+        let workbook = Workbook::new_empty().unwrap();
+        assert_eq!(
+            compute(&workbook, SheetId(9), Range::parse_a1("A1:A10").unwrap()),
+            None
+        );
+    }
 
     #[test]
     fn a_large_selection_adds_up_across_threads() {

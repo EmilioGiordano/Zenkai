@@ -226,7 +226,7 @@ mod tests {
     use zenkai_types::{CellPos, Contents, SheetId};
 
     fn number_at(book: &Workbook, pos: CellPos) -> Option<f64> {
-        match book.contents(SheetId(0))(pos) {
+        match book.contents(SheetId(0)).unwrap()(pos) {
             Contents::Number(n) => Some(n),
             _ => None,
         }
@@ -901,11 +901,20 @@ line 2"
             zenkai_types::StyleChange::Bold(true),
         )
         .unwrap();
-        let contents = book.contents(SheetId(0));
+        let contents = book.contents(SheetId(0)).unwrap();
         assert_eq!(contents(at("A1")), Contents::Number(1.0));
-        assert_eq!(contents(at("A2")), Contents::Other);
+        assert_eq!(contents(at("A2")), Contents::NonNumeric);
         assert_eq!(contents(at("A3")), Contents::Empty);
         assert_eq!(contents(at("A4")), Contents::Empty);
+    }
+
+    #[test]
+    fn contents_of_a_missing_sheet_is_an_error() {
+        let book = Workbook::new_empty().unwrap();
+        assert!(matches!(
+            book.contents(SheetId(7)),
+            Err(EngineError::UnknownSheet(SheetId(7)))
+        ));
     }
 
     #[test]

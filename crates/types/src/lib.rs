@@ -264,7 +264,7 @@ pub enum ValueKind {
 pub enum Contents {
     Empty,
     Number(f64),
-    Other,
+    NonNumeric,
 }
 
 impl Contents {

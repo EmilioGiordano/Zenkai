@@ -61,7 +61,7 @@ pub trait Engine: Send {
     fn sheets(&self) -> Vec<SheetInfo>;
     fn cell(&self, sheet: SheetId, pos: CellPos) -> CellView;
     fn input(&self, sheet: SheetId, pos: CellPos) -> String;
-    fn contents(&self, sheet: SheetId) -> impl Fn(CellPos) -> Contents + Sync;
+    fn contents(&self, sheet: SheetId) -> Result<impl Fn(CellPos) -> Contents + Sync, EngineError>;
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError>;
     fn set_inputs(
         &mut self,
@@ -217,15 +217,15 @@ impl Workbook {
     fn cell_lookup<'a>(
         &'a self,
         sheet: SheetId,
-    ) -> impl Fn(CellPos) -> Option<&'a Cell> + Sync + 'a {
-        let sheet_data = self
+    ) -> Result<impl Fn(CellPos) -> Option<&'a Cell> + Sync + 'a, EngineError> {
+        let sheet_data = &self
             .model
             .get_model()
             .workbook
             .worksheet(sheet.0)
-            .ok()
-            .map(|ws| &ws.sheet_data);
-        move |pos| sheet_data?.get(&row_i32(pos.row))?.get(&col_i32(pos.col))
+            .map_err(|_| EngineError::UnknownSheet(sheet))?
+            .sheet_data;
+        Ok(move |pos: CellPos| sheet_data.get(&row_i32(pos.row))?.get(&col_i32(pos.col)))
     }
 }
 
@@ -472,9 +472,9 @@ impl Engine for Workbook {
     // A formula returning "" counts as filled, as it does for Ctrl+Arrow in Excel. The
     // stored value is read without formatting, so a scan over a column of hundreds of
     // thousands of cells does not build a string per cell.
-    fn contents(&self, sheet: SheetId) -> impl Fn(CellPos) -> Contents + Sync {
-        let cell_at = self.cell_lookup(sheet);
-        move |pos| match cell_at(pos) {
+    fn contents(&self, sheet: SheetId) -> Result<impl Fn(CellPos) -> Contents + Sync, EngineError> {
+        let cell_at = self.cell_lookup(sheet)?;
+        Ok(move |pos| match cell_at(pos) {
             None | Some(Cell::EmptyCell { .. }) => Contents::Empty,
             Some(
                 Cell::NumberCell { v, .. }
@@ -491,8 +491,8 @@ impl Engine for Workbook {
                     ..
                 },
             ) => Contents::Number(*v),
-            Some(_) => Contents::Other,
-        }
+            Some(_) => Contents::NonNumeric,
+        })
     }
 
     fn input(&self, sheet: SheetId, pos: CellPos) -> String {

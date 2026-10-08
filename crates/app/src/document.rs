@@ -5,7 +5,7 @@ use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, Try
 
 use zenkai_engine::{Engine, EngineError, Unsupported, Workbook};
 use zenkai_grid::GridCell;
-use zenkai_types::{CellPos, Range, SheetId, SheetInfo};
+use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo};
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -213,6 +213,16 @@ impl Document {
             .collect();
         Some(cells)
     }
+}
+
+pub fn contents_of(
+    workbook: &Workbook,
+    sheet: SheetId,
+) -> Option<impl Fn(CellPos) -> Contents + Sync + '_> {
+    workbook
+        .contents(sheet)
+        .inspect_err(|error| tracing::error!(%error, "could not read the sheet contents"))
+        .ok()
 }
 
 pub fn read_shared(shared: &RwLock<Workbook>) -> RwLockReadGuard<'_, Workbook> {

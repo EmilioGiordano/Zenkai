@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use zenkai_types::SheetId;
+
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     #[error("could not read {path}: {source}")]
@@ -18,6 +20,8 @@ pub enum EngineError {
     Unsafe(String),
     #[error("the saved copy could not be reopened, the original was left untouched: {0}")]
     VerifyFailed(String),
+    #[error("sheet {} does not exist", .0.0)]
+    UnknownSheet(SheetId),
     #[error("{0}")]
     Rejected(String),
 }

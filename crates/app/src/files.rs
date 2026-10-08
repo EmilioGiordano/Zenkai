@@ -130,7 +130,7 @@ mod tests {
 
     fn number_at(workbook: &Workbook, col: u16) -> Option<f64> {
         let pos = CellPos::new(RowIdx::clamped(0), ColIdx::clamped(i64::from(col)));
-        match workbook.contents(SheetId(0))(pos) {
+        match workbook.contents(SheetId(0)).unwrap()(pos) {
             Contents::Number(n) => Some(n),
             _ => None,
         }
