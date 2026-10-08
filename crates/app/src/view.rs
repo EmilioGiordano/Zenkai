@@ -9,9 +9,7 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::*;
 
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
-use zenkai_formats::{
-    DateOrder, Delimiter, normalize_day_first, normalize_decimal_comma, parse_csv,
-};
+use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_types::{CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, SheetId, StyleChange};
 
@@ -944,14 +942,7 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    // Dates first: a day-first date written with dots must not be read
-                    // as a grouped number.
-                    if guess.date_order == DateOrder::DayFirst {
-                        normalize_day_first(&mut rows);
-                    }
-                    if guess.decimal_comma {
-                        normalize_decimal_comma(&mut rows);
-                    }
+                    csv_preview::apply(guess, &mut rows);
                     // On failure, parse again so the preview comes back as it was.
                     files::workbook_from_rows(rows)
                         .map_err(|error| (error, parse_csv(&task_bytes, Some(delimiter)).ok()))
@@ -1425,8 +1416,11 @@ impl Workspace {
                             cx,
                         );
                         this.flush_edits(cx);
-                        // Locked by another program or read-only: offer Save As right away.
-                        this.save_as(&SaveAs, window, cx);
+                        // Locked by another program or read-only: offer Save As right away,
+                        // unless this already was a new location picked in Save As.
+                        if this.document.path.as_ref() == Some(&path) {
+                            this.save_as(&SaveAs, window, cx);
+                        }
                         return;
                     }
                 }

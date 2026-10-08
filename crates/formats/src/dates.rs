@@ -60,7 +60,8 @@ fn parts(field: &str) -> Option<(u32, u32, u32)> {
     };
     let first = number(a, &[1, 2])?;
     let second = number(b, &[1, 2])?;
-    let year = number(c, &[2, 4])?;
+    // "3.4.10" is more likely a version than a date: dots need a four-digit year.
+    let year = number(c, if separator == '.' { &[4] } else { &[2, 4] })?;
     let year = match (c.len(), year) {
         (2, y) if y < 30 => 2000 + y,
         (2, y) => 1900 + y,
@@ -111,7 +112,7 @@ mod tests {
         let mut data = rows(&[
             "25/10/2026",
             "8-1-26",
-            "1.2.95",
+            "1.2.1995",
             "29/02/2024",
             "31/04/2026",
             "1/2/3/4",

@@ -6,7 +6,10 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use zenkai_formats::{DateOrder, Delimiter, ParsedCsv, detect_date_order, detect_decimal_comma};
+use zenkai_formats::{
+    DateOrder, Delimiter, ParsedCsv, detect_date_order, detect_decimal_comma, normalize_day_first,
+    normalize_decimal_comma,
+};
 
 use crate::actions::{CancelCsvImport, ConfirmCsvImport};
 
@@ -31,6 +34,18 @@ pub struct CsvPreview {
 pub struct Guess {
     pub decimal_comma: bool,
     pub date_order: DateOrder,
+    pub columns: usize,
+}
+
+/// Rewrites day-first dates and decimal-comma numbers as the import will. Dates go first:
+/// a day-first date written with dots must not be read as a grouped number.
+pub fn apply(guess: Guess, rows: &mut [Vec<String>]) {
+    if guess.date_order == DateOrder::DayFirst {
+        normalize_day_first(rows);
+    }
+    if guess.decimal_comma {
+        normalize_decimal_comma(rows);
+    }
 }
 
 /// Scans every row, so it runs on a background thread.
@@ -46,6 +61,7 @@ pub fn guess(parsed: &ParsedCsv) -> Guess {
     Guess {
         decimal_comma,
         date_order,
+        columns: parsed.rows.iter().map(Vec::len).max().unwrap_or(0),
     }
 }
 
@@ -66,34 +82,35 @@ pub fn render(
         .path
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let total_cols = preview.parsed.rows.iter().map(Vec::len).max().unwrap_or(0);
+    let total_cols = preview.guess.columns;
+    // The table shows the values as they will be imported.
+    let mut shown: Vec<Vec<String>> = preview
+        .parsed
+        .rows
+        .iter()
+        .take(PREVIEW_ROWS)
+        .map(|row| row.iter().take(PREVIEW_COLS).cloned().collect())
+        .collect();
+    apply(preview.guess, &mut shown);
     let table = v_flex()
         .border_1()
         .border_color(theme.border)
         .rounded_md()
         .overflow_hidden()
-        .children(
-            preview
-                .parsed
-                .rows
-                .iter()
-                .take(PREVIEW_ROWS)
-                .enumerate()
-                .map(|(index, row)| {
-                    h_flex()
-                        .when(index % 2 == 1, |line| line.bg(theme.table_even))
-                        .children((0..total_cols.min(PREVIEW_COLS)).map(|col| {
-                            div()
-                                .w(px(110.0))
-                                .px_2()
-                                .py_0p5()
-                                .text_sm()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .child(row.get(col).cloned().unwrap_or_default())
-                        }))
-                }),
-        );
+        .children(shown.into_iter().enumerate().map(|(index, row)| {
+            h_flex()
+                .when(index % 2 == 1, |line| line.bg(theme.table_even))
+                .children((0..total_cols.min(PREVIEW_COLS)).map(|col| {
+                    div()
+                        .w(px(110.0))
+                        .px_2()
+                        .py_0p5()
+                        .text_sm()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .child(row.get(col).cloned().unwrap_or_default())
+                }))
+        }));
     let delimiter_buttons = DELIMITERS.into_iter().map(|delimiter| {
         let on_event = on_event.clone();
         Button::new(delimiter.label())
