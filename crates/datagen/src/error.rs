@@ -2,7 +2,7 @@
 pub enum DatagenError {
     #[error("the spec has no columns")]
     NoColumns,
-    #[error("{requested} rows do not fit in a sheet of {limit} rows")]
+    #[error("{requested} rows do not fit below a header row; the limit is {limit}")]
     TooManyRows { requested: u32, limit: u32 },
     #[error("{requested} columns do not fit in a sheet of {limit} columns")]
     TooManyColumns { requested: usize, limit: u16 },

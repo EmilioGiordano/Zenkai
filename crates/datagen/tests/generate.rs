@@ -636,11 +636,15 @@ fn invalid_specs_name_the_column_and_the_problem() {
 fn spec_level_limits() {
     assert_eq!(validate(&spec(10, vec![])), Err(DatagenError::NoColumns));
     assert_eq!(
-        validate(&spec(1_048_577, vec![column("Ciudad", ColumnKind::City)])),
+        validate(&spec(1_048_576, vec![column("Ciudad", ColumnKind::City)])),
         Err(DatagenError::TooManyRows {
-            requested: 1_048_577,
-            limit: 1_048_576
+            requested: 1_048_576,
+            limit: 1_048_575
         })
+    );
+    assert_eq!(
+        validate(&spec(1_048_575, vec![column("Ciudad", ColumnKind::City)])),
+        Ok(())
     );
     let sequence = column(
         "Id",

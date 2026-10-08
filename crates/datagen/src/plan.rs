@@ -16,6 +16,8 @@ use crate::value_set::{FirstNames, LastNames, ValueSet, WeightedOptions};
 // Above 15 significant digits a spreadsheet cell no longer holds a number exactly.
 pub(crate) const PRECISION_LIMIT: i64 = 999_999_999_999_999;
 const MAX_DECIMAL_PLACES: u8 = 9;
+// The header takes the first row of the sheet.
+pub(crate) const MAX_DATA_ROWS: u32 = MAX_ROWS - 1;
 // A table instead of powi, whose precision Rust leaves unspecified per platform.
 const DECIMAL_SCALES: [f64; MAX_DECIMAL_PLACES as usize + 1] =
     [1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9];
@@ -42,10 +44,10 @@ pub(crate) fn plan(spec: &GenerationSpec) -> Result<Vec<ColumnPlan>, DatagenErro
     if spec.columns.is_empty() {
         return Err(DatagenError::NoColumns);
     }
-    if spec.rows > MAX_ROWS {
+    if spec.rows > MAX_DATA_ROWS {
         return Err(DatagenError::TooManyRows {
             requested: spec.rows,
-            limit: MAX_ROWS,
+            limit: MAX_DATA_ROWS,
         });
     }
     if spec.columns.len() > usize::from(MAX_COLS) {
