@@ -123,4 +123,10 @@ fn a_spill_into_a_shared_range_is_seen() {
         .unwrap();
     assert_eq!(model.get_formatted_cell_value(0, 5, 10).unwrap(), "6");
     assert_eq!(model.get_formatted_cell_value(0, 6, 10).unwrap(), "6");
+    model.set_user_input(0, 1, 9, "=SEQUENCE(1)").unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 5, 10).unwrap(), "1");
+    assert_eq!(model.get_formatted_cell_value(0, 6, 10).unwrap(), "1");
+    model.set_user_input(0, 1, 9, "=1/0").unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 5, 10).unwrap(), "0");
+    assert_eq!(model.get_formatted_cell_value(0, 6, 10).unwrap(), "0");
 }

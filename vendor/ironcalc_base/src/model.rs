@@ -918,6 +918,10 @@ impl<'a> Model<'a> {
             } => Some((true, (r.0, r.1))),
             _ => None,
         };
+        // An array result or an array formula writes, grows, shrinks or clears spill cells.
+        if original_range.is_some() || matches!(result, CalcResult::Array(_)) {
+            self.criteria_ranges.forget_values();
+        }
         let s = cell.get_style();
         let formula = match cell.get_formula() {
             Some(f) => f,
@@ -1480,6 +1484,7 @@ impl<'a> Model<'a> {
                     ..
                 } = &original_cell
                 {
+                    self.criteria_ranges.forget_values();
                     let (width, height) = *r;
                     let ws = match self.workbook.worksheet_mut(cell_reference.sheet) {
                         Ok(ws) => ws,
@@ -1563,9 +1568,6 @@ impl<'a> Model<'a> {
 
                 // mark cell as evaluated
                 self.cells.insert(key, CellState::Evaluated);
-                if matches!(result, CalcResult::Array(_)) {
-                    self.criteria_ranges.forget_values();
-                }
 
                 // return the result of the evaluation.
                 match result {
