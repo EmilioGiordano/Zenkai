@@ -143,17 +143,17 @@ impl Document {
     }
 
     // With `formulas`, cells holding a formula show it instead of its value (Ctrl+`).
-    pub fn cells(&self, range: Range, formulas: bool) -> HashMap<CellPos, GridCell> {
-        let Some(workbook) = self.workbook() else {
-            return HashMap::new();
-        };
+    pub fn cells(&self, ranges: &[Range], formulas: bool) -> Option<HashMap<CellPos, GridCell>> {
+        let workbook = self.workbook()?;
         let end = workbook.used_end(self.sheet);
-        let Some(clipped) = range.clip_to(CellPos::new(end.row.offset(1), end.col.offset(1)))
-        else {
-            return HashMap::new();
-        };
-        clipped
-            .positions()
+        let limit = CellPos::new(end.row.offset(1), end.col.offset(1));
+        let clipped: Vec<Range> = ranges
+            .iter()
+            .filter_map(|range| range.clip_to(limit))
+            .collect();
+        let cells = clipped
+            .iter()
+            .flat_map(Range::positions)
             .filter_map(|pos| {
                 let view = workbook.cell(self.sheet, pos);
                 let blank = view.text.is_empty()
@@ -181,7 +181,8 @@ impl Document {
                     (pos, cell)
                 })
             })
-            .collect()
+            .collect();
+        Some(cells)
     }
 }
 
@@ -216,8 +217,11 @@ mod tests {
         let document = Document::new(workbook, None, Vec::new());
         let range = Range::parse_a1("A1:B1").unwrap();
         let b1 = CellPos::parse_a1("B1").unwrap();
-        assert_eq!(document.cells(range, false)[&b1].text.as_ref(), "6");
-        let formulas = document.cells(range, true);
+        assert_eq!(
+            document.cells(&[range], false).unwrap()[&b1].text.as_ref(),
+            "6"
+        );
+        let formulas = document.cells(&[range], true).unwrap();
         assert_eq!(formulas[&b1].text.as_ref(), "=A1*3");
         assert_eq!(formulas[&CellPos::default()].text.as_ref(), "2");
     }
