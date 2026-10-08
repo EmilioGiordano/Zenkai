@@ -20,7 +20,7 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   Ctrl+A, Ctrl+Space, Shift+Space, F2, Enter/Tab (Enter returns to where Tab started),
   Esc, Delete, Ctrl+C/X/V (formulas shift on paste), Ctrl+Z/Y, Ctrl+S/O/N, F12, Ctrl+F,
   Ctrl+B/I/U, Ctrl+Shift+~ ! $ % # number formats, Ctrl+PageUp/PageDown, Shift+F11,
-  Ctrl+= / Ctrl+- / Ctrl+0 zoom, Ctrl+wheel zoom, Ctrl+Shift+P command palette.
+  Ctrl+= / Ctrl+- and Ctrl+wheel zoom, Ctrl+9 / Ctrl+0 hide rows / columns, Ctrl+Shift+P command palette.
 - Toolbar, formula bar with the active cell, sheet tabs, status bar with
   Average/Sum/Count of the selection.
 - Live chart of the selection (Alt+F1): column, line or pie, export as SVG or copy as
