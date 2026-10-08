@@ -25,7 +25,7 @@ use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
-use crate::document::{self, Document};
+use crate::document::{self, Document, FileJob};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
@@ -429,7 +429,7 @@ impl Workspace {
             recovery::remove(&own);
             return;
         }
-        let Some(shared) = self.document.begin_read() else {
+        let Some(shared) = self.document.begin_file_job(FileJob::Autosaving) else {
             return;
         };
         let generation = self.document.generation();
@@ -440,6 +440,7 @@ impl Workspace {
                 .spawn(async move { recovery::write(&document::read_shared(&shared), &target) })
                 .await;
             let update = this.update(cx, |this, cx| {
+                this.document.end_file_job(generation);
                 if !this.document.is_current(generation) {
                     return;
                 }
@@ -1641,12 +1642,12 @@ impl Workspace {
     }
 
     fn save_to(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(shared) = self.document.begin_read() else {
-            self.notify(
-                Severity::Warning,
-                "Still calculating, try again in a moment.",
-                cx,
-            );
+        let Some(shared) = self.document.begin_file_job(FileJob::Saving) else {
+            let reason = match self.document.file_job() {
+                FileJob::Idle => "Still calculating, try again in a moment.",
+                FileJob::Saving | FileJob::Autosaving => "Still saving, try again in a moment.",
+            };
+            self.notify(Severity::Warning, reason, cx);
             return;
         };
         self.busy = Some(SAVING.into());
@@ -1660,6 +1661,7 @@ impl Workspace {
                 .spawn(async move { save_xlsx_atomic(&document::read_shared(&shared), &target) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
+                this.document.end_file_job(generation);
                 if !this.document.is_current(generation) {
                     this.clear_busy(SAVING, cx);
                     if let Err(error) = result {

@@ -13,9 +13,18 @@ pub type SharedWorkbook = Arc<RwLock<Workbook>>;
 
 pub type Edit = Box<dyn FnOnce(&mut Workbook) -> Result<(), EngineError> + Send>;
 
+// Saves and autosaves write through the same temporary file, so only one runs at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FileJob {
+    Idle,
+    Saving,
+    Autosaving,
+}
+
 pub struct Document {
     workbook: SharedWorkbook,
     batch_running: bool,
+    file_job: FileJob,
     pub path: Option<PathBuf>,
     pub dirty: bool,
     pub sheet: SheetId,
@@ -36,6 +45,7 @@ impl Document {
         Document {
             workbook: Arc::new(RwLock::new(workbook)),
             batch_running: false,
+            file_job: FileJob::Idle,
             path,
             dirty: false,
             sheet: SheetId(0),
@@ -84,10 +94,29 @@ impl Document {
         }
     }
 
-    // Read-only jobs (autosave, find, save) share the workbook; they are refused while
+    // Read-only jobs (find, save, autosave) share the workbook; they are refused while
     // edits are queued or running so they never describe a document about to change.
     pub fn begin_read(&self) -> Option<SharedWorkbook> {
         (!self.has_pending()).then(|| Arc::clone(&self.workbook))
+    }
+
+    pub fn file_job(&self) -> FileJob {
+        self.file_job
+    }
+
+    pub fn begin_file_job(&mut self, job: FileJob) -> Option<SharedWorkbook> {
+        if self.file_job != FileJob::Idle {
+            return None;
+        }
+        let shared = self.begin_read()?;
+        self.file_job = job;
+        Some(shared)
+    }
+
+    pub fn end_file_job(&mut self, generation: u64) {
+        if self.is_current(generation) {
+            self.file_job = FileJob::Idle;
+        }
     }
 
     pub fn take_batch(&mut self) -> Option<(SharedWorkbook, Vec<Edit>)> {
@@ -277,6 +306,30 @@ mod tests {
         assert!(document.begin_read().is_none());
         assert!(document.finish_batch(generation));
         assert!(document.take_batch().is_some());
+    }
+
+    #[test]
+    fn a_save_or_autosave_waits_for_the_one_running() {
+        let mut document = document();
+        let generation = document.generation();
+        assert!(document.begin_file_job(FileJob::Saving).is_some());
+        assert_eq!(document.file_job(), FileJob::Saving);
+        assert!(document.begin_file_job(FileJob::Saving).is_none());
+        assert!(document.begin_file_job(FileJob::Autosaving).is_none());
+        assert!(document.begin_read().is_some());
+        document.end_file_job(generation);
+        assert!(document.begin_file_job(FileJob::Autosaving).is_some());
+        assert!(document.begin_file_job(FileJob::Saving).is_none());
+    }
+
+    #[test]
+    fn a_stale_save_does_not_release_the_new_documents_job() {
+        let old = document();
+        let stale = old.generation();
+        let mut current = document();
+        assert!(current.begin_file_job(FileJob::Saving).is_some());
+        current.end_file_job(stale);
+        assert_eq!(current.file_job(), FileJob::Saving);
     }
 
     #[test]
