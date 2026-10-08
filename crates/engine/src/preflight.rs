@@ -26,11 +26,19 @@ pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return Ok(features);
     };
-    if !text.trim_start().starts_with('<') || !has_checked_element(bytes) {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    if !has_checked_element(text.as_bytes()) {
         return Ok(features);
     }
-    let document = roxmltree::Document::parse(text)
-        .map_err(|e| reject(format!("an XML part is malformed: {e}")))?;
+    // The engine reads parts with this same roxmltree, so a part it cannot parse can
+    // never feed it a formula; rejecting here would only refuse valid files (VML).
+    let document = match roxmltree::Document::parse(text) {
+        Ok(document) => document,
+        Err(error) => {
+            tracing::debug!(%error, "skipping a part that is not well-formed XML");
+            return Ok(features);
+        }
+    };
     for node in document.descendants().filter(roxmltree::Node::is_element) {
         match node.tag_name().name() {
             "f" | "formula" | "formula1" | "formula2" | "definedName" => check_formula(&node)?,
@@ -211,6 +219,15 @@ mod tests {
         assert!(!has_checked_element(
             b"<row r=\"1\"><c r=\"A1\"><v>12</v></c><font/><fill/></row>"
         ));
+    }
+
+    #[test]
+    fn a_byte_order_mark_does_not_skip_the_check() {
+        let deep = format!(
+            "\u{feff}{}",
+            sheet(&format!("<c r=\"A1\"><f>{}1</f></c>", "(".repeat(300)))
+        );
+        assert!(check_part(deep.as_bytes()).is_err());
     }
 
     #[test]
