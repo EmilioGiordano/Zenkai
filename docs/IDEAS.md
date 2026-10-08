@@ -52,3 +52,25 @@ undo). Ordered so each step is useful on its own.
 Engine work these depend on: real charts written to the xlsx, and grouping/summarising
 (pivot-like) for dashboards. Privacy is part of the design: the UI always shows which
 data leaves the machine and to which provider.
+
+## Beyond Excel (ideas, not scheduled)
+
+Features no mainstream spreadsheet has, or that make Zenkai feel modern. Some were inspired
+by Quadratic (quadratichq.com), a browser spreadsheet with a similar philosophy (Rust,
+local computation); Zenkai's edge is being native: faster start, less memory, local files.
+
+1. **Drop a file onto a cell.** Dropping a CSV or xlsx on the grid inserts its data at that
+   cell (through the existing CSV preview); dropping it on the sidebar opens it as a file
+   in the space.
+2. **One-click AI actions.** Context menu and palette entries that wrap ready-made agent
+   prompts: create a chart from the selection, analyse a column, clean data, fill a series.
+   The user approves the result like any agent change.
+3. **Column profile.** Hovering a column header shows its data type, blanks, distinct
+   values, min/max and a small histogram, to understand a new file in seconds.
+4. **Local-first as a product message.** Nothing leaves the machine except what an agent
+   reads, always shown to the user; with a local model (Ollama) not even that.
+5. **Code cells** (Python, SQL, JavaScript in the grid). Powerful but heavy: embedding an
+   interpreter grows the app a lot. Possibly through the agent instead of embedded.
+6. **Database connections** (Postgres, MySQL) that pull data into a sheet.
+7. **Real-time collaboration.** Needs CRDT sync and a server; changes the architecture.
+   Only after the app is solid.
