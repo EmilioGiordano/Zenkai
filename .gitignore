@@ -1,0 +1,18 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+
+# User-provided spreadsheets for benchmarks and compatibility checks (private)
+/fixtures/real/*
+!/fixtures/real/.gitkeep
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Claude Code per-machine settings
+.claude/settings.local.json
