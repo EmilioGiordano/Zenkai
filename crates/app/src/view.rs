@@ -836,10 +836,7 @@ impl Workspace {
             }
             GridEvent::CommitToSelection { pos, text, range } => {
                 let (sheet, pos, text, range) = (self.document.sheet, *pos, text.clone(), *range);
-                self.edit(window, cx, move |wb| {
-                    wb.set_input(sheet, pos, &text)?;
-                    wb.fill_with(sheet, pos, range)
-                });
+                self.edit(window, cx, move |wb| wb.fill_with(sheet, pos, &text, range));
             }
             GridEvent::ClearRequested(range) => {
                 let (sheet, range) = (self.document.sheet, *range);

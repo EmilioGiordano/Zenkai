@@ -824,8 +824,13 @@ line 2"
         let mut book = Workbook::new_empty().unwrap();
         let range = zenkai_types::Range::parse_a1("B1:C2").unwrap();
         let b1 = CellPos::parse_a1("B1").unwrap();
-        book.set_input(SheetId(0), b1, "=A1*2").unwrap();
-        book.fill_with(SheetId(0), b1, range).unwrap();
+        book.fill_with(SheetId(0), b1, "=A1*2", range).unwrap();
+        let column = zenkai_types::Range::parse_a1("D1:D1048576").unwrap();
+        assert!(
+            book.fill_with(SheetId(0), CellPos::parse_a1("D1").unwrap(), "x", column)
+                .is_err()
+        );
+        assert_eq!(book.input(SheetId(0), CellPos::parse_a1("D1").unwrap()), "");
         let at = |a1: &str| book.input(SheetId(0), CellPos::parse_a1(a1).unwrap());
         assert_eq!(
             (at("B2"), at("C1"), at("C2")),

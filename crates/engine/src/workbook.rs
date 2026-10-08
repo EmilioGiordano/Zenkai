@@ -54,8 +54,13 @@ pub trait Engine: Send {
     fn clear_all(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError>;
     fn extend(&mut self, sheet: SheetId, source: Range, target: Range) -> Result<(), EngineError>;
-    fn fill_with(&mut self, sheet: SheetId, from: CellPos, range: Range)
-    -> Result<(), EngineError>;
+    fn fill_with(
+        &mut self,
+        sheet: SheetId,
+        from: CellPos,
+        text: &str,
+        range: Range,
+    ) -> Result<(), EngineError>;
     fn sort(
         &mut self,
         sheet: SheetId,
@@ -533,20 +538,23 @@ impl Engine for Workbook {
         self.set_inputs(sheet, range.start, &moved)
     }
 
-    // Ctrl+Enter: the content typed at `from` goes into every cell of `range`, formulas
+    // Ctrl+Enter: `text` typed at `from` goes into every cell of `range`, formulas
     // shifted for each cell, in one undo step.
     fn fill_with(
         &mut self,
         sheet: SheetId,
         from: CellPos,
+        text: &str,
         range: Range,
     ) -> Result<(), EngineError> {
+        // Refused before anything is written, so a huge selection leaves no partial edit.
         if range.cell_count() > MAX_FILL_CELLS {
             return Err(rejected(format!(
                 "filling {} cells at once is not supported",
                 range.cell_count()
             )));
         }
+        self.set_input(sheet, from, text)?;
         let model = self.model.get_model();
         let rows = (range.start.row.get()..=range.end.row.get())
             .map(|row| {
