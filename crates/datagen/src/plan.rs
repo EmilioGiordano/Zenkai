@@ -16,6 +16,9 @@ use crate::value_set::{FirstNames, LastNames, ValueSet, WeightedOptions};
 // Above 15 significant digits a spreadsheet cell no longer holds a number exactly.
 pub(crate) const PRECISION_LIMIT: i64 = 999_999_999_999_999;
 const MAX_DECIMAL_PLACES: u8 = 9;
+// A table instead of powi, whose precision Rust leaves unspecified per platform.
+const DECIMAL_SCALES: [f64; MAX_DECIMAL_PLACES as usize + 1] =
+    [1.0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Uniqueness {
@@ -185,7 +188,7 @@ fn decimal_set(min: f64, max: f64, places: u8) -> Result<ValueSet, ColumnProblem
             limit: MAX_DECIMAL_PLACES,
         });
     }
-    let scale = 10f64.powi(i32::from(places));
+    let scale = DECIMAL_SCALES[usize::from(places)];
     let scaled = |value: f64| -> Result<i64, ColumnProblem> {
         if !value.is_finite() {
             return Err(ColumnProblem::NotFinite {
