@@ -15,7 +15,7 @@ pub const MAX_FORMULA_AREA: u64 = 1_000_000;
 pub const ENGINE_STACK_BYTES: usize = 256 * 1024 * 1024;
 
 fn reject(reason: String) -> EngineError {
-    EngineError::InvalidFile(reason)
+    EngineError::Unsafe(reason)
 }
 
 // Every XML part is checked, wherever it lives: the engine follows relationship

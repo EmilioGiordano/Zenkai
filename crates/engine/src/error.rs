@@ -14,6 +14,8 @@ pub enum EngineError {
     },
     #[error("the file is not a valid xlsx workbook: {0}")]
     InvalidFile(String),
+    #[error("the file was refused because it could harm Zenkai: {0}")]
+    Unsafe(String),
     #[error("the saved copy could not be reopened, the original was left untouched: {0}")]
     VerifyFailed(String),
     #[error("{0}")]
