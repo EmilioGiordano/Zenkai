@@ -101,6 +101,7 @@ pub struct Workspace {
     document: Document,
     grid: Entity<Grid>,
     stats: Option<SelectionStats>,
+    stats_request: u64,
     active_input: SharedString,
     active_style: CellStyle,
     notice: Option<Notice>,
@@ -176,6 +177,7 @@ impl Workspace {
             document: Document::new(workbook, None, Vec::new()),
             grid,
             stats: None,
+            stats_request: 0,
             active_input: SharedString::default(),
             active_style: CellStyle::default(),
             notice: None,
@@ -833,10 +835,19 @@ impl Workspace {
     }
 
     fn refresh_stats(&mut self, cx: &mut Context<Self>) {
+        self.stats_request += 1;
         let selection = self.grid.read(cx).selection();
         let sheet = self.document.sheet;
+        let range = selection.range();
+        let inline = range.cell_count() <= stats::INLINE_CELLS;
+        if !inline {
+            self.stats = None;
+            self.compute_stats_in_background(sheet, range, cx);
+        }
         if let Some(wb) = self.document.workbook() {
-            self.stats = stats::compute(&wb, sheet, selection.range());
+            if inline {
+                self.stats = stats::compute(&wb, sheet, range);
+            }
             self.active_input = wb.input(sheet, selection.active).into();
             self.active_style = wb.cell(sheet, selection.active).style;
             let formula = self.active_input.clone();
@@ -849,6 +860,30 @@ impl Workspace {
                 .update(cx, |grid, _| grid.set_active_formula(formula));
         }
         cx.notify();
+    }
+
+    // A result is dropped when the selection or the document changed while it ran.
+    fn compute_stats_in_background(&self, sheet: SheetId, range: Range, cx: &mut Context<Self>) {
+        let Some(shared) = self.document.begin_read() else {
+            return;
+        };
+        let (request, generation) = (self.stats_request, self.document.generation());
+        cx.spawn(async move |this, cx| {
+            let stats = cx
+                .background_executor()
+                .spawn(async move { stats::compute(&document::read_shared(&shared), sheet, range) })
+                .await;
+            let update = this.update(cx, |this, cx| {
+                if this.stats_request == request && this.document.is_current(generation) {
+                    this.stats = stats;
+                    cx.notify();
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during selection statistics");
+            }
+        })
+        .detach();
     }
 
     fn notify(

@@ -7,7 +7,9 @@ use zenkai_types::{CellPos, Contents, Range, RowIdx, SheetId};
 
 const MAX_SCANNED: u64 = 500_000;
 // Below this many cells the threads cost more than the scan.
-const PARALLEL_CELLS: u64 = 20_000;
+const PARALLEL_CELLS: u64 = 5_000;
+// Selections up to this size are summed on the UI thread; larger ones go to the background.
+pub const INLINE_CELLS: u64 = 50_000;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SelectionStats {
@@ -44,6 +46,9 @@ pub fn compute(workbook: &Workbook, sheet: SheetId, selection: Range) -> Option<
     } else {
         thread::available_parallelism().map_or(1, NonZero::get) as u32
     };
+    if workers == 1 {
+        return Some(tally(clipped, &contents));
+    }
     let band_rows = clipped.rows().div_ceil(workers);
     let bands: Vec<Range> = (0..workers)
         .filter_map(|band| {
@@ -94,6 +99,17 @@ fn tally(band: Range, contents: &(impl Fn(CellPos) -> Contents + Sync)) -> Selec
 mod tests {
     use super::*;
     use zenkai_types::SheetId;
+
+    #[test]
+    fn a_small_selection_is_summed_without_threads() {
+        let mut workbook = Workbook::new_empty().unwrap();
+        let rows: Vec<Vec<String>> = (1..=10).map(|n| vec![n.to_string()]).collect();
+        workbook
+            .set_inputs(SheetId(0), CellPos::default(), &rows)
+            .unwrap();
+        let stats = compute(&workbook, SheetId(0), Range::parse_a1("A1:A10").unwrap()).unwrap();
+        assert_eq!((stats.count, stats.sum), (10, 55.0));
+    }
 
     #[test]
     fn a_missing_sheet_has_no_stats() {
