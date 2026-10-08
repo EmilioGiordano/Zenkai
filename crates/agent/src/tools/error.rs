@@ -68,6 +68,10 @@ pub enum ToolError {
     UserEditing,
     #[error("the user declined this change")]
     Declined,
+    #[error("another change is waiting for the user's approval; try again after it")]
+    AwaitingApproval,
+    #[error("Zenkai is still calculating; try again in a moment")]
+    Busy,
     #[error("Zenkai refused the change: {0}")]
     Engine(String),
     #[error("Zenkai is closing or no longer serving tools")]
