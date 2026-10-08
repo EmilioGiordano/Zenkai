@@ -27,6 +27,11 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Open…", Open),
             item("Close workbook", CloseDocument),
             item("Reopen closed workbook", ReopenClosedDocument),
+            item("New space", NewSpace),
+            item("Rename space", RenameSpace),
+            item("Delete space", DeleteSpace),
+            item("Move workbook to the previous space", MoveToPreviousSpace),
+            item("Move workbook to the next space", MoveToNextSpace),
             item("Next workbook", NextDocument),
             item("Previous workbook", PreviousDocument),
             item("Save", Save),
@@ -118,6 +123,8 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Previous sheet", PreviousSheet),
             item("Theme: light, dark, high contrast", ToggleTheme),
             item("Diagnostics in the status bar", ToggleDiagnostics),
+            item("Show or hide the sidebar", ToggleSidebar),
+            item("Focus the sidebar", FocusSidebar),
         ]),
     ]
 }

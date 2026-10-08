@@ -8,6 +8,7 @@ use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
 use crate::find::FindBar;
+use crate::spaces::SpaceId;
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -25,6 +26,7 @@ pub enum FileJob {
 
 pub struct Document {
     pub id: WorkbookId,
+    pub space: SpaceId,
     untitled: u32,
     workbook: SharedWorkbook,
     batch_running: bool,
@@ -46,6 +48,7 @@ pub struct Document {
 impl Document {
     pub fn new(
         id: WorkbookId,
+        space: SpaceId,
         untitled: u32,
         workbook: Workbook,
         path: Option<PathBuf>,
@@ -54,6 +57,7 @@ impl Document {
         let sheets = workbook.sheets();
         Document {
             id,
+            space,
             untitled,
             workbook: Arc::new(RwLock::new(workbook)),
             batch_running: false,
@@ -283,7 +287,7 @@ mod tests {
         workbook
             .set_inputs(SheetId(0), CellPos::default(), &rows)
             .unwrap();
-        let document = Document::new(WorkbookId(0), 1, workbook, None, Vec::new());
+        let document = Document::new(WorkbookId(0), SpaceId(0), 1, workbook, None, Vec::new());
         let range = Range::parse_a1("A1:B1").unwrap();
         let b1 = CellPos::parse_a1("B1").unwrap();
         assert_eq!(
@@ -298,6 +302,7 @@ mod tests {
     fn document() -> Document {
         Document::new(
             WorkbookId(0),
+            SpaceId(0),
             1,
             Workbook::new_empty().unwrap(),
             None,

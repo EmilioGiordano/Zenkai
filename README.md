@@ -20,6 +20,8 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   Esc, Delete, Ctrl+C/X/V (formulas shift on paste), Ctrl+Z/Y, Ctrl+S/O/N, F12, Ctrl+F,
   Ctrl+B/I/U, Ctrl+Shift+~ ! $ % # number formats, Ctrl+PageUp/PageDown, Shift+F11,
   Ctrl+= / Ctrl+- and Ctrl+wheel zoom, Ctrl+9 / Ctrl+0 hide rows / columns, Ctrl+Shift+P command palette.
+- Optional sidebar (Ctrl+Alt+B) with spaces: named groups of open workbooks you can rename, delete,
+  moved between with drag and drop or Alt+Up/Down, plus recent files. Ctrl+Shift+E moves focus into it.
 - Several workbooks open at once: Ctrl+Tab / Ctrl+Shift+Tab switch, Ctrl+W closes (asking about
   unsaved changes), Ctrl+Shift+T reopens the last closed one.
 - Toolbar, editable formula bar, sheet tabs, status bar with

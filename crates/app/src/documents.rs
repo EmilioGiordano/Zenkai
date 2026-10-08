@@ -5,6 +5,7 @@ use zenkai_types::WorkbookId;
 
 use crate::document::Document;
 use crate::files;
+use crate::spaces::{Neighbour, SpaceId, Spaces};
 
 const MAX_CLOSED: usize = 20;
 
@@ -21,6 +22,7 @@ pub struct Documents {
     next_id: u64,
     next_untitled: u32,
     closed: Vec<PathBuf>,
+    spaces: Spaces,
 }
 
 impl Documents {
@@ -31,6 +33,7 @@ impl Documents {
             next_id: 0,
             next_untitled: 1,
             closed: Vec::new(),
+            spaces: Spaces::new(),
         };
         documents.create(first);
         documents
@@ -65,7 +68,11 @@ impl Documents {
         } else {
             0
         };
-        let document = Document::new(id, untitled, workbook, path, unsupported);
+        let space = self
+            .entries
+            .get(self.active)
+            .map_or_else(|| self.spaces.first(), |active| active.space);
+        let document = Document::new(id, space, untitled, workbook, path, unsupported);
         match self.entries.get(self.active) {
             Some(active) if replace_blank && active.is_pristine() => {
                 self.entries[self.active] = document
@@ -111,6 +118,73 @@ impl Documents {
             .iter()
             .position(|document| document.id == id)
             .map_or(0, |index| index + 1)
+    }
+
+    pub fn spaces(&self) -> &Spaces {
+        &self.spaces
+    }
+
+    pub fn members(&self, space: SpaceId) -> impl Iterator<Item = &Document> {
+        self.entries
+            .iter()
+            .filter(move |document| document.space == space)
+    }
+
+    pub fn add_space(&mut self, name: &str) -> SpaceId {
+        self.spaces.add(name)
+    }
+
+    pub fn rename_space(&mut self, id: SpaceId, name: &str) -> bool {
+        self.spaces.rename(id, name)
+    }
+
+    pub fn toggle_space(&mut self, id: SpaceId) {
+        self.spaces.toggle(id);
+    }
+
+    pub fn expand_space(&mut self, id: SpaceId, expanded: bool) {
+        self.spaces.expand(id, expanded);
+    }
+
+    // Its documents are never closed: they go to the neighbouring space.
+    pub fn delete_space(&mut self, id: SpaceId) -> bool {
+        let Some(heir) = self.spaces.remove(id) else {
+            return false;
+        };
+        self.entries
+            .iter_mut()
+            .filter(|document| document.space == id)
+            .for_each(|document| document.space = heir);
+        true
+    }
+
+    pub fn move_to_space(&mut self, id: WorkbookId, space: SpaceId) -> bool {
+        if self.spaces.get(space).is_none() {
+            return false;
+        }
+        match self.get_mut(id) {
+            Some(document) => {
+                document.space = space;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn shift_space(&mut self, id: WorkbookId, side: Neighbour) -> bool {
+        let Some(current) = self.get(id).map(|document| document.space) else {
+            return false;
+        };
+        match self.spaces.neighbour(current, side) {
+            Some(target) => self.move_to_space(id, target),
+            None => false,
+        }
+    }
+
+    pub fn has_path(&self, path: &Path) -> bool {
+        self.entries
+            .iter()
+            .any(|document| document.path.as_deref() == Some(path))
     }
 
     pub fn find_by_path(&self, path: &Path) -> Option<WorkbookId> {
@@ -367,5 +441,64 @@ mod tests {
         assert!(background.has_pending());
         assert!(background.finish_batch(generation));
         assert!(!background.has_pending());
+    }
+
+    fn member_names(documents: &Documents, space: SpaceId) -> Vec<String> {
+        documents
+            .members(space)
+            .map(|document| document.name_with_marker())
+            .collect()
+    }
+
+    #[test]
+    fn a_new_document_joins_the_space_of_the_one_before_it() {
+        let mut documents = documents();
+        documents.active_mut().dirty = true;
+        let second = documents.add_space("Q3");
+        let first = documents.active_id();
+        documents.move_to_space(first, second);
+        open_file(&mut documents, "a.xlsx");
+        assert_eq!(member_names(&documents, second), ["• Book1", "a.xlsx"]);
+    }
+
+    #[test]
+    fn moving_changes_the_space_without_touching_the_order_of_documents() {
+        let mut documents = documents();
+        documents.active_mut().dirty = true;
+        let q3 = documents.add_space("Q3");
+        let a = open_file(&mut documents, "a.xlsx");
+        open_file(&mut documents, "b.xlsx");
+        assert!(documents.move_to_space(a, q3));
+        assert_eq!(member_names(&documents, q3), ["a.xlsx"]);
+        assert_eq!(names(&documents), ["• Book1", "a.xlsx", "b.xlsx"]);
+        assert!(!documents.move_to_space(a, SpaceId(99)));
+        assert!(!documents.move_to_space(WorkbookId(99), q3));
+    }
+
+    #[test]
+    fn shifting_moves_to_the_neighbouring_space_and_stops_at_the_ends() {
+        let mut documents = documents();
+        let first = documents.spaces().first();
+        let second = documents.add_space("Q3");
+        let id = documents.active_id();
+        assert!(!documents.shift_space(id, Neighbour::Previous));
+        assert!(documents.shift_space(id, Neighbour::Next));
+        assert_eq!(documents.active().space, second);
+        assert!(!documents.shift_space(id, Neighbour::Next));
+        assert!(documents.shift_space(id, Neighbour::Previous));
+        assert_eq!(documents.active().space, first);
+    }
+
+    #[test]
+    fn deleting_a_space_keeps_its_documents_in_the_neighbour() {
+        let mut documents = documents();
+        let first = documents.spaces().first();
+        let second = documents.add_space("Q3");
+        let id = documents.active_id();
+        documents.move_to_space(id, second);
+        assert!(documents.delete_space(second));
+        assert_eq!(documents.active().space, first);
+        assert_eq!(documents.len(), 1);
+        assert!(!documents.delete_space(first));
     }
 }

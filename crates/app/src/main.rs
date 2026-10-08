@@ -19,6 +19,8 @@ mod previews;
 mod recent;
 mod recovery;
 mod region;
+mod sidebar_rows;
+mod spaces;
 mod stats;
 mod theme;
 mod toolbar;

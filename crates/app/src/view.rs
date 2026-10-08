@@ -38,9 +38,12 @@ use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
 use crate::region;
+use crate::spaces::Neighbour;
 use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
 use crate::toolbar;
+
+mod sidebar;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::Button;
@@ -49,6 +52,7 @@ use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::spinner::Spinner;
+use sidebar::SidebarState;
 
 struct FormulaBarEdit {
     input: Entity<InputState>,
@@ -138,7 +142,8 @@ pub struct Workspace {
     previews: TypedPreviews,
     last_tab_click: Option<(Instant, SheetId)>,
     memory_mb: u64,
-    diagnostics_task: Option<Task<()>>,
+    memory_sampler: Option<Task<()>>,
+    sidebar: SidebarState,
     cell_refresh: CellRefresh,
     _subscriptions: Vec<Subscription>,
 }
@@ -208,7 +213,8 @@ impl Workspace {
             previews: TypedPreviews::default(),
             last_tab_click: None,
             memory_mb: 0,
-            diagnostics_task: None,
+            memory_sampler: None,
+            sidebar: SidebarState::new(cx),
             cell_refresh: CellRefresh::Idle,
             _subscriptions: vec![subscription, appearance, font_color, fill_color],
         };
@@ -499,8 +505,18 @@ impl Workspace {
         }
     }
 
-    fn sample_diagnostics(&mut self, cx: &mut Context<Self>) {
-        self.diagnostics_task = Some(cx.spawn(async move |this, cx| {
+    // The reading runs while the diagnostics or the sidebar show it, and stops otherwise.
+    fn sync_memory_sampler(&mut self, cx: &mut Context<Self>) {
+        let wanted = self.diagnostics || self.sidebar.visible;
+        match (wanted, self.memory_sampler.is_some()) {
+            (true, false) => self.sample_memory(cx),
+            (false, true) => self.memory_sampler = None,
+            _ => {}
+        }
+    }
+
+    fn sample_memory(&mut self, cx: &mut Context<Self>) {
+        self.memory_sampler = Some(cx.spawn(async move |this, cx| {
             loop {
                 let memory =
                     memory_stats::memory_stats().map_or(0, |m| m.physical_mem / 1024 / 1024);
@@ -3390,43 +3406,73 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleDiagnostics, _, cx| {
                 this.diagnostics = !this.diagnostics;
-                if this.diagnostics {
-                    this.sample_diagnostics(cx);
-                } else {
-                    this.diagnostics_task = None;
-                }
+                this.sync_memory_sampler(cx);
                 cx.notify();
             }))
             .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| theme::cycle(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &FocusSidebar, window, cx| this.focus_sidebar(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.new_space(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &RenameSpace, window, cx| this.rename_space(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &DeleteSpace, _, cx| this.delete_space(cx)))
+            .on_action(cx.listener(|this, _: &CloseSpaceRename, window, cx| {
+                this.close_space_rename(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MoveToPreviousSpace, _, cx| {
+                this.shift_document(Neighbour::Previous, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MoveToNextSpace, _, cx| {
+                this.shift_document(Neighbour::Next, cx)
+            }))
             .child(self.render_title_bar(cx))
-            .child(toolbar::render(&self.active_style, &self.colors, cx))
-            .child(self.render_formula_bar(cx))
-            .children(self.render_find(cx))
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
+                    .children(self.render_sidebar(window, cx))
                     .child(
-                        div()
-                            .id("grid-area")
+                        v_flex()
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .child(self.grid.clone())
-                            .context_menu({
-                                let grid_focus = self.grid.focus_handle(cx);
-                                move |menu, _, _| cell_menu(menu, grid_focus.clone())
-                            }),
-                    )
-                    .children(
-                        self.chart
-                            .as_ref()
-                            .map(|panel| chart_panel::render(panel, cx)),
+                            .child(toolbar::render(&self.active_style, &self.colors, cx))
+                            .child(self.render_formula_bar(cx))
+                            .children(self.render_find(cx))
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(
+                                        div()
+                                            .id("grid-area")
+                                            .flex_1()
+                                            .min_w_0()
+                                            .h_full()
+                                            .child(self.grid.clone())
+                                            .context_menu({
+                                                let grid_focus = self.grid.focus_handle(cx);
+                                                move |menu, _, _| {
+                                                    cell_menu(menu, grid_focus.clone())
+                                                }
+                                            }),
+                                    )
+                                    .children(
+                                        self.chart
+                                            .as_ref()
+                                            .map(|panel| chart_panel::render(panel, cx)),
+                                    ),
+                            )
+                            .children(self.render_rename(cx))
+                            .child(self.render_tabs(cx))
+                            .child(self.render_status(cx)),
                     ),
             )
-            .children(self.render_rename(cx))
-            .child(self.render_tabs(cx))
-            .child(self.render_status(cx))
             .children(self.render_palette())
             .children(self.render_busy(cx))
             .children(self.render_csv_preview(cx))
