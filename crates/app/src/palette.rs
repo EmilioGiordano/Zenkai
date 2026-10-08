@@ -81,6 +81,7 @@ pub fn groups() -> Vec<CommandGroup> {
             item("Zoom in", ZoomIn),
             item("Zoom out", ZoomOut),
             item("Reset zoom", ZoomReset),
+            item("Show formulas or values", ToggleFormulas),
             item("Larger interface (menus, bars, dialogs)", InterfaceLarger),
             item("Smaller interface", InterfaceSmaller),
             item("Reset interface size", InterfaceReset),

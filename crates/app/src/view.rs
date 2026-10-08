@@ -98,6 +98,7 @@ pub struct Workspace {
     csv_request: u64,
     // Interface scale, independent of the grid zoom: everything sized in rems.
     ui_scale: f32,
+    show_formulas: bool,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
@@ -157,6 +158,7 @@ impl Workspace {
             csv_preview: None,
             csv_request: 0,
             ui_scale: 1.0,
+            show_formulas: false,
             colors,
             focus: cx.focus_handle(),
             session_lock: None,
@@ -211,7 +213,7 @@ impl Workspace {
         let ranges = self.grid.read(cx).visible_ranges();
         let mut cells = HashMap::new();
         for range in ranges {
-            cells.extend(self.document.cells(range));
+            cells.extend(self.document.cells(range, self.show_formulas));
         }
         self.grid.update(cx, |grid, cx| grid.set_cells(cells, cx));
     }
@@ -2439,6 +2441,10 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, _: &UnhideColumns, window, cx| {
                 this.hide(false, false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleFormulas, _, cx| {
+                this.show_formulas = !this.show_formulas;
+                this.refresh_cells(cx);
             }))
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)

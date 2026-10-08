@@ -111,7 +111,8 @@ impl Document {
         true
     }
 
-    pub fn cells(&self, range: Range) -> HashMap<CellPos, GridCell> {
+    // With `formulas`, cells holding a formula show it instead of its value (Ctrl+`).
+    pub fn cells(&self, range: Range, formulas: bool) -> HashMap<CellPos, GridCell> {
         let Some(workbook) = &self.workbook else {
             return HashMap::new();
         };
@@ -131,14 +132,22 @@ impl Document {
                     && !view.style.border_bottom
                     && !view.style.border_right;
                 (!blank).then(|| {
-                    (
-                        pos,
-                        GridCell {
+                    let formula = formulas
+                        .then(|| workbook.input(self.sheet, pos))
+                        .filter(|input| input.starts_with('='));
+                    let cell = match formula {
+                        Some(formula) => GridCell {
+                            text: formula.into(),
+                            kind: zenkai_types::ValueKind::Text,
+                            style: view.style,
+                        },
+                        None => GridCell {
                             text: view.text.into(),
                             kind: view.kind,
                             style: view.style,
                         },
-                    )
+                    };
+                    (pos, cell)
                 })
             })
             .collect()
@@ -158,6 +167,23 @@ pub fn run_batch(workbook: &mut Workbook, edits: Vec<Edit>) -> Vec<EngineError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formula_view_shows_formulas_and_keeps_values() {
+        use zenkai_engine::Engine;
+        let mut workbook = Workbook::new_empty().unwrap();
+        let rows = vec![vec!["2".to_string(), "=A1*3".to_string()]];
+        workbook
+            .set_inputs(SheetId(0), CellPos::default(), &rows)
+            .unwrap();
+        let document = Document::new(workbook, None, Vec::new());
+        let range = Range::parse_a1("A1:B1").unwrap();
+        let b1 = CellPos::parse_a1("B1").unwrap();
+        assert_eq!(document.cells(range, false)[&b1].text.as_ref(), "6");
+        let formulas = document.cells(range, true);
+        assert_eq!(formulas[&b1].text.as_ref(), "=A1*3");
+        assert_eq!(formulas[&CellPos::default()].text.as_ref(), "2");
+    }
 
     #[test]
     fn stale_workbook_is_not_restored_into_a_new_document() {
