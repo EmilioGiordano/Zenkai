@@ -27,6 +27,8 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   when you pick them. Files that disappeared show as not found and are never removed for you.
 - Memory: past 4 GB (set ZENKAI_MEMORY_BUDGET_MB to change it) the workbooks unused for longest are
   unloaded one by one, only if saved and off screen; they reload when you open them.
+- Search (Ctrl+E, which replaces Excel's Flash Fill): workbooks in your spaces, recent files and
+  the sheets of open workbooks.
 - Several workbooks open at once: Ctrl+Tab / Ctrl+Shift+Tab switch, Ctrl+W closes (asking about
   unsaved changes), Ctrl+Shift+T reopens the last closed one.
 - Toolbar, editable formula bar, sheet tabs, status bar with

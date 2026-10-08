@@ -5,6 +5,7 @@ use crate::spaces::SpaceId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Row {
     NewWorkbook,
+    SearchFiles,
     Space(SpaceId),
     File(WorkbookId),
     NewSpace,
@@ -27,7 +28,7 @@ pub struct SpaceRows {
 }
 
 pub fn rows(spaces: &[SpaceRows], recent: usize, recent_open: bool) -> Vec<Row> {
-    let mut rows = vec![Row::NewWorkbook];
+    let mut rows = vec![Row::NewWorkbook, Row::SearchFiles];
     for space in spaces {
         rows.push(Row::Space(space.id));
         if !space.collapsed {
@@ -86,6 +87,7 @@ mod tests {
             rows(&spaces(), 2, true),
             [
                 Row::NewWorkbook,
+                Row::SearchFiles,
                 Row::Space(SpaceId(0)),
                 Row::File(file(1)),
                 Row::File(file(2)),

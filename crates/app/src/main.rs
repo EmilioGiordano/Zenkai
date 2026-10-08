@@ -10,6 +10,7 @@ mod decimals;
 mod document;
 mod documents;
 mod entry;
+mod file_search;
 mod files;
 mod find;
 mod format_dialog;

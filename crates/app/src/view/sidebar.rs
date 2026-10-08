@@ -203,6 +203,7 @@ impl Workspace {
     fn sidebar_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.sidebar.cursor {
             Some(Row::NewWorkbook) => self.create_document(window, cx),
+            Some(Row::SearchFiles) => self.toggle_search(window, cx),
             Some(Row::NewSpace) => self.new_space(window, cx),
             Some(Row::Space(id)) => self.documents.toggle_space(id),
             Some(Row::File(id)) => {
@@ -369,6 +370,13 @@ impl Workspace {
             label: "New workbook",
             keys: "Ctrl+N",
         };
+        let search_files = NavRow {
+            id: "search-files",
+            row: Row::SearchFiles,
+            icon: IconName::Search,
+            label: "Search file",
+            keys: "Ctrl+E",
+        };
         let new_space = NavRow {
             id: "new-space",
             row: Row::NewSpace,
@@ -433,6 +441,7 @@ impl Workspace {
                     ),
                 )
                 .child(self.nav_row(new_workbook, &paint, cx))
+                .child(self.nav_row(search_files, &paint, cx))
                 .child(
                     v_flex()
                         .id("sidebar-spaces")

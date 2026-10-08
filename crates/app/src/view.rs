@@ -44,6 +44,7 @@ use crate::toolbar;
 
 mod budget;
 mod lifecycle;
+mod search;
 mod sidebar;
 mod workbooks;
 use gpui_kit::component::Sizable;
@@ -55,6 +56,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::spinner::Spinner;
 use lifecycle::Lifecycle;
+use search::SearchOverlay;
 use sidebar::SidebarState;
 
 struct FormulaBarEdit {
@@ -123,6 +125,7 @@ pub struct Workspace {
     clipboard_source: Option<InternalClip>,
     chart: Option<ChartPanel>,
     palette: Option<Entity<CommandState>>,
+    search: Option<SearchOverlay>,
     csv_preview: Option<CsvPreview>,
     // Bumped by every CSV read, re-parse, import and cancel; a background result is
     // applied only if no newer request started meanwhile.
@@ -201,6 +204,7 @@ impl Workspace {
             clipboard_source: None,
             chart: None,
             palette: None,
+            search: None,
             csv_preview: None,
             csv_request: 0,
             ui_scale: 1.0,
@@ -320,6 +324,7 @@ impl Workspace {
             self.close_palette(window, cx);
             return;
         }
+        self.search = None;
         let state = cx.new(|cx| CommandState::new(window, cx));
         state.update(cx, |state, cx| state.focus(window, cx));
         self.palette = Some(state);
@@ -335,31 +340,14 @@ impl Workspace {
 
     fn render_palette(&self) -> Option<impl IntoElement> {
         let state = self.palette.as_ref()?;
-        Some(
-            div()
-                .absolute()
-                .top(px(72.0))
-                .left_0()
-                .right_0()
-                .flex()
-                .justify_center()
-                .child(
-                    div().w(px(560.0)).shadow_lg().child(
-                        palette::groups(&self.recent)
-                            .into_iter()
-                            .fold(Command::new(state), Command::group)
-                            .placeholder("Type a command")
-                            .bordered(true)
-                            .max_h(px(420.0))
-                            .on_confirm(|_, window, cx| {
-                                window.dispatch_action(Box::new(ClosePalette), cx)
-                            })
-                            .on_cancel(|window, cx| {
-                                window.dispatch_action(Box::new(ClosePalette), cx)
-                            }),
-                    ),
-                ),
-        )
+        Some(command_overlay(
+            palette::groups(&self.recent)
+                .into_iter()
+                .fold(Command::new(state), Command::group)
+                .placeholder("Type a command")
+                .on_confirm(|_, window, cx| window.dispatch_action(Box::new(ClosePalette), cx))
+                .on_cancel(|window, cx| window.dispatch_action(Box::new(ClosePalette), cx)),
+        ))
     }
 
     fn forget_find_results(&mut self) {
@@ -2938,6 +2926,12 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &ClosePalette, window, cx| this.close_palette(window, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &SearchFiles, window, cx| this.toggle_search(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CloseSearch, window, cx| this.close_search(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &CloseFind, window, cx| this.close_find(window, cx)))
             .on_action(cx.listener(|this, _: &ChartColumn, _, cx| {
                 this.set_chart_kind(ChartKind::Column, cx)
@@ -3027,10 +3021,28 @@ impl Render for Workspace {
                     ),
             )
             .children(self.render_palette())
+            .children(self.render_search(cx))
             .children(self.render_busy(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
     }
+}
+
+// The command palette and the file search sit at the same place, one at a time.
+fn command_overlay(command: Command) -> impl IntoElement {
+    div()
+        .absolute()
+        .top(px(72.0))
+        .left_0()
+        .right_0()
+        .flex()
+        .justify_center()
+        .child(
+            div()
+                .w(px(560.0))
+                .shadow_lg()
+                .child(command.bordered(true).max_h(px(420.0))),
+        )
 }
 
 fn file_label(path: &Path) -> String {

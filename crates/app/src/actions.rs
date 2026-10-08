@@ -123,6 +123,8 @@ actions!(
         LeaveSidebar,
         CloseSpaceRename,
         SidebarDelete,
+        SearchFiles,
+        CloseSearch,
     ]
 );
 
@@ -176,6 +178,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-w", CloseDocument, CONTEXT),
         KeyBinding::new("ctrl-shift-t", ReopenClosedDocument, CONTEXT),
         KeyBinding::new("ctrl-alt-b", ToggleSidebar, CONTEXT),
+        KeyBinding::new("ctrl-e", SearchFiles, CONTEXT),
         KeyBinding::new("ctrl-shift-e", FocusSidebar, CONTEXT),
         KeyBinding::new("ctrl-alt-n", NewSpace, CONTEXT),
         KeyBinding::new("ctrl-alt-pageup", MoveToPreviousSpace, CONTEXT),

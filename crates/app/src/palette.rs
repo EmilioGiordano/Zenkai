@@ -27,6 +27,10 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Open…", Open),
             item("Close workbook", CloseDocument),
             item("Reopen closed workbook", ReopenClosedDocument),
+            item(
+                "Search files, recent files and sheets (replaces Excel's Flash Fill, Ctrl+E)",
+                SearchFiles,
+            ),
             item("New space", NewSpace),
             item("Rename space", RenameSpace),
             item("Delete space", DeleteSpace),
