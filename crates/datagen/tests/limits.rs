@@ -120,12 +120,14 @@ fn sizes_fail_one_above_the_limit() {
 }
 
 #[test]
-fn control_characters_are_rejected_except_tab_and_line_break() {
+fn control_characters_are_rejected_except_tab_and_line_break_in_list_values() {
     let control = |field| Some(ColumnProblem::ControlCharacter { field });
-    assert_eq!(
-        problem("Nom\u{1b}bre", ColumnKind::City {}),
-        control(TextField::Header)
-    );
+    for header in ["Nom\u{1b}bre", "Nom\tbre", "Nom\nbre"] {
+        assert_eq!(
+            problem(header, ColumnKind::City {}),
+            control(TextField::Header)
+        );
+    }
     assert_eq!(
         problem("SKU", pattern("AA\r##".to_string())),
         control(TextField::Pattern)
@@ -135,6 +137,23 @@ fn control_characters_are_rejected_except_tab_and_line_break() {
         control(TextField::ListValue)
     );
     assert_eq!(check("L", list_of("a\tb\nc")), Ok(()));
+}
+
+#[test]
+fn invisible_formatting_characters_are_rejected() {
+    let invisible = |field| Some(ColumnProblem::InvisibleCharacter { field });
+    assert_eq!(
+        problem("Precio\u{202e}", ColumnKind::City {}),
+        invisible(TextField::Header)
+    );
+    assert_eq!(
+        problem("L", list_of("a\u{200b}b")),
+        invisible(TextField::ListValue)
+    );
+    assert_eq!(
+        problem("SKU", pattern("AA\u{2066}##".to_string())),
+        invisible(TextField::Pattern)
+    );
 }
 
 fn table(rows: u32, columns: usize, kind: ColumnKind) -> Result<(), DatagenError> {

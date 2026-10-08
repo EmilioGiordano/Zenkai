@@ -70,8 +70,10 @@ pub enum ColumnProblem {
         chars: usize,
         limit: usize,
     },
-    #[error("the {field} has a control character other than tab or line break")]
+    #[error("the {field} has a control character it cannot hold")]
     ControlCharacter { field: TextField },
+    #[error("the {field} has an invisible formatting character, such as a direction override")]
+    InvisibleCharacter { field: TextField },
     #[error("the list has {count} values; the limit is {limit}")]
     TooManyOptions { count: usize, limit: usize },
     #[error("{count} email domains are listed; the limit is {limit}")]

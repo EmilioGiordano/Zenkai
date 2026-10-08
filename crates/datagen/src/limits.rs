@@ -1,4 +1,5 @@
 use crate::error::{ColumnProblem, TextField};
+use crate::text::is_format_character;
 
 // Excel's limit on a table column name.
 pub(crate) const MAX_HEADER_CHARS: usize = 255;
@@ -22,11 +23,15 @@ pub(crate) fn check_text(text: &str, field: TextField, limit: usize) -> Result<(
             limit,
         });
     }
-    if text
-        .chars()
-        .any(|symbol| symbol.is_control() && symbol != '\t' && symbol != '\n')
-    {
+    let allows_line_breaks = field == TextField::ListValue;
+    let unwanted_control = |symbol: char| {
+        symbol.is_control() && !(allows_line_breaks && (symbol == '\t' || symbol == '\n'))
+    };
+    if text.chars().any(unwanted_control) {
         return Err(ColumnProblem::ControlCharacter { field });
+    }
+    if text.chars().any(is_format_character) {
+        return Err(ColumnProblem::InvisibleCharacter { field });
     }
     Ok(())
 }
@@ -53,7 +58,44 @@ mod tests {
     }
 
     #[test]
-    fn control_characters_fail_except_tab_and_newline() {
+    fn headers_are_single_line() {
+        for text in ["a\tb", "a\nb"] {
+            assert_eq!(
+                check_text(text, TextField::Header, 10),
+                Err(ColumnProblem::ControlCharacter {
+                    field: TextField::Header
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn invisible_format_characters_fail_in_every_field() {
+        for field in [
+            TextField::Header,
+            TextField::ListValue,
+            TextField::Pattern,
+            TextField::Domain,
+        ] {
+            for text in [
+                "evil\u{202e}txt",
+                "a\u{200b}b",
+                "\u{feff}x",
+                "\u{2066}x",
+                "\u{e0041}",
+            ] {
+                assert_eq!(
+                    check_text(text, field, 20),
+                    Err(ColumnProblem::InvisibleCharacter { field }),
+                    "{text:?}"
+                );
+            }
+        }
+        assert_eq!(check_text("Teléfono ñandú", TextField::Header, 20), Ok(()));
+    }
+
+    #[test]
+    fn control_characters_fail_except_tab_and_newline_in_list_values() {
         assert_eq!(check_text("a\tb\nc", TextField::ListValue, 10), Ok(()));
         for text in ["a\rb", "\u{0}", "a\u{1b}[2J", "\u{7f}", "\u{85}"] {
             assert_eq!(
