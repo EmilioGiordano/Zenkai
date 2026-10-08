@@ -312,6 +312,7 @@ impl Workspace {
         self.discard_agreed_at = None;
         self.format_dialog = None;
         self.formula_bar = None;
+        self.refuse_pending_agent_change();
         self.document = document;
         self.reset_grid(window, cx);
     }

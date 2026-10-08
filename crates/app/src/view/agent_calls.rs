@@ -361,6 +361,17 @@ impl Workspace {
         )
     }
 
+    // A change approved after its document was replaced would land in the new one.
+    pub(super) fn refuse_pending_agent_change(&mut self) {
+        if let Some(pending) = self.agent.pending.take() {
+            pending
+                .call
+                .respond(Err(ToolError::UnknownWorkbook(WorkbookId(
+                    pending.generation,
+                ))));
+        }
+    }
+
     // Dropping the bridge removes the endpoint file, so no client finds a dead pipe.
     pub(super) fn stop_bridge(&mut self) {
         self.agent.bridge = BridgeState::Off;
