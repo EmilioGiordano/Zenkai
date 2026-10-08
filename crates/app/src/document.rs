@@ -17,6 +17,7 @@ pub struct Document {
     pub sheet: SheetId,
     pub sheets: Vec<SheetInfo>,
     pub unsupported: Vec<Unsupported>,
+    pub read_only: bool,
     pending: Vec<Edit>,
     generation: u64,
 }
@@ -35,6 +36,7 @@ impl Document {
             sheet: SheetId(0),
             sheets,
             unsupported,
+            read_only: false,
             pending: Vec::new(),
             generation: GENERATION.fetch_add(1, Ordering::Relaxed),
         }

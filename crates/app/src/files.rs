@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use zenkai_engine::{Engine, EngineError, Workbook, run_with_engine_stack, write_atomic};
-use zenkai_formats::{Delimiter, parse_csv, write_csv};
+use zenkai_formats::{Delimiter, parse_csv, read_values, write_csv};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
 const REPLACED_EXTENSIONS: [&str; 4] = ["xlsm", "xls", "xlsb", "ods"];
@@ -57,6 +57,39 @@ pub fn import_csv(path: &Path) -> Result<(Workbook, String), String> {
         parsed.encoding.label()
     );
     Ok((workbook, summary))
+}
+
+const MAX_VALUES_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
+// Plan B when the engine cannot open a file (or it is .xls/.ods): only the values,
+// read by calamine, in a workbook that is never saved over the original.
+pub fn open_values(path: &Path) -> Result<Workbook, String> {
+    let size = std::fs::metadata(path)
+        .map_err(|e| format!("Could not read {}: {e}", path.display()))?
+        .len();
+    if size > MAX_VALUES_FILE_BYTES {
+        return Err(format!("{} is larger than 512 MB", path.display()));
+    }
+    let path = path.to_path_buf();
+    run_with_engine_stack(move || {
+        let sheets = read_values(&path).map_err(|e| EngineError::InvalidFile(e.to_string()))?;
+        let mut workbook = Workbook::new_empty()?;
+        for (index, sheet) in (0u32..).zip(&sheets) {
+            if index > 0 {
+                workbook.add_sheet()?;
+            }
+            if let Err(error) = workbook.rename_sheet(SheetId(index), &sheet.name) {
+                tracing::warn!(%error, name = %sheet.name, "kept the default sheet name");
+            }
+            let origin = CellPos::new(
+                RowIdx::clamped(i64::from(sheet.first_row)),
+                ColIdx::clamped(i64::from(sheet.first_col)),
+            );
+            workbook.set_inputs(SheetId(index), origin, &sheet.rows)?;
+        }
+        Ok(workbook)
+    })
+    .map_err(|e| e.to_string())
 }
 
 pub fn sheet_rows(workbook: &Workbook, sheet: SheetId) -> Vec<Vec<String>> {

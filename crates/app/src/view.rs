@@ -911,6 +911,9 @@ impl Workspace {
                             );
                         }
                     }
+                    Err(EngineError::InvalidFile(reason)) => {
+                        this.open_values(path, reason, window, cx)
+                    }
                     Err(error) => this.notify(Severity::Error, error.to_string(), cx),
                 }
             });
@@ -943,6 +946,49 @@ impl Workspace {
                 && let Err(error) = this.update_in(cx, |this, window, cx| then(this, window, cx))
             {
                 tracing::debug!(%error, "workspace closed during discard prompt");
+            }
+        })
+        .detach();
+    }
+
+    fn open_values(
+        &mut self,
+        path: PathBuf,
+        reason: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.busy = Some(format!("Reading values from {}…", path.display()).into());
+        let label = self.busy.clone().unwrap_or_default();
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let task_path = path.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { files::open_values(&task_path) })
+                .await;
+            let update = this.update_in(cx, |this, window, cx| {
+                this.clear_busy(&label, cx);
+                match result {
+                    Ok(workbook) => {
+                        this.document = Document::new(workbook, Some(path), Vec::new());
+                        this.document.read_only = true;
+                        this.reset_grid(window, cx);
+                        this.notify(
+                            Severity::Warning,
+                            "Opened read-only: values only, without formulas or formatting. Save As keeps a copy.",
+                            cx,
+                        );
+                    }
+                    Err(fallback) => this.notify(
+                        Severity::Error,
+                        format!("The file could not be opened: {reason}. Reading its values also failed: {fallback}"),
+                        cx,
+                    ),
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during read-only open");
             }
         })
         .detach();
@@ -987,7 +1033,9 @@ impl Workspace {
         match self.document.path.clone() {
             Some(path) if !must_rename => self.save_to(path, window, cx),
             Some(_) => {
-                let detail = if self.document.is_macro_enabled() {
+                let detail = if self.document.read_only {
+                    "This file was opened read-only with its values only. Save a copy with a new name; the original is never overwritten.".to_string()
+                } else if self.document.is_macro_enabled() {
                     let mut text =
                         "Macros are not kept. The original .xlsm file will not be overwritten."
                             .to_string();
@@ -1078,33 +1126,34 @@ impl Workspace {
             .path
             .as_ref()
             .is_some_and(|source| files::same_file(source, &path));
-        let (title, detail) = if replaces_source && self.document.is_macro_enabled() {
-            self.notify(
-                Severity::Error,
-                "Macro-enabled workbooks are never overwritten. Choose a new name.",
-                cx,
-            );
-            return;
-        } else if replaces_source && !self.document.unsupported.is_empty() {
-            (
-                "Replace the original file?",
-                format!(
-                    "Replacing the original loses: {}. This cannot be undone.",
-                    self.document.unsupported_labels()
-                ),
-            )
-        } else if renamed && path.exists() {
-            (
-                "Replace the existing file?",
-                format!(
-                    "Zenkai saves as .xlsx, so the workbook goes to {}, which already exists.",
-                    path.display()
-                ),
-            )
-        } else {
-            self.save_to(path, window, cx);
-            return;
-        };
+        let (title, detail) =
+            if replaces_source && (self.document.is_macro_enabled() || self.document.read_only) {
+                self.notify(
+                    Severity::Error,
+                    "This original is never overwritten. Choose a new name.",
+                    cx,
+                );
+                return;
+            } else if replaces_source && !self.document.unsupported.is_empty() {
+                (
+                    "Replace the original file?",
+                    format!(
+                        "Replacing the original loses: {}. This cannot be undone.",
+                        self.document.unsupported_labels()
+                    ),
+                )
+            } else if renamed && path.exists() {
+                (
+                    "Replace the existing file?",
+                    format!(
+                        "Zenkai saves as .xlsx, so the workbook goes to {}, which already exists.",
+                        path.display()
+                    ),
+                )
+            } else {
+                self.save_to(path, window, cx);
+                return;
+            };
         let answer = window.prompt(
             PromptLevel::Critical,
             title,
