@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{expressions::parser::Node, functions::Function};
 
-/// A cell as (sheet, row, column), the same key `Model::cells` uses.
+// (sheet, row, column), the key `Model::cells` uses.
 pub(crate) type CellKey = (u32, i32, i32);
 
 // Ranges wider than this are kept per sheet instead of once per column they cover.
@@ -20,7 +20,6 @@ enum Reference {
     },
 }
 
-/// The cells and ranges a formula's text refers to, resolved for the cell it is in.
 struct References {
     found: Vec<Reference>,
     volatile: bool,
@@ -200,8 +199,7 @@ fn widen_to_largest_shape(references: &mut [Reference]) {
     }
 }
 
-/// Row intervals that can be searched for the ones containing a row in logarithmic time
-/// plus the number of matches.
+// Finds the intervals containing a row in logarithmic time plus the number of matches.
 struct RowIntervals<T> {
     // Sorted by first row. `max_last_row[mid]` holds the largest last row in the slice
     // that `mid` is the middle of, as in an implicit balanced search tree.
@@ -264,17 +262,14 @@ impl<T: Copy + Ord> RowIntervals<T> {
     }
 }
 
-/// The formulas that refer to each column of a sheet.
 struct ColumnDependents {
     // (row, formula), sorted.
     cells: Vec<(i32, CellKey)>,
     ranges: RowIntervals<CellKey>,
 }
 
-/// Which formulas refer to which cells, built from the formulas' text.
-///
-/// Entries of a formula that changed since the index was built stay until the next full
-/// evaluation rebuilds it: a stale entry only makes a recalculation do needless work.
+// Entries of a formula that changed since the index was built stay until the next full
+// evaluation rebuilds it: a stale entry only makes a recalculation do needless work.
 pub(crate) struct DependencyIndex {
     columns: HashMap<(u32, i32), ColumnDependents>,
     wide_ranges: HashMap<u32, RowIntervals<(i32, i32, CellKey)>>,
@@ -304,8 +299,7 @@ impl DependencyIndex {
             })
     }
 
-    /// Adds the references of the formula `node` in `formula`. Call [`Self::sort`] before
-    /// looking up dependents again.
+    // Lookups need a `sort` after the last `add`.
     pub(crate) fn add(&mut self, formula: CellKey, node: &Node) {
         let references = References::of(node, formula);
         if references.volatile {
@@ -386,8 +380,6 @@ impl DependencyIndex {
         }
     }
 
-    /// The edited cells, every volatile formula, and everything that refers to them,
-    /// directly or through other formulas.
     pub(crate) fn affected_by(&self, edited: &[CellKey]) -> HashSet<CellKey> {
         let mut affected = HashSet::new();
         let mut pending: Vec<CellKey> = edited.iter().chain(&self.volatile).copied().collect();

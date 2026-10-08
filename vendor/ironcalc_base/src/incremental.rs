@@ -15,7 +15,7 @@ pub enum Recalculation {
     Incremental,
 }
 
-/// A dynamic formula and the (width, height) its result had when the index was built.
+// The (width, height) a dynamic formula's result had when the index was built.
 pub(crate) struct Spill {
     anchor: CellKey,
     size: (i32, i32),
@@ -31,7 +31,6 @@ impl Spill {
     }
 }
 
-/// What [`Model::evaluate_incremental`] needs from the last full evaluation.
 pub(crate) struct Dependencies {
     index: DependencyIndex,
     spills: Vec<Spill>,

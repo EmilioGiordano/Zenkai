@@ -4,11 +4,8 @@ use crate::{
     user_model::history::{Diff, DiffList},
 };
 
-/// What changed since the last evaluation, and so what the next one must recalculate.
 pub(crate) enum PendingRecalculation {
-    /// Only the content of these cells (sheet, row, column) changed.
     Cells(Vec<(u32, i32, i32)>),
-    /// Something that can change any formula changed: the structure, a name, a sheet.
     Workbook,
 }
 
@@ -39,7 +36,7 @@ impl PendingRecalculation {
         }
     }
 
-    /// Records the changes `diff_list` makes, applied or undone.
+    // The same cells change whether `diff_list` is applied or undone.
     pub(crate) fn add(&mut self, diff_list: &DiffList) {
         for diff in diff_list {
             match diff {
