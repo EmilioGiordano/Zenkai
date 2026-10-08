@@ -196,6 +196,8 @@ impl<'a> UserModel<'a> {
         }
         // clear the whole area (this resets array formulas)
         self.model.range_clear_contents(target_area)?;
+        // Cells of the area the clipboard has nothing for are cleared without a diff.
+        self.pending_recalculation.add_area(target_area);
         // set the new values and styles
         for (target_row, target_column, old_value, old_style, new_value, style) in changes {
             if let Some(ref v) = new_value {
@@ -461,6 +463,8 @@ impl<'a> UserModel<'a> {
         }
 
         self.model.range_clear_contents(&paste_area)?;
+        // Cells of the area a short record has nothing for are cleared without a diff.
+        self.pending_recalculation.add_area(&paste_area);
 
         // Second pass: write values and build diff list.
         let mut diff_list = Vec::new();

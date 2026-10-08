@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use crate::test::util::new_empty_model;
-use crate::{Model, Recalculation};
+use crate::{Model, Recalculation, UserModel};
 
 fn set(model: &mut Model, cell: &str, value: &str) -> (u32, i32, i32) {
     model._set(cell, value);
@@ -121,4 +121,55 @@ fn spills_fall_back_to_a_full_evaluation() {
         Recalculation::Full,
         "a blocked spill may unblock"
     );
+}
+
+#[test]
+fn user_model_edits_undo_and_redo_are_incremental() {
+    let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 1, "1").unwrap();
+    model.set_user_input(0, 2, 1, "=A1*2").unwrap();
+    model.set_user_input(0, 1, 1, "4").unwrap();
+    assert_eq!(
+        model.get_model().last_recalculation(),
+        Recalculation::Incremental
+    );
+    assert_eq!(model.get_formatted_cell_value(0, 2, 1).unwrap(), "8");
+    model.undo().unwrap();
+    assert_eq!(
+        model.get_model().last_recalculation(),
+        Recalculation::Incremental
+    );
+    assert_eq!(model.get_formatted_cell_value(0, 2, 1).unwrap(), "2");
+    model.redo().unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 2, 1).unwrap(), "8");
+}
+
+#[test]
+fn structural_changes_evaluate_the_whole_workbook() {
+    let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 1, "1").unwrap();
+    model.new_sheet().unwrap();
+    model.set_user_input(1, 1, 1, "=Sheet1!A1+1").unwrap();
+    assert_eq!(model.get_model().last_recalculation(), Recalculation::Full);
+    model.delete_sheet(0).unwrap();
+    model.set_user_input(0, 2, 1, "2").unwrap();
+    assert_eq!(model.get_model().last_recalculation(), Recalculation::Full);
+    assert_eq!(model.get_formatted_cell_value(0, 1, 1).unwrap(), "#REF!");
+}
+
+#[test]
+fn paused_edits_are_recalculated_together() {
+    let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 2, "=A1+A2").unwrap();
+    model.set_user_input(0, 3, 3, "0").unwrap();
+    model.pause_evaluation();
+    model.set_user_input(0, 1, 1, "1").unwrap();
+    model.set_user_input(0, 2, 1, "2").unwrap();
+    model.resume_evaluation();
+    model.evaluate();
+    assert_eq!(
+        model.get_model().last_recalculation(),
+        Recalculation::Incremental
+    );
+    assert_eq!(model.get_formatted_cell_value(0, 1, 2).unwrap(), "3");
 }

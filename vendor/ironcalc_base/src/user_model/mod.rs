@@ -8,6 +8,7 @@ mod common;
 mod conditional_formatting;
 pub(crate) mod history;
 mod named_cell_styles;
+mod recalculation;
 mod sequence_detector;
 mod ui;
 mod undo_redo;

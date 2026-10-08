@@ -13,6 +13,7 @@ use crate::user_model::history::{Diff, DiffList};
 
 impl<'a> UserModel<'a> {
     pub(super) fn apply_undo_diff_list(&mut self, diff_list: &DiffList) -> Result<(), String> {
+        self.pending_recalculation.add(diff_list);
         let mut needs_evaluation = false;
         for diff in diff_list.iter().rev() {
             match diff {
@@ -632,6 +633,7 @@ impl<'a> UserModel<'a> {
 
     /// Applies diff list
     pub(super) fn apply_diff_list(&mut self, diff_list: &DiffList) -> Result<(), String> {
+        self.pending_recalculation.add(diff_list);
         let mut needs_evaluation = false;
         for diff in diff_list {
             match diff {

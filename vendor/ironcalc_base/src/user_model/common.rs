@@ -24,6 +24,7 @@ use crate::user_model::history::{
 };
 
 use super::border_utils::is_max_border;
+use super::recalculation::PendingRecalculation;
 
 #[derive(Serialize, Deserialize)]
 pub enum CellArrayStructure {
@@ -214,6 +215,7 @@ pub struct UserModel<'a> {
     history: History,
     send_queue: Vec<QueueDiffs>,
     pause_evaluation: bool,
+    pub(crate) pending_recalculation: PendingRecalculation,
 }
 
 /// Given the index of the currently selected sheet, returns the index that same
@@ -251,6 +253,7 @@ impl<'a> UserModel<'a> {
             history: History::default(),
             send_queue: vec![],
             pause_evaluation: false,
+            pending_recalculation: PendingRecalculation::Workbook,
         }
     }
 
@@ -270,6 +273,7 @@ impl<'a> UserModel<'a> {
             history: History::default(),
             send_queue: vec![],
             pause_evaluation: false,
+            pending_recalculation: PendingRecalculation::Workbook,
         })
     }
 
@@ -284,6 +288,7 @@ impl<'a> UserModel<'a> {
             history: History::default(),
             send_queue: vec![],
             pause_evaluation: false,
+            pending_recalculation: PendingRecalculation::Workbook,
         })
     }
 
@@ -376,13 +381,21 @@ impl<'a> UserModel<'a> {
         self.pause_evaluation = false;
     }
 
-    /// Forces an evaluation of the model
+    /// Forces an evaluation of the model. Only the formulas that the changes since the
+    /// last evaluation can affect are recalculated, with the same results as evaluating
+    /// the whole workbook.
     ///
     /// See also:
-    /// * [Model::evaluate]
+    /// * [Model::evaluate_incremental]
     /// * [UserModel::pause_evaluation]
     pub fn evaluate(&mut self) {
-        self.model.evaluate()
+        match std::mem::replace(
+            &mut self.pending_recalculation,
+            PendingRecalculation::nothing(),
+        ) {
+            PendingRecalculation::Workbook => self.model.evaluate_indexed(),
+            PendingRecalculation::Cells(cells) => self.model.evaluate_incremental(&cells),
+        }
     }
 
     /// Returns the list of pending diffs and removes them from the queue
@@ -452,8 +465,6 @@ impl<'a> UserModel<'a> {
         self.model
             .set_user_input(sheet, row, column, value.to_string())?;
 
-        self.evaluate_if_not_paused();
-
         let mut diff_list = vec![Diff::SetCellValue {
             sheet,
             row,
@@ -480,6 +491,7 @@ impl<'a> UserModel<'a> {
         }
 
         self.push_diff_list(diff_list);
+        self.evaluate_if_not_paused();
         Ok(())
     }
 
@@ -2199,6 +2211,7 @@ impl<'a> UserModel<'a> {
     // **** Private methods ****** //
 
     pub(crate) fn push_diff_list(&mut self, diff_list: DiffList) {
+        self.pending_recalculation.add(&diff_list);
         self.send_queue.push(QueueDiffs {
             r#type: DiffType::Redo,
             list: diff_list.clone(),
@@ -2208,7 +2221,7 @@ impl<'a> UserModel<'a> {
 
     pub(super) fn evaluate_if_not_paused(&mut self) {
         if !self.pause_evaluation {
-            self.model.evaluate();
+            self.evaluate();
         }
     }
 }
