@@ -610,6 +610,9 @@ impl Workspace {
                 Ok((opened, path)) => {
                     let mut document = Document::new(opened.workbook, None, opened.unsupported);
                     document.dirty = true;
+                    // The recovery copy does not record where the work came from; agents
+                    // get Protected View until the user lifts it (Ctrl+Shift+E).
+                    document.origin = FileOrigin::Internet;
                     this.install_document(document, window, cx);
                     // Kept as this session's own recovery copy until the work is saved.
                     if let Err(error) = std::fs::rename(&path, &own) {
