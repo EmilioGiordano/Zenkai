@@ -17,6 +17,7 @@ use zenkai_types::{
 
 const LOCALE: &str = "en";
 const MAX_FILL_CELLS: u64 = 1_000_000;
+const MAX_STYLED_CELLS: u64 = 3_000_000;
 const LANGUAGE: &str = "en";
 // Stored widths are in Excel characters and heights in points; these give Excel's pixels.
 const PIXELS_PER_CHAR: f64 = 7.0;
@@ -38,10 +39,10 @@ fn whole_lines(range: Range) -> bool {
 
 // IronCalc formats whole rows and columns as row and column styles, but any other range
 // cell by cell; a huge partial range would run for minutes.
-fn check_style_range(range: Range) -> Result<(), EngineError> {
+fn check_border_range(range: Range) -> Result<(), EngineError> {
     if !whole_lines(range) && range.cell_count() > MAX_FILL_CELLS {
         return Err(rejected(format!(
-            "formatting {} cells at once is not supported; select whole rows or columns",
+            "borders on {} cells at once are not supported; select whole rows or columns",
             range.cell_count()
         )));
     }
@@ -248,12 +249,41 @@ fn area(sheet: SheetId, range: Range) -> Area {
 }
 
 impl Workbook {
+    // Up to MAX_FILL_CELLS the range is styled as selected, so a cell typed into later
+    // keeps the format as in Excel. A bigger one is cut to the used area, which holds
+    // every cell that exists; `None` means the range lies wholly beyond it.
+    fn style_target(&self, sheet: SheetId, range: Range) -> Result<Option<Range>, EngineError> {
+        if whole_lines(range) || range.cell_count() <= MAX_FILL_CELLS {
+            return Ok(Some(range));
+        }
+        let Some(used) = range.clip_to(self.used_end(sheet)) else {
+            return Ok(None);
+        };
+        if used.cell_count() > MAX_STYLED_CELLS {
+            return Err(rejected(format!(
+                "formatting {} cells at once is not supported; select whole rows or columns",
+                used.cell_count()
+            )));
+        }
+        Ok(Some(used))
+    }
+
+    fn formattable(&self, sheet: SheetId, range: Range) -> Result<Range, EngineError> {
+        self.style_target(sheet, range)?.ok_or_else(|| {
+            rejected(format!(
+                "formatting {} empty cells at once is not supported; select whole rows or columns",
+                range.cell_count()
+            ))
+        })
+    }
+
     fn apply_borders(
         &mut self,
         sheet: SheetId,
         range: Range,
         preset: BorderPreset,
     ) -> Result<(), EngineError> {
+        check_border_range(range)?;
         let kind = match preset {
             BorderPreset::All => "All",
             BorderPreset::Outside => "Outer",
@@ -862,9 +892,11 @@ impl Engine for Workbook {
     }
 
     fn clear_formats(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
-        check_style_range(range)?;
+        let Some(target) = self.style_target(sheet, range)? else {
+            return Ok(());
+        };
         self.model
-            .range_clear_formatting(&area(sheet, range))
+            .range_clear_formatting(&area(sheet, target))
             .map_err(rejected)
     }
 
@@ -876,8 +908,10 @@ impl Engine for Workbook {
             self.clear_formats(sheet, range)?;
             return self.clear(sheet, range);
         }
-        check_style_range(range)?;
         let Some(used) = range.clip_to(self.used_end(sheet)) else {
+            return Ok(());
+        };
+        let Some(used) = self.style_target(sheet, used)? else {
             return Ok(());
         };
         self.model
@@ -920,7 +954,6 @@ impl Engine for Workbook {
         range: Range,
         change: StyleChange,
     ) -> Result<(), EngineError> {
-        check_style_range(range)?;
         let flag = |on: bool| if on { "true" } else { "false" }.to_string();
         let hex = |color: Option<Rgb>| color.map_or_else(String::new, |c| format!("#{:06X}", c.0));
         let (path, value) = match change {
@@ -946,8 +979,9 @@ impl Engine for Workbook {
             ),
             StyleChange::NumberFormat(format) => ("num_fmt", format.code().to_string()),
         };
+        let target = self.formattable(sheet, range)?;
         self.model
-            .update_range_style(&area(sheet, range), path, &value)
+            .update_range_style(&area(sheet, target), path, &value)
             .map_err(rejected)
     }
 
@@ -958,9 +992,9 @@ impl Engine for Workbook {
         code: &str,
     ) -> Result<(), EngineError> {
         check_format_code(code)?;
-        check_style_range(range)?;
+        let target = self.formattable(sheet, range)?;
         self.model
-            .update_range_style(&area(sheet, range), "num_fmt", code)
+            .update_range_style(&area(sheet, target), "num_fmt", code)
             .map_err(rejected)
     }
 
