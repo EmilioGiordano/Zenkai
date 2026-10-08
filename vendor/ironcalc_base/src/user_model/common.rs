@@ -386,7 +386,6 @@ impl<'a> UserModel<'a> {
     /// the whole workbook.
     ///
     /// See also:
-    /// * [Model::evaluate_incremental]
     /// * [UserModel::pause_evaluation]
     pub fn evaluate(&mut self) {
         match std::mem::replace(

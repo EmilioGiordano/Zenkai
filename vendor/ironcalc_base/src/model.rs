@@ -224,7 +224,7 @@ pub struct Model<'a> {
     /// Evaluated CF results per cell, keyed by (sheet_index, row, column).
     /// Rebuilt from scratch on every call to evaluate_conditional_formatting().
     pub(crate) cf_cache: HashMap<(u32, i32, i32), Vec<CfCellResult>>,
-    /// Which formulas refer to which cells, for [`Model::evaluate_incremental`].
+    /// Which formulas refer to which cells, for incremental recalculation.
     pub(crate) dependencies: Option<Box<Dependencies>>,
     /// How many times a formula was reached again while it was being evaluated.
     pub(crate) circular_hits: u64,

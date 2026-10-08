@@ -41,9 +41,7 @@ fn reference((sheet, row, column): CellKey) -> CellReferenceIndex {
 }
 
 impl Model<'_> {
-    /// Evaluates the whole workbook and indexes which formulas refer to which cells, so
-    /// later edits can be recalculated with [`Model::evaluate_incremental`].
-    pub fn evaluate_indexed(&mut self) {
+    pub(crate) fn evaluate_indexed(&mut self) {
         self.evaluate();
         // The result of a circular reference depends on the order formulas are visited
         // in, which only a full evaluation reproduces.
@@ -52,14 +50,10 @@ impl Model<'_> {
         }
     }
 
-    /// Recalculates after the content of the `edited` cells changed and nothing else did
-    /// since the last evaluation, with the same results as [`Model::evaluate`].
-    ///
-    /// Only the formulas that depend on the edited cells and the volatile ones are
-    /// evaluated. It evaluates the whole workbook instead when there is no index from a
-    /// previous [`Model::evaluate_indexed`], or when a dynamic array, an array formula or
-    /// a circular reference is involved.
-    pub fn evaluate_incremental(&mut self, edited: &[(u32, i32, i32)]) {
+    // Only valid when nothing but the content of the `edited` cells changed since the last
+    // evaluation; `UserModel` tracks that. Falls back to `evaluate_indexed` when there is
+    // no index, or an array, a spill or a circular reference is involved.
+    pub(crate) fn evaluate_incremental(&mut self, edited: &[CellKey]) {
         let Some(mut dependencies) = self.dependencies.take() else {
             self.evaluate_indexed();
             return;
