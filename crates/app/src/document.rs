@@ -227,10 +227,7 @@ pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError
             .into_iter()
             .filter_map(|edit| edit(workbook).err())
             .collect::<Vec<_>>();
-        // Edits drop the cached used areas; rebuild them here so the UI thread never walks a sheet.
-        for sheet in workbook.sheets() {
-            workbook.used_end(sheet.id);
-        }
+        workbook.warm_used_areas();
         Ok(errors)
     });
     run.unwrap_or_else(|error| vec![error])

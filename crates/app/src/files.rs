@@ -49,6 +49,7 @@ pub fn workbook_from_rows(rows: Vec<Vec<String>>) -> Result<Workbook, String> {
     run_with_engine_stack(move || {
         let mut workbook = Workbook::new_empty()?;
         workbook.set_inputs(SheetId(0), CellPos::default(), &rows)?;
+        workbook.warm_used_areas();
         Ok(workbook)
     })
     .map_err(|e| e.to_string())
@@ -84,6 +85,7 @@ pub fn open_values(path: &Path) -> Result<Workbook, String> {
                 workbook.set_inputs(SheetId(index), origin, &block.rows)?;
             }
         }
+        workbook.warm_used_areas();
         Ok(workbook)
     })
     .map_err(|e| e.to_string())

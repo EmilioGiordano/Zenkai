@@ -347,9 +347,18 @@ impl Workbook {
             .map_err(EngineError::InvalidFile)?;
         let mut model = UserModel::from_model(model);
         model.evaluate();
-        Ok(Workbook {
+        let workbook = Workbook {
             model: CachedModel::new(model),
-        })
+        };
+        workbook.warm_used_areas();
+        Ok(workbook)
+    }
+
+    // Call on a background thread after building or editing, so the UI thread never walks a sheet.
+    pub fn warm_used_areas(&self) {
+        for sheet in self.sheets() {
+            self.model.used_end(sheet.id);
+        }
     }
 
     fn resolve(&self, color: &Color) -> Option<Rgb> {
