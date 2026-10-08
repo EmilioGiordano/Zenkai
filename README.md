@@ -41,7 +41,7 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   (1, 2 → 3, 4; a date → the next days; "Item 9" → "Item 10").
 - Sort A to Z / Z to A by the active cell's column; with one cell selected it sorts the
   current region (Ctrl+Shift+* selects it).
-- Right-click menus on cells and sheet tabs, as in Excel.
+- Right-click menus on cells and sheet tabs, as in Excel; duplicate a sheet from its tab.
 - Formatting: font and fill colour pickers, borders (bottom, all, outside, none;
   Ctrl+Shift+& / Ctrl+Shift+_), strikethrough (Ctrl+5), font size steps
   (Ctrl+Shift+> / <), increase/decrease decimal, wrap text and vertical alignment.
@@ -49,7 +49,8 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   to scientific notation, formatted numbers and dates widen a default-width column.
 - Formula point mode: while typing a formula, arrows or clicks insert references, which
   are coloured in the formula and in the grid.
-- Formula AutoComplete (Tab inserts the function), F4 cycles $ references, show formulas (Ctrl+`), find and
+- Formula AutoComplete (Tab inserts the function), F4 cycles $ references (and repeats the
+  last formatting outside the editor), Alt+Enter line breaks, show formulas (Ctrl+`), find and
   replace (Ctrl+H), paste values (Ctrl+Shift+V), hide/unhide rows and columns.
 - Format Cells (Ctrl+1) for number formats with a live sample; recent files in the
   command palette; drop a file on the window to open it.
