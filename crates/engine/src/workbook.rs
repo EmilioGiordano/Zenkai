@@ -1,7 +1,7 @@
 use std::io::Cursor;
 
 use ironcalc::base::expressions::types::Area;
-use ironcalc::base::types::{Color, HorizontalAlignment, Style, VerticalAlignment};
+use ironcalc::base::types::{Cell, Color, HorizontalAlignment, Style, VerticalAlignment};
 use ironcalc::base::{BorderArea, ClipboardData, UserModel};
 use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx_bytes;
@@ -248,6 +248,33 @@ impl Workbook {
         self.model
             .set_area_with_border(&area(sheet, range), &border)
             .map_err(rejected)
+    }
+
+    // Cells holding contents (not just a style) inside `range`, read straight from the
+    // sheet data: cheaper than `filled_cells`, which formats every input of the sheet.
+    fn content_cells_in(&self, sheet: SheetId, range: Range) -> Vec<CellPos> {
+        let Ok(ws) = self.model.get_model().workbook.worksheet(sheet.0) else {
+            return Vec::new();
+        };
+        let rows = row_i32(range.start.row)..=row_i32(range.end.row);
+        let cols = col_i32(range.start.col)..=col_i32(range.end.col);
+        ws.sheet_data
+            .iter()
+            .filter(|(row, _)| rows.contains(*row))
+            .flat_map(|(row, columns)| {
+                columns
+                    .iter()
+                    .filter(|(col, cell)| {
+                        cols.contains(*col) && !matches!(cell, Cell::EmptyCell { .. })
+                    })
+                    .map(move |(col, _)| {
+                        CellPos::new(
+                            RowIdx::clamped(i64::from(*row) - 1),
+                            ColIdx::clamped(i64::from(*col) - 1),
+                        )
+                    })
+            })
+            .collect()
     }
 
     // What Excel's AutoFill continues along one source line: numbers (two or more),
@@ -809,11 +836,7 @@ impl Engine for Workbook {
     // that the box is huge are cleared cell by cell. Nothing to clear writes nothing, so
     // no empty cells are created to grow the used area.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
-        let cells: Vec<CellPos> = self
-            .filled_cells(sheet)
-            .into_iter()
-            .filter(|pos| range.contains(*pos))
-            .collect();
+        let cells = self.content_cells_in(sheet, range);
         let Some(first) = cells.first() else {
             return Ok(());
         };
