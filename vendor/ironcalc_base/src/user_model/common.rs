@@ -1403,6 +1403,8 @@ impl<'a> UserModel<'a> {
             };
         }
         self.push_diff_list(diff_list);
+        // SUBTOTAL skips hidden rows, as Excel's does.
+        self.evaluate_if_not_paused();
         Ok(())
     }
 
@@ -2210,7 +2212,7 @@ impl<'a> UserModel<'a> {
     // **** Private methods ****** //
 
     pub(crate) fn push_diff_list(&mut self, diff_list: DiffList) {
-        self.pending_recalculation.add(&diff_list);
+        self.pending_recalculation.add(&diff_list, &self.model);
         self.send_queue.push(QueueDiffs {
             r#type: DiffType::Redo,
             list: diff_list.clone(),

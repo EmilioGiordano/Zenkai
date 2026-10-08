@@ -13,7 +13,7 @@ use crate::user_model::history::{Diff, DiffList};
 
 impl<'a> UserModel<'a> {
     pub(super) fn apply_undo_diff_list(&mut self, diff_list: &DiffList) -> Result<(), String> {
-        self.pending_recalculation.add(diff_list);
+        self.pending_recalculation.add(diff_list, &self.model);
         let mut needs_evaluation = false;
         for diff in diff_list.iter().rev() {
             match diff {
@@ -138,6 +138,7 @@ impl<'a> UserModel<'a> {
                     new_value: _,
                     old_value,
                 } => {
+                    needs_evaluation = true;
                     self.model.set_row_hidden(*sheet, *row, *old_value)?;
                 }
                 Diff::SetRowHeight {
@@ -633,7 +634,7 @@ impl<'a> UserModel<'a> {
 
     /// Applies diff list
     pub(super) fn apply_diff_list(&mut self, diff_list: &DiffList) -> Result<(), String> {
-        self.pending_recalculation.add(diff_list);
+        self.pending_recalculation.add(diff_list, &self.model);
         let mut needs_evaluation = false;
         for diff in diff_list {
             match diff {
@@ -684,6 +685,7 @@ impl<'a> UserModel<'a> {
                     new_value,
                     old_value: _,
                 } => {
+                    needs_evaluation = true;
                     self.model.set_row_hidden(*sheet, *row, *new_value)?;
                 }
                 Diff::SetRowHeight {

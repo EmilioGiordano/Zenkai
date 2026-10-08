@@ -65,16 +65,6 @@ fn content_and_presentation_changes_stay_incremental() {
 }
 
 #[test]
-fn hidden_rows_and_columns() {
-    assert!(recalculates_everything(|m| m
-        .set_rows_hidden(0, 2, 3, true)
-        .unwrap()));
-    assert!(recalculates_everything(|m| m
-        .set_columns_hidden(0, 3, 3, true)
-        .unwrap()));
-}
-
-#[test]
 fn inserted_deleted_and_moved_rows_and_columns() {
     assert!(recalculates_everything(|m| m.insert_rows(0, 1, 1).unwrap()));
     assert!(recalculates_everything(|m| m.delete_rows(0, 3, 1).unwrap()));

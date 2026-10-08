@@ -183,6 +183,32 @@ fn empty_formula_result_matches_a_full_evaluation() {
 }
 
 #[test]
+fn hiding_rows_recalculates_subtotals_incrementally() {
+    let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 1, "1").unwrap();
+    model.set_user_input(0, 2, 1, "2").unwrap();
+    model
+        .set_user_input(0, 1, 2, "=SUBTOTAL(109,A1:A2)")
+        .unwrap();
+    model.set_rows_hidden(0, 2, 2, true).unwrap();
+    assert_eq!(
+        model.get_model().last_recalculation(),
+        Recalculation::Incremental
+    );
+    assert_eq!(model.get_formatted_cell_value(0, 1, 2).unwrap(), "1");
+    model.undo().unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 1, 2).unwrap(), "3");
+    model.redo().unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 1, 2).unwrap(), "1");
+    model.set_columns_hidden(0, 1, 1, true).unwrap();
+    model.set_user_input(0, 3, 3, "x").unwrap();
+    assert_eq!(
+        model.get_model().last_recalculation(),
+        Recalculation::Incremental
+    );
+}
+
+#[test]
 fn structural_changes_evaluate_the_whole_workbook() {
     let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
     model.set_user_input(0, 1, 1, "1").unwrap();

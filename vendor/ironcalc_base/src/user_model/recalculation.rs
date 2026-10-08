@@ -1,5 +1,6 @@
 use crate::{
     expressions::types::Area,
+    model::Model,
     types::Cell,
     user_model::history::{Diff, DiffList},
 };
@@ -36,8 +37,21 @@ impl PendingRecalculation {
         }
     }
 
+    // SUBTOTAL skips hidden rows, so hiding or showing one changes what reads its cells.
+    fn add_row(&mut self, model: &Model, sheet: u32, row: i32) {
+        let Ok(worksheet) = model.workbook.worksheet(sheet) else {
+            *self = PendingRecalculation::Workbook;
+            return;
+        };
+        if let (PendingRecalculation::Cells(cells), Some(row_cells)) =
+            (&mut *self, worksheet.sheet_data.get(&row))
+        {
+            cells.extend(row_cells.keys().map(|column| (sheet, row, *column)));
+        }
+    }
+
     // The same cells change whether `diff_list` is applied or undone.
-    pub(crate) fn add(&mut self, diff_list: &DiffList) {
+    pub(crate) fn add(&mut self, diff_list: &DiffList, model: &Model) {
         for diff in diff_list {
             match diff {
                 Diff::SetCellValue {
@@ -61,10 +75,12 @@ impl PendingRecalculation {
                     old_value,
                     ..
                 } => self.add_cleared(*sheet, *row, *column, old_value),
+                Diff::SetRowHidden { sheet, row, .. } => self.add_row(model, *sheet, *row),
                 Diff::CellClearFormatting { .. }
                 | Diff::SetCellStyle { .. }
                 | Diff::ApplyNamedStyle { .. }
                 | Diff::SetColumnWidth { .. }
+                | Diff::SetColumnHidden { .. }
                 | Diff::SetRowHeight { .. }
                 | Diff::SetColumnStyle { .. }
                 | Diff::SetRowStyle { .. }
@@ -79,10 +95,7 @@ impl PendingRecalculation {
                 | Diff::CreateNamedStyle { .. }
                 | Diff::DeleteNamedStyle { .. }
                 | Diff::UpdateNamedStyle { .. } => {}
-                // SUBTOTAL skips hidden rows, so hiding is not only presentation.
-                Diff::SetColumnHidden { .. }
-                | Diff::SetRowHidden { .. }
-                | Diff::SetArrayValue { .. }
+                Diff::SetArrayValue { .. }
                 | Diff::InsertRows { .. }
                 | Diff::DeleteRows { .. }
                 | Diff::InsertColumns { .. }
