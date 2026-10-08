@@ -2,14 +2,13 @@
 // locales such as es-AR. The engine reads a dot as the decimal separator, so these fields
 // are rewritten before import; anything that is not exactly such a number is left alone.
 
-const SAMPLE_ROWS: usize = 1_000;
-
-/// True when the sampled fields use a comma for decimals and never a dot.
+/// True when some field uses a comma for decimals and none uses a dot. Every row is
+/// scanned, so a dot decimal anywhere vetoes the rewrite of the whole file.
 /// Only a file not separated by commas can use a decimal comma unquoted, so callers
 /// usually check the delimiter first.
 pub fn detect_decimal_comma(rows: &[Vec<String>]) -> bool {
     let mut comma = false;
-    for field in rows.iter().take(SAMPLE_ROWS).flatten() {
+    for field in rows.iter().flatten() {
         match shape(field) {
             Some(Shape::DecimalComma) => comma = true,
             Some(Shape::DecimalDot) => return false,
@@ -65,6 +64,14 @@ fn shape(field: &str) -> Option<Shape> {
     {
         return None;
     }
+    // "0.123" or "007.5": a leading zero cannot start a thousands group.
+    if groups.len() > 1 && groups[0].starts_with('0') {
+        return if decimals.is_none() && groups.len() == 2 {
+            Some(Shape::DecimalDot)
+        } else {
+            None
+        };
+    }
     if decimals.is_some() {
         let grouped =
             groups.len() == 1 || (groups[0].len() <= 3 && groups[1..].iter().all(|g| g.len() == 3));
@@ -114,12 +121,26 @@ mod tests {
     fn a_decimal_dot_means_the_file_is_not_decimal_comma() {
         assert!(!detect_decimal_comma(&rows(&["1,5", "2.75"])));
         assert!(!detect_decimal_comma(&rows(&["1.234", "7"])));
+        assert!(!detect_decimal_comma(&rows(&["1,5", "0.123"])));
+        assert!(!detect_decimal_comma(&rows(&["1,5", "0.500"])));
+        let mut late_dot = vec![vec!["1,5".to_string()]; 5_000];
+        late_dot.push(vec!["2.75".to_string()]);
+        assert!(!detect_decimal_comma(&late_dot));
     }
 
     #[test]
     fn leaves_non_numbers_alone() {
         for field in [
-            "1,", ",5", "1,2,3", "12.34,5", "1.2.3", "", "x1,5", "1 234,5",
+            "1,",
+            ",5",
+            "1,2,3",
+            "12.34,5",
+            "1.2.3",
+            "",
+            "x1,5",
+            "1 234,5",
+            "0.123,5",
+            "007.123.456",
         ] {
             assert_eq!(shape(field), None, "{field}");
         }

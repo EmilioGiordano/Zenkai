@@ -9,7 +9,9 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::*;
 
 use zenkai_engine::{Copied, Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
-use zenkai_formats::{Delimiter, normalize_decimal_comma, parse_csv};
+use zenkai_formats::{
+    DateOrder, Delimiter, normalize_day_first, normalize_decimal_comma, parse_csv,
+};
 use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout, SheetView};
 use zenkai_types::{CellPos, CellStyle, ColIdx, HAlign, NumberFormat, Range, SheetId, StyleChange};
 
@@ -842,7 +844,12 @@ impl Workspace {
             let task_path = path.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { files::read_csv(&task_path) })
+                .spawn(async move {
+                    files::read_csv(&task_path).map(|(bytes, parsed)| {
+                        let guess = csv_preview::guess(&parsed);
+                        (bytes, parsed, guess)
+                    })
+                })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(&label, cx);
@@ -850,8 +857,13 @@ impl Workspace {
                     return;
                 }
                 match result {
-                    Ok((bytes, parsed)) => {
-                        this.csv_preview = Some(CsvPreview::new(path, Arc::new(bytes), parsed));
+                    Ok((bytes, parsed, guess)) => {
+                        this.csv_preview = Some(CsvPreview {
+                            path,
+                            bytes: Arc::new(bytes),
+                            parsed,
+                            guess,
+                        });
                         window.focus(&this.focus, cx);
                         cx.notify();
                     }
@@ -874,13 +886,18 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let parsed = cx
                 .background_executor()
-                .spawn(async move { parse_csv(&bytes, Some(delimiter)) })
+                .spawn(async move {
+                    parse_csv(&bytes, Some(delimiter)).map(|parsed| {
+                        let guess = csv_preview::guess(&parsed);
+                        (parsed, guess)
+                    })
+                })
                 .await;
             let update = this.update(cx, |this, cx| match parsed {
                 _ if this.csv_request != request => {}
-                Ok(parsed) => {
+                Ok((parsed, guess)) => {
                     if let Some(preview) = &mut this.csv_preview {
-                        preview.decimal_comma = csv_preview::guess_decimal_comma(&parsed);
+                        preview.guess = guess;
                         preview.parsed = parsed;
                     }
                     cx.notify();
@@ -914,7 +931,7 @@ impl Workspace {
             path,
             bytes,
             parsed,
-            decimal_comma,
+            guess,
         } = preview;
         let delimiter = parsed.delimiter;
         let mut rows = parsed.rows;
@@ -923,7 +940,12 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    if decimal_comma {
+                    // Dates first: a day-first date written with dots must not be read
+                    // as a grouped number.
+                    if guess.date_order == DateOrder::DayFirst {
+                        normalize_day_first(&mut rows);
+                    }
+                    if guess.decimal_comma {
                         normalize_decimal_comma(&mut rows);
                     }
                     // On failure, parse again so the preview comes back as it was.
@@ -943,9 +965,12 @@ impl Workspace {
                         if let Some(parsed) = parsed
                             && this.csv_request == request
                         {
-                            let mut preview = CsvPreview::new(path, bytes, parsed);
-                            preview.decimal_comma = decimal_comma;
-                            this.csv_preview = Some(preview);
+                            this.csv_preview = Some(CsvPreview {
+                                path,
+                                bytes,
+                                parsed,
+                                guess,
+                            });
                             window.focus(&this.focus, cx);
                         }
                         this.notify(Severity::Error, error, cx);
@@ -972,7 +997,13 @@ impl Workspace {
                 csv_preview::PreviewEvent::Delimiter(delimiter) => this.reparse_csv(delimiter, cx),
                 csv_preview::PreviewEvent::DecimalComma(comma) => {
                     if let Some(preview) = &mut this.csv_preview {
-                        preview.decimal_comma = comma;
+                        preview.guess.decimal_comma = comma;
+                        cx.notify();
+                    }
+                }
+                csv_preview::PreviewEvent::DateOrder(order) => {
+                    if let Some(preview) = &mut this.csv_preview {
+                        preview.guess.date_order = order;
                         cx.notify();
                     }
                 }

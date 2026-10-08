@@ -175,6 +175,22 @@ mod tests {
     }
 
     #[test]
+    fn day_first_dates_import_as_the_right_day() {
+        let mut rows = vec![vec!["08/10/2026".to_string(), "25/10/2026".to_string()]];
+        zenkai_formats::normalize_day_first(&mut rows);
+        let workbook = workbook_from_rows(rows).unwrap();
+        let serial = |col| {
+            workbook.number(
+                SheetId(0),
+                CellPos::new(RowIdx::clamped(0), ColIdx::clamped(col)),
+            )
+        };
+        // 8 October 2026 and 25 October 2026 as Excel serials.
+        assert_eq!(serial(0), Some(46303.0));
+        assert_eq!(serial(1), Some(46320.0));
+    }
+
+    #[test]
     fn same_file_sees_through_different_spellings() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("Book.xlsx");

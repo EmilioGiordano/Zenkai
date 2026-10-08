@@ -6,7 +6,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use zenkai_formats::{Delimiter, ParsedCsv, detect_decimal_comma};
+use zenkai_formats::{DateOrder, Delimiter, ParsedCsv, detect_date_order, detect_decimal_comma};
 
 use crate::actions::{CancelCsvImport, ConfirmCsvImport};
 
@@ -23,28 +23,36 @@ pub struct CsvPreview {
     pub path: PathBuf,
     pub bytes: Arc<Vec<u8>>,
     pub parsed: ParsedCsv,
+    pub guess: Guess,
+}
+
+/// How numbers and dates are read on import; guessed from the file, switchable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Guess {
     pub decimal_comma: bool,
+    pub date_order: DateOrder,
 }
 
-impl CsvPreview {
-    pub fn new(path: PathBuf, bytes: Arc<Vec<u8>>, parsed: ParsedCsv) -> Self {
-        let decimal_comma = guess_decimal_comma(&parsed);
-        Self {
-            path,
-            bytes,
-            parsed,
-            decimal_comma,
-        }
+/// Scans every row, so it runs on a background thread.
+pub fn guess(parsed: &ParsedCsv) -> Guess {
+    let decimal_comma = parsed.delimiter != Delimiter::Comma && detect_decimal_comma(&parsed.rows);
+    // Dates that read both ways follow the number style: a decimal comma means a locale
+    // that writes the day first.
+    let date_order = detect_date_order(&parsed.rows).unwrap_or(if decimal_comma {
+        DateOrder::DayFirst
+    } else {
+        DateOrder::MonthFirst
+    });
+    Guess {
+        decimal_comma,
+        date_order,
     }
-}
-
-pub fn guess_decimal_comma(parsed: &ParsedCsv) -> bool {
-    parsed.delimiter != Delimiter::Comma && detect_decimal_comma(&parsed.rows)
 }
 
 pub enum PreviewEvent {
     Delimiter(Delimiter),
     DecimalComma(bool),
+    DateOrder(DateOrder),
 }
 
 pub fn render(
@@ -101,8 +109,21 @@ pub fn render(
             .ghost()
             .compact()
             .label(label)
-            .selected(preview.decimal_comma == comma)
+            .selected(preview.guess.decimal_comma == comma)
             .on_click(move |_, window, cx| on_event(PreviewEvent::DecimalComma(comma), window, cx))
+    });
+    let date_buttons = [
+        (DateOrder::DayFirst, "d/m/y"),
+        (DateOrder::MonthFirst, "m/d/y"),
+    ]
+    .map(|(order, label)| {
+        let on_event = on_event.clone();
+        Button::new(label)
+            .ghost()
+            .compact()
+            .label(label)
+            .selected(preview.guess.date_order == order)
+            .on_click(move |_, window, cx| on_event(PreviewEvent::DateOrder(order), window, cx))
     });
     v_flex()
         .key_context("CsvPreview")
@@ -131,6 +152,9 @@ pub fn render(
                 .child(div().w(px(12.0)))
                 .child(div().text_color(theme.muted_foreground).child("Decimal"))
                 .children(decimal_buttons)
+                .child(div().w(px(12.0)))
+                .child(div().text_color(theme.muted_foreground).child("Dates"))
+                .children(date_buttons)
                 .child(div().flex_1())
                 .child(div().text_color(theme.muted_foreground).child(format!(
                     "{} · {} rows · {} columns",
