@@ -1205,6 +1205,16 @@ impl Render for Grid {
                 cx.emit(GridEvent::SelectionChanged);
                 cx.notify();
             }))
+            .on_action(cx.listener(|g, _: &InsertLineBreak, _, cx| {
+                // Alt+Enter starts a new line inside the cell being edited.
+                if let Some(editor) = &mut g.editor {
+                    editor.text.insert(editor.caret, '\n');
+                    editor.caret += 1;
+                    editor.point = None;
+                    cx.emit(GridEvent::EditChanged);
+                    cx.notify();
+                }
+            }))
             .on_action(cx.listener(|g, _: &CycleReference, _, cx| {
                 // Outside the editor F4 is Excel's "repeat", which the app handles.
                 let Some(editor) = &mut g.editor else {

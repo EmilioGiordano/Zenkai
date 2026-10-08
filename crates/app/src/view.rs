@@ -824,7 +824,13 @@ impl Workspace {
             GridEvent::Commit { pos, text } => {
                 let (sheet, pos, text) = (self.document.sheet, *pos, text.clone());
                 self.edit(window, cx, move |wb| {
+                    // Excel turns on wrap text for a cell typed with a line break.
+                    let wraps = text.contains('\n') && !text.starts_with('=');
                     wb.set_input(sheet, pos, &text)?;
+                    if wraps {
+                        wb.apply_style(sheet, Range::single(pos), StyleChange::Wrap(true))?;
+                        grow_wrapped_rows(wb, sheet, Range::single(pos))?;
+                    }
                     widen_for_numbers(wb, sheet, Range::single(pos))
                 });
             }
@@ -2044,6 +2050,8 @@ impl Workspace {
 
     // The new format comes from the active cell, as in Excel, and applies to the selection.
     fn step_decimals(&mut self, more: bool, window: &mut Window, cx: &mut Context<Self>) {
+        // Not expressible as a repeatable StyleChange; F4 must not repeat an older one.
+        self.last_style = None;
         let (sheet, range) = (self.document.sheet, self.selection(cx));
         let active = self.grid.read(cx).selection().active;
         let Some(workbook) = self.document.workbook() else {
@@ -2063,8 +2071,6 @@ impl Workspace {
         });
     }
 
-    // Excel grows default-height rows to show every wrapped line; the line count is
-    // estimated from the text length and column width, like the column autofit.
     fn toggle_wrap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let (sheet, range) = (self.document.sheet, self.selection(cx));
         let active = self.grid.read(cx).selection().active;
@@ -2077,49 +2083,7 @@ impl Workspace {
             if !wrap || range.cell_count() > MAX_AUTOFIT_CELLS as u64 {
                 return Ok(());
             }
-            let sizes = wb.sizes(sheet);
-            let width = |col: ColIdx| {
-                sizes
-                    .columns
-                    .iter()
-                    .find(|span| span.first <= col && col <= span.last)
-                    .map_or(zenkai_types::DEFAULT_COL_WIDTH, |span| span.width)
-            };
-            // The tallest wrapped cell sets each row, once.
-            let mut lines_per_row: std::collections::BTreeMap<zenkai_types::RowIdx, f32> =
-                Default::default();
-            for pos in wb
-                .filled_cells(sheet)
-                .into_iter()
-                .filter(|pos| range.contains(*pos))
-            {
-                if sizes.rows.iter().any(|(row, _)| *row == pos.row) {
-                    continue;
-                }
-                let view = wb.cell(sheet, pos);
-                if view.kind != zenkai_types::ValueKind::Text {
-                    continue;
-                }
-                let per_line = ((width(pos.col) - 12.0) / AUTOFIT_CHAR_WIDTH).max(1.0);
-                // Breaking at word boundaries wastes part of each line.
-                let lines: f32 = view
-                    .text
-                    .split('\n')
-                    .map(|part| {
-                        (part.chars().count() as f32 * 1.3 / per_line)
-                            .ceil()
-                            .max(1.0)
-                    })
-                    .sum();
-                let entry = lines_per_row.entry(pos.row).or_insert(1.0);
-                *entry = entry.max(lines.min(20.0));
-            }
-            for (row, lines) in lines_per_row {
-                if lines > 1.0 {
-                    wb.set_row_height(sheet, row, lines * 17.0 + 4.0)?;
-                }
-            }
-            Ok(())
+            grow_wrapped_rows(wb, sheet, range)
         });
     }
 
@@ -2176,6 +2140,7 @@ impl Workspace {
     }
 
     fn apply_format_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.last_style = None;
         let Some(dialog) = &self.format_dialog else {
             return;
         };
@@ -2977,6 +2942,54 @@ fn widen_for_numbers(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
     for (col, width) in needed {
         if width > zenkai_types::DEFAULT_COL_WIDTH {
             wb.set_column_width(sheet, col, width)?;
+        }
+    }
+    Ok(())
+}
+
+// Excel grows default-height rows to show every wrapped line; the line count is
+// estimated from the text length and column width, like the column autofit.
+fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+    let sizes = wb.sizes(sheet);
+    let width = |col: ColIdx| {
+        sizes
+            .columns
+            .iter()
+            .find(|span| span.first <= col && col <= span.last)
+            .map_or(zenkai_types::DEFAULT_COL_WIDTH, |span| span.width)
+    };
+    // The tallest wrapped cell sets each row, once.
+    let mut lines_per_row: std::collections::BTreeMap<zenkai_types::RowIdx, f32> =
+        Default::default();
+    for pos in wb
+        .filled_cells(sheet)
+        .into_iter()
+        .filter(|pos| range.contains(*pos))
+    {
+        if sizes.rows.iter().any(|(row, _)| *row == pos.row) {
+            continue;
+        }
+        let view = wb.cell(sheet, pos);
+        if view.kind != zenkai_types::ValueKind::Text {
+            continue;
+        }
+        let per_line = ((width(pos.col) - 12.0) / AUTOFIT_CHAR_WIDTH).max(1.0);
+        // Breaking at word boundaries wastes part of each line.
+        let lines: f32 = view
+            .text
+            .split('\n')
+            .map(|part| {
+                (part.chars().count() as f32 * 1.3 / per_line)
+                    .ceil()
+                    .max(1.0)
+            })
+            .sum();
+        let entry = lines_per_row.entry(pos.row).or_insert(1.0);
+        *entry = entry.max(lines.min(20.0));
+    }
+    for (row, lines) in lines_per_row {
+        if lines > 1.0 {
+            wb.set_row_height(sheet, row, lines * 19.0 + 4.0)?;
         }
     }
     Ok(())

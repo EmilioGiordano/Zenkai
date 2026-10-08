@@ -118,6 +118,10 @@ fn parse_reference(token: &str) -> Option<(&str, &str, bool, bool)> {
         None => (false, token),
     };
     let letters = rest.chars().take_while(char::is_ascii_alphabetic).count();
+    // Checked before the column is computed: a long name like "INDIRECT" would overflow.
+    if !(1..=3).contains(&letters) {
+        return None;
+    }
     let (col, rest) = rest.split_at(letters);
     let (row_fixed, row) = match rest.strip_prefix('$') {
         Some(row) => (true, row),
@@ -195,5 +199,10 @@ mod cycle_tests {
         assert_eq!(cycle_reference("=\"A1\"", 4), None);
         assert_eq!(cycle_reference("=ZZZ1", 5), None);
         assert_eq!(cycle_reference("=Q1!A1", 3), None);
+        assert_eq!(cycle_reference("=INDIRECT", 9), None);
+        assert_eq!(cycle_reference("=AAAAAAAAAA1", 12), None);
+        assert_eq!(cycle_reference("=a1", 3).unwrap().0, "=$a$1");
+        assert_eq!(cycle_reference("=$A$1:B2", 8).unwrap().0, "=A$1:B$2");
+        assert_eq!(cycle_reference("=A1", 1).unwrap().0, "=$A$1");
     }
 }
