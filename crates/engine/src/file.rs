@@ -141,8 +141,20 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
 // never truncated and survives any failure before the final rename.
 pub fn save_xlsx_atomic(workbook: &Workbook, path: &Path) -> Result<(), EngineError> {
     let bytes = preflight::run_with_engine_stack(|| workbook.to_xlsx())?;
+    write_atomic(path, &bytes, |written| {
+        load_guarded(written, "verify").map(|_| ())
+    })
+}
+
+// Every write over a user file goes through here: sibling temp file, read back
+// and verified, then renamed over the target.
+pub fn write_atomic(
+    path: &Path,
+    bytes: &[u8],
+    verify: impl Fn(&[u8]) -> Result<(), EngineError>,
+) -> Result<(), EngineError> {
     let temp = temp_path(path);
-    if let Err(source) = write_new(&temp, &bytes) {
+    if let Err(source) = write_new(&temp, bytes) {
         if source.kind() != std::io::ErrorKind::AlreadyExists {
             remove_temp(&temp);
         }
@@ -151,9 +163,12 @@ pub fn save_xlsx_atomic(workbook: &Workbook, path: &Path) -> Result<(), EngineEr
     let verified = fs::read(&temp)
         .map_err(|e| EngineError::VerifyFailed(e.to_string()))
         .and_then(|written| {
-            load_guarded(&written, "verify")
-                .map(|_| ())
-                .map_err(|e| EngineError::VerifyFailed(e.to_string()))
+            if written != bytes {
+                return Err(EngineError::VerifyFailed(
+                    "the file on disk differs from what was written".to_string(),
+                ));
+            }
+            verify(&written).map_err(|e| EngineError::VerifyFailed(e.to_string()))
         });
     if let Err(error) = verified {
         remove_temp(&temp);
@@ -246,6 +261,14 @@ mod tests {
             fs::write(&path, bytes).unwrap();
             assert!(open_xlsx(&path).is_err(), "{name}");
         }
+    }
+
+    #[test]
+    fn inputs_that_do_not_fit_are_rejected_not_clamped() {
+        let mut book = Workbook::new_empty().unwrap();
+        let near_end = CellPos::new(zenkai_types::RowIdx::LAST, zenkai_types::ColIdx::default());
+        let rows = vec![vec!["1".to_string()], vec!["2".to_string()]];
+        assert!(book.set_inputs(SheetId(0), near_end, &rows).is_err());
     }
 
     #[test]

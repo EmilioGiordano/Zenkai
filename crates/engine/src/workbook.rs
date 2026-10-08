@@ -200,6 +200,15 @@ impl Engine for Workbook {
         origin: CellPos,
         rows: &[Vec<String>],
     ) -> Result<(), EngineError> {
+        let height = rows.len() as u64;
+        let width = rows.iter().map(Vec::len).max().unwrap_or(0) as u64;
+        if u64::from(origin.row.get()) + height > u64::from(zenkai_types::MAX_ROWS)
+            || u64::from(origin.col.get()) + width > u64::from(zenkai_types::MAX_COLS)
+        {
+            return Err(EngineError::Rejected(format!(
+                "{height} rows by {width} columns starting at {origin} do not fit in a sheet"
+            )));
+        }
         self.model.pause_evaluation();
         let result = (0i64..).zip(rows).try_for_each(|(r, row)| {
             (0i64..).zip(row).try_for_each(|(c, text)| {
@@ -306,7 +315,13 @@ impl Engine for Workbook {
             .map(|ws| {
                 ws.merge_cells
                     .iter()
-                    .filter_map(|m| Range::parse_a1(m))
+                    .filter_map(|m| {
+                        let range = Range::parse_a1(m);
+                        if range.is_none() {
+                            tracing::warn!(merge = %m, "ignoring a merged range that does not parse");
+                        }
+                        range
+                    })
                     .collect()
             })
             .unwrap_or_default()
