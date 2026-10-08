@@ -1,3 +1,13 @@
+const SHOWN_CHARS: usize = 80;
+
+// User text echoed in an error is cut short so a hostile spec cannot flood a dialog or agent.
+pub(crate) fn clip(text: &str) -> String {
+    match text.char_indices().nth(SHOWN_CHARS) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_string(),
+    }
+}
+
 pub(crate) fn fold(text: &str) -> String {
     text.chars()
         .flat_map(char::to_lowercase)
@@ -30,6 +40,13 @@ pub(crate) fn literal_input(text: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clip_keeps_short_text_and_cuts_long_text_on_a_char_boundary() {
+        let exact = "ñ".repeat(SHOWN_CHARS);
+        assert_eq!(clip(&exact), exact);
+        assert_eq!(clip(&"ñ".repeat(SHOWN_CHARS + 1)), format!("{exact}…"));
+    }
 
     #[test]
     fn fold_lowercases_and_strips_accents() {

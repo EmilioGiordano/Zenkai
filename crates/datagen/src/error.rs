@@ -1,3 +1,5 @@
+use crate::text::clip;
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum DatagenError {
     #[error("the spec has no columns")]
@@ -6,7 +8,7 @@ pub enum DatagenError {
     TooManyRows { requested: u32, limit: u32 },
     #[error("{requested} columns do not fit in a sheet of {limit} columns")]
     TooManyColumns { requested: usize, limit: u16 },
-    #[error("column {} \"{header}\": {problem}", .position + 1)]
+    #[error("column {} \"{}\": {problem}", .position + 1, clip(.header))]
     Column {
         position: usize,
         header: String,
@@ -28,17 +30,17 @@ pub enum ColumnProblem {
     ZeroStep,
     #[error("{needed} distinct values are needed but only {available} exist")]
     DomainTooSmall { needed: u64, available: u128 },
-    #[error("no column is named \"{source_header}\"")]
+    #[error("no column is named \"{}\"", clip(.source_header))]
     UnknownSource { source_header: String },
-    #[error("more than one column is named \"{source_header}\"")]
+    #[error("more than one column is named \"{}\"", clip(.source_header))]
     AmbiguousSource { source_header: String },
-    #[error("column \"{source_header}\" holds no first names")]
+    #[error("column \"{}\" holds no first names", clip(.source_header))]
     NotFirstNameSource { source_header: String },
-    #[error("column \"{source_header}\" holds no last names")]
+    #[error("column \"{}\" holds no last names", clip(.source_header))]
     NotLastNameSource { source_header: String },
     #[error("no email domains are listed")]
     NoDomains,
-    #[error("\"{domain}\" is not a valid email domain")]
+    #[error("\"{}\" is not a valid email domain", clip(.domain))]
     InvalidDomain { domain: String },
     #[error("the pattern ends with an escape character")]
     DanglingEscape,
@@ -48,7 +50,7 @@ pub enum ColumnProblem {
     EmptyList,
     #[error("the list has an empty value")]
     EmptyOption,
-    #[error("the list repeats \"{value}\"")]
+    #[error("the list repeats \"{}\"", clip(.value))]
     DuplicateOption { value: String },
     #[error("every weight is zero")]
     AllWeightsZero,

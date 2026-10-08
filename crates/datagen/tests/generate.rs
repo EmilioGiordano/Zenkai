@@ -461,6 +461,13 @@ fn invalid_specs_name_the_column_and_the_problem() {
         error.to_string(),
         "column 1 \"Edad\": the minimum 9 is greater than the maximum 1"
     );
+    let long_header = "x".repeat(10_000);
+    let error = validate(&spec(
+        10,
+        vec![column(&long_header, ColumnKind::Integer { min: 9, max: 1 })],
+    ))
+    .unwrap_err();
+    assert!(error.to_string().len() < 200, "{error}");
     let email_from = |first: &str| {
         column(
             "Mail",

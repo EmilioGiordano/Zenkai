@@ -4,6 +4,8 @@ use std::fmt;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 
+use crate::text::clip;
+
 const FIRST_YEAR: i64 = 1900;
 const LAST_YEAR: i64 = 9999;
 
@@ -14,7 +16,10 @@ pub struct Date {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("\"{0}\" is not a date written as yyyy-mm-dd between 1900-01-01 and 9999-12-31")]
+#[error(
+    "\"{}\" is not a date written as yyyy-mm-dd between 1900-01-01 and 9999-12-31",
+    clip(.0)
+)]
 pub struct InvalidDate(pub String);
 
 impl Date {
