@@ -27,6 +27,8 @@ enum Op {
     },
     InsertRow(u32, i32),
     DeleteRow(u32, i32),
+    HideRow(u32, i32, bool),
+    DefineName(String),
     Undo,
     Redo,
 }
@@ -77,6 +79,11 @@ fn formula() -> impl Strategy<Value = String> {
         3 => cell().prop_map(|a| format!("=INDIRECT(\"B2\")+{a}")),
         3 => cell().prop_map(|a| format!("=OFFSET({a},1,0)")),
         1 => Just("=SEQUENCE(2)".to_string()),
+        1 => cell().prop_map(|a| format!("=SEQUENCE(MAX(1,MIN(3,{a})))")),
+        2 => range().prop_map(|r| format!("=SUBTOTAL(109,{r})")),
+        2 => Just("=SUM(total)*2".to_string()),
+        1 => Just("=SUM(A1:T3)".to_string()),
+        1 => Just("=SUM(Sheet2!B:B)".to_string()),
     ]
 }
 
@@ -113,7 +120,9 @@ fn op() -> impl Strategy<Value = Op> {
         )
             .prop_map(|(from, to, cut)| Op::CopyPaste { from, to, cut }),
         1 => (0..SHEETS, row.clone()).prop_map(|(s, r)| Op::InsertRow(s, r)),
-        1 => (0..SHEETS, row).prop_map(|(s, r)| Op::DeleteRow(s, r)),
+        1 => (0..SHEETS, row.clone()).prop_map(|(s, r)| Op::DeleteRow(s, r)),
+        1 => (0..SHEETS, row, any::<bool>()).prop_map(|(s, r, hidden)| Op::HideRow(s, r, hidden)),
+        1 => range().prop_map(|r| Op::DefineName(r)),
         2 => Just(Op::Undo),
         1 => Just(Op::Redo),
     ]
@@ -142,7 +151,7 @@ fn copy_paste(
     from: (u32, i32, i32, i32, i32),
     to: (u32, i32, i32),
     cut: bool,
-) {
+) -> Result<(), String> {
     let (sheet, row, column, height, width) = from;
     select(model, sheet, row, column, height, width);
     let payload = serde_json::to_value(model.copy_to_clipboard().unwrap()).unwrap();
@@ -150,13 +159,30 @@ fn copy_paste(
     let source_range: (i32, i32, i32, i32) =
         serde_json::from_value(payload["range"].clone()).unwrap();
     select(model, to.0, to.1, to.2, 1, 1);
-    // Like Excel, a paste that does not fit is refused and leaves the workbook as it was.
-    let _refused = model.paste_from_clipboard(sheet, source_range, &data, cut);
+    model.paste_from_clipboard(sheet, source_range, &data, cut)
 }
 
-fn apply(model: &mut UserModel, op: &Op) {
-    // Inputs the engine refuses (a paste over part of an array) leave the model as it was.
-    let _refused = match op {
+fn define_name(model: &mut UserModel, range: &str) -> Result<(), String> {
+    let formula = if range.contains('!') {
+        range.to_string()
+    } else {
+        format!("Sheet1!{range}")
+    };
+    if model
+        .get_defined_name_list()
+        .iter()
+        .any(|(name, _, _)| name == "total")
+    {
+        model.update_defined_name("total", None, "total", None, &formula)
+    } else {
+        model.new_defined_name("total", None, &formula)
+    }
+}
+
+// Whether the engine accepted the operation; a refused one (a paste over part of an
+// array) leaves the model as it was.
+fn apply(model: &mut UserModel, op: &Op) -> bool {
+    let result = match op {
         Op::Set(sheet, row, column, value) => model.set_user_input(*sheet, *row, *column, value),
         Op::Paste(sheet, row, column, rows) => {
             let height = i32::try_from(rows.len()).unwrap();
@@ -178,15 +204,15 @@ fn apply(model: &mut UserModel, op: &Op) {
             width: *width,
             height: *height,
         }),
-        Op::CopyPaste { from, to, cut } => {
-            copy_paste(model, *from, *to, *cut);
-            Ok(())
-        }
+        Op::CopyPaste { from, to, cut } => copy_paste(model, *from, *to, *cut),
         Op::InsertRow(sheet, row) => model.insert_rows(*sheet, *row, 1),
         Op::DeleteRow(sheet, row) => model.delete_rows(*sheet, *row, 1),
+        Op::HideRow(sheet, row, hidden) => model.set_rows_hidden(*sheet, *row, *row, *hidden),
+        Op::DefineName(range) => define_name(model, range),
         Op::Undo => model.undo(),
         Op::Redo => model.redo(),
     };
+    result.is_ok()
 }
 
 fn values(model: &UserModel) -> Vec<(u32, i32, i32, CellValue)> {
@@ -229,11 +255,14 @@ fn incremental_recalculation_matches_a_full_evaluation() {
     let mut runner =
         TestRunner::new_with_rng(config, TestRng::deterministic_rng(RngAlgorithm::ChaCha));
     let steps = std::cell::Cell::new(0u32);
+    let accepted = std::cell::Cell::new(0u32);
     let incremental = std::cell::Cell::new(0u32);
     let result = runner.run(&prop::collection::vec(op(), 1..25), |ops| {
         let mut model = two_sheets();
         for op in &ops {
-            apply(&mut model, op);
+            if apply(&mut model, op) {
+                accepted.set(accepted.get() + 1);
+            }
             steps.set(steps.get() + 1);
             if model.get_model().last_recalculation() == Recalculation::Incremental {
                 incremental.set(incremental.get() + 1);
@@ -246,6 +275,12 @@ fn incremental_recalculation_matches_a_full_evaluation() {
     if let Err(failure) = result {
         panic!("{failure}");
     }
+    assert!(
+        accepted.get() * 10 > steps.get() * 9,
+        "only {} of {} operations were accepted",
+        accepted.get(),
+        steps.get()
+    );
     // The fast path must be what is under test, not the fallback.
     assert!(
         incremental.get() * 2 > steps.get(),
