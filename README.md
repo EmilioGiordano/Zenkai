@@ -33,9 +33,20 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
 - CSV/TSV import with a preview: detected encoding and separator, decimal comma
   (`1.234,56`) and day-first dates (`25/10/2026`) with switches, and the table shows the
   values exactly as they will be imported. Save As `.csv` exports with a BOM.
-- Columns resize by dragging header edges; double-click autofits. Insert/delete rows and
-  columns, freeze panes, Go To (Ctrl+G / F5), fill down/right (Ctrl+D / Ctrl+R),
-  AutoSum (Alt+=), today/now (Ctrl+; / Ctrl+Shift+;), find (Ctrl+F).
+- Columns and rows resize by dragging header edges; double-click a column edge to
+  autofit. Insert/delete rows and columns, freeze panes (or just the top row / first
+  column), Go To (Ctrl+G / F5), fill down/right (Ctrl+D / Ctrl+R), AutoSum (Alt+=),
+  today/now (Ctrl+; / Ctrl+Shift+;), find (Ctrl+F).
+- Fill handle: drag the square at the selection corner to repeat it or continue a series
+  (1, 2 → 3, 4; a date → the next days; "Item 9" → "Item 10").
+- Sort A to Z / Z to A by the active cell's column; with one cell selected it sorts the
+  current region (Ctrl+Shift+* selects it).
+- Right-click menus on cells and sheet tabs, as in Excel.
+- Formatting: font and fill colour pickers, borders (bottom, all, outside, none;
+  Ctrl+Shift+& / Ctrl+Shift+_), strikethrough (Ctrl+5), font size steps
+  (Ctrl+Shift+> / <).
+- Numbers behave like Excel when they do not fit: General numbers lose decimals or switch
+  to scientific notation, formatted numbers and dates widen a default-width column.
 - Formula point mode: while typing a formula, arrows or clicks insert references, which
   are coloured in the formula and in the grid.
 - Light, dark and high-contrast themes; follows the system light/dark setting until one is
