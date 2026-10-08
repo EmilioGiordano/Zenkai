@@ -65,8 +65,8 @@ pub struct Workspace {
     find: Option<FindBar>,
     palette: Option<Entity<CommandState>>,
     session_lock: Option<recovery::SessionLock>,
-    rename: Option<Entity<InputState>>,
-    go_to: Option<Entity<InputState>>,
+    rename: Option<(Entity<InputState>, Subscription)>,
+    go_to: Option<(Entity<InputState>, Subscription)>,
     pending_sheet: Option<SheetId>,
     last_tab_click: Option<(Instant, SheetId)>,
     memory_mb: u64,
@@ -747,11 +747,12 @@ impl Workspace {
             let update = this.update(cx, |this, cx| {
                 let sheets_before = this.document.sheets.clone();
                 let sheet_before = this.document.sheet;
+                let pending_sheet = this.pending_sheet.take();
                 if !this.document.restore(workbook, generation) {
                     this.clear_busy(CALCULATING, cx);
                     return;
                 }
-                if let Some(target) = this.pending_sheet.take()
+                if let Some(target) = pending_sheet
                     && errors.is_empty()
                 {
                     this.document.sheet = target;
@@ -1293,7 +1294,7 @@ impl Workspace {
             .border_color(theme.border)
             .bg(theme.background)
             .child(match &self.go_to {
-                Some(input) => div()
+                Some((input, _)) => div()
                     .key_context("NameBox")
                     .w(px(120.0))
                     .child(Input::new(input))
@@ -1411,31 +1412,39 @@ impl Workspace {
     fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("A1 or A1:C10"));
-        let subscription = cx.subscribe_in(&input, window, |this, input, event, window, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                let target = input.read(cx).value().to_string();
-                this.close_go_to(window, cx);
-                match Range::parse_a1(&target) {
-                    Some(range) => this
-                        .grid
-                        .update(cx, |grid, cx| grid.select(range.start, range.end, cx)),
-                    None => this.notify(
-                        Severity::Warning,
-                        format!("\"{target}\" is not a cell or range reference"),
-                        cx,
-                    ),
-                }
-            }
-        });
-        self._subscriptions.push(subscription);
+        let subscription =
+            cx.subscribe_in(
+                &input,
+                window,
+                |this, input, event, window, cx| match event {
+                    InputEvent::PressEnter { .. } => {
+                        let target = input.read(cx).value().to_string();
+                        this.close_go_to(window, cx);
+                        match Range::parse_a1(&target) {
+                            Some(range) => {
+                                this.grid.update(cx, |grid, cx| grid.show_range(range, cx))
+                            }
+                            None => this.notify(
+                                Severity::Warning,
+                                format!("\"{target}\" is not a cell or range reference"),
+                                cx,
+                            ),
+                        }
+                    }
+                    InputEvent::Blur => this.close_go_to(window, cx),
+                    _ => {}
+                },
+            );
         let focus = input.focus_handle(cx);
         window.focus(&focus, cx);
-        self.go_to = Some(input);
+        self.go_to = Some((input, subscription));
         cx.notify();
     }
 
     fn close_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.go_to = None;
+        if self.go_to.take().is_none() {
+            return;
+        }
         let focus = self.grid.focus_handle(cx);
         window.focus(&focus, cx);
         cx.notify();
@@ -1464,10 +1473,9 @@ impl Workspace {
                 }
             }
         });
-        self._subscriptions.push(subscription);
         let focus = input.focus_handle(cx);
         window.focus(&focus, cx);
-        self.rename = Some(input);
+        self.rename = Some((input, subscription));
         cx.notify();
     }
 
@@ -1479,7 +1487,7 @@ impl Workspace {
     }
 
     fn render_rename(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let input = self.rename.as_ref()?;
+        let (input, _) = self.rename.as_ref()?;
         let theme = cx.theme();
         Some(
             h_flex()

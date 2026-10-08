@@ -285,6 +285,17 @@ impl Grid {
         cx.notify();
     }
 
+    pub fn show_range(&mut self, range: Range, cx: &mut Context<Self>) {
+        self.tab_start = None;
+        self.selection = Selection {
+            active: range.start,
+            corner: range.end,
+        };
+        self.scroll_into_view(range.start, cx);
+        cx.emit(GridEvent::SelectionChanged);
+        cx.notify();
+    }
+
     pub fn select(&mut self, active: CellPos, corner: CellPos, cx: &mut Context<Self>) {
         self.tab_start = None;
         self.selection = Selection { active, corner };
