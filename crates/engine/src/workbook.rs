@@ -66,6 +66,18 @@ pub trait Engine: Send {
         range: Range,
         code: &str,
     ) -> Result<(), EngineError>;
+    fn set_rows_hidden(
+        &mut self,
+        sheet: SheetId,
+        range: Range,
+        hidden: bool,
+    ) -> Result<(), EngineError>;
+    fn set_columns_hidden(
+        &mut self,
+        sheet: SheetId,
+        range: Range,
+        hidden: bool,
+    ) -> Result<(), EngineError>;
     fn undo(&mut self) -> Result<(), EngineError>;
     fn redo(&mut self) -> Result<(), EngineError>;
     fn sizes(&self, sheet: SheetId) -> SheetSizes;
@@ -728,6 +740,38 @@ impl Engine for Workbook {
     ) -> Result<(), EngineError> {
         self.model
             .update_range_style(&area(sheet, range), "num_fmt", code)
+            .map_err(rejected)
+    }
+
+    fn set_rows_hidden(
+        &mut self,
+        sheet: SheetId,
+        range: Range,
+        hidden: bool,
+    ) -> Result<(), EngineError> {
+        self.model
+            .set_rows_hidden(
+                sheet.0,
+                row_i32(range.start.row),
+                row_i32(range.end.row),
+                hidden,
+            )
+            .map_err(rejected)
+    }
+
+    fn set_columns_hidden(
+        &mut self,
+        sheet: SheetId,
+        range: Range,
+        hidden: bool,
+    ) -> Result<(), EngineError> {
+        self.model
+            .set_columns_hidden(
+                sheet.0,
+                col_i32(range.start.col),
+                col_i32(range.end.col),
+                hidden,
+            )
             .map_err(rejected)
     }
 

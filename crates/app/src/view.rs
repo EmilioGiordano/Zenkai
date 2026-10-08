@@ -1893,6 +1893,31 @@ impl Workspace {
         });
     }
 
+    // The rows (or columns) the selection touches, as Excel's Hide and Unhide.
+    fn hide(&mut self, rows: bool, hidden: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (sheet, range) = (self.document.sheet, self.selection(cx));
+        let whole_sheet = if rows {
+            range.rows() == zenkai_types::MAX_ROWS
+        } else {
+            range.cols() == zenkai_types::MAX_COLS
+        };
+        if hidden && whole_sheet {
+            self.notify(
+                Severity::Warning,
+                "Hiding every row or column is not supported.",
+                cx,
+            );
+            return;
+        }
+        self.edit(window, cx, move |wb| {
+            if rows {
+                wb.set_rows_hidden(sheet, range, hidden)
+            } else {
+                wb.set_columns_hidden(sheet, range, hidden)
+            }
+        });
+    }
+
     fn select_current_region(&mut self, cx: &mut Context<Self>) -> Range {
         let active = self.grid.read(cx).selection().active;
         let sheet = self.document.sheet;
@@ -2320,6 +2345,18 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &ToggleWrapText, window, cx| this.toggle_wrap(window, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &HideRows, window, cx| this.hide(true, true, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &UnhideRows, window, cx| this.hide(true, false, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &HideColumns, window, cx| this.hide(false, true, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &UnhideColumns, window, cx| {
+                this.hide(false, false, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &NoFill, window, cx| {
                 this.style(StyleChange::Fill(None), window, cx)
             }))

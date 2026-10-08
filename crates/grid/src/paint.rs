@@ -696,6 +696,10 @@ fn paint_headers(
     let font_size = px(12.0 * z);
     let sel = frame.selection;
     for (col, x, w) in &columns.xs {
+        // Hidden columns have no width and no label.
+        if *w <= 0.0 {
+            continue;
+        }
         let active = (sel.start.col..=sel.end.col).contains(col);
         let area = rect(origin, *x, 0.0, *w, header_h);
         let text_color = if active {
@@ -720,6 +724,9 @@ fn paint_headers(
         );
     }
     for (row, y, h) in &rows.ys {
+        if *h <= 0.0 {
+            continue;
+        }
         let active = (sel.start.row..=sel.end.row).contains(row);
         let area = rect(origin, 0.0, *y, header_w, *h);
         let text_color = if active {

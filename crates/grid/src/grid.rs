@@ -384,8 +384,28 @@ impl Grid {
     }
 
     fn move_active(&mut self, direction: Direction, cx: &mut Context<Self>) {
-        let pos = step(self.selection.active, direction, 1);
+        let pos = self.step_visible(self.selection.active, direction);
         self.select(pos, pos, cx);
+    }
+
+    // Arrow keys pass over hidden rows and columns, as in Excel; at the sheet edge, or
+    // when everything beyond is hidden, the position stays put.
+    fn step_visible(&self, from: CellPos, direction: Direction) -> CellPos {
+        let mut pos = from;
+        loop {
+            let next = step(pos, direction, 1);
+            if next == pos {
+                return from;
+            }
+            pos = next;
+            let hidden = match direction {
+                Direction::Up | Direction::Down => self.layout.row_height(pos.row) == 0.0,
+                Direction::Left | Direction::Right => self.layout.col_width(pos.col) == 0.0,
+            };
+            if !hidden {
+                return pos;
+            }
+        }
     }
 
     fn navigate(&mut self, direction: Direction, extend: bool, cx: &mut Context<Self>) {
@@ -420,7 +440,7 @@ impl Grid {
             self.commit_edit(cx);
         }
         if extend {
-            let corner = step(self.selection.corner, direction, 1);
+            let corner = self.step_visible(self.selection.corner, direction);
             self.select(self.selection.active, corner, cx);
         } else {
             self.move_active(direction, cx);

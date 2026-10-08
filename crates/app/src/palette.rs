@@ -63,6 +63,10 @@ pub fn groups() -> Vec<CommandGroup> {
         CommandGroup::new().label("Insert").items([
             item("Chart of the selection", InsertChart),
             item("Insert rows above", InsertRows),
+            item("Hide rows", HideRows),
+            item("Unhide rows in the selection", UnhideRows),
+            item("Hide columns", HideColumns),
+            item("Unhide columns in the selection", UnhideColumns),
             item("Insert columns to the left", InsertColumns),
             item("Delete selected rows", DeleteRows),
             item("Delete selected columns", DeleteColumns),

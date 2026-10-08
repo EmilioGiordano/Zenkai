@@ -731,6 +731,27 @@ line 2"
     }
 
     #[test]
+    fn hidden_rows_and_columns_have_no_size_and_unhide() {
+        let mut book = Workbook::new_empty().unwrap();
+        let rows = zenkai_types::Range::parse_a1("A2:A3").unwrap();
+        let cols = zenkai_types::Range::parse_a1("C1:D1").unwrap();
+        book.set_rows_hidden(SheetId(0), rows, true).unwrap();
+        book.set_columns_hidden(SheetId(0), cols, true).unwrap();
+        let sizes = book.sizes(SheetId(0));
+        assert!(sizes.rows.iter().any(|(r, h)| r.get() == 1 && *h == 0.0));
+        assert!(
+            sizes
+                .columns
+                .iter()
+                .any(|s| s.first.get() <= 2 && 2 <= s.last.get() && s.width == 0.0)
+        );
+        book.set_rows_hidden(SheetId(0), rows, false).unwrap();
+        assert!(!book.sizes(SheetId(0)).rows.iter().any(|(_, h)| *h == 0.0));
+        book.undo().unwrap();
+        assert!(book.sizes(SheetId(0)).rows.iter().any(|(_, h)| *h == 0.0));
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
