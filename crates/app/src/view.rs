@@ -6,6 +6,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
+
 use zenkai_engine::{Engine, EngineError, Opened, Workbook, open_xlsx, save_xlsx_atomic};
 use zenkai_grid::{Direction, EditMode, Grid, GridEvent, Layout};
 use zenkai_types::{CellPos, HAlign, NumberFormat, Range, SheetId, StyleChange};
@@ -36,7 +37,7 @@ pub struct Workspace {
     busy: Option<SharedString>,
     last_recalc: Option<Duration>,
     diagnostics: bool,
-    clipboard_source: Option<Range>,
+    clipboard_source: Option<(Range, String)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -196,6 +197,7 @@ impl Workspace {
         self.busy = Some("Calculating…".into());
         cx.notify();
         let started = Instant::now();
+        let generation = self.document.generation();
         cx.spawn(async move |this, cx| {
             let (workbook, errors) = cx
                 .background_executor()
@@ -205,7 +207,10 @@ impl Workspace {
                 })
                 .await;
             let update = this.update(cx, |this, cx| {
-                this.document.restore(workbook);
+                if !this.document.restore(workbook, generation) {
+                    this.clear_stale_busy(cx);
+                    return;
+                }
                 this.last_recalc = Some(started.elapsed());
                 this.busy = None;
                 if let Some(error) = errors.first() {
@@ -219,6 +224,13 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    fn clear_stale_busy(&mut self, cx: &mut Context<Self>) {
+        if self.document.workbook().is_some() {
+            self.busy = None;
+            cx.notify();
+        }
     }
 
     fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -298,14 +310,37 @@ impl Workspace {
     }
 
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
-        let must_rename = !self.document.unsupported.is_empty()
-            || self.document.path.as_ref().is_some_and(|p| {
-                p.extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("xlsm"))
-            });
+        let must_rename = !self.document.unsupported.is_empty() || self.document.is_macro_enabled();
         match self.document.path.clone() {
             Some(path) if !must_rename => self.save_to(path, window, cx),
-            _ => self.save_as(&SaveAs, window, cx),
+            Some(_) => {
+                let detail = if self.document.is_macro_enabled() {
+                    "Macros are not kept. The original .xlsm file will not be overwritten."
+                        .to_string()
+                } else {
+                    format!(
+                        "Saving will lose: {}. Save a copy with a new name to keep the original intact.",
+                        self.document.unsupported_labels()
+                    )
+                };
+                let answer = window.prompt(
+                    PromptLevel::Warning,
+                    "This workbook has content Zenkai cannot save yet",
+                    Some(&detail),
+                    &["Save As…", "Cancel"],
+                    cx,
+                );
+                cx.spawn_in(window, async move |this, cx| {
+                    if answer.await == Ok(0)
+                        && let Err(error) =
+                            this.update_in(cx, |this, window, cx| this.save_as(&SaveAs, window, cx))
+                    {
+                        tracing::debug!(%error, "workspace closed during save prompt");
+                    }
+                })
+                .detach();
+            }
+            None => self.save_as(&SaveAs, window, cx),
         }
     }
 
@@ -329,7 +364,7 @@ impl Workspace {
         let path = cx.prompt_for_new_path(&directory, Some(&format!("{suggested}.xlsx")));
         cx.spawn_in(window, async move |this, cx| {
             let chosen = match path.await {
-                Ok(Ok(Some(path))) => Some(path),
+                Ok(Ok(Some(path))) => Some(path.with_extension("xlsx")),
                 Ok(Ok(None)) => None,
                 Ok(Err(error)) => {
                     tracing::warn!(%error, "save dialog failed");
@@ -341,12 +376,38 @@ impl Workspace {
                 }
             };
             if let Some(path) = chosen
-                && let Err(error) = this.update_in(cx, |this, window, cx| {
-                    this.document.unsupported.clear();
-                    this.save_to(path, window, cx);
-                })
+                && let Err(error) =
+                    this.update_in(cx, |this, window, cx| this.confirm_target(path, window, cx))
             {
                 tracing::debug!(%error, "workspace closed during save dialog");
+            }
+        })
+        .detach();
+    }
+
+    fn confirm_target(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let replaces_source = self.document.path.as_ref() == Some(&path);
+        if !replaces_source || self.document.unsupported.is_empty() {
+            self.save_to(path, window, cx);
+            return;
+        }
+        let detail = format!(
+            "Replacing the original loses: {}. This cannot be undone.",
+            self.document.unsupported_labels()
+        );
+        let answer = window.prompt(
+            PromptLevel::Critical,
+            "Replace the original file?",
+            Some(&detail),
+            &["Cancel", "Replace"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await == Ok(1)
+                && let Err(error) =
+                    this.update_in(cx, |this, window, cx| this.save_to(path, window, cx))
+            {
+                tracing::debug!(%error, "workspace closed during replace prompt");
             }
         })
         .detach();
@@ -363,6 +424,7 @@ impl Workspace {
         };
         self.busy = Some("Saving…".into());
         cx.notify();
+        let generation = self.document.generation();
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
             let (workbook, result) = cx
@@ -373,12 +435,18 @@ impl Workspace {
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
+                if !this.document.restore(workbook, generation) {
+                    this.clear_stale_busy(cx);
+                    return;
+                }
                 this.busy = None;
-                this.document.restore(workbook);
                 match result {
                     Ok(()) => {
+                        if this.document.path.as_ref() != Some(&path) {
+                            this.document.unsupported.clear();
+                        }
                         this.document.path = Some(path);
-                        this.document.dirty = false;
+                        this.document.dirty = this.document.has_pending();
                         window.set_window_title(&this.document.title());
                         this.notify(Severity::Info, "Saved", cx);
                     }
@@ -438,9 +506,8 @@ impl Workspace {
         };
         match clipboard::copy_tsv(workbook, self.document.sheet, range) {
             Some(text) => {
-                cx.write_to_clipboard(ClipboardItem::new_string(text));
-                let source = cut.then_some(range);
-                self.clipboard_source = source;
+                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                self.clipboard_source = cut.then_some((range, text));
                 self.grid
                     .update(cx, |grid, cx| grid.set_marquee(Some(range), cx));
             }
@@ -455,7 +522,11 @@ impl Workspace {
         let rows = clipboard::parse_tsv(&text);
         let sheet = self.document.sheet;
         let origin = self.grid.read(cx).selection().active;
-        let cut_source = self.clipboard_source.take();
+        let cut_source = self
+            .clipboard_source
+            .take()
+            .filter(|(_, cut_text)| *cut_text == text)
+            .map(|(range, _)| range);
         let height = u32::try_from(rows.len()).unwrap_or(u32::MAX);
         let width = rows.iter().map(Vec::len).max().unwrap_or(0);
         let width = u16::try_from(width).unwrap_or(u16::MAX);
