@@ -3125,30 +3125,157 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::widen_for_numbers;
+    use super::{grow_wrapped_rows, widen_for_numbers};
     use zenkai_engine::{Engine, Workbook};
-    use zenkai_types::{CellPos, Range, SheetId};
+    use zenkai_types::{CellPos, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId};
+
+    const SHEET: SheetId = SheetId(0);
+
+    fn a1() -> CellPos {
+        CellPos::default()
+    }
+
+    fn row_height(wb: &Workbook, row: RowIdx) -> Option<f32> {
+        wb.sizes(SHEET)
+            .rows
+            .iter()
+            .find(|(candidate, _)| *candidate == row)
+            .map(|(_, height)| *height)
+    }
+
+    fn column_is_widened(wb: &Workbook) -> bool {
+        wb.sizes(SHEET)
+            .columns
+            .iter()
+            .any(|span| span.first == a1().col && span.width > DEFAULT_COL_WIDTH)
+    }
+
+    fn priced_number(wb: &mut Workbook, format: &str) {
+        wb.set_input(SHEET, a1(), "1234.5").unwrap();
+        wb.set_number_format(SHEET, Range::single(a1()), format)
+            .unwrap();
+    }
 
     #[test]
     fn formatting_a_number_that_no_longer_fits_widens_its_column() {
         let mut wb = Workbook::new_empty().unwrap();
-        let a1 = CellPos::default();
-        wb.set_input(SheetId(0), a1, "1234.5").unwrap();
-        let range = Range::single(a1);
-        wb.set_number_format(SheetId(0), range, "$#,##0.00")
+        priced_number(&mut wb, "$#,##0.00");
+        widen_for_numbers(&mut wb, SHEET, Range::single(a1())).unwrap();
+        assert!(column_is_widened(&wb));
+    }
+
+    #[test]
+    fn a_number_in_general_format_does_not_widen_its_column() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), "123456789012345").unwrap();
+        widen_for_numbers(&mut wb, SHEET, Range::single(a1())).unwrap();
+        assert!(!column_is_widened(&wb));
+    }
+
+    #[test]
+    fn a_formatted_number_that_fits_leaves_the_column_alone() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), "5").unwrap();
+        wb.set_number_format(SHEET, Range::single(a1()), "0.0")
             .unwrap();
-        eprintln!(
-            "PROBE text={:?} fmt={:?} sizes={:?}",
-            wb.cell(SheetId(0), a1).text,
-            wb.cell(SheetId(0), a1).style.num_fmt,
-            wb.sizes(SheetId(0)).columns
-        );
-        widen_for_numbers(&mut wb, SheetId(0), range).unwrap();
-        let widened = wb
-            .sizes(SheetId(0))
+        widen_for_numbers(&mut wb, SHEET, Range::single(a1())).unwrap();
+        assert!(!column_is_widened(&wb));
+    }
+
+    #[test]
+    fn a_column_with_a_custom_width_is_never_widened() {
+        let mut wb = Workbook::new_empty().unwrap();
+        priced_number(&mut wb, "$#,##0.00");
+        wb.set_column_width(SHEET, a1().col, 40.0).unwrap();
+        widen_for_numbers(&mut wb, SHEET, Range::single(a1())).unwrap();
+        let widths: Vec<f32> = wb
+            .sizes(SHEET)
             .columns
             .iter()
-            .any(|span| span.first == a1.col && span.width > zenkai_types::DEFAULT_COL_WIDTH);
-        assert!(widened, "{:?}", wb.sizes(SheetId(0)).columns);
+            .map(|span| span.width)
+            .collect();
+        assert_eq!(widths.len(), 1);
+        assert!(widths[0] < DEFAULT_COL_WIDTH);
+    }
+
+    #[test]
+    fn cells_outside_the_range_do_not_widen_their_column() {
+        let mut wb = Workbook::new_empty().unwrap();
+        priced_number(&mut wb, "$#,##0.00");
+        let elsewhere = Range::parse_a1("C3:D4").unwrap();
+        widen_for_numbers(&mut wb, SHEET, elsewhere).unwrap();
+        assert!(!column_is_widened(&wb));
+    }
+
+    #[test]
+    fn long_wrapped_text_grows_a_default_height_row() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), &"word ".repeat(40)).unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, Range::single(a1())).unwrap();
+        let height = row_height(&wb, a1().row).unwrap();
+        assert!(height > 2.0 * 19.0, "{height}");
+    }
+
+    #[test]
+    fn text_wrapping_to_two_lines_sets_a_two_line_row_height() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), &"x".repeat(10)).unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, Range::single(a1())).unwrap();
+        let height = row_height(&wb, a1().row).unwrap();
+        assert!((height - (2.0 * 19.0 + 4.0)).abs() < 1.0, "{height}");
+    }
+
+    #[test]
+    fn text_that_fits_on_one_line_leaves_the_row_alone() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), "short").unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, Range::single(a1())).unwrap();
+        assert_eq!(row_height(&wb, a1().row), None);
+    }
+
+    #[test]
+    fn numbers_never_grow_a_row() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), "123456789012345678").unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, Range::single(a1())).unwrap();
+        assert_eq!(row_height(&wb, a1().row), None);
+    }
+
+    #[test]
+    fn a_row_with_a_custom_height_keeps_it() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), &"word ".repeat(40)).unwrap();
+        wb.set_row_height(SHEET, a1().row, 30.0).unwrap();
+        let before = row_height(&wb, a1().row);
+        grow_wrapped_rows(&mut wb, SHEET, Range::single(a1())).unwrap();
+        assert_eq!(row_height(&wb, a1().row), before);
+    }
+
+    #[test]
+    fn wrapped_text_outside_the_range_does_not_grow_its_row() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), &"word ".repeat(40)).unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, Range::parse_a1("C3:D4").unwrap()).unwrap();
+        assert_eq!(row_height(&wb, a1().row), None);
+    }
+
+    #[test]
+    fn the_tallest_wrapped_cell_sets_the_row_height() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), &"word ".repeat(10)).unwrap();
+        let b1 = CellPos::parse_a1("B1").unwrap();
+        wb.set_input(SHEET, b1, &"word ".repeat(20)).unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, Range::parse_a1("A1:B1").unwrap()).unwrap();
+        let height = row_height(&wb, a1().row).unwrap();
+        assert!((height - (19.0 * 19.0 + 4.0)).abs() < 1.0, "{height}");
+    }
+
+    #[test]
+    fn a_very_long_text_stops_growing_at_twenty_lines() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), &"x".repeat(20_000)).unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, Range::single(a1())).unwrap();
+        let height = row_height(&wb, a1().row).unwrap();
+        assert!((height - (20.0 * 19.0 + 4.0)).abs() < 1.0, "{height}");
     }
 }

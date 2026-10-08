@@ -87,7 +87,7 @@ pub fn label(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_RECENT, parse, with};
+    use super::{MAX_RECENT, label, parse, with};
     use std::path::{Path, PathBuf};
 
     #[test]
@@ -107,5 +107,30 @@ mod tests {
     #[test]
     fn parses_one_path_per_line() {
         assert_eq!(parse("C:\\a.xlsx\n\nD:\\b.csv\n").len(), 2);
+    }
+
+    #[test]
+    fn opening_a_listed_file_moves_it_to_the_front() {
+        let recent = vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")];
+        assert_eq!(
+            with(&recent, Path::new("c")),
+            [PathBuf::from("c"), PathBuf::from("a"), PathBuf::from("b")]
+        );
+    }
+
+    #[test]
+    fn adding_to_an_empty_list_gives_just_that_file() {
+        assert_eq!(with(&[], Path::new("a")), [PathBuf::from("a")]);
+    }
+
+    #[test]
+    fn label_shows_the_file_name_then_its_folder() {
+        let path = Path::new("reports").join("q1.xlsx");
+        assert_eq!(label(&path), "q1.xlsx  (reports)");
+    }
+
+    #[test]
+    fn label_of_a_bare_name_has_an_empty_folder() {
+        assert_eq!(label(Path::new("q1.xlsx")), "q1.xlsx  ()");
     }
 }

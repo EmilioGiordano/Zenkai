@@ -52,8 +52,8 @@ pub fn current_region(active: CellPos, filled: impl Fn(CellPos) -> bool) -> Rang
 
 #[cfg(test)]
 mod tests {
-    use super::current_region;
-    use zenkai_types::{CellPos, Range};
+    use super::{MAX_REGION_CELLS, current_region};
+    use zenkai_types::{CellPos, ColIdx, MAX_COLS, MAX_ROWS, Range, RowIdx};
 
     fn pos(a1: &str) -> CellPos {
         CellPos::parse_a1(a1).unwrap()
@@ -70,5 +70,31 @@ mod tests {
     fn an_isolated_empty_cell_is_its_own_region() {
         let region = current_region(pos("H8"), |_| false);
         assert_eq!(region, Range::single(pos("H8")));
+    }
+
+    #[test]
+    fn a_block_in_the_top_left_corner_stops_at_the_sheet_edge() {
+        let filled = ["A1", "B1", "A2", "B2"].map(pos);
+        let region = current_region(pos("A1"), |p| filled.contains(&p));
+        assert_eq!(region, Range::new(pos("A1"), pos("B2")));
+    }
+
+    #[test]
+    fn a_block_in_the_last_row_and_column_stops_at_the_sheet_edge() {
+        let last = CellPos::new(
+            RowIdx::clamped(i64::from(MAX_ROWS) - 1),
+            ColIdx::clamped(i64::from(MAX_COLS) - 1),
+        );
+        let above = CellPos::new(RowIdx::clamped(i64::from(MAX_ROWS) - 2), last.col);
+        let filled = [last, above];
+        let region = current_region(last, |p| filled.contains(&p));
+        assert_eq!(region, Range::new(above, last));
+    }
+
+    #[test]
+    fn a_fully_filled_sheet_stops_growing_at_the_cap() {
+        let region = current_region(pos("A1"), |_| true);
+        assert!(region.cell_count() <= MAX_REGION_CELLS + u64::from(MAX_ROWS));
+        assert!(region.cell_count() < u64::from(MAX_ROWS) * u64::from(MAX_COLS));
     }
 }
