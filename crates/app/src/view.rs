@@ -733,7 +733,10 @@ impl Workspace {
             }
             GridEvent::Commit { pos, text } => {
                 let (sheet, pos, text) = (self.document.sheet, *pos, text.clone());
-                self.edit(window, cx, move |wb| wb.set_input(sheet, pos, &text));
+                self.edit(window, cx, move |wb| {
+                    wb.set_input(sheet, pos, &text)?;
+                    widen_for_number(wb, sheet, pos)
+                });
             }
             GridEvent::ClearRequested(range) => {
                 let (sheet, range) = (self.document.sheet, *range);
@@ -1850,7 +1853,10 @@ impl Workspace {
         if !time {
             // An ISO date is recognised and formatted by the engine in one undo step.
             let text = now.format("%Y-%m-%d").to_string();
-            self.edit(window, cx, move |wb| wb.set_input(sheet, active, &text));
+            self.edit(window, cx, move |wb| {
+                wb.set_input(sheet, active, &text)?;
+                widen_for_number(wb, sheet, active)
+            });
             return;
         }
         let midnight = now.date().and_hms_opt(0, 0, 0).unwrap_or(now);
@@ -2404,4 +2410,23 @@ fn rgb_of(color: Hsla) -> Rgb {
     let rgba = color.to_rgb();
     let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
     Rgb(channel(rgba.r) << 16 | channel(rgba.g) << 8 | channel(rgba.b))
+}
+
+// Excel widens a column that still has the default width when a number or date typed
+// into it would only show as ####; text keeps overflowing instead.
+fn widen_for_number(wb: &mut Workbook, sheet: SheetId, pos: CellPos) -> Result<(), EngineError> {
+    let view = wb.cell(sheet, pos);
+    if view.number.is_none() {
+        return Ok(());
+    }
+    let custom = wb
+        .sizes(sheet)
+        .columns
+        .iter()
+        .any(|span| span.first <= pos.col && pos.col <= span.last);
+    let needed = view.text.chars().count() as f32 * AUTOFIT_CHAR_WIDTH + 12.0;
+    if custom || needed <= zenkai_types::DEFAULT_COL_WIDTH {
+        return Ok(());
+    }
+    wb.set_column_width(sheet, pos.col, needed)
 }
