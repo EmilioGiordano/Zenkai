@@ -3,11 +3,13 @@
     reason = "test helpers fail the test by panicking; clippy only exempts #[test] functions"
 )]
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
+use interprocess::local_socket::prelude::*;
+use interprocess::local_socket::{GenericNamespaced, Stream};
 use serde_json::{Value, json};
-use zenkai_agent::bridge::{Bridge, PIPE_VARIABLE, TOKEN_VARIABLE};
+use zenkai_agent::bridge::{Bridge, MAX_LINE_BYTES, PIPE_VARIABLE, TOKEN_VARIABLE};
 use zenkai_agent::tools::{AgentAccess, LocalHost, WorkbookId, channel};
 use zenkai_engine::{Engine, Workbook};
 use zenkai_types::{CellPos, Range, SheetId};
@@ -203,4 +205,41 @@ fn the_endpoint_file_exists_only_while_the_bridge_runs() {
     assert!(text.contains(&bridge.address().pipe));
     drop(bridge);
     assert!(!file.exists());
+}
+
+#[test]
+fn the_relay_stops_at_an_oversized_message() {
+    let (endpoint, calls) = channel();
+    let server = std::thread::spawn(move || host().serve(calls));
+    let bridge = Bridge::start(endpoint, None).unwrap();
+    let mut client = Client::start(&bridge, &bridge.address().token);
+    let huge = vec![b'x'; MAX_LINE_BYTES + 1];
+    let written = client.stdin.write_all(&huge);
+    let status = client.child.wait().unwrap();
+    assert!(!status.success(), "{written:?}");
+    drop(bridge);
+    server.join().unwrap();
+}
+
+#[test]
+fn the_bridge_drops_a_client_sending_an_oversized_message() {
+    let (endpoint, calls) = channel();
+    let server = std::thread::spawn(move || host().serve(calls));
+    let bridge = Bridge::start(endpoint, None).unwrap();
+    let name = bridge
+        .address()
+        .pipe
+        .clone()
+        .to_ns_name::<GenericNamespaced>()
+        .unwrap();
+    let stream = Stream::connect(name).unwrap();
+    let (mut receive, mut send) = stream.split();
+    send.write_all(format!("{}\n", bridge.address().token).as_bytes())
+        .unwrap();
+    let sent = send.write_all(&vec![b'x'; MAX_LINE_BYTES + 4096]);
+    let mut reply = Vec::new();
+    let read = receive.read_to_end(&mut reply);
+    assert!(reply.is_empty(), "{sent:?} {read:?}");
+    drop(bridge);
+    server.join().unwrap();
 }

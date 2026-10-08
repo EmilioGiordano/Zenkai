@@ -1,4 +1,5 @@
 mod catalog;
+mod line_limit;
 mod server;
 
 use std::path::{Path, PathBuf};
@@ -10,7 +11,10 @@ use rmcp::ServiceExt;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 pub use catalog::{CallError, parse_call, tools};
+pub use line_limit::MAX_LINE_BYTES;
 pub use server::ZenkaiServer;
+
+use line_limit::LineLimited;
 
 use crate::tools::ToolEndpoint;
 
@@ -90,7 +94,7 @@ fn listener_options(pipe: &str) -> std::io::Result<ListenerOptions<'static>> {
 
 async fn serve_connection(stream: LocalSocketStream, token: String, endpoint: ToolEndpoint) {
     let (receive, send) = stream.split();
-    let mut reader = BufReader::new(receive);
+    let mut reader = BufReader::new(LineLimited::new(receive));
     let mut line = Vec::new();
     let limit = (TOKEN_BYTES * 2 + 2) as u64;
     let read = tokio::time::timeout(

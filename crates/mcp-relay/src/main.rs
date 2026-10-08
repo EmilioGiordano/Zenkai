@@ -11,6 +11,8 @@ use interprocess::local_socket::{GenericNamespaced, Stream};
 const PIPE_VARIABLE: &str = "ZENKAI_MCP_PIPE";
 const TOKEN_VARIABLE: &str = "ZENKAI_MCP_TOKEN";
 const ENDPOINT_FILE: &str = "mcp-endpoint.txt";
+// Zenkai refuses longer messages; the relay stops before buffering one.
+const MAX_LINE_BYTES: usize = 1024 * 1024;
 
 struct Endpoint {
     pipe: String,
@@ -77,15 +79,27 @@ fn relay() -> Result<(), String> {
     // Requests flow on their own thread. The relay ends when Zenkai closes the pipe or
     // when the client closes stdin, which means the client is gone.
     std::thread::spawn(move || {
-        let stdin = BufReader::new(std::io::stdin().lock());
-        for line in stdin.split(b'\n') {
-            let Ok(mut line) = line else { break };
-            line.push(b'\n');
+        let mut stdin = BufReader::new(std::io::stdin().lock());
+        loop {
+            let mut line = Vec::new();
+            let read = (&mut stdin)
+                .take(MAX_LINE_BYTES as u64 + 1)
+                .read_until(b'\n', &mut line);
+            match read {
+                Ok(0) | Err(_) => std::process::exit(0),
+                Ok(_) if line.len() > MAX_LINE_BYTES => {
+                    eprintln!("zenkai-mcp: a message is longer than Zenkai accepts");
+                    std::process::exit(1);
+                }
+                Ok(_) => {}
+            }
+            if !line.ends_with(b"\n") {
+                line.push(b'\n');
+            }
             if send.write_all(&line).and_then(|()| send.flush()).is_err() {
-                break;
+                std::process::exit(0);
             }
         }
-        std::process::exit(0);
     });
     copy(receive, std::io::stdout().lock()).map_err(|error| format!("pipe closed: {error}"))
 }
