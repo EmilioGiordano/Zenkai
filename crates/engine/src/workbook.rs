@@ -59,6 +59,7 @@ pub trait Engine: Send {
     fn sheets(&self) -> Vec<SheetInfo>;
     fn cell(&self, sheet: SheetId, pos: CellPos) -> CellView;
     fn input(&self, sheet: SheetId, pos: CellPos) -> String;
+    fn filled(&self, sheet: SheetId) -> impl Fn(CellPos) -> bool;
     fn number(&self, sheet: SheetId, pos: CellPos) -> Option<f64>;
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError>;
     fn set_inputs(
@@ -464,6 +465,24 @@ impl Engine for Workbook {
         self.model
             .get_cell_content(sheet.0, row_i32(pos.row), col_i32(pos.col))
             .unwrap_or_default()
+    }
+
+    // A formula returning "" counts as filled, as it does for Ctrl+Arrow in Excel. The
+    // sheet is looked up once so a scan over thousands of cells only pays the cell lookups.
+    fn filled(&self, sheet: SheetId) -> impl Fn(CellPos) -> bool {
+        let sheet_data = self
+            .model
+            .get_model()
+            .workbook
+            .worksheet(sheet.0)
+            .ok()
+            .map(|ws| &ws.sheet_data);
+        move |pos| {
+            sheet_data
+                .and_then(|rows| rows.get(&row_i32(pos.row)))
+                .and_then(|columns| columns.get(&col_i32(pos.col)))
+                .is_some_and(|cell| !matches!(cell, ironcalc::base::types::Cell::EmptyCell { .. }))
+        }
     }
 
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError> {

@@ -949,9 +949,7 @@ impl Workspace {
             selection.active
         };
         let used_end = workbook.used_end(sheet);
-        let target = jump_target(from, direction, used_end, |pos| {
-            !workbook.cell(sheet, pos).text.is_empty()
-        });
+        let target = jump_target(from, direction, used_end, workbook.filled(sheet));
         self.grid.update(cx, |grid, cx| {
             let active = if extend { selection.active } else { target };
             grid.select(active, target, cx);

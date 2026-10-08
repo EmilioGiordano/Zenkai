@@ -883,6 +883,25 @@ line 2"
     }
 
     #[test]
+    fn filled_covers_values_and_formulas_but_not_styled_blanks() {
+        let mut book = Workbook::new_empty().unwrap();
+        let at = |text: &str| CellPos::parse_a1(text).unwrap();
+        book.set_input(SheetId(0), at("A1"), "1").unwrap();
+        book.set_input(SheetId(0), at("A2"), "=\"\"").unwrap();
+        book.apply_style(
+            SheetId(0),
+            zenkai_types::Range::single(at("A3")),
+            zenkai_types::StyleChange::Bold(true),
+        )
+        .unwrap();
+        let filled = book.filled(SheetId(0));
+        assert!(filled(at("A1")));
+        assert!(filled(at("A2")));
+        assert!(!filled(at("A3")));
+        assert!(!filled(at("A4")));
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();
