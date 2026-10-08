@@ -350,7 +350,6 @@ impl Workspace {
         }
     }
 
-    // The bridge runs only while the user allows external agents.
     pub(super) fn sync_bridge(&mut self, cx: &mut Context<Self>) {
         let wanted = cx
             .global::<AgentConfig>()

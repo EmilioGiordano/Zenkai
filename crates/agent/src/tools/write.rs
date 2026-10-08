@@ -168,7 +168,6 @@ impl PlannedWrite {
         }
     }
 
-    // Shown to the user before they allow the change.
     pub fn describe(&self) -> String {
         let place = format!("'{}'!{}", self.sheet_name, self.target);
         match &self.change {
