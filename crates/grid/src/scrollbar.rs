@@ -10,9 +10,9 @@ pub enum Axis {
     Horizontal,
 }
 
-// Where the viewport sits among the rows or columns past the frozen panes. The range
-// runs to the end of the used area, and further once the user scrolled beyond it, so
-// the last used row can reach the top as in Excel.
+// Where the viewport sits among the rows or columns past the frozen panes. `used` counts
+// them. The range ends when the last used one reaches the top, as in Excel, and runs
+// further once the user scrolled beyond it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scroll {
     pub first: u32,
@@ -34,7 +34,7 @@ pub enum Page {
 
 impl Scroll {
     fn scrollable(self) -> u32 {
-        self.used.max(self.first)
+        self.used.saturating_sub(1).max(self.first)
     }
 
     pub fn thumb(self, track: f32) -> Thumb {
@@ -207,7 +207,7 @@ mod tests {
         Scroll {
             first,
             visible: 40,
-            used: 200_000,
+            used: 200_001,
         }
     }
 
@@ -218,6 +218,19 @@ mod tests {
         assert_eq!(top.start, 0.0);
         assert_eq!(top.length, bottom.length);
         assert!((bottom.start + bottom.length - 600.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_last_used_row_is_the_furthest_the_thumb_goes() {
+        let sheet = |used| Scroll {
+            first: 0,
+            visible: 40,
+            used,
+        };
+        assert_eq!(sheet(100).first_at(600.0, 600.0), 99);
+        assert_eq!(sheet(100).paged(Page::Forward), 39);
+        assert_eq!(sheet(1).first_at(600.0, 600.0), 0);
+        assert_eq!(sheet(1).paged(Page::Forward), 0);
     }
 
     #[test]
