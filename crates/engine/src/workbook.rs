@@ -25,6 +25,12 @@ pub trait Engine: Send {
     fn cell(&self, sheet: SheetId, pos: CellPos) -> CellView;
     fn input(&self, sheet: SheetId, pos: CellPos) -> String;
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError>;
+    fn set_inputs(
+        &mut self,
+        sheet: SheetId,
+        origin: CellPos,
+        rows: &[Vec<String>],
+    ) -> Result<(), EngineError>;
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
     fn apply_style(
         &mut self,
@@ -176,6 +182,26 @@ impl Engine for Workbook {
         self.model
             .set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
             .map_err(rejected)
+    }
+
+    fn set_inputs(
+        &mut self,
+        sheet: SheetId,
+        origin: CellPos,
+        rows: &[Vec<String>],
+    ) -> Result<(), EngineError> {
+        self.model.pause_evaluation();
+        let result = (0i64..).zip(rows).try_for_each(|(r, row)| {
+            (0i64..).zip(row).try_for_each(|(c, text)| {
+                let pos = CellPos::new(origin.row.offset(r), origin.col.offset(c));
+                self.model
+                    .set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
+                    .map_err(rejected)
+            })
+        });
+        self.model.resume_evaluation();
+        self.model.evaluate();
+        result
     }
 
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
