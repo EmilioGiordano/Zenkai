@@ -87,6 +87,23 @@ pub fn save(paths: &SettingsPaths, settings: &Settings) -> Result<(), SettingsFi
     write_atomic(&paths.settings(), &settings.to_json()?)
 }
 
+// Applies a change to the file as it is on disk now, not to a copy read earlier: an edit
+// made meanwhile is kept, and a file that does not parse (someone's unfinished edit) is
+// refused rather than replaced.
+pub fn update(
+    paths: &SettingsPaths,
+    change: impl FnOnce(&mut Settings),
+) -> Result<Settings, SettingsFileError> {
+    static UPDATING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _updating = UPDATING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut settings = load(&paths.settings())?;
+    change(&mut settings);
+    save(paths, &settings)?;
+    Ok(settings)
+}
+
 // Written beside the target and renamed over it, so a reader (Zenkai's own watcher or
 // an agent) never sees half a file.
 fn write_atomic(path: &Path, text: &str) -> Result<(), SettingsFileError> {
@@ -222,6 +239,41 @@ mod tests {
             })
             .count();
         assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn an_update_never_replaces_a_file_that_does_not_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        std::fs::create_dir_all(&paths.folder).unwrap();
+        let broken = "{ \"agents\": { \"permission\": ";
+        std::fs::write(paths.settings(), broken).unwrap();
+        let refused = update(&paths, |settings| {
+            settings.agents.permission = PermissionMode::Automatic;
+        });
+        assert!(matches!(
+            refused,
+            Err(SettingsFileError::Settings(SettingsError::Parse { .. }))
+        ));
+        assert_eq!(std::fs::read_to_string(paths.settings()).unwrap(), broken);
+    }
+
+    #[test]
+    fn an_update_keeps_what_was_written_on_disk_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        prepare(&paths).unwrap();
+        std::fs::write(
+            paths.settings(),
+            "{ \"agents\": { \"permission\": \"read_only\" } }",
+        )
+        .unwrap();
+        let updated = update(&paths, |settings| {
+            settings.agents.external_agents = crate::settings::ExternalAgents::Allowed;
+        })
+        .unwrap();
+        assert_eq!(updated.agents.permission, PermissionMode::ReadOnly);
+        assert_eq!(load(&paths.settings()).unwrap(), updated);
     }
 
     #[test]

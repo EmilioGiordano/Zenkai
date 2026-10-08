@@ -145,36 +145,21 @@ fn secret_states(names: &[SecretName]) -> BTreeMap<SecretName, SecretState> {
         .collect()
 }
 
-// A file that does not parse is the user's (or an agent's) unfinished edit: writing the
-// last good settings over it would throw that edit away.
-pub fn change(cx: &mut App, edit: impl FnOnce(&mut Settings)) {
-    let config = cx.global::<AgentConfig>();
-    let (problem, paths) = (config.state.problem.clone(), config.paths.clone());
-    let mut settings = config.state.current.clone();
-    if let Some(problem) = problem {
-        cx.update_global::<AgentConfig, _>(|config, _| {
-            config.failure = Some(format!(
-                "Fix settings.json before changing settings here: {problem}"
-            ));
-        });
-        return;
-    }
-    let Some(paths) = paths else {
+pub fn change(cx: &mut App, edit: impl FnOnce(&mut Settings) + Send + 'static) {
+    let Some(paths) = cx.global::<AgentConfig>().paths.clone() else {
         return;
     };
-    edit(&mut settings);
     cx.spawn(async move |cx| {
-        let saved = settings.clone();
         let written = cx
             .background_executor()
-            .spawn(async move { settings_file::save(&paths, &saved) })
+            .spawn(async move { settings_file::update(&paths, edit) })
             .await;
         cx.update_global::<AgentConfig, _>(|config, _| match written {
-            Ok(()) => {
+            Ok(settings) => {
                 config.state.apply(Ok(settings));
                 config.failure = None;
             }
-            Err(error) => config.failure = Some(error.to_string()),
+            Err(error) => config.failure = Some(format!("Settings were not changed: {error}")),
         });
         refresh_secrets(cx);
     })
