@@ -323,6 +323,29 @@ mod tests {
     }
 
     #[test]
+    fn fill_down_and_right_copy_with_shifted_references() {
+        let mut book = Workbook::new_empty().unwrap();
+        let sheet = SheetId(0);
+        let rows = vec![
+            vec!["1".to_string(), "=A1*10".to_string()],
+            vec!["2".to_string(), String::new()],
+            vec!["3".to_string(), String::new()],
+        ];
+        book.set_inputs(sheet, CellPos::default(), &rows).unwrap();
+        let b1_b3 = zenkai_types::Range::parse_a1("B1:B3").unwrap();
+        book.fill(sheet, b1_b3, true).unwrap();
+        let b3 = CellPos::parse_a1("B3").unwrap();
+        assert_eq!(book.input(sheet, b3), "=A3*10");
+        assert_eq!(book.cell(sheet, b3).text, "30");
+        let c1 = zenkai_types::Range::parse_a1("C1").unwrap();
+        book.fill(sheet, c1, false).unwrap();
+        assert_eq!(
+            book.input(sheet, CellPos::parse_a1("C1").unwrap()),
+            "=B1*10"
+        );
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

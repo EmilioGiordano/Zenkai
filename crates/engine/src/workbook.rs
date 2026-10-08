@@ -13,7 +13,7 @@ use zenkai_types::{
 };
 
 const LOCALE: &str = "en";
-const TIMEZONE: &str = "UTC";
+const MAX_FILL_CELLS: u64 = 1_000_000;
 const LANGUAGE: &str = "en";
 // Stored widths are in Excel characters and heights in points; these give Excel's pixels.
 const PIXELS_PER_CHAR: f64 = 7.0;
@@ -32,6 +32,7 @@ pub trait Engine: Send {
         rows: &[Vec<String>],
     ) -> Result<(), EngineError>;
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError>;
+    fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError>;
     fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError>;
     fn paste(
         &mut self,
@@ -102,6 +103,17 @@ fn check_input(text: &str) -> Result<(), EngineError> {
     Ok(())
 }
 
+// TODAY() and NOW() must follow the user clock, as in Excel.
+fn timezone() -> &'static str {
+    static TIMEZONE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TIMEZONE.get_or_init(|| {
+        iana_time_zone::get_timezone()
+            .ok()
+            .filter(|tz| ironcalc::base::Model::new_empty("probe", LOCALE, tz, LANGUAGE).is_ok())
+            .unwrap_or_else(|| "UTC".to_string())
+    })
+}
+
 fn rejected(message: String) -> EngineError {
     EngineError::Rejected(message)
 }
@@ -126,12 +138,13 @@ fn area(sheet: SheetId, range: Range) -> Area {
 
 impl Workbook {
     pub fn new_empty() -> Result<Workbook, EngineError> {
-        let model = UserModel::new_empty("Book1", LOCALE, TIMEZONE, LANGUAGE).map_err(rejected)?;
+        let model =
+            UserModel::new_empty("Book1", LOCALE, timezone(), LANGUAGE).map_err(rejected)?;
         Ok(Workbook { model })
     }
 
     pub fn from_xlsx_bytes(bytes: &[u8], name: &str) -> Result<Workbook, EngineError> {
-        let book = load_from_xlsx_bytes(bytes, name, LOCALE, TIMEZONE)
+        let book = load_from_xlsx_bytes(bytes, name, LOCALE, timezone())
             .map_err(|e| EngineError::InvalidFile(format!("{e:?}")))?;
         let model = ironcalc::base::Model::from_workbook(book, LANGUAGE)
             .map_err(EngineError::InvalidFile)?;
@@ -297,6 +310,72 @@ impl Engine for Workbook {
         self.model
             .paste_from_clipboard(source_sheet, source_range, &data, cut)
             .map_err(rejected)
+    }
+
+    // Ctrl+D / Ctrl+R: the first row (or column) of the target is copied over the rest;
+    // a single row (or column) target copies the one above (or to the left), as Excel does.
+    fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError> {
+        let (source, rest) = if down {
+            if target.rows() == 1 {
+                if target.start.row.get() == 0 {
+                    return Ok(());
+                }
+                let above = target.start.row.offset(-1);
+                let source = Range::new(
+                    CellPos::new(above, target.start.col),
+                    CellPos::new(above, target.end.col),
+                );
+                (source, target)
+            } else {
+                let source =
+                    Range::new(target.start, CellPos::new(target.start.row, target.end.col));
+                let rest = Range::new(
+                    CellPos::new(target.start.row.offset(1), target.start.col),
+                    target.end,
+                );
+                (source, rest)
+            }
+        } else if target.cols() == 1 {
+            if target.start.col.get() == 0 {
+                return Ok(());
+            }
+            let left = target.start.col.offset(-1);
+            let source = Range::new(
+                CellPos::new(target.start.row, left),
+                CellPos::new(target.end.row, left),
+            );
+            (source, target)
+        } else {
+            let source = Range::new(target.start, CellPos::new(target.end.row, target.start.col));
+            let rest = Range::new(
+                CellPos::new(target.start.row, target.start.col.offset(1)),
+                target.end,
+            );
+            (source, rest)
+        };
+        if rest.cell_count() > MAX_FILL_CELLS {
+            return Err(rejected(format!(
+                "filling {} cells at once is not supported",
+                rest.cell_count()
+            )));
+        }
+        let copied = self.copy(sheet, source)?;
+        self.model.pause_evaluation();
+        let steps: Vec<CellPos> = if down {
+            (rest.start.row.get()..=rest.end.row.get())
+                .map(|row| CellPos::new(RowIdx::clamped(i64::from(row)), rest.start.col))
+                .collect()
+        } else {
+            (rest.start.col.get()..=rest.end.col.get())
+                .map(|col| CellPos::new(rest.start.row, ColIdx::clamped(i64::from(col))))
+                .collect()
+        };
+        let result = steps
+            .into_iter()
+            .try_for_each(|at| self.paste(sheet, at, &copied, false));
+        self.model.resume_evaluation();
+        self.model.evaluate();
+        result
     }
 
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {

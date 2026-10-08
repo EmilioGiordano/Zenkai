@@ -282,6 +282,7 @@ pub enum NumberFormat {
     Currency,
     Percent,
     Date,
+    Time,
 }
 
 impl NumberFormat {
@@ -292,6 +293,7 @@ impl NumberFormat {
             NumberFormat::Currency => "$#,##0.00",
             NumberFormat::Percent => "0.00%",
             NumberFormat::Date => "dd/mm/yyyy",
+            NumberFormat::Time => "h:mm",
         }
     }
 }
