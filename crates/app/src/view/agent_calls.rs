@@ -336,7 +336,7 @@ impl Workspace {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child("An agent wants to:"),
                 )
-                .child(div().flex_1().child(pending.plan.describe()))
+                .child(div().flex_1().min_w_0().child(pending.plan.describe()))
                 .child(
                     div()
                         .text_sm()
