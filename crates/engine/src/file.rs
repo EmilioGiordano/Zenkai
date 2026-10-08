@@ -870,6 +870,19 @@ line 2"
     }
 
     #[test]
+    fn used_end_follows_every_edit() {
+        let mut book = Workbook::new_empty().unwrap();
+        let (c5, e9) = (
+            CellPos::parse_a1("C5").unwrap(),
+            CellPos::parse_a1("E9").unwrap(),
+        );
+        book.set_input(SheetId(0), c5, "1").unwrap();
+        assert_eq!(book.used_end(SheetId(0)), c5);
+        book.set_input(SheetId(0), e9, "2").unwrap();
+        assert_eq!(book.used_end(SheetId(0)), e9);
+    }
+
+    #[test]
     fn undo_restores_previous_value() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = CellPos::parse_a1("A1").unwrap();

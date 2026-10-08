@@ -3,6 +3,7 @@
 mod empty_rows;
 mod error;
 mod file;
+mod model;
 mod preflight;
 mod workbook;
 

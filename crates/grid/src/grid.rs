@@ -265,45 +265,24 @@ impl Grid {
         (self.visible_rows, self.visible_cols)
     }
 
-    pub fn visible_ranges(&self) -> Vec<Range> {
-        let origin = self.scroll_origin();
-        let end = CellPos::new(
-            origin.row.offset(i64::from(self.visible_rows)),
-            origin.col.offset(i64::from(self.visible_cols)),
-        );
-        let mut ranges = vec![Range::new(origin, end)];
-        let zero = CellPos::default();
-        if self.frozen_rows > 0 {
-            let last = RowIdx::clamped(i64::from(self.frozen_rows) - 1);
-            ranges.push(Range::new(
-                CellPos::new(zero.row, origin.col),
-                CellPos::new(last, end.col),
-            ));
-        }
-        if self.frozen_cols > 0 {
-            let last = ColIdx::clamped(i64::from(self.frozen_cols) - 1);
-            ranges.push(Range::new(
-                CellPos::new(origin.row, zero.col),
-                CellPos::new(end.row, last),
-            ));
-        }
-        if self.frozen_rows > 0 && self.frozen_cols > 0 {
-            ranges.push(Range::new(
-                zero,
-                CellPos::new(
-                    RowIdx::clamped(i64::from(self.frozen_rows) - 1),
-                    ColIdx::clamped(i64::from(self.frozen_cols) - 1),
-                ),
-            ));
-        }
-        ranges
+    pub fn cached_ranges(&self) -> Vec<Range> {
+        cached_ranges(
+            self.scroll_origin(),
+            self.visible_rows,
+            self.visible_cols,
+            self.frozen_rows,
+            self.frozen_cols,
+        )
+    }
+
+    fn apply_view(&mut self, view: SheetView) {
+        self.layout = Rc::new(view.layout);
+        (self.frozen_rows, self.frozen_cols) = capped_frozen(view.frozen_rows, view.frozen_cols);
+        self.merges = Rc::new(view.merges);
     }
 
     pub fn reset(&mut self, view: SheetView, cx: &mut Context<Self>) {
-        self.layout = Rc::new(view.layout);
-        self.frozen_rows = view.frozen_rows;
-        self.frozen_cols = view.frozen_cols;
-        self.merges = Rc::new(view.merges);
+        self.apply_view(view);
         self.cells = Rc::new(HashMap::new());
         self.top = RowIdx::default();
         self.left = ColIdx::default();
@@ -318,10 +297,7 @@ impl Grid {
     }
 
     pub fn update_view(&mut self, view: SheetView, cx: &mut Context<Self>) {
-        self.layout = Rc::new(view.layout);
-        self.frozen_rows = view.frozen_rows;
-        self.frozen_cols = view.frozen_cols;
-        self.merges = Rc::new(view.merges);
+        self.apply_view(view);
         self.viewport_changed(cx);
     }
 
@@ -340,6 +316,20 @@ impl Grid {
             cells.insert(pos, cell);
         }
         cx.notify();
+    }
+
+    // Typed text shows at once while a recalculation runs; the recalculation's own
+    // refresh of the cache replaces it, so it never outlives the document or sheet.
+    pub fn show_typed(&mut self, range: Range, text: &str, cx: &mut Context<Self>) {
+        if range.cell_count() > MAX_TYPED_PREVIEW_CELLS {
+            return;
+        }
+        let text: SharedString = text.to_string().into();
+        let changes: Vec<_> = range
+            .positions()
+            .filter_map(|pos| Some((pos, typed_preview(self.cells.get(&pos), &text)?)))
+            .collect();
+        self.update_cells(changes, cx);
     }
 
     pub fn set_marquee(&mut self, range: Option<Range>, cx: &mut Context<Self>) {
@@ -1426,10 +1416,88 @@ impl Grid {
     }
 }
 
+const MAX_TYPED_PREVIEW_CELLS: u64 = 10_000;
+// More frozen panes than any screen can show would only make every frame and refresh
+// walk panes that cannot be seen, as Excel stops them at the window size.
+const MAX_FROZEN_ROWS: u32 = 200;
+const MAX_FROZEN_COLS: u16 = 100;
+
+fn capped_frozen(rows: u32, cols: u16) -> (u32, u16) {
+    (rows.min(MAX_FROZEN_ROWS), cols.min(MAX_FROZEN_COLS))
+}
+
+// A formula keeps its last value: its typed text is not what the cell will show.
+fn typed_preview(existing: Option<&GridCell>, text: &SharedString) -> Option<GridCell> {
+    if text.starts_with('=') {
+        return None;
+    }
+    let kind = if text.is_empty() {
+        ValueKind::Empty
+    } else if text.trim().parse::<f64>().is_ok_and(f64::is_finite) {
+        ValueKind::Number
+    } else {
+        ValueKind::Text
+    };
+    Some(GridCell {
+        text: text.clone(),
+        kind,
+        style: existing.map(|cell| cell.style.clone()).unwrap_or_default(),
+    })
+}
+
+// One extra screen of rows above and below the viewport, so a short scroll while the
+// workbook is busy still lands on cached values.
+fn cached_ranges(
+    origin: CellPos,
+    visible_rows: u32,
+    visible_cols: u16,
+    frozen_rows: u32,
+    frozen_cols: u16,
+) -> Vec<Range> {
+    let first_row = origin
+        .row
+        .offset(-i64::from(visible_rows))
+        .max(RowIdx::clamped(i64::from(frozen_rows)));
+    let last_row = origin.row.offset(2 * i64::from(visible_rows));
+    let end_col = origin.col.offset(i64::from(visible_cols));
+    let zero = CellPos::default();
+    let mut ranges = vec![Range::new(
+        CellPos::new(first_row, origin.col),
+        CellPos::new(last_row, end_col),
+    )];
+    if frozen_rows > 0 {
+        let last = RowIdx::clamped(i64::from(frozen_rows) - 1);
+        ranges.push(Range::new(
+            CellPos::new(zero.row, origin.col),
+            CellPos::new(last, end_col),
+        ));
+    }
+    if frozen_cols > 0 {
+        let last = ColIdx::clamped(i64::from(frozen_cols) - 1);
+        ranges.push(Range::new(
+            CellPos::new(first_row, zero.col),
+            CellPos::new(last_row, last),
+        ));
+    }
+    if frozen_rows > 0 && frozen_cols > 0 {
+        ranges.push(Range::new(
+            zero,
+            CellPos::new(
+                RowIdx::clamped(i64::from(frozen_rows) - 1),
+                ColIdx::clamped(i64::from(frozen_cols) - 1),
+            ),
+        ));
+    }
+    ranges
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Direction, cycle_within, next_boundary, prev_boundary};
-    use zenkai_types::{CellPos, Range};
+    use super::{
+        Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, cached_ranges, capped_frozen,
+        cycle_within, next_boundary, prev_boundary, typed_preview,
+    };
+    use zenkai_types::{CellPos, CellStyle, Range, ValueKind};
 
     fn pos(text: &str) -> CellPos {
         CellPos::parse_a1(text).unwrap()
@@ -1451,5 +1519,81 @@ mod tests {
         assert_eq!(prev_boundary(text, 3), 1);
         assert_eq!(prev_boundary(text, 0), 0);
         assert_eq!(next_boundary(text, text.len()), text.len());
+    }
+
+    #[test]
+    fn cache_covers_a_screen_above_and_below() {
+        let ranges = cached_ranges(pos("C101"), 40, 10, 0, 0);
+        assert_eq!(ranges, vec![Range::new(pos("C61"), pos("M181"))]);
+    }
+
+    #[test]
+    fn cache_stops_at_the_first_row_and_below_the_frozen_rows() {
+        assert_eq!(
+            cached_ranges(pos("A11"), 40, 10, 0, 0),
+            vec![Range::new(pos("A1"), pos("K91"))]
+        );
+        let ranges = cached_ranges(pos("A11"), 5, 10, 8, 0);
+        assert_eq!(ranges[0], Range::new(pos("A9"), pos("K21")));
+    }
+
+    #[test]
+    fn frozen_panes_are_capped_to_what_fits_on_screen() {
+        assert_eq!(capped_frozen(2, 3), (2, 3));
+        assert_eq!(
+            capped_frozen(1_048_575, 16_383),
+            (MAX_FROZEN_ROWS, MAX_FROZEN_COLS)
+        );
+    }
+
+    #[test]
+    fn cache_keeps_the_frozen_panes() {
+        let ranges = cached_ranges(pos("C101"), 40, 10, 2, 2);
+        assert_eq!(ranges.len(), 4);
+        assert!(ranges.contains(&Range::new(pos("C1"), pos("M2"))));
+        assert!(ranges.contains(&Range::new(pos("A61"), pos("B181"))));
+        assert!(ranges.contains(&Range::new(pos("A1"), pos("B2"))));
+    }
+
+    #[test]
+    fn typed_text_replaces_the_value_and_keeps_the_style() {
+        let mut existing = GridCell {
+            text: "Cliente 2301".into(),
+            kind: ValueKind::Text,
+            style: CellStyle::default(),
+        };
+        existing.style.bold = true;
+        let preview = typed_preview(Some(&existing), &"a".into()).unwrap();
+        assert_eq!(preview.text.as_ref(), "a");
+        assert_eq!(preview.kind, ValueKind::Text);
+        assert!(preview.style.bold);
+        assert_eq!(
+            typed_preview(None, &"12.5".into()).unwrap().kind,
+            ValueKind::Number
+        );
+        assert_eq!(
+            typed_preview(None, &"".into()).unwrap().kind,
+            ValueKind::Empty
+        );
+    }
+
+    #[test]
+    fn only_finite_numbers_preview_as_numbers() {
+        for text in ["inf", "-inf", "nan", "infinity", "NaN"] {
+            assert_eq!(
+                typed_preview(None, &text.into()).unwrap().kind,
+                ValueKind::Text,
+                "{text}"
+            );
+        }
+        assert_eq!(
+            typed_preview(None, &"-1e3".into()).unwrap().kind,
+            ValueKind::Number
+        );
+    }
+
+    #[test]
+    fn a_typed_formula_keeps_the_last_value() {
+        assert!(typed_preview(None, &"=A1+1".into()).is_none());
     }
 }

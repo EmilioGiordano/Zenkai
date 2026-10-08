@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,7 +25,7 @@ use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
-use crate::document::{self, Document};
+use crate::document::{self, Document, FileJob};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
@@ -44,6 +43,7 @@ use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
+use gpui_kit::component::spinner::Spinner;
 
 struct FormulaBarEdit {
     input: Entity<InputState>,
@@ -288,17 +288,18 @@ impl Workspace {
     }
 
     fn refresh_cells(&mut self, cx: &mut Context<Self>) {
-        let ranges = self.grid.read(cx).visible_ranges();
-        let mut cells = HashMap::new();
-        for range in ranges {
-            cells.extend(self.document.cells(range, self.show_formulas));
-        }
+        // While a recalculation holds the workbook the grid keeps showing the last values;
+        // the recalculation refreshes the cells when it hands the workbook back.
+        let ranges = self.grid.read(cx).cached_ranges();
+        let Some(cells) = self.document.cells(&ranges, self.show_formulas) else {
+            return;
+        };
         self.grid.update(cx, |grid, cx| grid.set_cells(cells, cx));
     }
 
     fn refresh_chart(&mut self) {
         if let (Some(panel), Some(wb)) = (&mut self.chart, self.document.workbook()) {
-            panel.refresh(wb);
+            panel.refresh(&wb);
         }
     }
 
@@ -428,24 +429,19 @@ impl Workspace {
             recovery::remove(&own);
             return;
         }
-        if self.document.has_pending() {
-            return;
-        }
-        let Some(workbook) = self.document.take() else {
+        let Some(shared) = self.document.begin_file_job(FileJob::Autosaving) else {
             return;
         };
         let generation = self.document.generation();
         cx.spawn(async move |this, cx| {
             let target = own.clone();
-            let (workbook, result) = cx
+            let result = cx
                 .background_executor()
-                .spawn(async move {
-                    let result = recovery::write(&workbook, &target);
-                    (workbook, result)
-                })
+                .spawn(async move { recovery::write(&document::read_shared(&shared), &target) })
                 .await;
             let update = this.update(cx, |this, cx| {
-                if !this.document.restore(workbook, generation) {
+                this.document.end_file_job(generation);
+                if !this.document.is_current(generation) {
                     return;
                 }
                 if let Err(error) = result {
@@ -456,7 +452,6 @@ impl Workspace {
                         cx,
                     );
                 }
-                this.flush_edits(cx);
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during autosave");
@@ -660,7 +655,7 @@ impl Workspace {
             );
             return;
         }
-        let Some(workbook) = self.document.take() else {
+        let Some(shared) = self.document.begin_read() else {
             self.notify(
                 Severity::Warning,
                 "Still calculating, try again in a moment.",
@@ -673,16 +668,15 @@ impl Workspace {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let task_query = query.clone();
-            let (workbook, matches) = cx
-                .background_executor()
-                .spawn(async move {
-                    let matches = find::search(&workbook, sheet, &task_query);
-                    (workbook, matches)
-                })
-                .await;
+            let matches =
+                cx.background_executor()
+                    .spawn(async move {
+                        find::search(&document::read_shared(&shared), sheet, &task_query)
+                    })
+                    .await;
             let update = this.update(cx, |this, cx| {
                 this.clear_busy(SEARCHING, cx);
-                if !this.document.restore(workbook, generation) {
+                if !this.document.is_current(generation) {
                     return;
                 }
                 if let Some(bar) = &mut this.find {
@@ -695,7 +689,6 @@ impl Workspace {
                         this.grid.update(cx, |grid, cx| grid.select(pos, pos, cx));
                     }
                 }
-                this.flush_edits(cx);
                 cx.notify();
             });
             if let Err(error) = update {
@@ -757,7 +750,7 @@ impl Workspace {
             return;
         };
         let source = self.grid.read(cx).selection().range();
-        self.chart = Some(ChartPanel::new(workbook, self.document.sheet, source));
+        self.chart = Some(ChartPanel::new(&workbook, self.document.sheet, source));
         cx.notify();
     }
 
@@ -832,7 +825,7 @@ impl Workspace {
         let selection = self.grid.read(cx).selection();
         let sheet = self.document.sheet;
         if let Some(wb) = self.document.workbook() {
-            self.stats = stats::compute(wb, sheet, selection.range());
+            self.stats = stats::compute(&wb, sheet, selection.range());
             self.active_input = wb.input(sheet, selection.active).into();
             self.active_style = wb.cell(sheet, selection.active).style;
             let formula = self.active_input.clone();
@@ -896,6 +889,7 @@ impl Workspace {
             }
             GridEvent::CommitToSelection { pos, text, range } => {
                 let (sheet, pos, text, range) = (self.document.sheet, *pos, text.clone(), *range);
+                self.show_typed(range, &text, cx);
                 self.edit(window, cx, move |wb| wb.fill_with(sheet, pos, &text, range));
             }
             GridEvent::ClearRequested(range) => {
@@ -972,8 +966,13 @@ impl Workspace {
         self.flush_edits(cx);
     }
 
+    fn show_typed(&mut self, range: Range, text: &str, cx: &mut Context<Self>) {
+        self.grid
+            .update(cx, |grid, cx| grid.show_typed(range, text, cx));
+    }
+
     fn flush_edits(&mut self, cx: &mut Context<Self>) {
-        let Some((mut workbook, edits)) = self.document.take_batch() else {
+        let Some((shared, edits)) = self.document.take_batch() else {
             return;
         };
         self.busy = Some(CALCULATING.into());
@@ -981,18 +980,15 @@ impl Workspace {
         let started = Instant::now();
         let generation = self.document.generation();
         cx.spawn(async move |this, cx| {
-            let (workbook, errors) = cx
+            let errors = cx
                 .background_executor()
-                .spawn(async move {
-                    let errors = document::run_batch(&mut workbook, edits);
-                    (workbook, errors)
-                })
+                .spawn(async move { document::run_batch(&shared, edits) })
                 .await;
             let update = this.update(cx, |this, cx| {
                 let sheets_before = this.document.sheets.clone();
                 let sheet_before = this.document.sheet;
                 let pending_sheet = this.pending_sheet.take();
-                if !this.document.restore(workbook, generation) {
+                if !this.document.finish_batch(generation) {
                     this.clear_busy(CALCULATING, cx);
                     return;
                 }
@@ -1043,7 +1039,7 @@ impl Workspace {
     fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         // A CSV read and an xlsx open replace the same document: the newer one wins.
         self.next_open_request();
-        self.busy = Some(format!("Reading {}…", path.display()).into());
+        self.busy = Some(format!("Reading {}…", file_label(&path)).into());
         cx.notify();
         let label = self.busy.clone().unwrap_or_default();
         let request = self.next_csv_request();
@@ -1249,7 +1245,7 @@ impl Workspace {
             );
             return;
         };
-        let rows = files::sheet_rows(workbook, self.document.sheet);
+        let rows = files::sheet_rows(&workbook, self.document.sheet);
         let sheets = self.document.sheets.len();
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
@@ -1278,7 +1274,7 @@ impl Workspace {
             self.import_csv(path, window, cx);
             return;
         }
-        self.busy = Some(format!("Opening {}…", path.display()).into());
+        self.busy = Some(format!("Opening {}…", file_label(&path)).into());
         cx.notify();
         let started = Instant::now();
         let request = self.next_open_request();
@@ -1371,7 +1367,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.busy = Some(format!("Reading values from {}…", path.display()).into());
+        self.busy = Some(format!("Reading values from {}…", file_label(&path)).into());
         let label = self.busy.clone().unwrap_or_default();
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
@@ -1646,28 +1642,27 @@ impl Workspace {
     }
 
     fn save_to(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(workbook) = self.document.take() else {
-            self.notify(
-                Severity::Warning,
-                "Still calculating, try again in a moment.",
-                cx,
-            );
+        let Some(shared) = self.document.begin_file_job(FileJob::Saving) else {
+            let reason = match self.document.file_job() {
+                FileJob::Idle => "Still calculating, try again in a moment.",
+                FileJob::Saving | FileJob::Autosaving => "Still saving, try again in a moment.",
+            };
+            self.notify(Severity::Warning, reason, cx);
             return;
         };
         self.busy = Some(SAVING.into());
         cx.notify();
+        let edits_at_start = self.edit_count;
         let generation = self.document.generation();
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
-            let (workbook, result) = cx
+            let result = cx
                 .background_executor()
-                .spawn(async move {
-                    let result = save_xlsx_atomic(&workbook, &target);
-                    (workbook, result)
-                })
+                .spawn(async move { save_xlsx_atomic(&document::read_shared(&shared), &target) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                if !this.document.restore(workbook, generation) {
+                this.document.end_file_job(generation);
+                if !this.document.is_current(generation) {
                     this.clear_busy(SAVING, cx);
                     if let Err(error) = result {
                         this.notify(
@@ -1685,7 +1680,7 @@ impl Workspace {
                             this.document.unsupported.clear();
                         }
                         this.document.path = Some(path);
-                        this.document.dirty = this.document.has_pending();
+                        this.document.dirty = this.edit_count != edits_at_start;
                         window.set_window_title(&this.document.title());
                         this.notify(Severity::Info, "Saved", cx);
                     }
@@ -1784,24 +1779,25 @@ impl Workspace {
     fn copy(&mut self, cut: bool, cx: &mut Context<Self>) {
         let range = self.selection(cx);
         let sheet = self.document.sheet;
-        let Some(workbook) = self.document.workbook_mut() else {
-            self.notify(
+        let outcome = self.document.workbook_mut().map(|mut workbook| {
+            let end = workbook.used_end(sheet);
+            let clipped = range.clip_to(end).unwrap_or(Range::single(range.start));
+            if clipped.cell_count() > clipboard::MAX_COPY_CELLS {
+                return None;
+            }
+            Some(workbook.copy(sheet, clipped))
+        });
+        match outcome {
+            None => self.notify(
                 Severity::Warning,
                 "Still calculating, try again in a moment.",
                 cx,
-            );
-            return;
-        };
-        let end = workbook.used_end(sheet);
-        let clipped = range.clip_to(end).unwrap_or(Range::single(range.start));
-        if clipped.cell_count() > clipboard::MAX_COPY_CELLS {
-            self.notify(Severity::Warning, "The selection is too large to copy.", cx);
-            return;
-        }
-        match workbook.copy(sheet, clipped) {
-            Ok(copied) => {
+            ),
+            Some(None) => {
+                self.notify(Severity::Warning, "The selection is too large to copy.", cx);
+            }
+            Some(Some(Ok(copied))) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(copied.text.clone()));
-                let sheet = self.document.sheet;
                 self.clipboard_source = Some(InternalClip {
                     copied,
                     cut,
@@ -1811,7 +1807,7 @@ impl Workspace {
                 self.grid
                     .update(cx, |grid, cx| grid.set_marquee(Some(range), cx));
             }
-            Err(error) => self.notify(Severity::Error, error.to_string(), cx),
+            Some(Some(Err(error))) => self.notify(Severity::Error, error.to_string(), cx),
         }
     }
 
@@ -2154,7 +2150,11 @@ impl Workspace {
         self.last_style = None;
         let (sheet, range) = (self.document.sheet, self.selection(cx));
         let active = self.grid.read(cx).selection().active;
-        let Some(workbook) = self.document.workbook() else {
+        let Some(view) = self
+            .document
+            .workbook()
+            .map(|workbook| workbook.cell(sheet, active))
+        else {
             self.notify(
                 Severity::Warning,
                 "Still calculating, try again in a moment.",
@@ -2162,7 +2162,6 @@ impl Workspace {
             );
             return;
         };
-        let view = workbook.cell(sheet, active);
         let Some(code) = decimals::step_decimals(
             &view.style.num_fmt,
             (view.kind == zenkai_types::ValueKind::Number).then_some(view.text.as_str()),
@@ -2327,6 +2326,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if sheet == self.document.sheet {
+            self.show_typed(Range::single(pos), &text, cx);
+        }
         self.edit(window, cx, move |wb| {
             // Excel turns on wrap text for a cell typed with a line break.
             let wraps = text.contains('\n') && !text.starts_with('=');
@@ -2652,6 +2654,46 @@ impl Workspace {
         };
         self.pending_sheet = Some(SheetId(target));
         self.edit(window, cx, move |wb| wb.move_sheet(sheet, target));
+    }
+
+    // Opening a large file takes seconds; the status bar text alone went unnoticed.
+    // Recalculations stay in the status bar only: most last a frame and the pill would
+    // flash on every edit.
+    fn render_busy(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let busy = self
+            .busy
+            .clone()
+            .filter(|busy| busy.as_ref() != CALCULATING)?;
+        let theme = cx.theme();
+        let indicator = if cx.reduce_motion() {
+            div().child("…").into_any_element()
+        } else {
+            Spinner::new().color(theme.primary).into_any_element()
+        };
+        Some(
+            div()
+                .absolute()
+                .top(px(96.0))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .px_4()
+                        .py_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.popover)
+                        .text_color(theme.popover_foreground)
+                        .shadow_md()
+                        .child(indicator)
+                        .child(busy),
+                ),
+        )
     }
 
     fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3094,9 +3136,17 @@ impl Render for Workspace {
             .child(self.render_tabs(cx))
             .child(self.render_status(cx))
             .children(self.render_palette())
+            .children(self.render_busy(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
     }
+}
+
+fn file_label(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 // Excel's cell context menu, trimmed to what Zenkai supports. Actions go to the grid so

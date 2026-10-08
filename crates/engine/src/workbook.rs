@@ -7,6 +7,7 @@ use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx_bytes;
 
 use crate::error::EngineError;
+use crate::model::CachedModel;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, HAlign, Range, Rgb, RowIdx,
     SheetId, SheetInfo, SheetSizes, StyleChange, VAlign, ValueKind,
@@ -157,7 +158,7 @@ pub trait Engine: Send {
 }
 
 pub struct Workbook {
-    model: UserModel<'static>,
+    model: CachedModel,
 }
 
 // What a copy produced: the text Excel and other apps understand, plus the engine's
@@ -334,7 +335,9 @@ impl Workbook {
     pub fn new_empty() -> Result<Workbook, EngineError> {
         let model =
             UserModel::new_empty("Book1", LOCALE, timezone(), LANGUAGE).map_err(rejected)?;
-        Ok(Workbook { model })
+        Ok(Workbook {
+            model: CachedModel::new(model),
+        })
     }
 
     pub fn from_xlsx_bytes(bytes: &[u8], name: &str) -> Result<Workbook, EngineError> {
@@ -344,7 +347,18 @@ impl Workbook {
             .map_err(EngineError::InvalidFile)?;
         let mut model = UserModel::from_model(model);
         model.evaluate();
-        Ok(Workbook { model })
+        let workbook = Workbook {
+            model: CachedModel::new(model),
+        };
+        workbook.warm_used_areas();
+        Ok(workbook)
+    }
+
+    // Call on a background thread after building or editing, so the UI thread never walks a sheet.
+    pub fn warm_used_areas(&self) {
+        for sheet in self.sheets() {
+            self.model.used_end(sheet.id);
+        }
     }
 
     fn resolve(&self, color: &Color) -> Option<Rgb> {
@@ -710,8 +724,10 @@ impl Engine for Workbook {
     }
 
     fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError> {
-        select(&mut self.model, sheet, range)?;
-        let clipboard = self.model.copy_to_clipboard().map_err(rejected)?;
+        let clipboard = self.model.select_without_invalidation(|model| {
+            select(model, sheet, range)?;
+            model.copy_to_clipboard().map_err(rejected)
+        })?;
         let payload = serde_json::to_value(&clipboard).map_err(|e| rejected(e.to_string()))?;
         let text = payload
             .get("csv")
@@ -1143,19 +1159,7 @@ impl Engine for Workbook {
     }
 
     fn used_end(&self, sheet: SheetId) -> CellPos {
-        let dimension = self
-            .model
-            .get_model()
-            .workbook
-            .worksheet(sheet.0)
-            .map(|ws| ws.dimension());
-        match dimension {
-            Ok(d) => CellPos::new(
-                RowIdx::clamped(i64::from(d.max_row) - 1),
-                ColIdx::clamped(i64::from(d.max_column) - 1),
-            ),
-            Err(_) => CellPos::default(),
-        }
+        self.model.used_end(sheet)
     }
 
     fn add_sheet(&mut self) -> Result<SheetId, EngineError> {
