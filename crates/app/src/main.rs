@@ -10,6 +10,7 @@ mod files;
 mod find;
 mod jump;
 mod palette;
+mod recovery;
 mod stats;
 mod toolbar;
 mod view;

@@ -21,6 +21,7 @@ use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::jump::jump_target;
 use crate::palette;
+use crate::recovery;
 use crate::stats::{self, SelectionStats};
 use crate::toolbar;
 use gpui_kit::component::command::{Command, CommandState};
@@ -94,6 +95,7 @@ impl Workspace {
         if let Some(path) = initial {
             workspace.open_path(path, window, cx);
         }
+        workspace.start_autosave(window, cx);
         workspace
     }
 
@@ -187,6 +189,137 @@ impl Workspace {
         if let Some(bar) = &mut self.find {
             bar.results = FindResults::default();
         }
+    }
+
+    fn start_autosave(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(directory) = recovery::directory() else {
+            tracing::warn!("no data directory for recovery files; autosave is off");
+            return;
+        };
+        let own = recovery::own_file(&directory);
+        let on_quit_file = own.clone();
+        let quit = cx.on_app_quit(move |_, _| {
+            recovery::remove(&on_quit_file);
+            async {}
+        });
+        self._subscriptions.push(quit);
+        let leftovers = recovery::leftovers(&directory);
+        let own_for_recovery = own.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            if !leftovers.is_empty()
+                && let Err(error) = this.update_in(cx, |this, window, cx| {
+                    this.offer_recovery(leftovers, own_for_recovery, window, cx)
+                })
+            {
+                tracing::debug!(%error, "workspace closed before recovery");
+            }
+            loop {
+                cx.background_executor()
+                    .timer(recovery::AUTOSAVE_EVERY)
+                    .await;
+                let own = own.clone();
+                if this.update(cx, |this, cx| this.autosave(own, cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn autosave(&mut self, own: PathBuf, cx: &mut Context<Self>) {
+        if !self.document.dirty {
+            recovery::remove(&own);
+            return;
+        }
+        if self.document.has_pending() {
+            return;
+        }
+        let Some(workbook) = self.document.take() else {
+            return;
+        };
+        let generation = self.document.generation();
+        cx.spawn(async move |this, cx| {
+            let target = own.clone();
+            let (workbook, result) = cx
+                .background_executor()
+                .spawn(async move {
+                    let result = recovery::write(&workbook, &target);
+                    (workbook, result)
+                })
+                .await;
+            let update = this.update(cx, |this, cx| {
+                if !this.document.restore(workbook, generation) {
+                    return;
+                }
+                if let Err(error) = result {
+                    tracing::warn!(%error, "autosave failed");
+                }
+                this.flush_edits(cx);
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during autosave");
+            }
+        })
+        .detach();
+    }
+
+    fn offer_recovery(
+        &mut self,
+        leftovers: Vec<PathBuf>,
+        own: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let detail = format!(
+            "Zenkai closed unexpectedly and kept {} unsaved workbook(s). Open the most recent one?",
+            leftovers.len()
+        );
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Recover unsaved work?",
+            Some(&detail),
+            &["Open recovered", "Discard"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(choice) = answer.await else {
+                return;
+            };
+            if choice == 1 {
+                leftovers.iter().for_each(|path| recovery::remove(path));
+                return;
+            }
+            let Some(newest) = leftovers
+                .iter()
+                .max_by_key(|path| std::fs::metadata(path).and_then(|m| m.modified()).ok())
+            else {
+                return;
+            };
+            let path = newest.clone();
+            let opened = cx
+                .background_executor()
+                .spawn(async move { open_xlsx(&path).map(|opened| (opened, path)) })
+                .await;
+            let update = this.update_in(cx, |this, window, cx| match opened {
+                Ok((opened, path)) => {
+                    this.document = Document::new(opened.workbook, None, opened.unsupported);
+                    this.document.dirty = true;
+                    this.reset_grid(window, cx);
+                    // Kept as this session's own recovery copy until the work is saved.
+                    if let Err(error) = std::fs::rename(&path, &own) {
+                        tracing::warn!(?path, %error, "could not adopt the recovery file");
+                    }
+                    this.notify(Severity::Warning, "Recovered work. Save it to keep it.", cx);
+                }
+                Err(error) => {
+                    this.notify(Severity::Error, format!("Could not recover: {error}"), cx)
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during recovery");
+            }
+        })
+        .detach();
     }
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
