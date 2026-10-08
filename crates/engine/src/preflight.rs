@@ -61,7 +61,7 @@ fn has_checked_element(bytes: &[u8]) -> bool {
         rest = &rest[at + 1..];
         let name_end = rest
             .iter()
-            .position(|b| !(b.is_ascii_alphanumeric() || matches!(b, b':' | b'_' | b'-' | b'.')))
+            .position(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/' | b'<'))
             .unwrap_or(rest.len());
         let name = &rest[..name_end];
         let local = name.rsplit(|b| *b == b':').next().unwrap_or(name);
@@ -206,6 +206,8 @@ mod tests {
         assert!(has_checked_element(
             b"<definedNames><definedName name=\"a\">1</definedName>"
         ));
+        assert!(has_checked_element("<ñ:f>1</ñ:f>".as_bytes()));
+        assert!(has_checked_element(b"<f>1</f"));
         assert!(!has_checked_element(
             b"<row r=\"1\"><c r=\"A1\"><v>12</v></c><font/><fill/></row>"
         ));
