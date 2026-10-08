@@ -2433,11 +2433,12 @@ fn rgb_of(color: Hsla) -> Rgb {
     Rgb(channel(rgba.r) << 16 | channel(rgba.g) << 8 | channel(rgba.b))
 }
 
-// Excel widens a column that still has the default width when a number or date typed
-// into it would only show as ####; text keeps overflowing instead.
+// Excel widens a column that still has the default width when a formatted number or date
+// typed into it would only show as ####. General numbers are shortened when painted
+// instead, and text keeps overflowing.
 fn widen_for_number(wb: &mut Workbook, sheet: SheetId, pos: CellPos) -> Result<(), EngineError> {
     let view = wb.cell(sheet, pos);
-    if view.number.is_none() {
+    if view.number.is_none() || view.style.num_fmt == "general" {
         return Ok(());
     }
     let custom = wb
