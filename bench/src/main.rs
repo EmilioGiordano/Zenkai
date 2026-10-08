@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod baseline;
 mod compat;
 mod coverage;
 mod fixtures;
@@ -20,6 +21,7 @@ use fixtures::Fixture;
 static PEAK: PeakAlloc = PeakAlloc;
 
 const ENGINES: [&str; 2] = ["ironcalc", "logisheets"];
+const BASELINE_ENGINE: &str = "ironcalc";
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 
 fn main() -> Result<()> {
@@ -33,10 +35,68 @@ fn main() -> Result<()> {
         ["compat", dir, report] => compat::report(Path::new(dir), Path::new(report)),
         ["run", dir] => run_all(Path::new(dir), 5),
         ["run", dir, runs] => run_all(Path::new(dir), runs.parse()?),
+        ["check", dir, baseline, current] => {
+            check(Path::new(dir), Path::new(baseline), Path::new(current), 5)
+        }
+        ["check", dir, baseline, current, runs] => check(
+            Path::new(dir),
+            Path::new(baseline),
+            Path::new(current),
+            runs.parse()?,
+        ),
         _ => bail!(
-            "usage: zenkai-bench generate <dir> | measure <engine> <fixture file> <dir> | coverage | run <dir> [runs] | compat-generate <dir> | compat <dir> <report.md>"
+            "usage: zenkai-bench generate <dir> | measure <engine> <fixture file> <dir> | coverage | run <dir> [runs] | check <dir> <baseline.csv> <current.csv> [runs] | compat-generate <dir> | compat <dir> <report.md>"
         ),
     }
+}
+
+fn ensure_fixtures(dir: &Path) -> Result<()> {
+    if Fixture::ALL
+        .iter()
+        .any(|f| !dir.join(f.file_name()).exists())
+    {
+        generate(dir)?;
+    }
+    Ok(())
+}
+
+fn check(dir: &Path, baseline_path: &Path, current_path: &Path, runs: usize) -> Result<()> {
+    let text = std::fs::read_to_string(baseline_path)
+        .with_context(|| format!("reading {}", baseline_path.display()))?;
+    let baseline =
+        baseline::parse(&text).with_context(|| format!("parsing {}", baseline_path.display()))?;
+    ensure_fixtures(dir)?;
+    let exe = std::env::current_exe()?;
+    let mut current = Vec::new();
+    for fixture in baseline::fixtures(&baseline) {
+        let samples: Result<Vec<_>> = (0..runs)
+            .map(|_| measure_subprocess(&exe, BASELINE_ENGINE, fixture, dir))
+            .collect();
+        match samples {
+            Ok(samples) => current.extend(baseline::Metric::ALL.into_iter().filter_map(|metric| {
+                median(&samples, metric.key()).map(|value| baseline::Measurement {
+                    fixture,
+                    metric,
+                    value,
+                })
+            })),
+            Err(e) => eprintln!("{} FAILED: {e:#}", fixture.file_name()),
+        }
+    }
+    std::fs::write(current_path, baseline::to_csv(&current))
+        .with_context(|| format!("writing {}", current_path.display()))?;
+    print!("{}", baseline::to_csv(&current));
+    let problems = baseline::compare(&baseline, &current);
+    if !problems.is_empty() {
+        let list: Vec<String> = problems.iter().map(ToString::to_string).collect();
+        bail!(
+            "{} metric(s) regressed more than 15% or are missing:\n{}",
+            problems.len(),
+            list.join("\n")
+        );
+    }
+    println!("no metric regressed more than 15% against the baseline");
+    Ok(())
 }
 
 fn generate(dir: &Path) -> Result<()> {
@@ -101,12 +161,7 @@ fn print_coverage() -> Result<()> {
 }
 
 fn run_all(dir: &Path, runs: usize) -> Result<()> {
-    if Fixture::ALL
-        .iter()
-        .any(|f| !dir.join(f.file_name()).exists())
-    {
-        generate(dir)?;
-    }
+    ensure_fixtures(dir)?;
     let exe = std::env::current_exe()?;
     println!(
         "| Fixture | Engine | Open ms | Recalc ms | Edit ms | Save ms | Peak MB | Idle MB | Correct | Round trip | Bold | Merges |"
@@ -191,6 +246,16 @@ fn measure_subprocess(
         .collect())
 }
 
+fn median(samples: &[Vec<(String, String)>], key: &str) -> Option<f64> {
+    let mut values: Vec<f64> = samples
+        .iter()
+        .filter_map(|s| s.iter().find(|(k, _)| k == key))
+        .filter_map(|(_, v)| v.parse().ok())
+        .collect();
+    values.sort_by(f64::total_cmp);
+    values.get(values.len() / 2).copied()
+}
+
 fn median_row(samples: &[Vec<(String, String)>]) -> String {
     let field = |key: &str| -> Vec<String> {
         samples
@@ -198,14 +263,7 @@ fn median_row(samples: &[Vec<(String, String)>]) -> String {
             .filter_map(|s| s.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()))
             .collect()
     };
-    let median = |key: &str| -> String {
-        let mut values: Vec<f64> = field(key).iter().filter_map(|v| v.parse().ok()).collect();
-        if values.is_empty() {
-            return "-".to_string();
-        }
-        values.sort_by(f64::total_cmp);
-        format!("{:.1}", values[values.len() / 2])
-    };
+    let shown = |key: &str| median(samples, key).map_or("-".to_string(), |v| format!("{v:.1}"));
     let last = |key: &str| {
         field(key)
             .last()
@@ -213,16 +271,16 @@ fn median_row(samples: &[Vec<(String, String)>]) -> String {
             .unwrap_or_else(|| "-".to_string())
     };
     let edit = match last("edit_ok").as_str() {
-        "false" => format!("{} (WRONG)", median("edit_ms")),
-        _ => median("edit_ms"),
+        "false" => format!("{} (WRONG)", shown("edit_ms")),
+        _ => shown("edit_ms"),
     };
     [
-        median("open_ms"),
-        median("recalc_ms"),
+        shown("open_ms"),
+        shown("recalc_ms"),
         edit,
-        median("save_ms"),
-        median("peak_mb"),
-        median("idle_mb"),
+        shown("save_ms"),
+        shown("peak_mb"),
+        shown("idle_mb"),
         last("correct"),
         last("roundtrip"),
         last("styles"),
