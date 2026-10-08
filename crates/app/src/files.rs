@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use zenkai_engine::{Engine, Workbook, run_with_engine_stack};
+use zenkai_engine::{Engine, EngineError, Workbook, run_with_engine_stack, write_atomic};
 use zenkai_formats::{Delimiter, parse_csv, write_csv};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
@@ -83,7 +83,12 @@ pub fn write_csv_file(path: &Path, rows: &[Vec<String>]) -> Result<(), String> {
         Delimiter::Comma
     };
     let bytes = write_csv(rows, delimiter).map_err(|e| e.to_string())?;
-    std::fs::write(path, bytes).map_err(|e| format!("Could not write {}: {e}", path.display()))
+    write_atomic(path, &bytes, |written| {
+        parse_csv(written, Some(delimiter))
+            .map(|_| ())
+            .map_err(|e| EngineError::VerifyFailed(e.to_string()))
+    })
+    .map_err(|e| format!("Could not write {}: {e}", path.display()))
 }
 
 #[cfg(test)]

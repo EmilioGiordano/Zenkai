@@ -73,15 +73,22 @@ pub fn from_rows(rows: &[Vec<CellView>], first_row_number: u32) -> ChartData {
     ChartData { title, points }
 }
 
+fn without_controls(text: &str) -> String {
+    text.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
+}
+
 fn escape_xml(text: &str) -> String {
-    text.replace('&', "&amp;")
+    without_controls(text)
+        .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
 }
 
 fn escape_mermaid(text: &str) -> String {
-    text.replace('"', "'")
+    without_controls(text).replace('"', "'")
 }
 
 pub fn to_mermaid(data: &ChartData, kind: ChartKind) -> String {
@@ -293,5 +300,14 @@ mod tests {
         assert!(svg.contains("A &quot;quoted&quot; &lt;title&gt;"));
         assert!(svg.contains("x&amp;y"));
         assert!(svg.ends_with("</svg>"));
+        let hostile = ChartData {
+            title: "t".to_string(),
+            points: vec![Point {
+                label: "x\"\nclick A call evil()\u{1}".to_string(),
+                value: 1.0,
+            }],
+        };
+        assert_eq!(to_mermaid(&hostile, ChartKind::Pie).lines().count(), 2);
+        assert!(!to_svg(&hostile, ChartKind::Column).contains('\u{1}'));
     }
 }
