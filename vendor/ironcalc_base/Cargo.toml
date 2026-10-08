@@ -82,3 +82,6 @@ version = "0.1.6"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies.wasm-bindgen]
 version = "0.2"
+
+# Built on its own when running its tests, outside the enclosing Zenkai workspace.
+[workspace]
