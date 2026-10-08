@@ -356,8 +356,11 @@ fn every_kind_has_its_format() {
     let ids: Vec<String> = (0..400).map(|row| (100 + 5 * row).to_string()).collect();
     assert_eq!(column_values(&rows, 13), ids);
     assert_all(&rows, 14, |cell| {
-        let uuid = cell.trim_start_matches('\'');
-        uuid.len() == 36 && uuid.as_bytes()[14] == b'4' && b"89ab".contains(&uuid.as_bytes()[19])
+        cell.strip_prefix('\'').is_some_and(|uuid| {
+            uuid.len() == 36
+                && uuid.as_bytes()[14] == b'4'
+                && b"89ab".contains(&uuid.as_bytes()[19])
+        })
     });
     assert_all(&rows, 15, |cell| {
         let words = cell.split(' ').count();

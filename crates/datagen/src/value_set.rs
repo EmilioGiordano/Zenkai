@@ -250,7 +250,7 @@ impl ValueSet {
             ValueSet::Boolean if index == 0 => "FALSE".to_string(),
             ValueSet::Boolean => "TRUE".to_string(),
             ValueSet::OneOf(options) => options.values[index as usize].clone(),
-            ValueSet::Uuid => uuid_v4(index),
+            ValueSet::Uuid => literal_input(uuid_v4(index)),
             ValueSet::Lorem { min_words, .. } => lorem_at(index, *min_words),
         }
     }
