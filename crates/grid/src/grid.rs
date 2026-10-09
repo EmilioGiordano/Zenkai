@@ -98,6 +98,13 @@ impl Selection {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ViewState {
+    pub selection: Selection,
+    pub top: RowIdx,
+    pub left: ColIdx,
+}
+
 #[derive(Clone, Debug)]
 pub enum GridEvent {
     SelectionChanged,
@@ -152,12 +159,6 @@ struct EdgeDrag {
 const RESIZE_GRIP: f32 = 4.0;
 const MIN_COLUMN_WIDTH: f32 = 8.0;
 const MIN_ROW_HEIGHT: f32 = 4.0;
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct ViewState {
-    pub selection: Selection,
-    pub top: RowIdx,
-    pub left: ColIdx,
-}
 
 const FILL_GRIP: f32 = 4.0;
 

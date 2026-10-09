@@ -147,7 +147,7 @@ pub fn render(panel: &ChartPanel, cx: &App) -> impl IntoElement {
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .overflow_hidden()
-                        .child(format!("{}  ·  {}", panel.data.title, panel.source)),
+                        .child(format!("{}, {}", panel.data.title, panel.source)),
                 )
                 .child(kind_button(
                     "chart-column",
