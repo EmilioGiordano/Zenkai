@@ -128,7 +128,7 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Theme: light, dark, high contrast", ToggleTheme),
             item("Diagnostics in the status bar", ToggleDiagnostics),
             item("Show or hide the sidebar", ToggleSidebar),
-            item("Focus the sidebar", FocusSidebar),
+            item("Move focus between the grid and the sidebar", FocusSidebar),
         ]),
     ]
 }

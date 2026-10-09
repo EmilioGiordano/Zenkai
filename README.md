@@ -21,11 +21,11 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   Ctrl+B/I/U, Ctrl+Shift+~ ! $ % # number formats, Ctrl+PageUp/PageDown, Shift+F11,
   Ctrl+= / Ctrl+- and Ctrl+wheel zoom, Ctrl+9 / Ctrl+0 hide rows / columns, Ctrl+Shift+P command palette.
 - Optional sidebar (Ctrl+Alt+B) with spaces: named groups of open workbooks you can rename, delete,
-  moved between with drag and drop or Alt+Up/Down, plus recent files. Ctrl+Shift+E moves focus into it.
+  moved between with drag and drop or Alt+Up/Down, plus recent files. F6 moves focus into it and back.
 - Session restore: closing keeps your spaces, open files, selection and scroll, and unsaved work
   (restored from the autosaved copy); on start only the active workbook loads, the rest load
   when you pick them. Files that disappeared show as not found and are never removed for you.
-- Memory: past 4 GB (set ZENKAI_MEMORY_BUDGET_MB to change it) the workbooks unused for longest are
+- Memory: past 60% of the physical memory (set ZENKAI_MEMORY_BUDGET_MB to change it) the workbooks unused for longest are
   unloaded one by one, only if saved and off screen; they reload when you open them.
 - Search (Ctrl+E, which replaces Excel's Flash Fill): workbooks in your spaces, recent files and
   the sheets of open workbooks.
