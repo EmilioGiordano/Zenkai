@@ -1,4 +1,5 @@
 use zenkai_datagen::{ColumnKind, EmailFormat, Gender, LastNameCount};
+use zenkai_i18n::t;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Choice {
@@ -29,11 +30,11 @@ fn gender_group(kind: &ColumnKind, current: Gender) -> ChoiceGroup {
         }
     };
     ChoiceGroup {
-        label: "Names",
+        label: t!("gen.names"),
         choices: vec![
-            choice("Female and male", Gender::Any),
-            choice("Female", Gender::Female),
-            choice("Male", Gender::Male),
+            choice(t!("gen.gender_any"), Gender::Any),
+            choice(t!("gen.gender_female"), Gender::Female),
+            choice(t!("gen.gender_male"), Gender::Male),
         ],
     }
 }
@@ -55,11 +56,11 @@ fn last_names_group(kind: &ColumnKind, current: LastNameCount) -> ChoiceGroup {
         }
     };
     ChoiceGroup {
-        label: "Last names",
+        label: t!("gen.last_names"),
         choices: vec![
-            choice("One", LastNameCount::One),
-            choice("Two", LastNameCount::Two),
-            choice("One or two", LastNameCount::OneOrTwo),
+            choice(t!("gen.last_one"), LastNameCount::One),
+            choice(t!("gen.last_two"), LastNameCount::Two),
+            choice(t!("gen.last_one_or_two"), LastNameCount::OneOrTwo),
         ],
     }
 }
@@ -85,11 +86,11 @@ pub fn choice_groups(kind: &ColumnKind) -> Vec<ChoiceGroup> {
                 }
             };
             vec![ChoiceGroup {
-                label: "Format",
+                label: t!("gen.email_format"),
                 choices: vec![
-                    choice("first.last@domain", EmailFormat::FirstDotLast),
-                    choice("firstlast@domain", EmailFormat::FirstLast),
-                    choice("flast@domain", EmailFormat::InitialLast),
+                    choice(t!("gen.email_first_dot_last"), EmailFormat::FirstDotLast),
+                    choice(t!("gen.email_first_last"), EmailFormat::FirstLast),
+                    choice(t!("gen.email_initial_last"), EmailFormat::InitialLast),
                 ],
             }]
         }
@@ -99,14 +100,14 @@ pub fn choice_groups(kind: &ColumnKind) -> Vec<ChoiceGroup> {
 
 pub fn summary(kind: &ColumnKind) -> String {
     let names = |gender: &Gender| match gender {
-        Gender::Any => "female and male",
-        Gender::Female => "female",
-        Gender::Male => "male",
+        Gender::Any => t!("gen.summary_gender_any"),
+        Gender::Female => t!("gen.summary_gender_female"),
+        Gender::Male => t!("gen.summary_gender_male"),
     };
     let last_names = |count: &LastNameCount| match count {
-        LastNameCount::One => "one last name",
-        LastNameCount::Two => "two last names",
-        LastNameCount::OneOrTwo => "one or two last names",
+        LastNameCount::One => t!("gen.summary_last_one"),
+        LastNameCount::Two => t!("gen.summary_last_two"),
+        LastNameCount::OneOrTwo => t!("gen.summary_last_one_or_two"),
     };
     match kind {
         ColumnKind::FirstName { gender } => names(gender).to_string(),
@@ -119,34 +120,40 @@ pub fn summary(kind: &ColumnKind) -> String {
             format, domains, ..
         } => {
             let format = match format {
-                EmailFormat::FirstDotLast => "first.last",
-                EmailFormat::FirstLast => "firstlast",
-                EmailFormat::InitialLast => "flast",
+                EmailFormat::FirstDotLast => t!("gen.summary_email_first_dot_last"),
+                EmailFormat::FirstLast => t!("gen.summary_email_first_last"),
+                EmailFormat::InitialLast => t!("gen.summary_email_initial_last"),
             };
-            format!("{format}, {} domains", domains.len())
+            t!("gen.summary_email", count = domains.len(), format = format)
         }
         ColumnKind::Phone { pattern } | ColumnKind::Pattern { pattern } => pattern.clone(),
-        ColumnKind::Integer { min, max } => format!("{min} to {max}"),
+        ColumnKind::Integer { min, max } => t!("gen.summary_range", min = min, max = max),
         ColumnKind::Decimal { min, max, places } => {
-            format!("{min} to {max}, {places} decimals")
+            t!("gen.summary_decimal", min = min, max = max, places = places)
         }
         ColumnKind::Date { from, to } => {
-            format!("{} to {}", String::from(*from), String::from(*to))
+            t!(
+                "gen.summary_range",
+                min = String::from(*from),
+                max = String::from(*to)
+            )
         }
         ColumnKind::OneOf { options } => options
             .iter()
             .map(|option| option.value.as_str())
             .collect::<Vec<_>>()
             .join(", "),
-        ColumnKind::SequentialId { start, step } => format!("from {start}, step {step}"),
+        ColumnKind::SequentialId { start, step } => {
+            t!("gen.summary_sequence", start = start, step = step)
+        }
         ColumnKind::Lorem {
             min_words,
             max_words,
-        } => format!("{min_words} to {max_words} words"),
+        } => t!("gen.summary_words", min = min_words, max = max_words),
         ColumnKind::StreetAddress {}
         | ColumnKind::City {}
         | ColumnKind::Company {}
         | ColumnKind::Boolean {}
-        | ColumnKind::Uuid {} => "No options".to_string(),
+        | ColumnKind::Uuid {} => t!("gen.no_options").to_string(),
     }
 }

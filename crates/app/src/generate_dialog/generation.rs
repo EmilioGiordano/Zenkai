@@ -3,6 +3,7 @@ use zenkai_datagen::DatagenError;
 use super::draft::{self, Block, WriteIssue};
 use super::{DEBOUNCE, DialogEvent, GenerateDialog, Ready, Write};
 use gpui_kit::*;
+use zenkai_i18n::t;
 
 impl GenerateDialog {
     // Generation runs on the background executor; a newer request makes older results stale.
@@ -111,9 +112,9 @@ impl GenerateDialog {
             return;
         };
         let rows = table.len() as u32;
-        let notice = format!(
-            "{} generated, Ctrl+Z to undo",
-            draft::count_label(rows, "row")
+        let notice = t!(
+            "gen.notice_generated",
+            rows = draft::count_label(rows, draft::Counted::Row)
         );
         let block = self.draft.block(Some(table));
         self.submit(block, notice, cx);
@@ -150,7 +151,10 @@ impl GenerateDialog {
         if changed == 0 || self.draft.has_local_issue() {
             return;
         }
-        let notice = format!("{} saved", draft::count_label(changed as u32, "header"));
+        let notice = t!(
+            "gen.notice_headers_saved",
+            headers = draft::count_label(changed as u32, draft::Counted::Header)
+        );
         let block = self.draft.block(None);
         self.submit(block, notice, cx);
     }

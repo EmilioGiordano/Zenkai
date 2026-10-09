@@ -1150,7 +1150,7 @@ impl Workspace {
                 .path
                 .file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
-            delimiter = preview.parsed.delimiter.label(),
+            delimiter = crate::csv_preview::delimiter_label(preview.parsed.delimiter),
             encoding = preview.parsed.encoding.label()
         );
         self.busy = Some(t!("busy.importing").into());

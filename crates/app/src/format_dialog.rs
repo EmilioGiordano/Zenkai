@@ -3,26 +3,29 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::*;
+use zenkai_i18n::t;
 use zenkai_types::{Range, SheetId};
 
 use crate::actions::{ApplyNumberFormat, CloseFormatDialog};
 
 // Excel's Format Cells > Number categories, with the code each one starts from.
-pub const CATEGORIES: [(&str, &str); 10] = [
-    ("General", "general"),
-    ("Number", "#,##0.00"),
-    ("Currency", "$#,##0.00"),
-    (
-        "Accounting",
-        "_($* #,##0.00_);_($* (#,##0.00);_($* \"-\"??_);_(@_)",
-    ),
-    ("Date", "dd/mm/yyyy"),
-    ("Time", "h:mm:ss"),
-    ("Percentage", "0.00%"),
-    ("Fraction", "# ?/?"),
-    ("Scientific", "0.00E+00"),
-    ("Text", "@"),
-];
+pub fn categories() -> [(&'static str, &'static str); 10] {
+    [
+        (t!("format.category.general"), "general"),
+        (t!("format.category.number"), "#,##0.00"),
+        (t!("format.category.currency"), "$#,##0.00"),
+        (
+            t!("format.category.accounting"),
+            "_($* #,##0.00_);_($* (#,##0.00);_($* \"-\"??_);_(@_)",
+        ),
+        (t!("format.category.date"), "dd/mm/yyyy"),
+        (t!("format.category.time"), "h:mm:ss"),
+        (t!("format.category.percentage"), "0.00%"),
+        (t!("format.category.fraction"), "# ?/?"),
+        (t!("format.category.scientific"), "0.00E+00"),
+        (t!("format.category.text"), "@"),
+    ]
+}
 
 pub struct FormatDialog {
     pub code: Entity<InputState>,
@@ -43,7 +46,7 @@ pub fn render(
 ) -> impl IntoElement {
     let theme = cx.theme();
     let current = dialog.code.read(cx).value().to_string();
-    let categories = CATEGORIES.map(|(label, code)| {
+    let categories = categories().map(|(label, code)| {
         let on_category = on_category.clone();
         let selected = current == code;
         Button::new(label)
@@ -73,7 +76,7 @@ pub fn render(
             div()
                 .text_lg()
                 .font_weight(FontWeight::SEMIBOLD)
-                .child("Format Cells: Number"),
+                .child(t!("format.title")),
         )
         .child(
             h_flex()
@@ -88,7 +91,7 @@ pub fn render(
                             div()
                                 .text_sm()
                                 .text_color(theme.muted_foreground)
-                                .child("Sample"),
+                                .child(t!("format.sample")),
                         )
                         .child(
                             div()
@@ -103,7 +106,7 @@ pub fn render(
                             div()
                                 .text_sm()
                                 .text_color(theme.muted_foreground)
-                                .child("Type"),
+                                .child(t!("format.type")),
                         )
                         .child(Input::new(&dialog.code)),
                 ),
@@ -114,7 +117,7 @@ pub fn render(
                 .justify_end()
                 .child(
                     Button::new("format-cancel")
-                        .label("Cancel")
+                        .label(t!("button.cancel"))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(CloseFormatDialog), cx)
                         }),
@@ -122,7 +125,7 @@ pub fn render(
                 .child(
                     Button::new("format-ok")
                         .primary()
-                        .label("OK")
+                        .label(t!("button.ok"))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(ApplyNumberFormat), cx)
                         }),

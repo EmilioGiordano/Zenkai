@@ -2,6 +2,7 @@ use zenkai_datagen::{ColumnKind, Date, Locale, Percent};
 
 use super::layout::{Layout, MAX_COLUMNS};
 use super::options::{self, KindChoice, OptionError};
+use zenkai_i18n::t;
 
 pub const DEFAULT_ROWS: u32 = 1000;
 pub const PREVIEW_ROWS: usize = 4;
@@ -39,28 +40,26 @@ pub enum Placement {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("blanks must be a whole percentage from 0 to 100, not \"{0}\"")]
+#[error("{}", t!("gen.error.blanks", value = .0))]
 pub struct InvalidBlanks(pub String);
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum FieldIssue {
-    #[error("the row count must be a whole number from 1, not \"{0}\"")]
+    #[error("{}", t!("gen.error.rows", value = .0))]
     Rows(String),
-    #[error("the seed must be a whole number, not \"{0}\"")]
+    #[error("{}", t!("gen.error.seed", value = .0))]
     Seed(String),
-    #[error("\"{0}\" is not a range such as A1:E1")]
+    #[error("{}", t!("gen.error.range", value = .0))]
     Range(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum WriteIssue {
-    #[error("the rows would run past the last row of the sheet")]
+    #[error("{}", t!("gen.error.past_last_row"))]
     PastLastRow,
-    #[error("the columns would run past the last column of the sheet")]
+    #[error("{}", t!("gen.error.past_last_column"))]
     PastLastColumn,
-    #[error(
-        "unsaved headers cannot be written with rows placed after the data; discard them or place the rows below the headers"
-    )]
+    #[error("{}", t!("gen.error.headers_with_appended_rows"))]
     HeadersWithAppendedRows,
 }
 
@@ -96,7 +95,7 @@ mod sources;
 mod tests;
 mod write;
 
-pub use write::{Block, count_label, parse_range};
+pub use write::{Block, Counted, count_label, parse_range};
 
 pub struct Draft {
     layout: Layout,

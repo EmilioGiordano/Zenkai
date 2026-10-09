@@ -1,5 +1,6 @@
 use std::iter;
 
+use zenkai_i18n::t;
 use zenkai_types::{CellPos, MAX_COLS, MAX_ROWS, Range, RowIdx};
 
 use super::{Draft, FieldIssue, PREVIEW_ROWS, Placement, WriteIssue};
@@ -95,18 +96,22 @@ impl Draft {
     }
 
     pub fn summary(&self) -> String {
-        let rows = count_label(self.rows, "row");
+        let rows = count_label(self.rows, Counted::Row);
         match self.changed_headers() {
-            0 => format!("Generates {rows}"),
-            changed => format!(
-                "Writes {} and generates {rows}",
-                count_label(changed as u32, "header")
+            0 => t!("gen.summary_rows", rows = rows),
+            changed => t!(
+                "gen.summary_headers",
+                headers = count_label(changed as u32, Counted::Header),
+                rows = rows
             ),
         }
     }
 
     pub fn generate_label(&self) -> String {
-        format!("Generate {}", count_label(self.rows, "row"))
+        t!(
+            "gen.generate_button",
+            rows = count_label(self.rows, Counted::Row)
+        )
     }
 }
 
@@ -115,15 +120,17 @@ pub fn parse_range(text: &str) -> Result<Range, FieldIssue> {
     Range::parse_a1(reference).ok_or_else(|| FieldIssue::Range(text.to_string()))
 }
 
-pub fn count_label(count: u32, noun: &str) -> String {
-    let digits = count.to_string();
-    let mut grouped = String::new();
-    for (position, digit) in digits.chars().enumerate() {
-        if position > 0 && (digits.len() - position).is_multiple_of(3) {
-            grouped.push(',');
-        }
-        grouped.push(digit);
+#[derive(Clone, Copy)]
+pub enum Counted {
+    Row,
+    Header,
+    Column,
+}
+
+pub fn count_label(count: u32, noun: Counted) -> String {
+    match noun {
+        Counted::Row => t!("gen.count_rows", count = count),
+        Counted::Header => t!("gen.count_headers", count = count),
+        Counted::Column => t!("gen.count_columns", count = count),
     }
-    let plural = if count == 1 { "" } else { "s" };
-    format!("{grouped} {noun}{plural}")
 }
