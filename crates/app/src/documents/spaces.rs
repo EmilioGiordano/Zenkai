@@ -2,7 +2,7 @@ use zenkai_types::WorkbookId;
 
 use super::Documents;
 use crate::entry::Entry;
-use crate::spaces::{Neighbour, SpaceId, Spaces};
+use crate::spaces::{Neighbour, SpaceColor, SpaceId, Spaces};
 
 impl Documents {
     pub fn spaces(&self) -> &Spaces {
@@ -19,6 +19,14 @@ impl Documents {
 
     pub fn rename_space(&mut self, id: SpaceId, name: &str) -> bool {
         self.spaces.rename(id, name)
+    }
+
+    pub fn is_saved(&self, id: WorkbookId) -> bool {
+        self.entry(id).is_some_and(|entry| entry.path().is_some())
+    }
+
+    pub fn set_space_color(&mut self, id: SpaceId, color: SpaceColor) {
+        self.spaces.set_color(id, color);
     }
 
     pub fn toggle_space(&mut self, id: SpaceId) {

@@ -7,11 +7,21 @@ use zenkai_types::WorkbookId;
 use super::{Severity, Workspace};
 use crate::entry::Entry;
 use crate::sidebar_rows::{self, Move, Row, SpaceRows};
-use crate::spaces::{NEW_SPACE_NAME, Neighbour, SpaceId};
+use crate::spaces::{NEW_SPACE_NAME, Neighbour, SpaceColor, SpaceId};
 
 const WIDTH: f32 = 248.0;
 
 mod render;
+
+// A button toggling the sidebar answers the primary button and the keyboard only.
+pub(super) fn is_primary_click(event: &ClickEvent) -> bool {
+    match event {
+        ClickEvent::Mouse(click) => {
+            click.down.button == MouseButton::Left && click.up.button == MouseButton::Left
+        }
+        _ => true,
+    }
+}
 
 pub(super) struct SidebarState {
     pub visible: bool,
@@ -98,6 +108,88 @@ impl Workspace {
         let rows = self.sidebar_rows();
         self.sidebar.cursor = sidebar_rows::step(&rows, self.sidebar.cursor, movement);
         cx.notify();
+    }
+
+    pub(super) fn set_space_color(
+        &mut self,
+        id: SpaceId,
+        color: SpaceColor,
+        cx: &mut Context<Self>,
+    ) {
+        self.documents.set_space_color(id, color);
+        cx.notify();
+    }
+
+    pub(super) fn delete_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = match self.sidebar.cursor {
+            Some(Row::File(id)) => id,
+            _ => self.documents.active_id(),
+        };
+        self.delete_file_of(id, window, cx);
+    }
+
+    // Never deletes for good: the file goes to the Recycle Bin, then its workbook is closed.
+    pub(super) fn delete_file_of(
+        &mut self,
+        id: WorkbookId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(entry) = self.documents.entry(id) else {
+            return;
+        };
+        let Some(path) = entry.path().map(PathBuf::from) else {
+            self.notify(Severity::Warning, "Only saved files can be deleted.", cx);
+            return;
+        };
+        let detail = format!(
+            "{} will be moved to the Recycle Bin and closed in Zenkai. Unsaved changes in it are lost.",
+            path.display()
+        );
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Delete {}?", entry.name()),
+            Some(&detail),
+            &["Cancel", "Move to Recycle Bin"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if answer.await != Ok(1) {
+                return;
+            }
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    if !path.is_file() {
+                        return Err("the file is not on disk".to_string());
+                    }
+                    trash::delete(&path).map_err(|error| error.to_string())
+                })
+                .await;
+            let update = this.update_in(cx, |this, window, cx| match result {
+                Ok(()) => {
+                    this.finish_close(id, window, cx);
+                    this.notify(Severity::Info, "Moved the file to the Recycle Bin.", cx);
+                }
+                Err(error) => {
+                    this.notify(Severity::Error, format!("Could not delete: {error}"), cx)
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during delete");
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn cycle_space_color(&mut self, cx: &mut Context<Self>) {
+        let target = self
+            .sidebar_cursor_space()
+            .unwrap_or_else(|| self.documents.active().space);
+        let Some(current) = self.documents.spaces().get(target).map(|space| space.color) else {
+            return;
+        };
+        self.set_space_color(target, current.next(), cx);
     }
 
     fn sidebar_cursor_space(&self) -> Option<SpaceId> {

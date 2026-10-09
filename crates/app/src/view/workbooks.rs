@@ -234,7 +234,12 @@ impl Workspace {
         .detach();
     }
 
-    fn finish_close(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn finish_close(
+        &mut self,
+        id: WorkbookId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let was_active = id == self.documents.active_id();
         if was_active {
             self.park_active(window, cx);

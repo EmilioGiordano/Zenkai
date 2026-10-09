@@ -7,7 +7,7 @@ use zenkai_grid::{Selection, ViewState};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, WorkbookId};
 
 use crate::entry::{Link, LinkStatus};
-use crate::spaces::SpaceId;
+use crate::spaces::{SpaceColor, SpaceId};
 
 const VERSION: u32 = 1;
 const FILE_NAME: &str = "session.json";
@@ -26,6 +26,8 @@ pub struct Session {
 pub struct SpaceRecord {
     pub name: String,
     pub collapsed: bool,
+    #[serde(default)]
+    pub color: SpaceColor,
     pub files: Vec<FileRecord>,
 }
 
@@ -317,6 +319,7 @@ mod tests {
             vec![SpaceRecord {
                 name: "Q3 close".to_string(),
                 collapsed: false,
+                color: Default::default(),
                 files: vec![record()],
             }],
         )
@@ -455,6 +458,7 @@ mod tests {
                 .map(|n| SpaceRecord {
                     name: n.to_string(),
                     collapsed: false,
+                    color: Default::default(),
                     files: Vec::new(),
                 })
                 .collect(),

@@ -128,6 +128,8 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Theme: light, dark, high contrast", ToggleTheme),
             item("Diagnostics in the status bar", ToggleDiagnostics),
             item("Show or hide the sidebar", ToggleSidebar),
+            item("Change the color of the selected space", CycleSpaceColor),
+            item("Delete the selected file (Recycle Bin)", DeleteFile),
             item("Move focus between the grid and the sidebar", FocusSidebar),
         ]),
         CommandGroup::new().label("Agents").items([

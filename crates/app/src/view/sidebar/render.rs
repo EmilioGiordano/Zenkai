@@ -14,7 +14,7 @@ use super::WIDTH;
 use crate::actions::*;
 use crate::sidebar_item::{self, FileItem, FileState};
 use crate::sidebar_rows::{Move, Row};
-use crate::spaces::{Space, SpaceId};
+use crate::spaces::{Space, SpaceColor, SpaceId};
 
 #[derive(Clone)]
 struct DraggedWorkbook {
@@ -196,8 +196,10 @@ impl Workspace {
                             .compact()
                             .icon(IconName::PanelLeft)
                             .tooltip("Hide sidebar (Ctrl+Alt+B)")
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(ToggleSidebar.boxed_clone(), cx)
+                            .on_click(|event, window, cx| {
+                                if super::is_primary_click(event) {
+                                    window.dispatch_action(ToggleSidebar.boxed_clone(), cx)
+                                }
                             }),
                     ),
                 )
@@ -316,9 +318,19 @@ impl Workspace {
                 })
                 .small(),
             )
+            .children(space.color.rgb().map(|value| {
+                div()
+                    .flex_shrink_0()
+                    .size(px(8.0))
+                    .rounded_full()
+                    .bg(rgb(value))
+            }))
             .child(title)
             .child(div().text_xs().child(count.to_string()))
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .on_click(cx.listener(move |this, event, _, cx| {
+                if !super::is_primary_click(event) {
+                    return;
+                }
                 this.sidebar.cursor = Some(Row::Space(id));
                 this.documents.toggle_space(id);
                 cx.notify();
@@ -332,9 +344,23 @@ impl Workspace {
             )
             .context_menu({
                 let focus = self.sidebar.focus.clone();
-                move |menu, _, _| {
+                let entity = paint.entity.clone();
+                move |menu, window, cx| {
+                    let entity = entity.clone();
                     menu.action_context(focus.clone())
                         .menu("Rename space", Box::new(RenameSpace))
+                        .submenu("Color", window, cx, move |menu, _, _| {
+                            SpaceColor::ALL.iter().fold(menu, |menu, color| {
+                                let (entity, color) = (entity.clone(), *color);
+                                menu.item(PopupMenuItem::new(color.label()).on_click(
+                                    move |_, _, cx| {
+                                        entity_update(&entity, cx, |this, cx| {
+                                            this.set_space_color(id, color, cx)
+                                        })
+                                    },
+                                ))
+                            })
+                        })
                         .menu("Delete space", Box::new(DeleteSpace))
                 }
             });
@@ -405,7 +431,10 @@ impl Workspace {
                     .child(Icon::new(IconName::FolderClosed).size_3())
                     .child(file.place),
             )
-            .on_click(cx.listener(move |this, _, window, cx| {
+            .on_click(cx.listener(move |this, event, window, cx| {
+                if !super::is_primary_click(event) {
+                    return;
+                }
                 this.sidebar.cursor = Some(Row::File(id));
                 this.switch_to(id, window, cx);
             }))
@@ -432,12 +461,27 @@ impl Workspace {
                             .collect()
                     })
                     .unwrap_or_default();
+                let saved = entity
+                    .upgrade()
+                    .is_some_and(|workspace| workspace.read(cx).documents.is_saved(id));
                 let close = entity.clone();
                 let menu = menu.item(PopupMenuItem::new(close_label).on_click(
                     move |_, window, cx| {
                         entity_update(&close, cx, |this, cx| this.close_document(id, window, cx))
                     },
                 ));
+                let menu = if saved {
+                    let delete = entity.clone();
+                    menu.item(
+                        PopupMenuItem::new("Delete file…").on_click(move |_, window, cx| {
+                            entity_update(&delete, cx, |this, cx| {
+                                this.delete_file_of(id, window, cx)
+                            })
+                        }),
+                    )
+                } else {
+                    menu
+                };
                 others.iter().fold(menu, |menu, (target, name)| {
                     let entity = entity.clone();
                     let target = *target;

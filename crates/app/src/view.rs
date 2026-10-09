@@ -394,6 +394,8 @@ impl Workspace {
                 .placeholder("Type a command")
                 .on_confirm(|_, window, cx| window.dispatch_action(Box::new(ClosePalette), cx))
                 .on_cancel(|window, cx| window.dispatch_action(Box::new(ClosePalette), cx)),
+            "Palette",
+            || Box::new(ClosePalette),
         ))
     }
 
@@ -1779,14 +1781,21 @@ impl Workspace {
                         .text_color(muted)
                         .when(!self.sidebar.visible, |this| {
                             this.child(
-                                Button::new("show-sidebar")
-                                    .ghost()
-                                    .compact()
-                                    .icon(gpui_kit::assets::IconName::PanelLeft)
-                                    .tooltip("Show sidebar (Ctrl+Alt+B)")
-                                    .on_click(|_, window, cx| {
-                                        window.dispatch_action(ToggleSidebar.boxed_clone(), cx)
-                                    }),
+                                div().occlude().child(
+                                    Button::new("show-sidebar")
+                                        .ghost()
+                                        .compact()
+                                        .icon(gpui_kit::assets::IconName::PanelLeft)
+                                        .tooltip("Show sidebar (Ctrl+Alt+B)")
+                                        .on_click(|event, window, cx| {
+                                            if sidebar::is_primary_click(event) {
+                                                window.dispatch_action(
+                                                    ToggleSidebar.boxed_clone(),
+                                                    cx,
+                                                )
+                                            }
+                                        }),
+                                ),
                             )
                         })
                         .child("Zenkai"),
@@ -3099,6 +3108,8 @@ impl Render for Workspace {
                 cx.listener(|this, _: &RenameSpace, window, cx| this.rename_space(window, cx)),
             )
             .on_action(cx.listener(|this, _: &DeleteSpace, _, cx| this.delete_space(cx)))
+            .on_action(cx.listener(|this, _: &CycleSpaceColor, _, cx| this.cycle_space_color(cx)))
+            .on_action(cx.listener(|this, _: &DeleteFile, window, cx| this.delete_file(window, cx)))
             .on_action(cx.listener(|this, _: &CloseSpaceRename, window, cx| {
                 this.close_space_rename(window, cx)
             }))
@@ -3197,19 +3208,37 @@ impl Render for Workspace {
     }
 }
 
-fn command_overlay(command: Command) -> impl IntoElement {
+// The scrim covers the window: a click outside the panel closes it, and Esc does too.
+fn command_overlay(
+    command: Command,
+    context: &'static str,
+    close: impl Fn() -> Box<dyn Action> + 'static,
+) -> impl IntoElement {
     div()
+        .key_context(context)
         .absolute()
-        .top(px(72.0))
+        .top_0()
         .left_0()
-        .right_0()
-        .flex()
-        .justify_center()
+        .size_full()
+        .occlude()
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            window.dispatch_action(close(), cx)
+        })
         .child(
             div()
-                .w(px(560.0))
-                .shadow_lg()
-                .child(command.bordered(true).max_h(px(420.0))),
+                .absolute()
+                .top(px(72.0))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .w(px(560.0))
+                        .shadow_lg()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(command.bordered(true).max_h(px(420.0))),
+                ),
         )
 }
 

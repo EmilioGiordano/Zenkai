@@ -7,11 +7,78 @@ pub enum Neighbour {
     Next,
 }
 
+// Muted on purpose: a space color marks a group, it never competes with the grid.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SpaceColor {
+    #[default]
+    Default,
+    Gray,
+    Red,
+    Orange,
+    Amber,
+    Green,
+    Teal,
+    Blue,
+    Violet,
+}
+
+impl SpaceColor {
+    pub const ALL: [SpaceColor; 9] = [
+        SpaceColor::Default,
+        SpaceColor::Gray,
+        SpaceColor::Red,
+        SpaceColor::Orange,
+        SpaceColor::Amber,
+        SpaceColor::Green,
+        SpaceColor::Teal,
+        SpaceColor::Blue,
+        SpaceColor::Violet,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SpaceColor::Default => "Default",
+            SpaceColor::Gray => "Gray",
+            SpaceColor::Red => "Red",
+            SpaceColor::Orange => "Orange",
+            SpaceColor::Amber => "Amber",
+            SpaceColor::Green => "Green",
+            SpaceColor::Teal => "Teal",
+            SpaceColor::Blue => "Blue",
+            SpaceColor::Violet => "Violet",
+        }
+    }
+
+    pub fn rgb(self) -> Option<u32> {
+        match self {
+            SpaceColor::Default => None,
+            SpaceColor::Gray => Some(0x8a8f98),
+            SpaceColor::Red => Some(0xc2625d),
+            SpaceColor::Orange => Some(0xc98250),
+            SpaceColor::Amber => Some(0xbfa04a),
+            SpaceColor::Green => Some(0x6fa06f),
+            SpaceColor::Teal => Some(0x4f9a9a),
+            SpaceColor::Blue => Some(0x5b8abf),
+            SpaceColor::Violet => Some(0x8c74b8),
+        }
+    }
+
+    pub fn next(self) -> SpaceColor {
+        let index = Self::ALL
+            .iter()
+            .position(|color| *color == self)
+            .unwrap_or(0);
+        Self::ALL[(index + 1) % Self::ALL.len()]
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Space {
     pub id: SpaceId,
     pub name: String,
     pub collapsed: bool,
+    pub color: SpaceColor,
 }
 
 // At least one space always exists, so every document has somewhere to be listed.
@@ -41,6 +108,7 @@ impl Spaces {
             id,
             name: name.to_string(),
             collapsed: false,
+            color: SpaceColor::Default,
         });
         id
     }
@@ -65,6 +133,12 @@ impl Spaces {
                 true
             }
             _ => false,
+        }
+    }
+
+    pub fn set_color(&mut self, id: SpaceId, color: SpaceColor) {
+        if let Some(space) = self.spaces.iter_mut().find(|space| space.id == id) {
+            space.color = color;
         }
     }
 
@@ -158,6 +232,25 @@ mod tests {
         assert_eq!(spaces.neighbour(first, Neighbour::Previous), None);
         assert_eq!(spaces.neighbour(first, Neighbour::Next), Some(second));
         assert_eq!(spaces.neighbour(second, Neighbour::Next), None);
+    }
+
+    #[test]
+    fn colors_cycle_through_every_swatch_and_back_to_default() {
+        let mut color = SpaceColor::Default;
+        for _ in 0..SpaceColor::ALL.len() {
+            color = color.next();
+        }
+        assert_eq!(color, SpaceColor::Default);
+        assert_eq!(SpaceColor::Default.rgb(), None);
+        assert!(SpaceColor::ALL[1..].iter().all(|c| c.rgb().is_some()));
+    }
+
+    #[test]
+    fn a_color_is_kept_on_its_space() {
+        let mut spaces = Spaces::new();
+        let id = spaces.first();
+        spaces.set_color(id, SpaceColor::Teal);
+        assert_eq!(spaces.get(id).unwrap().color, SpaceColor::Teal);
     }
 
     #[test]

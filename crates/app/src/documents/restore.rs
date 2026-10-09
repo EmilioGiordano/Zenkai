@@ -29,6 +29,7 @@ impl Documents {
         let mut active = None;
         for (space, record) in groups {
             self.spaces.expand(space, !record.collapsed);
+            self.spaces.set_color(space, record.color);
             for file in &record.files {
                 let id = self.take_id();
                 self.next_untitled = self.next_untitled.max(file.untitled + 1);
@@ -60,6 +61,7 @@ impl Documents {
             .map(|space| SpaceRecord {
                 name: space.name.clone(),
                 collapsed: space.collapsed,
+                color: space.color,
                 files: self
                     .members(space.id)
                     .filter(|entry| !entry.loaded().is_some_and(Document::is_pristine))
@@ -120,11 +122,13 @@ mod tests {
                 SpaceRecord {
                     name: "Q3".to_string(),
                     collapsed: false,
+                    color: Default::default(),
                     files: vec![file(Some("a.xlsx"), false), file(Some("gone.xlsx"), true)],
                 },
                 SpaceRecord {
                     name: "Suppliers".to_string(),
                     collapsed: true,
+                    color: Default::default(),
                     files: vec![file(None, false)],
                 },
             ],
@@ -286,6 +290,7 @@ mod tests {
             vec![SpaceRecord {
                 name: "Q3".to_string(),
                 collapsed: false,
+                color: Default::default(),
                 files: vec![record],
             }],
         );

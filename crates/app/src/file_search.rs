@@ -141,6 +141,7 @@ mod tests {
             vec![SpaceRecord {
                 name: "Q3 close".to_string(),
                 collapsed: false,
+                color: Default::default(),
                 files: vec![record("C:/data/sales.xlsx")],
             }],
         );
@@ -165,6 +166,7 @@ mod tests {
             vec![SpaceRecord {
                 name: "Q3".to_string(),
                 collapsed: false,
+                color: Default::default(),
                 files: vec![record("C:/data/sales.xlsx")],
             }],
         );

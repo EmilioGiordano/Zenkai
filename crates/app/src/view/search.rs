@@ -104,6 +104,6 @@ impl Workspace {
                 }
             })
             .on_cancel(|window, cx| window.dispatch_action(Box::new(CloseSearch), cx));
-        Some(command_overlay(command).into_any_element())
+        Some(command_overlay(command, "SearchOverlay", || Box::new(CloseSearch)).into_any_element())
     }
 }

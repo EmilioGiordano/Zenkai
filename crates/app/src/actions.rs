@@ -124,6 +124,8 @@ actions!(
         CloseSpaceRename,
         SidebarDelete,
         SearchFiles,
+        CycleSpaceColor,
+        DeleteFile,
         CloseSearch,
         OpenSettings,
         CloseSettings,
@@ -201,6 +203,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-e", SearchFiles, CONTEXT),
         KeyBinding::new("f6", FocusSidebar, CONTEXT),
         KeyBinding::new("ctrl-alt-r", RenameSpace, CONTEXT),
+        KeyBinding::new("ctrl-alt-k", CycleSpaceColor, CONTEXT),
+        KeyBinding::new(
+            "ctrl-shift-delete",
+            DeleteFile,
+            Some("Sidebar && !SpaceRename"),
+        ),
         KeyBinding::new("ctrl-alt-shift-d", DeleteSpace, CONTEXT),
         KeyBinding::new("ctrl-alt-n", NewSpace, CONTEXT),
         KeyBinding::new("ctrl-alt-pageup", MoveToPreviousSpace, CONTEXT),
@@ -244,6 +252,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", CloseGoTo, Some("NameBox")),
         KeyBinding::new("escape", CloseFind, Some("FindBar")),
         KeyBinding::new("escape", CancelFormulaBar, Some("FormulaBar")),
+        KeyBinding::new("escape", ClosePalette, Some("Palette")),
+        KeyBinding::new("escape", CloseSearch, Some("SearchOverlay")),
         KeyBinding::new("ctrl-,", OpenSettings, CONTEXT),
         KeyBinding::new("escape", CloseSettings, Some("SettingsPage")),
         KeyBinding::new("f5", DetectAgents, Some("SettingsPage")),
@@ -266,5 +276,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-y", AllowAgentChange, Some("AgentApproval")),
         KeyBinding::new("escape", DenyAgentChange, Some("AgentApproval")),
         KeyBinding::new("ctrl-shift-e", LetAgentsEdit, CONTEXT),
+        KeyBinding::new("alt-a", ApplyHeldSettings, CONTEXT),
+        KeyBinding::new("alt-y", AllowAgentChange, CONTEXT),
     ]);
 }
