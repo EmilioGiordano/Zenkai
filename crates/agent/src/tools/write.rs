@@ -139,6 +139,15 @@ impl PlannedWrite {
         self.target
     }
 
+    pub fn sheet_name(&self) -> &str {
+        &self.sheet_name
+    }
+
+    // Only writes of cell inputs can be rejected later; a format change has no input to restore.
+    pub fn input_block(&self) -> Option<Range> {
+        matches!(self.change, Change::Inputs(_)).then_some(self.target)
+    }
+
     fn place(&self) -> String {
         let name = shown_text(&self.sheet_name);
         if name.chars().all(|c| c.is_alphanumeric() || c == '_') {

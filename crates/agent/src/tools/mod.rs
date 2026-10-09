@@ -11,6 +11,7 @@ mod request;
 mod tests;
 mod write;
 
+pub use approval_text::{shown_entry, shown_text};
 pub use channel::{ToolCall, ToolEndpoint, ToolResult, channel};
 pub use client::client_label;
 pub use error::{AgentAccess, ReadOnlyReason, ToolError};
