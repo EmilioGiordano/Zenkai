@@ -1,6 +1,7 @@
 pub mod environment;
 pub mod history;
 mod install;
+pub mod instructions;
 pub mod launch;
 pub mod process;
 pub mod session;

@@ -213,8 +213,33 @@ fn the_session_runs_in_the_given_folder_keeps_it_and_passes_only_the_zenkai_tool
         text.contains("mcp zenkai env ZENKAI_MCP_PIPE+ZENKAI_MCP_TOKEN"),
         "{text}"
     );
+    // The session also carries the prompt in `_meta` for agents that read it there.
+    assert!(text.contains("prompt in meta true"), "{text}");
     session.close();
     assert!(folder.path().join("ventas.xlsx").is_file());
+}
+
+#[test]
+fn an_agent_without_a_session_prompt_reads_it_once_in_the_first_message() {
+    let session = launch(config("normal", &[]));
+    session.ready();
+    session.handle.prompt(
+        "echo".to_string(),
+        Some("[Zenkai] The user is looking at Ventas".to_string()),
+    );
+    let (first, _) = session.text_until_turn_end();
+    assert!(
+        first.contains("You are an assistant inside Zenkai"),
+        "{first}"
+    );
+    assert!(first.contains("The user is looking at Ventas"), "{first}");
+    session.handle.prompt("echo".to_string(), None);
+    let (second, _) = session.text_until_turn_end();
+    assert!(
+        !second.contains("You are an assistant inside Zenkai"),
+        "{second}"
+    );
+    session.close();
 }
 
 #[test]

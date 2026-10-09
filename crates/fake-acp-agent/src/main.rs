@@ -75,8 +75,12 @@ fn describe_session(request: &NewSessionRequest) -> String {
             _ => "other".to_string(),
         })
         .collect();
+    let prompt_in_meta = request
+        .meta
+        .as_ref()
+        .is_some_and(|meta| meta.contains_key("systemPrompt"));
     format!(
-        "cwd {} empty {empty}; mcp {}",
+        "cwd {} empty {empty}; mcp {}; prompt in meta {prompt_in_meta}",
         request.cwd.display(),
         servers.join(", ")
     )
@@ -157,16 +161,32 @@ fn say(connection: &ConnectionTo<Client>, session: &SessionId, text: &str) -> Re
     ))
 }
 
+// The user's words are the last block; the ones before are Zenkai's hidden context.
 fn prompt_text(request: &PromptRequest) -> String {
     request
         .prompt
         .iter()
-        .filter_map(|block| match block {
-            ContentBlock::Text(text) => Some(text.text.as_str()),
+        .rev()
+        .find_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.clone()),
             _ => None,
         })
-        .collect::<Vec<_>>()
-        .join(" ")
+        .unwrap_or_default()
+}
+
+fn hidden_context(request: &PromptRequest) -> String {
+    let blocks: Vec<&str> = request
+        .prompt
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) if text.text.starts_with("[Zenkai]") => {
+                Some(text.text.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    blocks.join("
+")
 }
 
 async fn run_prompt(
@@ -388,7 +408,11 @@ async fn serve(mode: Mode) -> Result<(), Error> {
             async move |request: PromptRequest, responder, connection| {
                 let text = prompt_text(&request);
                 let session = request.session_id.clone();
-                let facts = prompt_facts.clone();
+                let known = prompt_facts.lock().map(|f| f.clone()).unwrap_or_default();
+                let facts: Facts = Arc::new(Mutex::new(format!(
+                    "{known}; context {}",
+                    hidden_context(&request)
+                )));
                 let cancel = cancel_receive.clone();
                 let mcp = mcp.lock().ok().and_then(|slot| slot.clone());
                 let task_connection = connection.clone();

@@ -21,6 +21,15 @@ impl Workspace {
         Some((document.id, document.name()))
     }
 
+    pub(crate) fn selection_for_chat(&self, cx: &App) -> Option<String> {
+        let document = self.documents.active()?;
+        let sheet = document
+            .sheets
+            .iter()
+            .find(|info| info.id == document.sheet)?;
+        Some(reference::sheet_range(&sheet.name, self.selection(cx)))
+    }
+
     pub(crate) fn folder_hint_for_chat(&self) -> FolderHint {
         let space = self.documents.current_space();
         FolderHint {

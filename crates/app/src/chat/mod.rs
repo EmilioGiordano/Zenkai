@@ -125,6 +125,26 @@ fn plain_name(name: &str) -> String {
         .collect()
 }
 
+fn context_line(workbook: Option<(WorkbookId, String)>, selection: Option<&str>) -> String {
+    let Some((id, name)) = workbook else {
+        return format!(
+            "{CONTEXT_MARKER} No workbook is open. New workbooks are made with create_workbook."
+        );
+    };
+    let mut line = format!(
+        "{CONTEXT_MARKER} The user is looking at the workbook \"{}\" (workbook id {})",
+        plain_name(&name),
+        id.0
+    );
+    if let Some(selection) = selection {
+        line.push_str(&format!(", selection {}", plain_name(selection)));
+    }
+    line.push_str(
+        ". Other open workbooks are listed by list_workbooks; address any of them by id.",
+    );
+    line
+}
+
 impl ChatPanel {
     pub fn new(
         workspace: WeakEntity<Workspace>,
@@ -223,13 +243,12 @@ impl ChatPanel {
     }
 
     pub(super) fn prompt_context(&self, cx: &App) -> Option<String> {
-        let (id, name) = self.active_workbook(cx)?;
-        Some(format!(
-            "{CONTEXT_MARKER} The user is looking at the workbook \"{}\" (workbook id {}). Other open \
-             workbooks are listed by list_workbooks; address any of them by id.",
-            plain_name(&name),
-            id.0
-        ))
+        let selection = self
+            .workspace
+            .read_with(cx, |workspace, cx| workspace.selection_for_chat(cx))
+            .ok()
+            .flatten();
+        Some(context_line(self.active_workbook(cx), selection.as_deref()))
     }
 
     pub(super) fn at_bottom(&self) -> bool {
@@ -341,7 +360,26 @@ impl ChatPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::plain_name;
+    use zenkai_types::WorkbookId;
+
+    use super::{context_line, plain_name};
+
+    #[test]
+    fn the_context_names_the_workbook_sheet_and_selection() {
+        let line = context_line(
+            Some((WorkbookId(3), "Ventas.xlsx".to_string())),
+            Some("'Cash flow'!A5:B11"),
+        );
+        assert!(line.starts_with("[Zenkai] "));
+        assert!(line.contains("\"Ventas.xlsx\" (workbook id 3)"), "{line}");
+        assert!(line.contains("selection 'Cash flow'!A5:B11"), "{line}");
+    }
+
+    #[test]
+    fn without_a_workbook_the_context_says_so() {
+        let line = context_line(None, None);
+        assert!(line.contains("No workbook is open"), "{line}");
+    }
 
     #[test]
     fn a_file_name_loses_quotes_and_control_characters_before_an_agent_reads_it() {

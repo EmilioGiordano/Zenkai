@@ -20,6 +20,7 @@ use zenkai_i18n::t;
 
 use crate::bridge::{PIPE_VARIABLE, TOKEN_VARIABLE};
 use crate::chat::install::install;
+use crate::chat::instructions::{self, PromptRoute, SYSTEM_PROMPT};
 use crate::chat::launch::{self, INSTALLED_MARKER, LaunchError, LaunchPlan};
 use crate::chat::process::ProcessTree;
 use crate::chat::state::{ConfigId, ConfigSource, StateChange};
@@ -477,13 +478,19 @@ async fn converse_on(
         .block_task()
         .await?;
     let abilities = wire::abilities(&initialized);
+    let route = instructions::prompt_route(initialized.agent_info.as_ref());
+    let mut introduced = route == PromptRoute::SessionMeta;
     let agent = initialized
         .agent_info
         .map(|info| info.title.unwrap_or(info.name))
         .unwrap_or_else(|| t!("chat.agent").to_string());
     let servers = mcp_servers(relay);
     let session = connection
-        .send_request(NewSessionRequest::new(folder.clone()).mcp_servers(servers.clone()))
+        .send_request(
+            NewSessionRequest::new(folder.clone())
+                .mcp_servers(servers.clone())
+                .meta(instructions::session_meta()),
+        )
         .block_task()
         .await?;
     let mut session_id = session.session_id;
@@ -492,13 +499,16 @@ async fn converse_on(
         events,
         SessionEvent::State(StateChange::Abilities(abilities)),
     );
-    notify(
-        events,
-        SessionEvent::State(StateChange::Selects(wire::selects_from_session(
-            session.config_options.as_deref(),
-            session.modes.as_ref(),
-        ))),
-    );
+    let selects =
+        wire::selects_from_session(session.config_options.as_deref(), session.modes.as_ref());
+    let unguarded = wire::leave_unguarded_mode(&selects);
+    notify(events, SessionEvent::State(StateChange::Selects(selects)));
+    if let Some((id, source, value)) = unguarded {
+        notify(
+            events,
+            change_config(&connection, &session_id, id, source, value).await,
+        );
+    }
     notify(
         events,
         SessionEvent::Connection(Connection::Ready { agent }),
@@ -520,6 +530,9 @@ async fn converse_on(
         };
         match command {
             Command::Prompt { text, context } => {
+                let introduction =
+                    (!introduced).then(|| format!("{CONTEXT_MARKER} {SYSTEM_PROMPT}"));
+                introduced = true;
                 let task_connection = connection.clone();
                 let task_events = events.clone();
                 let task_session = session_id.clone();
@@ -527,8 +540,9 @@ async fn converse_on(
                     let result = task_connection
                         .send_request(PromptRequest::new(
                             task_session,
-                            context
+                            introduction
                                 .into_iter()
+                                .chain(context)
                                 .chain(std::iter::once(text))
                                 .map(ContentBlock::from)
                                 .collect(),
@@ -551,39 +565,10 @@ async fn converse_on(
                 connection.send_notification(CancelNotification::new(session_id.clone()))?;
             }
             Command::SetConfig { id, source, value } => {
-                let outcome = match source {
-                    ConfigSource::ConfigOption => connection
-                        .send_request(SetSessionConfigOptionRequest::new(
-                            session_id.clone(),
-                            id.as_str().to_string(),
-                            SessionConfigValueId::new(value.clone()),
-                        ))
-                        .block_task()
-                        .await
-                        .map(|response| {
-                            StateChange::Selects(wire::selects_from_options(
-                                &response.config_options,
-                            ))
-                        }),
-                    ConfigSource::LegacyMode => connection
-                        .send_request(SetSessionModeRequest::new(
-                            session_id.clone(),
-                            value.clone(),
-                        ))
-                        .block_task()
-                        .await
-                        .map(|_| StateChange::CurrentMode(value.clone())),
-                };
-                match outcome {
-                    Ok(change) => notify(events, SessionEvent::State(change)),
-                    Err(error) => notify(
-                        events,
-                        SessionEvent::Problem(t!(
-                            "chat.problem.change_refused",
-                            error = error.message
-                        )),
-                    ),
-                }
+                notify(
+                    events,
+                    change_config(&connection, &session_id, id, source, value).await,
+                );
             }
             Command::ListSessions(started) => {
                 match connection
@@ -615,13 +600,15 @@ async fn converse_on(
                 let loaded = connection
                     .send_request(
                         LoadSessionRequest::new(id.clone(), folder.clone())
-                            .mcp_servers(servers.clone()),
+                            .mcp_servers(servers.clone())
+                            .meta(instructions::session_meta()),
                     )
                     .block_task()
                     .await;
                 match loaded {
                     Ok(response) => {
                         session_id = SessionId::new(id.clone());
+                        introduced = true;
                         let selects = wire::selects_from_session(
                             response.config_options.as_deref(),
                             response.modes.as_ref(),
@@ -641,6 +628,42 @@ async fn converse_on(
                     ),
                 }
             }
+        }
+    }
+}
+
+async fn change_config(
+    connection: &ConnectionTo<Agent>,
+    session_id: &SessionId,
+    id: ConfigId,
+    source: ConfigSource,
+    value: String,
+) -> SessionEvent {
+    let outcome = match source {
+        ConfigSource::ConfigOption => connection
+            .send_request(SetSessionConfigOptionRequest::new(
+                session_id.clone(),
+                id.as_str().to_string(),
+                SessionConfigValueId::new(value.clone()),
+            ))
+            .block_task()
+            .await
+            .map(|response| {
+                StateChange::Selects(wire::selects_from_options(&response.config_options))
+            }),
+        ConfigSource::LegacyMode => connection
+            .send_request(SetSessionModeRequest::new(
+                session_id.clone(),
+                value.clone(),
+            ))
+            .block_task()
+            .await
+            .map(|_| StateChange::CurrentMode(value.clone())),
+    };
+    match outcome {
+        Ok(change) => SessionEvent::State(change),
+        Err(error) => {
+            SessionEvent::Problem(t!("chat.problem.change_refused", error = error.message))
         }
     }
 }
