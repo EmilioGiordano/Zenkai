@@ -6,6 +6,8 @@ mod file;
 mod model;
 mod preflight;
 mod rectangles;
+#[cfg(test)]
+mod used_end_property;
 mod workbook;
 
 pub use error::EngineError;

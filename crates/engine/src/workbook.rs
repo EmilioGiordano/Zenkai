@@ -235,11 +235,11 @@ impl Workbook {
     }
 }
 
-fn row_i32(row: RowIdx) -> i32 {
+pub(crate) fn row_i32(row: RowIdx) -> i32 {
     row.get() as i32 + 1
 }
 
-fn col_i32(col: ColIdx) -> i32 {
+pub(crate) fn col_i32(col: ColIdx) -> i32 {
     i32::from(col.get()) + 1
 }
 
@@ -420,6 +420,11 @@ impl Workbook {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn walked_end(&self, sheet: SheetId) -> Option<CellPos> {
+        self.model.walked_end(sheet)
+    }
+
     fn resolve(&self, color: &Color) -> Option<Rgb> {
         match color {
             Color::None => None,
@@ -548,7 +553,9 @@ impl Engine for Workbook {
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError> {
         check_input(text)?;
         self.model
-            .set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
+            .write_within(sheet, Range::new(pos, pos), |model| {
+                model.set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
+            })
             .map_err(rejected)
     }
 
@@ -610,8 +617,11 @@ impl Engine for Workbook {
                 .col
                 .offset(i64::try_from(width).unwrap_or(i64::MAX) - 1),
         );
-        select(&mut self.model, sheet, Range::new(origin, end))?;
-        self.model.paste_csv_string(&area, &tsv).map_err(rejected)
+        let target = Range::new(origin, end);
+        self.model.write_within(sheet, target, |model| {
+            select(model, sheet, target)?;
+            model.paste_csv_string(&area, &tsv).map_err(rejected)
+        })
     }
 
     // Rows of `range` reordered by the `key` column, with Excel's order: numbers, text
@@ -943,7 +953,9 @@ impl Engine for Workbook {
             .map(|rectangle| area(sheet, rectangle))
             .collect();
         self.model
-            .range_clear_contents_of_areas(&area(sheet, range), &areas)
+            .rewrite_values(|model| {
+                model.range_clear_contents_of_areas(&area(sheet, range), &areas)
+            })
             .map_err(rejected)
     }
 
