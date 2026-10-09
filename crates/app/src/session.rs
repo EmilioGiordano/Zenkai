@@ -1,5 +1,5 @@
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use zenkai_engine::Unsupported;
@@ -11,22 +11,25 @@ use crate::spaces::SpaceId;
 
 const VERSION: u32 = 1;
 const FILE_NAME: &str = "session.json";
+const MAX_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_SPACES: usize = 200;
+const MAX_FILES: usize = 5000;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Session {
     pub version: u32,
     pub sidebar_visible: bool,
     pub spaces: Vec<SpaceRecord>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpaceRecord {
     pub name: String,
     pub collapsed: bool,
     pub files: Vec<FileRecord>,
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FileRecord {
     pub path: Option<String>,
     // File name inside the recovery folder.
@@ -65,6 +68,17 @@ impl Session {
             sidebar_visible,
             spaces,
         }
+    }
+
+    // A session past these limits was not written by this program.
+    fn within_limits(&self) -> bool {
+        self.spaces.len() <= MAX_SPACES
+            && self
+                .spaces
+                .iter()
+                .map(|space| space.files.len())
+                .sum::<usize>()
+                <= MAX_FILES
     }
 
     pub fn recovery_files(&self) -> Vec<&str> {
@@ -167,6 +181,18 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
     }
 }
 
+// Only a plain `autosave-*.xlsx` name is trusted, so a tampered session cannot point the
+// recovery machinery (which moves and deletes these files) at any other file.
+fn recovery_name(name: &str) -> Option<&str> {
+    let mut parts = Path::new(name).components();
+    let Some(Component::Normal(only)) = parts.next() else {
+        return None;
+    };
+    let plain = parts.next().is_none() && only.to_str() == Some(name);
+    (plain && name.starts_with("autosave-") && name.ends_with(".xlsx") && !name.contains(':'))
+        .then_some(name)
+}
+
 // A guard code this version does not know forces Save As, the safe side of the doubt.
 pub fn link_of(
     record: &FileRecord,
@@ -179,16 +205,19 @@ pub fn link_of(
         .iter()
         .filter_map(|code| parse_unsupported(code))
         .collect();
+    let recovery = record
+        .recovery
+        .as_deref()
+        .and_then(recovery_name)
+        .zip(recovery_directory)
+        .map(|(name, directory)| directory.join(name));
     Link {
         id,
         space,
         untitled: record.untitled,
         path: record.path.as_ref().map(PathBuf::from),
-        recovery: record
-            .recovery
-            .as_ref()
-            .zip(recovery_directory)
-            .map(|(name, directory)| directory.join(name)),
+        recovery_lost: record.recovery.is_some() && recovery.is_none(),
+        recovery,
         dirty: record.dirty,
         read_only: record.read_only || known.len() != record.unsupported.len(),
         unsupported: known,
@@ -205,16 +234,25 @@ pub fn file_in(directory: &Path) -> PathBuf {
 
 pub fn load(directory: &Path) -> Loaded {
     let file = file_in(directory);
-    let text = match std::fs::read_to_string(&file) {
-        Ok(text) => text,
+    let mut text = String::new();
+    let read = std::fs::File::open(&file)
+        .and_then(|opened| opened.take(MAX_BYTES + 1).read_to_string(&mut text));
+    match read {
+        Ok(length) if length as u64 > MAX_BYTES => {
+            tracing::warn!("the session file is too large");
+            return set_aside(&file);
+        }
+        Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Loaded::Absent,
         Err(error) => {
             tracing::warn!(%error, "could not read the session file");
             return set_aside(&file);
         }
-    };
+    }
     match serde_json::from_str::<Session>(&text) {
-        Ok(session) if session.version == VERSION => Loaded::Restored(session),
+        Ok(session) if session.version == VERSION && session.within_limits() => {
+            Loaded::Restored(session)
+        }
         Ok(session) => {
             tracing::warn!(version = session.version, "unknown session file version");
             set_aside(&file)
@@ -373,5 +411,54 @@ mod tests {
     #[test]
     fn the_recovery_files_a_session_points_to_are_listed() {
         assert_eq!(session().recovery_files(), ["autosave-1-2-3.xlsx"]);
+    }
+
+    #[test]
+    fn a_tampered_recovery_name_is_never_joined_to_the_recovery_folder() {
+        let directory = Path::new("recovery");
+        for name in [
+            r"C:\Users\victim\autosave-1.xlsx",
+            r"..\autosave-1.xlsx",
+            "../autosave-1.xlsx",
+            r"\\host\share\autosave-1.xlsx",
+            r"sub\autosave-1.xlsx",
+            "autosave-1.xlsx:stream",
+            "notes.xlsx",
+            "autosave-1.docx",
+            "",
+        ] {
+            let mut tampered = record();
+            tampered.recovery = Some(name.to_string());
+            let link = link_of(&tampered, WorkbookId(0), SpaceId(0), Some(directory));
+            assert_eq!(link.recovery, None, "{name}");
+            assert!(link.recovery_lost, "{name}");
+        }
+        let honest = link_of(&record(), WorkbookId(0), SpaceId(0), Some(directory));
+        assert!(!honest.recovery_lost);
+    }
+
+    #[test]
+    fn an_oversized_session_file_is_set_aside_unread() {
+        let directory = tempfile::tempdir().unwrap();
+        let padding = " ".repeat(usize::try_from(MAX_BYTES).unwrap() + 1);
+        std::fs::write(file_in(directory.path()), padding).unwrap();
+        assert!(matches!(load(directory.path()), Loaded::Unreadable));
+    }
+
+    #[test]
+    fn a_session_with_absurd_counts_is_set_aside() {
+        let directory = tempfile::tempdir().unwrap();
+        let crowded = Session::new(
+            false,
+            (0..=MAX_SPACES)
+                .map(|n| SpaceRecord {
+                    name: n.to_string(),
+                    collapsed: false,
+                    files: Vec::new(),
+                })
+                .collect(),
+        );
+        save(directory.path(), &crowded).unwrap();
+        assert!(matches!(load(directory.path()), Loaded::Unreadable));
     }
 }
