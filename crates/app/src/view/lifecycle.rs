@@ -202,14 +202,21 @@ impl Workspace {
         };
         let target = recovery::document_file(&directory, id);
         if !document.needs_recovery() {
+            document.set_autosaved_at(None);
             cx.background_executor()
                 .spawn(async move { recovery::remove(&target) })
                 .detach();
             return;
         }
+        // Writing a large workbook takes seconds; nothing changed means the copy on disk
+        // already holds this state.
+        if document.recovery_is_current() {
+            return;
+        }
         let Some(shared) = document.begin_file_job(FileJob::Autosaving) else {
             return;
         };
+        let edits = document.edit_count();
         let generation = document.generation();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -228,12 +235,13 @@ impl Workspace {
                 if !document.is_current(generation) {
                     return;
                 }
-                if let Err(error) = result {
-                    this.notify(
+                match result {
+                    Ok(()) => document.set_autosaved_at(Some(edits)),
+                    Err(error) => this.notify(
                         Severity::Warning,
                         t!("notice.autosave_failed", error = error),
                         cx,
-                    );
+                    ),
                 }
             });
             if let Err(error) = update {

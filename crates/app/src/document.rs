@@ -47,6 +47,8 @@ pub struct Document {
     pending: Vec<Edit>,
     generation: u64,
     edit_count: u64,
+    // The edit count the recovery copy on disk was written at.
+    autosaved_at: Option<u64>,
     pub pending_sheet: Option<SheetId>,
     pub view: ViewState,
     pub find: Option<FindBar>,
@@ -97,6 +99,7 @@ impl Document {
             pending: Vec::new(),
             generation: GENERATION.fetch_add(1, Ordering::Relaxed),
             edit_count: 0,
+            autosaved_at: None,
             pending_sheet: None,
             view: ViewState::default(),
             find: None,
@@ -204,6 +207,14 @@ impl Document {
 
     pub fn edit_count(&self) -> u64 {
         self.edit_count
+    }
+
+    pub fn recovery_is_current(&self) -> bool {
+        self.autosaved_at == Some(self.edit_count)
+    }
+
+    pub fn set_autosaved_at(&mut self, edits: Option<u64>) {
+        self.autosaved_at = edits;
     }
 
     pub fn is_pristine(&self) -> bool {
@@ -477,6 +488,19 @@ mod tests {
             Err(EngineError::VerifyFailed("disk full".to_string()))
         });
         assert!(matches!(failed, Err(EngineError::VerifyFailed(_))));
+    }
+
+    #[test]
+    fn the_recovery_copy_is_current_until_the_next_edit() {
+        let mut document = document();
+        assert!(!document.recovery_is_current());
+        document.set_autosaved_at(Some(document.edit_count()));
+        assert!(document.recovery_is_current());
+        document.queue(noop());
+        assert!(!document.recovery_is_current());
+        document.set_autosaved_at(Some(document.edit_count()));
+        document.set_autosaved_at(None);
+        assert!(!document.recovery_is_current());
     }
 
     #[test]
