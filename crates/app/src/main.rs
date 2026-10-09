@@ -18,6 +18,7 @@ mod find;
 mod format_dialog;
 mod generate_dialog;
 mod jump;
+mod language;
 mod logging;
 mod memory;
 mod palette;
@@ -47,6 +48,7 @@ use gpui_kit::*;
 
 fn main() {
     logging::init();
+    zenkai_i18n::init(language::startup());
     let initial: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
 
     gpui_kit::application()

@@ -16,6 +16,7 @@ gpui-kit = "=0.7.1"
 memory-stats = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sys-locale = "0.3"
 sysinfo = { version = "0.31", default-features = false, features = ["system"] }
 trash = "5.2"
 thiserror = "2"
@@ -26,6 +27,7 @@ zenkai-datagen = { path = "../datagen" }
 zenkai-engine = { path = "../engine" }
 zenkai-formats = { path = "../formats" }
 zenkai-grid = { path = "../grid" }
+zenkai-i18n = { path = "../i18n" }
 zenkai-types = { path = "../types" }
 
 [target.'cfg(windows)'.build-dependencies]

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "bench",
     "crates/types",
+    "crates/i18n",
     "crates/datagen",
     "crates/engine",
     "crates/formats",
