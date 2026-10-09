@@ -162,7 +162,6 @@ impl Workspace {
             Panel::Chat => ("chat-edge", t!("panel.edge.chat")),
         };
         let ring = cx.theme().ring;
-        let mouse_focus = focus.clone();
         div()
             .id(id)
             .key_context("PanelEdge")
@@ -193,7 +192,7 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    window.focus(&mouse_focus, cx);
+                    this.leave_panel_edge(window, cx);
                     if event.click_count >= 2 {
                         this.restore_panel_width(panel, window, cx);
                     } else {
