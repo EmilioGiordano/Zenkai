@@ -12,11 +12,12 @@ use super::slash::{Entry, Target};
 use super::{ChatPanel, MONO, Menu};
 use crate::actions::*;
 use crate::agent_settings::AgentConfig;
+use crate::keymap;
 
 fn icon_button(
     id: &'static str,
     icon: IconName,
-    tooltip: &'static str,
+    tooltip: impl Into<SharedString>,
     action: impl Action + Clone,
 ) -> Button {
     Button::new(id)
@@ -330,7 +331,7 @@ impl ChatPanel {
                     .child(icon_button(
                         "chat-selection",
                         IconName::Grid2x2,
-                        t!("chat.add_selection"),
+                        keymap::labeled(cx, t!("chat.add_selection"), &AddSelectionToChat),
                         AddSelectionToChat,
                     ))
                     .child(send),

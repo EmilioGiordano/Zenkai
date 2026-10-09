@@ -10,6 +10,7 @@ use zenkai_types::{CellRef, Range, SheetId, WorkbookId};
 use super::Workspace;
 use crate::actions::*;
 use crate::agent_review::{CellChange, reject_unchanged};
+use crate::keymap;
 
 const POPOVER_WIDTH: f32 = 300.0;
 
@@ -261,21 +262,29 @@ impl Workspace {
                 )
                 .child(
                     Button::new("review-previous")
-                        .label(t!("review.previous"))
+                        .label(keymap::labeled(
+                            cx,
+                            t!("review.previous"),
+                            &PreviousAgentChange,
+                        ))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(PreviousAgentChange), cx)
                         }),
                 )
                 .child(
                     Button::new("review-next")
-                        .label(t!("review.next"))
+                        .label(keymap::labeled(cx, t!("review.next"), &NextAgentChange))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(NextAgentChange), cx)
                         }),
                 )
                 .child(
                     Button::new("review-reject-all")
-                        .label(t!("review.reject_all"))
+                        .label(keymap::labeled(
+                            cx,
+                            t!("review.reject_all"),
+                            &RejectAllAgentChanges,
+                        ))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(RejectAllAgentChanges), cx)
                         }),
@@ -283,7 +292,11 @@ impl Workspace {
                 .child(
                     Button::new("review-keep-all")
                         .primary()
-                        .label(t!("review.keep_all"))
+                        .label(keymap::labeled(
+                            cx,
+                            t!("review.keep_all"),
+                            &KeepAllAgentChanges,
+                        ))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(KeepAllAgentChanges), cx)
                         }),
@@ -349,7 +362,7 @@ impl Workspace {
                         .gap_2()
                         .child(
                             Button::new("review-reject")
-                                .label(t!("review.reject"))
+                                .label(keymap::labeled(cx, t!("review.reject"), &RejectAgentChange))
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(RejectAgentChange), cx)
                                 }),
@@ -357,7 +370,7 @@ impl Workspace {
                         .child(
                             Button::new("review-keep")
                                 .primary()
-                                .label(t!("review.keep"))
+                                .label(keymap::labeled(cx, t!("review.keep"), &KeepAgentChange))
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(KeepAgentChange), cx)
                                 }),

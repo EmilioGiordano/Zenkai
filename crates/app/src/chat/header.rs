@@ -11,6 +11,7 @@ use zenkai_i18n::t;
 
 use super::{ChatPanel, View};
 use crate::actions::*;
+use crate::keymap;
 
 // The brand colours of the agent marks in the design; other agents get a neutral mark.
 fn mark_color(agent: &AgentId, fallback: Hsla) -> Hsla {
@@ -74,7 +75,11 @@ impl ChatPanel {
         let title_button = Button::new("chat-title")
             .ghost()
             .compact()
-            .tooltip(t!("chat.switch_conversation"))
+            .tooltip(keymap::labeled(
+                cx,
+                t!("chat.switch_conversation"),
+                &ShowChatSessions,
+            ))
             .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowChatSessions), cx))
             .child(
                 h_flex()
@@ -153,7 +158,11 @@ impl ChatPanel {
                     .compact()
                     .icon(IconName::Inbox)
                     .selected(self.view == View::Sessions)
-                    .tooltip(t!("chat.sessions.tooltip"))
+                    .tooltip(keymap::labeled(
+                        cx,
+                        t!("chat.sessions.tooltip"),
+                        &ShowChatSessions,
+                    ))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(ShowChatSessions), cx)
                     }),
@@ -163,7 +172,11 @@ impl ChatPanel {
                     .ghost()
                     .compact()
                     .icon(IconName::Plus)
-                    .tooltip(t!("chat.new_conversation.tooltip"))
+                    .tooltip(keymap::labeled(
+                        cx,
+                        t!("chat.new_conversation.tooltip"),
+                        &NewAgentConversation,
+                    ))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(NewAgentConversation), cx)
                     }),
@@ -173,7 +186,11 @@ impl ChatPanel {
                     .ghost()
                     .compact()
                     .icon(IconName::PanelRightClose)
-                    .tooltip(t!("chat.close.tooltip"))
+                    .tooltip(keymap::labeled(
+                        cx,
+                        t!("chat.close.tooltip"),
+                        &ToggleAgentChat,
+                    ))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(ToggleAgentChat), cx)
                     }),
