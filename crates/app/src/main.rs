@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
+mod agent_routing;
+mod agent_settings;
 mod chart;
 mod chart_panel;
 mod clipboard;
@@ -23,6 +25,7 @@ mod recent;
 mod recovery;
 mod region;
 mod session;
+mod settings_page;
 mod sidebar_item;
 mod sidebar_rows;
 mod spaces;
@@ -45,6 +48,7 @@ fn main() {
             gpui_kit::init(cx);
             zenkai_grid::bind_keys(cx);
             actions::bind_keys(cx);
+            agent_settings::init(cx);
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.0), px(800.0)), cx)),

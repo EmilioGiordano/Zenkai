@@ -9,6 +9,8 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use zenkai_agent::presets;
+use zenkai_agent::settings::SettingsError;
 use zenkai_engine::{Copied, Engine, EngineError, Workbook, save_xlsx_atomic};
 use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{
@@ -19,7 +21,16 @@ use zenkai_types::{
     StyleChange, WorkbookId,
 };
 
+mod agent_calls;
+mod settings_gate;
+
+use agent_calls::{AgentLink, Decision};
+use settings_gate::HeldDecision;
+use zenkai_agent::protected_view::{FileOrigin, file_origin};
+use zenkai_agent::settings::{HeldChange, PermissionMode};
+
 use crate::actions::*;
+use crate::agent_settings::{self, AgentConfig};
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
@@ -38,6 +49,7 @@ use crate::recent;
 use crate::recovery;
 use crate::region;
 use crate::session::Session;
+use crate::settings_page::{self, SettingsPage};
 use crate::spaces::Neighbour;
 use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
@@ -156,6 +168,14 @@ pub struct Workspace {
     lifecycle: Lifecycle,
     saved_session: Option<Session>,
     cell_refresh: CellRefresh,
+    settings_page: Option<Entity<SettingsPage>>,
+    agent: AgentLink,
+    // The settings problem already shown, so a reload with the same error stays quiet.
+    shown_settings_problem: Option<SettingsError>,
+    // A settings.json change that gives agents more power, as last shown for confirmation.
+    shown_held: Option<HeldChange>,
+    held_focus: FocusHandle,
+    held_return_focus: Option<FocusHandle>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -190,6 +210,16 @@ impl Workspace {
         theme::follow_system(window, cx);
         let appearance = cx.observe_window_appearance(window, |_, window, cx| {
             theme::follow_system(window, cx);
+        });
+        let activation = cx.observe_window_activation(window, |_, window, cx| {
+            if window.is_window_active() {
+                agent_settings::reload(cx);
+            }
+        });
+        let settings = cx.observe_global_in::<AgentConfig>(window, Self::on_settings_changed);
+        let quit = cx.on_app_quit(|this, _| {
+            this.stop_bridge();
+            async {}
         });
         let mut workspace = Workspace {
             documents: Documents::new(empty_workbook()),
@@ -232,7 +262,21 @@ impl Workspace {
             lifecycle: Lifecycle::Running,
             saved_session: None,
             cell_refresh: CellRefresh::Idle,
-            _subscriptions: vec![subscription, appearance, font_color, fill_color],
+            settings_page: None,
+            agent: Self::start_tool_service(window, cx),
+            shown_settings_problem: None,
+            shown_held: None,
+            held_focus: cx.focus_handle(),
+            held_return_focus: None,
+            _subscriptions: vec![
+                subscription,
+                appearance,
+                activation,
+                settings,
+                quit,
+                font_color,
+                fill_color,
+            ],
         };
         workspace.reset_grid(window, cx);
         let this = cx.weak_entity();
@@ -838,11 +882,26 @@ impl Workspace {
         if self.clipboard_source.take().is_some() {
             self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
         }
-        let document = self.documents.active_mut();
+        let id = self.documents.active_id();
+        self.edit_document(id, window, cx, edit);
+    }
+
+    fn edit_document(
+        &mut self,
+        id: WorkbookId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        edit: impl FnOnce(&mut Workbook) -> Result<(), EngineError> + Send + 'static,
+    ) {
+        let shown = id == self.documents.active_id();
+        let Some(document) = self.documents.get_mut(id) else {
+            return;
+        };
         document.queue(Box::new(edit));
         document.dirty = true;
-        let id = document.id;
-        window.set_window_title(&document.title());
+        if shown {
+            window.set_window_title(&document.title());
+        }
         self.flush_edits(id, cx);
     }
 
@@ -1041,15 +1100,18 @@ impl Workspace {
         } = preview;
         let delimiter = parsed.delimiter;
         let mut rows = parsed.rows;
+        let origin_path = path.clone();
         cx.spawn_in(window, async move |this, cx| {
             let task_bytes = bytes.clone();
-            let result = cx
+            let (result, origin) = cx
                 .background_executor()
                 .spawn(async move {
+                    let origin = file_origin(&origin_path);
                     csv_preview::apply(guess, &mut rows);
                     // On failure, parse again so the preview comes back as it was.
-                    files::workbook_from_rows(rows)
-                        .map_err(|error| (error, parse_csv(&task_bytes, Some(delimiter)).ok()))
+                    let result = files::workbook_from_rows(rows)
+                        .map_err(|error| (error, parse_csv(&task_bytes, Some(delimiter)).ok()));
+                    (result, origin)
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
@@ -1057,7 +1119,10 @@ impl Workspace {
                 match result {
                     Ok(_) if this.csv_request != request => {}
                     Ok(workbook) => {
-                        this.open_document(workbook, None, Vec::new(), window, cx);
+                        let id = this.open_document(workbook, None, Vec::new(), window, cx);
+                        if let Some(document) = this.documents.get_mut(id) {
+                            document.origin = origin;
+                        }
                         this.notify(Severity::Info, summary, cx);
                     }
                     Err((error, parsed)) => {
@@ -2047,6 +2112,37 @@ impl Workspace {
         });
     }
 
+    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let page = self
+            .settings_page
+            .get_or_insert_with(|| cx.new(SettingsPage::new))
+            .clone();
+        let focus = page.read(cx).focus_handle();
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_page = None;
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
+    fn render_settings(&self) -> Option<impl IntoElement> {
+        let page = self.settings_page.clone()?;
+        Some(
+            div()
+                .absolute()
+                .top(px(64.0))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(page),
+        )
+    }
+
     // Excel's Ctrl+1, Number tab: categories, a custom code and a sample of the active cell.
     fn open_format_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.grid.read(cx).selection().active;
@@ -2557,10 +2653,23 @@ impl Workspace {
         } else {
             left = left.child(div().text_color(theme.muted_foreground).child("Ready"));
         }
+        let automatic =
+            cx.global::<AgentConfig>().state.current.agents.permission == PermissionMode::Automatic;
         let mut right = h_flex()
             .gap_4()
             .items_center()
-            .text_color(theme.muted_foreground);
+            .text_color(theme.muted_foreground)
+            .when(automatic, |this| {
+                this.child(
+                    div()
+                        .text_color(theme.warning)
+                        .child("⚠ Agents write without asking"),
+                )
+            })
+            .when(
+                self.documents.active().origin == FileOrigin::Internet,
+                |this| this.child("Protected View: agents read only"),
+            );
         match self.stats {
             Some(stats) if stats.count > 1 => {
                 if let Some(avg) = stats.average() {
@@ -2980,6 +3089,41 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &MoveToNextSpace, _, cx| {
                 this.shift_document(Neighbour::Next, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CloseSettings, window, cx| this.close_settings(window, cx)),
+            )
+            .on_action(|_: &DetectAgents, _, cx| agent_settings::detect_agents(cx))
+            .on_action(|_: &AddClaudeAgent, _, cx| settings_page::add_preset(presets::CLAUDE, cx))
+            .on_action(|_: &AddGeminiAgent, _, cx| settings_page::add_preset(presets::GEMINI, cx))
+            .on_action(|_: &AddCodexAgent, _, cx| settings_page::add_preset(presets::CODEX, cx))
+            .on_action(|_: &PermissionReadOnly, _, cx| {
+                settings_page::set_permission(PermissionMode::ReadOnly, cx)
+            })
+            .on_action(|_: &PermissionAskBeforeWrite, _, cx| {
+                settings_page::set_permission(PermissionMode::AskBeforeWrite, cx)
+            })
+            .on_action(|_: &PermissionAutomatic, _, cx| {
+                settings_page::set_permission(PermissionMode::Automatic, cx)
+            })
+            .on_action(|_: &ToggleExternalAgents, _, cx| settings_page::toggle_external_agents(cx))
+            .on_action(|_: &CycleDefaultAgent, _, cx| settings_page::cycle_default_agent(cx))
+            .on_action(|_: &CopyClaudeCommand, _, cx| settings_page::copy_claude_command(cx))
+            .on_action(cx.listener(|this, _: &ApplyHeldSettings, window, cx| {
+                this.decide_held_settings(HeldDecision::Apply, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &KeepCurrentSettings, window, cx| {
+                this.decide_held_settings(HeldDecision::Keep, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.let_agents_edit(cx)))
+            .on_action(cx.listener(|this, _: &AllowAgentChange, window, cx| {
+                this.decide_agent_change(Decision::Allow, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DenyAgentChange, window, cx| {
+                this.decide_agent_change(Decision::Deny, window, cx)
+            }))
             .child(self.render_title_bar(cx))
             .child(
                 h_flex()
@@ -2993,7 +3137,9 @@ impl Render for Workspace {
                             .h_full()
                             .child(toolbar::render(&self.active_style, &self.colors, cx))
                             .child(self.render_formula_bar(cx))
+                            .children(self.render_held_settings(cx))
                             .children(self.render_find(cx))
+                            .children(self.render_agent_approval(cx))
                             .child(
                                 h_flex()
                                     .flex_1()
@@ -3028,6 +3174,7 @@ impl Render for Workspace {
             .children(self.render_busy(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
+            .children(self.render_settings())
     }
 }
 

@@ -130,5 +130,35 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Show or hide the sidebar", ToggleSidebar),
             item("Move focus between the grid and the sidebar", FocusSidebar),
         ]),
+        CommandGroup::new().label("Agents").items([
+            item("Settings…", OpenSettings),
+            item("Detect installed agents", DetectAgents),
+            item("Add the Claude agent", AddClaudeAgent),
+            item("Add the Gemini CLI agent", AddGeminiAgent),
+            item("Add the Codex agent", AddCodexAgent),
+            item("Agents: read only", PermissionReadOnly),
+            item("Agents: ask before writing", PermissionAskBeforeWrite),
+            item("Agents: write without asking", PermissionAutomatic),
+            item("Allow or block external agents", ToggleExternalAgents),
+            item(
+                "Copy the command that adds Zenkai to Claude Code",
+                CopyClaudeCommand,
+            ),
+            item(
+                "Make the next configured agent the default",
+                CycleDefaultAgent,
+            ),
+            item(
+                "Apply the settings.json change waiting for you",
+                ApplyHeldSettings,
+            ),
+            item("Keep the current agent settings", KeepCurrentSettings),
+            item("Allow the change an agent asked for", AllowAgentChange),
+            item("Deny the change an agent asked for", DenyAgentChange),
+            item(
+                "Let agents edit this file (leave Protected View)",
+                LetAgentsEdit,
+            ),
+        ]),
     ]
 }

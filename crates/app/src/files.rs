@@ -1,5 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
+use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_engine::{
     Engine, EngineError, Unsupported, Workbook, open_xlsx, run_with_engine_stack, write_atomic,
 };
@@ -108,6 +109,7 @@ pub struct FileLoad {
     pub workbook: Workbook,
     pub unsupported: Vec<Unsupported>,
     pub read_only: bool,
+    pub origin: FileOrigin,
 }
 
 pub enum LoadFailure {
@@ -122,12 +124,14 @@ pub fn load_workbook(path: &Path) -> Result<FileLoad, LoadFailure> {
             workbook: opened.workbook,
             unsupported: opened.unsupported,
             read_only: false,
+            origin: file_origin(path),
         }),
         Err(EngineError::InvalidFile(reason)) => match open_values(path) {
             Ok(workbook) => Ok(FileLoad {
                 workbook,
                 unsupported: Vec::new(),
                 read_only: true,
+                origin: file_origin(path),
             }),
             Err(fallback) => Err(LoadFailure::Unreadable { reason, fallback }),
         },

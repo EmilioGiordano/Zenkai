@@ -225,6 +225,7 @@ pub fn link_of(
         view: record.view.view(),
         size: None,
         status: LinkStatus::NotLoaded,
+        origin: None,
     }
 }
 

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::Unsupported;
 use zenkai_grid::ViewState;
 use zenkai_types::{SheetId, WorkbookId};
@@ -31,6 +32,8 @@ pub struct Link {
     pub status: LinkStatus,
     // The session pointed at a recovery copy that could not be trusted or found.
     pub recovery_lost: bool,
+    // Known once the workbook has been loaded; a link restored from a session works it out on load.
+    pub origin: Option<FileOrigin>,
 }
 
 pub fn display_name(path: Option<&Path>, untitled: u32) -> String {
@@ -157,6 +160,7 @@ impl Document {
             size: None,
             status: LinkStatus::NotLoaded,
             recovery_lost: false,
+            origin: Some(self.origin),
         }
     }
 

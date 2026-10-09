@@ -35,13 +35,17 @@ impl Workspace {
         }
         let active = self.documents.active_id();
         let wanted = self.documents.wanted();
+        let awaiting_approval = self.awaiting_approval();
         let candidates: Vec<Candidate> = self
             .documents
             .iter()
             .map(|document| Candidate {
                 id: document.id,
                 last_used: document.last_used,
-                idle: document.id != active && Some(document.id) != wanted && document.can_unload(),
+                idle: document.id != active
+                    && Some(document.id) != wanted
+                    && Some(document.id) != awaiting_approval
+                    && document.can_unload(),
             })
             .collect();
         let since_last = self.last_unload.map(|at| at.elapsed());

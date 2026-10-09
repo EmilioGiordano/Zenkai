@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 use std::time::Instant;
 
+use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{Engine, EngineError, Unsupported, Workbook};
 use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
@@ -39,6 +40,8 @@ pub struct Document {
     pub sheets: Vec<SheetInfo>,
     pub unsupported: Vec<Unsupported>,
     pub read_only: bool,
+    // Where the file came from; a download keeps agents read-only, as Excel's Protected View.
+    pub origin: FileOrigin,
     pending: Vec<Edit>,
     generation: u64,
     edit_count: u64,
@@ -71,6 +74,7 @@ impl Document {
             sheets,
             unsupported,
             read_only: false,
+            origin: FileOrigin::Local,
             pending: Vec::new(),
             generation: GENERATION.fetch_add(1, Ordering::Relaxed),
             edit_count: 0,

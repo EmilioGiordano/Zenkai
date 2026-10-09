@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
@@ -67,6 +68,7 @@ pub struct Loaded {
     pub workbook: Workbook,
     pub unsupported: Vec<Unsupported>,
     pub read_only: bool,
+    pub origin: FileOrigin,
     pub from_recovery: bool,
 }
 
@@ -87,6 +89,7 @@ impl Loaded {
         );
         document.read_only = self.read_only || (self.from_recovery && link.read_only);
         document.dirty = self.from_recovery && link.dirty;
+        document.origin = link.origin.unwrap_or(self.origin);
         document.view = link.view;
         let last = u32::try_from(document.sheets.len().saturating_sub(1)).unwrap_or(0);
         document.sheet = SheetId(link.sheet.0.min(last));

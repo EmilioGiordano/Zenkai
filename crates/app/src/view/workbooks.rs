@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use gpui_kit::*;
+use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{Unsupported, Workbook, open_xlsx};
 use zenkai_types::WorkbookId;
 
@@ -11,6 +12,8 @@ use crate::documents::{Installed, Intent, Loaded, Step};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::files::{self, FileLoad, LoadFailure};
 use crate::recovery;
+
+const PROTECTED_VIEW: &str = "This file came from the internet: agents may only read it (Protected View). Ctrl+Shift+E lets them edit it.";
 
 pub(super) enum LinkLoad {
     Loaded {
@@ -35,6 +38,8 @@ fn read_link(link: &Link) -> LinkLoad {
                         workbook: opened.workbook,
                         unsupported: Vec::new(),
                         read_only: false,
+                        // A recovery copy does not record where the work came from; it fails closed.
+                        origin: FileOrigin::Internet,
                     }),
                     copy: Some(copy.clone()),
                     recovery_lost: false,
@@ -83,6 +88,7 @@ impl Workspace {
     ) -> WorkbookId {
         self.park_active(window, cx);
         let id = self.documents.open(workbook, path, unsupported);
+        self.refuse_orphaned_agent_change(window, cx);
         self.present_active(window, cx);
         id
     }
@@ -249,6 +255,7 @@ impl Workspace {
                 .detach();
         }
         self.documents.close(id, empty_workbook);
+        self.refuse_orphaned_agent_change(window, cx);
         if was_active {
             self.present_active(window, cx);
         }
@@ -293,10 +300,12 @@ impl Workspace {
                             workbook,
                             unsupported,
                             read_only,
+                            origin,
                         } = file;
                         let id = this.open_document(workbook, Some(path), unsupported, window, cx);
                         if let Some(document) = this.documents.get_mut(id) {
                             document.read_only = read_only;
+                            document.origin = origin;
                         }
                         this.announce_opened(Some(started), cx);
                     }
@@ -329,6 +338,8 @@ impl Workspace {
                 document.unsupported_labels()
             );
             self.notify(Severity::Warning, text, cx);
+        } else if document.origin == FileOrigin::Internet && started.is_some() {
+            self.notify(Severity::Warning, PROTECTED_VIEW, cx);
         } else if let Some(started) = started {
             let text = format!("Opened in {} ms", started.elapsed().as_millis());
             self.notify(Severity::Info, text, cx);
@@ -385,8 +396,10 @@ impl Workspace {
                     workbook: file.workbook,
                     unsupported: file.unsupported,
                     read_only: file.read_only,
+                    origin: file.origin,
                     from_recovery,
                 });
+                self.refuse_orphaned_agent_change(window, cx);
                 if let Some(copy) = copy {
                     self.adopt_recovery(id, copy, cx);
                 }

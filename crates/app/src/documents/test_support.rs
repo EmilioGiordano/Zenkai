@@ -35,6 +35,7 @@ pub fn loaded(id: WorkbookId) -> Loaded {
         workbook: blank(),
         unsupported: Vec::new(),
         read_only: false,
+        origin: zenkai_agent::protected_view::FileOrigin::Local,
         from_recovery: false,
     }
 }

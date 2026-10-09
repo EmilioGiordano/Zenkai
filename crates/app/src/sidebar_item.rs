@@ -109,6 +109,7 @@ mod tests {
             size: None,
             status,
             recovery_lost: false,
+            origin: None,
         }
     }
 

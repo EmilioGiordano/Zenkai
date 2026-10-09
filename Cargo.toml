@@ -1,6 +1,16 @@
 [workspace]
 resolver = "3"
-members = ["bench", "crates/types", "crates/datagen", "crates/engine", "crates/formats", "crates/grid", "crates/app"]
+members = [
+    "bench",
+    "crates/types",
+    "crates/datagen",
+    "crates/engine",
+    "crates/formats",
+    "crates/grid",
+    "crates/agent",
+    "crates/mcp-relay",
+    "crates/app",
+]
 # Third-party code patched for Zenkai: built as a dependency, outside our fmt and clippy gates.
 exclude = ["vendor"]
 
