@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
+use zenkai_datagen::GenerationSpec;
 use zenkai_types::{BorderPreset, HAlign, NumberFormat, Rgb, StyleChange, WorkbookId};
 
 fn workbook_id<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<WorkbookId, D::Error> {
@@ -91,6 +92,20 @@ pub struct FormatRange {
     pub sheet: String,
     pub range: String,
     pub format: FormatChange,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GenerateData {
+    #[serde(deserialize_with = "workbook_id")]
+    #[schemars(with = "u64", description = "Id from list_workbooks.")]
+    pub workbook: WorkbookId,
+    pub sheet: String,
+    #[schemars(
+        description = "Top-left cell of the table, such as \"A1\"; the header row goes here and the rows below it."
+    )]
+    pub start: String,
+    pub spec: GenerationSpec,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
@@ -220,6 +235,7 @@ pub enum WriteRequest {
     WriteCells(WriteCells),
     SetFormula(SetFormula),
     FormatRange(FormatRange),
+    GenerateData(GenerateData),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -269,6 +285,12 @@ impl From<SetFormula> for ToolRequest {
 impl From<FormatRange> for ToolRequest {
     fn from(request: FormatRange) -> ToolRequest {
         ToolRequest::Write(request.workbook, WriteRequest::FormatRange(request))
+    }
+}
+
+impl From<GenerateData> for ToolRequest {
+    fn from(request: GenerateData) -> ToolRequest {
+        ToolRequest::Write(request.workbook, WriteRequest::GenerateData(request))
     }
 }
 

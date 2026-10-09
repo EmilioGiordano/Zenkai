@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use zenkai_agent::tools::MAX_GENERATE_BYTES;
 use zenkai_engine::{Engine, EngineError, Workbook};
 use zenkai_types::{CellPos, CellRef, Range, SheetId};
 
@@ -31,10 +32,10 @@ impl Batch {
     }
 }
 
-// A write holds at most 5,000 cells (MAX_WRITE_CELLS), so 64 MiB keeps every old and new
-// input of several typical writes (a few dozen bytes per cell) while bounding the worst
-// case of long texts; past it the oldest writes are kept automatically.
+// Holds the old and new inputs of several typical writes while bounding long texts; past it
+// the oldest writes are kept automatically. A generated table may use at most half of it.
 pub const MAX_REVIEW_BYTES: usize = 64 * 1024 * 1024;
+const _: () = assert!(MAX_GENERATE_BYTES * 2 <= MAX_REVIEW_BYTES as u64);
 
 fn row_major(change: &CellChange) -> (SheetId, u32, u16) {
     (
@@ -100,9 +101,11 @@ impl Review {
             return;
         }
         cells.sort_by_key(row_major);
-        for change in &cells {
-            self.forget(change.cell);
+        let written: HashSet<CellRef> = cells.iter().map(|change| change.cell).collect();
+        for batch in &mut self.batches {
+            batch.cells.retain(|change| !written.contains(&change.cell));
         }
+        self.tidy();
         self.batches.push(Batch {
             agent,
             sheet_name,
@@ -301,7 +304,7 @@ pub fn restore_blocks(changes: &[CellChange]) -> Vec<RestoreBlock> {
 #[cfg(test)]
 mod tests {
     use zenkai_agent::tools::{WriteCells, WriteRequest, plan_write};
-    use zenkai_types::WorkbookId;
+    use zenkai_types::{ColIdx, RowIdx, WorkbookId};
 
     use super::*;
 
@@ -549,6 +552,31 @@ mod tests {
         reject_unchanged(&mut workbook, &changes).unwrap();
         assert_eq!(workbook.input(sheet, cell("A1").pos), "a");
         assert_eq!(workbook.input(sheet, cell("B1").pos), "by hand");
+    }
+
+    #[test]
+    fn rewriting_a_large_block_moves_it_to_the_newer_batch_in_one_pass() {
+        let block = |new: &str| -> Vec<CellChange> {
+            (0..200_000u32)
+                .map(|n| CellChange {
+                    cell: CellRef {
+                        sheet: SheetId(0),
+                        pos: CellPos::new(
+                            RowIdx::new(n / 2).unwrap(),
+                            ColIdx::new((n % 2) as u16).unwrap(),
+                        ),
+                    },
+                    old: String::new(),
+                    new: new.to_string(),
+                })
+                .collect()
+        };
+        let mut review = Review::default();
+        review.record("A".into(), "S".into(), "w".into(), block("1"));
+        review.record("B".into(), "S".into(), "w".into(), block("2"));
+        assert_eq!(review.batch_count(), 1);
+        assert_eq!(review.current().unwrap().agent, "B");
+        assert_eq!(review.current().unwrap().cells().len(), 200_000);
     }
 
     #[test]

@@ -57,6 +57,10 @@ fn messages() -> Vec<Value> {
             "format_range",
             json!({ "workbook": 1, "sheet": "Sheet1", "range": "A1:B2", "format": { "bold": true } }),
         ),
+        call(
+            "generate_data",
+            json!({ "workbook": 1, "sheet": "Sheet1", "start": "A1", "spec": { "rows": 3, "locale": "en-US", "seed": 7, "columns": [{ "header": "Id", "kind": { "type": "sequential_id" } }] } }),
+        ),
     ]
 }
 
@@ -80,7 +84,7 @@ fn every_baseline_message_is_understood() {
         let parsed = serde_json::from_value::<ClientJsonRpcMessage>(message.clone());
         assert!(parsed.is_ok(), "{message}");
     }
-    assert_eq!(tools().len(), 8);
+    assert_eq!(tools().len(), 9);
 }
 
 proptest! {
@@ -104,6 +108,7 @@ proptest! {
             Just("read_range".to_string()),
             Just("write_cells".to_string()),
             Just("format_range".to_string()),
+            Just("generate_data".to_string()),
             "[a-z_]{0,12}",
         ],
         bytes in prop::sample::select(messages()).prop_flat_map(json_mutation::mutated),

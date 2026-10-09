@@ -147,7 +147,8 @@ fn an_mcp_client_reads_and_edits_the_open_workbook_through_the_relay() {
             "find",
             "write_cells",
             "set_formula",
-            "format_range"
+            "format_range",
+            "generate_data"
         ]
     );
 
