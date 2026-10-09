@@ -2,6 +2,8 @@ mod approval_text;
 mod channel;
 mod client;
 mod error;
+#[cfg(test)]
+mod generate_tests;
 #[cfg(any(test, feature = "test-support"))]
 mod local_host;
 mod read;
