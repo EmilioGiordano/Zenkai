@@ -56,8 +56,11 @@ fn used_keys() -> BTreeSet<String> {
     }
     let mut keys = BTreeSet::new();
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-    for member in ["app", "grid", "agent"] {
-        visit(&crates.join(member).join("src"), &mut keys);
+    for member in fs::read_dir(&crates).unwrap() {
+        let source = member.unwrap().path().join("src");
+        if source.is_dir() {
+            visit(&source, &mut keys);
+        }
     }
     keys
 }
