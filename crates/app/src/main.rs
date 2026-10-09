@@ -55,6 +55,7 @@ use gpui_kit::*;
 
 fn main() {
     logging::init();
+    logging::log_panics();
     zenkai_i18n::init(language::startup());
     let initial: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
 
