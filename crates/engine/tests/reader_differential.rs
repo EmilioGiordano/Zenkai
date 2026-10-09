@@ -303,6 +303,48 @@ fn the_longest_allowed_formula_opens_with_the_fast_reader() {
     );
 }
 
+// Past a few megabytes a sheet is read in pieces; strings, shared formulas and row order
+// must come out as if it were read in one go.
+fn large_sheet_data(rows: usize, with_array: bool) -> String {
+    let mut data = String::new();
+    for row in 1..=rows {
+        let r = if row % 1_000 == 7 {
+            String::new()
+        } else {
+            format!(" r=\"{row}\"")
+        };
+        let shared = if row == 1 {
+            r#"<f t="shared" ref="D1:D99999" si="0">A1*2</f>"#.to_string()
+        } else {
+            r#"<f t="shared" si="0"/>"#.to_string()
+        };
+        data.push_str(&format!(
+            r#"<row{r}><c r="A{row}"><v>{row}</v></c><c r="B{row}" t="inlineStr"><is><t>name {}</t></is></c><c r="C{row}" t="str"><v>v{}</v></c><c r="D{row}">{shared}<v>0</v></c><c r="E{row}"><f>A{row}+D{row}*$A$1+{}</f></c></row>"#,
+            row % 37,
+            row % 11,
+            row % 7,
+        ));
+    }
+    if with_array {
+        data.push_str(&format!(
+            r#"<row r="{}"><c r="A{0}"><f t="array" ref="A{0}:A{1}">SEQUENCE(2)</f></c></row><row r="{1}"><c r="A{1}"><v>2</v></c></row>"#,
+            rows + 1,
+            rows + 2,
+        ));
+    }
+    data
+}
+
+#[test]
+fn a_sheet_read_in_pieces_reads_the_same() {
+    for with_array in [false, true] {
+        let data = large_sheet_data(20_000, with_array);
+        assert!(data.len() > 4 * 1024 * 1024 + 100_000, "{}", data.len());
+        let bytes = workbook(&[&sheet(&data), &sheet(&large_sheet_data(50, false))], None);
+        assert_agree(&format!("pieces, array {with_array}"), &bytes, false);
+    }
+}
+
 fn damaged_case(file: prop::sample::Index, damages: &[xlsx_damage::Damage]) -> Vec<u8> {
     let files = corpus();
     let mut parts = parts_of(&files[file.index(files.len())]);
