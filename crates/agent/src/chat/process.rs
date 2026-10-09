@@ -48,11 +48,22 @@ impl WorkFolder {
         getrandom::fill(&mut random).map_err(|error| ProcessError::Random(error.to_string()))?;
         let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
         let path = std::env::temp_dir().join(format!("{WORK_PREFIX}{name}"));
-        // create_dir fails when the name exists, so a planted folder is never reused.
-        std::fs::create_dir(&path).map_err(|source| ProcessError::WorkFolder {
-            path: path.clone(),
-            source,
-        })?;
+        // create fails when the name exists, so a planted folder is never reused.
+        #[cfg(unix)]
+        let builder = {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = std::fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = std::fs::DirBuilder::new();
+        builder
+            .create(&path)
+            .map_err(|source| ProcessError::WorkFolder {
+                path: path.clone(),
+                source,
+            })?;
         Ok(WorkFolder { path })
     }
 
@@ -146,6 +157,18 @@ fn kill_tree(pid: u32) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn the_work_folder_is_private_to_the_user() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = WorkFolder::create().unwrap();
+        let mode = std::fs::metadata(folder.path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700);
+    }
 
     #[test]
     fn only_folders_zenkai_made_in_temp_count_as_its_sessions() {

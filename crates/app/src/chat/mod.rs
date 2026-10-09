@@ -33,6 +33,7 @@ use launch::{Live, Prepared};
 
 const SCROLL_FOLLOW_SLACK: f32 = 48.0;
 const MAX_NAME_CHARS: usize = 80;
+const MAX_PENDING_ASKS: usize = 8;
 const MONO: &str = "IBM Plex Mono";
 
 pub enum ChatEvent {
@@ -93,6 +94,7 @@ pub struct ChatPanel {
     turn_started: Option<Instant>,
     state: AgentState,
     history: History,
+    history_saves: async_channel::Sender<History>,
     view: View,
     menu: Option<Menu>,
     title: Option<String>,
@@ -158,6 +160,7 @@ impl ChatPanel {
         let sessions_query =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search sessions"));
         let searching = cx.subscribe(&sessions_query, |_, _, _: &InputEvent, cx| cx.notify());
+        let (history_saves, history_queue) = async_channel::unbounded();
         let mut panel = ChatPanel {
             workspace,
             endpoint,
@@ -174,6 +177,7 @@ impl ChatPanel {
             turn_started: None,
             state: AgentState::default(),
             history: History::default(),
+            history_saves,
             view: View::Chat,
             menu: None,
             title: None,
@@ -184,7 +188,7 @@ impl ChatPanel {
             epoch: 0,
             _subscriptions: vec![sending, settings, searching],
         };
-        panel.load_history(cx);
+        panel.load_history(history_queue, cx);
         panel
     }
 

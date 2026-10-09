@@ -1,13 +1,10 @@
 use std::path::Path;
-use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
 use crate::settings::AgentId;
 
 const MAX_RECORDS: usize = 50;
-// Saves come from background tasks; one at a time keeps the temp file and the rename together.
-static SAVING: Mutex<()> = Mutex::new(());
 const MAX_TITLE_CHARS: usize = 80;
 
 // Metadata only: no message text is kept. It stands in for the agent's own session list when
@@ -78,12 +75,35 @@ impl History {
         }
     }
 
+    // A damaged file is kept as .bak for the user and replaced by an empty history, so the
+    // next save never overwrites the only copy.
+    pub fn load_or_quarantine(path: &Path) -> Result<History, HistoryError> {
+        match History::load(path) {
+            Err(HistoryError::Damaged(error)) => {
+                tracing::warn!(%error, "conversation history is damaged; keeping it as .bak");
+                std::fs::rename(path, path.with_extension("json.bak"))
+                    .map_err(HistoryError::Write)?;
+                Ok(History::default())
+            }
+            other => other,
+        }
+    }
+
+    // Records loaded from disk join the ones made since the app started, newest first.
+    pub fn merge(&mut self, loaded: History) {
+        for record in loaded.records {
+            if !self.records.contains(&record) {
+                self.records.push(record);
+            }
+        }
+        self.records
+            .sort_by_key(|record| std::cmp::Reverse(record.started_unix_seconds));
+        self.records.truncate(MAX_RECORDS);
+    }
+
     pub fn save(&self, path: &Path) -> Result<(), HistoryError> {
         let text = serde_json::to_string_pretty(self)
             .map_err(|error| HistoryError::Write(std::io::Error::other(error)))?;
-        let _saving = SAVING
-            .lock()
-            .map_err(|_| HistoryError::Write(std::io::Error::other("poisoned lock")))?;
         if let Some(folder) = path.parent() {
             std::fs::create_dir_all(folder).map_err(HistoryError::Write)?;
         }
@@ -142,6 +162,34 @@ mod tests {
         history.push(AgentId::new("a"), "hello", "w", 5);
         history.save(&path).unwrap();
         assert_eq!(History::load(&path).unwrap(), history);
+    }
+
+    #[test]
+    fn a_damaged_file_is_kept_as_a_backup_and_the_history_starts_empty() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("history.json");
+        std::fs::write(&path, "{ nope").unwrap();
+        assert_eq!(
+            History::load_or_quarantine(&path).unwrap(),
+            History::default()
+        );
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read_to_string(path.with_extension("json.bak")).unwrap(),
+            "{ nope"
+        );
+    }
+
+    #[test]
+    fn loaded_records_merge_with_newer_ones_without_duplicates() {
+        let mut older = History::default();
+        older.push(AgentId::new("a"), "old", "w", 1);
+        let mut current = History::default();
+        current.push(AgentId::new("a"), "new", "w", 9);
+        current.merge(older.clone());
+        current.merge(older);
+        let titles: Vec<&str> = current.records().iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(titles, ["new", "old"]);
     }
 
     #[test]

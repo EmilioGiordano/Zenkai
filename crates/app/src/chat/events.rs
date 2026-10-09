@@ -5,7 +5,7 @@ use zenkai_agent::chat::thread::{Effect, MessageId, NoticeKind, TurnEnd};
 use zenkai_agent::presets::Preset;
 
 use super::launch;
-use super::{ChatEvent, ChatPanel, Link, Problem, View};
+use super::{ChatEvent, ChatPanel, Link, MAX_PENDING_ASKS, Problem, View};
 use crate::agent_settings::AgentConfig;
 
 impl ChatPanel {
@@ -58,12 +58,19 @@ impl ChatPanel {
             }
             SessionEvent::Update(update) => {
                 let follow = self.at_bottom();
-                if let Effect::Appended { message, from } = self.thread.apply(update) {
-                    self.grow_message(message, from, cx);
+                if let Effect::Appended { message, added } = self.thread.apply(update) {
+                    self.grow_message(message, added, cx);
                 }
                 if follow {
                     self.scroll_to_end();
                 }
+            }
+            SessionEvent::Permission(ask) if self.permissions.len() >= MAX_PENDING_ASKS => {
+                ask.cancel();
+                self.thread.notice(
+                    NoticeKind::Error,
+                    "The agent asked too many questions at once; the extra ones were declined.",
+                );
             }
             SessionEvent::Permission(ask) => {
                 self.thread.waiting_for_permission(&ask.tool, &ask.title);
@@ -108,19 +115,20 @@ impl ChatPanel {
         });
     }
 
-    pub(super) fn grow_message(&mut self, message: MessageId, from: usize, cx: &mut Context<Self>) {
-        let Some(text) = self.thread.message_text(message) else {
-            return;
-        };
+    pub(super) fn grow_message(
+        &mut self,
+        message: MessageId,
+        added: String,
+        cx: &mut Context<Self>,
+    ) {
         match self.texts.get(&message) {
-            Some(state) => {
-                let added = text.get(from..).unwrap_or_default().to_string();
-                state.update(cx, |state, cx| state.push_str(&added, cx));
-            }
+            Some(state) => state.update(cx, |state, cx| state.push_str(&added, cx)),
             None => {
-                let text = text.to_string();
-                let state = cx.new(|cx| TextViewState::markdown(&text, cx));
+                let state = cx.new(|cx| TextViewState::markdown(&added, cx));
                 self.texts.insert(message, state);
+                // Messages the transcript trimmed no longer need their view state.
+                self.texts
+                    .retain(|id, _| self.thread.message_text(*id).is_some());
             }
         }
     }

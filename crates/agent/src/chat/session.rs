@@ -30,6 +30,9 @@ pub const CONTEXT_MARKER: &str = "[Zenkai]";
 // Past this many unread events an agent that floods the chat loses the overflow instead of
 // growing memory without limit.
 const EVENT_BACKLOG: usize = 4096;
+const MAX_ASK_TITLE_CHARS: usize = 200;
+const MAX_OPTION_LABEL_CHARS: usize = 100;
+const MAX_OPTIONS: usize = 6;
 const STDERR_LINES_KEPT: usize = 20;
 const MAX_CHUNK_CHARS: usize = 200_000;
 
@@ -234,6 +237,23 @@ async fn run(
     }
 }
 
+// The end of a turn and of the session must reach the chat even when the queue is full; the
+// sender waits for room instead of dropping them.
+async fn deliver(events: &Sender<SessionEvent>, event: SessionEvent) {
+    if events.send(event).await.is_err() {
+        tracing::debug!("the chat closed before an event arrived");
+    }
+}
+
+fn limit(text: String, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text;
+    }
+    let mut shortened: String = text.chars().take(max).collect();
+    shortened.push('…');
+    shortened
+}
+
 fn notify(events: &Sender<SessionEvent>, event: SessionEvent) {
     if events.try_send(event).is_err() {
         tracing::debug!("the chat closed before an event arrived");
@@ -385,13 +405,17 @@ async fn converse(
                 let (reply, answered) = oneshot::channel();
                 let ask = PermissionAsk {
                     tool: ToolCallId::new(request.tool_call.tool_call_id.to_string()),
-                    title: request.tool_call.fields.title.clone().unwrap_or_default(),
+                    title: limit(
+                        request.tool_call.fields.title.clone().unwrap_or_default(),
+                        MAX_ASK_TITLE_CHARS,
+                    ),
                     choices: request
                         .options
                         .iter()
+                        .take(MAX_OPTIONS)
                         .map(|option| PermissionChoice {
                             id: option.option_id.to_string(),
-                            label: option.name.clone(),
+                            label: limit(option.name.clone(), MAX_OPTION_LABEL_CHARS),
                             kind: choice_kind(option.kind),
                         })
                         .collect(),
@@ -514,14 +538,14 @@ async fn converse_on(
                     let end = match result {
                         Ok(response) => turn_end(response.stop_reason),
                         Err(error) if error.code == ErrorCode::AuthRequired => {
-                            notify(&task_events, SessionEvent::AuthRequired);
+                            deliver(&task_events, SessionEvent::AuthRequired).await;
                             TurnEnd::Failed(
                                 "The agent needs you to sign in before it can answer.".to_string(),
                             )
                         }
                         Err(error) => TurnEnd::Failed(error.message),
                     };
-                    notify(&task_events, SessionEvent::TurnEnded(end));
+                    deliver(&task_events, SessionEvent::TurnEnded(end)).await;
                     Ok(())
                 })?;
             }

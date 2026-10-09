@@ -3,6 +3,8 @@ use std::fmt;
 const MAX_DETAIL_CHARS: usize = 600;
 const MAX_TITLE_CHARS: usize = 200;
 const MAX_MESSAGE_CHARS: usize = 500_000;
+const MAX_ENTRIES: usize = 2_000;
+const TRIMMED_NOTICE: &str = "Older messages were dropped to keep the chat responsive.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MessageId(u64);
@@ -127,9 +129,9 @@ pub enum TurnState {
 }
 
 // What the screen must do after an update: grow one message's text, or redraw.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
-    Appended { message: MessageId, from: usize },
+    Appended { message: MessageId, added: String },
     Changed,
     Nothing,
 }
@@ -201,7 +203,7 @@ impl Thread {
             return false;
         }
         self.open_message = None;
-        self.entries.push(Entry::User(text));
+        self.push_entry(Entry::User(text));
         self.turn = TurnState::Running;
         true
     }
@@ -221,7 +223,7 @@ impl Thread {
                 self.open_message = None;
                 match self.entries.last_mut() {
                     Some(Entry::User(last)) if self.open_user => last.push_str(&text),
-                    _ => self.entries.push(Entry::User(text)),
+                    _ => self.push_entry(Entry::User(text)),
                 }
                 self.open_user = true;
                 Effect::Changed
@@ -235,7 +237,7 @@ impl Thread {
                 card.input = capped(card.input, MAX_DETAIL_CHARS);
                 match self.tool_index(&card.id) {
                     Some(index) => self.entries[index] = Entry::Tool(card),
-                    None => self.entries.push(Entry::Tool(card)),
+                    None => self.push_entry(Entry::Tool(card)),
                 }
                 Effect::Changed
             }
@@ -272,6 +274,33 @@ impl Thread {
         }
     }
 
+    // A flooding agent cannot grow the transcript without limit: the oldest entries go, behind one
+    // notice that says so.
+    fn push_entry(&mut self, entry: Entry) {
+        self.entries.push(entry);
+        while self.entries.len() > MAX_ENTRIES {
+            let has_notice = matches!(
+                self.entries.first(),
+                Some(Entry::Notice { text, .. }) if text == TRIMMED_NOTICE
+            );
+            if !has_notice {
+                self.entries.insert(
+                    0,
+                    Entry::Notice {
+                        kind: NoticeKind::Info,
+                        text: TRIMMED_NOTICE.to_string(),
+                    },
+                );
+                self.open_message = self.open_message.map(|index| index + 1);
+            }
+            self.entries.remove(1);
+            self.open_message = match self.open_message {
+                Some(1) | None => None,
+                Some(index) => Some(index - 1),
+            };
+        }
+    }
+
     fn append_text(&mut self, text: String) -> Effect {
         if text.is_empty() {
             return Effect::Nothing;
@@ -282,15 +311,23 @@ impl Thread {
             if existing.len() + text.len() > MAX_MESSAGE_CHARS {
                 return Effect::Nothing;
             }
-            let from = existing.len();
             existing.push_str(&text);
-            return Effect::Appended { message: *id, from };
+            return Effect::Appended {
+                message: *id,
+                added: text,
+            };
         }
         let message = MessageId(self.next_message);
         self.next_message += 1;
-        self.entries.push(Entry::Assistant { id: message, text });
+        self.push_entry(Entry::Assistant {
+            id: message,
+            text: text.clone(),
+        });
         self.open_message = Some(self.entries.len() - 1);
-        Effect::Appended { message, from: 0 }
+        Effect::Appended {
+            message,
+            added: text,
+        }
     }
 
     fn tool_index(&self, id: &ToolCallId) -> Option<usize> {
@@ -310,7 +347,7 @@ impl Thread {
             }
             None => {
                 self.open_message = None;
-                self.entries.push(Entry::Tool(ToolCard {
+                self.push_entry(Entry::Tool(ToolCard {
                     id: id.clone(),
                     title: title.to_string(),
                     kind: ToolKind::Other,
@@ -382,12 +419,12 @@ impl Thread {
             Some(index) if index + 1 == self.entries.len() => {
                 self.entries.insert(index, divider);
             }
-            _ => self.entries.push(divider),
+            _ => self.push_entry(divider),
         }
     }
 
     pub fn notice(&mut self, kind: NoticeKind, text: &str) {
-        self.entries.push(Entry::Notice {
+        self.push_entry(Entry::Notice {
             kind,
             text: text.to_string(),
         });
@@ -452,14 +489,14 @@ mod tests {
             thread.apply(AgentUpdate::Message("Hel".to_string())),
             Effect::Appended {
                 message: MessageId(0),
-                from: 0
+                added: "Hel".to_string()
             }
         );
         assert_eq!(
             thread.apply(AgentUpdate::Message("lo".to_string())),
             Effect::Appended {
                 message: MessageId(0),
-                from: 3
+                added: "lo".to_string()
             }
         );
         assert_eq!(thread.message_text(MessageId(0)), Some("Hello"));
@@ -479,7 +516,7 @@ mod tests {
             effect,
             Effect::Appended {
                 message: MessageId(1),
-                from: 0
+                added: "Done.".to_string()
             }
         );
         assert_eq!(thread.entries().len(), 4);
@@ -717,6 +754,30 @@ mod tests {
         thread.apply(AgentUpdate::Message("a".repeat(MAX_MESSAGE_CHARS - 1)));
         let effect = thread.apply(AgentUpdate::Message("bbbb".to_string()));
         assert_eq!(effect, Effect::Nothing);
+    }
+
+    #[test]
+    fn the_transcript_drops_its_oldest_entries_behind_one_notice() {
+        let mut thread = running();
+        for number in 0..(MAX_ENTRIES + 50) {
+            thread.apply(AgentUpdate::ToolStarted(card(
+                &format!("t{number}"),
+                ToolStatus::Completed,
+            )));
+        }
+        assert_eq!(thread.entries().len(), MAX_ENTRIES);
+        assert!(matches!(
+            &thread.entries()[0],
+            Entry::Notice { text, .. } if text == TRIMMED_NOTICE
+        ));
+        let notices = thread
+            .entries()
+            .iter()
+            .filter(|entry| matches!(entry, Entry::Notice { .. }))
+            .count();
+        assert_eq!(notices, 1);
+        let effect = thread.apply(AgentUpdate::Message("still works".to_string()));
+        assert!(matches!(effect, Effect::Appended { .. }));
     }
 
     #[test]

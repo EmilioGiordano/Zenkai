@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+
+use async_channel::Receiver;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui_kit::*;
@@ -23,22 +25,43 @@ fn history_path() -> Option<PathBuf> {
 }
 
 impl ChatPanel {
-    pub(super) fn load_history(&mut self, cx: &mut Context<Self>) {
+    // One task writes the file, and only after a successful load, so a save can neither land out
+    // of order nor replace history that was never read.
+    pub(super) fn load_history(&mut self, queue: Receiver<History>, cx: &mut Context<Self>) {
         let Some(path) = history_path() else {
             return;
         };
         cx.spawn(async move |this, cx| {
+            let load_path = path.clone();
             let loaded = cx
                 .background_executor()
-                .spawn(async move { History::load(&path) })
+                .spawn(async move { History::load_or_quarantine(&load_path) })
                 .await;
-            closed(this.update(cx, |this, cx| {
-                match loaded {
-                    Ok(history) => this.history = history,
-                    Err(error) => tracing::warn!(%error, "conversation history not loaded"),
+            let loaded = match loaded {
+                Ok(loaded) => loaded,
+                Err(error) => {
+                    tracing::warn!(%error, "conversation history not loaded; it will not be saved");
+                    return;
                 }
+            };
+            let on_disk = loaded.clone();
+            closed(this.update(cx, |this, cx| {
+                this.history.merge(loaded);
                 cx.notify();
             }));
+            cx.background_executor()
+                .spawn(async move {
+                    while let Ok(mut latest) = queue.recv().await {
+                        while let Ok(newer) = queue.try_recv() {
+                            latest = newer;
+                        }
+                        latest.merge(on_disk.clone());
+                        if let Err(error) = latest.save(&path) {
+                            tracing::warn!(%error, "conversation history not saved");
+                        }
+                    }
+                })
+                .detach();
         })
         .detach();
     }
@@ -68,16 +91,9 @@ impl ChatPanel {
             .unwrap_or_default();
         self.history
             .push(agent, first_message, &workbook, now_seconds());
-        let (Some(path), history) = (history_path(), self.history.clone()) else {
-            return;
-        };
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(error) = history.save(&path) {
-                    tracing::warn!(%error, "conversation history not saved");
-                }
-            })
-            .detach();
+        if self.history_saves.try_send(self.history.clone()).is_err() {
+            tracing::debug!("conversation history writer is not running");
+        }
     }
 
     pub(crate) fn toggle_sessions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
