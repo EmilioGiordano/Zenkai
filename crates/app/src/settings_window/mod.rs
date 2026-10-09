@@ -53,6 +53,19 @@ pub fn open_to_find_shortcut(cx: &mut App) {
     }
 }
 
+pub fn open_to_keyboard(cx: &mut App) {
+    let Some((handle, window)) = show(cx) else {
+        return;
+    };
+    if let Err(error) = handle.update(cx, |_, native, cx| {
+        window.update(cx, |this, cx| {
+            this.select_section(rows::Section::Keyboard, native, cx)
+        })
+    }) {
+        tracing::debug!(%error, "the settings window is already being updated");
+    }
+}
+
 fn show(cx: &mut App) -> Option<(AnyWindowHandle, Entity<SettingsWindow>)> {
     let existing = cx
         .try_global::<OpenWindow>()
@@ -169,7 +182,7 @@ impl SettingsWindow {
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.keyboard.cancel() {
+        if self.keyboard.cancel() | crate::keymap::disarm_reset(cx) {
             cx.notify();
         } else if self.dropdown.take().is_some() {
             window.focus(&self.focus, cx);

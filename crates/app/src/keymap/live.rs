@@ -8,8 +8,8 @@ use super::chord::{Chord, display};
 use super::conflict::{self, Claim, Conflict, Scope};
 use super::defaults::Binding;
 use super::edit::{self, Edit};
-use super::model::Model;
-use super::overrides::{Overrides, Problem, validate};
+use super::model::{Command, Model, is_guarded};
+use super::overrides::{Override, Overrides, Problem, validate};
 use crate::agent_settings;
 
 // What settings.json asks for, as last applied to the app's key bindings.
@@ -18,6 +18,9 @@ pub struct KeymapState {
     raw: BTreeMap<String, Value>,
     pub overrides: Overrides,
     pub problems: Vec<Problem>,
+    // What the user set for guarded commands in this session; the file alone cannot.
+    approved: Overrides,
+    pub reset_armed: bool,
 }
 
 impl Global for KeymapState {}
@@ -35,12 +38,15 @@ pub fn sync_with_settings(cx: &mut App) {
         return;
     }
     let model = Model::build();
-    let (overrides, problems) = validate(&model, &raw, &foreign_claims(cx, &model));
+    let approved = cx.global::<KeymapState>().approved.clone();
+    let (overrides, problems) = validate(&model, &raw, &foreign_claims(cx, &model), &approved);
     rebuild(cx, &model, &overrides);
     cx.set_global(KeymapState {
         raw,
         overrides,
         problems,
+        approved,
+        reset_armed: false,
     });
 }
 
@@ -99,7 +105,7 @@ fn foreign_claims(cx: &App, model: &Model) -> Vec<Claim> {
         .filter(|binding| {
             binding
                 .predicate()
-                .is_none_or(|predicate| predicate.to_string().contains("Grid"))
+                .is_none_or(|predicate| mentions(&predicate, "Grid"))
         })
         .filter_map(|binding| {
             let [stroke] = binding.keystrokes() else {
@@ -130,23 +136,28 @@ pub fn labeled(cx: &App, label: &str, action: &dyn Action) -> String {
     }
 }
 
+fn mentions(predicate: &KeyBindingContextPredicate, name: &str) -> bool {
+    use KeyBindingContextPredicate::*;
+    match predicate {
+        Identifier(identifier) => identifier == name,
+        Descendant(parent, child) => mentions(parent, name) || mentions(child, name),
+        And(left, right) | Or(left, right) => mentions(left, name) || mentions(right, name),
+        Equal(..) | NotEqual(..) | Not(_) => false,
+    }
+}
+
 pub struct Proposal {
     pub command: &'static str,
     pub chord: Chord,
     pub conflict: Option<Conflict>,
 }
 
-pub fn propose(cx: &App, command: &'static str, chord: Chord) -> Proposal {
-    let model = Model::build();
+pub fn propose(cx: &App, model: &Model, command: &Command, chord: Chord) -> Proposal {
     let overrides = &cx.global::<KeymapState>().overrides;
-    let claims = model.claims(overrides, &foreign_claims(cx, &model));
-    let scopes = model
-        .command(command)
-        .map(|known| known.scopes())
-        .unwrap_or_default();
+    let claims = model.claims(overrides, &foreign_claims(cx, model));
     Proposal {
-        command,
-        conflict: conflict::find(&claims, command, &scopes, &chord),
+        command: command.name,
+        conflict: conflict::find(&claims, command.name, &command.scopes(), &chord),
         chord,
     }
 }
@@ -189,11 +200,53 @@ pub fn reset(cx: &mut App, command: &'static str) {
     edit(cx, vec![Edit::Reset { command }]);
 }
 
-pub fn reset_all(cx: &mut App) {
-    edit(cx, vec![Edit::ResetAll]);
+// The first request arms a confirmation and the second carries it out. Only the entries that
+// are in force are removed; what the file holds and was reported as a problem stays.
+// Returns whether anything was armed, so the caller can show the Settings window.
+pub fn request_reset_all(cx: &mut App) -> bool {
+    let state = cx.global::<KeymapState>();
+    if state.overrides.len() == 0 {
+        return false;
+    }
+    if state.reset_armed {
+        let edits = state
+            .overrides
+            .iter()
+            .map(|(command, _)| Edit::Reset { command })
+            .collect();
+        edit(cx, edits);
+    } else {
+        cx.update_global::<KeymapState, _>(|state, _| state.reset_armed = true);
+    }
+    true
+}
+
+pub fn disarm_reset(cx: &mut App) -> bool {
+    let armed = cx.global::<KeymapState>().reset_armed;
+    if armed {
+        cx.update_global::<KeymapState, _>(|state, _| state.reset_armed = false);
+    }
+    armed
 }
 
 fn edit(cx: &mut App, edits: Vec<Edit>) {
+    cx.update_global::<KeymapState, _>(|state, _| {
+        for edit in &edits {
+            match edit {
+                Edit::Set { command, keys } if is_guarded(command) => {
+                    let replacement = if keys.is_empty() {
+                        Override::Removed
+                    } else {
+                        Override::Keys(keys.clone())
+                    };
+                    state.approved.insert(command, replacement);
+                }
+                Edit::Reset { command } => state.approved.remove(command),
+                Edit::Set { .. } => {}
+            }
+        }
+        state.reset_armed = false;
+    });
     agent_settings::change(cx, move |settings| {
         edit::apply(&Model::build(), &mut settings.keymap, &edits)
     });

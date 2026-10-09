@@ -91,14 +91,18 @@ enum Capture {
 pub struct KeyboardState {
     capture: Capture,
     proposal: Option<Proposal>,
+    refusal: Option<&'static str>,
     pub pressed: Option<String>,
 }
 
 impl KeyboardState {
     pub fn cancel(&mut self) -> bool {
-        let busy = !matches!(self.capture, Capture::Idle) || self.proposal.is_some();
+        let busy = !matches!(self.capture, Capture::Idle)
+            || self.proposal.is_some()
+            || self.refusal.is_some();
         self.capture = Capture::Idle;
         self.proposal = None;
+        self.refusal = None;
         busy
     }
 }
@@ -178,18 +182,26 @@ impl SettingsWindow {
                 if bare && matches!(keystroke.key.as_str(), "backspace" | "delete") {
                     self.keyboard.cancel();
                     keymap::remove(cx, command);
-                } else if let Ok(chord) = Chord::from_keystroke(&keystroke) {
-                    self.keyboard.cancel();
-                    let proposal = keymap::propose(cx, command, chord);
-                    if proposal.conflict.is_some() {
-                        self.keyboard.proposal = Some(proposal);
-                    } else {
-                        keymap::commit(cx, &proposal);
+                } else {
+                    match Chord::from_keystroke(&keystroke) {
+                        Ok(chord) => {
+                            self.keyboard.cancel();
+                            let model = Model::build();
+                            if let Some(known) = model.command(command) {
+                                let proposal = keymap::propose(cx, &model, known, chord);
+                                if proposal.conflict.is_some() {
+                                    self.keyboard.proposal = Some(proposal);
+                                } else {
+                                    keymap::commit(cx, &proposal);
+                                }
+                            }
+                        }
+                        Err(error) => self.keyboard.refusal = Some(error.reason()),
                     }
                 }
             }
-            Capture::Finding { .. } => {
-                if let Ok(chord) = Chord::from_keystroke(&keystroke) {
+            Capture::Finding { .. } => match Chord::from_keystroke(&keystroke) {
+                Ok(chord) => {
                     self.keyboard.cancel();
                     let shown = chord.display();
                     self.query = shown.clone();
@@ -197,7 +209,8 @@ impl SettingsWindow {
                     self.search
                         .update(cx, |search, cx| search.set_value(shown, window, cx));
                 }
-            }
+                Err(error) => self.keyboard.refusal = Some(error.reason()),
+            },
         }
         cx.notify();
     }
@@ -213,6 +226,31 @@ impl SettingsWindow {
         let theme = cx.theme();
         let finding = matches!(self.keyboard.capture, Capture::Finding { .. });
         let customized = modified_count(cx) > 0;
+        let armed = cx.global::<KeymapState>().reset_armed;
+        let (description, tint) = if armed {
+            (
+                t!(
+                    "settings.shortcut.reset_confirm",
+                    count = modified_count(cx)
+                ),
+                theme.warning,
+            )
+        } else if let Some(reason) = self.keyboard.refusal {
+            (
+                t!("settings.shortcut.cannot_use", reason = reason),
+                theme.warning,
+            )
+        } else if finding {
+            (
+                t!("settings.shortcut.finding_hint").to_string(),
+                theme.muted_foreground,
+            )
+        } else {
+            (
+                t!("settings.shortcut.find_lead").to_string(),
+                theme.muted_foreground,
+            )
+        };
         let find = Button::new("record-keys")
             .selected(finding)
             .label(if finding {
@@ -223,7 +261,12 @@ impl SettingsWindow {
             .accessibility_label(t!("settings.shortcut.record_keys"))
             .on_click(|_, window, cx| window.dispatch_action(Box::new(RecordShortcutKeys), cx));
         let reset = Button::new("reset-all-shortcuts")
-            .label(t!("settings.shortcut.reset_all"))
+            .label(if armed {
+                t!("settings.shortcut.reset_again")
+            } else {
+                t!("settings.shortcut.reset_all")
+            })
+            .accessibility_label(t!("settings.shortcut.reset_all"))
             .disabled(!customized)
             .on_click(|_, window, cx| window.dispatch_action(Box::new(ResetAllShortcuts), cx));
         let card_rows = vec![
@@ -243,13 +286,11 @@ impl SettingsWindow {
                                 .font_weight(FontWeight::MEDIUM)
                                 .child(t!("settings.shortcut.find_title")),
                         )
-                        .child(div().text_xs().text_color(theme.muted_foreground).child(
-                            if finding {
-                                t!("settings.shortcut.finding_hint")
-                            } else {
-                                t!("settings.shortcut.find_lead")
-                            },
-                        )),
+                        .child(div().text_xs().text_color(tint).child(if armed {
+                            format!("⚠ {description}")
+                        } else {
+                            description
+                        })),
                 )
                 .child(h_flex().gap_2().child(find).child(reset))
                 .into_any_element(),
@@ -371,10 +412,20 @@ impl SettingsWindow {
             };
         let notice = if recording {
             Some(
-                div()
+                v_flex()
+                    .gap_0p5()
                     .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(t!("settings.shortcut.recording_hint"))
+                    .child(
+                        div()
+                            .text_color(theme.muted_foreground)
+                            .child(t!("settings.shortcut.recording_hint")),
+                    )
+                    .children(self.keyboard.refusal.map(|reason| {
+                        div().text_color(theme.warning).child(format!(
+                            "⚠ {}",
+                            t!("settings.shortcut.cannot_use", reason = reason)
+                        ))
+                    }))
                     .into_any_element(),
             )
         } else {

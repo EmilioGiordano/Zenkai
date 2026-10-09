@@ -5,7 +5,7 @@ use zenkai_i18n::t;
 
 use super::chord::Chord;
 use super::conflict::{self, Claim};
-use super::model::Model;
+use super::model::{Model, is_guarded};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Override {
@@ -31,6 +31,10 @@ impl Overrides {
         self.0.len()
     }
 
+    pub fn remove(&mut self, name: &str) {
+        self.0.remove(name);
+    }
+
     pub fn insert(&mut self, name: &'static str, replacement: Override) {
         self.0.insert(name, replacement);
     }
@@ -40,6 +44,7 @@ impl Overrides {
 pub enum Problem {
     UnknownCommand(String),
     FixedCommand(String),
+    Held(String),
     BadEntry(String),
     BadKeystroke {
         command: String,
@@ -58,6 +63,7 @@ impl Problem {
         match self {
             Problem::UnknownCommand(name) => t!("keymap.problem.unknown_command", name = name),
             Problem::FixedCommand(command) => t!("keymap.problem.fixed_command", command = command),
+            Problem::Held(command) => t!("keymap.problem.held", command = command),
             Problem::BadEntry(command) => t!("keymap.problem.bad_entry", command = command),
             Problem::BadKeystroke {
                 command,
@@ -126,6 +132,7 @@ pub fn validate(
     model: &Model,
     raw: &BTreeMap<String, Value>,
     foreign: &[Claim],
+    approved: &Overrides,
 ) -> (Overrides, Vec<Problem>) {
     let mut overrides = Overrides::default();
     let mut problems: Vec<Problem> = Vec::new();
@@ -139,7 +146,13 @@ pub fn validate(
             continue;
         }
         match parse_entry(command.label, value) {
-            Parsed::Accepted(replacement) => overrides.insert(command.name, replacement),
+            Parsed::Accepted(replacement) => {
+                if is_guarded(command.name) && approved.get(command.name) != Some(&replacement) {
+                    problems.push(Problem::Held(command.label.to_string()));
+                } else {
+                    overrides.insert(command.name, replacement);
+                }
+            }
             Parsed::Ignored(problem) => problems.push(problem),
         }
     }
@@ -217,6 +230,7 @@ mod tests {
             &model,
             &raw(&[(BOLD, keys(&["ctrl-shift-b"])), (ITALIC, Value::Null)]),
             &[],
+            &Overrides::default(),
         );
         assert_eq!(problems, []);
         assert_eq!(
@@ -233,6 +247,7 @@ mod tests {
             &model,
             &raw(&[("zenkai::Nonsense", keys(&["ctrl-j"]))]),
             &[],
+            &Overrides::default(),
         );
         assert_eq!(overrides.len(), 0);
         assert_eq!(
@@ -251,6 +266,7 @@ mod tests {
                 (ITALIC, keys(&["ctrl-k ctrl-i"])),
             ]),
             &[],
+            &Overrides::default(),
         );
         assert_eq!(overrides.len(), 0);
         assert_eq!(problems.len(), 2);
@@ -264,6 +280,7 @@ mod tests {
             &model,
             &raw(&[(BOLD, Value::from("ctrl-j")), (ITALIC, keys(&["ctrl-j"]))]),
             &[],
+            &Overrides::default(),
         );
         assert_eq!(problems, [Problem::BadEntry(model.label_of(BOLD))]);
         assert_eq!(overrides.len(), 1);
@@ -276,6 +293,7 @@ mod tests {
             &model,
             &raw(&[("zenkai::AllowAgentChange", keys(&["ctrl-s"]))]),
             &[],
+            &Overrides::default(),
         );
         assert_eq!(overrides.len(), 0);
         assert!(matches!(problems[0], Problem::FixedCommand(_)));
@@ -288,6 +306,7 @@ mod tests {
             &model,
             &raw(&[(SIDEBAR, keys(&["ctrl-b"])), (BOLD, Value::Null)]),
             &[],
+            &Overrides::default(),
         );
         assert_eq!(problems, []);
         assert_eq!(overrides.len(), 2);
@@ -296,7 +315,12 @@ mod tests {
     #[test]
     fn an_override_that_takes_a_key_from_another_command_is_ignored() {
         let model = Model::build();
-        let (overrides, problems) = validate(&model, &raw(&[(SIDEBAR, keys(&["ctrl-b"]))]), &[]);
+        let (overrides, problems) = validate(
+            &model,
+            &raw(&[(SIDEBAR, keys(&["ctrl-b"]))]),
+            &[],
+            &Overrides::default(),
+        );
         assert_eq!(overrides.len(), 0);
         assert!(matches!(problems[0], Problem::Conflict { .. }));
     }
@@ -308,9 +332,43 @@ mod tests {
             &model,
             &raw(&[(SIDEBAR, keys(&["ctrl-j"])), (ITALIC, keys(&["ctrl-j"]))]),
             &[],
+            &Overrides::default(),
         );
         assert_eq!(problems.len(), 1);
         assert_eq!(overrides.len(), 1);
         assert!(overrides.get(ITALIC).is_some());
+    }
+
+    #[test]
+    fn a_file_cannot_put_a_key_on_a_destructive_command_unless_the_user_set_it() {
+        let model = Model::build();
+        let entry = raw(&[
+            ("zenkai::DeleteSpace", keys(&["ctrl-s"])),
+            ("zenkai::Save", Value::Null),
+        ]);
+        let (overrides, problems) = validate(&model, &entry, &[], &Overrides::default());
+        assert_eq!(
+            problems,
+            [Problem::Held(model.label_of("zenkai::DeleteSpace"))]
+        );
+        assert_eq!(overrides.get("zenkai::DeleteSpace"), None);
+        assert_eq!(overrides.get("zenkai::Save"), Some(&Override::Removed));
+
+        let mut approved = Overrides::default();
+        approved.insert("zenkai::DeleteSpace", Override::Keys(chords(&["ctrl-s"])));
+        let (overrides, problems) = validate(&model, &entry, &[], &approved);
+        assert_eq!(problems, []);
+        assert!(overrides.get("zenkai::DeleteSpace").is_some());
+    }
+
+    #[test]
+    fn an_approval_for_other_keys_does_not_cover_the_file() {
+        let model = Model::build();
+        let entry = raw(&[("zenkai::DeleteSpace", keys(&["ctrl-j"]))]);
+        let mut approved = Overrides::default();
+        approved.insert("zenkai::DeleteSpace", Override::Keys(chords(&["ctrl-k"])));
+        let (overrides, problems) = validate(&model, &entry, &[], &approved);
+        assert_eq!(overrides.len(), 0);
+        assert_eq!(problems.len(), 1);
     }
 }

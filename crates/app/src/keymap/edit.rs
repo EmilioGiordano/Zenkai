@@ -14,7 +14,6 @@ pub enum Edit {
     Reset {
         command: &'static str,
     },
-    ResetAll,
 }
 
 // Settings only hold what differs from the defaults: keys equal to the defaults are dropped
@@ -22,7 +21,6 @@ pub enum Edit {
 pub fn apply(model: &Model, raw: &mut BTreeMap<String, Value>, edits: &[Edit]) {
     for edit in edits {
         match edit {
-            Edit::ResetAll => raw.clear(),
             Edit::Reset { command } => {
                 raw.remove(*command);
             }
@@ -112,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_clears_one_entry_and_reset_all_clears_them_all() {
+    fn reset_clears_only_the_commands_named() {
         let model = Model::build();
         let mut raw = BTreeMap::from([
             (BOLD.to_string(), Value::Null),
@@ -121,7 +119,13 @@ mod tests {
         ]);
         apply(&model, &mut raw, &[Edit::Reset { command: BOLD }]);
         assert_eq!(raw.len(), 2);
-        apply(&model, &mut raw, &[Edit::ResetAll]);
-        assert!(raw.is_empty());
+        apply(
+            &model,
+            &mut raw,
+            &[Edit::Reset {
+                command: "zenkai::Open",
+            }],
+        );
+        assert_eq!(raw.keys().collect::<Vec<_>>(), ["zenkai::Typo"]);
     }
 }

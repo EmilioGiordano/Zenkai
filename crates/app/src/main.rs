@@ -66,7 +66,11 @@ fn main() {
             cx.on_action(|_: &actions::RecordShortcutKeys, cx| {
                 settings_window::open_to_find_shortcut(cx)
             });
-            cx.on_action(|_: &actions::ResetAllShortcuts, cx| keymap::reset_all(cx));
+            cx.on_action(|_: &actions::ResetAllShortcuts, cx| {
+                if keymap::request_reset_all(cx) {
+                    settings_window::open_to_keyboard(cx);
+                }
+            });
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.0), px(800.0)), cx)),

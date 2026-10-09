@@ -25,6 +25,18 @@ fn is_locked(name: &str) -> bool {
     .contains(&name)
 }
 
+// Commands that destroy data or end the session. The user may bind them in Settings, but a
+// settings.json entry for them is held until the user sets it there, so a file edit cannot
+// move a key people press often (Ctrl+S) onto one of them.
+pub fn is_guarded(name: &str) -> bool {
+    [
+        <DeleteFile as Action>::name_for_type(),
+        <DeleteSpace as Action>::name_for_type(),
+        <Quit as Action>::name_for_type(),
+    ]
+    .contains(&name)
+}
+
 pub enum Editability {
     Editable { home: Vec<Option<&'static str>> },
     Fixed,
@@ -270,7 +282,7 @@ mod tests {
 
     fn overrides_from(raw: Value) -> Overrides {
         let raw: BTreeMap<String, Value> = serde_json::from_value(raw).unwrap();
-        let (overrides, problems) = validate(&Model::build(), &raw, &[]);
+        let (overrides, problems) = validate(&Model::build(), &raw, &[], &Overrides::default());
         assert_eq!(problems, []);
         overrides
     }
