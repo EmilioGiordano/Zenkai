@@ -400,6 +400,7 @@ impl Workspace {
             return;
         }
         self.search = None;
+        self.revert_theme_preview(cx);
         let state = cx.new(|cx| CommandState::new(window, cx));
         state.update(cx, |state, cx| state.focus(window, cx));
         self.palette = Some(state);
@@ -439,6 +440,7 @@ impl Workspace {
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
+        self.revert_theme_preview(cx);
         let Some(document) = self.documents.active_mut() else {
             return;
         };
@@ -2568,6 +2570,7 @@ impl Workspace {
 
     fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
+        self.revert_theme_preview(cx);
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("A1 or A1:C10"));
         let subscription =
             cx.subscribe_in(
@@ -2609,6 +2612,7 @@ impl Workspace {
 
     fn open_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
+        self.revert_theme_preview(cx);
         let Some(document) = self.documents.active() else {
             return;
         };

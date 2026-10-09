@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::*;
 use zenkai_engine::{EngineError, open_xlsx};
@@ -15,6 +15,7 @@ use crate::agent_settings;
 use crate::session::{self, Loaded, Session};
 use crate::space_settings;
 
+const AUTOSAVE_TICK: Duration = Duration::from_secs(1);
 const CLOSING: &str = "Saving your session…";
 const CLOSE_POLL: Duration = Duration::from_millis(50);
 const CLOSE_POLLS_BEFORE_ASKING: u32 = 300;
@@ -50,19 +51,6 @@ fn restore_enabled() -> bool {
             true
         }
     }
-}
-
-// With the restore off the last session is not reopened, so its unsaved work is not
-// reopened either: it must be offered like the leftovers of a crash.
-fn kept_recovery_files(session: &Session, restore: bool) -> Vec<String> {
-    if !restore {
-        return Vec::new();
-    }
-    session
-        .recovery_files()
-        .into_iter()
-        .map(str::to_string)
-        .collect()
 }
 
 fn strays(leftovers: Vec<PathBuf>, referenced: &[String]) -> Vec<PathBuf> {
@@ -123,15 +111,22 @@ impl Workspace {
             }) {
                 tracing::debug!(%error, "workspace closed before the session was restored");
             }
-            loop {
-                let Ok(every) = this.update(cx, |_, cx| {
-                    Duration::from_secs(u64::from(
-                        agent_settings::settings(cx).general.autosave_seconds,
-                    ))
-                }) else {
-                    break;
-                };
-                cx.background_executor().timer(every).await;
+            // Short ticks against the elapsed time, so a new interval applies at once.
+            'cycles: loop {
+                let started = Instant::now();
+                loop {
+                    cx.background_executor().timer(AUTOSAVE_TICK).await;
+                    let Ok(every) = this.update(cx, |_, cx| {
+                        Duration::from_secs(u64::from(
+                            agent_settings::settings(cx).general.autosave_seconds,
+                        ))
+                    }) else {
+                        break 'cycles;
+                    };
+                    if started.elapsed() >= every {
+                        break;
+                    }
+                }
                 if this.update(cx, |this, cx| this.autosave_all(cx)).is_err() {
                     break;
                 }
@@ -152,19 +147,26 @@ impl Workspace {
         let mut referenced: Vec<String> = Vec::new();
         match loaded {
             Loaded::Restored(session) => {
+                let session = if restore {
+                    session
+                } else {
+                    session.without_unsaved_work()
+                };
                 cx.set_global(session.space_appearance);
-                referenced = kept_recovery_files(&session, restore);
-                if restore {
-                    self.sidebar.visible = session.sidebar_visible;
-                    if let Some(active) = self
-                        .documents
-                        .restore(&session, self.recovery_dir.as_deref())
-                    {
-                        self.documents.want(active, Intent::Restore);
-                        self.begin_load(active, window, cx);
-                    }
-                    self.probe_links(cx);
+                referenced = session
+                    .recovery_files()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect();
+                self.sidebar.visible = session.sidebar_visible;
+                if let Some(active) = self
+                    .documents
+                    .restore(&session, self.recovery_dir.as_deref())
+                {
+                    self.documents.want(active, Intent::Restore);
+                    self.begin_load(active, window, cx);
                 }
+                self.probe_links(cx);
             }
             Loaded::Unreadable => self.notify(
                 Severity::Warning,
@@ -540,7 +542,7 @@ impl Workspace {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{kept_recovery_files, strays};
+    use super::strays;
     use crate::session::Session;
     use crate::session::{FileRecord, SpaceRecord, ViewRecord};
 
@@ -575,10 +577,17 @@ mod tests {
         )
     }
 
+    fn referenced(session: &Session) -> Vec<String> {
+        session
+            .recovery_files()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    }
+
     #[test]
     fn a_restored_session_keeps_its_unsaved_work_out_of_the_recovery_offer() {
-        let session = session_pointing_at("autosave-1-2-3.xlsx");
-        let kept = kept_recovery_files(&session, true);
+        let kept = referenced(&session_pointing_at("autosave-1-2-3.xlsx"));
         let leftovers = vec![
             PathBuf::from("recovery/autosave-1-2-3.xlsx"),
             PathBuf::from("recovery/autosave-9-9-9.xlsx"),
@@ -591,10 +600,30 @@ mod tests {
 
     #[test]
     fn without_a_restore_the_previous_sessions_unsaved_work_is_still_offered() {
-        let session = session_pointing_at("autosave-1-2-3.xlsx");
-        let kept = kept_recovery_files(&session, false);
+        let session = session_pointing_at("autosave-1-2-3.xlsx").without_unsaved_work();
+        let kept = referenced(&session);
         assert!(kept.is_empty());
         let leftovers = vec![PathBuf::from("recovery/autosave-1-2-3.xlsx")];
         assert_eq!(strays(leftovers.clone(), &kept), leftovers);
+    }
+
+    #[test]
+    fn without_a_restore_the_spaces_and_the_links_to_files_survive() {
+        let mut session = session_pointing_at("autosave-1-2-3.xlsx");
+        let mut saved = session.spaces[0].files[0].clone();
+        saved.path = Some("data/q3.xlsx".to_string());
+        saved.recovery = None;
+        saved.dirty = false;
+        session.spaces[0].files.push(saved);
+        let kept = session.without_unsaved_work();
+        assert_eq!(kept.spaces.len(), 1);
+        assert_eq!(kept.spaces[0].name, "Work");
+        assert_eq!(kept.spaces[0].files.len(), 1);
+        assert_eq!(
+            kept.spaces[0].files[0].path.as_deref(),
+            Some("data/q3.xlsx")
+        );
+        assert!(kept.spaces[0].files.iter().all(|file| !file.active));
+        assert!(kept.recovery_files().is_empty());
     }
 }

@@ -50,13 +50,21 @@ impl Workspace {
     }
 
     pub(super) fn cancel_theme_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.revert_theme_preview(cx) {
+            self.leave_theme_picker(window, cx);
+        }
+    }
+
+    // Any other overlay opening over the picker ends the preview, so a theme that was only
+    // being tried never stays on screen.
+    pub(super) fn revert_theme_preview(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(mut picker) = self.theme_picker.take() else {
-            return;
+            return false;
         };
         if let Some(original) = picker.preview.cancel() {
             theme::show(original, cx);
         }
-        self.leave_theme_picker(window, cx);
+        true
     }
 
     fn leave_theme_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {

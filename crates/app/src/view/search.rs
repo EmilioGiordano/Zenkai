@@ -24,6 +24,7 @@ impl Workspace {
             return;
         }
         self.palette = None;
+        self.revert_theme_preview(cx);
         let groups = file_search::collect(&self.documents, &self.recent);
         let state = cx.new(|cx| CommandState::new(window, cx));
         state.update(cx, |state, cx| state.focus(window, cx));

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use gpui_kit::*;
+use zenkai_agent::confirmed;
 use zenkai_agent::detect::{self, Detection};
 use zenkai_agent::secrets::{SecretStatus, Secrets};
 use zenkai_agent::settings::{
@@ -67,7 +68,13 @@ pub fn init(cx: &mut App) {
             .spawn(async move {
                 let paths = SettingsPaths::from_environment()?;
                 let loaded = settings_file::prepare(&paths);
-                let remembered = settings_file::load_remembered(&paths);
+                let remembered = match Secrets::platform() {
+                    Ok(secrets) => confirmed::load(&secrets, &paths),
+                    Err(error) => {
+                        tracing::warn!(%error, "no secret store: nothing is confirmed");
+                        Vec::new()
+                    }
+                };
                 let watcher = settings_file::watch(&paths, move |loaded| {
                     if sender.send_blocking(loaded).is_err() {
                         tracing::debug!("settings reload arrived after the app closed");
@@ -223,13 +230,14 @@ pub fn store_secret(cx: &mut App, name: SecretName, value: String) {
     .detach();
 }
 
-// Written whenever the elevated values in force change, never from a file edit alone: the
-// record only ever follows what the user confirmed, so it cannot be widened from outside.
+// Written whenever the elevated values in force change, and derived from them: a settings.json
+// edit never reaches it unless the user confirmed it. It lives in Credential Manager so a
+// program that can only write files cannot forge it.
 fn remember_confirmations(cx: &mut App) {
     let config = cx.global::<AgentConfig>();
-    let Some(paths) = config.paths.clone() else {
+    if config.paths.is_none() {
         return;
-    };
+    }
     let confirmed = remembered_confirmations(&config.state.current);
     if confirmed == cx.global::<Remembered>().0 {
         return;
@@ -237,7 +245,10 @@ fn remember_confirmations(cx: &mut App) {
     cx.set_global(Remembered(confirmed.clone()));
     cx.background_executor()
         .spawn(async move {
-            if let Err(error) = settings_file::save_remembered(&paths, &confirmed) {
+            let saved = Secrets::platform()
+                .map_err(|error| error.to_string())
+                .and_then(|secrets| confirmed::save(&secrets, &confirmed));
+            if let Err(error) = saved {
                 tracing::warn!(%error, "could not record the confirmed settings");
             }
         })
