@@ -51,6 +51,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - COUNTIFS over a whole-sheet range like `A:XFD` counted its blank tail in i32, which
   overflowed (`src/functions/statistical/if_ifs.rs`). Tests:
   `src/test/test_criteria_semantics.rs`.
+- `UserModel::range_clear_contents_of_areas` clears several areas of a sheet as one undo
+  step, so a sparse selection clears only the cells it holds instead of every cell of its
+  box; an array formula may span areas as long as it lies inside the given bounds
+  (`src/user_model/common.rs`, `Model::arrays_inside` and `Model::clear_area_contents` in
+  `src/model.rs`). Tests: `src/test/user_model/test_clear_areas.rs`.
 
 Zenkai-only, not for upstream:
 

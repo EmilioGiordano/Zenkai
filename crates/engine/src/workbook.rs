@@ -11,6 +11,7 @@ use ironcalc::import::load_from_xlsx_bytes;
 use crate::error::EngineError;
 use crate::file::Unsupported;
 use crate::model::CachedModel;
+use crate::rectangles::covering_rectangles;
 use crate::sheet_settings::{Carried, SheetSettings};
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
@@ -237,11 +238,11 @@ impl Workbook {
     }
 }
 
-fn row_i32(row: RowIdx) -> i32 {
+pub(crate) fn row_i32(row: RowIdx) -> i32 {
     row.get() as i32 + 1
 }
 
-fn col_i32(col: ColIdx) -> i32 {
+pub(crate) fn col_i32(col: ColIdx) -> i32 {
     i32::from(col.get()) + 1
 }
 
@@ -469,6 +470,11 @@ impl Workbook {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn walked_end(&self, sheet: SheetId) -> Option<CellPos> {
+        self.model.walked_end(sheet)
+    }
+
     fn resolve(&self, color: &Color) -> Option<Rgb> {
         match color {
             Color::None => None,
@@ -597,7 +603,9 @@ impl Engine for Workbook {
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError> {
         check_input(text)?;
         self.model
-            .set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
+            .write_within(sheet, Range::new(pos, pos), |model| {
+                model.set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
+            })
             .map_err(rejected)
     }
 
@@ -659,8 +667,11 @@ impl Engine for Workbook {
                 .col
                 .offset(i64::try_from(width).unwrap_or(i64::MAX) - 1),
         );
-        select(&mut self.model, sheet, Range::new(origin, end))?;
-        self.model.paste_csv_string(&area, &tsv).map_err(rejected)
+        let target = Range::new(origin, end);
+        self.model.write_within(sheet, target, |model| {
+            select(model, sheet, target)?;
+            model.paste_csv_string(&area, &tsv).map_err(rejected)
+        })
     }
 
     // Rows of `range` reordered by the `key` column, with Excel's order: numbers, text
@@ -978,32 +989,23 @@ impl Engine for Workbook {
             .map_err(rejected)
     }
 
-    // IronCalc visits every cell of the range it clears, so only the box around the
-    // contents inside the range is cleared (a whole sheet has 17 billion cells, and a
-    // formatted far cell makes the used area that big). Contents scattered so far apart
-    // that the box is huge are cleared cell by cell. Nothing to clear writes nothing, so
-    // no empty cells are created to grow the used area.
+    // IronCalc visits every cell of an area it clears, so only the cells holding contents
+    // are cleared, as rectangles of them: the work and the undo record follow the contents,
+    // never the selection (a whole sheet has 17 billion cells), and gaps get no empty cells
+    // that would grow the used area. All rectangles go in one call, so one undo step.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
         let cells = self.content_cells_in(sheet, range)?;
-        let Some(first) = cells.first() else {
+        if cells.is_empty() {
             return Ok(());
-        };
-        let (mut top, mut left, mut bottom, mut right) =
-            (first.row, first.col, first.row, first.col);
-        for pos in &cells {
-            top = top.min(pos.row);
-            bottom = bottom.max(pos.row);
-            left = left.min(pos.col);
-            right = right.max(pos.col);
         }
-        let bounds = Range::new(CellPos::new(top, left), CellPos::new(bottom, right));
-        if bounds.cell_count() > MAX_FILL_CELLS {
-            let empties: Vec<(CellPos, String)> =
-                cells.into_iter().map(|pos| (pos, String::new())).collect();
-            return self.set_scattered_inputs(sheet, &empties);
-        }
+        let areas: Vec<Area> = covering_rectangles(cells)
+            .into_iter()
+            .map(|rectangle| area(sheet, rectangle))
+            .collect();
         self.model
-            .range_clear_contents(&area(sheet, bounds))
+            .rewrite_values(|model| {
+                model.range_clear_contents_of_areas(&area(sheet, range), &areas)
+            })
             .map_err(rejected)
     }
 

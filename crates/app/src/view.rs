@@ -1602,7 +1602,11 @@ impl Workspace {
             let target = path.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { save_xlsx_atomic(&document::read_shared(&shared), &target) })
+                .spawn(async move {
+                    document::write_snapshot(&shared, FileJob::Saving, |bytes| {
+                        save_xlsx_atomic(bytes, &target)
+                    })
+                })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(t!("busy.saving"), cx);

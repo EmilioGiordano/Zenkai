@@ -6,7 +6,7 @@ use std::time::Instant;
 use zenkai_i18n::t;
 
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Engine, EngineError, Unsupported, Workbook};
+use zenkai_engine::{Engine, EngineError, Unsupported, Workbook, xlsx_bytes};
 use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
@@ -47,6 +47,8 @@ pub struct Document {
     pending: Vec<Edit>,
     generation: u64,
     edit_count: u64,
+    // The edit count the recovery copy on disk was written at.
+    autosaved_at: Option<u64>,
     pub pending_sheet: Option<SheetId>,
     pub view: ViewState,
     pub find: Option<FindBar>,
@@ -99,6 +101,7 @@ impl Document {
             pending: Vec::new(),
             generation: GENERATION.fetch_add(1, Ordering::Relaxed),
             edit_count: 0,
+            autosaved_at: None,
             pending_sheet: None,
             view: ViewState::default(),
             find: None,
@@ -206,6 +209,14 @@ impl Document {
 
     pub fn edit_count(&self) -> u64 {
         self.edit_count
+    }
+
+    pub fn recovery_is_current(&self) -> bool {
+        self.autosaved_at == Some(self.edit_count)
+    }
+
+    pub fn set_autosaved_at(&mut self, edits: Option<u64>) {
+        self.autosaved_at = edits;
     }
 
     pub fn is_pristine(&self) -> bool {
@@ -320,9 +331,36 @@ pub fn read_shared(shared: &RwLock<Workbook>) -> RwLockReadGuard<'_, Workbook> {
     shared.read().unwrap_or_else(PoisonError::into_inner)
 }
 
+// The read lock is held only while the bytes are made: writing and verifying them takes
+// far longer, and an edit waiting for the write lock blocks every reader meanwhile.
+pub fn write_snapshot(
+    shared: &RwLock<Workbook>,
+    job: FileJob,
+    write: impl FnOnce(&[u8]) -> Result<(), EngineError>,
+) -> Result<(), EngineError> {
+    let started = Instant::now();
+    let bytes = {
+        let workbook = read_shared(shared);
+        xlsx_bytes(&workbook)
+    };
+    let locked_ms = started.elapsed().as_millis();
+    let written = bytes.and_then(|bytes| write(&bytes));
+    let total_ms = started.elapsed().as_millis();
+    match &written {
+        Ok(()) => tracing::info!(?job, locked_ms, total_ms, "workbook written"),
+        Err(error) => {
+            tracing::warn!(?job, %error, locked_ms, total_ms, "writing the workbook failed")
+        }
+    }
+    written
+}
+
 pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError> {
+    let waited = Instant::now();
     let mut guard = shared.write().unwrap_or_else(PoisonError::into_inner);
+    let started = Instant::now();
     let workbook: &mut Workbook = &mut guard;
+    let count = edits.len();
     let run = zenkai_engine::run_with_engine_stack(|| {
         let errors = edits
             .into_iter()
@@ -331,7 +369,18 @@ pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError
         workbook.warm_used_areas();
         Ok(errors)
     });
-    run.unwrap_or_else(|error| vec![error])
+    let errors = run.unwrap_or_else(|error| vec![error]);
+    let (waited_ms, ran_ms) = (
+        started.duration_since(waited).as_millis(),
+        started.elapsed().as_millis(),
+    );
+    match errors.first() {
+        None => tracing::info!(count, waited_ms, ran_ms, "edit batch done"),
+        Some(error) => {
+            tracing::warn!(count, waited_ms, ran_ms, failed = errors.len(), %error, "edit batch had errors")
+        }
+    }
+    errors
 }
 
 #[cfg(test)]
@@ -440,6 +489,43 @@ mod tests {
         assert!(current.begin_file_job(FileJob::Saving).is_some());
         current.end_file_job(stale);
         assert_eq!(current.file_job(), FileJob::Saving);
+    }
+
+    #[test]
+    fn a_snapshot_is_written_without_the_lock() {
+        let document = document();
+        let shared = document.begin_read().unwrap();
+        let mut written = Vec::new();
+        write_snapshot(&shared, FileJob::Autosaving, |bytes| {
+            assert!(shared.try_write().is_ok(), "the read lock is still held");
+            written = bytes.to_vec();
+            Ok(())
+        })
+        .unwrap();
+        assert!(written.starts_with(b"PK"));
+    }
+
+    #[test]
+    fn a_failed_snapshot_write_is_reported() {
+        let document = document();
+        let shared = document.begin_read().unwrap();
+        let failed = write_snapshot(&shared, FileJob::Saving, |_| {
+            Err(EngineError::VerifyFailed("disk full".to_string()))
+        });
+        assert!(matches!(failed, Err(EngineError::VerifyFailed(_))));
+    }
+
+    #[test]
+    fn the_recovery_copy_is_current_until_the_next_edit() {
+        let mut document = document();
+        assert!(!document.recovery_is_current());
+        document.set_autosaved_at(Some(document.edit_count()));
+        assert!(document.recovery_is_current());
+        document.queue(noop());
+        assert!(!document.recovery_is_current());
+        document.set_autosaved_at(Some(document.edit_count()));
+        document.set_autosaved_at(None);
+        assert!(!document.recovery_is_current());
     }
 
     #[test]

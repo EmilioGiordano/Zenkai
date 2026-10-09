@@ -222,11 +222,14 @@ fn worksheet_parts(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Vec<String> 
         .collect()
 }
 
+pub fn xlsx_bytes(workbook: &Workbook) -> Result<Vec<u8>, EngineError> {
+    preflight::run_with_engine_stack(|| workbook.to_xlsx())
+}
+
 // Write to a sibling temp file, prove it reopens, then replace: the original is
 // never truncated and survives any failure before the final rename.
-pub fn save_xlsx_atomic(workbook: &Workbook, path: &Path) -> Result<(), EngineError> {
-    let bytes = preflight::run_with_engine_stack(|| workbook.to_xlsx())?;
-    write_atomic(path, &bytes, |written| {
+pub fn save_xlsx_atomic(bytes: &[u8], path: &Path) -> Result<(), EngineError> {
+    write_atomic(path, bytes, |written| {
         load_guarded(written, "verify").map(|_| ())
     })
 }
@@ -329,7 +332,7 @@ mod tests {
             .workbook
             .set_input(SheetId(0), CellPos::parse_a1("A1").unwrap(), "3")
             .unwrap();
-        save_xlsx_atomic(&opened.workbook, &path).unwrap();
+        save_xlsx_atomic(&xlsx_bytes(&opened.workbook).unwrap(), &path).unwrap();
 
         let reopened = open_xlsx(&path).unwrap();
         assert_eq!(reopened.workbook.cell(SheetId(0), a2).text, "63");
