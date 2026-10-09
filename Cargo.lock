@@ -9878,6 +9878,7 @@ dependencies = [
  "widestring",
  "windows-native-keyring-store",
  "zenkai-engine",
+ "zenkai-i18n",
  "zenkai-types",
 ]
 

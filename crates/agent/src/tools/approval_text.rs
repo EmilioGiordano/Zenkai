@@ -1,3 +1,4 @@
+use zenkai_i18n::t;
 // What the user reads before allowing an agent write. Entries and sheet names come from
 // the agent, which may have read them from the file: control and format characters
 // (line breaks, right-to-left overrides) are shown escaped so the text cannot be
@@ -80,7 +81,7 @@ pub fn shown_entry(entry: &str) -> String {
     }
     let total = entry.chars().count();
     if total <= SHOWN_CHARS {
-        return format!("formula {}", shown_text(entry));
+        return t!("plan.formula", text = shown_text(entry));
     }
     let hidden = functions_after_cut(entry);
     let listed: Vec<String> = hidden.iter().take(LISTED_FUNCTIONS).cloned().collect();
@@ -92,9 +93,14 @@ pub fn shown_entry(entry: &str) -> String {
     let uses = if listed.is_empty() {
         String::new()
     } else {
-        format!("; further on it calls {}{more}", listed.join(", "))
+        t!("plan.formula_calls", names = listed.join(", "), more = more)
     };
-    format!("formula {} ({total} characters{uses})", shown_text(entry))
+    t!(
+        "plan.formula_long",
+        text = shown_text(entry),
+        total = total,
+        uses = uses
+    )
 }
 
 #[cfg(test)]
