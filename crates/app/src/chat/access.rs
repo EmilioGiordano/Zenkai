@@ -52,6 +52,12 @@ impl Access {
         }
     }
 
+    pub fn from_session_mode(mode: &str) -> Option<Access> {
+        Access::ALL
+            .into_iter()
+            .find(|access| access.session_modes().contains(&mode))
+    }
+
     fn session_modes(self) -> &'static [&'static str] {
         match self {
             Access::AskBeforeWriting => &["default", "ask"],
@@ -141,5 +147,15 @@ mod tests {
         for access in Access::ALL {
             assert_eq!(Access::from_setting(access.setting()), access);
         }
+    }
+
+    #[test]
+    fn session_modes_map_back_to_a_choice() {
+        assert_eq!(Access::from_session_mode("plan"), Some(Access::Plan));
+        assert_eq!(
+            Access::from_session_mode("acceptEdits"),
+            Some(Access::EditAutomatically)
+        );
+        assert_eq!(Access::from_session_mode("bypassPermissions"), None);
     }
 }

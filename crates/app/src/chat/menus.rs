@@ -319,19 +319,18 @@ impl ChatPanel {
         self.mode_synced = true;
     }
 
-    // An agent that leaves plan mode on its own (the user approved its plan) no longer plans.
-    pub(super) fn follow_agent_mode(&mut self) {
-        if !self.mode_synced || self.access != Access::Plan {
+    // The label follows the agent's own mode changes, such as leaving plan mode once the user
+    // approved its plan.
+    pub(super) fn follow_agent_mode(&mut self, cx: &mut Context<Self>) {
+        if !self.mode_synced {
             return;
         }
-        let Some(modes) = self.state.select(ConfigKind::Mode) else {
-            return;
-        };
-        if Access::Plan
-            .session_mode(modes)
-            .is_some_and(|plan| plan != modes.current)
-        {
-            self.access = Access::AskBeforeWriting;
+        let reported = self
+            .state
+            .select(ConfigKind::Mode)
+            .and_then(|modes| Access::from_session_mode(&modes.current));
+        if let Some(access) = reported.filter(|access| *access != self.access) {
+            self.set_access(access, cx);
         }
     }
 

@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use zenkai_agent::chat::session::{Connection, SessionError, SessionEvent};
+use zenkai_agent::chat::state::ConfigKind;
 use zenkai_agent::chat::thread::{Effect, MessageId, NoticeKind, TurnEnd};
 use zenkai_agent::presets::Preset;
 use zenkai_i18n::t;
@@ -109,8 +110,15 @@ impl ChatPanel {
             }
             SessionEvent::Closed => self.end_session(cx),
             SessionEvent::State(change) => {
+                let before = self
+                    .state
+                    .select(ConfigKind::Mode)
+                    .map(|m| m.current.clone());
                 self.state.apply(change);
-                self.follow_agent_mode();
+                let after = self.state.select(ConfigKind::Mode).map(|m| &m.current);
+                if before.as_ref() != after {
+                    self.follow_agent_mode(cx);
+                }
             }
             SessionEvent::Problem(text) => {
                 if let Some(backup) = self.resume_backup.take() {
