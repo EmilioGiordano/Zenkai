@@ -92,6 +92,7 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Decrease decimal", DecreaseDecimal),
         ]),
         CommandGroup::new().label("Insert").items([
+            item("Generate data…", GenerateData),
             item("Chart of the selection", InsertChart),
             item("Insert rows above", InsertRows),
             item("Hide rows", HideRows),

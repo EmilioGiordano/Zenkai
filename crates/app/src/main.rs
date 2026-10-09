@@ -16,6 +16,7 @@ mod file_search;
 mod files;
 mod find;
 mod format_dialog;
+mod generate_dialog;
 mod jump;
 mod logging;
 mod memory;

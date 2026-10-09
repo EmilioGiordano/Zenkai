@@ -373,6 +373,7 @@ impl Workspace {
             || self.go_to.is_some()
             || self.palette.is_some()
             || self.search.is_some()
+            || self.generate.is_some()
             || self.sidebar.renaming.is_some()
             || self.documents.active().find.is_some()
     }
