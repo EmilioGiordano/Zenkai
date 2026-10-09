@@ -169,6 +169,9 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             ),
             item("Agent chat: deny the agent's question", DenyChatPermission),
             item("Agent chat: copy the sign-in command", CopyLoginCommand),
+            item("Agent chat: sessions", ShowChatSessions),
+            item("Agent chat: model and effort", PickChatModel),
+            item("Agent chat: change the agent's mode", CycleChatMode),
             item(
                 "Agent chat: start the agent after checking its command",
                 ConfirmAgentLaunch,

@@ -48,6 +48,9 @@ impl ChatPanel {
                 self.link = Link::Ready(agent.into());
                 if let Some(live) = &mut self.live {
                     live.ready = true;
+                    if self.state.abilities.list_sessions {
+                        live.handle.list_sessions();
+                    }
                     if let Some((text, context)) = self.queued.take() {
                         live.handle.prompt(text, context);
                     }
@@ -77,6 +80,9 @@ impl ChatPanel {
                 self.finish_turn(TurnEnd::Failed(error.to_string()), cx);
             }
             SessionEvent::Closed => self.end_session(cx),
+            SessionEvent::State(change) => self.state.apply(change),
+            SessionEvent::Problem(text) => self.thread.notice(NoticeKind::Error, &text),
+            SessionEvent::Resumed => self.scroll_to_end(),
         }
         cx.notify();
     }

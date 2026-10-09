@@ -1,47 +1,16 @@
-use gpui_kit::assets::IconName;
-use gpui_kit::base::{h_flex, v_flex};
+use gpui_kit::base::v_flex;
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::Textarea;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::presets::Preset;
 use zenkai_agent::settings::Settings;
 
 use super::launch::chosen_agent;
-use super::{ChatEvent, ChatPanel};
+use super::{ChatEvent, ChatPanel, View};
 use crate::actions::*;
 use crate::agent_settings::AgentConfig;
 
-const PANEL_WIDTH_REMS: f32 = 22.5;
-
-fn icon_button(
-    id: &'static str,
-    icon: IconName,
-    tooltip: &'static str,
-    action: impl Action + Clone,
-) -> Button {
-    Button::new(id)
-        .ghost()
-        .compact()
-        .icon(icon)
-        .tooltip(tooltip)
-        .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
-}
-
-fn text_button(
-    id: &'static str,
-    label: impl Into<SharedString>,
-    tooltip: &'static str,
-    action: impl Action + Clone,
-) -> Button {
-    Button::new(id)
-        .ghost()
-        .compact()
-        .label(label)
-        .tooltip(tooltip)
-        .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
-}
+const PANEL_WIDTH_REMS: f32 = 29.0;
 
 fn provider_name(settings: &Settings) -> String {
     match chosen_agent(settings) {
@@ -52,114 +21,15 @@ fn provider_name(settings: &Settings) -> String {
     }
 }
 
-impl ChatPanel {
-    fn render_header(&self, cx: &App) -> impl IntoElement {
-        let theme = cx.theme();
-        let workbook = self.active_workbook(cx).map(|(_, name)| name);
-        h_flex()
-            .h(px(44.0))
-            .flex_shrink_0()
-            .px_3p5()
-            .gap_2p5()
-            .items_center()
-            .text_color(theme.muted_foreground)
-            .child(
-                div()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.sidebar_foreground)
-                    .child("Agent"),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_xs()
-                    .child(workbook.unwrap_or_default()),
-            )
-            .child(div().flex_1())
-            .child(icon_button(
-                "chat-new",
-                IconName::Plus,
-                "New conversation (Ctrl+Shift+N)",
-                NewAgentConversation,
-            ))
-            .child(icon_button(
-                "chat-close",
-                IconName::PanelRightClose,
-                "Close the agent panel (Ctrl+J)",
-                ToggleAgentChat,
-            ))
-    }
-
-    fn render_composer(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let settings = cx.global::<AgentConfig>().state.current.clone();
-        let focused = self.composer.focus_handle(cx).contains_focused(window, cx);
-        let agent = chosen_agent(&settings).map_or_else(|| "No agent".to_string(), |a| a.1.name);
-        let busy = self.busy();
-        let send = if busy {
-            icon_button("chat-stop", IconName::Square, "Stop (Esc)", StopAgentTurn)
-        } else {
-            icon_button(
-                "chat-send",
-                IconName::ArrowUp,
-                "Send (Enter)",
-                SendChatMessage,
-            )
-            .primary()
-        };
-        v_flex()
-            .flex_shrink_0()
-            .mx_3()
-            .mb_3()
-            .p_2p5()
-            .gap_2p5()
-            .rounded_xl()
-            .border_1()
-            .border_color(if focused { theme.ring } else { theme.border })
-            .bg(theme.background)
-            .child(
-                Textarea::new(&self.composer)
-                    .appearance(false)
-                    .bordered(false)
-                    .aria_label("Message to the agent"),
-            )
-            .child(
-                h_flex()
-                    .gap_1()
-                    .items_center()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(text_button(
-                        "chat-agent",
-                        agent,
-                        "Switch agent (Alt+G)",
-                        CycleChatAgent,
-                    ))
-                    .child(text_button(
-                        "chat-permission",
-                        settings.agents.permission.label(),
-                        "Change what agents may do to the workbook (Alt+P)",
-                        CycleChatPermission,
-                    ))
-                    .child(div().flex_1())
-                    .child(icon_button(
-                        "chat-selection",
-                        IconName::Grid2x2,
-                        "Add the selected cells to the message (Ctrl+L)",
-                        AddSelectionToChat,
-                    ))
-                    .child(send),
-            )
-    }
-}
-
 impl Render for ChatPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut context = KeyContext::default();
         context.add("AgentChat");
         if self.busy() {
             context.add("Working");
+        }
+        if self.slash_open(cx) {
+            context.add("Slash");
         }
         let provider = provider_name(&cx.global::<AgentConfig>().state.current);
         let (sidebar, foreground, border, muted) = {
@@ -172,6 +42,11 @@ impl Render for ChatPanel {
             )
         };
         let entries = self.render_entries(cx);
+        let sessions = if self.view == View::Sessions {
+            Some(self.render_sessions(cx))
+        } else {
+            None
+        };
         let body = v_flex()
             .id("chat-scroll")
             .flex_1()
@@ -189,6 +64,7 @@ impl Render for ChatPanel {
             .children(self.render_gate(cx))
             .children(self.render_problem(cx))
             .children(self.render_status(cx));
+        let chat_view = self.view == View::Chat;
         let root = v_flex()
             .id("agent-chat")
             .key_context(context)
@@ -215,9 +91,21 @@ impl Render for ChatPanel {
             .on_action(cx.listener(|this, _: &DeclineAgentLaunch, window, cx| {
                 this.decline_launch(window, cx)
             }))
+            .on_action(cx.listener(|this, _: &ShowChatSessions, _, cx| this.toggle_sessions(cx)))
+            .on_action(cx.listener(|this, _: &PickChatModel, _, cx| this.toggle_model_menu(cx)))
+            .on_action(cx.listener(|this, _: &CycleChatMode, _, cx| this.cycle_mode(cx)))
+            .on_action(cx.listener(|this, _: &SlashNext, _, cx| this.slash_step(true, cx)))
+            .on_action(cx.listener(|this, _: &SlashPrevious, _, cx| this.slash_step(false, cx)))
+            .on_action(
+                cx.listener(|this, _: &SlashAccept, window, cx| this.slash_accept(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &SlashClose, _, cx| this.slash_close(cx)))
             .child(self.render_header(cx))
-            .child(body)
-            .child(self.render_composer(window, cx))
+            .children(sessions)
+            .when(chat_view, |root| root.child(body))
+            .when(chat_view, |root| {
+                root.child(self.render_composer(window, cx))
+            })
             .child(
                 div()
                     .flex_shrink_0()

@@ -1,19 +1,27 @@
 mod cards;
+mod composer;
 mod events;
+mod extras;
+mod header;
 mod launch;
 mod permissions;
 pub(crate) mod reference;
 mod render;
+mod session_rows;
+mod sessions;
+mod slash;
 mod startup;
 mod transcript;
 
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-use gpui_kit::component::input::{InputEvent, TextareaState};
+use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
+use zenkai_agent::chat::history::History;
 use zenkai_agent::chat::session::PermissionAsk;
+use zenkai_agent::chat::state::AgentState;
 use zenkai_agent::chat::thread::{MessageId, Thread, TurnEnd, TurnState};
 use zenkai_agent::settings::{AgentId, PermissionMode};
 use zenkai_agent::tools::ToolEndpoint;
@@ -29,6 +37,17 @@ const MONO: &str = "IBM Plex Mono";
 
 pub enum ChatEvent {
     Leave,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum View {
+    Chat,
+    Sessions,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Menu {
+    Model,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,6 +84,15 @@ pub struct ChatPanel {
     gate: Option<Gate>,
     problem: Option<Problem>,
     turn_started: Option<Instant>,
+    state: AgentState,
+    history: History,
+    view: View,
+    menu: Option<Menu>,
+    title: Option<String>,
+    sessions_query: Entity<InputState>,
+    slash_index: usize,
+    // The composer text for which the user closed the slash list.
+    slash_dismissed: Option<String>,
     // Bumped when a conversation ends, so a late answer from an older session is dropped.
     epoch: u64,
     _subscriptions: Vec<Subscription>,
@@ -103,13 +131,26 @@ impl ChatPanel {
             &composer,
             window,
             |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::PressEnter { shift: false, .. } => this.send(window, cx),
-                InputEvent::Change | InputEvent::Focus | InputEvent::Blur => cx.notify(),
+                InputEvent::PressEnter { shift: false, .. } => {
+                    if this.slash_open(cx) {
+                        this.slash_accept(window, cx);
+                    } else {
+                        this.send(window, cx);
+                    }
+                }
+                InputEvent::Change => {
+                    this.slash_index = 0;
+                    cx.notify();
+                }
+                InputEvent::Focus | InputEvent::Blur => cx.notify(),
                 InputEvent::PressEnter { .. } => {}
             },
         );
         let settings = cx.observe_global::<AgentConfig>(|_, cx| cx.notify());
-        ChatPanel {
+        let sessions_query =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search sessions"));
+        let searching = cx.subscribe(&sessions_query, |_, _, _: &InputEvent, cx| cx.notify());
+        let mut panel = ChatPanel {
             workspace,
             endpoint,
             composer,
@@ -123,9 +164,19 @@ impl ChatPanel {
             gate: None,
             problem: None,
             turn_started: None,
+            state: AgentState::default(),
+            history: History::default(),
+            view: View::Chat,
+            menu: None,
+            title: None,
+            sessions_query,
+            slash_index: 0,
+            slash_dismissed: None,
             epoch: 0,
-            _subscriptions: vec![sending, settings],
-        }
+            _subscriptions: vec![sending, settings, searching],
+        };
+        panel.load_history(cx);
+        panel
     }
 
     pub fn focus_composer(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -178,6 +229,9 @@ impl ChatPanel {
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.turn_started = Some(Instant::now());
         self.problem = None;
+        self.view = View::Chat;
+        self.menu = None;
+        self.remember_conversation(&text, cx);
         let context = self.prompt_context(cx);
         match &self.live {
             Some(live) if live.ready => live.handle.prompt(text, context),
@@ -223,6 +277,10 @@ impl ChatPanel {
         self.gate = None;
         self.problem = None;
         self.turn_started = None;
+        self.state = AgentState::default();
+        self.view = View::Chat;
+        self.menu = None;
+        self.title = None;
         self.focus_composer(window, cx);
         cx.notify();
     }

@@ -169,6 +169,13 @@ actions!(
         ConfirmAgentLaunch,
         DeclineAgentLaunch,
         CopyLoginCommand,
+        ShowChatSessions,
+        PickChatModel,
+        CycleChatMode,
+        SlashNext,
+        SlashPrevious,
+        SlashAccept,
+        SlashClose,
     ]
 );
 
@@ -325,6 +332,13 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-g", CycleChatAgent, Some("AgentChat")),
         KeyBinding::new("alt-p", CycleChatPermission, Some("AgentChat")),
         KeyBinding::new("alt-c", CopyLoginCommand, Some("AgentChat")),
+        KeyBinding::new("ctrl-shift-h", ShowChatSessions, CONTEXT),
+        KeyBinding::new("alt-m", PickChatModel, Some("AgentChat")),
+        KeyBinding::new("alt-o", CycleChatMode, Some("AgentChat")),
+        KeyBinding::new("down", SlashNext, Some("Slash > Input")),
+        KeyBinding::new("up", SlashPrevious, Some("Slash > Input")),
+        KeyBinding::new("tab", SlashAccept, Some("Slash > Input")),
+        KeyBinding::new("escape", SlashClose, Some("Slash > Input")),
         KeyBinding::new("alt-l", ConfirmAgentLaunch, Some("AgentLaunchGate")),
         KeyBinding::new("enter", DeclineAgentLaunch, Some("AgentLaunchGate")),
         KeyBinding::new("escape", DeclineAgentLaunch, Some("AgentLaunchGate")),
