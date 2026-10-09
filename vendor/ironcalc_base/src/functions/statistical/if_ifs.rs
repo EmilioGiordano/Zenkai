@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use crate::constants::{LAST_COLUMN, LAST_ROW};
 use crate::criteria_ranges::AreaValues;
+use crate::exact_sum::ExactSum;
 use crate::expressions::types::CellReferenceIndex;
 use crate::functions::util::build_criteria;
 use crate::{
@@ -423,15 +424,15 @@ impl<'a> Model<'a> {
             let mut out_row: Vec<ArrayNode> = Vec::with_capacity(criteria_row.len());
             for criterion in criteria_row {
                 let fn_criteria = [build_criteria(criterion, self.locale)];
-                let mut total = 0.0;
+                let mut total = ExactSum::default();
                 let node = match self.run_ifs(
                     &sum_range,
                     std::slice::from_ref(&criteria_range),
                     &fn_criteria,
                     cell,
-                    |v| total += v,
+                    |v| total.add(v),
                 ) {
-                    Ok(()) => ArrayNode::Number(total),
+                    Ok(()) => ArrayNode::Number(total.value()),
                     Err(CalcResult::Error { error, .. }) => ArrayNode::Error(error),
                     Err(_) => ArrayNode::Error(Error::ERROR),
                 };

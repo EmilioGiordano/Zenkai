@@ -35,6 +35,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/test/test_criteria_ranges.rs`. Needs the incremental recalculation for
   `Model::circular_hits` and for turning the cache on around `evaluate_incremental`;
   without it, only the hooks in `Model::evaluate` remain.
+- SUMIF and SUMIFS round the exact sum once instead of adding in order
+  (`src/exact_sum.rs`), so the result does not depend on the order cells are added in;
+  it can differ from upstream in the last bit. Tests: `src/exact_sum.rs`,
+  `src/test/test_fn_sumifs.rs`.
 - COUNTIFS over a whole-sheet range like `A:XFD` counted its blank tail in i32, which
   overflowed (`src/functions/statistical/if_ifs.rs`). Tests:
   `src/test/test_criteria_semantics.rs`.
