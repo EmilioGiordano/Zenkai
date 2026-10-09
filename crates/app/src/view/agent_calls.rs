@@ -14,8 +14,10 @@ use zenkai_agent::tools::{
     WorkbookId, WriteRequest,
 };
 
+use super::agent_review::AgentWrite;
 use super::{Severity, Workspace};
 use crate::actions::{AllowAgentChange, DenyAgentChange, ShowAgentChange};
+use crate::agent_review::{CellChange, changes_since, inputs_in};
 use crate::agent_routing;
 use crate::agent_settings::{AgentConfig, BridgeStatus};
 use crate::document::{self, Document};
@@ -328,10 +330,27 @@ impl Workspace {
         };
         let summary = plan.summary();
         let description = plan.describe();
-        let (done, finished) = async_channel::bounded::<Result<(), String>>(1);
+        let write = AgentWrite {
+            id,
+            generation: self.documents.get(id).map_or(0, Document::generation),
+            agent: call
+                .client
+                .clone()
+                .unwrap_or_else(|| "An external agent".to_string()),
+            description: plan.headline(),
+            sheet_name: plan.sheet_name().to_string(),
+        };
+        let (sheet, block) = (plan.sheet(), plan.input_block());
+        let (done, finished) = async_channel::bounded::<Result<Vec<CellChange>, String>>(1);
         self.edit_document(id, window, cx, move |workbook| {
+            let before = block.map(|block| inputs_in(workbook, sheet, block));
             let applied = plan.apply(workbook);
-            let outcome = applied.as_ref().map(|_| ()).map_err(ToString::to_string);
+            let outcome = applied
+                .as_ref()
+                .map(|_| {
+                    before.map_or_else(Vec::new, |before| changes_since(workbook, sheet, before))
+                })
+                .map_err(ToString::to_string);
             if done.try_send(outcome).is_err() {
                 tracing::debug!("nobody waits for this agent write any more");
             }
@@ -342,9 +361,16 @@ impl Workspace {
             format!("Agent in {name}: {description}"),
             cx,
         );
-        cx.spawn(async move |_, _| {
+        cx.spawn(async move |this, cx| {
             let reply = match finished.recv().await {
-                Ok(Ok(())) => Ok(ToolReply::Written(summary)),
+                Ok(Ok(changes)) => {
+                    let recorded =
+                        this.update(cx, |this, cx| this.record_agent_review(write, changes, cx));
+                    if recorded.is_err() {
+                        tracing::debug!("workspace closed before an agent write was recorded");
+                    }
+                    Ok(ToolReply::Written(summary))
+                }
                 Ok(Err(message)) => Err(ToolError::Engine(message)),
                 Err(_) => Err(ToolError::Closed),
             };
@@ -488,7 +514,7 @@ impl Workspace {
         self.formula_bar.is_some() || self.grid.read(cx).editor().is_some()
     }
 
-    fn typing_in_a_field(&self, cx: &App) -> bool {
+    pub(super) fn typing_in_a_field(&self, cx: &App) -> bool {
         self.user_is_editing(cx)
             || self.rename.is_some()
             || self.go_to.is_some()

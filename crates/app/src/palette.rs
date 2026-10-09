@@ -145,6 +145,24 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Settings…", OpenSettings),
             item("Show the change an agent asks to make", ShowAgentChange),
             item("Agent: Deny pending change", DenyAgentChange),
+            item("Go to the next change an agent made", NextAgentChange),
+            item(
+                "Go to the previous change an agent made",
+                PreviousAgentChange,
+            ),
+            item(
+                "Keep the agent's change in the selected cell",
+                KeepAgentChange,
+            ),
+            item(
+                "Reject the agent's change in the selected cell",
+                RejectAgentChange,
+            ),
+            item("Keep all the changes an agent made", KeepAllAgentChanges),
+            item(
+                "Reject all the changes an agent made",
+                RejectAllAgentChanges,
+            ),
             item("Detect installed agents", DetectAgents),
             item("Add the Claude agent", AddClaudeAgent),
             item("Add the Gemini CLI agent", AddGeminiAgent),

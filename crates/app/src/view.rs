@@ -22,6 +22,7 @@ use zenkai_types::{
 };
 
 mod agent_calls;
+mod agent_review;
 mod settings_gate;
 mod space_panel;
 
@@ -323,6 +324,7 @@ impl Workspace {
         let view = self.sheet_view();
         self.grid.update(cx, |grid, cx| grid.reset(view, cx));
         self.sync_pending_highlight(cx);
+        self.sync_review_marks(cx);
         self.refresh_cells(cx);
     }
 
@@ -836,7 +838,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match event {
-            GridEvent::SelectionChanged => self.refresh_stats(cx),
+            GridEvent::SelectionChanged => {
+                self.refresh_stats(cx);
+                self.follow_review(cx);
+            }
             GridEvent::ViewportChanged => self.schedule_cell_refresh(window, cx),
             GridEvent::EditChanged => cx.notify(),
             GridEvent::EditRequested(pos) => {
@@ -862,6 +867,7 @@ impl Workspace {
             }
             GridEvent::Commit { pos, text } => {
                 if let Some(sheet) = self.active_sheet() {
+                    self.forget_review_range(sheet, Range::single(*pos), cx);
                     self.commit_text(sheet, *pos, text.clone(), window, cx);
                 }
             }
@@ -870,6 +876,7 @@ impl Workspace {
                     return;
                 };
                 let (pos, text, range) = (*pos, text.clone(), *range);
+                self.forget_review_range(sheet, range, cx);
                 self.show_typed(range, &text, cx);
                 self.edit(window, cx, move |wb| wb.fill_with(sheet, pos, &text, range));
             }
@@ -878,6 +885,7 @@ impl Workspace {
                     return;
                 };
                 let range = *range;
+                self.forget_review_range(sheet, range, cx);
                 self.edit(window, cx, move |wb| wb.clear(sheet, range));
             }
             GridEvent::Jump { direction, extend } => self.jump(*direction, *extend, cx),
@@ -1026,6 +1034,7 @@ impl Workspace {
                     this.clear_calculating(cx);
                     return;
                 }
+                document.revalidate_review();
                 if let Some(target) = pending_sheet
                     && errors.is_empty()
                 {
@@ -1046,6 +1055,7 @@ impl Workspace {
                         let view = this.sheet_view();
                         this.grid.update(cx, |grid, cx| grid.update_view(view, cx));
                     }
+                    this.sync_review_marks(cx);
                     this.refresh_cells(cx);
                     this.refresh_stats(cx);
                     this.refresh_chart();
@@ -2923,6 +2933,7 @@ impl Workspace {
             .h_full()
             .child(toolbar::render(&self.active_style, &self.colors, cx))
             .child(self.render_formula_bar(cx))
+            .children(self.render_agent_review(cx))
             .children(self.render_held_settings(cx))
             .children(self.render_find(cx))
             .child(
@@ -2932,10 +2943,12 @@ impl Workspace {
                     .child(
                         div()
                             .id("grid-area")
+                            .relative()
                             .flex_1()
                             .min_w_0()
                             .h_full()
                             .child(self.grid.clone())
+                            .children(self.render_review_popover(cx))
                             .context_menu({
                                 let grid_focus = self.grid.focus_handle(cx);
                                 move |menu, _, _| cell_menu(menu, grid_focus.clone())
@@ -3377,6 +3390,24 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.let_agents_edit(cx)))
             .on_action(cx.listener(|this, _: &AllowAgentChange, window, cx| {
                 this.decide_agent_change(Decision::Allow, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NextAgentChange, window, cx| {
+                this.step_review(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PreviousAgentChange, window, cx| {
+                this.step_review(false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &KeepAgentChange, window, cx| {
+                this.keep_review_cell(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &RejectAgentChange, window, cx| {
+                this.reject_review_cell(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &KeepAllAgentChanges, window, cx| {
+                this.keep_all_review(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &RejectAllAgentChanges, window, cx| {
+                this.reject_all_review(window, cx)
             }))
             .on_action(cx.listener(|this, _: &ShowAgentChange, window, cx| {
                 this.show_agent_change(window, cx)

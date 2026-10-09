@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
+mod agent_review;
 mod agent_routing;
 mod agent_settings;
 mod chart;
