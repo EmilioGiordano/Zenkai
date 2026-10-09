@@ -333,7 +333,7 @@ impl Workspace {
             agent: call
                 .client
                 .clone()
-                .unwrap_or_else(|| "An external agent".to_string()),
+                .unwrap_or_else(|| t!("approval.external_agent").to_string()),
             description: plan.headline(),
             sheet_name: plan.sheet_name().to_string(),
         };

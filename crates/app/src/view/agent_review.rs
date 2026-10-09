@@ -4,6 +4,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
 use zenkai_agent::tools::{shown_entry, shown_text};
 use zenkai_grid::PENDING_COLOR;
+use zenkai_i18n::t;
 use zenkai_types::{CellRef, Range, SheetId, WorkbookId};
 
 use super::Workspace;
@@ -26,13 +27,9 @@ pub(super) struct AgentWrite {
     pub sheet_name: String,
 }
 
-fn cells_noun(count: usize) -> &'static str {
-    if count == 1 { "cell" } else { "cells" }
-}
-
 fn shown_input(input: &str) -> String {
     if input.is_empty() {
-        "(empty)".to_string()
+        t!("review.empty").to_string()
     } else {
         shown_entry(input)
     }
@@ -212,9 +209,14 @@ impl Workspace {
         let total = batch.cells().len();
         let writes = document.review.batch_count();
         let progress = if writes > 1 {
-            format!("{position} of {total}, {writes} writes waiting")
+            t!(
+                "review.progress_waiting",
+                position = position,
+                total = total,
+                writes = writes
+            )
         } else {
-            format!("{position} of {total}")
+            t!("review.progress", position = position, total = total)
         };
         let theme = cx.theme();
         let amber: Hsla = rgb(PENDING_COLOR).into();
@@ -222,7 +224,7 @@ impl Workspace {
             h_flex()
                 .id("agent-review")
                 .role(Role::Region)
-                .aria_label("Agent changes")
+                .aria_label(t!("review.region"))
                 .flex_wrap()
                 .items_center()
                 .gap_3()
@@ -238,17 +240,17 @@ impl Workspace {
                     v_flex()
                         .flex_1()
                         .min_w_0()
-                        .child(div().font_weight(FontWeight::SEMIBOLD).child(format!(
-                            "{} changed {total} {} in {}",
-                            batch.agent,
-                            cells_noun(total),
-                            shown_text(&batch.sheet_name)
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(t!(
+                            "review.headline",
+                            count = total,
+                            agent = batch.agent,
+                            sheet = shown_text(&batch.sheet_name)
                         )))
                         .child(
                             div()
                                 .text_sm()
                                 .text_color(theme.muted_foreground)
-                                .child(format!("{}. Ctrl+Z undoes it.", batch.description)),
+                                .child(t!("review.undo_hint", description = batch.description)),
                         ),
                 )
                 .child(
@@ -259,17 +261,21 @@ impl Workspace {
                 )
                 .child(
                     Button::new("review-previous")
-                        .label("Previous (Alt+[)")
+                        .label(t!("review.previous"))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(PreviousAgentChange), cx)
                         }),
                 )
-                .child(Button::new("review-next").label("Next (Alt+])").on_click(
-                    |_, window, cx| window.dispatch_action(Box::new(NextAgentChange), cx),
-                ))
+                .child(
+                    Button::new("review-next")
+                        .label(t!("review.next"))
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(NextAgentChange), cx)
+                        }),
+                )
                 .child(
                     Button::new("review-reject-all")
-                        .label("Reject all (Alt+Shift+J)")
+                        .label(t!("review.reject_all"))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(RejectAllAgentChanges), cx)
                         }),
@@ -277,7 +283,7 @@ impl Workspace {
                 .child(
                     Button::new("review-keep-all")
                         .primary()
-                        .label("Keep all (Alt+Shift+K)")
+                        .label(t!("review.keep_all"))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(KeepAllAgentChanges), cx)
                         }),
@@ -303,7 +309,7 @@ impl Workspace {
             v_flex()
                 .id("review-popover")
                 .role(Role::Dialog)
-                .aria_label(format!("Change {}", cell.pos))
+                .aria_label(t!("review.popover", cell = cell.pos))
                 .absolute()
                 .left(corner.x)
                 .top(corner.y + px(2.0))
@@ -315,12 +321,11 @@ impl Workspace {
                 .border_color(theme.border)
                 .bg(theme.popover)
                 .shadow_md()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(format!("{}, changed by {agent}", cell.pos)),
-                )
+                .child(div().text_xs().text_color(theme.muted_foreground).child(t!(
+                    "review.changed_by",
+                    cell = cell.pos,
+                    agent = agent
+                )))
                 .child(
                     v_flex()
                         .gap_1()
@@ -330,12 +335,12 @@ impl Workspace {
                             div()
                                 .text_color(theme.danger)
                                 .line_through()
-                                .child(format!("Was: {}", shown_input(&change.old))),
+                                .child(t!("review.was", value = shown_input(&change.old))),
                         )
                         .child(
                             div()
                                 .text_color(theme.success)
-                                .child(format!("Now: {}", shown_input(&change.new))),
+                                .child(t!("review.now", value = shown_input(&change.new))),
                         ),
                 )
                 .child(
@@ -344,7 +349,7 @@ impl Workspace {
                         .gap_2()
                         .child(
                             Button::new("review-reject")
-                                .label("Reject (Alt+J)")
+                                .label(t!("review.reject"))
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(RejectAgentChange), cx)
                                 }),
@@ -352,7 +357,7 @@ impl Workspace {
                         .child(
                             Button::new("review-keep")
                                 .primary()
-                                .label("Keep (Alt+K)")
+                                .label(t!("review.keep"))
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(KeepAgentChange), cx)
                                 }),
