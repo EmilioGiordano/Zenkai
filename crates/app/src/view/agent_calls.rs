@@ -87,6 +87,12 @@ fn endpoint_file() -> Option<PathBuf> {
     Some(crate::recovery::directory()?.parent()?.join(ENDPOINT_FILE))
 }
 
+impl AgentLink {
+    pub(super) fn endpoint(&self) -> ToolEndpoint {
+        self.endpoint.clone()
+    }
+}
+
 impl Workspace {
     // Tool calls from every agent arrive here, one at a time, on the UI thread.
     pub(super) fn start_tool_service(window: &mut Window, cx: &mut Context<Self>) -> AgentLink {

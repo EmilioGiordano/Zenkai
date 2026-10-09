@@ -440,8 +440,12 @@ pub fn cycle_default_agent(cx: &mut App) {
     });
 }
 
+pub fn relay_program() -> Option<std::path::PathBuf> {
+    Some(std::env::current_exe().ok()?.with_file_name(RELAY_EXE))
+}
+
 pub fn claude_command() -> Option<String> {
-    let relay = std::env::current_exe().ok()?.with_file_name(RELAY_EXE);
+    let relay = relay_program()?;
     Some(format!("claude mcp add zenkai -- \"{}\"", relay.display()))
 }
 

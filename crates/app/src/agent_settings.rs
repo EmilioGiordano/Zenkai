@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use gpui_kit::*;
+use zenkai_agent::chat::launch::LaunchApprovals;
 use zenkai_agent::detect::{self, Detection};
 use zenkai_agent::secrets::{SecretStatus, Secrets};
 use zenkai_agent::settings::{SecretName, Settings, SettingsState, escalations};
@@ -30,6 +31,7 @@ pub struct AgentConfig {
     // The last failure of something the user asked for (saving, storing a secret).
     pub failure: Option<String>,
     pub bridge: BridgeStatus,
+    pub approvals: LaunchApprovals,
     watcher: Option<SettingsWatcher>,
 }
 
@@ -165,6 +167,15 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
     let mut edited = current.clone();
     edit(&mut edited);
     let approved = escalations(&current, &edited);
+    // Only the servers this click changed count as approved; a file edit that is still
+    // waiting stays unconfirmed even though the page writes the whole file.
+    let launches: Vec<_> = edited
+        .agents
+        .servers
+        .iter()
+        .filter(|(id, server)| current.agents.servers.get(*id) != Some(*server))
+        .map(|(id, server)| (id.clone(), server.clone()))
+        .collect();
     cx.spawn(async move |cx| {
         let written = cx
             .background_executor()
@@ -173,6 +184,9 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
         cx.update_global::<AgentConfig, _>(|config, _| match written {
             Ok(settings) => {
                 config.state.apply_from_page(settings, &approved);
+                for (id, server) in &launches {
+                    config.approvals.approve(id, server);
+                }
                 config.failure = None;
             }
             Err(error) => config.failure = Some(format!("Settings were not changed: {error}")),

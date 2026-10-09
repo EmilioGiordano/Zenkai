@@ -6,6 +6,7 @@ mod agent_routing;
 mod agent_settings;
 mod chart;
 mod chart_panel;
+mod chat;
 mod clipboard;
 mod csv_preview;
 mod decimals;

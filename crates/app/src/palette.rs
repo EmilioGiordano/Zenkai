@@ -153,6 +153,28 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Agents: ask before writing", PermissionAskBeforeWrite),
             item("Agents: write without asking", PermissionAutomatic),
             item("Allow or block external agents", ToggleExternalAgents),
+            item("Agent chat: show or hide", ToggleAgentChat),
+            item(
+                "Agent chat: add the selected cells to the message",
+                AddSelectionToChat,
+            ),
+            item("Agent chat: new conversation", NewAgentConversation),
+            item("Agent chat: send the message", SendChatMessage),
+            item("Agent chat: stop the agent", StopAgentTurn),
+            item("Agent chat: switch agent", CycleChatAgent),
+            item("Agent chat: change what agents may do", CycleChatPermission),
+            item(
+                "Agent chat: allow the agent's question",
+                AllowChatPermission,
+            ),
+            item("Agent chat: deny the agent's question", DenyChatPermission),
+            item("Agent chat: copy the sign-in command", CopyLoginCommand),
+            item(
+                "Agent chat: start the agent after checking its command",
+                ConfirmAgentLaunch,
+            ),
+            item("Agent chat: do not start the agent", DeclineAgentLaunch),
+            item("Agent chat: return to the grid", LeaveAgentChat),
             item(
                 "Copy the command that adds Zenkai to Claude Code",
                 CopyClaudeCommand,
