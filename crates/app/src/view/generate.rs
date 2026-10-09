@@ -166,8 +166,7 @@ impl Workspace {
         let (origin, rows, selection) =
             (write.block.origin, write.block.rows, write.block.selection);
         self.edit(window, cx, move |workbook| {
-            workbook.set_inputs(sheet, origin, &rows)?;
-            super::widen_for_numbers(workbook, sheet, selection)
+            workbook.set_inputs(sheet, origin, &rows)
         });
         self.grid.update(cx, |grid, cx| {
             grid.select(selection.start, selection.end, cx)

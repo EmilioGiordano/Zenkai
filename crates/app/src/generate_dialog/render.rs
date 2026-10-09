@@ -128,7 +128,7 @@ impl Render for GenerateDialog {
             .justify_center()
             .items_start()
             .pt(px(24.0))
-            .bg(hsla(0.0, 0.0, 0.0, 0.45))
+            .bg(cx.theme().overlay)
             .occlude()
             .on_mouse_down(
                 MouseButton::Left,
