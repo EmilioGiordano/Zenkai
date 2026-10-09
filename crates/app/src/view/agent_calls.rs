@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui_kit::base::h_flex;
+use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::bridge::{Bridge, ENDPOINT_FILE};
 use zenkai_agent::protected_view::FileOrigin;
@@ -14,7 +15,7 @@ use zenkai_agent::tools::{
 };
 
 use super::{Severity, Workspace};
-use crate::actions::{AllowAgentChange, DenyAgentChange};
+use crate::actions::{AllowAgentChange, DenyAgentChange, ShowAgentChange};
 use crate::agent_routing;
 use crate::agent_settings::{AgentConfig, BridgeStatus};
 use crate::document::{self, Document};
@@ -258,6 +259,7 @@ impl Workspace {
             focus,
             return_focus,
         });
+        self.sync_pending_highlight(cx);
         cx.notify();
     }
 
@@ -310,6 +312,7 @@ impl Workspace {
             return;
         };
         self.release_focus_from_bar(&pending.focus, pending.return_focus.clone(), window, cx);
+        self.sync_pending_highlight(cx);
         cx.notify();
         if decision == Decision::Deny {
             pending.call.respond(Err(ToolError::Declined));
@@ -325,42 +328,109 @@ impl Workspace {
     pub(super) fn render_agent_approval(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let pending = self.agent.pending.as_ref()?;
         let theme = cx.theme();
+        let who = pending
+            .call
+            .client
+            .clone()
+            .unwrap_or_else(|| "An external agent".to_string());
+        let workbook = self
+            .documents
+            .get(pending.id)
+            .map_or_else(|| "a closed workbook".to_string(), Document::name);
+        let on_screen = self.documents.active_id() == pending.id
+            && self.documents.active().sheet == pending.plan.sheet();
         Some(
-            h_flex()
+            v_flex()
                 .key_context("AgentApproval")
                 .track_focus(&pending.focus)
-                .px_2()
-                .py_1()
-                .gap_3()
-                .items_center()
-                .border_b_1()
-                .border_color(theme.border)
+                .px_3()
+                .py_2()
+                .gap_1()
                 .bg(theme.secondary)
-                .child(div().font_weight(FontWeight::SEMIBOLD).child(format!(
-                    "An agent wants to change {}:",
-                    self.documents
-                        .get(pending.id)
-                        .map_or_else(|| "a closed workbook".to_string(), Document::name)
-                )))
-                .child(div().flex_1().min_w_0().child(pending.plan.describe()))
+                .child(
+                    h_flex()
+                        .gap_3()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format!("{who} wants to change {workbook}")),
+                        )
+                        .when(!on_screen, |row| {
+                            row.child(Button::new("agent-show").label("Show (Alt+W)").on_click(
+                                |_, window, cx| {
+                                    window.dispatch_action(Box::new(ShowAgentChange), cx)
+                                },
+                            ))
+                        })
+                        .child(
+                            Button::new("agent-deny")
+                                .primary()
+                                .label("Deny (Enter)")
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(Box::new(DenyAgentChange), cx)
+                                }),
+                        )
+                        .child(Button::new("agent-allow").label("Allow (Alt+Y)").on_click(
+                            |_, window, cx| window.dispatch_action(Box::new(AllowAgentChange), cx),
+                        )),
+                )
                 .child(
                     div()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child("Not saved; Ctrl+Z undoes it."),
+                        .child(format!(
+                            "{}. Not saved; Ctrl+Z undoes it.",
+                            pending.plan.headline()
+                        )),
                 )
-                .child(Button::new("agent-allow").label("Allow (Alt+Y)").on_click(
-                    |_, window, cx| window.dispatch_action(Box::new(AllowAgentChange), cx),
-                ))
-                .child(
-                    Button::new("agent-deny")
-                        .primary()
-                        .label("Deny (Enter)")
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(DenyAgentChange), cx)
-                        }),
-                ),
+                .children(pending.plan.sample().map(|sample| {
+                    div()
+                        .text_sm()
+                        .font_family(theme.mono_font_family.clone())
+                        .text_color(theme.muted_foreground)
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .child(sample)
+                })),
         )
+    }
+
+    // The amber outline follows the pending change only while its workbook and sheet are on screen.
+    pub(super) fn sync_pending_highlight(&mut self, cx: &mut Context<Self>) {
+        let range = self
+            .agent
+            .pending
+            .as_ref()
+            .filter(|pending| {
+                pending.id == self.documents.active_id()
+                    && pending.plan.sheet() == self.documents.active().sheet
+            })
+            .map(|pending| pending.plan.target());
+        self.grid.update(cx, |grid, cx| grid.set_pending(range, cx));
+    }
+
+    pub(super) fn show_agent_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((id, sheet, target)) = self
+            .agent
+            .pending
+            .as_ref()
+            .map(|pending| (pending.id, pending.plan.sheet(), pending.plan.target()))
+        else {
+            return;
+        };
+        self.switch_to(id, window, cx);
+        if self.documents.active_id() != id {
+            return;
+        }
+        self.switch_sheet(sheet, window, cx);
+        self.grid.update(cx, |grid, cx| {
+            grid.show_range(target, cx);
+        });
+        self.sync_pending_highlight(cx);
     }
 
     pub(super) fn user_is_editing(&self, cx: &App) -> bool {
@@ -434,6 +504,7 @@ impl Workspace {
             pending
                 .call
                 .respond(Err(ToolError::UnknownWorkbook(pending.id)));
+            self.sync_pending_highlight(cx);
             cx.notify();
         }
     }

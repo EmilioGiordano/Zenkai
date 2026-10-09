@@ -176,6 +176,7 @@ pub struct Grid {
     zoom: f32,
     dragging: bool,
     marquee: Option<Range>,
+    pending: Option<Range>,
     tab_start: Option<ColIdx>,
     frozen_rows: u32,
     frozen_cols: u16,
@@ -233,6 +234,7 @@ impl Grid {
             zoom: 1.0,
             dragging: false,
             marquee: None,
+            pending: None,
             tab_start: None,
             frozen_rows: 0,
             frozen_cols: 0,
@@ -386,6 +388,14 @@ impl Grid {
     pub fn set_marquee(&mut self, range: Option<Range>, cx: &mut Context<Self>) {
         self.marquee = range;
         cx.notify();
+    }
+
+    // Cells an agent asked to change and the user has not decided on yet.
+    pub fn set_pending(&mut self, range: Option<Range>, cx: &mut Context<Self>) {
+        if self.pending != range {
+            self.pending = range;
+            cx.notify();
+        }
     }
 
     pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
@@ -1290,6 +1300,7 @@ impl Render for Grid {
             active: self.selection.active,
             editor: self.editor.clone(),
             marquee: self.marquee,
+            pending: self.pending,
             fill_target: self.fill_target,
             zoom: self.zoom,
             focused: self.focus.is_focused(window),

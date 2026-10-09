@@ -302,6 +302,7 @@ impl Workspace {
         self.forget_find_results();
         let view = self.sheet_view();
         self.grid.update(cx, |grid, cx| grid.reset(view, cx));
+        self.sync_pending_highlight(cx);
         self.refresh_cells(cx);
     }
 
@@ -3150,6 +3151,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.let_agents_edit(cx)))
             .on_action(cx.listener(|this, _: &AllowAgentChange, window, cx| {
                 this.decide_agent_change(Decision::Allow, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ShowAgentChange, window, cx| {
+                this.show_agent_change(window, cx)
             }))
             .on_action(cx.listener(|this, _: &DenyAgentChange, window, cx| {
                 this.decide_agent_change(Decision::Deny, window, cx)

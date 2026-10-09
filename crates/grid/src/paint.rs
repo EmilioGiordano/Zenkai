@@ -72,6 +72,7 @@ pub struct Frame {
     pub active: CellPos,
     pub editor: Option<Editor>,
     pub marquee: Option<Range>,
+    pub pending: Option<Range>,
     pub fill_target: Option<Range>,
     pub zoom: f32,
     pub focused: bool,
@@ -85,6 +86,7 @@ pub struct Frame {
 }
 
 const FILL_HANDLE: f32 = 7.0;
+const PENDING_COLOR: u32 = 0xD9_A0_3F;
 const MAX_WRAPPED_CHARS: usize = 2_000;
 
 // Excel's reference colours while editing a formula, in order of appearance.
@@ -682,6 +684,20 @@ fn paint_selection(
                 transparent_black(),
                 px(2.0),
                 c.accent,
+                BorderStyle::Dashed,
+            ));
+        }
+        if let Some(pending) = frame.pending
+            && let Some(area) = range_rect(pending, columns, rows, origin, z)
+        {
+            let amber: Hsla = rgb(PENDING_COLOR).into();
+            window.paint_quad(fill(area, amber.opacity(0.18)));
+            window.paint_quad(quad(
+                area,
+                px(0.0),
+                transparent_black(),
+                px(2.0),
+                amber,
                 BorderStyle::Dashed,
             ));
         }

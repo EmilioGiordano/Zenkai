@@ -145,6 +145,7 @@ actions!(
         KeepCurrentSettings,
         AllowAgentChange,
         DenyAgentChange,
+        ShowAgentChange,
         LetAgentsEdit,
         CopyClaudeCommand,
     ]
@@ -278,5 +279,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-e", LetAgentsEdit, CONTEXT),
         KeyBinding::new("alt-a", ApplyHeldSettings, CONTEXT),
         KeyBinding::new("alt-y", AllowAgentChange, CONTEXT),
+        KeyBinding::new("alt-w", ShowAgentChange, CONTEXT),
     ]);
 }

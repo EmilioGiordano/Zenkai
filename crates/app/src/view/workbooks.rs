@@ -177,6 +177,7 @@ impl Workspace {
             grid.reset(sheet, cx);
             grid.restore_view(view, cx);
         });
+        self.sync_pending_highlight(cx);
         self.refresh_cells(cx);
         window.set_window_title(&self.documents.active().title());
         let focus = self.grid.focus_handle(cx);
