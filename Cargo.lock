@@ -9863,6 +9863,7 @@ dependencies = [
  "interprocess",
  "keyring-core",
  "notify",
+ "proptest",
  "rmcp",
  "rust_xlsxwriter",
  "schemars 1.2.2",
