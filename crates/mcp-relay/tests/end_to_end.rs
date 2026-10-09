@@ -278,3 +278,24 @@ fn the_bridge_drops_a_client_sending_an_oversized_message() {
     drop(bridge);
     server.join().unwrap();
 }
+
+#[test]
+fn a_call_waiting_for_the_user_is_abandoned_when_the_client_disconnects() {
+    let (endpoint, calls) = channel();
+    let bridge = Bridge::start(endpoint, None).unwrap();
+    let mut client = Client::start(&bridge, &bridge.address().token);
+    client.initialize();
+    client.send(json!({
+        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": { "name": "list_workbooks", "arguments": {} }
+    }));
+    let call = calls.recv_blocking().unwrap();
+    assert!(!call.is_abandoned());
+    client.child.kill().unwrap();
+    client.child.wait().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !call.is_abandoned() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(call.is_abandoned(), "the unanswered call stayed alive");
+}

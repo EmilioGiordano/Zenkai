@@ -10,6 +10,8 @@ use rmcp::service::RequestContext;
 use crate::bridge::catalog;
 use crate::tools::{Nonce, ToolEndpoint, UNTRUSTED_NOTICE, client_label};
 
+const CLIENT_CHECK: std::time::Duration = std::time::Duration::from_millis(500);
+
 const INSTRUCTIONS: &str = "Zenkai is a spreadsheet. These tools read and change the \
      workbooks the user has open, live: changes show at once, recalculate, can be undone by \
      the user and are never saved by Zenkai. Start with list_workbooks.";
@@ -52,9 +54,27 @@ impl ServerHandler for ZenkaiServer {
             .peer
             .peer_info()
             .and_then(|info| client_label(&info.client_info.name, &info.client_info.version));
-        let result = match self.endpoint.call_from(call, client).await {
-            Ok(reply) => CallToolResult::success(vec![ContentBlock::text(reply.render(&nonce))]),
-            Err(error) => failed(error.to_string()),
+        // rmcp keeps this handler running after the client leaves; dropping the pending call
+        // is what tells Zenkai nobody waits for the user's answer any more.
+        let call = self.endpoint.call_from(call, client);
+        tokio::pin!(call);
+        let outcome = loop {
+            tokio::select! {
+                result = &mut call => break Some(result),
+                () = context.ct.cancelled() => break None,
+                () = tokio::time::sleep(CLIENT_CHECK) => {
+                    if context.peer.is_transport_closed() {
+                        break None;
+                    }
+                }
+            }
+        };
+        let result = match outcome {
+            Some(Ok(reply)) => {
+                CallToolResult::success(vec![ContentBlock::text(reply.render(&nonce))])
+            }
+            Some(Err(error)) => failed(error.to_string()),
+            None => failed("the client closed the connection".to_string()),
         };
         Ok(result.into())
     }
