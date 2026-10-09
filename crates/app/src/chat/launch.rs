@@ -101,3 +101,35 @@ pub(super) fn arm(prepared: &Prepared, endpoint: ToolEndpoint) -> Result<Armed, 
         bridge,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(json: &str) -> Settings {
+        Settings::parse(json).unwrap()
+    }
+
+    #[test]
+    fn the_default_agent_is_chosen_when_it_exists() {
+        let settings = settings(
+            r#"{"agents": {"default": "b", "servers": {
+                "a": {"name": "A", "command": "x"}, "b": {"name": "B", "command": "y"}}}}"#,
+        );
+        assert_eq!(chosen_agent(&settings).unwrap().0, AgentId::new("b"));
+    }
+
+    #[test]
+    fn without_a_default_the_first_server_is_chosen() {
+        let settings = settings(
+            r#"{"agents": {"servers": {
+                "b": {"name": "B", "command": "y"}, "a": {"name": "A", "command": "x"}}}}"#,
+        );
+        assert_eq!(chosen_agent(&settings).unwrap().0, AgentId::new("a"));
+    }
+
+    #[test]
+    fn no_servers_means_no_agent() {
+        assert!(chosen_agent(&Settings::default()).is_none());
+    }
+}

@@ -100,7 +100,13 @@ impl ChatPanel {
                                 .flex_shrink_0()
                                 .text_color(theme.danger),
                         )
-                        .child(div().text_sm().child(problem.text.clone())),
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .child(problem.text.clone()),
+                        ),
                 )
                 .when_some(problem.login, |card, command| {
                     card.child(
@@ -148,7 +154,7 @@ impl ChatPanel {
                 .text_sm()
                 .text_color(theme.muted_foreground)
                 .child(Spinner::new().color(theme.muted_foreground))
-                .child(text),
+                .child(div().flex_1().min_w_0().child(text)),
         )
     }
 

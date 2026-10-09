@@ -113,12 +113,14 @@ impl ChatPanel {
                             card.id.as_str()
                         )))
                         .small()
+                        .w_full()
                         .label(choice.label.clone())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.answer(&tool, index, cx);
                         }));
                         match choice.kind {
-                            ChoiceKind::AllowOnce | ChoiceKind::AllowAlways => button.primary(),
+                            ChoiceKind::AllowOnce => button.primary(),
+                            ChoiceKind::AllowAlways => button.outline(),
                             ChoiceKind::RejectOnce | ChoiceKind::RejectAlways => button.ghost(),
                         }
                     })
@@ -129,6 +131,8 @@ impl ChatPanel {
             .gap_2p5()
             .p_3()
             .rounded_lg()
+            .border_1()
+            .border_color(theme.border)
             .bg(theme.background)
             .child(
                 h_flex()
@@ -162,7 +166,7 @@ impl ChatPanel {
                 )
             })
             .when(!buttons.is_empty(), |card_view| {
-                card_view.child(h_flex().justify_end().gap_2().flex_wrap().children(buttons))
+                card_view.child(v_flex().gap_1().children(buttons))
             })
     }
 }

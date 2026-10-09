@@ -258,3 +258,18 @@ impl ChatPanel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::plain_name;
+
+    #[test]
+    fn a_file_name_loses_quotes_and_control_characters_before_an_agent_reads_it() {
+        assert_eq!(plain_name("Ventas \"Q3\"\n.xlsx"), "Ventas Q3.xlsx");
+    }
+
+    #[test]
+    fn a_very_long_file_name_is_cut() {
+        assert_eq!(plain_name(&"a".repeat(500)).chars().count(), 80);
+    }
+}

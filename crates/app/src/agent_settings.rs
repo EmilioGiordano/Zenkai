@@ -4,7 +4,9 @@ use gpui_kit::*;
 use zenkai_agent::chat::launch::LaunchApprovals;
 use zenkai_agent::detect::{self, Detection};
 use zenkai_agent::secrets::{SecretStatus, Secrets};
-use zenkai_agent::settings::{SecretName, Settings, SettingsState, escalations};
+use zenkai_agent::settings::{
+    AgentId, AgentServer, SecretName, Settings, SettingsState, escalations,
+};
 use zenkai_agent::settings_file::{self, SettingsFileError, SettingsPaths, SettingsWatcher};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,15 +169,7 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
     let mut edited = current.clone();
     edit(&mut edited);
     let approved = escalations(&current, &edited);
-    // Only the servers this click changed count as approved; a file edit that is still
-    // waiting stays unconfirmed even though the page writes the whole file.
-    let launches: Vec<_> = edited
-        .agents
-        .servers
-        .iter()
-        .filter(|(id, server)| current.agents.servers.get(*id) != Some(*server))
-        .map(|(id, server)| (id.clone(), server.clone()))
-        .collect();
+    let launches = servers_changed(&current, &edited);
     cx.spawn(async move |cx| {
         let written = cx
             .background_executor()
@@ -208,4 +202,51 @@ pub fn store_secret(cx: &mut App, name: SecretName, value: String) {
         refresh_secrets(cx);
     })
     .detach();
+}
+
+// Only the servers a click changed count as approved; a file edit that is still waiting
+// stays unconfirmed even though the page writes the whole file.
+fn servers_changed(current: &Settings, edited: &Settings) -> Vec<(AgentId, AgentServer)> {
+    edited
+        .agents
+        .servers
+        .iter()
+        .filter(|(id, server)| current.agents.servers.get(*id) != Some(*server))
+        .map(|(id, server)| (id.clone(), server.clone()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use zenkai_agent::settings::Settings;
+
+    use super::servers_changed;
+
+    fn settings(json: &str) -> Settings {
+        Settings::parse(json).unwrap()
+    }
+
+    #[test]
+    fn only_servers_the_edit_added_or_changed_are_approved() {
+        let current = settings(
+            r#"{"agents": {"servers": {"kept": {"name": "K", "command": "a"},
+                "edited": {"name": "E", "command": "b"}}}}"#,
+        );
+        let edited = settings(
+            r#"{"agents": {"servers": {"kept": {"name": "K", "command": "a"},
+                "edited": {"name": "E", "command": "c"},
+                "new": {"name": "N", "command": "d"}}}}"#,
+        );
+        let ids: Vec<String> = servers_changed(&current, &edited)
+            .into_iter()
+            .map(|(id, _)| id.to_string())
+            .collect();
+        assert_eq!(ids, ["edited", "new"]);
+    }
+
+    #[test]
+    fn a_click_that_changes_no_server_approves_nothing() {
+        let current = settings(r#"{"agents": {"servers": {"a": {"name": "A", "command": "x"}}}}"#);
+        assert!(servers_changed(&current, &current.clone()).is_empty());
+    }
 }
