@@ -16,6 +16,7 @@ use async_channel::{Receiver, Sender};
 use async_process::{Command as ProcessCommand, Stdio};
 use futures::channel::oneshot;
 use futures::{AsyncBufReadExt, StreamExt};
+use zenkai_i18n::t;
 
 use crate::bridge::{PIPE_VARIABLE, TOKEN_VARIABLE};
 use crate::chat::install::install;
@@ -481,7 +482,7 @@ async fn converse_on(
     let agent = initialized
         .agent_info
         .map(|info| info.title.unwrap_or(info.name))
-        .unwrap_or_else(|| "Agent".to_string());
+        .unwrap_or_else(|| t!("chat.agent").to_string());
     let servers = mcp_servers(relay);
     let session = connection
         .send_request(NewSessionRequest::new(folder.clone()).mcp_servers(servers.clone()))
@@ -539,9 +540,7 @@ async fn converse_on(
                         Ok(response) => turn_end(response.stop_reason),
                         Err(error) if error.code == ErrorCode::AuthRequired => {
                             deliver(&task_events, SessionEvent::AuthRequired).await;
-                            TurnEnd::Failed(
-                                "The agent needs you to sign in before it can answer.".to_string(),
-                            )
+                            TurnEnd::Failed(t!("chat.turn.sign_in").to_string())
                         }
                         Err(error) => TurnEnd::Failed(error.message),
                     };
@@ -580,9 +579,9 @@ async fn converse_on(
                     Ok(change) => notify(events, SessionEvent::State(change)),
                     Err(error) => notify(
                         events,
-                        SessionEvent::Problem(format!(
-                            "The agent refused the change: {}",
-                            error.message
+                        SessionEvent::Problem(t!(
+                            "chat.problem.change_refused",
+                            error = error.message
                         )),
                     ),
                 }
@@ -606,9 +605,9 @@ async fn converse_on(
                     ),
                     Err(error) => notify(
                         events,
-                        SessionEvent::Problem(format!(
-                            "Could not list sessions: {}",
-                            error.message
+                        SessionEvent::Problem(t!(
+                            "chat.problem.list_sessions",
+                            error = error.message
                         )),
                     ),
                 }
@@ -636,9 +635,9 @@ async fn converse_on(
                     }
                     Err(error) => notify(
                         events,
-                        SessionEvent::Problem(format!(
-                            "Could not resume that session: {}",
-                            error.message
+                        SessionEvent::Problem(t!(
+                            "chat.problem.resume_session",
+                            error = error.message
                         )),
                     ),
                 }

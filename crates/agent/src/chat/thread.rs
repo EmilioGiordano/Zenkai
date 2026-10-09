@@ -1,10 +1,15 @@
 use std::fmt;
 
+use zenkai_i18n::t;
+
 const MAX_DETAIL_CHARS: usize = 600;
 const MAX_TITLE_CHARS: usize = 200;
 const MAX_MESSAGE_CHARS: usize = 500_000;
 const MAX_ENTRIES: usize = 2_000;
-const TRIMMED_NOTICE: &str = "Older messages were dropped to keep the chat responsive.";
+
+fn trimmed_notice() -> &'static str {
+    t!("chat.trimmed")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MessageId(u64);
@@ -59,13 +64,13 @@ impl ToolStatus {
 
     pub fn label(self) -> &'static str {
         match self {
-            ToolStatus::Pending => "Starting",
-            ToolStatus::WaitingForPermission => "Waiting for your answer",
-            ToolStatus::InProgress => "Running",
-            ToolStatus::Completed => "Done",
-            ToolStatus::Failed => "Failed",
-            ToolStatus::Rejected => "Denied",
-            ToolStatus::Canceled => "Stopped",
+            ToolStatus::Pending => t!("chat.tool.starting"),
+            ToolStatus::WaitingForPermission => t!("chat.tool.waiting"),
+            ToolStatus::InProgress => t!("chat.tool.running"),
+            ToolStatus::Completed => t!("chat.tool.done"),
+            ToolStatus::Failed => t!("chat.tool.failed"),
+            ToolStatus::Rejected => t!("chat.tool.denied"),
+            ToolStatus::Canceled => t!("chat.tool.stopped"),
         }
     }
 }
@@ -148,24 +153,20 @@ pub struct Thread {
 }
 
 pub fn worked_label(seconds: u64) -> String {
-    let plural = |count: u64, unit: &str| {
-        if count == 1 {
-            format!("{count} {unit}")
-        } else {
-            format!("{count} {unit}s")
-        }
-    };
-    if seconds < 60 {
-        format!("Worked {}", plural(seconds, "second"))
+    let seconds_text = |count: u64| t!("chat.unit.second", count = count);
+    let minutes_text = |count: u64| t!("chat.unit.minute", count = count);
+    let time = if seconds < 60 {
+        seconds_text(seconds)
     } else if seconds.is_multiple_of(60) {
-        format!("Worked {}", plural(seconds / 60, "minute"))
+        minutes_text(seconds / 60)
     } else {
         format!(
-            "Worked {} {}",
-            plural(seconds / 60, "minute"),
-            plural(seconds % 60, "second")
+            "{} {}",
+            minutes_text(seconds / 60),
+            seconds_text(seconds % 60)
         )
-    }
+    };
+    t!("chat.worked", time = time)
 }
 
 fn capped(text: String, limit: usize) -> String {
@@ -281,14 +282,14 @@ impl Thread {
         while self.entries.len() > MAX_ENTRIES {
             let has_notice = matches!(
                 self.entries.first(),
-                Some(Entry::Notice { text, .. }) if text == TRIMMED_NOTICE
+                Some(Entry::Notice { text, .. }) if text == trimmed_notice()
             );
             if !has_notice {
                 self.entries.insert(
                     0,
                     Entry::Notice {
                         kind: NoticeKind::Info,
-                        text: TRIMMED_NOTICE.to_string(),
+                        text: trimmed_notice().to_string(),
                     },
                 );
                 self.open_message = self.open_message.map(|index| index + 1);
@@ -392,11 +393,9 @@ impl Thread {
         }
         match end {
             TurnEnd::Finished => {}
-            TurnEnd::TokenLimit => {
-                self.notice(NoticeKind::Info, "The agent reached its length limit.")
-            }
-            TurnEnd::Refused => self.notice(NoticeKind::Info, "The agent declined to answer."),
-            TurnEnd::Cancelled => self.notice(NoticeKind::Info, "Stopped."),
+            TurnEnd::TokenLimit => self.notice(NoticeKind::Info, t!("chat.turn.length_limit")),
+            TurnEnd::Refused => self.notice(NoticeKind::Info, t!("chat.turn.refused")),
+            TurnEnd::Cancelled => self.notice(NoticeKind::Info, t!("chat.turn.cancelled")),
             TurnEnd::Failed(reason) => self.notice(NoticeKind::Error, &reason),
         }
         self.open_message = None;
@@ -438,15 +437,15 @@ impl Thread {
 impl fmt::Display for ToolKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            ToolKind::Read => "Read",
-            ToolKind::Edit => "Edit",
-            ToolKind::Delete => "Delete",
-            ToolKind::Move => "Move",
-            ToolKind::Search => "Search",
-            ToolKind::Execute => "Run",
-            ToolKind::Think => "Think",
-            ToolKind::Fetch => "Fetch",
-            ToolKind::Other => "Tool",
+            ToolKind::Read => t!("chat.kind.read"),
+            ToolKind::Edit => t!("chat.kind.edit"),
+            ToolKind::Delete => t!("chat.kind.delete"),
+            ToolKind::Move => t!("chat.kind.move"),
+            ToolKind::Search => t!("chat.kind.search"),
+            ToolKind::Execute => t!("chat.kind.execute"),
+            ToolKind::Think => t!("chat.kind.think"),
+            ToolKind::Fetch => t!("chat.kind.fetch"),
+            ToolKind::Other => t!("chat.kind.tool"),
         })
     }
 }
@@ -768,7 +767,7 @@ mod tests {
         assert_eq!(thread.entries().len(), MAX_ENTRIES);
         assert!(matches!(
             &thread.entries()[0],
-            Entry::Notice { text, .. } if text == TRIMMED_NOTICE
+            Entry::Notice { text, .. } if text == trimmed_notice()
         ));
         let notices = thread
             .entries()
