@@ -7,6 +7,7 @@ use super::reference::Reference;
 const MAX_SHEET_NAME_CHARS: usize = 31;
 const FORBIDDEN_IN_SHEET_NAME: [char; 7] = ['[', ']', ':', '\\', '/', '?', '*'];
 const MAX_CELL_CHARS: usize = 12;
+const MAX_AUTOLINK_CHARS: usize = 256;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Part {
@@ -60,6 +61,9 @@ fn parse_sheet(chars: &[char], at: usize) -> Option<(String, usize)> {
     if chars.get(at) == Some(&'\'') {
         index += 1;
         loop {
+            if name.chars().count() > MAX_SHEET_NAME_CHARS {
+                return None;
+            }
             match (chars.get(index)?, chars.get(index + 1)) {
                 ('\'', Some('\'')) => {
                     name.push('\'');
@@ -82,6 +86,7 @@ fn parse_sheet(chars: &[char], at: usize) -> Option<(String, usize)> {
         }
         while let Some(c) = chars.get(index)
             && (c.is_alphanumeric() || *c == '_' || *c == '.')
+            && name.len() <= MAX_SHEET_NAME_CHARS * 4
         {
             name.push(*c);
             index += 1;
@@ -188,9 +193,16 @@ fn run_of(chars: &[char], at: usize, mark: char) -> usize {
 
 fn line_starts_fence(chars: &[char], at: usize) -> Option<usize> {
     let line_start = at == 0 || chars[at - 1] == '\n';
-    let indent = chars[at..].iter().take_while(|c| **c == ' ').count();
+    if !line_start {
+        return None;
+    }
+    let indent = chars[at..]
+        .iter()
+        .take(4)
+        .take_while(|c| **c == ' ')
+        .count();
     let mark = *chars.get(at + indent)?;
-    (line_start && indent < 4 && matches!(mark, '`' | '~') && run_of(chars, at + indent, mark) >= 3)
+    (indent < 4 && matches!(mark, '`' | '~') && run_of(chars, at + indent, mark) >= 3)
         .then_some(at + indent)
 }
 
@@ -240,6 +252,7 @@ fn protected_end(chars: &[char], at: usize) -> Option<usize> {
         ),
         '<' => chars[at..]
             .iter()
+            .take(MAX_AUTOLINK_CHARS)
             .take_while(|c| **c != '\n')
             .position(|c| *c == '>')
             .map(|close| at + close + 1),
@@ -373,6 +386,27 @@ mod tests {
             "Use `Sales!B4` or [Sales!B5](http://x) in\n```\nSales!B6\n```\nbut [Sales!B7](zenkai-ref:) <Sales!B8>"
         );
         assert!(matches!(link_references("nothing here"), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn long_hostile_input_is_scanned_in_linear_time() {
+        let size = 200_000;
+        let inputs = [
+            "<".repeat(size),
+            " ".repeat(size),
+            "' ".repeat(size / 2),
+            format!("'{}", "a".repeat(size)),
+            format!(" '{}", "a b ".repeat(size / 4)),
+            "`` ` ".repeat(size / 4),
+            "](".repeat(size / 2),
+            "Sales!B4 ".repeat(size / 9),
+        ];
+        let started = std::time::Instant::now();
+        for input in &inputs {
+            let _ = link_references(input);
+            let _ = split(input);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]
