@@ -638,13 +638,14 @@ async fn converse_on(
                 match loaded {
                     Ok(response) => {
                         session_id = SessionId::new(id.clone());
-                        notify(
-                            events,
-                            SessionEvent::State(StateChange::Selects(wire::selects_from_session(
-                                response.config_options.as_deref(),
-                                response.modes.as_ref(),
-                            ))),
+                        let selects = wire::selects_from_session(
+                            response.config_options.as_deref(),
+                            response.modes.as_ref(),
                         );
+                        // An agent that sends none keeps the pickers it had.
+                        if !selects.is_empty() {
+                            notify(events, SessionEvent::State(StateChange::Selects(selects)));
+                        }
                         notify(events, SessionEvent::Resumed);
                     }
                     Err(error) => notify(
