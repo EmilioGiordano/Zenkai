@@ -5,6 +5,7 @@ mod diff;
 mod formulas;
 pub mod limits;
 mod package;
+mod sheet_data;
 mod sheet_xml;
 mod text;
 
@@ -115,7 +116,7 @@ pub fn read_xlsx(
             defined_names: &package.defined_names,
             tables: &workbook.tables,
         };
-        let jobs: Vec<(&str, &[sheet_xml::FormulaJob<'_>])> = package
+        let jobs: Vec<(&str, &[sheet_data::FormulaJob<'_>])> = package
             .worksheets
             .iter()
             .zip(&sheets)

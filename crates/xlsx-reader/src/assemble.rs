@@ -4,7 +4,7 @@ use ironcalc::base::types::{Cell, Workbook};
 
 use crate::ReadError;
 use crate::formulas::Converted;
-use crate::sheet_xml::{FormulaEvent, SheetCells};
+use crate::sheet_data::{FormulaEvent, SheetCells};
 
 fn unsupported(what: &str) -> ReadError {
     ReadError::Unsupported(what.to_string())
