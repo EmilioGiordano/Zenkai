@@ -44,20 +44,18 @@ pub fn show(choice: ThemeChoice, cx: &mut App) {
     if on_screen(cx).shown == Some(choice) {
         return;
     }
-    match choice {
-        ThemeChoice::Dark(DarkTheme::ZenkaiDark) => {
-            cx.set_global(HighContrast(false));
-            Theme::change(ThemeMode::Dark, None, cx);
-        }
-        ThemeChoice::Dark(DarkTheme::HighContrast) => {
-            Theme::change(ThemeMode::Dark, None, cx);
-            apply_high_contrast(cx);
-            cx.set_global(HighContrast(true));
-        }
-        ThemeChoice::Light(_) => {
-            cx.set_global(HighContrast(false));
-            Theme::change(ThemeMode::Light, None, cx);
-        }
+    let high_contrast = choice == ThemeChoice::Dark(DarkTheme::HighContrast);
+    cx.set_global(HighContrast(high_contrast));
+    let mode = if choice.is_dark() {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    Theme::change(mode, None, cx);
+    if high_contrast {
+        apply_high_contrast(cx);
+    } else {
+        crate::theme_palettes::apply(choice, cx);
     }
     cx.update_global::<OnScreen, _>(|screen, _| screen.shown = Some(choice));
 }
