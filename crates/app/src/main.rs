@@ -27,6 +27,7 @@ mod recovery;
 mod region;
 mod session;
 mod settings_page;
+mod settings_spaces;
 mod sidebar_item;
 mod sidebar_rows;
 mod space_appearance;

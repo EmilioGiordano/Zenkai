@@ -14,6 +14,7 @@ use zenkai_agent::settings::{ExternalAgents, PermissionMode, SecretName};
 
 use crate::actions::*;
 use crate::agent_settings::{self, AgentConfig, BridgeStatus, SecretState};
+use crate::settings_spaces::SpacesSection;
 
 const RELAY_EXE: &str = if cfg!(windows) {
     "zenkai-mcp.exe"
@@ -27,6 +28,7 @@ pub struct SettingsPage {
     // next to this executable.
     claude_command: Option<String>,
     secret_inputs: BTreeMap<SecretName, Entity<InputState>>,
+    spaces: SpacesSection,
     _config: Subscription,
 }
 
@@ -37,6 +39,7 @@ impl SettingsPage {
             focus: cx.focus_handle(),
             claude_command: claude_command(),
             secret_inputs: BTreeMap::new(),
+            spaces: SpacesSection::new(cx),
             _config: cx.observe_global::<AgentConfig>(|_, cx| cx.notify()),
         }
     }
@@ -273,6 +276,7 @@ impl Render for SettingsPage {
             })
             .collect();
 
+        let spaces = self.spaces.render(window, cx);
         let theme = cx.theme();
         v_flex()
             .id("settings-page")
@@ -392,6 +396,7 @@ impl Render for SettingsPage {
                             ))
                     })),
             )
+            .child(spaces)
             .when(!secret_rows.is_empty(), |this| {
                 this.child(
                     section("Secrets (Windows Credential Manager)")
