@@ -87,6 +87,14 @@ pub enum DarkTheme {
     #[default]
     ZenkaiDark,
     HighContrast,
+    AyuDark,
+    AyuMirage,
+    OneDark,
+    TokyoNight,
+    Dracula,
+    Nord,
+    ModestDark,
+    Lumin,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -94,6 +102,48 @@ pub enum DarkTheme {
 pub enum LightTheme {
     #[default]
     ZenkaiLight,
+    AyuLight,
+    OneLight,
+    CatppuccinLatte,
+    LuminLight,
+}
+
+// A theme name the app does not know lands on the default instead of failing the
+// whole settings file, so a settings.json written by a newer version still opens.
+fn dark_theme_or_default<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<DarkTheme, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Named {
+        Known(DarkTheme),
+        Unknown(String),
+    }
+    Ok(match Named::deserialize(deserializer)? {
+        Named::Known(theme) => theme,
+        Named::Unknown(name) => {
+            tracing::debug!(%name, "unknown dark theme name; using the default");
+            DarkTheme::default()
+        }
+    })
+}
+
+fn light_theme_or_default<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<LightTheme, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Named {
+        Known(LightTheme),
+        Unknown(String),
+    }
+    Ok(match Named::deserialize(deserializer)? {
+        Named::Known(theme) => theme,
+        Named::Unknown(name) => {
+            tracing::debug!(%name, "unknown light theme name; using the default");
+            LightTheme::default()
+        }
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,10 +153,22 @@ pub enum ThemeChoice {
 }
 
 impl ThemeChoice {
-    pub const ALL: [ThemeChoice; 3] = [
+    pub const ALL: [ThemeChoice; 15] = [
         ThemeChoice::Dark(DarkTheme::ZenkaiDark),
+        ThemeChoice::Dark(DarkTheme::AyuDark),
+        ThemeChoice::Dark(DarkTheme::AyuMirage),
+        ThemeChoice::Dark(DarkTheme::OneDark),
+        ThemeChoice::Dark(DarkTheme::TokyoNight),
+        ThemeChoice::Dark(DarkTheme::Dracula),
+        ThemeChoice::Dark(DarkTheme::Nord),
+        ThemeChoice::Dark(DarkTheme::ModestDark),
+        ThemeChoice::Dark(DarkTheme::Lumin),
         ThemeChoice::Dark(DarkTheme::HighContrast),
         ThemeChoice::Light(LightTheme::ZenkaiLight),
+        ThemeChoice::Light(LightTheme::AyuLight),
+        ThemeChoice::Light(LightTheme::OneLight),
+        ThemeChoice::Light(LightTheme::CatppuccinLatte),
+        ThemeChoice::Light(LightTheme::LuminLight),
     ];
 
     pub fn is_dark(self) -> bool {
@@ -117,7 +179,19 @@ impl ThemeChoice {
         match self {
             ThemeChoice::Dark(DarkTheme::ZenkaiDark) => t!("theme.zenkai_dark"),
             ThemeChoice::Dark(DarkTheme::HighContrast) => t!("theme.high_contrast"),
+            ThemeChoice::Dark(DarkTheme::AyuDark) => t!("theme.ayu_dark"),
+            ThemeChoice::Dark(DarkTheme::AyuMirage) => t!("theme.ayu_mirage"),
+            ThemeChoice::Dark(DarkTheme::OneDark) => t!("theme.one_dark"),
+            ThemeChoice::Dark(DarkTheme::TokyoNight) => t!("theme.tokyo_night"),
+            ThemeChoice::Dark(DarkTheme::Dracula) => t!("theme.dracula"),
+            ThemeChoice::Dark(DarkTheme::Nord) => t!("theme.nord"),
+            ThemeChoice::Dark(DarkTheme::ModestDark) => t!("theme.modest_dark"),
+            ThemeChoice::Dark(DarkTheme::Lumin) => t!("theme.lumin"),
             ThemeChoice::Light(LightTheme::ZenkaiLight) => t!("theme.zenkai_light"),
+            ThemeChoice::Light(LightTheme::AyuLight) => t!("theme.ayu_light"),
+            ThemeChoice::Light(LightTheme::OneLight) => t!("theme.one_light"),
+            ThemeChoice::Light(LightTheme::CatppuccinLatte) => t!("theme.catppuccin_latte"),
+            ThemeChoice::Light(LightTheme::LuminLight) => t!("theme.lumin_light"),
         }
     }
 
@@ -136,10 +210,10 @@ pub struct AppearanceSettings {
     #[serde(default)]
     #[schemars(description = "Light, dark, or follow the system setting.")]
     pub mode: ColorMode,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "dark_theme_or_default")]
     #[schemars(description = "Theme used when the appearance is dark.")]
     pub dark_theme: DarkTheme,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "light_theme_or_default")]
     #[schemars(description = "Theme used when the appearance is light.")]
     pub light_theme: LightTheme,
 }
@@ -180,12 +254,16 @@ impl AppearanceSettings {
 mod tests {
     use super::*;
 
+    const DARK: ThemeChoice = ThemeChoice::Dark(DarkTheme::ZenkaiDark);
+    const CONTRAST: ThemeChoice = ThemeChoice::Dark(DarkTheme::HighContrast);
+    const LIGHT: ThemeChoice = ThemeChoice::Light(LightTheme::ZenkaiLight);
+
     #[test]
     fn defaults_follow_the_system_and_restore_the_session() {
         let appearance = AppearanceSettings::default();
         assert_eq!(appearance.mode, ColorMode::System);
-        assert_eq!(appearance.effective(true), ThemeChoice::ALL[0]);
-        assert_eq!(appearance.effective(false), ThemeChoice::ALL[2]);
+        assert_eq!(appearance.effective(true), DARK);
+        assert_eq!(appearance.effective(false), LIGHT);
         let general = GeneralSettings::default();
         assert!(general.restore_session);
         assert_eq!(general.autosave_seconds, 60);
@@ -198,12 +276,12 @@ mod tests {
             dark_theme: DarkTheme::HighContrast,
             ..Default::default()
         };
-        assert_eq!(dark.effective(false), ThemeChoice::ALL[1]);
+        assert_eq!(dark.effective(false), CONTRAST);
         let light = AppearanceSettings {
             mode: ColorMode::Light,
             ..dark
         };
-        assert_eq!(light.effective(true), ThemeChoice::ALL[2]);
+        assert_eq!(light.effective(true), LIGHT);
     }
 
     #[test]
@@ -213,12 +291,48 @@ mod tests {
             dark_theme: DarkTheme::HighContrast,
             ..Default::default()
         };
-        let light = appearance.with_theme(ThemeChoice::ALL[2]);
+        let light = appearance.with_theme(LIGHT);
         assert_eq!(light.mode, ColorMode::Light);
         assert_eq!(light.dark_theme, DarkTheme::HighContrast);
-        let dark = appearance.with_theme(ThemeChoice::ALL[0]);
+        let dark = appearance.with_theme(DARK);
         assert_eq!(dark.mode, ColorMode::Dark);
         assert_eq!(dark.dark_theme, DarkTheme::ZenkaiDark);
+    }
+
+    #[test]
+    fn the_theme_list_groups_the_dark_choices_before_the_light_ones() {
+        let darks = ThemeChoice::ALL
+            .iter()
+            .filter(|choice| choice.is_dark())
+            .count();
+        assert!(
+            ThemeChoice::ALL[..darks]
+                .iter()
+                .all(|choice| choice.is_dark())
+        );
+        assert!(
+            ThemeChoice::ALL[darks..]
+                .iter()
+                .all(|choice| !choice.is_dark())
+        );
+    }
+
+    #[test]
+    fn every_theme_has_a_name_of_its_own() {
+        let mut names: Vec<&'static str> = ThemeChoice::ALL.iter().map(|c| c.name()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), ThemeChoice::ALL.len());
+    }
+
+    #[test]
+    fn an_unknown_theme_name_falls_back_to_the_default() {
+        let appearance: AppearanceSettings = serde_json::from_str(
+            r#"{"mode":"dark","dark_theme":"solarized","light_theme":"paper"}"#,
+        )
+        .unwrap();
+        assert_eq!(appearance.dark_theme, DarkTheme::default());
+        assert_eq!(appearance.light_theme, LightTheme::default());
     }
 
     #[test]

@@ -40,6 +40,7 @@ mod start_view;
 mod stats;
 mod theme;
 mod theme_list;
+mod theme_palettes;
 mod toolbar;
 mod view;
 
