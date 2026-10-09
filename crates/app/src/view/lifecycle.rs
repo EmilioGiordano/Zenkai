@@ -214,7 +214,11 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { recovery::write(&document::read_shared(&shared), &target) })
+                .spawn(async move {
+                    document::write_snapshot(&shared, FileJob::Autosaving, |bytes| {
+                        recovery::write(bytes, &target)
+                    })
+                })
                 .await;
             let update = this.update(cx, |this, cx| {
                 let Some(document) = this.documents.get_mut(id) else {
@@ -225,7 +229,6 @@ impl Workspace {
                     return;
                 }
                 if let Err(error) = result {
-                    tracing::warn!(%error, "autosave failed");
                     this.notify(
                         Severity::Warning,
                         t!("notice.autosave_failed", error = error),
@@ -352,7 +355,11 @@ impl Workspace {
                     writes
                         .into_iter()
                         .map(|write| {
-                            recovery::write(&document::read_shared(&write.workbook), &write.target)
+                            document::write_snapshot(
+                                &write.workbook,
+                                FileJob::Autosaving,
+                                |bytes| recovery::write(bytes, &write.target),
+                            )
                         })
                         .collect::<Vec<Result<(), EngineError>>>()
                 })

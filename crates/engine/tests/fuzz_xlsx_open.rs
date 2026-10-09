@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use zenkai_engine::{Engine, open_xlsx, save_xlsx_atomic, scan_unsupported};
+use zenkai_engine::{Engine, open_xlsx, save_xlsx_atomic, scan_unsupported, xlsx_bytes};
 
 const HANG_AFTER: Duration = Duration::from_secs(60);
 
@@ -129,7 +129,9 @@ fn open_with_watchdog(bytes: Vec<u8>) {
             if let Ok(opened) = open_xlsx(&path) {
                 opened.workbook.sheets();
                 let saved = folder.path().join("saved.xlsx");
-                match save_xlsx_atomic(&opened.workbook, &saved) {
+                match xlsx_bytes(&opened.workbook)
+                    .and_then(|bytes| save_xlsx_atomic(&bytes, &saved))
+                {
                     Ok(()) => {
                         open_xlsx(&saved).expect("a file Zenkai just wrote must reopen");
                     }
