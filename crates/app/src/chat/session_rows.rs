@@ -2,6 +2,7 @@ use chrono::DateTime;
 use zenkai_agent::chat::history::History;
 use zenkai_agent::chat::state::AgentState;
 use zenkai_agent::settings::AgentId;
+use zenkai_i18n::t;
 
 const MINUTE: u64 = 60;
 const HOUR: u64 = 60 * MINUTE;
@@ -17,9 +18,9 @@ pub enum Group {
 impl Group {
     pub fn title(self) -> &'static str {
         match self {
-            Group::Today => "Today",
-            Group::ThisWeek => "This week",
-            Group::Earlier => "Earlier",
+            Group::Today => t!("chat.sessions.today"),
+            Group::ThisWeek => t!("chat.sessions.this_week"),
+            Group::Earlier => t!("chat.sessions.earlier"),
         }
     }
 }
@@ -53,7 +54,7 @@ pub fn group_of(age_seconds: u64) -> Group {
 
 pub fn age_label(age_seconds: u64) -> String {
     match age_seconds {
-        s if s < MINUTE => "now".to_string(),
+        s if s < MINUTE => t!("chat.age.now").to_string(),
         s if s < HOUR => format!("{}m", s / MINUTE),
         s if s < DAY => format!("{}h", s / HOUR),
         s => format!("{}d", s / DAY),
@@ -71,7 +72,12 @@ fn row(
     let age = started.map_or(u64::MAX, |started| now.saturating_sub(started));
     Row {
         source,
-        title: if title.is_empty() { "Untitled" } else { title }.to_string(),
+        title: if title.is_empty() {
+            t!("chat.sessions.untitled")
+        } else {
+            title
+        }
+        .to_string(),
         meta,
         age: if started.is_some() {
             age_label(age)

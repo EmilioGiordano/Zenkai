@@ -7,6 +7,7 @@ use gpui_kit::*;
 use zenkai_agent::chat::history::History;
 use zenkai_agent::chat::state::{ConfigKind, slash_query};
 use zenkai_agent::chat::thread::NoticeKind;
+use zenkai_i18n::t;
 
 use super::session_rows::{Row, Source};
 use super::slash::{self, Entry, Target, ZenkaiCommand};
@@ -127,10 +128,8 @@ impl ChatPanel {
                     return;
                 }
                 if self.busy() {
-                    self.thread.notice(
-                        NoticeKind::Info,
-                        "Stop the agent before opening another conversation.",
-                    );
+                    self.thread
+                        .notice(NoticeKind::Info, t!("chat.stop_before_switching"));
                     self.view = View::Chat;
                     cx.notify();
                     return;
@@ -153,10 +152,8 @@ impl ChatPanel {
             Source::Local => {
                 self.new_conversation(window, cx);
                 self.title = Some(title);
-                self.thread.notice(
-                    NoticeKind::Info,
-                    "Started fresh: this agent cannot reopen an earlier conversation, so only its title was kept.",
-                );
+                self.thread
+                    .notice(NoticeKind::Info, t!("chat.started_fresh"));
             }
         }
         self.view = View::Chat;
@@ -269,6 +266,6 @@ impl ChatPanel {
 
     pub(super) fn agent_name(&self, cx: &App) -> String {
         launch::chosen_agent(&cx.global::<AgentConfig>().state.current)
-            .map_or_else(|| "Agent".to_string(), |(_, server)| server.name)
+            .map_or_else(|| t!("chat.agent").to_string(), |(_, server)| server.name)
     }
 }

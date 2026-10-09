@@ -1,4 +1,5 @@
 use zenkai_agent::chat::state::AgentState;
+use zenkai_i18n::t;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ZenkaiCommand {
@@ -24,9 +25,9 @@ impl ZenkaiCommand {
 
     fn description(self) -> &'static str {
         match self {
-            ZenkaiCommand::Selection => "Add the current selection as context",
-            ZenkaiCommand::Generate => "Fill a range with Generate data",
-            ZenkaiCommand::Chart => "Chart the selection",
+            ZenkaiCommand::Selection => t!("chat.slash.selection"),
+            ZenkaiCommand::Generate => t!("chat.slash.generate"),
+            ZenkaiCommand::Chart => t!("chat.slash.chart"),
         }
     }
 }

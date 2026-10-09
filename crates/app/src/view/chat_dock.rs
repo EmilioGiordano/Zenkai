@@ -1,4 +1,5 @@
 use gpui_kit::*;
+use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
@@ -67,11 +68,7 @@ impl Workspace {
             .is_some_and(|panel| panel.read(cx).has_pending_permission());
         self.chat.open = false;
         if waiting {
-            self.notify(
-                Severity::Warning,
-                "The agent is waiting for your answer. Press Ctrl+J to show it.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("chat.waiting_for_answer"), cx);
         }
         let focus = self.grid.focus_handle(cx);
         window.focus(&focus, cx);
@@ -103,11 +100,7 @@ impl Workspace {
             return;
         };
         if !self.chat.open || !panel.read(cx).permission_visible() {
-            self.notify(
-                Severity::Info,
-                "No agent question is on screen. Open the agent panel (Ctrl+J) to see it.",
-                cx,
-            );
+            self.notify(Severity::Info, t!("chat.no_question"), cx);
             return;
         }
         panel.update(cx, |panel, cx| {

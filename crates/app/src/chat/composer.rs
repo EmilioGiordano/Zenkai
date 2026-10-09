@@ -6,6 +6,7 @@ use gpui_kit::component::input::Textarea;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::chat::state::{ConfigKind, Select};
+use zenkai_i18n::t;
 
 use super::slash::{Entry, Target};
 use super::{ChatPanel, MONO, Menu};
@@ -85,7 +86,7 @@ impl ChatPanel {
             div()
                 .id("chat-slash")
                 .role(Role::ListBox)
-                .aria_label("Commands")
+                .aria_label(t!("chat.slash.label"))
                 .occlude()
                 .absolute()
                 .left_0()
@@ -165,7 +166,7 @@ impl ChatPanel {
         };
         let mut menu = v_flex().gap_0p5();
         if let Some(model) = &model {
-            menu = menu.child(heading("Model"));
+            menu = menu.child(heading(t!("chat.model.heading")));
             for choice in &model.choices {
                 let value = choice.value.clone();
                 let current = model.current == choice.value;
@@ -175,7 +176,7 @@ impl ChatPanel {
                         .w_full()
                         .selected(current)
                         .label(if current {
-                            format!("{}   (current)", choice.label)
+                            t!("chat.model.current", label = choice.label)
                         } else {
                             choice.label.clone()
                         })
@@ -189,13 +190,15 @@ impl ChatPanel {
             }
         }
         if let Some(effort_row) = effort_row {
-            menu = menu.child(heading("Effort")).child(effort_row);
+            menu = menu
+                .child(heading(t!("chat.effort.heading")))
+                .child(effort_row);
         }
         Some(
             div()
                 .id("chat-model-menu")
                 .role(Role::Menu)
-                .aria_label("Model")
+                .aria_label(t!("chat.model.heading"))
                 .occlude()
                 .absolute()
                 .left_0()
@@ -242,12 +245,17 @@ impl ChatPanel {
         let effort = self.state.select(ConfigKind::Effort).cloned();
         let mode = self.state.select(ConfigKind::Mode).cloned();
         let send = if busy {
-            icon_button("chat-stop", IconName::Square, "Stop (Esc)", StopAgentTurn)
+            icon_button(
+                "chat-stop",
+                IconName::Square,
+                t!("chat.stop"),
+                StopAgentTurn,
+            )
         } else {
             icon_button(
                 "chat-send",
                 IconName::ArrowUp,
-                "Send (Enter)",
+                t!("chat.send"),
                 SendChatMessage,
             )
             .primary()
@@ -281,7 +289,7 @@ impl ChatPanel {
                 Textarea::new(&self.composer)
                     .appearance(false)
                     .bordered(false)
-                    .aria_label("Message to the agent"),
+                    .aria_label(t!("chat.composer.label")),
             )
             .child(
                 h_flex()
@@ -293,14 +301,14 @@ impl ChatPanel {
                     .child(picker(
                         "chat-agent",
                         agent,
-                        "Switch agent (Alt+G)",
+                        t!("chat.switch_agent"),
                         CycleChatAgent,
                     ))
                     .when_some(model_label, |row, label| {
                         row.child(picker(
                             "chat-model",
                             label,
-                            "Model and effort (Alt+M)",
+                            t!("chat.model_and_effort"),
                             PickChatModel,
                         ))
                     })
@@ -308,21 +316,21 @@ impl ChatPanel {
                         row.child(picker(
                             "chat-mode",
                             select.current_label().to_string(),
-                            "Change the agent's mode (Alt+O)",
+                            t!("chat.change_mode"),
                             CycleChatMode,
                         ))
                     })
                     .child(picker(
                         "chat-permission",
                         settings.agents.permission.label(),
-                        "Change what agents may do to the workbook (Alt+P)",
+                        t!("chat.change_permission"),
                         CycleChatPermission,
                     ))
                     .child(div().flex_1())
                     .child(icon_button(
                         "chat-selection",
                         IconName::Grid2x2,
-                        "Add the selected cells to the message (Ctrl+L)",
+                        t!("chat.add_selection"),
                         AddSelectionToChat,
                     ))
                     .child(send),

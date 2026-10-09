@@ -4,6 +4,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::presets::Preset;
 use zenkai_agent::settings::Settings;
+use zenkai_i18n::t;
 
 use super::launch::chosen_agent;
 use super::{ChatEvent, ChatPanel, View};
@@ -17,7 +18,7 @@ fn provider_name(settings: &Settings) -> String {
         Some((id, server)) => {
             Preset::for_agent(&id).map_or_else(|| server.name, |preset| preset.provider.to_string())
         }
-        None => "the agent's provider".to_string(),
+        None => t!("chat.provider.unknown").to_string(),
     }
 }
 
@@ -118,10 +119,7 @@ impl Render for ChatPanel {
                     .pb_3()
                     .text_xs()
                     .text_color(muted)
-                    .child(format!(
-                        "What the agent reads is sent to {provider}. Zenkai gives it no access to \
-                         your files or terminal; its own tools ask you here first."
-                    )),
+                    .child(t!("chat.provider.notice", provider = provider)),
             );
         swallow_cell_edits(root)
     }

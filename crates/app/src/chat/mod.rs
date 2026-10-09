@@ -30,6 +30,7 @@ use zenkai_types::WorkbookId;
 use crate::agent_settings::{self, AgentConfig};
 use crate::view::Workspace;
 use launch::{Live, Prepared};
+use zenkai_i18n::t;
 
 const SCROLL_FOLLOW_SLACK: f32 = 48.0;
 const MAX_NAME_CHARS: usize = 80;
@@ -135,7 +136,7 @@ impl ChatPanel {
             TextareaState::new(window, cx)
                 .auto_grow(1, 6)
                 .submit_on_enter(true)
-                .placeholder("Ask a question or ask for a change")
+                .placeholder(t!("chat.composer.placeholder"))
         });
         let sending = cx.subscribe_in(
             &composer,
@@ -158,7 +159,7 @@ impl ChatPanel {
         );
         let settings = cx.observe_global::<AgentConfig>(|_, cx| cx.notify());
         let sessions_query =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search sessions"));
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("chat.sessions.search")));
         let searching = cx.subscribe(&sessions_query, |_, _, _: &InputEvent, cx| cx.notify());
         let (history_saves, history_queue) = async_channel::unbounded();
         let mut panel = ChatPanel {

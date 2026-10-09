@@ -7,6 +7,7 @@ use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::settings::AgentId;
+use zenkai_i18n::t;
 
 use super::{ChatPanel, View};
 use crate::actions::*;
@@ -62,18 +63,18 @@ impl ChatPanel {
                 .current,
         );
         let title = match self.view {
-            View::Sessions => "Sessions".to_string(),
+            View::Sessions => t!("chat.sessions.title").to_string(),
             View::Chat => self
                 .title
                 .clone()
-                .unwrap_or_else(|| "New conversation".to_string()),
+                .unwrap_or_else(|| t!("chat.new_conversation").to_string()),
         };
         let usage = self.state.usage;
         let percent = usage.and_then(|usage| usage.fraction());
         let title_button = Button::new("chat-title")
             .ghost()
             .compact()
-            .tooltip("Switch conversation (Ctrl+Shift+H)")
+            .tooltip(t!("chat.switch_conversation"))
             .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowChatSessions), cx))
             .child(
                 h_flex()
@@ -121,10 +122,10 @@ impl ChatPanel {
                         .items_center()
                         .px_2()
                         .tooltip(move |window, cx| {
-                            Tooltip::new(format!(
-                                "Context {} of {} tokens",
-                                token_count(usage.used),
-                                token_count(usage.size)
+                            Tooltip::new(t!(
+                                "chat.context.tooltip",
+                                used = token_count(usage.used),
+                                size = token_count(usage.size)
                             ))
                             .build(window, cx)
                         })
@@ -132,8 +133,9 @@ impl ChatPanel {
                             div().size(px(18.0)).child(
                                 ProgressCircle::new("chat-context-ring")
                                     .value(percent)
-                                    .accessibility_label(format!(
-                                        "Context used: {percent} percent"
+                                    .accessibility_label(t!(
+                                        "chat.context.label",
+                                        percent = percent
                                     )),
                             ),
                         )
@@ -151,7 +153,7 @@ impl ChatPanel {
                     .compact()
                     .icon(IconName::Inbox)
                     .selected(self.view == View::Sessions)
-                    .tooltip("Sessions (Ctrl+Shift+H)")
+                    .tooltip(t!("chat.sessions.tooltip"))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(ShowChatSessions), cx)
                     }),
@@ -161,7 +163,7 @@ impl ChatPanel {
                     .ghost()
                     .compact()
                     .icon(IconName::Plus)
-                    .tooltip("New conversation (Ctrl+Shift+N)")
+                    .tooltip(t!("chat.new_conversation.tooltip"))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(NewAgentConversation), cx)
                     }),
@@ -171,7 +173,7 @@ impl ChatPanel {
                     .ghost()
                     .compact()
                     .icon(IconName::PanelRightClose)
-                    .tooltip("Close the agent panel (Ctrl+J)")
+                    .tooltip(t!("chat.close.tooltip"))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(ToggleAgentChat), cx)
                     }),

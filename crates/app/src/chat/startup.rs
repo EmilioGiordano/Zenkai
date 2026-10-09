@@ -1,6 +1,7 @@
 use gpui_kit::*;
 use zenkai_agent::chat::session::start;
 use zenkai_agent::chat::thread::TurnEnd;
+use zenkai_i18n::t;
 
 use super::launch::{self, Live, Prepared};
 use super::{ChatPanel, Gate, Link, closed};
@@ -137,12 +138,7 @@ impl ChatPanel {
         }
         self.queued = None;
         self.link = Link::Idle;
-        self.finish_turn(
-            TurnEnd::Failed(
-                "The agent was not started because you did not confirm its command.".to_string(),
-            ),
-            cx,
-        );
+        self.finish_turn(TurnEnd::Failed(t!("chat.not_confirmed").to_string()), cx);
         self.focus_composer(window, cx);
     }
 }

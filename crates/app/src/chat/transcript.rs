@@ -8,6 +8,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::chat::session::ChoiceKind;
 use zenkai_agent::chat::thread::{Entry, NoticeKind, ToolCard, ToolStatus, worked_label};
+use zenkai_i18n::t;
 
 use super::{ChatPanel, MONO};
 
@@ -159,7 +160,7 @@ impl ChatPanel {
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(format!("{} call, text provided by the agent", card.kind)),
+                    .child(t!("chat.tool.kind", kind = card.kind)),
             )
             .when(!card.input.is_empty(), |card_view| {
                 card_view.child(
@@ -188,7 +189,7 @@ impl ChatPanel {
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child("Options provided by the agent"),
+                            .child(t!("chat.permission.options")),
                     )
                     .child(v_flex().gap_1().children(buttons))
             })

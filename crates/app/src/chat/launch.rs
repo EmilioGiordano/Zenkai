@@ -8,24 +8,23 @@ use zenkai_agent::detect;
 use zenkai_agent::secrets::Secrets;
 use zenkai_agent::settings::{AgentId, AgentServer, Settings};
 use zenkai_agent::tools::ToolEndpoint;
+use zenkai_i18n::t;
 
 use crate::settings_window::relay_program;
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum PrepareError {
-    #[error(
-        "No agent is set up. Open Settings (Ctrl+,) and add Claude, Gemini CLI or Codex, then pick it as the default."
-    )]
+    #[error("{}", t!("chat.error.no_agent"))]
     NoAgent,
-    #[error("The agent cannot be started: {0}")]
+    #[error("{}", t!("chat.error.cannot_start", error = .0))]
     Launch(#[from] LaunchError),
-    #[error("The agent cannot be started: {0}")]
+    #[error("{}", t!("chat.error.cannot_start", error = .0))]
     Environment(#[from] EnvironmentError),
-    #[error("Zenkai could not open its tool channel for the agent: {0}")]
+    #[error("{}", t!("chat.error.bridge", error = .0))]
     Bridge(#[from] zenkai_agent::bridge::BridgeError),
-    #[error("Zenkai has no folder for the agent packages (LOCALAPPDATA is not set).")]
+    #[error("{}", t!("chat.error.no_data_folder"))]
     NoDataFolder,
-    #[error("zenkai-mcp was not found next to Zenkai, so the agent cannot get the workbook tools.")]
+    #[error("{}", t!("chat.error.relay_missing"))]
     RelayMissing,
 }
 

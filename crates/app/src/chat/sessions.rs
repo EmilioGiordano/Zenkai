@@ -5,6 +5,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use zenkai_i18n::t;
 
 use super::extras::now_seconds;
 use super::header::agent_mark;
@@ -125,7 +126,7 @@ impl ChatPanel {
                         .p_2()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child("No conversations yet."),
+                        .child(t!("chat.sessions.empty")),
                 )
             })
             .when(local_only && resumes_fresh, |view| {
@@ -134,10 +135,7 @@ impl ChatPanel {
                         .p_2()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child(
-                            "This agent cannot reopen earlier conversations. Picking one starts \
-                             a new conversation with the same title.",
-                        ),
+                        .child(t!("chat.sessions.fresh_only")),
                 )
             })
             .into_any_element()

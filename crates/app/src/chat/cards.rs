@@ -7,6 +7,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use zenkai_agent::chat::launch::{LaunchPlan, LaunchSpec};
+use zenkai_i18n::t;
 
 use super::{ChatPanel, Link, MONO};
 use crate::actions::*;
@@ -30,12 +31,9 @@ impl ChatPanel {
                 .child(
                     div()
                         .font_weight(FontWeight::MEDIUM)
-                        .child("Start this agent?"),
+                        .child(t!("chat.gate.title")),
                 )
-                .child(div().text_sm().child(
-                    "This command is not one of Zenkai's presets, or settings.json changed it. \
-                     Check it before Zenkai runs it.",
-                ))
+                .child(div().text_sm().child(t!("chat.gate.body")))
                 .child(
                     div()
                         .font_family(MONO)
@@ -48,9 +46,10 @@ impl ChatPanel {
                 .when(
                     matches!(gate.prepared.plan, LaunchPlan::Package { .. }),
                     |card| {
-                        card.child(div().text_xs().text_color(theme.muted_foreground).child(
-                            format!("Zenkai will run: {}", gate.prepared.plan.describe()),
-                        ))
+                        card.child(div().text_xs().text_color(theme.muted_foreground).child(t!(
+                            "chat.gate.will_run",
+                            command = gate.prepared.plan.describe()
+                        )))
                     },
                 )
                 .child(
@@ -61,7 +60,7 @@ impl ChatPanel {
                             Button::new("decline-launch")
                                 .ghost()
                                 .small()
-                                .label("Don't start (Esc)")
+                                .label(t!("chat.gate.decline"))
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(DeclineAgentLaunch), cx)
                                 }),
@@ -70,7 +69,7 @@ impl ChatPanel {
                             Button::new("confirm-launch")
                                 .primary()
                                 .small()
-                                .label("Start agent (Alt+L)")
+                                .label(t!("chat.gate.confirm"))
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(ConfirmAgentLaunch), cx)
                                 }),
@@ -128,7 +127,7 @@ impl ChatPanel {
                                     .ghost()
                                     .small()
                                     .icon(IconName::Copy)
-                                    .label("Copy (Alt+C)")
+                                    .label(t!("chat.copy_login"))
                                     .on_click(|_, window, cx| {
                                         window.dispatch_action(Box::new(CopyLoginCommand), cx)
                                     }),
@@ -141,10 +140,10 @@ impl ChatPanel {
     pub(super) fn render_status(&self, cx: &App) -> Option<impl IntoElement> {
         let theme = cx.theme();
         let text = match &self.link {
-            Link::Preparing => "Preparing the agent…",
-            Link::Installing => "Installing the agent (first run only, this can take a minute)…",
-            Link::Starting => "Starting the agent…",
-            Link::Ready(_) if self.busy() => "Working…",
+            Link::Preparing => t!("chat.status.preparing"),
+            Link::Installing => t!("chat.status.installing"),
+            Link::Starting => t!("chat.status.starting"),
+            Link::Ready(_) if self.busy() => t!("chat.status.working"),
             Link::Idle | Link::Confirming | Link::Ready(_) => return None,
         };
         Some(
@@ -164,10 +163,7 @@ impl ChatPanel {
             .gap_2()
             .text_sm()
             .text_color(theme.muted_foreground)
-            .child("Ask about the open workbook or ask for a change.")
-            .child(
-                "Changes appear in the grid for your approval first, and Ctrl+Z undoes them. \
-                 Nothing is saved for you.",
-            )
+            .child(t!("chat.empty.ask"))
+            .child(t!("chat.empty.approval"))
     }
 }

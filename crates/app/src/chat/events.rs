@@ -3,6 +3,7 @@ use gpui_kit::*;
 use zenkai_agent::chat::session::{Connection, SessionError, SessionEvent};
 use zenkai_agent::chat::thread::{Effect, MessageId, NoticeKind, TurnEnd};
 use zenkai_agent::presets::Preset;
+use zenkai_i18n::t;
 
 use super::launch;
 use super::{ChatEvent, ChatPanel, Link, MAX_PENDING_ASKS, Problem, View};
@@ -67,10 +68,8 @@ impl ChatPanel {
             }
             SessionEvent::Permission(ask) if self.permissions.len() >= MAX_PENDING_ASKS => {
                 ask.cancel();
-                self.thread.notice(
-                    NoticeKind::Error,
-                    "The agent asked too many questions at once; the extra ones were declined.",
-                );
+                self.thread
+                    .notice(NoticeKind::Error, t!("chat.too_many_questions"));
             }
             SessionEvent::Permission(ask) => {
                 self.thread.waiting_for_permission(&ask.tool, &ask.title);
@@ -109,8 +108,7 @@ impl ChatPanel {
     pub(super) fn require_sign_in(&mut self, cx: &App) {
         let login = self.login_command(cx);
         self.problem = Some(Problem {
-            text: "The agent needs you to sign in. Run this in a terminal, then send your message again."
-                .into(),
+            text: t!("chat.sign_in").into(),
             login,
         });
     }
