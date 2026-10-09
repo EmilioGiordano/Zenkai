@@ -3,7 +3,10 @@ use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use zenkai_i18n::t;
 use zenkai_types::Language;
+
+use crate::preferences::{AppearanceSettings, GeneralSettings};
 
 pub const SCHEMA_FILE: &str = "settings.schema.json";
 const SCHEMA_REFERENCE: &str = "./settings.schema.json";
@@ -22,6 +25,10 @@ pub struct Settings {
     )]
     pub language: Option<Language>,
     #[serde(default)]
+    pub general: GeneralSettings,
+    #[serde(default)]
+    pub appearance: AppearanceSettings,
+    #[serde(default)]
     pub agents: AgentSettings,
 }
 
@@ -34,12 +41,14 @@ impl Default for Settings {
         Settings {
             schema: schema_reference(),
             language: None,
+            general: GeneralSettings::default(),
+            appearance: AppearanceSettings::default(),
             agents: AgentSettings::default(),
         }
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AgentSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -58,6 +67,27 @@ pub struct AgentSettings {
         description = "Whether MCP clients outside Zenkai (such as Claude Code) may connect to the open workbook."
     )]
     pub external_agents: ExternalAgents,
+    #[serde(default = "confirm_by_default")]
+    #[schemars(
+        description = "Ask again at every start before agents may write without asking or outside MCP clients may connect. Turning it off from this file waits for your confirmation in Zenkai."
+    )]
+    pub confirm_elevated_at_start: bool,
+}
+
+fn confirm_by_default() -> bool {
+    true
+}
+
+impl Default for AgentSettings {
+    fn default() -> AgentSettings {
+        AgentSettings {
+            default: None,
+            servers: BTreeMap::new(),
+            permission: PermissionMode::default(),
+            external_agents: ExternalAgents::default(),
+            confirm_elevated_at_start: confirm_by_default(),
+        }
+    }
 }
 
 #[derive(
@@ -194,6 +224,8 @@ pub enum SettingsError {
     },
     #[error("settings.json: the default agent \"{0}\" is not one of agents.servers")]
     UnknownDefault(AgentId),
+    #[error("settings.json is larger than 1 MB")]
+    TooLarge,
     #[error("could not read settings.json: {0}")]
     Read(String),
     #[error("could not encode the settings: {0}")]
@@ -274,17 +306,20 @@ impl Settings {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Escalation {
     WriteWithoutAsking,
     ExternalAgents,
+    StopConfirmingAtStart,
 }
 
 impl Escalation {
     pub fn label(self) -> &'static str {
         match self {
-            Escalation::WriteWithoutAsking => "let agents change the workbook without asking",
-            Escalation::ExternalAgents => "let MCP clients outside Zenkai connect",
+            Escalation::WriteWithoutAsking => t!("held.write_without_asking"),
+            Escalation::ExternalAgents => t!("held.external_agents"),
+            Escalation::StopConfirmingAtStart => t!("held.stop_confirming_at_start"),
         }
     }
 }
@@ -302,7 +337,19 @@ pub fn escalations(from: &Settings, to: &Settings) -> Vec<Escalation> {
     {
         raised.push(Escalation::ExternalAgents);
     }
+    if !to.agents.confirm_elevated_at_start && from.agents.confirm_elevated_at_start {
+        raised.push(Escalation::StopConfirmingAtStart);
+    }
     raised
+}
+
+// What the user has confirmed and the app may take for granted at the next start: nothing
+// while the confirmation is on, and exactly the elevated values in force while it is off.
+pub fn remembered_confirmations(settings: &Settings) -> Vec<Escalation> {
+    if settings.agents.confirm_elevated_at_start {
+        return Vec::new();
+    }
+    escalations(&Settings::default(), settings)
 }
 
 // A change to settings.json that gives agents more power, waiting for the user.
@@ -336,6 +383,27 @@ impl SettingsState {
         }
     }
 
+    // The first load of a run. Elevated values are held again at every start unless the user
+    // turned the confirmation off and confirmed exactly these values before.
+    pub fn apply_startup(
+        &mut self,
+        loaded: Result<Settings, SettingsError>,
+        remembered: &[Escalation],
+    ) {
+        match loaded {
+            Ok(settings) => {
+                self.problem = None;
+                let approved = if settings.agents.confirm_elevated_at_start {
+                    &[]
+                } else {
+                    remembered
+                };
+                self.apply_with_approval(settings, approved);
+            }
+            Err(problem) => self.problem = Some(problem),
+        }
+    }
+
     // Settings written by Zenkai's own page: what the user clicked there is approved.
     pub fn apply_from_page(&mut self, settings: Settings, approved: &[Escalation]) {
         self.problem = None;
@@ -359,6 +427,9 @@ impl SettingsState {
         }
         if raised.contains(&Escalation::ExternalAgents) {
             safe.agents.external_agents = self.current.agents.external_agents;
+        }
+        if raised.contains(&Escalation::StopConfirmingAtStart) {
+            safe.agents.confirm_elevated_at_start = self.current.agents.confirm_elevated_at_start;
         }
         self.current = safe;
         self.held = (self.declined.as_ref() != Some(&settings)).then_some(HeldChange {
@@ -613,5 +684,119 @@ mod tests {
             state.held.unwrap().escalations,
             [Escalation::WriteWithoutAsking]
         );
+    }
+
+    const CONFIRMATION_OFF: &str = r#"{ "agents": { "permission": "automatic",
+        "confirm_elevated_at_start": false } }"#;
+
+    #[test]
+    fn turning_the_start_confirmation_off_from_the_file_waits_for_the_user() {
+        let mut state = SettingsState::default();
+        state.apply_file(Ok(granting(CONFIRMATION_OFF)));
+        assert!(state.current.agents.confirm_elevated_at_start);
+        assert_eq!(
+            state.current.agents.permission,
+            PermissionMode::AskBeforeWrite
+        );
+        assert_eq!(
+            state.held.unwrap().escalations,
+            [
+                Escalation::WriteWithoutAsking,
+                Escalation::StopConfirmingAtStart
+            ]
+        );
+    }
+
+    #[test]
+    fn a_start_takes_for_granted_only_what_was_confirmed_with_the_confirmation_off() {
+        let off = granting(CONFIRMATION_OFF);
+        let remembered = remembered_confirmations(&off);
+        assert_eq!(
+            remembered,
+            [
+                Escalation::WriteWithoutAsking,
+                Escalation::StopConfirmingAtStart
+            ]
+        );
+        let mut state = SettingsState::default();
+        state.apply_startup(Ok(off.clone()), &remembered);
+        assert_eq!(state.current, off);
+        assert_eq!(state.held, None);
+
+        let mut forgotten = SettingsState::default();
+        forgotten.apply_startup(Ok(off), &[]);
+        assert!(forgotten.held.is_some());
+        assert!(forgotten.current.agents.confirm_elevated_at_start);
+        assert_eq!(
+            forgotten.current.agents.permission,
+            PermissionMode::AskBeforeWrite
+        );
+    }
+
+    #[test]
+    fn a_value_added_after_the_confirmation_is_held_even_with_the_confirmation_off() {
+        let remembered = remembered_confirmations(&granting(CONFIRMATION_OFF));
+        let more = granting(
+            r#"{ "agents": { "permission": "automatic", "external_agents": "allowed",
+                "confirm_elevated_at_start": false } }"#,
+        );
+        let mut state = SettingsState::default();
+        state.apply_startup(Ok(more), &remembered);
+        assert_eq!(state.current.agents.permission, PermissionMode::Automatic);
+        assert_eq!(
+            state.current.agents.external_agents,
+            ExternalAgents::Blocked
+        );
+        assert_eq!(
+            state.held.unwrap().escalations,
+            [Escalation::ExternalAgents]
+        );
+    }
+
+    #[test]
+    fn with_the_confirmation_on_nothing_is_remembered_and_every_start_asks() {
+        let on = granting(r#"{ "agents": { "permission": "automatic" } }"#);
+        assert_eq!(remembered_confirmations(&on), []);
+        let mut state = SettingsState::default();
+        state.apply_startup(
+            Ok(on),
+            &[
+                Escalation::WriteWithoutAsking,
+                Escalation::StopConfirmingAtStart,
+            ],
+        );
+        assert!(state.held.is_some());
+    }
+
+    #[test]
+    fn a_change_made_while_the_confirmation_is_off_is_still_held() {
+        let off = granting(CONFIRMATION_OFF);
+        let mut state = SettingsState::default();
+        state.apply_startup(Ok(off.clone()), &remembered_confirmations(&off));
+        let more = granting(
+            r#"{ "agents": { "permission": "automatic", "external_agents": "allowed",
+                "confirm_elevated_at_start": false } }"#,
+        );
+        state.apply_file(Ok(more));
+        assert_eq!(
+            state.current.agents.external_agents,
+            ExternalAgents::Blocked
+        );
+        assert!(state.held.is_some());
+    }
+
+    #[test]
+    fn general_and_appearance_settings_round_trip_with_the_rest() {
+        let settings = granting(
+            r#"{ "general": { "restore_session": false, "autosave_seconds": 30 },
+                "appearance": { "mode": "dark", "dark_theme": "high_contrast" } }"#,
+        );
+        assert!(!settings.general.restore_session);
+        assert_eq!(settings.general.autosave_seconds, 30);
+        assert_eq!(
+            Settings::parse(&settings.to_json().unwrap()).unwrap(),
+            settings
+        );
+        assert!(granting("{}").general.restore_session);
     }
 }

@@ -9,7 +9,6 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use zenkai_agent::presets;
 use zenkai_agent::settings::SettingsError;
 use zenkai_engine::{Copied, Engine, EngineError, Workbook, save_xlsx_atomic};
 use zenkai_formats::{Delimiter, parse_csv};
@@ -27,12 +26,11 @@ mod settings_gate;
 mod space_panel;
 
 use agent_calls::{AgentLink, Decision};
-use settings_gate::HeldDecision;
 use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_agent::settings::{HeldChange, PermissionMode};
 
 use crate::actions::*;
-use crate::agent_settings::{self, AgentConfig};
+use crate::agent_settings::{self, AgentConfig, HeldDecision};
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
@@ -51,7 +49,6 @@ use crate::recent;
 use crate::recovery;
 use crate::region;
 use crate::session::Session;
-use crate::settings_page::{self, SettingsPage};
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Neighbour;
 use crate::start_view;
@@ -64,6 +61,7 @@ mod generate;
 mod lifecycle;
 mod search;
 mod sidebar;
+mod theme_picker;
 mod workbooks;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::TitleBar;
@@ -76,6 +74,7 @@ use gpui_kit::component::spinner::Spinner;
 use lifecycle::Lifecycle;
 use search::SearchOverlay;
 use sidebar::SidebarState;
+use theme_picker::ThemePicker;
 
 struct FormulaBarEdit {
     input: Entity<InputState>,
@@ -140,6 +139,7 @@ pub struct Workspace {
     chart: Option<ChartPanel>,
     palette: Option<Entity<CommandState>>,
     search: Option<SearchOverlay>,
+    theme_picker: Option<ThemePicker>,
     csv_preview: Option<CsvPreview>,
     // Bumped by every CSV read, re-parse, import and cancel; a background result is
     // applied only if no newer request started meanwhile.
@@ -170,7 +170,6 @@ pub struct Workspace {
     lifecycle: Lifecycle,
     saved_session: Option<Session>,
     cell_refresh: CellRefresh,
-    settings_page: Option<Entity<SettingsPage>>,
     space_panel: Option<space_panel::SpacePanel>,
     agent: AgentLink,
     // The settings problem already shown, so a reload with the same error stays quiet.
@@ -220,7 +219,10 @@ impl Workspace {
             }
         });
         let settings = cx.observe_global_in::<AgentConfig>(window, Self::on_settings_changed);
-        let space_look = cx.observe_global::<SpaceAppearance>(|_, cx| cx.notify());
+        let space_look = cx.observe_global::<SpaceAppearance>(|this, cx| {
+            this.persist_session(cx);
+            cx.notify();
+        });
         let quit = cx.on_app_quit(|this, _| {
             this.stop_bridge();
             async {}
@@ -241,6 +243,7 @@ impl Workspace {
             chart: None,
             palette: None,
             search: None,
+            theme_picker: None,
             csv_preview: None,
             csv_request: 0,
             ui_scale: 1.0,
@@ -267,7 +270,6 @@ impl Workspace {
             lifecycle: Lifecycle::Running,
             saved_session: None,
             cell_refresh: CellRefresh::Idle,
-            settings_page: None,
             space_panel: None,
             agent: Self::start_tool_service(window, cx),
             shown_settings_problem: None,
@@ -394,6 +396,7 @@ impl Workspace {
             return;
         }
         self.search = None;
+        self.revert_theme_preview(cx);
         let state = cx.new(|cx| CommandState::new(window, cx));
         state.update(cx, |state, cx| state.focus(window, cx));
         self.palette = Some(state);
@@ -433,6 +436,7 @@ impl Workspace {
 
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
+        self.revert_theme_preview(cx);
         let Some(document) = self.documents.active_mut() else {
             return;
         };
@@ -2206,38 +2210,6 @@ impl Workspace {
         });
     }
 
-    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let page = self
-            .settings_page
-            .get_or_insert_with(|| cx.new(SettingsPage::new))
-            .clone();
-        let focus = page.read(cx).focus_handle();
-        window.focus(&focus, cx);
-        cx.notify();
-    }
-
-    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.settings_page = None;
-        let focus = self.grid.focus_handle(cx);
-        window.focus(&focus, cx);
-        self.persist_session(cx);
-        cx.notify();
-    }
-
-    fn render_settings(&self) -> Option<impl IntoElement> {
-        let page = self.settings_page.clone()?;
-        Some(
-            div()
-                .absolute()
-                .top(px(64.0))
-                .left_0()
-                .right_0()
-                .flex()
-                .justify_center()
-                .child(page),
-        )
-    }
-
     // Excel's Ctrl+1, Number tab: categories, a custom code and a sample of the active cell.
     fn open_format_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let active = self.grid.read(cx).selection().active;
@@ -2553,6 +2525,7 @@ impl Workspace {
 
     fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
+        self.revert_theme_preview(cx);
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("goto.placeholder")));
         let subscription =
             cx.subscribe_in(
@@ -2594,6 +2567,7 @@ impl Workspace {
 
     fn open_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
+        self.revert_theme_preview(cx);
         let Some(document) = self.documents.active() else {
             return;
         };
@@ -3266,7 +3240,13 @@ impl Render for Workspace {
                 this.diagnostics = !this.diagnostics;
                 cx.notify();
             }))
-            .on_action(cx.listener(|_, _: &ToggleTheme, window, cx| theme::cycle(window, cx)))
+            .on_action(|_: &ToggleTheme, _, cx| theme::cycle(cx))
+            .on_action(
+                cx.listener(|this, _: &SelectTheme, window, cx| this.open_theme_picker(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &CancelThemePicker, window, cx| {
+                this.cancel_theme_picker(window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
@@ -3302,28 +3282,6 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &MoveToNextSpace, _, cx| {
                 this.shift_document(Neighbour::Next, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &CloseSettings, window, cx| this.close_settings(window, cx)),
-            )
-            .on_action(|_: &DetectAgents, _, cx| agent_settings::detect_agents(cx))
-            .on_action(|_: &AddClaudeAgent, _, cx| settings_page::add_preset(presets::CLAUDE, cx))
-            .on_action(|_: &AddGeminiAgent, _, cx| settings_page::add_preset(presets::GEMINI, cx))
-            .on_action(|_: &AddCodexAgent, _, cx| settings_page::add_preset(presets::CODEX, cx))
-            .on_action(|_: &PermissionReadOnly, _, cx| {
-                settings_page::set_permission(PermissionMode::ReadOnly, cx)
-            })
-            .on_action(|_: &PermissionAskBeforeWrite, _, cx| {
-                settings_page::set_permission(PermissionMode::AskBeforeWrite, cx)
-            })
-            .on_action(|_: &PermissionAutomatic, _, cx| {
-                settings_page::set_permission(PermissionMode::Automatic, cx)
-            })
-            .on_action(|_: &ToggleExternalAgents, _, cx| settings_page::toggle_external_agents(cx))
-            .on_action(|_: &CycleDefaultAgent, _, cx| settings_page::cycle_default_agent(cx))
-            .on_action(|_: &CopyClaudeCommand, _, cx| settings_page::copy_claude_command(cx))
             .on_action(cx.listener(|this, _: &ApplyHeldSettings, window, cx| {
                 this.decide_held_settings(HeldDecision::Apply, window, cx)
             }))
@@ -3354,12 +3312,12 @@ impl Render for Workspace {
                     }),
             )
             .children(self.render_palette())
+            .children(self.render_theme_picker(cx))
             .children(self.render_search(cx))
             .children(self.render_busy(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
             .children(self.render_generate())
-            .children(self.render_settings())
             .children(self.render_space_panel(window, cx))
     }
 }

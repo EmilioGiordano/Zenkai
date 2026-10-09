@@ -4,6 +4,7 @@
 mod actions;
 mod agent_routing;
 mod agent_settings;
+mod assets;
 mod chart;
 mod chart_panel;
 mod clipboard;
@@ -27,8 +28,7 @@ mod recent;
 mod recovery;
 mod region;
 mod session;
-mod settings_page;
-mod settings_spaces;
+mod settings_window;
 mod sidebar_item;
 mod sidebar_rows;
 mod space_appearance;
@@ -39,6 +39,7 @@ mod spaces;
 mod start_view;
 mod stats;
 mod theme;
+mod theme_list;
 mod toolbar;
 mod view;
 
@@ -52,12 +53,15 @@ fn main() {
     let initial: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
 
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::AllAssets)
+        .with_assets(assets::ZenkaiAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
             zenkai_grid::bind_keys(cx);
             actions::bind_keys(cx);
+            theme::init(cx);
             agent_settings::init(cx);
+            settings_window::register_agent_actions(cx);
+            cx.on_action(|_: &actions::OpenSettings, cx| settings_window::open(cx));
 
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::centered(size(px(1280.0), px(800.0)), cx)),

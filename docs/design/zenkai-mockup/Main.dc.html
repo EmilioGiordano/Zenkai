@@ -248,6 +248,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
     <div role="listbox" style="display: flex; flex-direction: column; padding: 6px">
       <sc-for list="{{overlay.items}}" as="item" hint-placeholder-count="7">
         <div role="option" aria-selected="{{item.selected}}" style="display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: 7px; background: {{item.bg}}">
+          <span style="width: 14px; color: {{p.text}}; font-weight: 600">{{item.check}}</span>
           <span style="color: {{p.text}}">{{item.label}}</span>
           <span style="font-size: 12px; color: {{p.faint}}">{{item.detail}}</span>
           <span style="flex-grow: 1"></span>
@@ -260,7 +261,7 @@ button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:poin
 </sc-if>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"sidebar":{"editor":"boolean","default":true},"chat":{"editor":"boolean","default":false},"overlay":{"editor":"enum","options":["none","palette","files"],"default":"none"},"accent":{"editor":"color","default":"#4caf7a","options":["#4caf7a","#5b8def","#d08a4c","#9a86d6"]},"$preview":{"width":1440,"height":900}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"sidebar":{"editor":"boolean","default":true},"chat":{"editor":"boolean","default":false},"overlay":{"editor":"enum","options":["none","palette","files","theme"],"default":"none"},"accent":{"editor":"color","default":"#4caf7a","options":["#4caf7a","#5b8def","#d08a4c","#9a86d6"]},"$preview":{"width":1440,"height":900}}'>
 class Component extends DCLogic {
   renderVals() {
     const theme = this.props.theme ?? 'dark';
@@ -292,6 +293,19 @@ class Component extends DCLogic {
           { label: 'Agente: editar en línea', detail: 'Agente', keys: 'Ctrl+K' }
         ]
       },
+      theme: {
+        title: 'Select theme', query: '', placeholder: 'Select theme…', hint: 'Live preview',
+        items: [
+          { label: 'Zenkai Dark', detail: '', keys: 'Dark' },
+          { label: 'Ayu Mirage', detail: '', keys: 'Dark' },
+          { label: 'Catppuccin Latte', detail: '', keys: 'Light' },
+          { label: 'Catppuccin Mocha', detail: '', keys: 'Dark' },
+          { label: 'Gruvbox Dark', detail: '', keys: 'Dark' },
+          { label: 'One Dark', detail: '', keys: 'Dark', check: '✓' },
+          { label: 'One Light', detail: '', keys: 'Light' },
+          { label: 'Zenkai Light', detail: '', keys: 'Light' }
+        ]
+      },
       files: {
         title: 'Buscar archivo', query: 'pre', placeholder: 'Buscar en espacios y recientes…', hint: 'Ctrl+E',
         items: [
@@ -304,7 +318,7 @@ class Component extends DCLogic {
     };
     const overlay = overlays[overlayKind] ?? null;
     if (overlay) {
-      overlay.items = overlay.items.map((it, i) => ({ ...it, selected: i === 0 ? 'true' : 'false', bg: i === 0 ? p.selected : 'transparent' }));
+      overlay.items = overlay.items.map((it, i) => ({ check: '', ...it, selected: i === 0 ? 'true' : 'false', bg: i === 0 ? p.selected : 'transparent' }));
     }
     const showChat = this.props.chat ?? false;
     const acc = dark ? accent : '#1f7a4a';

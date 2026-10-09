@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use zenkai_engine::{EngineError, Workbook, save_xlsx_atomic};
 use zenkai_types::WorkbookId;
@@ -8,7 +7,6 @@ pub fn session_directory() -> Option<PathBuf> {
     Some(directory()?.parent()?.to_path_buf())
 }
 
-pub const AUTOSAVE_EVERY: Duration = Duration::from_secs(60);
 const PREFIX: &str = "autosave-";
 
 pub fn directory() -> Option<PathBuf> {

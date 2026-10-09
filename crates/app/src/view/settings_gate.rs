@@ -2,25 +2,11 @@ use gpui_kit::base::h_flex;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
-use zenkai_agent::settings::{Escalation, HeldChange};
 use zenkai_i18n::t;
 
 use super::{Severity, Workspace};
 use crate::actions::{ApplyHeldSettings, KeepCurrentSettings};
-use crate::agent_settings::AgentConfig;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum HeldDecision {
-    Apply,
-    Keep,
-}
-
-fn escalation_text(escalation: Escalation) -> &'static str {
-    match escalation {
-        Escalation::WriteWithoutAsking => t!("held.write_without_asking"),
-        Escalation::ExternalAgents => t!("held.external_agents"),
-    }
-}
+use crate::agent_settings::{self, AgentConfig, HeldDecision};
 
 impl Workspace {
     pub(super) fn on_settings_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -53,24 +39,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // Apply only what the bar showed: a newer file change may have replaced it since.
-        let shown = self.shown_held.clone();
-        cx.update_global::<AgentConfig, _>(|config, _| {
-            if config.state.held != shown {
-                return;
-            }
-            match decision {
-                HeldDecision::Apply => config.state.accept_held(),
-                HeldDecision::Keep => config.state.decline_held(),
-            }
-        });
+        agent_settings::decide_held(cx, self.shown_held.clone(), decision);
         let previous = self.held_return_focus.take();
         self.release_focus_from_bar(&self.held_focus.clone(), previous, window, cx);
         cx.notify();
     }
 
     pub(super) fn render_held_settings(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let HeldChange { escalations, .. } = self.shown_held.as_ref()?;
-        let asks: Vec<&str> = escalations.iter().map(|e| escalation_text(*e)).collect();
+        let summary = agent_settings::held_summary(self.shown_held.as_ref()?);
         let theme = cx.theme();
         Some(
             h_flex()
@@ -84,10 +60,12 @@ impl Workspace {
                 .border_color(theme.border)
                 .bg(theme.secondary)
                 .child(div().text_color(theme.warning).child("⚠"))
-                .child(div().flex_1().min_w_0().child(t!(
-                    "held.message",
-                    asks = asks.join(&format!(" {} ", t!("held.and")))
-                )))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(t!("held.message", summary = summary)),
+                )
                 .child(Button::new("held-apply").label(t!("held.apply")).on_click(
                     |_, window, cx| window.dispatch_action(Box::new(ApplyHeldSettings), cx),
                 ))

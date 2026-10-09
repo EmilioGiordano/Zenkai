@@ -96,6 +96,20 @@ impl Session {
                 <= MAX_FILES
     }
 
+    // What a start with "Restore last session" off keeps: the spaces and the links to files on
+    // disk, but nothing to reopen and no unsaved work (its recovery copies are offered instead).
+    pub fn without_unsaved_work(mut self) -> Session {
+        for space in &mut self.spaces {
+            space.files.retain(|file| file.path.is_some());
+            for file in &mut space.files {
+                file.recovery = None;
+                file.dirty = false;
+                file.active = false;
+            }
+        }
+        self
+    }
+
     pub fn recovery_files(&self) -> Vec<&str> {
         self.spaces
             .iter()

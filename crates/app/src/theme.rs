@@ -5,34 +5,139 @@ use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
 use zenkai_grid::HighContrast;
 
-/// Set once the user picks a theme; from then on the system setting is not followed.
-struct ChosenTheme;
+use zenkai_agent::preferences::{AppearanceSettings, DarkTheme, ThemeChoice};
 
-impl Global for ChosenTheme {}
+use crate::agent_settings;
 
-/// Light or dark as the system is, unless the user chose a theme in this session.
-pub fn follow_system(window: &mut Window, cx: &mut App) {
-    if cx.has_global::<ChosenTheme>() {
+// What is on screen now and the appearance settings it was last derived from. A preview
+// changes the first and leaves the second, so a settings reload never ends a preview.
+#[derive(Default)]
+struct OnScreen {
+    shown: Option<ThemeChoice>,
+    from_settings: Option<AppearanceSettings>,
+}
+
+impl Global for OnScreen {}
+
+fn on_screen(cx: &App) -> &OnScreen {
+    cx.global::<OnScreen>()
+}
+
+pub fn init(cx: &mut App) {
+    cx.set_global(OnScreen::default());
+}
+
+pub fn shown(cx: &App) -> ThemeChoice {
+    on_screen(cx)
+        .shown
+        .unwrap_or_else(|| AppearanceSettings::default().effective(system_is_dark(cx)))
+}
+
+fn system_is_dark(cx: &App) -> bool {
+    matches!(
+        cx.window_appearance(),
+        WindowAppearance::Dark | WindowAppearance::VibrantDark
+    )
+}
+
+pub fn show(choice: ThemeChoice, cx: &mut App) {
+    if on_screen(cx).shown == Some(choice) {
         return;
     }
-    Theme::sync_system_appearance(Some(window), cx);
+    match choice {
+        ThemeChoice::Dark(DarkTheme::ZenkaiDark) => {
+            cx.set_global(HighContrast(false));
+            Theme::change(ThemeMode::Dark, None, cx);
+        }
+        ThemeChoice::Dark(DarkTheme::HighContrast) => {
+            Theme::change(ThemeMode::Dark, None, cx);
+            apply_high_contrast(cx);
+            cx.set_global(HighContrast(true));
+        }
+        ThemeChoice::Light(_) => {
+            cx.set_global(HighContrast(false));
+            Theme::change(ThemeMode::Light, None, cx);
+        }
+    }
+    cx.update_global::<OnScreen, _>(|screen, _| screen.shown = Some(choice));
+}
+
+pub fn sync_with_settings(cx: &mut App) {
+    let appearance = agent_settings::settings(cx).appearance;
+    if on_screen(cx).from_settings == Some(appearance) {
+        return;
+    }
+    cx.update_global::<OnScreen, _>(|screen, _| screen.from_settings = Some(appearance));
+    show(appearance.effective(system_is_dark(cx)), cx);
+}
+
+// In System mode the theme follows the window setting; a fixed mode ignores it.
+pub fn follow_system(window: &mut Window, cx: &mut App) {
+    let appearance = agent_settings::settings(cx).appearance;
+    let system_is_dark = matches!(
+        window.appearance(),
+        WindowAppearance::Dark | WindowAppearance::VibrantDark
+    );
+    show(appearance.effective(system_is_dark), cx);
     window.refresh();
 }
 
-pub fn cycle(window: &mut Window, cx: &mut App) {
-    cx.set_global(ChosenTheme);
-    let high_contrast = cx.try_global::<HighContrast>().is_some_and(|h| h.0);
-    if high_contrast {
-        cx.set_global(HighContrast(false));
-        Theme::change(ThemeMode::Light, Some(window), cx);
-    } else if Theme::global(cx).mode.is_dark() {
-        Theme::change(ThemeMode::Dark, Some(window), cx);
-        apply_high_contrast(cx);
-        cx.set_global(HighContrast(true));
-    } else {
-        Theme::change(ThemeMode::Dark, Some(window), cx);
+// A settings write that failed leaves the file as it was, so what is on screen goes back to it.
+pub fn revert_to_settings(cx: &mut App) {
+    let appearance = agent_settings::settings(cx).appearance;
+    show(appearance.effective(system_is_dark(cx)), cx);
+}
+
+pub fn choose(choice: ThemeChoice, cx: &mut App) {
+    show(choice, cx);
+    agent_settings::change(cx, move |settings| {
+        settings.appearance = settings.appearance.with_theme(choice);
+    });
+}
+
+pub fn cycle(cx: &mut App) {
+    let all = ThemeChoice::ALL;
+    let current = shown(cx);
+    let position = all.iter().position(|choice| *choice == current);
+    choose(all[position.map_or(0, |at| (at + 1) % all.len())], cx);
+}
+
+// Moving through the theme list applies each theme at once; confirming keeps the last one
+// and cancelling puts the original back.
+#[derive(Clone, Copy, Debug)]
+pub struct ThemePreview {
+    original: AppearanceSettings,
+    original_shown: ThemeChoice,
+    shown: ThemeChoice,
+}
+
+impl ThemePreview {
+    pub fn begin(original: AppearanceSettings, original_shown: ThemeChoice) -> ThemePreview {
+        ThemePreview {
+            original,
+            original_shown,
+            shown: original_shown,
+        }
     }
-    window.refresh();
+
+    pub fn original_shown(&self) -> ThemeChoice {
+        self.original_shown
+    }
+
+    pub fn highlight(&mut self, choice: ThemeChoice) -> Option<ThemeChoice> {
+        (choice != self.shown).then(|| {
+            self.shown = choice;
+            choice
+        })
+    }
+
+    pub fn cancel(&mut self) -> Option<ThemeChoice> {
+        self.highlight(self.original_shown)
+    }
+
+    pub fn keep(self, choice: ThemeChoice) -> AppearanceSettings {
+        self.original.with_theme(choice)
+    }
 }
 
 fn apply_high_contrast(cx: &mut App) {
@@ -103,4 +208,64 @@ fn apply_high_contrast(cx: &mut App) {
         colors.list_active = yellow.opacity(0.3);
         colors.danger = rgb(0xFF_6B_6B).into();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use zenkai_agent::preferences::{
+        AppearanceSettings, ColorMode, DarkTheme, LightTheme, ThemeChoice,
+    };
+
+    use super::ThemePreview;
+
+    const DARK: ThemeChoice = ThemeChoice::Dark(DarkTheme::ZenkaiDark);
+    const CONTRAST: ThemeChoice = ThemeChoice::Dark(DarkTheme::HighContrast);
+    const LIGHT: ThemeChoice = ThemeChoice::Light(LightTheme::ZenkaiLight);
+
+    fn preview_from_dark() -> ThemePreview {
+        let original = AppearanceSettings {
+            mode: ColorMode::Dark,
+            ..Default::default()
+        };
+        ThemePreview::begin(original, DARK)
+    }
+
+    #[test]
+    fn each_highlighted_theme_applies_once_and_a_repeat_is_ignored() {
+        let mut preview = preview_from_dark();
+        assert_eq!(preview.highlight(DARK), None);
+        assert_eq!(preview.highlight(LIGHT), Some(LIGHT));
+        assert_eq!(preview.highlight(LIGHT), None);
+        assert_eq!(preview.highlight(CONTRAST), Some(CONTRAST));
+    }
+
+    #[test]
+    fn cancelling_restores_the_theme_that_was_showing() {
+        let mut preview = preview_from_dark();
+        preview.highlight(LIGHT);
+        assert_eq!(preview.cancel(), Some(DARK));
+        assert_eq!(preview.cancel(), None);
+    }
+
+    #[test]
+    fn cancelling_without_moving_changes_nothing() {
+        assert_eq!(preview_from_dark().cancel(), None);
+    }
+
+    #[test]
+    fn keeping_the_highlighted_theme_selects_it_and_its_appearance() {
+        let mut preview = preview_from_dark();
+        preview.highlight(LIGHT);
+        let kept = preview.keep(LIGHT);
+        assert_eq!(kept.mode, ColorMode::Light);
+        assert_eq!(kept.effective(true), LIGHT);
+    }
+
+    #[test]
+    fn the_original_settings_are_untouched_until_the_choice_is_kept() {
+        let mut preview = preview_from_dark();
+        preview.highlight(CONTRAST);
+        assert_eq!(preview.original_shown(), DARK);
+        assert_eq!(preview.cancel(), Some(DARK));
+    }
 }
