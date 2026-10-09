@@ -11,6 +11,8 @@ use crate::files;
 use crate::spaces::{SpaceId, Spaces};
 
 mod restore;
+#[cfg(test)]
+mod session_property;
 mod spaces;
 #[cfg(test)]
 mod test_support;
