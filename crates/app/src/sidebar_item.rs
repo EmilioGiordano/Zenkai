@@ -52,7 +52,7 @@ fn link_meta(link: &Link) -> String {
     }
 }
 
-pub fn describe(entry: &Entry, active: bool) -> FileItem {
+pub fn describe(entry: Entry, active: bool) -> FileItem {
     let (meta, state) = match entry {
         Entry::Loaded(document) => {
             let count = document.sheets.len();
@@ -80,7 +80,7 @@ pub fn describe(entry: &Entry, active: bool) -> FileItem {
     FileItem {
         id: entry.id(),
         name: entry.name(),
-        place: format!("{folder} · {meta}"),
+        place: format!("{folder}, {meta}"),
         state,
         active,
     }
@@ -108,6 +108,7 @@ mod tests {
             view: ViewState::default(),
             size: None,
             status,
+            recovery_lost: false,
         }
     }
 
@@ -124,17 +125,17 @@ mod tests {
     fn a_not_loaded_link_says_so_with_its_size_and_a_hollow_state() {
         let mut waiting = link(LinkStatus::NotLoaded);
         waiting.size = Some(2 * 1024 * 1024);
-        let item = describe(&Entry::Link(waiting), false);
+        let item = describe(Entry::Link(&waiting), false);
         assert_eq!(item.state, FileState::NotLoaded);
-        assert_eq!(item.place, "q3 · not loaded, 2.0 MB");
+        assert_eq!(item.place, "q3, not loaded, 2.0 MB");
         assert_eq!(item.name, "sales.xlsx");
     }
 
     #[test]
     fn a_missing_file_says_not_found_in_words() {
-        let item = describe(&Entry::Link(link(LinkStatus::Missing)), true);
+        let item = describe(Entry::Link(&link(LinkStatus::Missing)), true);
         assert_eq!(item.state, FileState::Missing);
-        assert_eq!(item.place, "q3 · not found");
+        assert_eq!(item.place, "q3, not found");
         assert!(item.active);
     }
 
@@ -142,9 +143,9 @@ mod tests {
     fn a_loading_link_and_unsaved_work_are_both_named() {
         let mut loading = link(LinkStatus::Loading);
         loading.dirty = true;
-        let item = describe(&Entry::Link(loading), false);
+        let item = describe(Entry::Link(&loading), false);
         assert_eq!(item.state, FileState::Loading);
-        assert_eq!(item.place, "q3 · unsaved changes, loading…");
+        assert_eq!(item.place, "q3, unsaved changes, loading…");
     }
 
     #[test]
@@ -152,8 +153,8 @@ mod tests {
         let mut untitled = link(LinkStatus::NotLoaded);
         untitled.path = None;
         untitled.untitled = 3;
-        let item = describe(&Entry::Link(untitled), false);
+        let item = describe(Entry::Link(&untitled), false);
         assert_eq!(item.name, "Book3");
-        assert_eq!(item.place, "not saved · not loaded");
+        assert_eq!(item.place, "not saved, not loaded");
     }
 }

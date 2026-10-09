@@ -34,7 +34,7 @@ pub fn collect(documents: &Documents, recent: &[PathBuf]) -> Vec<Group> {
         .flat_map(|space| {
             documents.members(space.id).map(|entry| Hit {
                 label: entry.name(),
-                detail: format!("{} · {}", space.name, folder_of(entry)),
+                detail: format!("{}, {}", space.name, folder_of(entry)),
                 target: Target::Workbook(entry.id()),
             })
         })
@@ -79,7 +79,7 @@ pub fn collect(documents: &Documents, recent: &[PathBuf]) -> Vec<Group> {
     .collect()
 }
 
-fn folder_of(entry: &Entry) -> String {
+fn folder_of(entry: Entry) -> String {
     entry
         .path()
         .and_then(sidebar_item::folder_name)
@@ -128,7 +128,7 @@ mod tests {
         let headings: Vec<_> = groups.iter().map(|group| group.heading).collect();
         assert_eq!(headings, ["Workbooks", "Sheets"]);
         assert_eq!(labels(&groups[0]), ["Book1"]);
-        assert_eq!(groups[0].hits[0].detail, "Workbooks · not saved");
+        assert_eq!(groups[0].hits[0].detail, "Workbooks, not saved");
         assert_eq!(labels(&groups[1]), ["Sheet1"]);
         assert_eq!(groups[1].hits[0].detail, "Book1");
     }
@@ -148,7 +148,7 @@ mod tests {
         let groups = collect(&documents, &[]);
         let workbooks = &groups[0];
         assert_eq!(labels(workbooks), ["Book1", "sales.xlsx"]);
-        assert_eq!(workbooks.hits[1].detail, "Q3 close · data");
+        assert_eq!(workbooks.hits[1].detail, "Q3 close, data");
         let sheet_details: Vec<_> = groups[1]
             .hits
             .iter()

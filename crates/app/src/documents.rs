@@ -5,10 +5,14 @@ use zenkai_engine::{Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
 use crate::document::Document;
-use crate::entry::{Entry, Link, LinkStatus};
+use crate::entry::{Entry, Link, LinkStatus, Slot};
 use crate::files;
-use crate::session::{self, Session, SpaceRecord};
-use crate::spaces::{Neighbour, SpaceId, Spaces};
+use crate::spaces::{SpaceId, Spaces};
+
+mod restore;
+mod spaces;
+#[cfg(test)]
+mod test_support;
 
 const MAX_CLOSED: usize = 20;
 
@@ -32,11 +36,19 @@ struct Want {
     intent: Intent,
 }
 
-// The workbook on screen is always loaded (`active` only ever points at a loaded entry); the
-// rest may be links that load on activation. Closing the last entry opens a new blank.
+#[derive(Clone, Copy)]
+enum Side {
+    Before,
+    After,
+}
+
+// The workbook on screen is held apart from the rest, so there is always exactly one and it
+// is always loaded. The others, in tab order around it, may be links that load on activation.
+// Closing the last one opens a new blank.
 pub struct Documents {
-    entries: Vec<Entry>,
-    active: usize,
+    before: Vec<Slot>,
+    active: Box<Document>,
+    after: Vec<Slot>,
     wanted: Option<Want>,
     next_id: u64,
     next_untitled: u32,
@@ -82,19 +94,42 @@ impl Loaded {
     }
 }
 
+// Takes a loaded workbook out of the list; anything else stays where it is.
+fn take_loaded(slots: &mut Vec<Slot>, index: usize) -> Option<Box<Document>> {
+    if index >= slots.len() {
+        return None;
+    }
+    match slots.remove(index) {
+        Slot::Loaded(document) => Some(document),
+        other => {
+            slots.insert(index, other);
+            None
+        }
+    }
+}
+
 impl Documents {
     pub fn new(first: Workbook) -> Documents {
-        let mut documents = Documents {
-            entries: Vec::new(),
-            active: 0,
+        let spaces = Spaces::new();
+        let space = spaces.first();
+        let active = Box::new(Document::new(
+            WorkbookId(0),
+            space,
+            1,
+            first,
+            None,
+            Vec::new(),
+        ));
+        Documents {
+            before: Vec::new(),
+            active,
+            after: Vec::new(),
             wanted: None,
-            next_id: 0,
-            next_untitled: 1,
+            next_id: 1,
+            next_untitled: 2,
             closed: Vec::new(),
-            spaces: Spaces::new(),
-        };
-        documents.create(first);
-        documents
+            spaces,
+        }
     }
 
     // An untouched blank workbook gives way to the one opened, as in Excel.
@@ -118,29 +153,34 @@ impl Documents {
         unsupported: Vec<Unsupported>,
         replace_blank: bool,
     ) -> WorkbookId {
+        let space = self.active.space;
+        let document = Box::new(self.new_document(space, workbook, path, unsupported));
+        let id = document.id;
+        if replace_blank && self.active.is_pristine() {
+            self.active = document;
+        } else {
+            let old = std::mem::replace(&mut self.active, document);
+            self.before.push(Slot::Loaded(old));
+            self.before.append(&mut self.after);
+        }
+        self.wanted = None;
+        id
+    }
+
+    fn new_document(
+        &mut self,
+        space: SpaceId,
+        workbook: Workbook,
+        path: Option<PathBuf>,
+        unsupported: Vec<Unsupported>,
+    ) -> Document {
         let id = self.take_id();
         let untitled = if path.is_none() {
             self.take_untitled()
         } else {
             0
         };
-        let space = self
-            .entries
-            .get(self.active)
-            .map_or_else(|| self.spaces.first(), Entry::space);
-        let document = Document::new(id, space, untitled, workbook, path, unsupported);
-        let entry = Entry::Loaded(Box::new(document));
-        match self.entries.get(self.active) {
-            Some(Entry::Loaded(active)) if replace_blank && active.is_pristine() => {
-                self.entries[self.active] = entry;
-            }
-            _ => {
-                self.entries.push(entry);
-                self.active = self.entries.len() - 1;
-            }
-        }
-        self.wanted = None;
-        id
+        Document::new(id, space, untitled, workbook, path, unsupported)
     }
 
     fn take_id(&mut self) -> WorkbookId {
@@ -154,29 +194,48 @@ impl Documents {
     }
 
     pub fn active(&self) -> &Document {
-        match &self.entries[self.active] {
-            Entry::Loaded(document) => document,
-            Entry::Link(_) => unreachable!("the active entry is always loaded"),
-        }
+        &self.active
     }
 
     pub fn active_mut(&mut self) -> &mut Document {
-        match &mut self.entries[self.active] {
-            Entry::Loaded(document) => document,
-            Entry::Link(_) => unreachable!("the active entry is always loaded"),
-        }
+        &mut self.active
     }
 
     pub fn active_id(&self) -> WorkbookId {
-        self.active().id
+        self.active.id
     }
 
-    pub fn entry(&self, id: WorkbookId) -> Option<&Entry> {
-        self.entries.iter().find(|entry| entry.id() == id)
+    // Every workbook in tab order, the one on screen included.
+    pub fn entries(&self) -> impl Iterator<Item = Entry<'_>> {
+        self.before
+            .iter()
+            .map(Slot::as_entry)
+            .chain(std::iter::once(Entry::Loaded(&self.active)))
+            .chain(self.after.iter().map(Slot::as_entry))
     }
 
-    pub fn entry_mut(&mut self, id: WorkbookId) -> Option<&mut Entry> {
-        self.entries.iter_mut().find(|entry| entry.id() == id)
+    pub fn entry(&self, id: WorkbookId) -> Option<Entry<'_>> {
+        self.entries().find(|entry| entry.id() == id)
+    }
+
+    fn slot_mut(&mut self, id: WorkbookId) -> Option<SlotMut<'_>> {
+        if self.active.id == id {
+            return Some(SlotMut::Active(&mut self.active));
+        }
+        self.before
+            .iter_mut()
+            .chain(self.after.iter_mut())
+            .find(|slot| slot.id() == id)
+            .map(SlotMut::Other)
+    }
+
+    fn set_space(&mut self, id: WorkbookId, space: SpaceId) -> bool {
+        match self.slot_mut(id) {
+            Some(SlotMut::Active(document)) => document.space = space,
+            Some(SlotMut::Other(slot)) => slot.set_space(space),
+            None => return false,
+        }
+        true
     }
 
     pub fn get(&self, id: WorkbookId) -> Option<&Document> {
@@ -184,124 +243,119 @@ impl Documents {
     }
 
     pub fn get_mut(&mut self, id: WorkbookId) -> Option<&mut Document> {
-        self.entry_mut(id).and_then(Entry::loaded_mut)
+        match self.slot_mut(id)? {
+            SlotMut::Active(document) => Some(document),
+            SlotMut::Other(slot) => slot.loaded_mut(),
+        }
     }
 
-    pub fn entries(&self) -> &[Entry] {
-        &self.entries
+    fn link_mut(&mut self, id: WorkbookId) -> Option<&mut Link> {
+        match self.slot_mut(id)? {
+            SlotMut::Other(Slot::Link(link)) => Some(link),
+            _ => None,
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Document> {
-        self.entries.iter().filter_map(Entry::loaded)
+        self.entries().filter_map(Entry::loaded)
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Document> {
-        self.entries.iter_mut().filter_map(Entry::loaded_mut)
+        self.before
+            .iter_mut()
+            .filter_map(Slot::loaded_mut)
+            .chain(std::iter::once(&mut *self.active))
+            .chain(self.after.iter_mut().filter_map(Slot::loaded_mut))
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.before.len() + 1 + self.after.len()
     }
 
     pub fn position_of(&self, id: WorkbookId) -> usize {
-        self.entries
-            .iter()
+        self.entries()
             .position(|entry| entry.id() == id)
             .map_or(0, |index| index + 1)
     }
 
-    pub fn spaces(&self) -> &Spaces {
-        &self.spaces
-    }
-
-    pub fn members(&self, space: SpaceId) -> impl Iterator<Item = &Entry> {
-        self.entries
-            .iter()
-            .filter(move |entry| entry.space() == space)
-    }
-
-    pub fn add_space(&mut self, name: &str) -> SpaceId {
-        self.spaces.add(name)
-    }
-
-    pub fn rename_space(&mut self, id: SpaceId, name: &str) -> bool {
-        self.spaces.rename(id, name)
-    }
-
-    pub fn toggle_space(&mut self, id: SpaceId) {
-        self.spaces.toggle(id);
-    }
-
-    pub fn expand_space(&mut self, id: SpaceId, expanded: bool) {
-        self.spaces.expand(id, expanded);
-    }
-
-    // Its entries are never closed: they go to the neighbouring space.
-    pub fn delete_space(&mut self, id: SpaceId) -> bool {
-        let Some(heir) = self.spaces.remove(id) else {
-            return false;
-        };
-        self.entries
-            .iter_mut()
-            .filter(|entry| entry.space() == id)
-            .for_each(|entry| entry.set_space(heir));
-        true
-    }
-
-    pub fn move_to_space(&mut self, id: WorkbookId, space: SpaceId) -> bool {
-        if self.spaces.get(space).is_none() {
-            return false;
-        }
-        match self.entry_mut(id) {
-            Some(entry) => {
-                entry.set_space(space);
-                true
-            }
-            None => false,
-        }
-    }
-
-    pub fn shift_space(&mut self, id: WorkbookId, side: Neighbour) -> bool {
-        let Some(current) = self.entry(id).map(Entry::space) else {
-            return false;
-        };
-        match self.spaces.neighbour(current, side) {
-            Some(target) => self.move_to_space(id, target),
-            None => false,
-        }
+    // The edit counts of the workbooks holding work that exists only in memory.
+    pub fn unsaved_edits(&self) -> Vec<(WorkbookId, u64)> {
+        self.iter()
+            .filter(|document| document.needs_recovery())
+            .map(|document| (document.id, document.edit_count()))
+            .collect()
     }
 
     pub fn has_path(&self, path: &Path) -> bool {
-        self.entries.iter().any(|entry| entry.path() == Some(path))
+        self.entries().any(|entry| entry.path() == Some(path))
     }
 
+    // Spellings that differ only by case, separators or `.` and `..` are the same file; the
+    // check never touches the disk, so a slow or offline share cannot stall the window.
     pub fn find_by_path(&self, path: &Path) -> Option<WorkbookId> {
-        self.entries
-            .iter()
+        self.entries()
             .find(|entry| {
                 entry
                     .path()
-                    .is_some_and(|open| open == path || files::same_file(open, path))
+                    .is_some_and(|open| files::same_path(open, path))
             })
             .map(Entry::id)
     }
 
     // Only a loaded workbook can be on screen; a link asks for loading with `want`.
     pub fn activate(&mut self, id: WorkbookId) -> bool {
-        match self
-            .entries
-            .iter()
-            .position(|entry| entry.id() == id && entry.loaded().is_some())
-        {
-            Some(index) => {
-                self.active_mut().last_used = Instant::now();
-                self.active = index;
-                self.active_mut().last_used = Instant::now();
-                self.wanted = None;
-                true
-            }
-            None => false,
+        if self.active.id == id {
+            self.active.last_used = Instant::now();
+            self.wanted = None;
+            return true;
         }
+        if let Some(index) = self
+            .before
+            .iter()
+            .position(|slot| slot.id() == id && slot.is_loaded())
+            && let Some(target) = take_loaded(&mut self.before, index)
+        {
+            self.promote(Side::Before, index, target, true);
+            return true;
+        }
+        if let Some(index) = self
+            .after
+            .iter()
+            .position(|slot| slot.id() == id && slot.is_loaded())
+            && let Some(target) = take_loaded(&mut self.after, index)
+        {
+            self.promote(Side::After, index, target, true);
+            return true;
+        }
+        false
+    }
+
+    // `target` was already taken out of `side` at `index`; it takes the screen and the
+    // workbook that was on screen goes back in its place, unless it is dropped.
+    fn promote(&mut self, side: Side, index: usize, target: Box<Document>, keep_old: bool) {
+        let mut target = target;
+        target.last_used = Instant::now();
+        let mut old = std::mem::replace(&mut self.active, target);
+        old.last_used = Instant::now();
+        match side {
+            Side::Before => {
+                let mut tail = self.before.split_off(index);
+                if keep_old {
+                    tail.push(Slot::Loaded(old));
+                }
+                tail.append(&mut self.after);
+                self.after = tail;
+            }
+            Side::After => {
+                let rest = self.after.split_off(index);
+                if keep_old {
+                    self.before.push(Slot::Loaded(old));
+                }
+                self.before.append(&mut self.after);
+                self.after = rest;
+            }
+        }
+        self.wanted = None;
     }
 
     pub fn want(&mut self, id: WorkbookId, intent: Intent) {
@@ -317,20 +371,19 @@ impl Documents {
     // Stepping starts from the workbook being waited for, so repeated presses keep moving
     // while a link is still loading.
     pub fn step(&self, step: Step) -> WorkbookId {
-        let count = self.entries.len();
+        let ids: Vec<WorkbookId> = self.entries().map(Entry::id).collect();
         let from = self.wanted().unwrap_or_else(|| self.active_id());
-        let index = self.position_of(from).saturating_sub(1);
+        let index = ids.iter().position(|id| *id == from).unwrap_or(0);
+        let count = ids.len();
         let target = match step {
             Step::Next => (index + 1) % count,
             Step::Previous => (index + count - 1) % count,
         };
-        self.entries[target].id()
+        ids.get(target).copied().unwrap_or(from)
     }
 
     pub fn start_loading(&mut self, id: WorkbookId) -> Option<Link> {
-        let Entry::Link(link) = self.entry_mut(id)? else {
-            return None;
-        };
+        let link = self.link_mut(id)?;
         if link.status == LinkStatus::Loading {
             return None;
         }
@@ -339,7 +392,7 @@ impl Documents {
     }
 
     pub fn set_link_status(&mut self, id: WorkbookId, status: LinkStatus) {
-        if let Some(Entry::Link(link)) = self.entry_mut(id) {
+        if let Some(link) = self.link_mut(id) {
             link.status = status;
         }
         if status != LinkStatus::Loading && self.wanted() == Some(id) {
@@ -348,7 +401,7 @@ impl Documents {
     }
 
     pub fn set_link_size(&mut self, id: WorkbookId, size: Option<u64>) {
-        if let Some(Entry::Link(link)) = self.entry_mut(id) {
+        if let Some(link) = self.link_mut(id) {
             link.size = size;
         }
     }
@@ -357,7 +410,7 @@ impl Documents {
         match self.wanted {
             Some(Want { id: wanted, intent }) if wanted == id => match intent {
                 Intent::Switch => true,
-                Intent::Restore => self.active().is_pristine(),
+                Intent::Restore => self.active.is_pristine(),
             },
             _ => false,
         }
@@ -367,81 +420,115 @@ impl Documents {
     // when it is what the user waits for, dropping an untouched startup blank.
     pub fn install(&mut self, loaded: Loaded) -> Installed {
         let id = loaded.id;
-        let Some(index) = self.entries.iter().position(|entry| entry.id() == id) else {
-            return Installed::Gone;
-        };
-        let Entry::Link(link) = &self.entries[index] else {
-            return Installed::Gone;
-        };
-        let document = loaded.into_document(link);
         let on_screen = self.shows_when_loaded(id);
-        self.entries[index] = Entry::Loaded(Box::new(document));
+        let blank = self.active.is_pristine();
+        let found = self
+            .before
+            .iter()
+            .position(|slot| slot.id() == id)
+            .map(|index| (Side::Before, index))
+            .or_else(|| {
+                self.after
+                    .iter()
+                    .position(|slot| slot.id() == id)
+                    .map(|index| (Side::After, index))
+            });
+        let Some((side, index)) = found else {
+            return Installed::Gone;
+        };
+        let slots = match side {
+            Side::Before => &mut self.before,
+            Side::After => &mut self.after,
+        };
+        let Some(Slot::Link(link)) = slots.get(index) else {
+            return Installed::Gone;
+        };
+        let document = Box::new(loaded.into_document(link));
         if !on_screen {
+            slots[index] = Slot::Loaded(document);
             return Installed::Background;
         }
-        let blank = self.active;
-        self.active = index;
-        self.wanted = None;
-        if self.entries[blank]
-            .loaded()
-            .is_some_and(Document::is_pristine)
-        {
-            self.entries.remove(blank);
-            if blank < self.active {
-                self.active -= 1;
-            }
-        }
+        slots.remove(index);
+        self.promote(side, index, document, !blank);
         Installed::OnScreen
     }
 
     // A clean workbook off screen goes back to being a link; its saved view and sheet stay.
     // Undo history is dropped with it.
     pub fn unload(&mut self, id: WorkbookId) -> bool {
-        if id == self.active_id() || self.wanted() == Some(id) {
+        if self.wanted() == Some(id) {
             return false;
         }
-        let Some(entry) = self.entry_mut(id) else {
+        let Some(SlotMut::Other(slot)) = self.slot_mut(id) else {
             return false;
         };
-        match entry {
-            Entry::Loaded(document) if document.can_unload() => {
-                *entry = Entry::Link(document.to_link());
+        match slot {
+            Slot::Loaded(document) if document.can_unload() => {
+                *slot = Slot::Link(document.to_link());
                 true
             }
             _ => false,
         }
     }
 
-    // The nearest loaded neighbour takes over: to the right first, then to the left.
+    // The nearest loaded neighbour takes over, to the right first, so the screen never lands
+    // on a link.
     pub fn close(&mut self, id: WorkbookId, empty: impl FnOnce() -> Workbook) -> bool {
-        let Some(index) = self.entries.iter().position(|entry| entry.id() == id) else {
-            return false;
+        if self.wanted() == Some(id) {
+            self.wanted = None;
+        }
+        if self.active.id != id {
+            let removed = [&mut self.before, &mut self.after]
+                .into_iter()
+                .find_map(|slots| {
+                    let index = slots.iter().position(|slot| slot.id() == id)?;
+                    Some(slots.remove(index))
+                });
+            return match removed {
+                Some(slot) => {
+                    self.remember(slot.as_entry().path());
+                    true
+                }
+                None => false,
+            };
+        }
+        let next_right = self.after.iter().position(Slot::is_loaded);
+        let next_left = self.before.iter().rposition(Slot::is_loaded);
+        let closed = if let Some(index) = next_right
+            && let Some(target) = take_loaded(&mut self.after, index)
+        {
+            let closed = std::mem::replace(&mut self.active, target);
+            let rest = self.after.split_off(index);
+            self.before.append(&mut self.after);
+            self.after = rest;
+            closed
+        } else if let Some(index) = next_left
+            && let Some(target) = take_loaded(&mut self.before, index)
+        {
+            let closed = std::mem::replace(&mut self.active, target);
+            let mut tail = self.before.split_off(index);
+            tail.append(&mut self.after);
+            self.after = tail;
+            closed
+        } else {
+            let space = self.active.space;
+            let blank = Box::new(self.new_document(space, empty(), None, Vec::new()));
+            let closed = std::mem::replace(&mut self.active, blank);
+            self.before.append(&mut self.after);
+            closed
         };
-        let closed = self.entries.remove(index);
-        if let Some(path) = closed.path() {
+        self.remember(closed.path.as_deref());
+        true
+    }
+
+    fn remember(&mut self, path: Option<&Path>) {
+        if let Some(path) = path {
             self.closed.retain(|known| known != path);
             self.closed.push(path.to_path_buf());
             if self.closed.len() > MAX_CLOSED {
                 self.closed.remove(0);
             }
         }
-        if self.wanted() == Some(id) {
-            self.wanted = None;
-        }
-        if index < self.active {
-            self.active -= 1;
-        } else if index == self.active {
-            let loaded = |i: &usize| self.entries[*i].loaded().is_some();
-            let right = (index..self.entries.len()).find(loaded);
-            let left = (0..index).rev().find(loaded);
-            match right.or(left) {
-                Some(next) => self.active = next,
-                None => {
-                    self.create(empty());
-                }
-            }
-        }
-        true
     }
 
     pub fn take_reopenable(&mut self) -> Option<PathBuf> {
@@ -452,101 +539,17 @@ impl Documents {
         }
         None
     }
+}
 
-    // The startup blank joins the first space and stays on screen until the active workbook
-    // has loaded.
-    pub fn restore(
-        &mut self,
-        session: &Session,
-        recovery_directory: Option<&Path>,
-    ) -> Option<WorkbookId> {
-        let (first, others) = session.spaces.split_first()?;
-        self.spaces = Spaces::new();
-        let first_space = self.spaces.first();
-        self.spaces.rename(first_space, &first.name);
-        let mut groups = vec![(first_space, first)];
-        groups.extend(
-            others
-                .iter()
-                .map(|record| (self.spaces.add(&record.name), record)),
-        );
-        let mut active = None;
-        for (space, record) in groups {
-            self.spaces.expand(space, !record.collapsed);
-            for file in &record.files {
-                let id = self.take_id();
-                self.next_untitled = self.next_untitled.max(file.untitled + 1);
-                let link = session::link_of(file, id, space, recovery_directory);
-                self.entries.push(Entry::Link(link));
-                if file.active {
-                    active = Some(id);
-                }
-            }
-        }
-        if let Some(blank) = self.entries.get_mut(self.active) {
-            blank.set_space(first_space);
-        }
-        if let Some(id) = active {
-            self.want(id, Intent::Restore);
-        }
-        active
-    }
-
-    pub fn snapshot(
-        &self,
-        sidebar_visible: bool,
-        recovery_file: impl Fn(WorkbookId) -> PathBuf,
-    ) -> Session {
-        let active = self.wanted().unwrap_or_else(|| self.active_id());
-        let spaces = self
-            .spaces
-            .iter()
-            .map(|space| SpaceRecord {
-                name: space.name.clone(),
-                collapsed: space.collapsed,
-                files: self
-                    .members(space.id)
-                    .filter(|entry| !entry.loaded().is_some_and(Document::is_pristine))
-                    .map(|entry| {
-                        let mut link = entry.to_link();
-                        if entry.loaded().is_some_and(Document::needs_recovery) {
-                            link.recovery = Some(recovery_file(link.id));
-                        }
-                        session::record_of(&link, link.id == active)
-                    })
-                    .collect(),
-            })
-            .collect();
-        Session::new(sidebar_visible, spaces)
-    }
+enum SlotMut<'a> {
+    Active(&'a mut Document),
+    Other(&'a mut Slot),
 }
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::*;
     use super::*;
-    use crate::session::{FileRecord, ViewRecord};
-
-    fn blank() -> Workbook {
-        Workbook::new_empty().unwrap()
-    }
-
-    fn documents() -> Documents {
-        Documents::new(blank())
-    }
-
-    fn busy() -> Documents {
-        let mut documents = documents();
-        documents.active_mut().dirty = true;
-        documents
-    }
-
-    fn open_file(documents: &mut Documents, name: &str) -> WorkbookId {
-        documents.open(blank(), Some(PathBuf::from(name)), Vec::new())
-    }
-
-    fn names(documents: &Documents) -> Vec<String> {
-        documents.entries().iter().map(Entry::name).collect()
-    }
 
     #[test]
     fn starts_with_one_active_blank_workbook() {
@@ -611,6 +614,17 @@ mod tests {
     }
 
     #[test]
+    fn activating_keeps_the_tab_order() {
+        let mut documents = busy();
+        let first = documents.active_id();
+        open_file(&mut documents, "a.xlsx");
+        open_file(&mut documents, "b.xlsx");
+        documents.activate(first);
+        assert_eq!(names(&documents), ["Book1", "a.xlsx", "b.xlsx"]);
+        assert_eq!(documents.active().name(), "Book1");
+    }
+
+    #[test]
     fn next_and_previous_wrap_around() {
         let mut documents = busy();
         let first = documents.active_id();
@@ -634,6 +648,7 @@ mod tests {
         documents.activate(second);
         documents.close(second, blank);
         assert_eq!(documents.active_id(), third);
+        assert_eq!(names(&documents), ["Book1", "b.xlsx"]);
         documents.close(third, blank);
         assert_eq!(documents.active_id(), first);
     }
@@ -711,272 +726,21 @@ mod tests {
         assert!(!background.has_pending());
     }
 
-    fn member_names(documents: &Documents, space: SpaceId) -> Vec<String> {
-        documents.members(space).map(Entry::name).collect()
-    }
-
     #[test]
-    fn a_new_document_joins_the_space_of_the_one_before_it() {
+    fn an_edit_during_closing_shows_in_the_unsaved_edit_counts() {
         let mut documents = busy();
-        let second = documents.add_space("Q3");
-        let first = documents.active_id();
-        documents.move_to_space(first, second);
-        open_file(&mut documents, "a.xlsx");
-        assert_eq!(member_names(&documents, second), ["Book1", "a.xlsx"]);
+        let before = documents.unsaved_edits();
+        assert_eq!(before, [(documents.active_id(), 0)]);
+        documents.active_mut().queue(Box::new(|_| Ok(())));
+        assert_ne!(documents.unsaved_edits(), before);
     }
 
     #[test]
-    fn moving_changes_the_space_without_touching_the_order_of_documents() {
-        let mut documents = busy();
-        let q3 = documents.add_space("Q3");
-        let a = open_file(&mut documents, "a.xlsx");
-        open_file(&mut documents, "b.xlsx");
-        assert!(documents.move_to_space(a, q3));
-        assert_eq!(member_names(&documents, q3), ["a.xlsx"]);
-        assert_eq!(names(&documents), ["Book1", "a.xlsx", "b.xlsx"]);
-        assert!(!documents.move_to_space(a, SpaceId(99)));
-        assert!(!documents.move_to_space(WorkbookId(99), q3));
-    }
-
-    #[test]
-    fn shifting_moves_to_the_neighbouring_space_and_stops_at_the_ends() {
+    fn a_workbook_that_becomes_dirty_shows_in_the_unsaved_edit_counts() {
         let mut documents = documents();
-        let first = documents.spaces().first();
-        let second = documents.add_space("Q3");
-        let id = documents.active_id();
-        assert!(!documents.shift_space(id, Neighbour::Previous));
-        assert!(documents.shift_space(id, Neighbour::Next));
-        assert_eq!(documents.active().space, second);
-        assert!(!documents.shift_space(id, Neighbour::Next));
-        assert!(documents.shift_space(id, Neighbour::Previous));
-        assert_eq!(documents.active().space, first);
-    }
-
-    #[test]
-    fn deleting_a_space_keeps_its_documents_in_the_neighbour() {
-        let mut documents = documents();
-        let first = documents.spaces().first();
-        let second = documents.add_space("Q3");
-        let id = documents.active_id();
-        documents.move_to_space(id, second);
-        assert!(documents.delete_space(second));
-        assert_eq!(documents.active().space, first);
-        assert_eq!(documents.len(), 1);
-        assert!(!documents.delete_space(first));
-    }
-
-    fn file(path: Option<&str>, active: bool) -> FileRecord {
-        FileRecord {
-            path: path.map(str::to_string),
-            recovery: None,
-            untitled: if path.is_none() { 3 } else { 0 },
-            dirty: false,
-            read_only: false,
-            unsupported: Vec::new(),
-            active,
-            sheet: 1,
-            view: ViewRecord {
-                active_row: 9,
-                active_col: 2,
-                corner_row: 9,
-                corner_col: 2,
-                top: 5,
-                left: 0,
-            },
-        }
-    }
-
-    fn session() -> Session {
-        Session::new(
-            true,
-            vec![
-                SpaceRecord {
-                    name: "Q3".to_string(),
-                    collapsed: false,
-                    files: vec![file(Some("a.xlsx"), false), file(Some("gone.xlsx"), true)],
-                },
-                SpaceRecord {
-                    name: "Suppliers".to_string(),
-                    collapsed: true,
-                    files: vec![file(None, false)],
-                },
-            ],
-        )
-    }
-
-    #[test]
-    fn restoring_lists_every_file_as_a_link_in_its_space_and_returns_the_active_one() {
-        let mut documents = documents();
-        let active = documents.restore(&session(), None).unwrap();
-        assert_eq!(documents.len(), 4);
-        let spaces: Vec<_> = documents.spaces().iter().cloned().collect();
-        assert_eq!(spaces.len(), 2);
-        assert_eq!(spaces[0].name, "Q3");
-        assert!(spaces[1].collapsed);
-        assert_eq!(
-            member_names(&documents, spaces[0].id),
-            ["Book1", "a.xlsx", "gone.xlsx"]
-        );
-        assert_eq!(member_names(&documents, spaces[1].id), ["Book3"]);
-        assert_eq!(documents.entry(active).unwrap().name(), "gone.xlsx");
-        assert!(documents.entry(active).unwrap().loaded().is_none());
-        assert_eq!(documents.active().name(), "Book1");
-    }
-
-    #[test]
-    fn untitled_numbers_continue_after_the_restored_ones() {
-        let mut documents = documents();
-        documents.restore(&session(), None);
+        assert!(documents.unsaved_edits().is_empty());
         documents.active_mut().dirty = true;
-        documents.create(blank());
-        assert_eq!(documents.active().name(), "Book4");
-    }
-
-    #[test]
-    fn an_empty_session_changes_nothing() {
-        let mut documents = documents();
-        let empty = Session::new(false, Vec::new());
-        assert_eq!(documents.restore(&empty, None), None);
-        assert_eq!(documents.len(), 1);
-    }
-
-    #[test]
-    fn the_snapshot_keeps_links_that_never_loaded_and_the_missing_ones() {
-        let mut documents = documents();
-        documents.restore(&session(), None);
-        let missing = documents.find_by_path(Path::new("a.xlsx")).unwrap();
-        documents.set_link_status(missing, LinkStatus::Missing);
-        let snapshot = documents.snapshot(true, |_| PathBuf::new());
-        let files: Vec<_> = snapshot
-            .spaces
-            .iter()
-            .flat_map(|space| space.files.iter().map(|file| file.path.clone()))
-            .collect();
-        assert_eq!(
-            files,
-            [
-                Some("a.xlsx".to_string()),
-                Some("gone.xlsx".to_string()),
-                None
-            ]
-        );
-        assert!(snapshot.spaces[0].files[1].active);
-    }
-
-    #[test]
-    fn the_snapshot_points_unsaved_work_at_its_recovery_copy() {
-        let mut documents = documents();
-        documents.active_mut().dirty = true;
-        let snapshot =
-            documents.snapshot(false, |id| PathBuf::from(format!("recovery/{}.xlsx", id.0)));
-        let record = &snapshot.spaces[0].files[0];
-        assert_eq!(record.recovery.as_deref(), Some("0.xlsx"));
-        assert!(record.dirty);
-    }
-
-    fn loaded(id: WorkbookId) -> Loaded {
-        Loaded {
-            id,
-            workbook: blank(),
-            unsupported: Vec::new(),
-            read_only: false,
-            from_recovery: false,
-        }
-    }
-
-    #[test]
-    fn a_restored_active_workbook_replaces_the_untouched_blank_when_it_loads() {
-        let mut documents = documents();
-        let active = documents.restore(&session(), None).unwrap();
-        documents.want(active, Intent::Restore);
-        assert!(matches!(
-            documents.install(loaded(active)),
-            Installed::OnScreen
-        ));
-        assert_eq!(documents.active_id(), active);
-        assert_eq!(documents.len(), 3);
-        assert_eq!(documents.active().sheet, SheetId(0));
-        assert_eq!(documents.active().view.selection.active.row.get(), 9);
-    }
-
-    #[test]
-    fn a_workbook_loaded_while_the_user_works_elsewhere_stays_in_the_background() {
-        let mut documents = documents();
-        let active = documents.restore(&session(), None).unwrap();
-        documents.want(active, Intent::Restore);
-        documents.active_mut().dirty = true;
-        assert!(matches!(
-            documents.install(loaded(active)),
-            Installed::Background
-        ));
-        assert_eq!(documents.active().name(), "Book1");
-        assert!(documents.get(active).is_some());
-    }
-
-    #[test]
-    fn a_switch_made_during_a_load_overrides_the_restored_active_workbook() {
-        let mut documents = documents();
-        let restored = documents.restore(&session(), None).unwrap();
-        documents.want(restored, Intent::Restore);
-        let other = documents.find_by_path(Path::new("a.xlsx")).unwrap();
-        documents.want(other, Intent::Switch);
-        assert!(matches!(
-            documents.install(loaded(restored)),
-            Installed::Background
-        ));
-        assert!(matches!(
-            documents.install(loaded(other)),
-            Installed::OnScreen
-        ));
-        assert_eq!(documents.active_id(), other);
-    }
-
-    #[test]
-    fn stepping_starts_from_the_workbook_being_waited_for() {
-        let mut documents = busy();
-        documents.restore(&session(), None);
-        let a = documents.find_by_path(Path::new("a.xlsx")).unwrap();
-        let gone = documents.find_by_path(Path::new("gone.xlsx")).unwrap();
-        documents.want(a, Intent::Switch);
-        assert_eq!(documents.step(Step::Next), gone);
-    }
-
-    #[test]
-    fn closing_the_active_workbook_never_lands_on_a_link() {
-        let mut documents = busy();
-        let first = documents.active_id();
-        documents.restore(&session(), None);
-        let a = documents.find_by_path(Path::new("a.xlsx")).unwrap();
-        documents.close(first, blank);
-        assert!(documents.entry(a).unwrap().loaded().is_none());
-        assert_eq!(documents.active().name(), "Book4");
-    }
-
-    #[test]
-    fn a_dirty_restored_workbook_keeps_its_save_guard() {
-        let mut record = file(Some("a.xlsx"), true);
-        record.dirty = true;
-        record.unsupported = vec!["charts".to_string()];
-        let session = Session::new(
-            false,
-            vec![SpaceRecord {
-                name: "Q3".to_string(),
-                collapsed: false,
-                files: vec![record],
-            }],
-        );
-        let mut documents = documents();
-        let id = documents
-            .restore(&session, Some(Path::new("recovery")))
-            .unwrap();
-        documents.want(id, Intent::Restore);
-        let mut recovered = loaded(id);
-        recovered.from_recovery = true;
-        documents.install(recovered);
-        let document = documents.active();
-        assert!(document.dirty);
-        assert_eq!(document.unsupported, [Unsupported::Charts]);
-        assert_eq!(document.path.as_deref(), Some(Path::new("a.xlsx")));
+        assert_eq!(documents.unsaved_edits().len(), 1);
     }
 
     #[test]
@@ -984,7 +748,6 @@ mod tests {
         let mut documents = documents();
         let a = open_file(&mut documents, "a.xlsx");
         documents.active_mut().view.top = zenkai_types::RowIdx::clamped(40);
-        documents.active_mut().sheet = SheetId(0);
         let b = open_file(&mut documents, "b.xlsx");
         assert!(documents.unload(a));
         assert!(documents.entry(a).unwrap().loaded().is_none());
@@ -1040,14 +803,6 @@ mod tests {
             documents.active().path.as_deref(),
             Some(Path::new("a.xlsx"))
         );
-    }
-
-    #[test]
-    fn closing_a_link_remembers_its_path_for_reopening() {
-        let mut documents = documents();
-        documents.restore(&session(), None);
-        let a = documents.find_by_path(Path::new("a.xlsx")).unwrap();
-        documents.close(a, blank);
-        assert_eq!(documents.take_reopenable(), Some(PathBuf::from("a.xlsx")));
+        assert_eq!(names(&documents), ["a.xlsx", "b.xlsx"]);
     }
 }

@@ -29,11 +29,8 @@ pub struct Link {
     pub view: ViewState,
     pub size: Option<u64>,
     pub status: LinkStatus,
-}
-
-pub enum Entry {
-    Loaded(Box<Document>),
-    Link(Link),
+    // The session pointed at a recovery copy that could not be trusted or found.
+    pub recovery_lost: bool,
 }
 
 pub fn display_name(path: Option<&Path>, untitled: u32) -> String {
@@ -49,64 +46,94 @@ impl Link {
     }
 }
 
-impl Entry {
+// What the list stores for a workbook that is not on screen.
+pub enum Slot {
+    Loaded(Box<Document>),
+    Link(Link),
+}
+
+// A borrowed look at any workbook of the list, on screen or not.
+#[derive(Clone, Copy)]
+pub enum Entry<'a> {
+    Loaded(&'a Document),
+    Link(&'a Link),
+}
+
+impl Slot {
+    pub fn as_entry(&self) -> Entry<'_> {
+        match self {
+            Slot::Loaded(document) => Entry::Loaded(document),
+            Slot::Link(link) => Entry::Link(link),
+        }
+    }
+
     pub fn id(&self) -> WorkbookId {
+        self.as_entry().id()
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        matches!(self, Slot::Loaded(_))
+    }
+
+    pub fn set_space(&mut self, space: SpaceId) {
+        match self {
+            Slot::Loaded(document) => document.space = space,
+            Slot::Link(link) => link.space = space,
+        }
+    }
+
+    pub fn loaded_mut(&mut self) -> Option<&mut Document> {
+        match self {
+            Slot::Loaded(document) => Some(document),
+            Slot::Link(_) => None,
+        }
+    }
+}
+
+impl<'a> Entry<'a> {
+    pub fn id(self) -> WorkbookId {
         match self {
             Entry::Loaded(document) => document.id,
             Entry::Link(link) => link.id,
         }
     }
 
-    pub fn space(&self) -> SpaceId {
+    pub fn space(self) -> SpaceId {
         match self {
             Entry::Loaded(document) => document.space,
             Entry::Link(link) => link.space,
         }
     }
 
-    pub fn set_space(&mut self, space: SpaceId) {
-        match self {
-            Entry::Loaded(document) => document.space = space,
-            Entry::Link(link) => link.space = space,
-        }
-    }
-
-    pub fn path(&self) -> Option<&Path> {
+    pub fn path(self) -> Option<&'a Path> {
         match self {
             Entry::Loaded(document) => document.path.as_deref(),
             Entry::Link(link) => link.path.as_deref(),
         }
     }
 
-    pub fn dirty(&self) -> bool {
+    pub fn dirty(self) -> bool {
         match self {
             Entry::Loaded(document) => document.dirty,
             Entry::Link(link) => link.dirty,
         }
     }
 
-    pub fn name(&self) -> String {
+    pub fn name(self) -> String {
         match self {
             Entry::Loaded(document) => document.name(),
             Entry::Link(link) => link.name(),
         }
     }
 
-    pub fn loaded(&self) -> Option<&Document> {
+    pub fn loaded(self) -> Option<&'a Document> {
         match self {
             Entry::Loaded(document) => Some(document),
             Entry::Link(_) => None,
         }
     }
 
-    pub fn loaded_mut(&mut self) -> Option<&mut Document> {
-        match self {
-            Entry::Loaded(document) => Some(document),
-            Entry::Link(_) => None,
-        }
-    }
-
-    pub fn to_link(&self) -> Link {
+    pub fn to_link(self) -> Link {
         match self {
             Entry::Loaded(document) => document.to_link(),
             Entry::Link(link) => link.clone(),
@@ -129,6 +156,7 @@ impl Document {
             view: self.view,
             size: None,
             status: LinkStatus::NotLoaded,
+            recovery_lost: false,
         }
     }
 
