@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
@@ -20,6 +20,8 @@ use crate::agent_routing;
 use crate::agent_settings::{AgentConfig, BridgeStatus};
 use crate::document::{self, Document};
 
+const APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const APPROVAL_CHECK: Duration = Duration::from_secs(1);
 const READ_WAIT_STEP: Duration = Duration::from_millis(20);
 const READ_WAIT_STEPS: u32 = 1_500;
 
@@ -32,6 +34,8 @@ pub(super) enum Decision {
 pub(super) struct PendingWrite {
     call: ToolCall,
     plan: PlannedWrite,
+    serial: u64,
+    asked_at: Instant,
     id: WorkbookId,
     generation: u64,
     focus: FocusHandle,
@@ -76,6 +80,7 @@ pub(super) struct AgentLink {
     endpoint: ToolEndpoint,
     bridge: BridgeState,
     pending: Option<PendingWrite>,
+    next_serial: u64,
 }
 
 fn endpoint_file() -> Option<PathBuf> {
@@ -101,6 +106,7 @@ impl Workspace {
             endpoint,
             bridge: BridgeState::Off,
             pending: None,
+            next_serial: 0,
         }
     }
 
@@ -251,16 +257,61 @@ impl Workspace {
         };
         let focus = cx.focus_handle();
         let return_focus = self.take_focus_for_bar(&focus, window, cx);
+        let serial = self.agent.next_serial;
+        self.agent.next_serial += 1;
         self.agent.pending = Some(PendingWrite {
             call,
             plan,
+            serial,
+            asked_at: Instant::now(),
             id,
             generation,
             focus,
             return_focus,
         });
         self.sync_pending_highlight(cx);
+        self.watch_pending_approval(serial, window, cx);
         cx.notify();
+    }
+
+    // A client that disconnected or gave up, or a user who never answers, must not leave
+    // the approval slot taken: every later write would be refused with nobody to clear it.
+    fn watch_pending_approval(&mut self, serial: u64, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(APPROVAL_CHECK).await;
+                let finished = this.update_in(cx, |this, window, cx| {
+                    let Some(pending) = this.agent.pending.as_ref() else {
+                        return true;
+                    };
+                    if pending.serial != serial {
+                        return true;
+                    }
+                    let timed_out = pending.asked_at.elapsed() >= APPROVAL_TIMEOUT;
+                    if !timed_out && !pending.call.is_abandoned() {
+                        return false;
+                    }
+                    if let Some(pending) = this.agent.pending.take() {
+                        if timed_out {
+                            pending.call.respond(Err(ToolError::ApprovalTimedOut));
+                        }
+                        this.release_focus_from_bar(
+                            &pending.focus,
+                            pending.return_focus.clone(),
+                            window,
+                            cx,
+                        );
+                        this.sync_pending_highlight(cx);
+                        cx.notify();
+                    }
+                    true
+                });
+                if !matches!(finished, Ok(false)) {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn apply_agent_write(

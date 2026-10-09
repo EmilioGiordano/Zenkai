@@ -18,6 +18,11 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
+    // The client closed the connection or gave up while this call waited for the user.
+    pub fn is_abandoned(&self) -> bool {
+        self.reply.is_closed()
+    }
+
     pub fn respond(self, result: ToolResult) {
         if self.reply.try_send(result).is_err() {
             tracing::debug!("the tool caller stopped waiting before the reply");
@@ -52,4 +57,22 @@ impl ToolEndpoint {
 pub fn channel() -> (ToolEndpoint, Receiver<ToolCall>) {
     let (calls, received) = async_channel::bounded(QUEUED_CALLS);
     (ToolEndpoint { calls }, received)
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_lite::future::{block_on, poll_once};
+
+    use super::*;
+
+    #[test]
+    fn a_call_whose_caller_went_away_is_abandoned() {
+        let (endpoint, calls) = channel();
+        let mut waiting = Box::pin(endpoint.call(ToolRequest::ListWorkbooks));
+        assert!(block_on(poll_once(&mut waiting)).is_none());
+        let call = calls.try_recv().unwrap();
+        assert!(!call.is_abandoned());
+        drop(waiting);
+        assert!(call.is_abandoned());
+    }
 }

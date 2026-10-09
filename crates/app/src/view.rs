@@ -3159,6 +3159,7 @@ impl Render for Workspace {
                 this.decide_agent_change(Decision::Deny, window, cx)
             }))
             .child(self.render_title_bar(cx))
+            .children(self.render_agent_approval(cx))
             .child(
                 h_flex()
                     .flex_1()
@@ -3173,7 +3174,6 @@ impl Render for Workspace {
                             .child(self.render_formula_bar(cx))
                             .children(self.render_held_settings(cx))
                             .children(self.render_find(cx))
-                            .children(self.render_agent_approval(cx))
                             .child(
                                 h_flex()
                                     .flex_1()

@@ -135,6 +135,7 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
         CommandGroup::new().label("Agents").items([
             item("Settings…", OpenSettings),
             item("Show the change an agent asks to make", ShowAgentChange),
+            item("Agent: Deny pending change", DenyAgentChange),
             item("Detect installed agents", DetectAgents),
             item("Add the Claude agent", AddClaudeAgent),
             item("Add the Gemini CLI agent", AddGeminiAgent),

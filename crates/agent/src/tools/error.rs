@@ -70,6 +70,8 @@ pub enum ToolError {
     UserEditing,
     #[error("the user declined this change")]
     Declined,
+    #[error("the user did not answer in time; the change was not made")]
+    ApprovalTimedOut,
     #[error("another change is waiting for the user's approval; try again after it")]
     AwaitingApproval,
     #[error("Zenkai is still calculating; try again in a moment")]

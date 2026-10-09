@@ -280,5 +280,6 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-a", ApplyHeldSettings, CONTEXT),
         KeyBinding::new("alt-y", AllowAgentChange, CONTEXT),
         KeyBinding::new("alt-w", ShowAgentChange, CONTEXT),
+        KeyBinding::new("alt-n", DenyAgentChange, CONTEXT),
     ]);
 }
