@@ -1,8 +1,9 @@
-use zenkai_i18n::t;
 // What the user reads before allowing an agent write. Entries and sheet names come from
 // the agent, which may have read them from the file: control and format characters
 // (line breaks, right-to-left overrides) are shown escaped so the text cannot be
 // reshaped, and formulas are marked so the user sees they will compute.
+
+use zenkai_i18n::t;
 
 const SHOWN_CHARS: usize = 40;
 const LISTED_FUNCTIONS: usize = 5;
