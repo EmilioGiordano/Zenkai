@@ -181,6 +181,24 @@ fn a_missing_key_falls_back_to_english_and_is_reported_once() {
 }
 
 #[test]
+fn a_count_on_a_key_without_plural_forms_is_not_a_missing_translation() {
+    let spanish = translator(
+        Language::Spanish,
+        "found = {count} encontradas",
+        "found = {count} found",
+    );
+    let text = spanish.format(
+        "found",
+        &Arguments {
+            count: Some(2500),
+            named: &[],
+        },
+    );
+    assert_eq!(text, "2.500 encontradas");
+    assert_eq!(spanish.reported_count(), 0);
+}
+
+#[test]
 fn a_key_missing_everywhere_shows_the_key() {
     let spanish = translator(Language::Spanish, "", "");
     assert_eq!(spanish.text("no.such.key"), "no.such.key");

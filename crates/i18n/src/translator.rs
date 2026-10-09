@@ -87,7 +87,13 @@ impl Translator {
     }
 
     fn find_plural(&self, key: &str, form: &str) -> Option<&'static str> {
-        self.find(&format!("{key}.{form}"))
+        let plural_key = format!("{key}.{form}");
+        if let Some(text) = self.primary.get(&plural_key) {
+            return Some(text);
+        }
+        let text = self.fallback.get(&plural_key)?;
+        self.report_missing(&plural_key);
+        Some(text)
     }
 
     fn find(&self, key: &str) -> Option<&'static str> {
