@@ -179,7 +179,7 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
             Ok(settings) => {
                 config.state.apply_from_page(settings, &approved);
                 for (id, server) in &launches {
-                    config.approvals.approve(id, server);
+                    config.approvals.approve(id, server, None);
                 }
                 config.failure = None;
             }

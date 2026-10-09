@@ -155,6 +155,23 @@ impl ChatPanel {
                             .child(card.status.label()),
                     ),
             )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child(format!("{} call, text provided by the agent", card.kind)),
+            )
+            .when(!card.input.is_empty(), |card_view| {
+                card_view.child(
+                    div()
+                        .font_family(MONO)
+                        .text_xs()
+                        .p_2()
+                        .rounded_md()
+                        .bg(theme.muted)
+                        .child(card.input.clone()),
+                )
+            })
             .when(!card.detail.is_empty(), |card_view| {
                 card_view.child(
                     div()
@@ -166,7 +183,14 @@ impl ChatPanel {
                 )
             })
             .when(!buttons.is_empty(), |card_view| {
-                card_view.child(v_flex().gap_1().children(buttons))
+                card_view
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child("Options provided by the agent"),
+                    )
+                    .child(v_flex().gap_1().children(buttons))
             })
     }
 }

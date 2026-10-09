@@ -37,6 +37,7 @@ const MONO: &str = "IBM Plex Mono";
 
 pub enum ChatEvent {
     Leave,
+    NeedsAnswer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +66,12 @@ struct Problem {
     login: Option<&'static str>,
 }
 
+struct Backup {
+    thread: Thread,
+    texts: BTreeMap<MessageId, Entity<TextViewState>>,
+    title: Option<String>,
+}
+
 struct Gate {
     prepared: Prepared,
     focus: FocusHandle,
@@ -89,6 +96,7 @@ pub struct ChatPanel {
     view: View,
     menu: Option<Menu>,
     title: Option<String>,
+    resume_backup: Option<Backup>,
     sessions_query: Entity<InputState>,
     slash_index: usize,
     // The composer text for which the user closed the slash list.
@@ -169,6 +177,7 @@ impl ChatPanel {
             view: View::Chat,
             menu: None,
             title: None,
+            resume_backup: None,
             sessions_query,
             slash_index: 0,
             slash_dismissed: None,
@@ -275,6 +284,7 @@ impl ChatPanel {
         self.texts.clear();
         self.queued = None;
         self.gate = None;
+        self.resume_backup = None;
         self.problem = None;
         self.turn_started = None;
         self.state = AgentState::default();

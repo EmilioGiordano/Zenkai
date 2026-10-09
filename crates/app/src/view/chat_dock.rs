@@ -31,6 +31,11 @@ impl Workspace {
                     let focus = this.grid.focus_handle(cx);
                     window.focus(&focus, cx);
                 }
+                // Shown without taking the focus: the user may be typing in the grid.
+                ChatEvent::NeedsAnswer => {
+                    this.chat.open = true;
+                    cx.notify();
+                }
             },
         ));
         self.chat.panel = Some(panel.clone());
@@ -54,7 +59,19 @@ impl Workspace {
     }
 
     fn close_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let waiting = self
+            .chat
+            .panel
+            .as_ref()
+            .is_some_and(|panel| panel.read(cx).has_pending_permission());
         self.chat.open = false;
+        if waiting {
+            self.notify(
+                Severity::Warning,
+                "The agent is waiting for your answer. Press Ctrl+J to show it.",
+                cx,
+            );
+        }
         let focus = self.grid.focus_handle(cx);
         window.focus(&focus, cx);
         cx.notify();
@@ -82,10 +99,10 @@ impl Workspace {
         let Some(panel) = self.chat.panel.clone() else {
             return;
         };
-        if !panel.read(cx).has_pending_permission() {
+        if !self.chat.open || !panel.read(cx).permission_visible() {
             self.notify(
                 Severity::Info,
-                "No agent question is waiting for an answer.",
+                "No agent question is on screen. Open the agent panel (Ctrl+J) to see it.",
                 cx,
             );
             return;
@@ -103,9 +120,11 @@ impl Workspace {
         self.chat.panel.clone().filter(|_| self.chat.open)
     }
 
-    pub(super) fn shutdown_chat(&mut self, cx: &mut Context<Self>) {
-        if let Some(panel) = &self.chat.panel {
-            panel.update(cx, |panel, _| panel.shutdown());
-        }
+    pub(super) fn shutdown_chat(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<std::sync::Arc<zenkai_agent::chat::process::ProcessTree>> {
+        let panel = self.chat.panel.clone()?;
+        panel.update(cx, |panel, _| panel.shutdown())
     }
 }

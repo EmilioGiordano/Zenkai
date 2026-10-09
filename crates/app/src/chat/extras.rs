@@ -8,7 +8,7 @@ use zenkai_agent::chat::thread::NoticeKind;
 
 use super::session_rows::{Row, Source};
 use super::slash::{self, Entry, Target, ZenkaiCommand};
-use super::{ChatPanel, Menu, View, closed, launch};
+use super::{Backup, ChatPanel, Menu, View, closed, launch};
 use crate::actions::*;
 use crate::agent_settings::AgentConfig;
 
@@ -110,10 +110,26 @@ impl ChatPanel {
                 if !ready {
                     return;
                 }
-                self.thread.clear();
-                self.texts.clear();
+                if self.busy() {
+                    self.thread.notice(
+                        NoticeKind::Info,
+                        "Stop the agent before opening another conversation.",
+                    );
+                    self.view = View::Chat;
+                    cx.notify();
+                    return;
+                }
+                for ask in self.permissions.drain(..) {
+                    ask.cancel();
+                }
+                // The old transcript comes back if the agent cannot load the session.
+                let old_title = self.title.replace(title);
+                self.resume_backup = Some(Backup {
+                    thread: std::mem::take(&mut self.thread),
+                    texts: std::mem::take(&mut self.texts),
+                    title: old_title,
+                });
                 self.problem = None;
-                self.title = Some(title);
                 if let Some(live) = &self.live {
                     live.handle.resume(session.clone());
                 }

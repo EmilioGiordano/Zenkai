@@ -39,10 +39,11 @@ impl ChatPanel {
         match planned {
             Err(error) => self.fail_before_start(error.to_string(), cx),
             Ok(prepared) => {
-                let approved = cx
-                    .global::<AgentConfig>()
-                    .approvals
-                    .is_approved(&prepared.id, &prepared.server);
+                let approved = cx.update_global::<AgentConfig, _>(|config, _| {
+                    config
+                        .approvals
+                        .is_approved(&prepared.id, &prepared.server, &prepared.plan)
+                });
                 if approved {
                     self.arm(prepared, window, cx);
                 } else {
@@ -120,9 +121,11 @@ impl ChatPanel {
             return;
         };
         cx.update_global::<AgentConfig, _>(|config, _| {
-            config
-                .approvals
-                .approve(&gate.prepared.id, &gate.prepared.server);
+            config.approvals.approve(
+                &gate.prepared.id,
+                &gate.prepared.server,
+                Some(&gate.prepared.plan),
+            );
         });
         self.focus_composer(window, cx);
         self.arm(gate.prepared, window, cx);

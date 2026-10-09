@@ -228,8 +228,13 @@ impl Workspace {
         let space_look = cx.observe_global::<SpaceAppearance>(|_, cx| cx.notify());
         let quit = cx.on_app_quit(|this, cx| {
             this.stop_bridge();
-            this.shutdown_chat(cx);
-            async {}
+            let tree = this.shutdown_chat(cx);
+            let executor = cx.background_executor().clone();
+            async move {
+                if let Some(tree) = tree {
+                    executor.spawn(async move { tree.close() }).await;
+                }
+            }
         });
         let mut workspace = Workspace {
             documents: Documents::new(empty_workbook()),

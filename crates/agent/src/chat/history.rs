@@ -1,10 +1,13 @@
 use std::path::Path;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
 use crate::settings::AgentId;
 
 const MAX_RECORDS: usize = 50;
+// Saves come from background tasks; one at a time keeps the temp file and the rename together.
+static SAVING: Mutex<()> = Mutex::new(());
 const MAX_TITLE_CHARS: usize = 80;
 
 // Metadata only: no message text is kept. It stands in for the agent's own session list when
@@ -78,10 +81,16 @@ impl History {
     pub fn save(&self, path: &Path) -> Result<(), HistoryError> {
         let text = serde_json::to_string_pretty(self)
             .map_err(|error| HistoryError::Write(std::io::Error::other(error)))?;
+        let _saving = SAVING
+            .lock()
+            .map_err(|_| HistoryError::Write(std::io::Error::other("poisoned lock")))?;
         if let Some(folder) = path.parent() {
             std::fs::create_dir_all(folder).map_err(HistoryError::Write)?;
         }
-        std::fs::write(path, text).map_err(HistoryError::Write)
+        // Written beside the target and renamed, so a crash never leaves half a file.
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, text).map_err(HistoryError::Write)?;
+        std::fs::rename(&temporary, path).map_err(HistoryError::Write)
     }
 }
 

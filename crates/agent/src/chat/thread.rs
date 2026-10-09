@@ -1,6 +1,8 @@
 use std::fmt;
 
 const MAX_DETAIL_CHARS: usize = 600;
+const MAX_TITLE_CHARS: usize = 200;
+const MAX_MESSAGE_CHARS: usize = 500_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MessageId(u64);
@@ -73,6 +75,8 @@ pub struct ToolCard {
     pub kind: ToolKind,
     pub status: ToolStatus,
     pub detail: String,
+    // The raw input or command the agent gave for the call, when it gave one.
+    pub input: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +105,7 @@ pub enum AgentUpdate {
         title: Option<String>,
         status: Option<ToolStatus>,
         detail: Option<String>,
+        input: Option<String>,
     },
 }
 
@@ -161,11 +166,11 @@ pub fn worked_label(seconds: u64) -> String {
     }
 }
 
-fn capped(text: String) -> String {
-    if text.chars().count() <= MAX_DETAIL_CHARS {
+fn capped(text: String, limit: usize) -> String {
+    if text.chars().count() <= limit {
         return text;
     }
-    let mut shortened: String = text.chars().take(MAX_DETAIL_CHARS).collect();
+    let mut shortened: String = text.chars().take(limit).collect();
     shortened.push('…');
     shortened
 }
@@ -223,8 +228,11 @@ impl Thread {
             }
             AgentUpdate::Message(text) => self.append_text(text),
             AgentUpdate::Thought => Effect::Nothing,
-            AgentUpdate::ToolStarted(card) => {
+            AgentUpdate::ToolStarted(mut card) => {
                 self.open_message = None;
+                card.title = capped(card.title, MAX_TITLE_CHARS);
+                card.detail = capped(card.detail, MAX_DETAIL_CHARS);
+                card.input = capped(card.input, MAX_DETAIL_CHARS);
                 match self.tool_index(&card.id) {
                     Some(index) => self.entries[index] = Entry::Tool(card),
                     None => self.entries.push(Entry::Tool(card)),
@@ -236,6 +244,7 @@ impl Thread {
                 title,
                 status,
                 detail,
+                input,
             } => {
                 let Some(index) = self.tool_index(&id) else {
                     return Effect::Nothing;
@@ -244,7 +253,7 @@ impl Thread {
                     return Effect::Nothing;
                 };
                 if let Some(title) = title {
-                    card.title = title;
+                    card.title = capped(title, MAX_TITLE_CHARS);
                 }
                 // A call that is waiting for the user stays waiting until the answer arrives.
                 if let Some(status) = status
@@ -253,7 +262,10 @@ impl Thread {
                     card.status = status;
                 }
                 if let Some(detail) = detail {
-                    card.detail = capped(detail);
+                    card.detail = capped(detail, MAX_DETAIL_CHARS);
+                }
+                if let Some(input) = input {
+                    card.input = capped(input, MAX_DETAIL_CHARS);
                 }
                 Effect::Changed
             }
@@ -267,6 +279,9 @@ impl Thread {
         if let Some(index) = self.open_message
             && let Some(Entry::Assistant { id, text: existing }) = self.entries.get_mut(index)
         {
+            if existing.len() + text.len() > MAX_MESSAGE_CHARS {
+                return Effect::Nothing;
+            }
             let from = existing.len();
             existing.push_str(&text);
             return Effect::Appended { message: *id, from };
@@ -301,6 +316,7 @@ impl Thread {
                     kind: ToolKind::Other,
                     status: ToolStatus::WaitingForPermission,
                     detail: String::new(),
+                    input: String::new(),
                 }));
             }
         }
@@ -409,6 +425,7 @@ mod tests {
             kind: ToolKind::Other,
             status,
             detail: String::new(),
+            input: String::new(),
         }
     }
 
@@ -477,6 +494,7 @@ mod tests {
             title: None,
             status: Some(status),
             detail: detail.map(str::to_string),
+            input: None,
         };
         thread.apply(change(ToolStatus::InProgress, None));
         thread.apply(change(ToolStatus::Completed, Some("12 cells")));
@@ -496,6 +514,7 @@ mod tests {
             title: Some("x".to_string()),
             status: Some(ToolStatus::Completed),
             detail: None,
+            input: None,
         });
         assert_eq!(effect, Effect::Nothing);
         assert_eq!(thread.entries().len(), 1);
@@ -519,6 +538,7 @@ mod tests {
             title: None,
             status: Some(ToolStatus::InProgress),
             detail: None,
+            input: None,
         });
         let Entry::Tool(waiting) = &thread.entries()[1] else {
             panic!("expected a tool call");
@@ -649,6 +669,7 @@ mod tests {
             title: None,
             status: None,
             detail: Some("x".repeat(5_000)),
+            input: None,
         });
         let Entry::Tool(shown) = &thread.entries()[1] else {
             panic!("expected a tool call");
@@ -667,6 +688,35 @@ mod tests {
         assert_eq!(thread.entries().len(), 3);
         assert_eq!(thread.entries()[0], Entry::User("Hello".to_string()));
         assert_eq!(thread.entries()[2], Entry::User("Again".to_string()));
+    }
+
+    #[test]
+    fn titles_and_inputs_are_capped_whether_a_call_starts_or_changes() {
+        let mut thread = running();
+        let mut long = card("t1", ToolStatus::Pending);
+        long.title = "t".repeat(1_000);
+        long.input = "i".repeat(5_000);
+        thread.apply(AgentUpdate::ToolStarted(long));
+        thread.apply(AgentUpdate::ToolChanged {
+            id: ToolCallId::new("t1"),
+            title: Some("u".repeat(1_000)),
+            status: None,
+            detail: None,
+            input: Some("j".repeat(5_000)),
+        });
+        let Entry::Tool(shown) = &thread.entries()[1] else {
+            panic!("expected a tool call");
+        };
+        assert_eq!(shown.title.chars().count(), MAX_TITLE_CHARS + 1);
+        assert_eq!(shown.input.chars().count(), MAX_DETAIL_CHARS + 1);
+    }
+
+    #[test]
+    fn one_message_stops_growing_at_its_cap() {
+        let mut thread = running();
+        thread.apply(AgentUpdate::Message("a".repeat(MAX_MESSAGE_CHARS - 1)));
+        let effect = thread.apply(AgentUpdate::Message("bbbb".to_string()));
+        assert_eq!(effect, Effect::Nothing);
     }
 
     #[test]

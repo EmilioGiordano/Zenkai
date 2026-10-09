@@ -18,7 +18,8 @@ use futures::channel::oneshot;
 use futures::{AsyncBufReadExt, StreamExt};
 
 use crate::bridge::{PIPE_VARIABLE, TOKEN_VARIABLE};
-use crate::chat::launch::{self, LaunchError, LaunchPlan, PackageSpec};
+use crate::chat::install::install;
+use crate::chat::launch::{self, INSTALLED_MARKER, LaunchError, LaunchPlan};
 use crate::chat::process::{ProcessError, ProcessTree, WorkFolder, is_work_folder};
 use crate::chat::state::{ConfigId, ConfigSource, StateChange};
 use crate::chat::thread::{AgentUpdate, ToolCallId, ToolCard, ToolKind, ToolStatus, TurnEnd};
@@ -26,6 +27,9 @@ use crate::chat::wire;
 
 // The hidden first block of every prompt; replayed history must not show it as the user's words.
 pub const CONTEXT_MARKER: &str = "[Zenkai]";
+// Past this many unread events an agent that floods the chat loses the overflow instead of
+// growing memory without limit.
+const EVENT_BACKLOG: usize = 4096;
 const STDERR_LINES_KEPT: usize = 20;
 const MAX_CHUNK_CHARS: usize = 200_000;
 
@@ -203,7 +207,7 @@ pub fn start(
     impl Future<Output = ()> + Send + 'static,
 ) {
     let (commands, received) = async_channel::unbounded();
-    let (events, event_stream) = async_channel::unbounded();
+    let (events, event_stream) = async_channel::bounded(EVENT_BACKLOG);
     let tree = Arc::new(ProcessTree::default());
     let handle = SessionHandle {
         commands,
@@ -236,61 +240,15 @@ fn notify(events: &Sender<SessionEvent>, event: SessionEvent) {
     }
 }
 
-async fn install(
-    node: &std::path::Path,
-    package: &PackageSpec,
-    folder: &std::path::Path,
-    tree: &ProcessTree,
-) -> Result<(), SessionError> {
-    std::fs::create_dir_all(folder)
-        .map_err(|error| SessionError::Install(format!("{}: {error}", folder.display())))?;
-    let mut command = ProcessCommand::new(node);
-    command
-        .arg(launch::npm_cli(node))
-        .args(["install", "--prefix"])
-        .arg(folder)
-        .args([
-            "--ignore-scripts",
-            "--no-audit",
-            "--no-fund",
-            "--loglevel=error",
-        ])
-        .arg(package.spec())
-        .env("npm_config_update_notifier", "false")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    hide_window(&mut command);
-    let child = command
-        .spawn()
-        .map_err(|error| SessionError::Install(error.to_string()))?;
-    tree.register(child.id());
-    tracing::info!(package = %package.spec(), "installing the agent package");
-    let output = child
-        .output()
-        .await
-        .map_err(|error| SessionError::Install(error.to_string()))?;
-    tree.forget();
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let tail: Vec<&str> = stderr.lines().rev().take(6).collect();
-        let reason = tail.into_iter().rev().collect::<Vec<_>>().join(" ");
-        Err(SessionError::Install(reason))
-    }
-}
-
 #[cfg(windows)]
-fn hide_window(command: &mut ProcessCommand) {
+pub(super) fn hide_window(command: &mut ProcessCommand) {
     use async_process::windows::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
 #[cfg(not(windows))]
-fn hide_window(_: &mut ProcessCommand) {}
+pub(super) fn hide_window(_: &mut ProcessCommand) {}
 
 async fn resolve(
     plan: &LaunchPlan,
@@ -305,14 +263,12 @@ async fn resolve(
             folder,
             args,
         } => {
-            let entry = match launch::package_entry(folder, package) {
-                Ok(entry) => entry,
-                Err(_) => {
-                    notify(events, SessionEvent::Connection(Connection::Installing));
-                    install(node, package, folder, tree).await?;
-                    launch::package_entry(folder, package)?
-                }
-            };
+            if !folder.join(INSTALLED_MARKER).is_file() {
+                notify(events, SessionEvent::Connection(Connection::Installing));
+                install(node, package, folder, tree).await?;
+            }
+            // A finished install with a broken package is reported, not silently redone.
+            let entry = launch::package_entry(folder, package)?;
             let mut arguments = vec![entry.to_string_lossy().into_owned()];
             arguments.extend(args.iter().cloned());
             Ok((node.clone(), arguments))
@@ -391,8 +347,14 @@ async fn drive(
         tree.close();
         result
     };
-    let (result, ()) = futures::join!(talk, drain);
-    drop(child);
+    // Once the child is reaped its pid may be reused, so it must never be killed again.
+    let reaped = async {
+        if let Err(error) = child.status().await {
+            tracing::debug!(%error, "could not wait for the agent to exit");
+        }
+        tree.forget();
+    };
+    let (result, (), ()) = futures::join!(talk, drain, reaped);
     result
 }
 
@@ -782,12 +744,22 @@ fn agent_update(update: SessionUpdate) -> Option<AgentUpdate> {
             kind: tool_kind(call.kind),
             status: tool_status(call.status),
             detail: content_detail(&call.content),
+            input: call
+                .raw_input
+                .as_ref()
+                .map(|input| input.to_string())
+                .unwrap_or_default(),
         })),
         SessionUpdate::ToolCallUpdate(update) => Some(AgentUpdate::ToolChanged {
             id: ToolCallId::new(update.tool_call_id.to_string()),
             title: update.fields.title,
             status: update.fields.status.map(tool_status),
             detail: update.fields.content.as_deref().map(content_detail),
+            input: update
+                .fields
+                .raw_input
+                .as_ref()
+                .map(|input| input.to_string()),
         }),
         _ => None,
     }

@@ -5,7 +5,7 @@ use zenkai_agent::chat::thread::{Effect, MessageId, NoticeKind, TurnEnd};
 use zenkai_agent::presets::Preset;
 
 use super::launch;
-use super::{ChatPanel, Link, Problem};
+use super::{ChatEvent, ChatPanel, Link, Problem, View};
 use crate::agent_settings::AgentConfig;
 
 impl ChatPanel {
@@ -68,6 +68,8 @@ impl ChatPanel {
             SessionEvent::Permission(ask) => {
                 self.thread.waiting_for_permission(&ask.tool, &ask.title);
                 self.permissions.push(ask);
+                self.view = View::Chat;
+                cx.emit(ChatEvent::NeedsAnswer);
                 self.scroll_to_end();
             }
             SessionEvent::TurnEnded(end) => self.finish_turn(end, cx),
@@ -81,8 +83,18 @@ impl ChatPanel {
             }
             SessionEvent::Closed => self.end_session(cx),
             SessionEvent::State(change) => self.state.apply(change),
-            SessionEvent::Problem(text) => self.thread.notice(NoticeKind::Error, &text),
-            SessionEvent::Resumed => self.scroll_to_end(),
+            SessionEvent::Problem(text) => {
+                if let Some(backup) = self.resume_backup.take() {
+                    self.thread = backup.thread;
+                    self.texts = backup.texts;
+                    self.title = backup.title;
+                }
+                self.thread.notice(NoticeKind::Error, &text);
+            }
+            SessionEvent::Resumed => {
+                self.resume_backup = None;
+                self.scroll_to_end();
+            }
         }
         cx.notify();
     }
@@ -124,9 +136,8 @@ impl ChatPanel {
         }
     }
 
-    pub fn shutdown(&mut self) {
-        if let Some(live) = self.live.take() {
-            live.handle.process_tree().close();
-        }
+    // The caller ends the tree off the UI thread.
+    pub fn shutdown(&mut self) -> Option<std::sync::Arc<zenkai_agent::chat::process::ProcessTree>> {
+        self.live.take().map(|live| live.handle.process_tree())
     }
 }

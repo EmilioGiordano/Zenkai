@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use crate::settings::{AgentId, AgentServer, EnvValue};
 
 const SHIM_EXTENSIONS: [&str; 4] = ["cmd", "bat", "com", "ps1"];
-const INTERPRETERS: [&str; 8] = [
+const INTERPRETERS: [&str; 15] = [
     "cmd",
     "powershell",
     "pwsh",
@@ -14,6 +14,13 @@ const INTERPRETERS: [&str; 8] = [
     "mshta",
     "bash",
     "sh",
+    "python",
+    "pythonw",
+    "py",
+    "deno",
+    "bun",
+    "perl",
+    "ruby",
 ];
 const NODE_CODE_FLAGS: [&str; 8] = [
     "-e",
@@ -188,7 +195,8 @@ fn check_program(command: &str, resolved: &Path) -> Result<(), LaunchError> {
     if extension(&name).is_some_and(|ext| SHIM_EXTENSIONS.contains(&ext)) {
         return Err(LaunchError::Shim(shown()));
     }
-    if INTERPRETERS.contains(&stem(&name)) {
+    let program_stem = stem(&name);
+    if INTERPRETERS.contains(&program_stem) || program_stem.starts_with("python") {
         return Err(LaunchError::Interpreter(shown()));
     }
     if cfg!(windows) && extension(&name) != Some("exe") {
@@ -200,7 +208,14 @@ fn check_program(command: &str, resolved: &Path) -> Result<(), LaunchError> {
 fn check_node_args(args: &[String]) -> Result<(), LaunchError> {
     for arg in args {
         let flag = arg.split('=').next().unwrap_or(arg);
-        let forbidden = NODE_CODE_FLAGS.contains(&flag)
+        // Short flags can be bundled: -pe is --print --eval.
+        let bundled = flag.len() > 2
+            && flag.starts_with('-')
+            && !flag.starts_with("--")
+            && flag.chars().skip(1).all(|c| c.is_ascii_alphabetic())
+            && flag.chars().skip(1).any(|c| matches!(c, 'e' | 'p' | 'r'));
+        let forbidden = bundled
+            || NODE_CODE_FLAGS.contains(&flag)
             || NODE_CODE_FLAG_PREFIXES
                 .iter()
                 .any(|prefix| flag.starts_with(prefix));
@@ -264,6 +279,8 @@ pub fn plan(
         args: server.args.clone(),
     })
 }
+
+pub const INSTALLED_MARKER: &str = ".zenkai-installed";
 
 pub fn npm_cli(node: &Path) -> PathBuf {
     node.parent()
@@ -367,22 +384,56 @@ impl fmt::Display for LaunchSpec {
 // Launch commands the user approved in this run. They stay in memory on purpose:
 // settings.json is meant to be written by agents, and anything that can write it could write
 // a file of approvals next to it.
+#[derive(Clone, Debug)]
+struct Approved {
+    spec: LaunchSpec,
+    // The executable the approval covers. Approvals made on the Settings page start without one
+    // and pin the first program the command resolves to.
+    program: Option<PathBuf>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct LaunchApprovals {
-    approved: BTreeMap<AgentId, LaunchSpec>,
+    approved: BTreeMap<AgentId, Approved>,
+}
+
+fn program_of(plan: &LaunchPlan) -> &Path {
+    match plan {
+        LaunchPlan::Direct { program, .. } => program,
+        LaunchPlan::Package { node, .. } => node,
+    }
 }
 
 impl LaunchApprovals {
-    pub fn is_approved(&self, id: &AgentId, server: &AgentServer) -> bool {
+    // A changed command, argument, variable or resolved executable is a new launch.
+    pub fn is_approved(&mut self, id: &AgentId, server: &AgentServer, plan: &LaunchPlan) -> bool {
         let spec = LaunchSpec::of(server);
-        crate::presets::PRESETS
+        if crate::presets::PRESETS
             .iter()
             .any(|preset| LaunchSpec::of(&preset.server()) == spec)
-            || self.approved.get(id) == Some(&spec)
+        {
+            return true;
+        }
+        match self.approved.get_mut(id) {
+            Some(approved) if approved.spec == spec => match &approved.program {
+                Some(program) => program == program_of(plan),
+                None => {
+                    approved.program = Some(program_of(plan).to_path_buf());
+                    true
+                }
+            },
+            _ => false,
+        }
     }
 
-    pub fn approve(&mut self, id: &AgentId, server: &AgentServer) {
-        self.approved.insert(id.clone(), LaunchSpec::of(server));
+    pub fn approve(&mut self, id: &AgentId, server: &AgentServer, plan: Option<&LaunchPlan>) {
+        self.approved.insert(
+            id.clone(),
+            Approved {
+                spec: LaunchSpec::of(server),
+                program: plan.map(|plan| program_of(plan).to_path_buf()),
+            },
+        );
     }
 }
 
@@ -664,31 +715,83 @@ mod tests {
         assert!(package_entry(folder.path(), &package).is_err());
     }
 
+    fn direct(program: &str) -> LaunchPlan {
+        LaunchPlan::Direct {
+            program: PathBuf::from(program),
+            args: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_different_executable_behind_the_same_command_needs_a_new_approval() {
+        let mut approvals = LaunchApprovals::default();
+        let id = AgentId::new("mine");
+        let typed = server("agent", &[]);
+        approvals.approve(&id, &typed, Some(&direct("C:/tools/agent.exe")));
+        assert!(approvals.is_approved(&id, &typed, &direct("C:/tools/agent.exe")));
+        assert!(!approvals.is_approved(&id, &typed, &direct("C:/planted/agent.exe")));
+    }
+
+    #[test]
+    fn a_settings_page_approval_pins_the_first_executable_it_resolves_to() {
+        let mut approvals = LaunchApprovals::default();
+        let id = AgentId::new("mine");
+        let typed = server("agent", &[]);
+        approvals.approve(&id, &typed, None);
+        assert!(approvals.is_approved(&id, &typed, &direct("C:/tools/agent.exe")));
+        assert!(!approvals.is_approved(&id, &typed, &direct("C:/planted/agent.exe")));
+    }
+
+    #[test]
+    fn bundled_short_flags_and_more_interpreters_are_refused() {
+        for flag in ["-pe", "-ep", "-rp"] {
+            let result = plan_with(&server("node", &[flag, "x"]), &[NODE]);
+            assert!(
+                matches!(result, Err(LaunchError::NodeCodeFlag(_))),
+                "{flag}"
+            );
+        }
+        for command in [
+            "C:/py/python.exe",
+            "C:/py/python3.12.exe",
+            "C:/x/deno.exe",
+            "C:/x/bun.exe",
+        ] {
+            let result = plan_with(&server(command, &[]), &[]);
+            assert!(
+                matches!(result, Err(LaunchError::Interpreter(_))),
+                "{command}"
+            );
+        }
+    }
+
     #[test]
     fn presets_are_trusted_and_other_commands_need_an_approval() {
         let mut approvals = LaunchApprovals::default();
         let id = AgentId::new("claude");
-        assert!(approvals.is_approved(&id, &CLAUDE.server()));
+        let plan = direct("C:/bin/node.exe");
+        assert!(approvals.is_approved(&id, &CLAUDE.server(), &plan));
         let mut edited = CLAUDE.server();
         edited.args.push("--extra".to_string());
-        assert!(!approvals.is_approved(&id, &edited));
-        approvals.approve(&id, &edited);
-        assert!(approvals.is_approved(&id, &edited));
-        assert!(!approvals.is_approved(&AgentId::new("other"), &edited));
+        assert!(!approvals.is_approved(&id, &edited, &plan));
+        approvals.approve(&id, &edited, Some(&plan));
+        assert!(approvals.is_approved(&id, &edited, &plan));
+        assert!(!approvals.is_approved(&AgentId::new("other"), &edited, &plan));
     }
 
     #[test]
     fn an_environment_change_needs_a_new_approval() {
         let mut approvals = LaunchApprovals::default();
         let id = AgentId::new("mine");
-        let plain = server("C:\\a.exe", &[]);
-        approvals.approve(&id, &plain);
+        let plain = server("C://a.exe", &[]);
+        let plan = direct("C:/a.exe");
+        approvals.approve(&id, &plain, Some(&plan));
         let mut with_options = plain.clone();
         with_options.env.insert(
             "NODE_OPTIONS".to_string(),
             EnvValue::Text("--require x.js".to_string()),
         );
-        assert!(!approvals.is_approved(&id, &with_options));
+        assert!(!approvals.is_approved(&id, &with_options, &plan));
         let mut with_secret = plain;
         with_secret.env.insert(
             "KEY".to_string(),

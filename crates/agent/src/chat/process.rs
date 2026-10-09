@@ -15,15 +15,24 @@ pub enum ProcessError {
 
 pub const WORK_PREFIX: &str = "zenkai-agent-";
 
+// The temp path can arrive in short (8.3) or long form, so both sides are resolved first.
+fn same_folder(first: &Path, second: &Path) -> bool {
+    match (first.canonicalize(), second.canonicalize()) {
+        (Ok(first), Ok(second)) => first == second,
+        _ => false,
+    }
+}
+
 // Past sessions are listed by the agent for every folder the user ever used it in; only the ones
 // Zenkai started belong in this chat.
 pub fn is_work_folder(folder: &Path) -> bool {
     let named = folder
         .file_name()
         .is_some_and(|name| name.to_string_lossy().starts_with(WORK_PREFIX));
-    let temp = std::env::temp_dir();
-    let in_temp = folder.parent().and_then(Path::file_name) == temp.file_name();
-    named && in_temp
+    named
+        && folder
+            .parent()
+            .is_some_and(|parent| same_folder(parent, &std::env::temp_dir()))
 }
 
 // The folder an agent runs in: new, empty and outside every workbook's folder, so an agent
