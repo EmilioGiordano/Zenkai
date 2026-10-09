@@ -4,6 +4,7 @@ use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
 use crate::chat::{ChatEvent, ChatPanel, reference};
+use crate::panel_width::Panel;
 
 #[derive(Default)]
 pub(super) struct ChatDock {
@@ -112,8 +113,26 @@ impl Workspace {
         });
     }
 
-    pub(super) fn render_chat(&self) -> Option<Entity<ChatPanel>> {
-        self.chat.panel.clone().filter(|_| self.chat.open)
+    pub(super) fn chat_open(&self) -> bool {
+        self.chat.open
+    }
+
+    pub(super) fn render_chat(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let panel = self.chat.panel.clone().filter(|_| self.chat.open)?;
+        let width = self.panel_width(Panel::Chat, window);
+        Some(
+            div()
+                .relative()
+                .flex_shrink_0()
+                .h_full()
+                .w(px(width))
+                .child(panel)
+                .child(self.panel_edge(Panel::Chat, window, cx)),
+        )
     }
 
     pub(super) fn shutdown_chat(

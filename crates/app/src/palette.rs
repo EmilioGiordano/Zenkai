@@ -177,6 +177,8 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.reset_space_appearance"), ResetSpaceAppearance),
                 item(t!("palette.delete_file"), DeleteFile),
                 item(t!("palette.focus_sidebar"), FocusSidebar),
+                item(t!("palette.widen_sidebar"), WidenSidebar),
+                item(t!("palette.narrow_sidebar"), NarrowSidebar),
             ],
         ),
         group(
@@ -202,6 +204,8 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.permission_automatic"), PermissionAutomatic),
                 item(t!("palette.toggle_external_agents"), ToggleExternalAgents),
                 item(t!("palette.chat.toggle"), ToggleAgentChat),
+                item(t!("palette.chat.widen"), WidenChat),
+                item(t!("palette.chat.narrow"), NarrowChat),
                 item(t!("palette.chat.add_selection"), AddSelectionToChat),
                 item(t!("palette.chat.new_conversation"), NewAgentConversation),
                 item(t!("palette.chat.send"), SendChatMessage),

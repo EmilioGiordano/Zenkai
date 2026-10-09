@@ -48,6 +48,7 @@ use crate::jump::jump_target;
 use crate::keymap;
 use crate::memory;
 use crate::palette;
+use crate::panel_width::{Panel, Resize};
 use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
@@ -63,6 +64,7 @@ use crate::toolbar;
 mod budget;
 mod generate;
 mod lifecycle;
+mod panels;
 mod search;
 mod sidebar;
 mod theme_picker;
@@ -76,6 +78,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::spinner::Spinner;
 use lifecycle::Lifecycle;
+use panels::PanelsState;
 use search::SearchOverlay;
 use sidebar::SidebarState;
 use theme_picker::ThemePicker;
@@ -171,6 +174,7 @@ pub struct Workspace {
     memory_budget_mb: u64,
     last_unload: Option<Instant>,
     sidebar: SidebarState,
+    panels: PanelsState,
     lifecycle: Lifecycle,
     saved_session: Option<Session>,
     cell_refresh: CellRefresh,
@@ -278,6 +282,7 @@ impl Workspace {
             memory_budget_mb: memory::budget_mb(),
             last_unload: None,
             sidebar: SidebarState::new(cx),
+            panels: PanelsState::new(cx),
             lifecycle: Lifecycle::Running,
             saved_session: None,
             cell_refresh: CellRefresh::Idle,
@@ -3306,6 +3311,26 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &FocusSidebar, window, cx| this.focus_sidebar(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &WidenSidebar, window, cx| {
+                this.step_panel(Panel::Sidebar, Resize::Wider, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NarrowSidebar, window, cx| {
+                this.step_panel(Panel::Sidebar, Resize::Narrower, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &WidenChat, window, cx| {
+                this.step_panel(Panel::Chat, Resize::Wider, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NarrowChat, window, cx| {
+                this.step_panel(Panel::Chat, Resize::Narrower, window, cx)
+            }))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.drag_panel(event, window, cx)
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, _, cx| this.end_panel_drag(cx)),
+            )
+            .when(self.panels_dragging(), |root| root.cursor_col_resize())
             .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.new_space(window, cx)))
             .on_action(
                 cx.listener(|this, _: &RenameSpace, window, cx| this.rename_space(window, cx)),
@@ -3381,7 +3406,7 @@ impl Render for Workspace {
                     } else {
                         self.render_empty(cx).into_any_element()
                     })
-                    .children(self.render_chat()),
+                    .children(self.render_chat(window, cx)),
             )
             .children(self.render_palette())
             .children(self.render_theme_picker(cx))
