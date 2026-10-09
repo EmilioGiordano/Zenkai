@@ -56,6 +56,7 @@ use crate::theme;
 use crate::toolbar;
 
 mod budget;
+mod generate;
 mod lifecycle;
 mod search;
 mod sidebar;
@@ -152,6 +153,7 @@ pub struct Workspace {
     recent: Vec<PathBuf>,
     recent_saves: Arc<AtomicU64>,
     format_dialog: Option<FormatDialog>,
+    generate: Option<generate::GenerateSession>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
@@ -246,6 +248,7 @@ impl Workspace {
             recent: Vec::new(),
             recent_saves: Arc::new(AtomicU64::new(0)),
             format_dialog: None,
+            generate: None,
             colors,
             focus: cx.focus_handle(),
             session_lock: None,
@@ -2910,6 +2913,9 @@ impl Render for Workspace {
                     this.open_format_dialog(window, cx)
                 }),
             )
+            .on_action(
+                cx.listener(|this, _: &GenerateData, window, cx| this.open_generate(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ApplyNumberFormat, window, cx| {
                 this.apply_format_dialog(window, cx)
             }))
@@ -3211,6 +3217,7 @@ impl Render for Workspace {
             .children(self.render_busy(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
+            .children(self.render_generate())
             .children(self.render_settings())
     }
 }
@@ -3276,6 +3283,8 @@ fn cell_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
         .separator()
         .menu("Sort A to Z", Box::new(SortAscending))
         .menu("Sort Z to A", Box::new(SortDescending))
+        .separator()
+        .menu("Generate data…", Box::new(GenerateData))
         .separator()
         .menu("Insert chart", Box::new(InsertChart))
 }

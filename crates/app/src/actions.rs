@@ -148,6 +148,11 @@ actions!(
         ShowAgentChange,
         LetAgentsEdit,
         CopyClaudeCommand,
+        GenerateData,
+        ConfirmGenerate,
+        CancelGenerate,
+        SaveGenerateHeaders,
+        AddGenerateColumn,
     ]
 );
 
@@ -281,5 +286,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-y", AllowAgentChange, CONTEXT),
         KeyBinding::new("alt-w", ShowAgentChange, CONTEXT),
         KeyBinding::new("alt-n", DenyAgentChange, CONTEXT),
+        KeyBinding::new("ctrl-alt-g", GenerateData, CONTEXT),
+        KeyBinding::new("enter", ConfirmGenerate, Some("GenerateDialog > Input")),
+        KeyBinding::new("escape", CancelGenerate, Some("GenerateDialog")),
+        KeyBinding::new("alt-h", SaveGenerateHeaders, Some("GenerateDialog")),
+        KeyBinding::new("alt-n", AddGenerateColumn, Some("GenerateDialog")),
+        KeyBinding::new("tab", FocusNextControl, Some("GenerateDialog")),
+        KeyBinding::new("shift-tab", FocusPreviousControl, Some("GenerateDialog")),
     ]);
 }
