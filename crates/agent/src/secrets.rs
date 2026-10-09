@@ -66,6 +66,17 @@ impl Secrets {
             })
     }
 
+    pub fn get(&self, name: &SecretName) -> Result<Option<String>, SecretError> {
+        match self.entry(name)?.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring_core::Error::NoEntry) => Ok(None),
+            Err(source) => Err(SecretError::Store {
+                name: name.clone(),
+                source,
+            }),
+        }
+    }
+
     pub fn status(&self, name: &SecretName) -> Result<SecretStatus, SecretError> {
         match self.entry(name)?.get_password() {
             Ok(_) => Ok(SecretStatus::Stored),
@@ -97,5 +108,7 @@ mod tests {
             secrets.status(&name("other")).unwrap(),
             SecretStatus::Missing
         );
+        assert_eq!(secrets.get(&key).unwrap().as_deref(), Some("sk-test"));
+        assert_eq!(secrets.get(&name("other")).unwrap(), None);
     }
 }

@@ -112,7 +112,7 @@ impl Running {
 fn a_prompt_streams_text_runs_a_tool_and_waits_for_the_users_permission() {
     let session = launch(config("normal", &[]));
     assert_eq!(session.ready(), "Fake agent");
-    session.handle.prompt("please read".to_string());
+    session.handle.prompt("please read".to_string(), None);
 
     let ask = session.permission();
     assert_eq!(ask.title, "read_range on Sheet1");
@@ -131,7 +131,7 @@ fn a_prompt_streams_text_runs_a_tool_and_waits_for_the_users_permission() {
 fn the_tool_call_arrives_before_its_permission_and_completes_after_the_answer() {
     let session = launch(config("normal", &[]));
     session.ready();
-    session.handle.prompt("please read".to_string());
+    session.handle.prompt("please read".to_string(), None);
     let started = session.until(|event| match event {
         SessionEvent::Update(AgentUpdate::ToolStarted(card)) => Some(card),
         _ => None,
@@ -154,7 +154,7 @@ fn the_tool_call_arrives_before_its_permission_and_completes_after_the_answer() 
 fn denying_a_permission_tells_the_agent_to_stand_down() {
     let session = launch(config("normal", &[]));
     session.ready();
-    session.handle.prompt("please read".to_string());
+    session.handle.prompt("please read".to_string(), None);
     let ask = session.permission();
     let deny = ask.choices[1].clone();
     ask.choose(&deny);
@@ -168,7 +168,7 @@ fn denying_a_permission_tells_the_agent_to_stand_down() {
 fn dismissing_a_permission_cancels_it() {
     let session = launch(config("normal", &[]));
     session.ready();
-    session.handle.prompt("please read".to_string());
+    session.handle.prompt("please read".to_string(), None);
     session.permission().cancel();
     let (text, _) = session.text_until_turn_end();
     assert!(text.contains("I did not read it"), "{text}");
@@ -179,7 +179,7 @@ fn dismissing_a_permission_cancels_it() {
 fn stop_cancels_a_turn_in_progress() {
     let session = launch(config("normal", &[]));
     session.ready();
-    session.handle.prompt("slow please".to_string());
+    session.handle.prompt("slow please".to_string(), None);
     session.until(|event| match event {
         SessionEvent::Update(AgentUpdate::Message(_)) => Some(()),
         _ => None,
@@ -195,7 +195,7 @@ fn the_session_runs_in_an_empty_folder_and_passes_only_the_zenkai_tools_and_no_c
     // The fake agent refuses to initialize when file-system or terminal access is advertised,
     // so reaching Ready proves none was.
     session.ready();
-    session.handle.prompt("echo".to_string());
+    session.handle.prompt("echo".to_string(), None);
     let (text, _) = session.text_until_turn_end();
     assert!(text.contains("empty true"), "{text}");
     assert!(
@@ -219,7 +219,7 @@ fn the_session_runs_in_an_empty_folder_and_passes_only_the_zenkai_tools_and_no_c
 fn an_agent_that_exits_mid_turn_ends_the_session_with_a_failure() {
     let session = launch(config("normal", &[]));
     session.ready();
-    session.handle.prompt("exit now".to_string());
+    session.handle.prompt("exit now".to_string(), None);
     let failure = session.until(|event| match event {
         SessionEvent::Failed(error) => Some(error),
         _ => None,

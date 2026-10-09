@@ -130,7 +130,10 @@ pub enum SessionEvent {
 
 #[derive(Debug)]
 pub enum Command {
-    Prompt(String),
+    Prompt {
+        text: String,
+        context: Option<String>,
+    },
     Cancel,
 }
 
@@ -141,8 +144,9 @@ pub struct SessionHandle {
 }
 
 impl SessionHandle {
-    pub fn prompt(&self, text: String) {
-        self.send(Command::Prompt(text));
+    // `context` is read by the agent but not shown in the chat: which workbook is active.
+    pub fn prompt(&self, text: String, context: Option<String>) {
+        self.send(Command::Prompt { text, context });
     }
 
     pub fn cancel(&self) {
@@ -492,7 +496,7 @@ async fn converse_on(
             }
         };
         match command {
-            Command::Prompt(text) => {
+            Command::Prompt { text, context } => {
                 let task_connection = connection.clone();
                 let task_events = events.clone();
                 let task_session = session_id.clone();
@@ -500,7 +504,11 @@ async fn converse_on(
                     let result = task_connection
                         .send_request(PromptRequest::new(
                             task_session,
-                            vec![ContentBlock::from(text)],
+                            context
+                                .into_iter()
+                                .chain(std::iter::once(text))
+                                .map(ContentBlock::from)
+                                .collect(),
                         ))
                         .block_task()
                         .await;

@@ -12,6 +12,7 @@ pub struct Preset {
     pub package: &'static str,
     pub extra_args: &'static [&'static str],
     pub min_node_major: u32,
+    pub login_command: &'static str,
 }
 
 pub const CLAUDE: Preset = Preset {
@@ -20,6 +21,7 @@ pub const CLAUDE: Preset = Preset {
     package: "@agentclientprotocol/claude-agent-acp@0.88.0",
     extra_args: &[],
     min_node_major: 22,
+    login_command: "claude /login",
 };
 
 pub const GEMINI: Preset = Preset {
@@ -28,6 +30,7 @@ pub const GEMINI: Preset = Preset {
     package: "@google/gemini-cli@0.63.0",
     extra_args: &["--acp"],
     min_node_major: 20,
+    login_command: "gemini",
 };
 
 pub const CODEX: Preset = Preset {
@@ -36,11 +39,16 @@ pub const CODEX: Preset = Preset {
     package: "@agentclientprotocol/codex-acp@2.1.1",
     extra_args: &[],
     min_node_major: 20,
+    login_command: "codex login",
 };
 
 pub const PRESETS: [Preset; 3] = [CLAUDE, GEMINI, CODEX];
 
 impl Preset {
+    pub fn for_agent(id: &AgentId) -> Option<Preset> {
+        PRESETS.into_iter().find(|preset| preset.id == id.as_str())
+    }
+
     pub fn agent_id(&self) -> AgentId {
         AgentId::new(self.id)
     }
