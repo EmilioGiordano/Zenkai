@@ -2,6 +2,9 @@ use std::fmt;
 
 const MAX_DETAIL_CHARS: usize = 600;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MessageId(u64);
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ToolCallId(String);
 
@@ -81,7 +84,7 @@ pub enum NoticeKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Entry {
     User(String),
-    Assistant(String),
+    Assistant { id: MessageId, text: String },
     Tool(ToolCard),
     Worked { seconds: u64 },
     Notice { kind: NoticeKind, text: String },
@@ -120,7 +123,7 @@ pub enum TurnState {
 // What the screen must do after an update: grow one message's text, or redraw.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Effect {
-    Appended { entry: usize, from: usize },
+    Appended { message: MessageId, from: usize },
     Changed,
     Nothing,
 }
@@ -131,6 +134,7 @@ pub struct Thread {
     turn: TurnState,
     // The assistant message the next chunk continues; a tool call or the end of the turn closes it.
     open_message: Option<usize>,
+    next_message: u64,
 }
 
 pub fn worked_label(seconds: u64) -> String {
@@ -170,6 +174,13 @@ impl Thread {
 
     pub fn turn(&self) -> TurnState {
         self.turn
+    }
+
+    pub fn message_text(&self, id: MessageId) -> Option<&str> {
+        self.entries.iter().find_map(|entry| match entry {
+            Entry::Assistant { id: found, text } if *found == id => Some(text.as_str()),
+            _ => None,
+        })
     }
 
     pub fn is_empty(&self) -> bool {
@@ -239,16 +250,17 @@ impl Thread {
             return Effect::Nothing;
         }
         if let Some(index) = self.open_message
-            && let Some(Entry::Assistant(existing)) = self.entries.get_mut(index)
+            && let Some(Entry::Assistant { id, text: existing }) = self.entries.get_mut(index)
         {
             let from = existing.len();
             existing.push_str(&text);
-            return Effect::Appended { entry: index, from };
+            return Effect::Appended { message: *id, from };
         }
-        self.entries.push(Entry::Assistant(text));
-        let entry = self.entries.len() - 1;
-        self.open_message = Some(entry);
-        Effect::Appended { entry, from: 0 }
+        let message = MessageId(self.next_message);
+        self.next_message += 1;
+        self.entries.push(Entry::Assistant { id: message, text });
+        self.open_message = Some(self.entries.len() - 1);
+        Effect::Appended { message, from: 0 }
     }
 
     fn tool_index(&self, id: &ToolCallId) -> Option<usize> {
@@ -332,7 +344,7 @@ impl Thread {
             .map_or(0, |index| index + 1);
         let closing = self.entries[turn_start..]
             .iter()
-            .rposition(|entry| matches!(entry, Entry::Assistant(_)))
+            .rposition(|entry| matches!(entry, Entry::Assistant { .. }))
             .map(|offset| turn_start + offset);
         let divider = Entry::Worked { seconds };
         match closing {
@@ -406,13 +418,19 @@ mod tests {
         let mut thread = running();
         assert_eq!(
             thread.apply(AgentUpdate::Message("Hel".to_string())),
-            Effect::Appended { entry: 1, from: 0 }
+            Effect::Appended {
+                message: MessageId(0),
+                from: 0
+            }
         );
         assert_eq!(
             thread.apply(AgentUpdate::Message("lo".to_string())),
-            Effect::Appended { entry: 1, from: 3 }
+            Effect::Appended {
+                message: MessageId(0),
+                from: 3
+            }
         );
-        assert_eq!(thread.entries()[1], Entry::Assistant("Hello".to_string()));
+        assert_eq!(thread.message_text(MessageId(0)), Some("Hello"));
         assert_eq!(
             thread.apply(AgentUpdate::Message(String::new())),
             Effect::Nothing
@@ -425,7 +443,13 @@ mod tests {
         thread.apply(AgentUpdate::Message("Reading.".to_string()));
         thread.apply(AgentUpdate::ToolStarted(card("t1", ToolStatus::InProgress)));
         let effect = thread.apply(AgentUpdate::Message("Done.".to_string()));
-        assert_eq!(effect, Effect::Appended { entry: 3, from: 0 });
+        assert_eq!(
+            effect,
+            Effect::Appended {
+                message: MessageId(1),
+                from: 0
+            }
+        );
         assert_eq!(thread.entries().len(), 4);
     }
 
@@ -571,7 +595,8 @@ mod tests {
         thread.apply(AgentUpdate::Message("Result.".to_string()));
         thread.end_turn(TurnEnd::Finished, 6);
         assert_eq!(thread.entries()[3], Entry::Worked { seconds: 6 });
-        assert_eq!(thread.entries()[4], Entry::Assistant("Result.".to_string()));
+        assert_eq!(thread.message_text(MessageId(1)), Some("Result."));
+        assert!(matches!(thread.entries()[4], Entry::Assistant { .. }));
     }
 
     #[test]

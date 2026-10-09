@@ -13,6 +13,7 @@ pub struct Preset {
     pub extra_args: &'static [&'static str],
     pub min_node_major: u32,
     pub login_command: &'static str,
+    pub provider: &'static str,
 }
 
 pub const CLAUDE: Preset = Preset {
@@ -22,6 +23,7 @@ pub const CLAUDE: Preset = Preset {
     extra_args: &[],
     min_node_major: 22,
     login_command: "claude /login",
+    provider: "Anthropic",
 };
 
 pub const GEMINI: Preset = Preset {
@@ -31,6 +33,7 @@ pub const GEMINI: Preset = Preset {
     extra_args: &["--acp"],
     min_node_major: 20,
     login_command: "gemini",
+    provider: "Google",
 };
 
 pub const CODEX: Preset = Preset {
@@ -40,6 +43,7 @@ pub const CODEX: Preset = Preset {
     extra_args: &[],
     min_node_major: 20,
     login_command: "codex login",
+    provider: "OpenAI",
 };
 
 pub const PRESETS: [Preset; 3] = [CLAUDE, GEMINI, CODEX];
