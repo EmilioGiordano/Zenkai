@@ -2,19 +2,29 @@ use std::time::{Duration, Instant};
 
 use zenkai_types::WorkbookId;
 
-pub const DEFAULT_BUDGET_MB: u64 = 4096;
-pub const BUDGET_VARIABLE: &str = "ZENKAI_MEMORY_BUDGET_MB";
+// Used only when the machine's memory cannot be read.
+const FALLBACK_BUDGET_MB: u64 = 4096;
+const SHARE_OF_RAM_PERCENT: u64 = 60;
+const BUDGET_VARIABLE: &str = "ZENKAI_MEMORY_BUDGET_MB";
 const COOLDOWN: Duration = Duration::from_secs(15);
 
+// 60 % of the physical memory, unless the variable names a number of MB.
 pub fn budget_mb() -> u64 {
-    parse_budget(std::env::var(BUDGET_VARIABLE).ok().as_deref())
+    let mut system = sysinfo::System::new();
+    system.refresh_memory();
+    let total_mb = system.total_memory() / 1024 / 1024;
+    budget_from(
+        std::env::var(BUDGET_VARIABLE).ok().as_deref(),
+        (total_mb > 0).then_some(total_mb),
+    )
 }
 
-fn parse_budget(value: Option<&str>) -> u64 {
-    value
+fn budget_from(override_mb: Option<&str>, total_mb: Option<u64>) -> u64 {
+    override_mb
         .and_then(|text| text.trim().parse::<u64>().ok())
         .filter(|megabytes| *megabytes > 0)
-        .unwrap_or(DEFAULT_BUDGET_MB)
+        .or_else(|| total_mb.map(|total| total * SHARE_OF_RAM_PERCENT / 100))
+        .unwrap_or(FALLBACK_BUDGET_MB)
 }
 
 pub struct Candidate {
@@ -99,10 +109,12 @@ mod tests {
     }
 
     #[test]
-    fn the_budget_comes_from_the_environment_or_falls_back() {
-        assert_eq!(parse_budget(Some(" 2048 ")), 2048);
-        assert_eq!(parse_budget(Some("0")), DEFAULT_BUDGET_MB);
-        assert_eq!(parse_budget(Some("many")), DEFAULT_BUDGET_MB);
-        assert_eq!(parse_budget(None), DEFAULT_BUDGET_MB);
+    fn the_budget_is_sixty_percent_of_ram_unless_overridden() {
+        assert_eq!(budget_from(None, Some(16_000)), 9_600);
+        assert_eq!(budget_from(Some(" 2048 "), Some(16_000)), 2048);
+        assert_eq!(budget_from(Some("0"), Some(16_000)), 9_600);
+        assert_eq!(budget_from(Some("many"), Some(16_000)), 9_600);
+        assert_eq!(budget_from(None, None), FALLBACK_BUDGET_MB);
+        assert_eq!(budget_from(Some("512"), None), 512);
     }
 }
