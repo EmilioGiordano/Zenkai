@@ -9902,6 +9902,7 @@ dependencies = [
 name = "zenkai-datagen"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "schemars 1.2.2",
  "serde",
  "serde_json",
