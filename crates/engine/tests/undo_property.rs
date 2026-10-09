@@ -201,7 +201,10 @@ proptest! {
             return Ok(());
         }
         let cleared = every_cell(&book);
-        prop_assert!(cleared.iter().all(|(at, _)| !target.contains(*at)));
+        // Values spilled by a formula outside the selection are recomputed and stay as they were.
+        prop_assert!(cleared
+            .iter()
+            .all(|entry| !target.contains(entry.0) || before.contains(entry)));
         book.undo().unwrap();
         prop_assert_eq!(every_cell(&book), before.clone());
         book.redo().unwrap();
