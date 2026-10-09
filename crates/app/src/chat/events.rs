@@ -50,7 +50,7 @@ impl ChatPanel {
                 if let Some(live) = &mut self.live {
                     live.ready = true;
                     if self.state.abilities.list_sessions {
-                        live.handle.list_sessions();
+                        live.handle.list_sessions(self.history.started_sessions());
                     }
                     if let Some((text, context)) = self.queued.take() {
                         live.handle.prompt(text, context);
@@ -96,6 +96,12 @@ impl ChatPanel {
                     self.title = backup.title;
                 }
                 self.thread.notice(NoticeKind::Error, &text);
+            }
+            SessionEvent::Started(id) => {
+                self.history.remember_session(&id);
+                if self.history_saves.try_send(self.history.clone()).is_err() {
+                    tracing::debug!("conversation history writer is not running");
+                }
             }
             SessionEvent::Resumed => {
                 self.resume_backup = None;

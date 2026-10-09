@@ -216,6 +216,12 @@ impl ChatPanel {
             .flatten()
     }
 
+    fn folder_hint(&self, cx: &App) -> crate::agent_folder::FolderHint {
+        self.workspace
+            .read_with(cx, |workspace, _| workspace.folder_hint_for_chat())
+            .unwrap_or_default()
+    }
+
     pub(super) fn prompt_context(&self, cx: &App) -> Option<String> {
         let (id, name) = self.active_workbook(cx)?;
         Some(format!(

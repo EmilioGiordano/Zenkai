@@ -7,9 +7,10 @@ use zenkai_agent::chat::session::{McpRelay, SessionConfig, SessionHandle};
 use zenkai_agent::detect;
 use zenkai_agent::secrets::Secrets;
 use zenkai_agent::settings::{AgentId, AgentServer, Settings};
-use zenkai_agent::tools::ToolEndpoint;
+use zenkai_agent::tools::{ToolEndpoint, WorkingFolder};
 use zenkai_i18n::t;
 
+use crate::agent_folder::{self, FolderError, FolderHint};
 use crate::settings_window::relay_program;
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +27,8 @@ pub(super) enum PrepareError {
     NoDataFolder,
     #[error("{}", t!("chat.error.relay_missing"))]
     RelayMissing,
+    #[error(transparent)]
+    Folder(#[from] FolderError),
 }
 
 // What the user confirms before a launch that did not come from the Settings page.
@@ -34,6 +37,7 @@ pub(super) struct Prepared {
     pub id: AgentId,
     pub server: AgentServer,
     pub plan: LaunchPlan,
+    pub folder: WorkingFolder,
 }
 
 pub(super) struct Live {
@@ -55,8 +59,11 @@ pub(super) fn chosen_agent(settings: &Settings) -> Option<(AgentId, AgentServer)
     Some((id, server))
 }
 
-// Looks programs up on PATH, so it runs off the UI thread.
-pub(super) fn plan_launch(settings: &Settings) -> Result<Prepared, PrepareError> {
+// Looks programs up on PATH and prepares the working folder, so it runs off the UI thread.
+pub(super) fn plan_launch(
+    settings: &Settings,
+    hint: &FolderHint,
+) -> Result<Prepared, PrepareError> {
     let (id, server) = chosen_agent(settings).ok_or(PrepareError::NoAgent)?;
     let search_path = detect::search_path();
     let find = |name: &str| detect::find_in(&search_path, name);
@@ -70,7 +77,13 @@ pub(super) fn plan_launch(settings: &Settings) -> Result<Prepared, PrepareError>
             agents_folder,
         },
     )?;
-    Ok(Prepared { id, server, plan })
+    let folder = agent_folder::prepare(hint)?;
+    Ok(Prepared {
+        id,
+        server,
+        plan,
+        folder,
+    })
 }
 
 pub(super) struct Armed {
@@ -90,6 +103,7 @@ pub(super) fn arm(prepared: &Prepared, endpoint: ToolEndpoint) -> Result<Armed, 
     Ok(Armed {
         config: SessionConfig {
             plan: prepared.plan.clone(),
+            folder: prepared.folder.path().to_path_buf(),
             env,
             relay: Some(McpRelay {
                 program: relay_program,

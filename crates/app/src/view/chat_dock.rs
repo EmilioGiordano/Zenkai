@@ -1,8 +1,11 @@
+use std::path::Path;
+
 use gpui_kit::*;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
+use crate::agent_folder::FolderHint;
 use crate::chat::{ChatEvent, ChatPanel, reference};
 
 #[derive(Default)]
@@ -16,6 +19,21 @@ impl Workspace {
     pub(crate) fn active_workbook_for_chat(&self) -> Option<(WorkbookId, String)> {
         let document = self.documents.active()?;
         Some((document.id, document.name()))
+    }
+
+    pub(crate) fn folder_hint_for_chat(&self) -> FolderHint {
+        let space = self.documents.current_space();
+        FolderHint {
+            space_files: self
+                .documents
+                .members(space)
+                .filter_map(|entry| entry.path().map(Path::to_path_buf))
+                .collect(),
+            active_file: self
+                .documents
+                .active()
+                .and_then(|document| document.path.clone()),
+        }
     }
 
     fn chat_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ChatPanel> {

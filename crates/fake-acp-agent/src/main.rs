@@ -266,7 +266,7 @@ async fn run_prompt(
 }
 
 fn zenkai_folder(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("zenkai-agent-{name}"))
+    std::env::temp_dir().join(name)
 }
 
 type Choices = Arc<Mutex<(String, String)>>;

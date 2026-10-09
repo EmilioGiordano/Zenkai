@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -21,7 +21,7 @@ use zenkai_i18n::t;
 use crate::bridge::{PIPE_VARIABLE, TOKEN_VARIABLE};
 use crate::chat::install::install;
 use crate::chat::launch::{self, INSTALLED_MARKER, LaunchError, LaunchPlan};
-use crate::chat::process::{ProcessError, ProcessTree, WorkFolder, is_work_folder};
+use crate::chat::process::ProcessTree;
 use crate::chat::state::{ConfigId, ConfigSource, StateChange};
 use crate::chat::thread::{AgentUpdate, ToolCallId, ToolCard, ToolKind, ToolStatus, TurnEnd};
 use crate::chat::wire;
@@ -47,6 +47,8 @@ pub struct McpRelay {
 #[derive(Clone, Debug)]
 pub struct SessionConfig {
     pub plan: LaunchPlan,
+    // The agent's working folder. It belongs to the user and is never removed.
+    pub folder: PathBuf,
     pub env: Vec<(String, String)>,
     pub relay: Option<McpRelay>,
 }
@@ -62,8 +64,6 @@ pub enum Connection {
 pub enum SessionError {
     #[error(transparent)]
     Launch(#[from] LaunchError),
-    #[error("could not prepare the agent: {0}")]
-    Prepare(String),
     #[error("installing the agent package failed: {0}")]
     Install(String),
     #[error("could not start the agent: {0}")]
@@ -81,12 +81,6 @@ fn stderr_suffix(stderr: &str) -> String {
         String::new()
     } else {
         format!(": {stderr}")
-    }
-}
-
-impl From<ProcessError> for SessionError {
-    fn from(error: ProcessError) -> SessionError {
-        SessionError::Prepare(error.to_string())
     }
 }
 
@@ -144,6 +138,9 @@ pub enum SessionEvent {
     // Something the user asked for failed, but the conversation goes on.
     Problem(String),
     Resumed,
+    // The id of a conversation this chat started, so its past sessions can be told apart
+    // from the user's other sessions in the same folder.
+    Started(String),
 }
 
 #[derive(Debug)]
@@ -158,7 +155,7 @@ pub enum Command {
         source: ConfigSource,
         value: String,
     },
-    ListSessions,
+    ListSessions(BTreeSet<String>),
     Resume(String),
 }
 
@@ -182,8 +179,10 @@ impl SessionHandle {
         self.send(Command::SetConfig { id, source, value });
     }
 
-    pub fn list_sessions(&self) {
-        self.send(Command::ListSessions);
+    // Only the sessions in `started` are listed: the agent reports every session the user
+    // ever had, in any folder.
+    pub fn list_sessions(&self, started: BTreeSet<String>) {
+        self.send(Command::ListSessions(started));
     }
 
     pub fn resume(&self, session: String) {
@@ -311,7 +310,6 @@ async fn drive(
     events: &Sender<SessionEvent>,
     tree: &Arc<ProcessTree>,
 ) -> Result<(), SessionError> {
-    let work = WorkFolder::create()?;
     let (program, arguments) = resolve(&config.plan, events, tree).await?;
     if tree.is_closed() {
         return Ok(());
@@ -321,7 +319,7 @@ async fn drive(
     command
         .args(&arguments)
         .envs(config.env.iter().map(|(name, value)| (name, value)))
-        .current_dir(work.path())
+        .current_dir(&config.folder)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -358,7 +356,7 @@ async fn drive(
     let talk = async {
         let result = converse(
             config,
-            work.path().to_path_buf(),
+            config.folder.clone(),
             ByteStreams::new(stdin, stdout),
             commands,
             events,
@@ -489,6 +487,7 @@ async fn converse_on(
         .block_task()
         .await?;
     let mut session_id = session.session_id;
+    notify(events, SessionEvent::Started(session_id.to_string()));
     notify(
         events,
         SessionEvent::State(StateChange::Abilities(abilities)),
@@ -586,7 +585,7 @@ async fn converse_on(
                     ),
                 }
             }
-            Command::ListSessions => {
+            Command::ListSessions(started) => {
                 match connection
                     .send_request(ListSessionsRequest::new())
                     .block_task()
@@ -598,7 +597,7 @@ async fn converse_on(
                             response
                                 .sessions
                                 .iter()
-                                .filter(|info| is_work_folder(&info.cwd))
+                                .filter(|info| started.contains(&info.session_id.to_string()))
                                 .map(wire::past_session)
                                 .collect(),
                         )),
