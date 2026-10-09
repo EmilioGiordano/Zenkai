@@ -8,7 +8,7 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 
 use crate::bridge::catalog;
-use crate::tools::{Nonce, ToolEndpoint, UNTRUSTED_NOTICE};
+use crate::tools::{Nonce, ToolEndpoint, UNTRUSTED_NOTICE, client_label};
 
 const INSTRUCTIONS: &str = "Zenkai is a spreadsheet. These tools read and change the \
      workbooks the user has open, live: changes show at once, recalculate, can be undone by \
@@ -37,7 +37,7 @@ impl ServerHandler for ZenkaiServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let failed = |message: String| CallToolResult::error(vec![ContentBlock::text(message)]);
         let call = match catalog::parse_call(&request.name, request.arguments) {
@@ -48,7 +48,11 @@ impl ServerHandler for ZenkaiServer {
             Ok(nonce) => nonce,
             Err(error) => return Ok(failed(error.to_string()).into()),
         };
-        let result = match self.endpoint.call(call).await {
+        let client = context
+            .peer
+            .peer_info()
+            .and_then(|info| client_label(&info.client_info.name, &info.client_info.version));
+        let result = match self.endpoint.call_from(call, client).await {
             Ok(reply) => CallToolResult::success(vec![ContentBlock::text(reply.render(&nonce))]),
             Err(error) => failed(error.to_string()),
         };

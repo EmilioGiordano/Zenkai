@@ -1,5 +1,6 @@
 mod approval_text;
 mod channel;
+mod client;
 mod error;
 #[cfg(any(test, feature = "test-support"))]
 mod local_host;
@@ -11,6 +12,7 @@ mod tests;
 mod write;
 
 pub use channel::{ToolCall, ToolEndpoint, ToolResult, channel};
+pub use client::client_label;
 pub use error::{AgentAccess, ReadOnlyReason, ToolError};
 #[cfg(any(test, feature = "test-support"))]
 pub use local_host::LocalHost;

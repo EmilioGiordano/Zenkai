@@ -135,6 +135,60 @@ impl PlannedWrite {
         self.sheet
     }
 
+    pub fn target(&self) -> Range {
+        self.target
+    }
+
+    fn place(&self) -> String {
+        let name = shown_text(&self.sheet_name);
+        if name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            format!("{name}!{}", self.target)
+        } else {
+            format!("'{name}'!{}", self.target)
+        }
+    }
+
+    // The action in words, as the approval bar's second line.
+    pub fn headline(&self) -> String {
+        match &self.change {
+            Change::Inputs(rows) => {
+                let cells = self.target.cell_count();
+                let formulas = rows
+                    .iter()
+                    .flatten()
+                    .filter(|entry| entry.starts_with('='))
+                    .count();
+                let noun = if cells == 1 { "cell" } else { "cells" };
+                let formulas = match formulas {
+                    0 => String::new(),
+                    1 => " (1 formula)".to_string(),
+                    count => format!(" ({count} formulas)"),
+                };
+                format!("Write {cells} {noun} in {}{formulas}", self.place())
+            }
+            Change::Style(change) => format!("Format {}: {}", self.place(), style_label(*change)),
+        }
+    }
+
+    // The first entries as the user will see them, for the approval bar's sample line.
+    pub fn sample(&self) -> Option<String> {
+        let Change::Inputs(rows) = &self.change else {
+            return None;
+        };
+        let shown: Vec<String> = rows
+            .iter()
+            .flatten()
+            .take(SAMPLE_ENTRIES)
+            .map(|entry| shown_entry(entry))
+            .collect();
+        let more = if self.target.cell_count() > SAMPLE_ENTRIES as u64 {
+            ", …"
+        } else {
+            ""
+        };
+        Some(format!("{}{more}", shown.join(", ")))
+    }
+
     pub fn summary(&self) -> WriteSummary {
         WriteSummary {
             range: self.target,
