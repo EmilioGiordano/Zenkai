@@ -62,7 +62,7 @@ mod sidebar;
 mod workbooks;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::TitleBar;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -1771,7 +1771,26 @@ impl Workspace {
                 .size_full()
                 .items_center()
                 .text_sm()
-                .child(div().w(px(160.0)).text_color(muted).child("Zenkai"))
+                .child(
+                    h_flex()
+                        .w(px(160.0))
+                        .items_center()
+                        .gap_2()
+                        .text_color(muted)
+                        .when(!self.sidebar.visible, |this| {
+                            this.child(
+                                Button::new("show-sidebar")
+                                    .ghost()
+                                    .compact()
+                                    .icon(gpui_kit::assets::IconName::PanelLeft)
+                                    .tooltip("Show sidebar (Ctrl+Alt+B)")
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(ToggleSidebar.boxed_clone(), cx)
+                                    }),
+                            )
+                        })
+                        .child("Zenkai"),
+                )
                 .child(
                     div()
                         .flex_1()
