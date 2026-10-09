@@ -3,6 +3,7 @@ use std::fmt;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use zenkai_types::Language;
 
 pub const SCHEMA_FILE: &str = "settings.schema.json";
 const SCHEMA_REFERENCE: &str = "./settings.schema.json";
@@ -15,6 +16,11 @@ pub struct Settings {
     #[serde(rename = "$schema", default = "schema_reference")]
     #[schemars(description = "Path of the JSON Schema that Zenkai writes next to this file.")]
     schema: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Language of the interface, \"en\" or \"es\". Without it Zenkai follows the Windows display language. Takes effect on the next start."
+    )]
+    pub language: Option<Language>,
     #[serde(default)]
     pub agents: AgentSettings,
 }
@@ -27,6 +33,7 @@ impl Default for Settings {
     fn default() -> Settings {
         Settings {
             schema: schema_reference(),
+            language: None,
             agents: AgentSettings::default(),
         }
     }
@@ -507,6 +514,16 @@ mod tests {
         state.apply_file(Settings::parse("{}"));
         assert_eq!(state.current, Settings::default());
         assert_eq!(state.problem, None);
+    }
+
+    #[test]
+    fn the_language_is_optional_and_round_trips() {
+        assert_eq!(Settings::parse("{}").unwrap().language, None);
+        let spanish = Settings::parse(r#"{ "language": "es" }"#).unwrap();
+        assert_eq!(spanish.language, Some(Language::Spanish));
+        assert!(spanish.to_json().unwrap().contains("\"language\": \"es\""));
+        assert!(!Settings::default().to_json().unwrap().contains("language"));
+        assert!(Settings::parse(r#"{ "language": "fr" }"#).is_err());
     }
 
     fn granting(text: &str) -> Settings {
