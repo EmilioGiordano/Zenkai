@@ -53,10 +53,11 @@ fn labelled(label: &'static str, field: impl IntoElement, cx: &App) -> Div {
     v_flex().gap_1().child(caption(label, cx)).child(field)
 }
 
-fn menu_surface(width: f32, cx: &App) -> Div {
+fn menu_surface(width: f32, cx: &Context<GenerateDialog>) -> Div {
     let theme = cx.theme();
     v_flex()
         .occlude()
+        .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_panel(cx)))
         .w(px(width))
         .p_2()
         .gap_2()

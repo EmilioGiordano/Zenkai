@@ -26,7 +26,7 @@ impl GenerateDialog {
                                 .dropdown_caret(true)
                                 .accessibility_label(format!("Type of column {letter}"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.toggle_type_menu(index, cx)
+                                    this.open_type_menu(index, cx)
                                 })),
                         ),
                     )
@@ -45,22 +45,23 @@ impl GenerateDialog {
             .when(type_open, |cell| {
                 cell.child(below_trigger(self.render_type_menu(index, cx)))
             });
-        let options_cell = v_flex()
-            .flex_1()
-            .min_w_0()
-            .child(
-                Button::new(("options", index))
-                    .w_full()
-                    .label(ellipsize(&options::summary(&column.kind), SUMMARY_CHARS))
-                    .accessibility_label(format!("Options of column {letter}"))
-                    .selected(options_open)
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.toggle_options(index, window, cx)
-                    })),
-            )
-            .when(options_open, |cell| {
-                cell.child(below_trigger(self.render_options(index, cx)))
-            });
+        let options_cell =
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    Button::new(("options", index))
+                        .w_full()
+                        .label(ellipsize(&options::summary(&column.kind), SUMMARY_CHARS))
+                        .accessibility_label(format!("Options of column {letter}"))
+                        .selected(options_open)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.open_options(index, window, cx)
+                        })),
+                )
+                .when(options_open, |cell| {
+                    cell.child(below_trigger(self.render_options(index, cx)))
+                });
         let removable = self.draft.is_added(index) && index + 1 == self.draft.columns().len();
         let unique_cell = h_flex()
             .w(px(64.0))

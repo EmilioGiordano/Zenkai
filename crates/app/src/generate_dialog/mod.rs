@@ -259,18 +259,19 @@ impl GenerateDialog {
         }
     }
 
-    fn toggle_type_menu(&mut self, column: usize, cx: &mut Context<Self>) {
-        let open = matches!(self.panel, Some(Panel::Type(open)) if open == column);
-        self.panel = (!open).then_some(Panel::Type(column));
+    // A click outside a panel closes it before the click reaches its trigger, so a trigger
+    // always opens and never has to tell whether its own panel is showing.
+    fn close_panel(&mut self, cx: &mut Context<Self>) {
+        self.panel = None;
         cx.notify();
     }
 
-    fn toggle_options(&mut self, column: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(&self.panel, Some(Panel::Options(open)) if open.column == column) {
-            self.panel = None;
-            cx.notify();
-            return;
-        }
+    fn open_type_menu(&mut self, column: usize, cx: &mut Context<Self>) {
+        self.panel = Some(Panel::Type(column));
+        cx.notify();
+    }
+
+    fn open_options(&mut self, column: usize, window: &mut Window, cx: &mut Context<Self>) {
         let values = options::fields(&self.draft.columns()[column].kind);
         let inputs: Vec<Entity<InputState>> = values
             .iter()
