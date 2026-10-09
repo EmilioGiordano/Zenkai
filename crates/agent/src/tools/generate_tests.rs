@@ -156,3 +156,50 @@ fn a_generated_table_lands_as_one_undo_step() {
         );
     }
 }
+
+fn ids(rows: u32, columns: usize) -> GenerationSpec {
+    let columns: Vec<_> = (0..columns)
+        .map(|n| json!({ "header": format!("C{n}"), "kind": { "type": "sequential_id" } }))
+        .collect();
+    serde_json::from_value(
+        json!({ "rows": rows, "locale": "en-US", "seed": 3, "columns": columns }),
+    )
+    .unwrap()
+}
+
+#[test]
+fn agents_generate_at_most_the_cells_the_review_can_hold() {
+    let sheets = host().workbook.sheets();
+    let plan = |spec| {
+        plan_write(
+            &WriteRequest::GenerateData(generate_at("A1", spec)),
+            &sheets,
+        )
+    };
+    let at_limit = (MAX_GENERATE_CELLS / 2 - 1) as u32;
+    assert_eq!(
+        plan(ids(at_limit, 2)).unwrap().target().cell_count(),
+        MAX_GENERATE_CELLS
+    );
+    assert_eq!(
+        plan(ids(at_limit + 1, 2)),
+        Err(ToolError::TooManyGeneratedCells {
+            cells: MAX_GENERATE_CELLS + 2,
+            limit: MAX_GENERATE_CELLS
+        })
+    );
+    let long_text: GenerationSpec = serde_json::from_value(json!({
+        "rows": 20_000,
+        "locale": "en-US",
+        "seed": 1,
+        "columns": [{ "header": "Notes", "kind": { "type": "lorem", "min_words": 200, "max_words": 200 } }]
+    }))
+    .unwrap();
+    assert!(matches!(
+        plan(long_text),
+        Err(ToolError::GeneratedTextTooLarge {
+            limit: MAX_GENERATE_BYTES,
+            ..
+        })
+    ));
+}

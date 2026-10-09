@@ -16,6 +16,11 @@ use crate::tools::request::WriteRequest;
 pub const MAX_WRITE_CELLS: u64 = 5_000;
 pub const MAX_FORMAT_CELLS: u64 = 100_000;
 pub const MAX_CELL_CHARS: usize = 32_767;
+// The review records every generated cell, so the new text must fit in half of the app's
+// 64 MiB review budget; with the snapshot of old inputs the peak stays near 100 MiB.
+pub const MAX_GENERATE_BYTES: u64 = 32 * 1024 * 1024;
+// Keeps the review's per-cell bookkeeping (about 60 bytes a cell beyond the text) near 12 MiB.
+pub const MAX_GENERATE_CELLS: u64 = 200_000;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Change {
@@ -63,6 +68,23 @@ fn block_at(origin: CellPos, rows: &[Vec<String>]) -> Result<Range, ToolError> {
     fitted(origin, rows.len() as u64, width as u64)
 }
 
+fn check_generated_size(spec: &GenerationSpec, cells: u64) -> Result<(), ToolError> {
+    if cells > MAX_GENERATE_CELLS {
+        return Err(ToolError::TooManyGeneratedCells {
+            cells,
+            limit: MAX_GENERATE_CELLS,
+        });
+    }
+    let bytes = zenkai_datagen::estimated_output_bytes(spec);
+    if bytes > MAX_GENERATE_BYTES {
+        return Err(ToolError::GeneratedTextTooLarge {
+            bytes,
+            limit: MAX_GENERATE_BYTES,
+        });
+    }
+    Ok(())
+}
+
 fn fitted(origin: CellPos, height: u64, width: u64) -> Result<Range, ToolError> {
     let last_row = u64::from(origin.row.get()) + height - 1;
     let last_col = u64::from(origin.col.get()) + width - 1;
@@ -97,6 +119,7 @@ pub fn plan_write(request: &WriteRequest, sheets: &[SheetInfo]) -> Result<Planne
             zenkai_datagen::validate(&request.spec).map_err(ToolError::Generation)?;
             let header_and_rows = u64::from(request.spec.rows) + 1;
             let columns = request.spec.columns.len() as u64;
+            check_generated_size(&request.spec, header_and_rows * columns)?;
             let target = fitted(parse_cell(&request.start)?, header_and_rows, columns)?;
             (
                 &request.sheet,

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use zenkai_agent::tools::MAX_GENERATE_BYTES;
 use zenkai_engine::{Engine, EngineError, Workbook};
 use zenkai_types::{CellPos, CellRef, Range, SheetId};
 
@@ -31,10 +32,10 @@ impl Batch {
     }
 }
 
-// A write holds at most 5,000 cells (MAX_WRITE_CELLS), so 64 MiB keeps every old and new
-// input of several typical writes (a few dozen bytes per cell) while bounding the worst
-// case of long texts; past it the oldest writes are kept automatically.
+// Holds the old and new inputs of several typical writes while bounding long texts; past it
+// the oldest writes are kept automatically. A generated table may use at most half of it.
 pub const MAX_REVIEW_BYTES: usize = 64 * 1024 * 1024;
+const _: () = assert!(MAX_GENERATE_BYTES * 2 <= MAX_REVIEW_BYTES as u64);
 
 fn row_major(change: &CellChange) -> (SheetId, u32, u16) {
     (
