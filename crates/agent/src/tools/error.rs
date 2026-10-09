@@ -3,6 +3,8 @@ use std::fmt;
 use zenkai_datagen::DatagenError;
 use zenkai_types::WorkbookId;
 
+use crate::tools::folder::PathError;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadOnlyReason {
     Settings,
@@ -93,4 +95,24 @@ pub enum ToolError {
     Closed,
     #[error("could not create a random marker for the reply: {0}")]
     Random(String),
+    #[error(
+        "this connection has no working folder: only the agent in Zenkai's chat can create or open files"
+    )]
+    NoWorkingFolder,
+    #[error(transparent)]
+    Path(#[from] PathError),
+    #[error("\"{0}\" already exists; choose another name, or open it with open_workbook")]
+    AlreadyExists(String),
+    #[error("\"{0}\" does not exist in the working folder")]
+    FileNotFound(String),
+    #[error("create_workbook makes .xlsx files; \"{0}\" has another extension")]
+    NotNewWorkbookFile(String),
+    #[error(
+        "\"{0}\" is not a spreadsheet Zenkai opens with this tool (.xlsx, .xlsm, .xls, .xlsb or .ods)"
+    )]
+    NotOpenableFile(String),
+    #[error("{count} sheets is more than the {limit} a new workbook may start with")]
+    TooManySheets { count: usize, limit: usize },
+    #[error("the file could not be written or read: {0}")]
+    File(String),
 }
