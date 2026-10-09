@@ -10,6 +10,12 @@ pub enum Panel {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Resize {
     Wider,
     Narrower,
@@ -20,6 +26,13 @@ impl Panel {
         match self {
             Panel::Sidebar => (180.0, 420.0),
             Panel::Chat => (320.0, 720.0),
+        }
+    }
+
+    pub fn moving_edge(self, direction: Direction) -> Resize {
+        match (self, direction) {
+            (Panel::Sidebar, Direction::Left) | (Panel::Chat, Direction::Right) => Resize::Narrower,
+            (Panel::Sidebar, Direction::Right) | (Panel::Chat, Direction::Left) => Resize::Wider,
         }
     }
 
@@ -139,7 +152,7 @@ impl PanelWidths {
             _ => 0.0,
         };
         let width = PanelWidth::within(panel, requested, window, other);
-        fitted.with(panel, width)
+        self.with(panel, width)
     }
 
     pub fn stepped(self, panel: Panel, resize: Resize, window: f32, shown: Shown) -> PanelWidths {
@@ -187,13 +200,17 @@ mod tests {
     fn the_grid_keeps_its_minimum_on_a_small_window() {
         let widths = PanelWidths::default();
         let window = 1000.0;
-        let sidebar = widths.resized(Panel::Sidebar, 420.0, window, BOTH);
+        let sidebar = widths
+            .resized(Panel::Sidebar, 420.0, window, BOTH)
+            .fitted(window, BOTH);
         let chat_width = sidebar.width_of(Panel::Chat);
         assert_eq!(
             sidebar.width_of(Panel::Sidebar),
             window - 480.0 - chat_width
         );
-        let chat = widths.resized(Panel::Chat, 720.0, window, BOTH);
+        let chat = widths
+            .resized(Panel::Chat, 720.0, window, BOTH)
+            .fitted(window, BOTH);
         let sidebar_width = chat.width_of(Panel::Sidebar);
         assert_eq!(chat.width_of(Panel::Chat), window - 480.0 - sidebar_width);
     }
@@ -221,6 +238,18 @@ mod tests {
         let small = stored.fitted(1100.0, BOTH);
         assert!(small.width_of(Panel::Sidebar) + small.width_of(Panel::Chat) <= 1100.0 - 480.0);
         assert_eq!(stored.fitted(BIG, BOTH), stored);
+    }
+
+    #[test]
+    fn resizing_in_a_small_window_keeps_the_other_stored_width() {
+        let stored = PanelWidths::default();
+        let small = 1100.0;
+        let resized = stored.resized(Panel::Sidebar, 420.0, small, BOTH);
+        assert_eq!(resized.width_of(Panel::Chat), 464.0);
+        let maximised = resized.fitted(BIG, BOTH);
+        assert_eq!(maximised.width_of(Panel::Chat), 464.0);
+        let stepped = stored.stepped(Panel::Chat, Resize::Wider, small, BOTH);
+        assert_eq!(stepped.width_of(Panel::Sidebar), 248.0);
     }
 
     #[test]

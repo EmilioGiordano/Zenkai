@@ -5,7 +5,7 @@ use zenkai_i18n::t;
 
 use super::Workspace;
 use crate::actions::*;
-use crate::panel_width::{Panel, PanelWidths, Resize, Shown};
+use crate::panel_width::{Direction, Panel, PanelWidths, Resize, Shown};
 
 const EDGE_HIT_AREA: f32 = 6.0;
 
@@ -203,18 +203,10 @@ impl Workspace {
                 }),
             )
             .on_action(cx.listener(move |this, _: &MoveEdgeLeft, window, cx| {
-                let resize = match panel {
-                    Panel::Sidebar => Resize::Narrower,
-                    Panel::Chat => Resize::Wider,
-                };
-                this.step_panel(panel, resize, window, cx)
+                this.step_panel(panel, panel.moving_edge(Direction::Left), window, cx)
             }))
             .on_action(cx.listener(move |this, _: &MoveEdgeRight, window, cx| {
-                let resize = match panel {
-                    Panel::Sidebar => Resize::Wider,
-                    Panel::Chat => Resize::Narrower,
-                };
-                this.step_panel(panel, resize, window, cx)
+                this.step_panel(panel, panel.moving_edge(Direction::Right), window, cx)
             }))
             .on_action(cx.listener(move |this, _: &RestorePanelWidth, window, cx| {
                 this.restore_panel_width(panel, window, cx)
