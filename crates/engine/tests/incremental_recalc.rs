@@ -86,12 +86,46 @@ fn formula() -> impl Strategy<Value = String> {
         1 => Just("=SUM(Sheet2!B:B)".to_string()),
         1 => Just("=SUMIF($A$1:$D$300,\">2\",$B$1:$E$300)".to_string()),
         1 => Just("=COUNTIF(Sheet2!$A$1:$D$300,\"<5\")".to_string()),
+        2 => criteria_total(),
+    ]
+}
+
+// SUMIF and COUNTIF over areas large enough to keep their totals, reading the edited grid.
+fn criteria_total() -> impl Strategy<Value = String> {
+    prop_oneof![
+        2 => cell().prop_map(|a| format!("=SUMIF($A$1:$A$1100,{a},$B$1:$B$1100)")),
+        2 => Just("=SUMIF($A$1:$A$1100,\">2\",$C$1:$C$1100)".to_string()),
+        2 => Just("=SUMIF(Sheet2!$A$1:$B$600,\"<1\",Sheet2!$C$1:$D$600)".to_string()),
+        2 => Just(
+            "=SUMIFS($B$1:$B$1100,$A$1:$A$1100,\"<>\",$C$1:$C$1100,\"<5\")".to_string()
+        ),
+        2 => cell().prop_map(|a| format!("=COUNTIF(Sheet2!$B$1:$B$1100,{a})")),
+        2 => Just("=COUNTIFS($A$1:$A$1100,\"a*\",$B$1:$B$1100,\"\")".to_string()),
+        2 => cell().prop_map(|a| format!("=IF({a}>0,SUMIF($A$1:$A$1100,\"<3\",$D$1:$D$1100),0)")),
+        2 => cell().prop_map(|a| format!("=IF({a}<0,COUNTIF($C$1:$C$1100,\">=1\"),-1)")),
+        1 => Just("=SUMIF($A$1:$A$1100,\">0\",$B$1:$B$1200)".to_string()),
+        1 => Just("=SUMIF(A:A,\"<3\",B:B)+COUNTIF(B:B,\"<>\")".to_string()),
+    ]
+}
+
+// Decimals whose sums round differently in different orders, so a total updated by delta
+// that drifted from a full read would show.
+fn decimal() -> impl Strategy<Value = String> {
+    prop_oneof![
+        Just("0.1".to_string()),
+        Just("0.2".to_string()),
+        Just("-0.3".to_string()),
+        Just("679.8711".to_string()),
+        Just("1000000000000000.3".to_string()),
+        Just("-1000000000000000".to_string()),
+        Just("=1/0".to_string()),
     ]
 }
 
 fn input() -> impl Strategy<Value = String> {
     prop_oneof![
         5 => (-9i32..10).prop_map(|n| n.to_string()),
+        3 => decimal(),
         1 => "[a-c]{1,2}",
         1 => Just(String::new()),
         4 => formula(),
@@ -104,6 +138,9 @@ fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
         8 => (0..SHEETS, row.clone(), column.clone(), input())
             .prop_map(|(s, r, c, v)| Op::Set(s, r, c, v)),
+        // Beside the grid, so the totals do not read their own cell.
+        3 => (0..SHEETS, row.clone(), criteria_total())
+            .prop_map(|(s, r, v)| Op::Set(s, r, COLUMNS + 1, v)),
         2 => (
             0..SHEETS,
             row.clone(),
@@ -259,15 +296,20 @@ fn incremental_recalculation_matches_a_full_evaluation() {
     let steps = std::cell::Cell::new(0u32);
     let accepted = std::cell::Cell::new(0u32);
     let incremental = std::cell::Cell::new(0u32);
+    let deltas = std::cell::Cell::new(0u32);
     let result = runner.run(&prop::collection::vec(op(), 1..25), |ops| {
         let mut model = two_sheets();
         for op in &ops {
+            let deltas_before = model.get_model().criteria_deltas();
             if apply(&mut model, op) {
                 accepted.set(accepted.get() + 1);
             }
             steps.set(steps.get() + 1);
             if model.get_model().last_recalculation() == Recalculation::Incremental {
                 incremental.set(incremental.get() + 1);
+            }
+            if model.get_model().criteria_deltas() > deltas_before {
+                deltas.set(deltas.get() + 1);
             }
             let expected = values(&evaluated_from_scratch(&model));
             prop_assert_eq!(values(&model), expected, "after {:?}", op);
@@ -288,6 +330,13 @@ fn incremental_recalculation_matches_a_full_evaluation() {
         incremental.get() * 2 > steps.get(),
         "only {} of {} steps were incremental",
         incremental.get(),
+        steps.get()
+    );
+    // Criteria totals updated by delta must be under test too.
+    assert!(
+        deltas.get() * 20 > steps.get(),
+        "only {} of {} steps updated a criteria total by delta",
+        deltas.get(),
         steps.get()
     );
 }
