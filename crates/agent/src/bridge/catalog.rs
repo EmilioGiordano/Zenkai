@@ -6,8 +6,8 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::tools::{
-    Find, FormatRange, GetSelection, ListSheets, ListWorkbooks, ReadRange, SetFormula, ToolRequest,
-    UNTRUSTED_NOTICE, WriteCells,
+    Find, FormatRange, GenerateData, GetSelection, ListSheets, ListWorkbooks, ReadRange,
+    SetFormula, ToolRequest, UNTRUSTED_NOTICE, WriteCells,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +37,7 @@ fn parse<T: DeserializeOwned + Into<ToolRequest>>(
     serde_json::from_value::<T>(arguments).map(Into::into)
 }
 
-const CATALOG: [Entry; 8] = [
+const CATALOG: [Entry; 9] = [
     Entry {
         name: "list_workbooks",
         description: "List the workbooks open in Zenkai with their ids. Every other tool takes one of these ids.",
@@ -96,6 +96,13 @@ const CATALOG: [Entry; 8] = [
         schema: schema::<FormatRange>,
         parse: parse::<FormatRange>,
     },
+    Entry {
+        name: "generate_data",
+        description: "Fill a table with synthetic data: a header row at start and spec.rows rows below it. The spec is the one Zenkai's Generate data dialog uses: rows, locale (es-AR or en-US), seed (same spec and seed, same rows) and columns, each with a header, a kind (\"type\": first_name, last_name, full_name, email, phone, street_address, city, company, integer, decimal, date, boolean, one_of, sequential_id, uuid, lorem or pattern, plus that kind's options), blanks (percent left empty) and unique. At most 5000000 cells and 512 MiB of text. The user may be asked to approve it; it is one undo step and is never saved by itself.",
+        effect: Effect::Writes,
+        schema: schema::<GenerateData>,
+        parse: parse::<GenerateData>,
+    },
 ];
 
 pub fn tools() -> Vec<Tool> {
@@ -135,12 +142,12 @@ pub fn parse_call(name: &str, arguments: Option<JsonObject>) -> Result<ToolReque
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::{ReadRequest, WorkbookId};
+    use crate::tools::{GenerateData, ReadRequest, WorkbookId, WriteRequest};
 
     #[test]
     fn every_tool_has_an_object_schema_and_the_data_warning() {
         let tools = tools();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 9);
         for tool in &tools {
             assert_eq!(tool.input_schema.get("type"), Some(&Value::from("object")));
             let description = tool.description.as_deref().unwrap_or_default();
@@ -174,6 +181,58 @@ mod tests {
         );
         assert!(matches!(
             parse_call("list_sheets", None),
+            Err(CallError::Arguments { .. })
+        ));
+    }
+
+    #[test]
+    fn generate_data_takes_the_dialog_spec_and_nothing_else() {
+        let spec = serde_json::json!({
+            "rows": 2,
+            "locale": "es-AR",
+            "seed": 9,
+            "columns": [{ "header": "Id", "kind": { "type": "sequential_id" } }]
+        });
+        let call = |spec: &Value, extra: Option<(&str, Value)>| {
+            let mut arguments = serde_json::json!({
+                "workbook": 5, "sheet": "Sheet1", "start": "A1", "spec": spec
+            });
+            if let (Some((key, value)), Value::Object(object)) = (extra, &mut arguments) {
+                object.insert(key.to_string(), value);
+            }
+            let Value::Object(arguments) = arguments else {
+                unreachable!()
+            };
+            parse_call("generate_data", Some(arguments))
+        };
+        let request = call(&spec, None).unwrap();
+        let ToolRequest::Write(
+            WorkbookId(5),
+            WriteRequest::GenerateData(GenerateData { spec: parsed, .. }),
+        ) = request
+        else {
+            panic!("expected a generate_data write, got {request:?}");
+        };
+        assert_eq!(parsed.seed, 9);
+        let mut extra_field = spec.clone();
+        extra_field["columns"][0]["colour"] = Value::from("red");
+        let mut unknown_kind = spec.clone();
+        unknown_kind["columns"][0]["kind"] = serde_json::json!({ "type": "password" });
+        let mut negative_rows = spec.clone();
+        negative_rows["rows"] = Value::from(-1);
+        for bad in [
+            extra_field,
+            unknown_kind,
+            negative_rows,
+            Value::from("rows: 2"),
+        ] {
+            assert!(
+                matches!(call(&bad, None), Err(CallError::Arguments { .. })),
+                "{bad}"
+            );
+        }
+        assert!(matches!(
+            call(&spec, Some(("seed", Value::from(1)))),
             Err(CallError::Arguments { .. })
         ));
     }

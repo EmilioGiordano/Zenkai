@@ -1,3 +1,4 @@
+use zenkai_datagen::GenerationSpec;
 use zenkai_engine::{Engine, EngineError, Workbook};
 use zenkai_i18n::t;
 use zenkai_types::{
@@ -20,6 +21,7 @@ pub const MAX_CELL_CHARS: usize = 32_767;
 enum Change {
     Inputs(Vec<Vec<String>>),
     Style(StyleChange),
+    Generated(GenerationSpec),
 }
 
 // A write that passed every check and only waits for the user's approval. Inputs go in
@@ -58,8 +60,12 @@ fn block_at(origin: CellPos, rows: &[Vec<String>]) -> Result<Range, ToolError> {
             limit: MAX_CELL_CHARS,
         });
     }
-    let last_row = u64::from(origin.row.get()) + rows.len() as u64 - 1;
-    let last_col = u64::from(origin.col.get()) + width as u64 - 1;
+    fitted(origin, rows.len() as u64, width as u64)
+}
+
+fn fitted(origin: CellPos, height: u64, width: u64) -> Result<Range, ToolError> {
+    let last_row = u64::from(origin.row.get()) + height - 1;
+    let last_col = u64::from(origin.col.get()) + width - 1;
     if last_row >= u64::from(MAX_ROWS) || last_col >= u64::from(MAX_COLS) {
         return Err(ToolError::OutsideSheet);
     }
@@ -86,6 +92,17 @@ pub fn plan_write(request: &WriteRequest, sheets: &[SheetInfo]) -> Result<Planne
             let rows = vec![vec![request.formula.clone()]];
             let target = block_at(parse_cell(&request.cell)?, &rows)?;
             (&request.sheet, target, Change::Inputs(rows))
+        }
+        WriteRequest::GenerateData(request) => {
+            zenkai_datagen::validate(&request.spec).map_err(ToolError::Generation)?;
+            let header_and_rows = u64::from(request.spec.rows) + 1;
+            let columns = request.spec.columns.len() as u64;
+            let target = fitted(parse_cell(&request.start)?, header_and_rows, columns)?;
+            (
+                &request.sheet,
+                target,
+                Change::Generated(request.spec.clone()),
+            )
         }
         WriteRequest::FormatRange(request) => {
             let target = parse_range(&request.range)?;
@@ -147,6 +164,14 @@ fn style_label(change: StyleChange) -> String {
     }
 }
 
+fn generated_size(spec: &GenerationSpec) -> String {
+    t!(
+        "plan.generated_size",
+        rows = t!("plan.rows", count = spec.rows),
+        columns = t!("plan.columns", count = spec.columns.len())
+    )
+}
+
 impl PlannedWrite {
     pub fn sheet(&self) -> SheetId {
         self.sheet
@@ -162,7 +187,7 @@ impl PlannedWrite {
 
     // Only writes of cell inputs can be rejected later; a format change has no input to restore.
     pub fn input_block(&self) -> Option<Range> {
-        matches!(self.change, Change::Inputs(_)).then_some(self.target)
+        matches!(self.change, Change::Inputs(_) | Change::Generated(_)).then_some(self.target)
     }
 
     fn place(&self) -> String {
@@ -200,26 +225,43 @@ impl PlannedWrite {
                 place = self.place(),
                 change = style_label(*change)
             ),
+            Change::Generated(spec) => t!(
+                "plan.headline_generate",
+                size = generated_size(spec),
+                place = self.place()
+            ),
         }
     }
 
     // The first entries as the user will see them, for the approval bar's sample line.
     pub fn sample(&self) -> Option<String> {
-        let Change::Inputs(rows) = &self.change else {
-            return None;
-        };
-        let shown: Vec<String> = rows
-            .iter()
-            .flatten()
-            .take(SAMPLE_ENTRIES)
-            .map(|entry| shown_entry(entry))
-            .collect();
+        let entries = self.first_entries()?;
         let more = if self.target.cell_count() > SAMPLE_ENTRIES as u64 {
             ", …"
         } else {
             ""
         };
-        Some(format!("{}{more}", shown.join(", ")))
+        Some(format!("{}{more}", entries.join(", ")))
+    }
+
+    // A generated table is only known once applied; its headers stand for it until then.
+    fn first_entries(&self) -> Option<Vec<String>> {
+        let entries: Vec<String> = match &self.change {
+            Change::Inputs(rows) => rows
+                .iter()
+                .flatten()
+                .take(SAMPLE_ENTRIES)
+                .cloned()
+                .collect(),
+            Change::Generated(spec) => spec
+                .columns
+                .iter()
+                .take(SAMPLE_ENTRIES)
+                .map(|column| column.header_input())
+                .collect(),
+            Change::Style(_) => return None,
+        };
+        Some(entries.iter().map(|entry| shown_entry(entry)).collect())
     }
 
     pub fn summary(&self) -> WriteSummary {
@@ -268,6 +310,12 @@ impl PlannedWrite {
             Change::Style(change) => {
                 t!("plan.format", place = place, change = style_label(*change))
             }
+            Change::Generated(spec) => t!(
+                "plan.describe_generate",
+                size = generated_size(spec),
+                place = place,
+                headers = self.first_entries().unwrap_or_default().join(", ")
+            ),
         }
     }
 
@@ -275,6 +323,14 @@ impl PlannedWrite {
         match self.change {
             Change::Inputs(rows) => workbook.set_inputs(self.sheet, self.target.start, &rows),
             Change::Style(change) => workbook.apply_style(self.sheet, self.target, change),
+            Change::Generated(spec) => {
+                let rows = zenkai_datagen::generate(&spec)
+                    .map_err(|error| EngineError::Rejected(error.to_string()))?;
+                let headers = spec.columns.iter().map(|column| column.header_input());
+                let block: Vec<Vec<String>> =
+                    std::iter::once(headers.collect()).chain(rows).collect();
+                workbook.set_inputs(self.sheet, self.target.start, &block)
+            }
         }
     }
 }

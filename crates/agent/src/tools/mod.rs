@@ -23,8 +23,9 @@ pub use reply::{
     UNTRUSTED_NOTICE, WorkbookSummary, WriteSummary,
 };
 pub use request::{
-    Alignment, Borders, Find, FormatChange, FormatRange, GetSelection, ListSheets, ListWorkbooks,
-    NumberFormatName, ReadRange, ReadRequest, SetFormula, ToolRequest, WriteCells, WriteRequest,
+    Alignment, Borders, Find, FormatChange, FormatRange, GenerateData, GetSelection, ListSheets,
+    ListWorkbooks, NumberFormatName, ReadRange, ReadRequest, SetFormula, ToolRequest, WriteCells,
+    WriteRequest,
 };
 pub use write::{MAX_CELL_CHARS, MAX_FORMAT_CELLS, MAX_WRITE_CELLS, PlannedWrite, plan_write};
 

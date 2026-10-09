@@ -9923,6 +9923,7 @@ dependencies = [
  "which",
  "widestring",
  "windows-native-keyring-store",
+ "zenkai-datagen",
  "zenkai-engine",
  "zenkai-i18n",
  "zenkai-types",
