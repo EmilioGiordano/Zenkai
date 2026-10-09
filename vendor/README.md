@@ -39,6 +39,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   (`src/exact_sum.rs`), so the result does not depend on the order cells are added in;
   it can differ from upstream in the last bit. Tests: `src/exact_sum.rs`,
   `src/test/test_fn_sumifs.rs`.
+- SUMIF, SUMIFS, COUNTIF and COUNTIFS keep their totals between recalculations and
+  update them by what an edit changed instead of reading their ranges again
+  (`src/criteria_totals.rs`, `src/criteria_ranges.rs`, `src/incremental.rs`,
+  `Model::criteria_deltas`). Tests: `src/test/test_criteria_totals.rs`,
+  `src/criteria_ranges.rs`. Needs the incremental recalculation, the exact sum and the
+  per-evaluation criteria ranges above.
 - COUNTIFS over a whole-sheet range like `A:XFD` counted its blank tail in i32, which
   overflowed (`src/functions/statistical/if_ifs.rs`). Tests:
   `src/test/test_criteria_semantics.rs`.

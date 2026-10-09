@@ -1,6 +1,5 @@
 use crate::cast::NumberOrArray;
 use crate::constants::{EXCEL_PRECISION, LAST_COLUMN, LAST_ROW};
-use crate::exact_sum::ExactSum;
 use crate::expressions::parser::ArrayNode;
 use crate::expressions::types::CellReferenceIndex;
 use crate::number_format::{to_excel_precision, to_precision};
@@ -613,11 +612,7 @@ impl<'a> Model<'a> {
 
     /// SUMIFS(sum_range, criteria_range1, criteria1, [criteria_range2, criteria2], ...)
     pub(crate) fn fn_sumifs(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
-        let mut total = ExactSum::default();
-        if let Err(e) = self.apply_ifs(args, cell, |value| total.add(value)) {
-            return e;
-        }
-        CalcResult::Number(total.value())
+        self.sum_ifs(args, cell)
     }
 
     pub(crate) fn fn_round(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {

@@ -2,9 +2,10 @@ use std::borrow::Cow;
 
 use crate::constants::{LAST_COLUMN, LAST_ROW};
 use crate::criteria_ranges::AreaValues;
+use crate::criteria_totals::TotalKey;
 use crate::exact_sum::ExactSum;
 use crate::expressions::types::CellReferenceIndex;
-use crate::functions::util::build_criteria;
+use crate::functions::util::{build_criteria, Criterion};
 use crate::{
     calc_result::{CalcResult, Range},
     expressions::parser::{ArrayNode, Node},
@@ -12,8 +13,20 @@ use crate::{
     model::Model,
 };
 
-/// A compiled criterion predicate, as returned by `build_criteria`.
-type Criterion<'c> = Box<dyn Fn(&CalcResult) -> bool + 'c>;
+// Totals are kept only for ranges of one shape: the full read takes the others in the
+// shape of the first, which Excel does not do.
+fn same_shape<'r>(mut ranges: impl Iterator<Item = &'r Range>) -> bool {
+    let shape = |range: &Range| {
+        (
+            range.right.row - range.left.row,
+            range.right.column - range.left.column,
+        )
+    };
+    match ranges.next() {
+        Some(first) => ranges.all(|range| shape(range) == shape(first)),
+        None => false,
+    }
+}
 
 /// Converts a single array element into the equivalent scalar `CalcResult`,
 /// used to feed `build_criteria` from an inline-array criteria argument.
@@ -96,7 +109,6 @@ impl<'a> Model<'a> {
             fn_criteria.push(build_criteria(criterion, self.locale));
         }
 
-        let mut total = 0.0;
         let first_range = &ranges[0];
         let left_row = first_range.left.row;
         let left_column = first_range.left.column;
@@ -143,23 +155,44 @@ impl<'a> Model<'a> {
                 )
             })
             .collect();
-        for row_offset in 0..height {
-            for column_offset in 0..width {
-                let mut is_true = true;
-                for (values, fn_criterion) in values.iter().zip(fn_criteria.iter()) {
-                    // We check if value in range n meets criterion n
-                    if !fn_criterion(&self.area_value(values, row_offset, column_offset)) {
-                        is_true = false;
-                        break;
+        let key = if same_shape(ranges.iter()) {
+            TotalKey::new(&values, &criteria, None)
+        } else {
+            None
+        };
+        let kept = key
+            .as_ref()
+            .and_then(|key| self.kept_total(key, &values, None, cell));
+        let mut total = match kept {
+            Some(count) => count,
+            None => {
+                let misses = self.criteria_ranges.misses;
+                let mut count = 0.0;
+                for row_offset in 0..height {
+                    for column_offset in 0..width {
+                        let mut is_true = true;
+                        for (values, fn_criterion) in values.iter().zip(fn_criteria.iter()) {
+                            // We check if value in range n meets criterion n
+                            if !fn_criterion(&self.area_value(values, row_offset, column_offset)) {
+                                is_true = false;
+                                break;
+                            }
+                        }
+                        if is_true {
+                            count += 1.0;
+                        }
                     }
                 }
-                if is_true {
-                    total += 1.0;
+                if let Some(key) = key {
+                    let mut sum = ExactSum::default();
+                    sum.add(count);
+                    self.keep_total(key, sum, misses, cell);
                 }
+                count
             }
-            if open_column && right_column > max_column && empty_matches {
-                total += (LAST_COLUMN - max_column) as f64;
-            }
+        };
+        if open_column && right_column > max_column && empty_matches {
+            total += f64::from(LAST_COLUMN - max_column) * f64::from(height);
         }
         if open_row && right_row > max_row && empty_matches {
             // In f64: a whole sheet holds more cells than an i32 counts.
@@ -168,15 +201,13 @@ impl<'a> Model<'a> {
         CalcResult::Number(total)
     }
 
-    pub(crate) fn apply_ifs<F>(
+    // The sum range, the criteria ranges and the criteria of SUMIFS and the functions
+    // like it.
+    fn ifs_arguments(
         &mut self,
         args: &[Node],
         cell: CellReferenceIndex,
-        apply: F,
-    ) -> Result<(), CalcResult>
-    where
-        F: FnMut(f64),
-    {
+    ) -> Result<(Range, Vec<Range>, Vec<CalcResult>), CalcResult> {
         let args_count = args.len();
         if args_count < 3 || args_count.is_multiple_of(2) {
             return Err(CalcResult::new_args_number_error(cell));
@@ -203,18 +234,12 @@ impl<'a> Model<'a> {
         };
 
         let case_count = (args_count - 1) / 2;
-        // NB: this is a beautiful example of the borrow checker
-        // The order of these two definitions cannot be swapped.
         let mut criteria = Vec::new();
-        let mut fn_criteria = Vec::new();
-        let ranges = &mut Vec::new();
+        let mut ranges = Vec::new();
         for case_index in 1..=case_count {
             let criterion = self.evaluate_node_in_context(&args[case_index * 2], cell);
             // NB: criterion might be an error. That's ok
             criteria.push(criterion);
-            // NB: We cannot do:
-            // fn_criteria.push(build_criteria(&criterion));
-            // because criterion doesn't live long enough
             let result = self.evaluate_node_in_context(&args[case_index * 2 - 1], cell);
             if result.is_error() {
                 return Err(result);
@@ -237,11 +262,61 @@ impl<'a> Model<'a> {
                 ));
             }
         }
-        for criterion in criteria.iter() {
-            fn_criteria.push(build_criteria(criterion, self.locale));
-        }
+        Ok((sum_range, ranges, criteria))
+    }
 
-        self.run_ifs(&sum_range, ranges.as_slice(), &fn_criteria, cell, apply)
+    pub(crate) fn apply_ifs<F>(
+        &mut self,
+        args: &[Node],
+        cell: CellReferenceIndex,
+        apply: F,
+    ) -> Result<(), CalcResult>
+    where
+        F: FnMut(f64),
+    {
+        let (sum_range, ranges, criteria) = self.ifs_arguments(args, cell)?;
+        let fn_criteria: Vec<Criterion<'_>> = criteria
+            .iter()
+            .map(|criterion| build_criteria(criterion, self.locale))
+            .collect();
+        self.run_ifs(&sum_range, &ranges, &fn_criteria, cell, apply)
+    }
+
+    /// SUMIFS, from the kept total when there is one.
+    pub(crate) fn sum_ifs(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
+        let (sum_range, ranges, criteria) = match self.ifs_arguments(args, cell) {
+            Ok(arguments) => arguments,
+            Err(error) => return error,
+        };
+        let fn_criteria: Vec<Criterion<'_>> = criteria
+            .iter()
+            .map(|criterion| build_criteria(criterion, self.locale))
+            .collect();
+        let (sums, values) = match self.ifs_areas(&sum_range, &ranges, cell) {
+            Ok(areas) => areas,
+            Err(error) => return error,
+        };
+        let key = if same_shape(std::iter::once(&sum_range).chain(&ranges)) {
+            TotalKey::new(&values, &criteria, Some(&sums))
+        } else {
+            None
+        };
+        if let Some(total) = key
+            .as_ref()
+            .and_then(|key| self.kept_total(key, &values, Some(&sums), cell))
+        {
+            return CalcResult::Number(total);
+        }
+        let misses = self.criteria_ranges.misses;
+        let mut total = ExactSum::default();
+        if let Err(error) = self.scan_ifs(&sums, &values, &fn_criteria, |value| total.add(value)) {
+            return error;
+        }
+        let value = total.value();
+        if let Some(key) = key {
+            self.keep_total(key, total, misses, cell);
+        }
+        CalcResult::Number(value)
     }
 
     /// Walks `sum_range` and applies `apply` to every numeric cell whose parallel
@@ -255,11 +330,22 @@ impl<'a> Model<'a> {
         ranges: &[Range],
         fn_criteria: &[Criterion<'_>],
         cell: CellReferenceIndex,
-        mut apply: F,
+        apply: F,
     ) -> Result<(), CalcResult>
     where
         F: FnMut(f64),
     {
+        let (sums, values) = self.ifs_areas(sum_range, ranges, cell)?;
+        self.scan_ifs(&sums, &values, fn_criteria, apply)
+    }
+
+    // The sum area and the criteria areas, all in the shape of the sum range.
+    fn ifs_areas(
+        &mut self,
+        sum_range: &Range,
+        ranges: &[Range],
+        cell: CellReferenceIndex,
+    ) -> Result<(AreaValues, Vec<AreaValues>), CalcResult> {
         let left_row = sum_range.left.row;
         let left_column = sum_range.left.column;
         let mut right_row = sum_range.right.row;
@@ -305,6 +391,20 @@ impl<'a> Model<'a> {
                 )
             })
             .collect();
+        Ok((sums, values))
+    }
+
+    fn scan_ifs<F>(
+        &mut self,
+        sums: &AreaValues,
+        values: &[AreaValues],
+        fn_criteria: &[Criterion<'_>],
+        mut apply: F,
+    ) -> Result<(), CalcResult>
+    where
+        F: FnMut(f64),
+    {
+        let (_, _, _, height, width) = sums.area;
         for row_offset in 0..height {
             for column_offset in 0..width {
                 let mut is_true = true;
@@ -316,7 +416,7 @@ impl<'a> Model<'a> {
                     }
                 }
                 if is_true {
-                    match self.area_value(&sums, row_offset, column_offset) {
+                    match self.area_value(sums, row_offset, column_offset) {
                         Cow::Borrowed(CalcResult::Number(n)) => apply(*n),
                         Cow::Owned(CalcResult::Number(n)) => apply(n),
                         v if v.is_error() => return Err(v.into_owned()),

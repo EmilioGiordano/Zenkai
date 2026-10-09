@@ -51,6 +51,7 @@ mod cast;
 mod conditional_formatting;
 mod constants;
 mod criteria_ranges;
+mod criteria_totals;
 mod cut_paste;
 mod dependency_index;
 mod exact_sum;
