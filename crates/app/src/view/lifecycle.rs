@@ -9,7 +9,7 @@ use super::{Severity, Workspace};
 use crate::document::{self, FileJob, SharedWorkbook};
 use crate::documents::Intent;
 use crate::recovery;
-use crate::session::{self, Loaded};
+use crate::session::{self, Loaded, Session};
 
 const CLOSING: &str = "Saving your session…";
 const CLOSE_POLL: Duration = Duration::from_millis(50);
@@ -19,6 +19,11 @@ const CLOSE_POLLS_BEFORE_ASKING: u32 = 300;
 pub(super) enum Lifecycle {
     Running,
     Closing,
+}
+
+struct RecoveryBatch {
+    writes: Vec<RecoveryWrite>,
+    edits: Vec<(WorkbookId, u64)>,
 }
 
 struct RecoveryWrite {
@@ -140,6 +145,7 @@ impl Workspace {
         for id in ids {
             self.autosave(id, cx);
         }
+        self.persist_session(cx);
     }
 
     fn autosave(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
@@ -274,22 +280,24 @@ impl Workspace {
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let mut polls = 0;
-            let writes = loop {
-                let ready = this.update(cx, |this, _| this.begin_recovery_writes());
-                match ready {
-                    Ok(Some(writes)) => break writes,
+            let batch = loop {
+                match this.update(cx, |this, _| this.begin_recovery_writes()) {
+                    Ok(Some(batch)) => break batch,
                     Ok(None) if polls < CLOSE_POLLS_BEFORE_ASKING => polls += 1,
                     Ok(None) => {
-                        this.update_in(cx, |this, window, cx| {
+                        let asked = this.update_in(cx, |this, window, cx| {
                             this.ask_to_quit_anyway("A workbook is still busy.", window, cx)
-                        })
-                        .ok();
+                        });
+                        if let Err(error) = asked {
+                            tracing::debug!(%error, "workspace gone while closing");
+                        }
                         return;
                     }
                     Err(_) => return,
                 }
                 cx.background_executor().timer(CLOSE_POLL).await;
             };
+            let RecoveryBatch { writes, edits } = batch;
             let generations: Vec<(WorkbookId, u64)> = writes
                 .iter()
                 .map(|write| (write.id, write.generation))
@@ -300,24 +308,26 @@ impl Workspace {
                     writes
                         .into_iter()
                         .map(|write| {
-                            let result = recovery::write(
-                                &document::read_shared(&write.workbook),
-                                &write.target,
-                            );
-                            (write.id, result)
+                            recovery::write(&document::read_shared(&write.workbook), &write.target)
                         })
-                        .collect::<Vec<(WorkbookId, Result<(), EngineError>)>>()
+                        .collect::<Vec<Result<(), EngineError>>>()
                 })
                 .await;
-            let failed = this.update_in(cx, |this, window, cx| {
+            let finished = this.update_in(cx, |this, window, cx| {
                 for (id, generation) in &generations {
                     if let Some(document) = this.documents.get_mut(*id) {
                         document.end_file_job(*generation);
                     }
                 }
+                // Edits made while the copies were written are not in them: write again.
+                if this.documents.unsaved_edits() != edits {
+                    this.lifecycle = Lifecycle::Running;
+                    this.request_close(window, cx);
+                    return;
+                }
                 let failures: Vec<String> = results
                     .iter()
-                    .filter_map(|(_, result)| result.as_ref().err().map(ToString::to_string))
+                    .filter_map(|result| result.as_ref().err().map(ToString::to_string))
                     .collect();
                 if failures.is_empty() {
                     this.finish_close_with_session(window, cx);
@@ -325,7 +335,7 @@ impl Workspace {
                     this.ask_to_quit_anyway(&failures.join("; "), window, cx);
                 }
             });
-            if let Err(error) = failed {
+            if let Err(error) = finished {
                 tracing::debug!(%error, "workspace gone while closing");
             }
         })
@@ -333,33 +343,43 @@ impl Workspace {
     }
 
     // `None` while a recalculation or an autosave still holds a workbook that needs saving.
-    fn begin_recovery_writes(&mut self) -> Option<Vec<RecoveryWrite>> {
+    fn begin_recovery_writes(&mut self) -> Option<RecoveryBatch> {
         let Some(directory) = self.recovery_dir.clone() else {
-            return Some(Vec::new());
+            return Some(RecoveryBatch {
+                writes: Vec::new(),
+                edits: self.documents.unsaved_edits(),
+            });
         };
-        let ready = self
-            .documents
-            .iter()
-            .filter(|document| document.needs_recovery())
-            .all(|document| document.file_job() == FileJob::Idle && !document.has_pending());
-        if !ready {
-            return None;
-        }
-        let writes = self
+        let edits = self.documents.unsaved_edits();
+        let mut writes = Vec::new();
+        let mut blocked = false;
+        for document in self
             .documents
             .iter_mut()
             .filter(|document| document.needs_recovery())
-            .filter_map(|document| {
-                let workbook = document.begin_file_job(FileJob::Autosaving)?;
-                Some(RecoveryWrite {
+        {
+            match document.begin_file_job(FileJob::Autosaving) {
+                Some(workbook) => writes.push(RecoveryWrite {
                     id: document.id,
                     generation: document.generation(),
                     workbook,
                     target: recovery::document_file(&directory, document.id),
-                })
-            })
-            .collect();
-        Some(writes)
+                }),
+                None => {
+                    blocked = true;
+                    break;
+                }
+            }
+        }
+        if blocked {
+            for write in &writes {
+                if let Some(document) = self.documents.get_mut(write.id) {
+                    document.end_file_job(write.generation);
+                }
+            }
+            return None;
+        }
+        Some(RecoveryBatch { writes, edits })
     }
 
     fn finish_close_with_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -375,15 +395,42 @@ impl Workspace {
         self.write_session_and_quit(cx);
     }
 
-    // The spaces and links are kept even when unsaved work could not be.
-    fn write_session_and_quit(&mut self, cx: &mut Context<Self>) {
+    fn snapshot_session(&self) -> Session {
         let directory = self.recovery_dir.clone();
-        let session = self.documents.snapshot(self.sidebar.visible, |id| {
+        self.documents.snapshot(self.sidebar.visible, |id| {
             directory
                 .as_deref()
                 .map(|directory| recovery::document_file(directory, id))
-                .unwrap_or_default()
-        });
+        })
+    }
+
+    // Written when something changed, so a crash leaves the spaces and files as they were a
+    // minute ago instead of as they were at the last clean close.
+    pub(super) fn persist_session(&mut self, cx: &mut Context<Self>) {
+        let Some(directory) = recovery::session_directory() else {
+            return;
+        };
+        if self.lifecycle == Lifecycle::Closing {
+            return;
+        }
+        let session = self.snapshot_session();
+        if self.saved_session.as_ref() == Some(&session) {
+            return;
+        }
+        self.saved_session = Some(session.clone());
+        cx.background_executor()
+            .spawn(async move {
+                if let Err(error) = session::save(&directory, &session) {
+                    tracing::warn!(%error, "could not save the session");
+                }
+            })
+            .detach();
+    }
+
+    // The spaces and links are kept even when unsaved work could not be.
+    fn write_session_and_quit(&mut self, cx: &mut Context<Self>) {
+        let directory = self.recovery_dir.clone();
+        let session = self.snapshot_session();
         let session_directory = recovery::session_directory();
         let clean: Vec<PathBuf> = self
             .documents

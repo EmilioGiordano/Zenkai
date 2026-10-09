@@ -15,7 +15,8 @@ use crate::recovery;
 pub(super) enum LinkLoad {
     Loaded {
         file: Box<FileLoad>,
-        from_recovery: bool,
+        // The recovery copy the work was read from, to adopt once the workbook is installed.
+        copy: Option<PathBuf>,
         recovery_lost: bool,
     },
     Missing,
@@ -23,25 +24,19 @@ pub(super) enum LinkLoad {
 }
 
 // Runs on the background executor. The recovery copy, when there is one, holds the unsaved
-// work and is read instead of the file; it moves to this session's own name so autosave
-// keeps protecting it.
-fn read_link(link: &Link, adopt_as: Option<PathBuf>) -> LinkLoad {
-    let mut recovery_lost = false;
+// work and is read instead of the file.
+fn read_link(link: &Link) -> LinkLoad {
+    let mut recovery_lost = link.recovery_lost;
     if let Some(copy) = link.recovery.as_ref().filter(|copy| copy.exists()) {
         match open_xlsx(copy) {
             Ok(opened) => {
-                if let Some(target) = adopt_as
-                    && let Err(error) = recovery::adopt(copy, &target)
-                {
-                    tracing::warn!(?copy, %error, "could not adopt the recovery file");
-                }
                 return LinkLoad::Loaded {
                     file: Box::new(FileLoad {
                         workbook: opened.workbook,
                         unsupported: Vec::new(),
                         read_only: false,
                     }),
-                    from_recovery: true,
+                    copy: Some(copy.clone()),
                     recovery_lost: false,
                 };
             }
@@ -59,7 +54,7 @@ fn read_link(link: &Link, adopt_as: Option<PathBuf>) -> LinkLoad {
     match files::load_workbook(path) {
         Ok(file) => LinkLoad::Loaded {
             file: Box::new(file),
-            from_recovery: false,
+            copy: None,
             recovery_lost,
         },
         Err(LoadFailure::Missing) => LinkLoad::Missing,
@@ -170,9 +165,16 @@ impl Workspace {
 
     pub(super) fn present_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let view = self.documents.active().view;
-        self.reset_grid(window, cx);
-        self.grid.update(cx, |grid, cx| grid.restore_view(view, cx));
+        self.forget_find_results();
+        let sheet = self.sheet_view();
+        self.grid.update(cx, |grid, cx| {
+            grid.reset(sheet, cx);
+            grid.restore_view(view, cx);
+        });
         self.refresh_cells(cx);
+        window.set_window_title(&self.documents.active().title());
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
     }
 
     pub(super) fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -185,6 +187,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Typing in the cell or the formula bar counts as an edit of the document being closed.
+        if id == self.documents.active_id() {
+            self.park_active(window, cx);
+        }
         let Some(entry) = self.documents.entry(id) else {
             return;
         };
@@ -338,15 +344,11 @@ impl Workspace {
         let Some(link) = self.documents.start_loading(id) else {
             return;
         };
-        let adopt_as = self
-            .recovery_dir
-            .as_deref()
-            .map(|directory| recovery::document_file(directory, id));
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let load = cx
                 .background_executor()
-                .spawn(async move { read_link(&link, adopt_as) })
+                .spawn(async move { read_link(&link) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.finish_load(id, load, window, cx)
@@ -371,12 +373,13 @@ impl Workspace {
         match load {
             LinkLoad::Loaded {
                 file,
-                from_recovery,
+                copy,
                 recovery_lost,
             } => {
                 if self.documents.shows_when_loaded(id) {
                     self.park_active(window, cx);
                 }
+                let from_recovery = copy.is_some();
                 let outcome = self.documents.install(Loaded {
                     id,
                     workbook: file.workbook,
@@ -384,6 +387,9 @@ impl Workspace {
                     read_only: file.read_only,
                     from_recovery,
                 });
+                if let Some(copy) = copy {
+                    self.adopt_recovery(id, copy, cx);
+                }
                 let path = self
                     .documents
                     .get(id)
@@ -413,6 +419,30 @@ impl Workspace {
         }
     }
 
+    // The copy moves under this session's own name only once its workbook is in the list, and
+    // the session file is rewritten right after, so no crash leaves the two disagreeing for long.
+    fn adopt_recovery(&mut self, id: WorkbookId, copy: PathBuf, cx: &mut Context<Self>) {
+        let Some(directory) = self.recovery_dir.clone() else {
+            return;
+        };
+        let target = recovery::document_file(&directory, id);
+        cx.spawn(async move |this, cx| {
+            let moved = cx
+                .background_executor()
+                .spawn(
+                    async move { recovery::adopt(&copy, &target).map_err(|error| (copy, error)) },
+                )
+                .await;
+            if let Err((copy, error)) = moved {
+                tracing::warn!(?copy, %error, "could not adopt the recovery file");
+            }
+            if let Err(error) = this.update(cx, |this, cx| this.persist_session(cx)) {
+                tracing::debug!(%error, "workspace closed while adopting a recovery file");
+            }
+        })
+        .detach();
+    }
+
     fn announce_loaded(
         &mut self,
         name: &str,
@@ -433,28 +463,30 @@ impl Workspace {
         }
     }
 
+    // Whether each listed file still exists and how big it is, one background task per file so
+    // a stalled share holds up only its own answer. Network and device paths are left alone
+    // until the file is opened: asking about them can send credentials to a host the user has
+    // not touched this session.
     pub(super) fn probe_links(&mut self, cx: &mut Context<Self>) {
         let probes: Vec<(WorkbookId, PathBuf)> = self
             .documents
             .entries()
-            .iter()
             .filter_map(|entry| match entry {
-                Entry::Link(link) => link.path.clone().map(|path| (link.id, path)),
+                Entry::Link(link) => link
+                    .path
+                    .clone()
+                    .filter(|path| !files::is_remote_or_device(path))
+                    .map(|path| (link.id, path)),
                 Entry::Loaded(_) => None,
             })
             .collect();
-        cx.spawn(async move |this, cx| {
-            let results = cx
-                .background_executor()
-                .spawn(async move {
-                    probes
-                        .into_iter()
-                        .map(|(id, path)| (id, std::fs::metadata(path)))
-                        .collect::<Vec<_>>()
-                })
-                .await;
-            let update = this.update(cx, |this, cx| {
-                for (id, result) in results {
+        for (id, path) in probes {
+            cx.spawn(async move |this, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { std::fs::metadata(path) })
+                    .await;
+                let update = this.update(cx, |this, cx| {
                     let waiting = matches!(
                         this.documents.entry(id),
                         Some(Entry::Link(link)) if link.status == LinkStatus::NotLoaded
@@ -466,13 +498,13 @@ impl Workspace {
                         }
                         Err(_) => {}
                     }
+                    cx.notify();
+                });
+                if let Err(error) = update {
+                    tracing::debug!(%error, "workspace closed while probing a file");
                 }
-                cx.notify();
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed while probing files");
-            }
-        })
-        .detach();
+            })
+            .detach();
+        }
     }
 }

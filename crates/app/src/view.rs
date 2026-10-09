@@ -37,6 +37,7 @@ use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
 use crate::region;
+use crate::session::Session;
 use crate::spaces::Neighbour;
 use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
@@ -153,6 +154,7 @@ pub struct Workspace {
     last_unload: Option<Instant>,
     sidebar: SidebarState,
     lifecycle: Lifecycle,
+    saved_session: Option<Session>,
     cell_refresh: CellRefresh,
     _subscriptions: Vec<Subscription>,
 }
@@ -228,6 +230,7 @@ impl Workspace {
             last_unload: None,
             sidebar: SidebarState::new(cx),
             lifecycle: Lifecycle::Running,
+            saved_session: None,
             cell_refresh: CellRefresh::Idle,
             _subscriptions: vec![subscription, appearance, font_color, fill_color],
         };
