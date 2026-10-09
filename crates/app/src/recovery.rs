@@ -2,6 +2,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use zenkai_engine::{EngineError, Workbook, save_xlsx_atomic};
+use zenkai_types::WorkbookId;
+
+pub fn session_directory() -> Option<PathBuf> {
+    Some(directory()?.parent()?.to_path_buf())
+}
 
 pub const AUTOSAVE_EVERY: Duration = Duration::from_secs(60);
 const PREFIX: &str = "autosave-";
@@ -27,8 +32,23 @@ fn session_name() -> &'static str {
     })
 }
 
-pub fn own_file(directory: &Path) -> PathBuf {
-    directory.join(format!("{PREFIX}{}.xlsx", session_name()))
+pub fn document_file(directory: &Path, id: WorkbookId) -> PathBuf {
+    directory.join(format!("{PREFIX}{}-{}.xlsx", session_name(), id.0))
+}
+
+fn lock_file(directory: &Path) -> PathBuf {
+    directory.join(format!("{PREFIX}{}.lock", session_name()))
+}
+
+// One lock per session guards the recovery files of all its documents.
+fn lock_of(autosave: &Path) -> PathBuf {
+    let stem = autosave
+        .file_stem()
+        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+    let session = stem
+        .rsplit_once('-')
+        .map_or(stem.as_str(), |(session, _)| session);
+    autosave.with_file_name(format!("{session}.lock"))
 }
 
 // Held for the whole session; an autosave whose lock can still be taken belongs to
@@ -39,7 +59,7 @@ pub struct SessionLock {
 
 pub fn lock_session(directory: &Path) -> std::io::Result<SessionLock> {
     std::fs::create_dir_all(directory)?;
-    let file = std::fs::File::create(own_file(directory).with_extension("lock"))?;
+    let file = std::fs::File::create(lock_file(directory))?;
     file.try_lock().map_err(std::io::Error::other)?;
     Ok(SessionLock { _file: file })
 }
@@ -47,29 +67,28 @@ pub fn lock_session(directory: &Path) -> std::io::Result<SessionLock> {
 fn owner_is_alive(autosave: &Path) -> bool {
     let Ok(file) = std::fs::OpenOptions::new()
         .write(true)
-        .open(autosave.with_extension("lock"))
+        .open(lock_of(autosave))
     else {
         return false;
     };
     matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock))
 }
 
+fn is_autosave(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(PREFIX) && name.ends_with(".xlsx"))
+}
+
 pub fn leftovers(directory: &Path) -> Vec<PathBuf> {
-    let own = own_file(directory);
+    let own_lock = lock_file(directory);
     let Ok(entries) = std::fs::read_dir(directory) else {
         return Vec::new();
     };
     let mut found: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| {
-            path != &own
-                && path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with(PREFIX) && n.ends_with(".xlsx"))
-                && !owner_is_alive(path)
-        })
+        .filter(|path| lock_of(path) != own_lock && is_autosave(path) && !owner_is_alive(path))
         .collect();
     found.sort();
     found
@@ -85,9 +104,24 @@ pub fn write(workbook: &Workbook, path: &Path) -> Result<(), EngineError> {
     save_xlsx_atomic(workbook, path)
 }
 
+// Moves a dead session's copy under this session's name; the copy stays where it was when the
+// move fails, since it may be the only one holding the work.
+pub fn adopt(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::rename(from, to)?;
+    remove_stale_lock(from);
+    Ok(())
+}
+
+// A lock still held belongs to a running session, this one included, and stays.
+fn remove_stale_lock(path: &Path) {
+    if !owner_is_alive(path) {
+        remove(&lock_of(path));
+    }
+}
+
 pub fn remove_with_lock(path: &Path) {
     remove(path);
-    remove(&path.with_extension("lock"));
+    remove_stale_lock(path);
 }
 
 pub fn remove(path: &Path) {
@@ -102,18 +136,20 @@ pub fn remove(path: &Path) {
 mod tests {
     use super::*;
     use zenkai_engine::Engine;
-    use zenkai_types::{CellPos, SheetId};
+    use zenkai_types::{CellPos, SheetId, WorkbookId};
 
     #[test]
-    fn autosave_round_trips_and_leftovers_skip_our_own_file() {
+    fn autosave_round_trips_and_leftovers_skip_our_own_files() {
         let dir = tempfile::tempdir().unwrap();
         let mut book = Workbook::new_empty().unwrap();
         book.set_input(SheetId(0), CellPos::default(), "42")
             .unwrap();
-        let own = own_file(dir.path());
+        let own = document_file(dir.path(), WorkbookId(0));
+        let sibling = document_file(dir.path(), WorkbookId(1));
         write(&book, &own).unwrap();
         write(&book, &own).unwrap();
-        let other = dir.path().join("autosave-1.xlsx");
+        write(&book, &sibling).unwrap();
+        let other = dir.path().join("autosave-1-1-0.xlsx");
         std::fs::copy(&own, &other).unwrap();
         std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
         assert_eq!(leftovers(dir.path()), vec![other.clone()]);
@@ -127,15 +163,46 @@ mod tests {
         assert!(leftovers(dir.path()).is_empty());
 
         let _lock = lock_session(dir.path()).unwrap();
-        let live = dir.path().join("autosave-2.xlsx");
+        let live = dir.path().join("autosave-2-2-0.xlsx");
         std::fs::copy(&own, &live).unwrap();
-        let live_lock = std::fs::File::create(live.with_extension("lock")).unwrap();
+        let live_lock = std::fs::File::create(lock_of(&live)).unwrap();
         live_lock.lock().unwrap();
         assert!(
             leftovers(dir.path()).is_empty(),
             "a live session is not a leftover"
         );
         drop(live_lock);
-        assert_eq!(leftovers(dir.path()), vec![live]);
+        assert_eq!(leftovers(dir.path()), vec![live.clone()]);
+    }
+
+    #[test]
+    fn discarding_a_leftover_never_deletes_the_lock_of_a_live_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let _lock = lock_session(dir.path()).unwrap();
+        let closed = document_file(dir.path(), WorkbookId(3));
+        let open = document_file(dir.path(), WorkbookId(4));
+        std::fs::write(&closed, b"x").unwrap();
+        std::fs::write(&open, b"x").unwrap();
+        remove_with_lock(&closed);
+        assert!(!closed.exists());
+        assert!(owner_is_alive(&open));
+        assert!(leftovers(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn adopting_moves_the_copy_and_keeps_it_when_the_move_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("autosave-1-1-0.xlsx");
+        std::fs::write(&old, b"work").unwrap();
+        let target = dir.path().join("autosave-2-2-0.xlsx");
+        adopt(&old, &target).unwrap();
+        assert!(!old.exists());
+        assert_eq!(std::fs::read(&target).unwrap(), b"work");
+
+        let kept = dir.path().join("autosave-3-3-0.xlsx");
+        std::fs::write(&kept, b"work").unwrap();
+        let impossible = dir.path().join("missing-folder").join("copy.xlsx");
+        assert!(adopt(&kept, &impossible).is_err());
+        assert!(kept.exists());
     }
 }

@@ -25,6 +25,19 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
         CommandGroup::new().label("File").items([
             item("New workbook", NewWorkbook),
             item("Open…", Open),
+            item("Close workbook", CloseDocument),
+            item("Reopen closed workbook", ReopenClosedDocument),
+            item(
+                "Search files, recent files and sheets (replaces Excel's Flash Fill, Ctrl+E)",
+                SearchFiles,
+            ),
+            item("New space", NewSpace),
+            item("Rename space", RenameSpace),
+            item("Delete space", DeleteSpace),
+            item("Move workbook to the previous space", MoveToPreviousSpace),
+            item("Move workbook to the next space", MoveToNextSpace),
+            item("Next workbook", NextDocument),
+            item("Previous workbook", PreviousDocument),
             item("Save", Save),
             item("Save As…", SaveAs),
         ]),
@@ -114,6 +127,8 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Previous sheet", PreviousSheet),
             item("Theme: light, dark, high contrast", ToggleTheme),
             item("Diagnostics in the status bar", ToggleDiagnostics),
+            item("Show or hide the sidebar", ToggleSidebar),
+            item("Move focus between the grid and the sidebar", FocusSidebar),
         ]),
     ]
 }

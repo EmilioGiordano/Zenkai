@@ -186,7 +186,7 @@ pub fn render(
                 .children(date_buttons)
                 .child(div().flex_1())
                 .child(div().text_color(theme.muted_foreground).child(format!(
-                    "{} · {} rows · {} columns",
+                    "{}, {} rows, {} columns",
                     preview.parsed.encoding.label(),
                     preview.parsed.rows.len(),
                     total_cols

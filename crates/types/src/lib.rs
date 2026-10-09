@@ -8,6 +8,9 @@ pub const MAX_COLS: u16 = 16_384;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct SheetId(pub u32);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WorkbookId(pub u64);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct RowIdx(u32);
 

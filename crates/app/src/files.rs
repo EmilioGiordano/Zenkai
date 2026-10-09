@@ -1,6 +1,8 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
-use zenkai_engine::{Engine, EngineError, Workbook, run_with_engine_stack, write_atomic};
+use zenkai_engine::{
+    Engine, EngineError, Unsupported, Workbook, open_xlsx, run_with_engine_stack, write_atomic,
+};
 use zenkai_formats::{Delimiter, ParsedCsv, parse_csv, read_values, write_csv};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
@@ -28,6 +30,53 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+pub fn is_remote_or_device(path: &Path) -> bool {
+    matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(
+            prefix.kind(),
+            std::path::Prefix::UNC(..)
+                | std::path::Prefix::VerbatimUNC(..)
+                | std::path::Prefix::DeviceNS(_)
+                | std::path::Prefix::Verbatim(_)
+        )
+    )
+}
+
+// Case, separators, `.` and `..` do not make two spellings different files. Purely lexical:
+// it never reads the disk, so it is safe on the UI thread.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    normalized(a) == normalized(b)
+}
+
+fn normalized(path: &Path) -> Vec<(bool, String)> {
+    let fold = |text: &std::ffi::OsStr| {
+        let text = text.to_string_lossy();
+        if cfg!(windows) {
+            text.to_lowercase()
+        } else {
+            text.into_owned()
+        }
+    };
+    let mut parts: Vec<(bool, String)> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => parts.push((false, fold(prefix.as_os_str()))),
+            Component::RootDir => parts.push((false, "/".to_string())),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if parts.last().is_some_and(|(is_name, _)| *is_name) {
+                    parts.pop();
+                } else {
+                    parts.push((false, "..".to_string()));
+                }
+            }
+            Component::Normal(name) => parts.push((true, fold(name))),
+        }
+    }
+    parts
+}
+
 fn extension(path: &Path) -> Option<String> {
     path.extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -53,6 +102,40 @@ pub fn workbook_from_rows(rows: Vec<Vec<String>>) -> Result<Workbook, String> {
         Ok(workbook)
     })
     .map_err(|e| e.to_string())
+}
+
+pub struct FileLoad {
+    pub workbook: Workbook,
+    pub unsupported: Vec<Unsupported>,
+    pub read_only: bool,
+}
+
+pub enum LoadFailure {
+    Missing,
+    Engine(EngineError),
+    Unreadable { reason: String, fallback: String },
+}
+
+pub fn load_workbook(path: &Path) -> Result<FileLoad, LoadFailure> {
+    match open_xlsx(path) {
+        Ok(opened) => Ok(FileLoad {
+            workbook: opened.workbook,
+            unsupported: opened.unsupported,
+            read_only: false,
+        }),
+        Err(EngineError::InvalidFile(reason)) => match open_values(path) {
+            Ok(workbook) => Ok(FileLoad {
+                workbook,
+                unsupported: Vec::new(),
+                read_only: true,
+            }),
+            Err(fallback) => Err(LoadFailure::Unreadable { reason, fallback }),
+        },
+        Err(EngineError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Err(LoadFailure::Missing)
+        }
+        Err(error) => Err(LoadFailure::Engine(error)),
+    }
 }
 
 const MAX_VALUES_FILE_BYTES: u64 = 512 * 1024 * 1024;
@@ -190,6 +273,30 @@ mod tests {
         // 8 October 2026 and 25 October 2026 as Excel serials.
         assert_eq!(serial(0), Some(46303.0));
         assert_eq!(serial(1), Some(46320.0));
+    }
+
+    #[test]
+    fn network_and_device_paths_are_not_probed() {
+        assert!(is_remote_or_device(Path::new(r"\\host\share\a.xlsx")));
+        assert!(is_remote_or_device(Path::new(r"\\.\pipe\x")));
+        assert!(!is_remote_or_device(Path::new(r"C:\data\a.xlsx")));
+        assert!(!is_remote_or_device(Path::new("relative/a.xlsx")));
+    }
+
+    #[test]
+    fn same_path_ignores_separators_dots_and_on_windows_case() {
+        assert!(same_path(
+            Path::new("a/b/../c.xlsx"),
+            Path::new("./a/c.xlsx")
+        ));
+        assert!(!same_path(Path::new("a/c.xlsx"), Path::new("a/d.xlsx")));
+        assert!(!same_path(Path::new("../c.xlsx"), Path::new("c.xlsx")));
+        if cfg!(windows) {
+            assert!(same_path(
+                Path::new("C:/Data/Sales.xlsx"),
+                Path::new(r"c:\data\sales.XLSX")
+            ));
+        }
     }
 
     #[test]
