@@ -86,7 +86,7 @@ impl Editor {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct Selection {
     pub active: CellPos,
     pub corner: CellPos,
@@ -96,6 +96,13 @@ impl Selection {
     pub fn range(&self) -> Range {
         Range::new(self.active, self.corner)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct ViewState {
+    pub selection: Selection,
+    pub top: RowIdx,
+    pub left: ColIdx,
 }
 
 #[derive(Clone, Debug)]
@@ -152,6 +159,7 @@ struct EdgeDrag {
 const RESIZE_GRIP: f32 = 4.0;
 const MIN_COLUMN_WIDTH: f32 = 8.0;
 const MIN_ROW_HEIGHT: f32 = 4.0;
+
 const FILL_GRIP: f32 = 4.0;
 
 pub struct Grid {
@@ -168,6 +176,7 @@ pub struct Grid {
     zoom: f32,
     dragging: bool,
     marquee: Option<Range>,
+    pending: Option<Range>,
     tab_start: Option<ColIdx>,
     frozen_rows: u32,
     frozen_cols: u16,
@@ -225,6 +234,7 @@ impl Grid {
             zoom: 1.0,
             dragging: false,
             marquee: None,
+            pending: None,
             tab_start: None,
             frozen_rows: 0,
             frozen_cols: 0,
@@ -322,6 +332,23 @@ impl Grid {
         cx.emit(GridEvent::SelectionChanged);
     }
 
+    pub fn view_state(&self) -> ViewState {
+        ViewState {
+            selection: self.selection,
+            top: self.top,
+            left: self.left,
+        }
+    }
+
+    pub fn restore_view(&mut self, state: ViewState, cx: &mut Context<Self>) {
+        self.selection = state.selection;
+        self.top = state.top;
+        self.left = state.left;
+        self.tab_start = None;
+        self.viewport_changed(cx);
+        cx.emit(GridEvent::SelectionChanged);
+    }
+
     pub fn update_view(&mut self, view: SheetView, cx: &mut Context<Self>) {
         self.apply_view(view);
         self.viewport_changed(cx);
@@ -361,6 +388,14 @@ impl Grid {
     pub fn set_marquee(&mut self, range: Option<Range>, cx: &mut Context<Self>) {
         self.marquee = range;
         cx.notify();
+    }
+
+    // Cells an agent asked to change and the user has not decided on yet.
+    pub fn set_pending(&mut self, range: Option<Range>, cx: &mut Context<Self>) {
+        if self.pending != range {
+            self.pending = range;
+            cx.notify();
+        }
     }
 
     pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
@@ -412,6 +447,12 @@ impl Grid {
             cx.emit(GridEvent::EditChanged);
             cx.notify();
         }
+    }
+
+    pub fn take_edit(&mut self, cx: &mut Context<Self>) -> Option<(CellPos, String)> {
+        let editor = self.editor.take()?;
+        cx.emit(GridEvent::EditChanged);
+        Some((editor.pos, editor.text))
     }
 
     fn commit_edit(&mut self, cx: &mut Context<Self>) {
@@ -1259,6 +1300,7 @@ impl Render for Grid {
             active: self.selection.active,
             editor: self.editor.clone(),
             marquee: self.marquee,
+            pending: self.pending,
             fill_target: self.fill_target,
             zoom: self.zoom,
             focused: self.focus.is_focused(window),

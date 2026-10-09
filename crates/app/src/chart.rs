@@ -1,3 +1,4 @@
+use zenkai_i18n::t;
 use zenkai_types::{CellView, ValueKind};
 
 pub const MAX_POINTS: usize = 2_000;
@@ -18,9 +19,9 @@ pub enum ChartKind {
 impl ChartKind {
     pub fn label(self) -> &'static str {
         match self {
-            ChartKind::Column => "Column",
-            ChartKind::Line => "Line",
-            ChartKind::Pie => "Pie",
+            ChartKind::Column => t!("chart.kind_column"),
+            ChartKind::Line => t!("chart.kind_line"),
+            ChartKind::Pie => t!("chart.kind_pie"),
         }
     }
 }
@@ -53,7 +54,7 @@ pub fn from_rows(rows: &[Vec<CellView>], first_row_number: u32) -> ChartData {
             .and_then(|row| row.last())
             .map(|cell| cell.text.clone())
             .unwrap_or_default(),
-        _ => "Series 1".to_string(),
+        _ => t!("chart.series_one").to_string(),
     };
     let body = if header { &rows[1..] } else { rows };
     let offset = first_row_number + u32::from(header);

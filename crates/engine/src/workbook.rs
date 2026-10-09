@@ -12,7 +12,7 @@ use crate::error::EngineError;
 use crate::model::CachedModel;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
-    RowIdx, SheetId, SheetInfo, SheetSizes, StyleChange, VAlign, ValueKind,
+    RowIdx, SheetId, SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign, ValueKind,
 };
 
 const LOCALE: &str = "en";
@@ -466,6 +466,11 @@ impl Engine for Workbook {
             .zip(self.model.get_worksheets_properties())
             .map(|(index, props)| SheetInfo {
                 id: SheetId(index),
+                visibility: match props.state.as_str() {
+                    "hidden" => SheetVisibility::Hidden,
+                    "veryHidden" => SheetVisibility::VeryHidden,
+                    _ => SheetVisibility::Visible,
+                },
                 name: props.name,
             })
             .collect()

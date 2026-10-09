@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use zenkai_i18n::t;
 
 use gpui_kit::base::{Selectable, h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
@@ -21,6 +22,15 @@ const DELIMITERS: [Delimiter; 4] = [
     Delimiter::Tab,
     Delimiter::Pipe,
 ];
+
+pub fn delimiter_label(delimiter: Delimiter) -> &'static str {
+    match delimiter {
+        Delimiter::Comma => t!("csv.delimiter.comma"),
+        Delimiter::Semicolon => t!("csv.delimiter.semicolon"),
+        Delimiter::Tab => t!("csv.delimiter.tab"),
+        Delimiter::Pipe => t!("csv.delimiter.pipe"),
+    }
+}
 
 pub struct CsvPreview {
     pub path: PathBuf,
@@ -129,7 +139,7 @@ pub fn render(
     };
     let delimiter_buttons = DELIMITERS.map(|delimiter| {
         choice(
-            delimiter.label(),
+            delimiter_label(delimiter),
             preview.parsed.delimiter == delimiter,
             PreviewEvent::Delimiter(delimiter),
         )
@@ -142,8 +152,8 @@ pub fn render(
         )
     });
     let date_buttons = [
-        (DateOrder::DayFirst, "d/m/y"),
-        (DateOrder::MonthFirst, "m/d/y"),
+        (DateOrder::DayFirst, t!("csv.date_day_first")),
+        (DateOrder::MonthFirst, t!("csv.date_month_first")),
     ]
     .map(|(order, label)| {
         choice(
@@ -169,27 +179,39 @@ pub fn render(
             div()
                 .text_lg()
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(format!("Import {name}")),
+                .child(t!("csv.title", name = name)),
         )
         .child(
             h_flex()
                 .gap_2()
                 .items_center()
                 .text_sm()
-                .child(div().text_color(theme.muted_foreground).child("Separator"))
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child(t!("csv.separator")),
+                )
                 .children(delimiter_buttons)
                 .child(div().w(px(12.0)))
-                .child(div().text_color(theme.muted_foreground).child("Decimal"))
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child(t!("csv.decimal")),
+                )
                 .children(decimal_buttons)
                 .child(div().w(px(12.0)))
-                .child(div().text_color(theme.muted_foreground).child("Dates"))
+                .child(
+                    div()
+                        .text_color(theme.muted_foreground)
+                        .child(t!("csv.dates")),
+                )
                 .children(date_buttons)
                 .child(div().flex_1())
-                .child(div().text_color(theme.muted_foreground).child(format!(
-                    "{} · {} rows · {} columns",
-                    preview.parsed.encoding.label(),
-                    preview.parsed.rows.len(),
-                    total_cols
+                .child(div().text_color(theme.muted_foreground).child(t!(
+                    "csv.summary",
+                    encoding = preview.parsed.encoding.label(),
+                    rows = t!("csv.rows", count = preview.parsed.rows.len()),
+                    columns = t!("csv.columns", count = total_cols)
                 ))),
         )
         .child(table)
@@ -199,7 +221,7 @@ pub fn render(
                 .justify_end()
                 .child(
                     Button::new("csv-cancel")
-                        .label("Cancel")
+                        .label(t!("button.cancel"))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(CancelCsvImport), cx)
                         }),
@@ -207,7 +229,7 @@ pub fn render(
                 .child(
                     Button::new("csv-import")
                         .primary()
-                        .label("Import")
+                        .label(t!("csv.import"))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(ConfirmCsvImport), cx)
                         }),

@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Zenkai, Espacios</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7fb894}a:hover{color:#a6d3b5}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 100%; height: 900px; display: flex; flex-wrap: wrap; overflow: hidden; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; background: {{p.content}}; color: {{p.text}}">
+
+<sc-if value="{{showSidebar}}" hint-placeholder-val="{{ true }}">
+<nav aria-label="Espacios" style="flex: 1 1 240px; max-width: 264px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; background: {{p.sidebar}}; padding: 0 10px 12px">
+  <div style="height: 44px; display: flex; align-items: center; gap: 14px; padding: 0 6px; color: {{p.muted}}">
+    <button aria-label="Ocultar barra lateral (Ctrl+Alt+B)" style="display: flex">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2.5" width="13" height="11" rx="2"></rect><line x1="6" y1="2.5" x2="6" y2="13.5"></line></svg>
+    </button>
+    <button aria-label="Archivo anterior" style="display: flex">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M13 8H3M7 4L3 8l4 4"></path></svg>
+    </button>
+    <button aria-label="Archivo siguiente" style="display: flex; opacity: 0.45">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M3 8h10M9 4l4 4-4 4"></path></svg>
+    </button>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 2px; margin-top: 6px">
+    <button style="display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 8px; border-radius: 7px; color: {{p.text}}">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2.5" y="1.5" width="11" height="13" rx="1.5"></rect><path d="M8 5.5v5M5.5 8h5"></path></svg>
+      <span style="flex-grow: 1; text-align: left">Nuevo libro</span>
+      <span style="font-size: 11px; color: {{p.faint}}">Ctrl+N</span>
+    </button>
+    <button style="display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 8px; border-radius: 7px; color: {{p.text}}">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
+      <span style="flex-grow: 1; text-align: left">Buscar archivo</span>
+      <span style="font-size: 11px; color: {{p.faint}}">Ctrl+P</span>
+    </button>
+  </div>
+
+  <div style="flex-grow: 1; overflow: hidden; margin-top: 18px; display: flex; flex-direction: column; gap: 14px">
+    <sc-for list="{{spaces}}" as="space" hint-placeholder-count="3">
+      <section style="display: flex; flex-direction: column; gap: 2px">
+        <div style="display: flex; align-items: center; height: 26px; padding: 0 8px; color: {{p.muted}}; font-size: 11.5px; font-weight: 500; letter-spacing: 0.02em">
+          <span style="flex-grow: 1">{{space.title}}</span>
+          <span style="font-size: 11px; color: {{p.faint}}">{{space.count}}</span>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" style="margin-left: 8px; transform: {{space.chevron}}"><path d="M6 4l4 4-4 4"></path></svg>
+        </div>
+        <sc-for list="{{space.files}}" as="file" hint-placeholder-count="2">
+          <button style="display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 8px; text-align: left; background: {{file.bg}}">
+            <span style="display: flex; align-items: center; gap: 8px; width: 100%">
+              <span style="flex-grow: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: {{file.color}}; font-weight: {{file.weight}}">{{file.name}}</span>
+              <span style="font-size: 12px; color: {{file.stateColor}}">{{file.state}}</span>
+            </span>
+            <span style="display: flex; align-items: center; gap: 6px; width: 100%; font-size: 11.5px; color: {{p.faint}}">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1.5 4.5a1 1 0 011-1h3.5l1.5 1.5h6a1 1 0 011 1v6.5a1 1 0 01-1 1h-11a1 1 0 01-1-1z"></path></svg>
+              <span style="flex-grow: 1">{{file.where}}</span>
+              <span>{{file.meta}}</span>
+            </span>
+          </button>
+        </sc-for>
+      </section>
+    </sc-for>
+  </div>
+
+  <div style="display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0 8px; color: {{p.muted}}">
+    <button aria-label="Ajustes" style="display: flex">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="8" cy="8" r="2.2"></circle><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"></path></svg>
+    </button>
+    <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: {{p.faint}}">640 MB</span>
+  </div>
+</nav>
+</sc-if>
+
+<main style="flex: 999 1 600px; min-width: 0; height: 100%; display: flex; flex-direction: column; background: {{p.content}}">
+  <header style="height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding-left: 16px; color: {{p.muted}}">
+    <sc-if value="{{showToggle}}" hint-placeholder-val="{{ false }}">
+      <button aria-label="Mostrar barra lateral (Ctrl+Alt+B)" style="display: flex">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2.5" width="13" height="11" rx="2"></rect><line x1="6" y1="2.5" x2="6" y2="13.5"></line></svg>
+      </button>
+    </sc-if>
+    <span style="color: {{p.text}}; font-weight: 500">ventas-2024.xlsx</span>
+    <span style="font-size: 12px; color: {{p.faint}}">Cierre Q3, editado</span>
+    <span style="flex-grow: 1"></span>
+    <div style="display: flex; height: 44px">
+      <button aria-label="Minimizar" style="width: 46px; display: flex; align-items: center; justify-content: center">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 5h10"></path></svg>
+      </button>
+      <button aria-label="Maximizar" style="width: 46px; display: flex; align-items: center; justify-content: center">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"></rect></svg>
+      </button>
+      <button aria-label="Cerrar" style="width: 46px; display: flex; align-items: center; justify-content: center">
+        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 0l10 10M10 0L0 10"></path></svg>
+      </button>
+    </div>
+  </header>
+
+  <div role="toolbar" aria-label="Formato" style="height: 38px; flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 12px; color: {{p.muted}}">
+    <sc-for list="{{tools}}" as="tool" hint-placeholder-count="12">
+      <sc-if value="{{tool.gap}}" hint-placeholder-val="{{ false }}">
+        <span style="width: 1px; height: 16px; margin: 0 6px; background: {{p.line}}"></span>
+      </sc-if>
+      <sc-if value="{{tool.label}}" hint-placeholder-val="{{ true }}">
+        <button aria-label="{{tool.aria}}" style="min-width: 30px; height: 28px; padding: 0 6px; border-radius: 6px; font-size: 13px; font-weight: {{tool.weight}}; font-style: {{tool.style}}; text-decoration: {{tool.deco}}; color: {{p.muted}}">{{tool.label}}</button>
+      </sc-if>
+    </sc-for>
+  </div>
+
+  <div style="height: 34px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 12px 0 12px">
+    <label style="display: flex">
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Cuadro de nombres</span>
+      <input value="F6" style="width: 72px; height: 26px; box-sizing: border-box; padding: 0 8px; border-radius: 6px; border: 0; background: {{p.field}}; color: {{p.text}}; font-family: 'IBM Plex Mono', monospace; font-size: 12px">
+    </label>
+    <span style="font-style: italic; color: {{p.faint}}">fx</span>
+    <label style="flex-grow: 1; display: flex">
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Barra de fórmulas</span>
+      <input value="38" style="flex-grow: 1; height: 26px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 0; background: {{p.field}}; color: {{p.text}}; font-family: 'IBM Plex Mono', monospace; font-size: 12px">
+    </label>
+  </div>
+
+  <div role="grid" aria-label="Hoja Ventas" style="flex-grow: 1; min-height: 0; overflow: hidden; margin-top: 6px; font-variant-numeric: tabular-nums">
+    <div style="display: grid; grid-template-columns: {{cols}}; height: 24px; background: {{p.header}}; color: {{p.faint}}; font-size: 11.5px">
+      <span></span>
+      <sc-for list="{{letters}}" as="letter" hint-placeholder-count="10">
+        <span style="display: flex; align-items: center; justify-content: center; color: {{letter.color}}; background: {{letter.bg}}">{{letter.text}}</span>
+      </sc-for>
+    </div>
+    <sc-for list="{{rows}}" as="row" hint-placeholder-count="24">
+      <div style="display: grid; grid-template-columns: {{cols}}; height: 25px; box-sizing: border-box; border-bottom: 1px solid {{p.grid}}">
+        <span style="display: flex; align-items: center; justify-content: center; font-size: 11.5px; color: {{row.numColor}}; background: {{row.numBg}}">{{row.num}}</span>
+        <sc-for list="{{row.cells}}" as="cell" hint-placeholder-count="10">
+          <span style="{{cell.style}}">{{cell.text}}</span>
+        </sc-for>
+      </div>
+    </sc-for>
+  </div>
+
+  <footer style="height: 32px; flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 0 10px; color: {{p.muted}}; font-size: 12px">
+    <sc-for list="{{sheets}}" as="sheet" hint-placeholder-count="3">
+      <button style="height: 24px; padding: 0 12px; border-radius: 6px; background: {{sheet.bg}}; color: {{sheet.color}}">{{sheet.name}}</button>
+    </sc-for>
+    <button aria-label="Nueva hoja" style="width: 24px; height: 24px; border-radius: 6px">+</button>
+    <span style="flex-grow: 1"></span>
+    <span style="color: {{p.faint}}">Promedio</span><span style="margin-right: 12px">{{stats.avg}}</span>
+    <span style="color: {{p.faint}}">Recuento</span><span style="margin-right: 12px">{{stats.count}}</span>
+    <span style="color: {{p.faint}}">Suma</span><span style="margin-right: 16px">{{stats.sum}}</span>
+    <span style="color: {{p.faint}}">100%</span>
+  </footer>
+</main>
+
+<sc-if value="{{showChat}}" hint-placeholder-val="{{ false }}">
+<aside aria-label="Agente" style="flex: 1 1 340px; max-width: 380px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; background: {{p.sidebar}}">
+  <div style="height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 14px; color: {{p.muted}}">
+    <span style="color: {{p.text}}; font-weight: 500">Agente</span>
+    <span style="font-size: 12px; color: {{p.faint}}">ventas-2024.xlsx</span>
+    <span style="flex-grow: 1"></span>
+    <button aria-label="Nueva conversación" style="display: flex">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M11 2.5l2.5 2.5L6 12.5H3.5V10z"></path></svg>
+    </button>
+    <button aria-label="Cerrar panel del agente (Ctrl+Alt+A)" style="display: flex">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="2.5" width="13" height="11" rx="2"></rect><line x1="10" y1="2.5" x2="10" y2="13.5"></line></svg>
+    </button>
+  </div>
+
+  <div style="flex-grow: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 16px; padding: 8px 14px 14px">
+    <div style="align-self: flex-end; max-width: 88%; padding: 10px 12px; border-radius: 12px; background: {{p.selected}}; line-height: 1.5">
+      Normalizá las fechas de
+      <span style="display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; margin: 0 2px; border-radius: 5px; background: {{p.chip}}; color: {{p.chipText}}; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px">Ventas!B2:B200001</span>
+      a formato fecha real y avisame si hay valores raros.
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 10px; color: {{p.faint}}; font-size: 12px">
+      <span style="flex-grow: 1; height: 1px; background: {{p.line}}"></span>
+      <span>Trabajó 6 segundos</span>
+      <span style="flex-grow: 1; height: 1px; background: {{p.line}}"></span>
+    </div>
+
+    <div style="line-height: 1.6; color: {{p.text}}">
+      Leí la columna B: 199.988 valores ya son fechas, 12 son texto con formato <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: {{p.code}}">dd/mm/aaaa</span>. Propongo convertir esos 12 y dejar el resto igual.
+    </div>
+
+    <div style="border-radius: 10px; background: {{p.content}}; padding: 12px; display: flex; flex-direction: column; gap: 10px">
+      <div style="display: flex; align-items: center; gap: 8px">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" style="color: {{p.muted}}"><rect x="2" y="2" width="12" height="12" rx="1.5"></rect><path d="M2 6h12M6 2v12"></path></svg>
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">write_cells</span>
+        <span style="font-size: 12px; color: {{p.faint}}">Ventas, 12 celdas</span>
+        <span style="flex-grow: 1"></span>
+        <span style="font-size: 11.5px; color: {{p.muted}}">Esperando aprobación</span>
+      </div>
+      <div style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; line-height: 1.7; color: {{p.muted}}">
+        B814  "03/10/2024" → 2024-10-03<br>
+        B2207 "17/10/2024" → 2024-10-17<br>
+        <span style="color: {{p.faint}}">… 10 más, resaltadas en la grilla</span>
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 8px">
+        <button style="height: 28px; padding: 0 12px; border-radius: 7px; color: {{p.muted}}">Rechazar</button>
+        <button style="height: 28px; padding: 0 12px; border-radius: 7px; background: {{p.text}}; color: {{p.content}}; font-weight: 500">Aplicar</button>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex-shrink: 0; margin: 0 12px 12px; border-radius: 12px; background: {{p.content}}; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px">
+    <div style="display: flex; flex-wrap: wrap; gap: 6px">
+      <span style="display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 6px; background: {{p.chip}}; color: {{p.chipText}}; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px">Resumen!A1:E8
+        <button aria-label="Quitar mención" style="display: flex; opacity: 0.7">
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M1 1l8 8M9 1L1 9"></path></svg>
+        </button>
+      </span>
+    </div>
+    <label style="display: flex">
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Mensaje al agente</span>
+      <textarea placeholder="Preguntá o pedí un cambio…  (Ctrl+L agrega la selección)" style="flex-grow: 1; height: 44px; resize: none; border: 0; background: transparent; color: {{p.text}}; font: inherit"></textarea>
+    </label>
+    <div style="display: flex; align-items: center; gap: 12px; font-size: 12px; color: {{p.muted}}">
+      <button style="display: flex; align-items: center; gap: 4px">Claude Code
+        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"></path></svg>
+      </button>
+      <button style="display: flex; align-items: center; gap: 4px">Preguntar antes de escribir
+        <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6l4 4 4-4"></path></svg>
+      </button>
+      <span style="flex-grow: 1"></span>
+      <button aria-label="Enviar" style="width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: {{p.selected}}; color: {{p.text}}">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 13V3M4 7l4-4 4 4"></path></svg>
+      </button>
+    </div>
+  </div>
+  <div style="padding: 0 16px 12px; font-size: 11px; color: {{p.faint}}">Lo que el agente lee se envía a Anthropic. No accede a tus archivos ni a la terminal.</div>
+</aside>
+</sc-if>
+
+<sc-if value="{{showOverlay}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; padding-top: 96px; background: {{p.scrim}}">
+  <div role="dialog" aria-label="{{overlay.title}}" style="width: 600px; max-width: calc(100% - 32px); border-radius: 12px; background: {{p.sidebar}}; box-shadow: 0 24px 64px rgba(0,0,0,0.35); overflow: hidden">
+    <label style="display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 16px; color: {{p.muted}}">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">{{overlay.title}}</span>
+      <input value="{{overlay.query}}" placeholder="{{overlay.placeholder}}" style="flex-grow: 1; border: 0; background: transparent; color: {{p.text}}; font: inherit; font-size: 14px">
+      <span style="font-size: 11px; color: {{p.faint}}">{{overlay.hint}}</span>
+    </label>
+    <div style="height: 1px; background: {{p.line}}"></div>
+    <div role="listbox" style="display: flex; flex-direction: column; padding: 6px">
+      <sc-for list="{{overlay.items}}" as="item" hint-placeholder-count="7">
+        <div role="option" aria-selected="{{item.selected}}" style="display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: 7px; background: {{item.bg}}">
+          <span style="width: 14px; color: {{p.text}}; font-weight: 600">{{item.check}}</span>
+          <span style="color: {{p.text}}">{{item.label}}</span>
+          <span style="font-size: 12px; color: {{p.faint}}">{{item.detail}}</span>
+          <span style="flex-grow: 1"></span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: {{p.muted}}">{{item.keys}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"sidebar":{"editor":"boolean","default":true},"chat":{"editor":"boolean","default":false},"overlay":{"editor":"enum","options":["none","palette","files","theme"],"default":"none"},"accent":{"editor":"color","default":"#4caf7a","options":["#4caf7a","#5b8def","#d08a4c","#9a86d6"]},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const theme = this.props.theme ?? 'dark';
+    const accent = this.props.accent ?? '#4caf7a';
+    const showSidebar = this.props.sidebar ?? true;
+    const dark = theme !== 'light';
+    const p = dark ? {
+      content: '#18191b', sidebar: '#1f2023', selected: '#2a2b2f', text: '#e4e4e6', muted: '#a3a5ab',
+      faint: '#767880', line: '#2e2f33', field: '#222326', header: '#1d1e21', grid: '#232427',
+      headerSel: '#26302a', range: 'rgba(76,175,122,0.13)', chip: '#2b3a31', chipText: '#9fd3b4',
+      code: '#d9a679', scrim: 'rgba(0,0,0,0.45)'
+    } : {
+      content: '#ffffff', sidebar: '#f4f4f5', selected: '#e6e7ea', text: '#1c1d1f', muted: '#55585e',
+      faint: '#6e7178', line: '#e2e3e6', field: '#f2f2f4', header: '#f7f7f8', grid: '#ededef',
+      headerSel: '#e3efe7', range: 'rgba(31,138,82,0.10)', chip: '#e1f0e7', chipText: '#1b5e3a',
+      code: '#9a5a1f', scrim: 'rgba(20,20,24,0.25)'
+    };
+    const overlayKind = this.props.overlay ?? 'none';
+    const overlays = {
+      palette: {
+        title: 'Paleta de comandos', query: 'form', placeholder: 'Ejecutar un comando…', hint: 'Ctrl+Shift+P',
+        items: [
+          { label: 'Formato de celdas…', detail: 'Inicio', keys: 'Ctrl+1' },
+          { label: 'Formato: moneda', detail: 'Número', keys: 'Ctrl+Shift+$' },
+          { label: 'Formato: porcentaje', detail: 'Número', keys: 'Ctrl+Shift+%' },
+          { label: 'Borrar formatos', detail: 'Edición', keys: '' },
+          { label: 'Mostrar fórmulas', detail: 'Vista', keys: 'Ctrl+`' },
+          { label: 'Agente: agregar selección al chat', detail: 'Agente', keys: 'Ctrl+L' },
+          { label: 'Agente: editar en línea', detail: 'Agente', keys: 'Ctrl+K' }
+        ]
+      },
+      theme: {
+        title: 'Select theme', query: '', placeholder: 'Select theme…', hint: 'Live preview',
+        items: [
+          { label: 'Zenkai Dark', detail: '', keys: 'Dark' },
+          { label: 'Ayu Mirage', detail: '', keys: 'Dark' },
+          { label: 'Catppuccin Latte', detail: '', keys: 'Light' },
+          { label: 'Catppuccin Mocha', detail: '', keys: 'Dark' },
+          { label: 'Gruvbox Dark', detail: '', keys: 'Dark' },
+          { label: 'One Dark', detail: '', keys: 'Dark', check: '✓' },
+          { label: 'One Light', detail: '', keys: 'Light' },
+          { label: 'Zenkai Light', detail: '', keys: 'Light' }
+        ]
+      },
+      files: {
+        title: 'Buscar archivo', query: 'pre', placeholder: 'Buscar en espacios y recientes…', hint: 'Ctrl+E',
+        items: [
+          { label: 'presupuesto-2025.xlsx', detail: 'Cierre Q3, Drive, sin cargar', keys: '' },
+          { label: 'precios-proveedores.xlsx', detail: 'Proveedores, Compras', keys: '' },
+          { label: 'presentacion-directorio.csv', detail: 'Recientes, Descargas', keys: '' },
+          { label: 'Hoja Resumen', detail: 'ventas-2024.xlsx', keys: '' }
+        ]
+      }
+    };
+    const overlay = overlays[overlayKind] ?? null;
+    if (overlay) {
+      overlay.items = overlay.items.map((it, i) => ({ check: '', ...it, selected: i === 0 ? 'true' : 'false', bg: i === 0 ? p.selected : 'transparent' }));
+    }
+    const showChat = this.props.chat ?? false;
+    const acc = dark ? accent : '#1f7a4a';
+
+    const spaces = [
+      { title: 'CIERRE Q3', count: '3', chevron: 'rotate(90deg)', files: [
+        { name: 'ventas-2024.xlsx', where: 'Finanzas', meta: '3 hojas', state: '•', active: true },
+        { name: 'gastos-operativos.csv', where: 'Finanzas', meta: '2 MB', state: '' },
+        { name: 'presupuesto-2025.xlsx', where: 'Drive', meta: 'sin cargar', state: '○' }
+      ]},
+      { title: 'PROVEEDORES', count: '2', chevron: 'rotate(90deg)', files: [
+        { name: 'proveedores.xlsx', where: 'Compras', meta: '14m', state: '' },
+        { name: 'pagos-octubre.csv', where: 'Compras', meta: 'sin cargar', state: '○' }
+      ]},
+      { title: 'RECIENTES', count: '8', chevron: 'rotate(0deg)', files: [] }
+    ].map((s) => ({ ...s, files: s.files.map((f) => ({
+      ...f,
+      bg: f.active ? p.selected : 'transparent',
+      color: f.meta === 'sin cargar' ? p.muted : p.text,
+      weight: f.active ? 500 : 400,
+      stateColor: f.state === '•' ? p.text : p.faint
+    })) }));
+
+    const tools = [
+      { label: '↶', aria: 'Deshacer' }, { label: '↷', aria: 'Rehacer' }, { gap: true },
+      { label: 'B', aria: 'Negrita', weight: 600 }, { label: 'I', aria: 'Cursiva', style: 'italic' },
+      { label: 'U', aria: 'Subrayado', deco: 'underline' }, { gap: true },
+      { label: '$', aria: 'Formato moneda' }, { label: '%', aria: 'Formato porcentaje' },
+      { label: '.0', aria: 'Menos decimales' }, { label: '.00', aria: 'Más decimales' }, { gap: true },
+      { label: 'Σ', aria: 'Autosuma' }, { label: '−', aria: 'Alejar' }, { label: '+', aria: 'Acercar' }
+    ].map((t) => ({ gap: false, weight: 400, style: 'normal', deco: 'none', ...t }));
+
+    const heads = ['ID', 'Fecha', 'Región', 'Producto', 'Cliente', 'Cantidad', 'Precio', 'Desc.', 'Subtotal', 'Total'];
+    const widths = [52, 92, 84, 104, 108, 76, 92, 64, 112, 112];
+    const cols = '44px ' + widths.map((w) => w + 'px').join(' ') + ' 1fr';
+    const regions = ['Norte', 'Sur', 'Este', 'Oeste', 'Centro'];
+    const products = ['Teclado', 'Mouse', 'Monitor', 'Notebook', 'Auricular', 'Cable', 'Silla'];
+    let seed = 7;
+    const rnd = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
+    const money = (n) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const activeCol = 5;
+    const activeRow = 6;
+    const rangeEnd = 12;
+    const qtys = [];
+    const rows = [];
+    for (let r = 1; r <= 24; r++) {
+      let values;
+      if (r === 1) {
+        values = heads;
+      } else {
+        const qty = 1 + Math.floor(rnd() * 48);
+        const price = Math.round((20 + rnd() * 1800) * 100) / 100;
+        const disc = [0, 0, 0.05, 0.1, 0.15][Math.floor(rnd() * 5)];
+        const sub = qty * price * (1 - disc);
+        const day = 1 + Math.floor(rnd() * 28);
+        if (r >= activeRow && r <= rangeEnd) qtys.push(qty);
+        values = [String(r - 1), '2024-10-' + String(day).padStart(2, '0'), regions[Math.floor(rnd() * 5)],
+          products[Math.floor(rnd() * 7)], 'Cliente ' + String(1000 + Math.floor(rnd() * 8999)), String(qty),
+          money(price), disc ? Math.round(disc * 100) + '%' : '0%', money(sub), money(sub * 1.21)];
+      }
+      const inRow = r >= activeRow && r <= rangeEnd;
+      const cells = values.map((v, c) => {
+        const numeric = r > 1 && (c === 0 || c >= 5);
+        const inRange = inRow && c === activeCol;
+        const isActive = r === activeRow && c === activeCol;
+        let style = 'display: flex; align-items: center; padding: 0 8px; box-sizing: border-box; overflow: hidden; white-space: nowrap; border-right: 1px solid ' + p.grid + ';';
+        style += numeric ? ' justify-content: flex-end;' : '';
+        style += r === 1 ? ' font-weight: 600; color: ' + p.text + ';' : '';
+        if (inRange) style += ' background: ' + p.range + ';';
+        if (isActive) style += ' box-shadow: inset 0 0 0 2px ' + acc + '; background: ' + p.content + ';';
+        return { text: v, style };
+      });
+      cells.push({ text: '', style: 'border-right: 0' });
+      rows.push({
+        num: String(r), cells,
+        numColor: inRow ? acc : p.faint,
+        numBg: inRow ? p.headerSel : p.header
+      });
+    }
+    const letters = 'ABCDEFGHIJ'.split('').map((l, i) => ({
+      text: l,
+      color: i === activeCol ? acc : p.faint,
+      bg: i === activeCol ? p.headerSel : 'transparent'
+    }));
+    const sum = qtys.reduce((a, b) => a + b, 0);
+    const stats = {
+      sum: String(sum),
+      count: String(qtys.length),
+      avg: (sum / qtys.length).toFixed(2)
+    };
+    const sheets = [
+      { name: 'Ventas', bg: p.selected, color: p.text },
+      { name: 'Resumen', bg: 'transparent', color: p.muted },
+      { name: 'Matriz', bg: 'transparent', color: p.muted }
+    ];
+    return { p, spaces, tools, cols, rows, letters, stats, sheets, showSidebar, showToggle: !showSidebar,
+      showChat, showOverlay: overlay !== null, overlay: overlay ?? { title: '', query: '', placeholder: '', hint: '', items: [] } };
+  }
+}
+</script>
+</body>
+</html>

@@ -46,7 +46,11 @@ Design principle: reinvent nothing. Shortcuts, menu names, selection, formula er
 
 ## Architecture
 
-- Cargo workspace: `crates/engine`, `crates/formats`, `crates/grid`, `crates/app`, `bench/`.
+- Cargo workspace: `crates/engine`, `crates/formats`, `crates/grid`, `crates/app`, `bench/`,
+  plus `crates/agent` and `crates/mcp-relay` for Phase 6.
+- `agent` (settings, agent tools, MCP bridge) uses `engine` and `types`, never GPUI;
+  `app` uses `agent`; `grid` knows neither. `mcp-relay` (the `zenkai-mcp` binary) is
+  standalone and depends on no Zenkai crate.
 - Dependencies flow one way: `app` uses `grid`, `engine` and `formats`; `grid` does not
   know the engine; only `engine` knows IronCalc or logisheets. Where `formats` sits
   relative to `engine` is decided in Phase 1 and recorded in `DECISIONS.md`.

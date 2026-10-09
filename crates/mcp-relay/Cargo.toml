@@ -1,0 +1,25 @@
+[package]
+name = "zenkai-mcp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "zenkai-mcp"
+path = "src/main.rs"
+
+# The relay ships next to zenkai.exe and is started by every agent session, so it stays
+# a std program plus the pipe client.
+[dependencies]
+interprocess = "=2.4.4"
+
+[dev-dependencies]
+serde_json = "1"
+tempfile = "3"
+zenkai-agent = { path = "../agent", features = ["test-support"] }
+zenkai-engine = { path = "../engine" }
+zenkai-types = { path = "../types" }
+
+[lints]
+workspace = true

@@ -20,6 +20,18 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
   Esc, Delete, Ctrl+C/X/V (formulas shift on paste), Ctrl+Z/Y, Ctrl+S/O/N, F12, Ctrl+F,
   Ctrl+B/I/U, Ctrl+Shift+~ ! $ % # number formats, Ctrl+PageUp/PageDown, Shift+F11,
   Ctrl+= / Ctrl+- and Ctrl+wheel zoom, Ctrl+9 / Ctrl+0 hide rows / columns, Ctrl+Shift+P command palette.
+- Optional sidebar (Ctrl+Alt+B) with spaces: named groups of open workbooks you can rename, delete,
+  moved between with drag and drop or Alt+Up/Down, plus recent files. F6 moves focus into it and back.
+- Session restore: closing keeps your spaces, open files, selection and scroll, and unsaved work
+  (restored from the autosaved copy); on start only the active workbook loads, the rest load
+  when you pick them. Files that disappeared show as not found and are never removed for you.
+- Memory: past 60% of the physical memory (set ZENKAI_MEMORY_BUDGET_MB to change it) the workbooks unused for longest are
+  unloaded one by one, only if saved and off screen; they reload when you open them.
+- Search (Ctrl+E, which replaces Excel's Flash Fill): workbooks in your spaces, recent files and
+  the sheets of open workbooks.
+- Several workbooks open at once: Ctrl+Tab / Ctrl+Shift+Tab switch, Ctrl+W closes (asking about
+  unsaved changes), Ctrl+Shift+T reopens the last closed one. Closing the last workbook leaves
+  Zenkai open with a start view (New, Open, recent files), as Excel does; Ctrl+W is then a no-op.
 - Toolbar, editable formula bar, sheet tabs, status bar with
   Average/Sum/Count of the selection.
 - Live chart of the selection (Alt+F1): column, line or pie, export as SVG or copy as
@@ -59,6 +71,11 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
 - Screen readers: the sheet, the active cell (address, value, formula), the name box and
   the formula bar carry AccessKit labels.
 - Diagnostics panel (Ctrl+Shift+D): memory, frame time, last recalculation.
+- Agent settings (Ctrl+,): `%APPDATA%\Zenkai\settings.json`, with
+  `settings.schema.json` written next to it so an agent can edit it correctly. Changes on
+  disk apply at once; a broken edit keeps the last valid settings and says why. The page
+  detects Node, npx, Claude Code and Gemini CLI, adds the Claude, Gemini and Codex ACP
+  presets, sets the permission mode and stores API keys in Windows Credential Manager.
 - Autosave every minute to a recovery folder and a recovery offer after a crash.
 - If saving fails (file locked by another program, read-only folder), Save As opens.
 - Hostile files are rejected before the engine sees them (zip bombs, huge array areas,
@@ -71,13 +88,33 @@ Requirements: Windows 10/11, the MSVC build tools (Visual Studio Build Tools wit
 `rust-toolchain.toml` and installs itself on the first build.
 
 ```powershell
-cargo build --release -p zenkai -j 6
+cargo build --release -p zenkai -p zenkai-mcp -j 6
 .\target\release\zenkai.exe                    # empty workbook
 .\target\release\zenkai.exe path\to\book.xlsx  # open a file
 ```
 
 `-j 6` keeps the first build (GPUI is large) from saturating the machine; drop it on a
 dedicated build box. The release binary is `target\release\zenkai.exe`.
+
+## Agents over MCP
+
+Zenkai can let an MCP client, such as Claude Code, read and edit the workbook that is open,
+live: changes recalculate, show at once and undo with Ctrl+Z; nothing is saved by the
+agent. Turn on Settings (Ctrl+,) > "Allow MCP clients outside Zenkai", then register the
+relay that ships next to `zenkai.exe` (the Settings page shows the exact command):
+
+```powershell
+claude mcp add zenkai -- "C:\path\to\zenkai-mcp.exe"
+```
+
+`zenkai-mcp.exe` only relays stdio to a named pipe that is random per run, limited to the
+current user and guarded by a token written to `%LOCALAPPDATA%\Zenkai\mcp-endpoint.txt`
+while the bridge runs. Tools: `list_workbooks`, `list_sheets`, `get_selection`,
+`read_range`, `find`, `write_cells`, `set_formula`, `format_range`. Writes ask for
+approval by default (Alt+Y allows; Enter or Esc denies); files downloaded from the internet keep
+agents read-only, as Excel's Protected View does (Ctrl+Shift+E lifts it for the open
+file). Cell content reaches the agent marked as
+untrusted data.
 
 ## Packaging
 

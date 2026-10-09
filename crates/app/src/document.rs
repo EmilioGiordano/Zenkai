@@ -2,10 +2,17 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
+use std::time::Instant;
+use zenkai_i18n::t;
 
+use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{Engine, EngineError, Unsupported, Workbook};
-use zenkai_grid::GridCell;
-use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo};
+use zenkai_grid::{GridCell, ViewState};
+use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
+
+use crate::entry::display_name;
+use crate::find::FindBar;
+use crate::spaces::SpaceId;
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -22,6 +29,9 @@ pub enum FileJob {
 }
 
 pub struct Document {
+    pub id: WorkbookId,
+    pub space: SpaceId,
+    untitled: u32,
     workbook: SharedWorkbook,
     batch_running: bool,
     file_job: FileJob,
@@ -31,18 +41,47 @@ pub struct Document {
     pub sheets: Vec<SheetInfo>,
     pub unsupported: Vec<Unsupported>,
     pub read_only: bool,
+    // Where the file came from; a download keeps agents read-only, as Excel's Protected View.
+    pub origin: FileOrigin,
     pending: Vec<Edit>,
     generation: u64,
+    edit_count: u64,
+    pub pending_sheet: Option<SheetId>,
+    pub view: ViewState,
+    pub find: Option<FindBar>,
+    pub last_used: Instant,
+}
+
+fn unsupported_label(unsupported: Unsupported) -> &'static str {
+    match unsupported {
+        Unsupported::Charts => t!("unsupported.charts"),
+        Unsupported::Images => t!("unsupported.images"),
+        Unsupported::PivotTables => t!("unsupported.pivot_tables"),
+        Unsupported::Macros => t!("unsupported.macros"),
+        Unsupported::Comments => t!("unsupported.comments"),
+        Unsupported::Tables => t!("unsupported.tables"),
+        Unsupported::Hyperlinks => t!("unsupported.hyperlinks"),
+        Unsupported::DataValidation => t!("unsupported.data_validation"),
+        Unsupported::ExternalLinks => t!("unsupported.external_links"),
+        Unsupported::AutoFilter => t!("unsupported.auto_filter"),
+        Unsupported::SheetProtection => t!("unsupported.sheet_protection"),
+    }
 }
 
 impl Document {
     pub fn new(
+        id: WorkbookId,
+        space: SpaceId,
+        untitled: u32,
         workbook: Workbook,
         path: Option<PathBuf>,
         unsupported: Vec<Unsupported>,
     ) -> Document {
         let sheets = workbook.sheets();
         Document {
+            id,
+            space,
+            untitled,
             workbook: Arc::new(RwLock::new(workbook)),
             batch_running: false,
             file_job: FileJob::Idle,
@@ -52,19 +91,28 @@ impl Document {
             sheets,
             unsupported,
             read_only: false,
+            origin: FileOrigin::Local,
             pending: Vec::new(),
             generation: GENERATION.fetch_add(1, Ordering::Relaxed),
+            edit_count: 0,
+            pending_sheet: None,
+            view: ViewState::default(),
+            find: None,
+            last_used: Instant::now(),
         }
     }
 
+    pub fn name(&self) -> String {
+        display_name(self.path.as_deref(), self.untitled)
+    }
+
+    pub fn untitled(&self) -> u32 {
+        self.untitled
+    }
+
     pub fn name_with_marker(&self) -> String {
-        let name = self
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map_or_else(|| "Book1".to_string(), |n| n.to_string_lossy().into_owned());
         let marker = if self.dirty { "• " } else { "" };
-        format!("{marker}{name}")
+        format!("{marker}{}", self.name())
     }
 
     pub fn title(&self) -> String {
@@ -84,6 +132,7 @@ impl Document {
     }
 
     pub fn queue(&mut self, edit: Edit) {
+        self.edit_count += 1;
         self.pending.push(edit);
     }
 
@@ -138,12 +187,24 @@ impl Document {
         self.generation
     }
 
+    pub fn edit_count(&self) -> u64 {
+        self.edit_count
+    }
+
+    pub fn is_pristine(&self) -> bool {
+        self.path.is_none() && !self.dirty && self.edit_count == 0
+    }
+
     pub fn has_pending(&self) -> bool {
         self.batch_running || !self.pending.is_empty()
     }
 
     pub fn unsupported_labels(&self) -> String {
-        let labels: Vec<&str> = self.unsupported.iter().map(|u| u.label()).collect();
+        let labels: Vec<&str> = self
+            .unsupported
+            .iter()
+            .map(|u| unsupported_label(*u))
+            .collect();
         labels.join(", ")
     }
 
@@ -259,7 +320,7 @@ mod tests {
         workbook
             .set_inputs(SheetId(0), CellPos::default(), &rows)
             .unwrap();
-        let document = Document::new(workbook, None, Vec::new());
+        let document = Document::new(WorkbookId(0), SpaceId(0), 1, workbook, None, Vec::new());
         let range = Range::parse_a1("A1:B1").unwrap();
         let b1 = CellPos::parse_a1("B1").unwrap();
         assert_eq!(
@@ -272,7 +333,14 @@ mod tests {
     }
 
     fn document() -> Document {
-        Document::new(Workbook::new_empty().unwrap(), None, Vec::new())
+        Document::new(
+            WorkbookId(0),
+            SpaceId(0),
+            1,
+            Workbook::new_empty().unwrap(),
+            None,
+            Vec::new(),
+        )
     }
 
     fn noop() -> Edit {
