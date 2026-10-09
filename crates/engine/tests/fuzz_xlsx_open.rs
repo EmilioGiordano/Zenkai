@@ -9,7 +9,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use zenkai_engine::{Engine, open_xlsx, save_xlsx_atomic, scan_unsupported, xlsx_bytes};
+use zenkai_engine::{Engine, open_xlsx, save_xlsx_atomic, xlsx_bytes};
 
 const HANG_AFTER: Duration = Duration::from_secs(60);
 
