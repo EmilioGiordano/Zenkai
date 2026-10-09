@@ -5,6 +5,7 @@ use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState, Colo
 use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::*;
+use zenkai_i18n::t;
 
 use super::sidebar::WIDTH;
 use super::{Severity, Workspace};
@@ -118,11 +119,7 @@ impl Workspace {
             .unwrap_or_else(|| self.documents.current_space());
         self.documents
             .set_space_appearance(target, SpaceOverride::Default);
-        self.notify(
-            Severity::Info,
-            "The space follows the default appearance.",
-            cx,
-        );
+        self.notify(Severity::Info, t!("space.follows_default_notice"), cx);
     }
 
     fn panel_space(&self) -> Option<(SpaceId, SpaceColor, SpaceOverride)> {
@@ -264,11 +261,11 @@ impl Workspace {
         let mode = h_flex()
             .gap_1()
             .child(
-                mode_button("space-mode-default", "Default", !is_custom)
+                mode_button("space-mode-default", t!("space.mode_default"), !is_custom)
                     .on_click(cx.listener(|this, _, _, cx| this.use_default_appearance(cx))),
             )
             .child(
-                mode_button("space-mode-custom", "Custom", is_custom)
+                mode_button("space-mode-custom", t!("space.mode_custom"), is_custom)
                     .on_click(cx.listener(|this, _, _, cx| this.edit_custom(cx, |_| {}))),
             );
         let custom_sections = custom.map(|custom| {
@@ -278,7 +275,7 @@ impl Workspace {
                 .child(
                     v_flex()
                         .gap_2()
-                        .child(caption("Style", cx))
+                        .child(caption(t!("space.style"), cx))
                         .child(style_cards(
                             "space-style",
                             look,
@@ -291,12 +288,15 @@ impl Workspace {
                         )),
                 )
                 .child(
-                    v_flex().gap_2().child(caption("Custom color", cx)).child(
-                        ColorSelect::new(&picker)
-                            .featured_colors(featured)
-                            .placeholder("No color")
-                            .accessibility_label("Custom color"),
-                    ),
+                    v_flex()
+                        .gap_2()
+                        .child(caption(t!("space.custom_color"), cx))
+                        .child(
+                            ColorSelect::new(&picker)
+                                .featured_colors(featured)
+                                .placeholder(t!("space.no_color"))
+                                .accessibility_label(t!("space.custom_color")),
+                        ),
                 )
                 .child(
                     h_flex()
@@ -327,9 +327,9 @@ impl Workspace {
                 )
         });
         let note = if is_custom {
-            format!("Only {name} uses this. The other spaces follow the default in Settings.")
+            t!("space.note_custom", name = name)
         } else {
-            format!("{name} follows the default appearance from Settings (Ctrl+,).")
+            t!("space.note_default", name = name)
         };
         let left = if self.sidebar.visible {
             WIDTH + 16.0
@@ -375,13 +375,13 @@ impl Workspace {
                                     div()
                                         .flex_1()
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .child(format!("Customize {name}")),
+                                        .child(t!("space.customize_title", name = name)),
                                 )
                                 .child(
                                     Button::new("space-panel-close")
                                         .ghost()
                                         .icon(Icon::new(IconName::Close))
-                                        .accessibility_label("Close")
+                                        .accessibility_label(t!("gen.close"))
                                         .on_click(|_, window, cx| {
                                             window.dispatch_action(Box::new(CloseSpacePanel), cx)
                                         }),
@@ -392,7 +392,7 @@ impl Workspace {
                         .child(
                             v_flex()
                                 .gap_2()
-                                .child(caption("Palette", cx))
+                                .child(caption(t!("space.palette"), cx))
                                 .child(palette),
                         )
                         .child(
@@ -401,7 +401,7 @@ impl Workspace {
                                 .items_center()
                                 .child(
                                     Button::new("space-reset")
-                                        .label("Back to default (Ctrl+Alt+Shift+R)")
+                                        .label(t!("space.back_to_default"))
                                         .disabled(!is_custom)
                                         .on_click(|_, window, cx| {
                                             window
@@ -413,13 +413,16 @@ impl Workspace {
                                         .flex_1()
                                         .text_xs()
                                         .text_color(muted)
-                                        .child("Changes show live in the sidebar."),
+                                        .child(t!("space.live_note")),
                                 )
-                                .child(Button::new("space-done").primary().label("Done").on_click(
-                                    |_, window, cx| {
-                                        window.dispatch_action(Box::new(CloseSpacePanel), cx)
-                                    },
-                                )),
+                                .child(
+                                    Button::new("space-done")
+                                        .primary()
+                                        .label(t!("button.done"))
+                                        .on_click(|_, window, cx| {
+                                            window.dispatch_action(Box::new(CloseSpacePanel), cx)
+                                        }),
+                                ),
                         ),
                 ),
         )

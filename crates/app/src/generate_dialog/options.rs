@@ -1,6 +1,7 @@
 use zenkai_datagen::{
     ColumnKind, Date, EmailFormat, Gender, LastNameCount, ListOption, Locale, detect_kind,
 };
+use zenkai_i18n::t;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KindChoice {
@@ -46,23 +47,23 @@ impl KindChoice {
 
     pub fn label(self) -> &'static str {
         match self {
-            KindChoice::FirstName => "First name",
-            KindChoice::LastName => "Last name",
-            KindChoice::FullName => "Full name",
-            KindChoice::Email => "Email",
-            KindChoice::Phone => "Phone",
-            KindChoice::StreetAddress => "Street address",
-            KindChoice::City => "City",
-            KindChoice::Company => "Company",
-            KindChoice::Integer => "Whole number",
-            KindChoice::Decimal => "Decimal number",
-            KindChoice::Date => "Date",
-            KindChoice::Boolean => "TRUE or FALSE",
-            KindChoice::OneOf => "List of values",
-            KindChoice::SequentialId => "Sequential id",
-            KindChoice::Uuid => "UUID",
-            KindChoice::Lorem => "Text",
-            KindChoice::Pattern => "Pattern",
+            KindChoice::FirstName => t!("gen.kind.first_name"),
+            KindChoice::LastName => t!("gen.kind.last_name"),
+            KindChoice::FullName => t!("gen.kind.full_name"),
+            KindChoice::Email => t!("gen.kind.email"),
+            KindChoice::Phone => t!("gen.kind.phone"),
+            KindChoice::StreetAddress => t!("gen.kind.street_address"),
+            KindChoice::City => t!("gen.kind.city"),
+            KindChoice::Company => t!("gen.kind.company"),
+            KindChoice::Integer => t!("gen.kind.integer"),
+            KindChoice::Decimal => t!("gen.kind.decimal"),
+            KindChoice::Date => t!("gen.kind.date"),
+            KindChoice::Boolean => t!("gen.kind.boolean"),
+            KindChoice::OneOf => t!("gen.kind.one_of"),
+            KindChoice::SequentialId => t!("gen.kind.sequential_id"),
+            KindChoice::Uuid => t!("gen.kind.uuid"),
+            KindChoice::Lorem => t!("gen.kind.lorem"),
+            KindChoice::Pattern => t!("gen.kind.pattern"),
         }
     }
 
@@ -132,9 +133,9 @@ impl KindChoice {
             ),
             KindChoice::Boolean => ColumnKind::Boolean {},
             KindChoice::OneOf => ColumnKind::OneOf {
-                options: ["Option 1", "Option 2", "Option 3"]
-                    .map(|value| ListOption {
-                        value: value.to_string(),
+                options: [1, 2, 3]
+                    .map(|number| ListOption {
+                        value: t!("gen.default_option", number = number),
                         weight: 1,
                     })
                     .to_vec(),

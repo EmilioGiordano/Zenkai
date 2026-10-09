@@ -4,6 +4,7 @@ use std::time::Instant;
 use gpui_kit::*;
 use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{Unsupported, Workbook, open_xlsx};
+use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace, file_label};
@@ -12,8 +13,6 @@ use crate::documents::{Installed, Intent, Loaded, Step};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::files::{self, FileLoad, LoadFailure};
 use crate::recovery;
-
-const PROTECTED_VIEW: &str = "This file came from the internet: agents may only read it (Protected View). Ctrl+Shift+E lets them edit it.";
 
 pub(super) enum LinkLoad {
     Loaded {
@@ -69,11 +68,11 @@ fn read_link(link: &Link) -> LinkLoad {
 
 fn failure_text(failure: &LoadFailure) -> String {
     match failure {
-        LoadFailure::Missing => "The file was not found.".to_string(),
+        LoadFailure::Missing => t!("open.not_found").to_string(),
         LoadFailure::Engine(error) => error.to_string(),
-        LoadFailure::Unreadable { reason, fallback } => format!(
-            "The file could not be opened: {reason}. Reading its values also failed: {fallback}"
-        ),
+        LoadFailure::Unreadable { reason, fallback } => {
+            t!("open.unreadable", reason = reason, fallback = fallback)
+        }
     }
 }
 
@@ -149,7 +148,12 @@ impl Workspace {
         let count = self.documents.len();
         self.notify(
             Severity::Info,
-            format!("{name} ({position} of {count})"),
+            t!(
+                "notice.workbook_position",
+                name = name,
+                position = position,
+                total = count
+            ),
             cx,
         );
     }
@@ -226,12 +230,12 @@ impl Workspace {
             return;
         }
         let edits = entry.loaded().map(Document::edit_count);
-        let detail = format!("{} has changes that are not saved.", entry.name());
+        let detail = t!("discard.detail", name = entry.name());
         let answer = window.prompt(
             PromptLevel::Warning,
-            "Discard unsaved changes?",
+            t!("discard.title"),
             Some(&detail),
-            &["Cancel", "Discard"],
+            &[t!("button.cancel"), t!("button.discard")],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -291,7 +295,7 @@ impl Workspace {
     pub(super) fn reopen_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.documents.take_reopenable() {
             Some(path) => self.open_path(path, window, cx),
-            None => self.notify(Severity::Info, "No closed workbook to reopen.", cx),
+            None => self.notify(Severity::Info, t!("notice.no_closed_workbook"), cx),
         }
     }
 
@@ -304,7 +308,7 @@ impl Workspace {
             self.switch_to(open, window, cx);
             return;
         }
-        self.busy = Some(format!("Opening {}…", file_label(&path)).into());
+        self.busy = Some(t!("busy.opening", name = file_label(&path)).into());
         cx.notify();
         let started = Instant::now();
         cx.spawn_in(window, async move |this, cx| {
@@ -337,7 +341,7 @@ impl Workspace {
                     }
                     Err(LoadFailure::Missing) => this.notify(
                         Severity::Error,
-                        format!("{} was not found.", path.display()),
+                        t!("open.path_not_found", path = path.display()),
                         cx,
                     ),
                     Err(failure) => this.notify(Severity::Error, failure_text(&failure), cx),
@@ -355,21 +359,17 @@ impl Workspace {
             return;
         };
         if document.read_only {
-            self.notify(
-                Severity::Warning,
-                "Opened read-only: values only, without formulas or formatting. Save As keeps a copy.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("notice.opened_read_only"), cx);
         } else if !document.unsupported.is_empty() {
-            let text = format!(
-                "This file has content Zenkai does not keep yet ({}). Saving will ask for a new name.",
-                document.unsupported_labels()
+            let text = t!(
+                "notice.opened_unsupported",
+                list = document.unsupported_labels()
             );
             self.notify(Severity::Warning, text, cx);
         } else if document.origin == FileOrigin::Internet && started.is_some() {
-            self.notify(Severity::Warning, PROTECTED_VIEW, cx);
+            self.notify(Severity::Warning, t!("notice.protected_view"), cx);
         } else if let Some(started) = started {
-            let text = format!("Opened in {} ms", started.elapsed().as_millis());
+            let text = t!("notice.opened_in", ms = started.elapsed().as_millis());
             self.notify(Severity::Info, text, cx);
         }
     }
@@ -449,13 +449,16 @@ impl Workspace {
             }
             LinkLoad::Missing => {
                 self.documents.set_link_status(id, LinkStatus::Missing);
-                let text =
-                    format!("{name} was not found. It stays in the sidebar until you remove it.");
+                let text = t!("notice.link_missing", name = name);
                 self.notify(Severity::Warning, text, cx);
             }
             LinkLoad::Failed(message) => {
                 self.documents.set_link_status(id, LinkStatus::NotLoaded);
-                self.notify(Severity::Error, format!("{name}: {message}"), cx);
+                self.notify(
+                    Severity::Error,
+                    t!("notice.link_failed", name = name, message = message),
+                    cx,
+                );
             }
         }
     }
@@ -492,12 +495,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if recovery_lost {
-            let text = format!(
-                "The unsaved changes of {name} could not be recovered; this is the saved file."
-            );
+            let text = t!("notice.recovery_lost", name = name);
             self.notify(Severity::Warning, text, cx);
         } else if from_recovery {
-            let text = format!("Restored the unsaved changes of {name}. Save to keep them.");
+            let text = t!("notice.recovered", name = name);
             self.notify(Severity::Warning, text, cx);
         } else {
             self.announce_opened(None, cx);

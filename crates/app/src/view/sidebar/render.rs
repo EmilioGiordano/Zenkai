@@ -7,6 +7,7 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::super::Workspace;
@@ -132,21 +133,21 @@ impl Workspace {
             id: "new-workbook",
             row: Row::NewWorkbook,
             icon: IconName::FilePlus,
-            label: "New workbook",
+            label: t!("sidebar.new_workbook"),
             keys: "Ctrl+N",
         };
         let search_files = NavRow {
             id: "search-files",
             row: Row::SearchFiles,
             icon: IconName::Search,
-            label: "Search file",
+            label: t!("sidebar.search_file"),
             keys: "Ctrl+E",
         };
         let new_space = NavRow {
             id: "new-space",
             row: Row::NewSpace,
             icon: IconName::Plus,
-            label: "New space",
+            label: t!("sidebar.new_space"),
             keys: "Ctrl+Alt+N",
         };
         Some(
@@ -359,8 +360,8 @@ impl Workspace {
                         .flatten();
                     menu.action_context(focus.clone())
                         .check_side(Side::Right)
-                        .menu("Rename space", Box::new(RenameSpace))
-                        .submenu("Color", window, cx, move |menu, _, _| {
+                        .menu(t!("sidebar.rename_space"), Box::new(RenameSpace))
+                        .submenu(t!("sidebar.color"), window, cx, move |menu, _, _| {
                             SpaceColor::ALL.iter().fold(menu, |menu, color| {
                                 let (entity, color) = (entity.clone(), *color);
                                 menu.item(
@@ -382,8 +383,8 @@ impl Workspace {
                                 )
                             })
                         })
-                        .menu("Customize…", Box::new(CustomizeSpace))
-                        .menu("Delete space", Box::new(DeleteSpace))
+                        .menu(t!("sidebar.customize"), Box::new(CustomizeSpace))
+                        .menu(t!("sidebar.delete_space"), Box::new(DeleteSpace))
                 }
             });
         let items: Vec<_> = files
@@ -424,8 +425,8 @@ impl Workspace {
             label: file.name.clone().into(),
         };
         let close_label = match file.state {
-            FileState::Ready | FileState::Dirty => "Close",
-            _ => "Remove from sidebar",
+            FileState::Ready | FileState::Dirty => t!("sidebar.close"),
+            _ => t!("sidebar.remove"),
         };
         let entity = paint.entity.clone();
         self.row_frame(("file", id.0), Row::File(id), paint, cx)
@@ -500,26 +501,28 @@ impl Workspace {
                 ));
                 let menu = if saved {
                     let delete = entity.clone();
-                    menu.item(
-                        PopupMenuItem::new("Delete file…").on_click(move |_, window, cx| {
+                    menu.item(PopupMenuItem::new(t!("sidebar.delete_file")).on_click(
+                        move |_, window, cx| {
                             entity_update(&delete, cx, |this, cx| {
                                 this.delete_file_of(id, window, cx)
                             })
-                        }),
-                    )
+                        },
+                    ))
                 } else {
                     menu
                 };
                 others.iter().fold(menu, |menu, (target, name)| {
                     let entity = entity.clone();
                     let target = *target;
-                    menu.item(PopupMenuItem::new(format!("Move to {name}")).on_click(
-                        move |_, _, cx| {
-                            entity_update(&entity, cx, |this, cx| {
-                                this.move_document(id, target, cx)
-                            })
-                        },
-                    ))
+                    menu.item(
+                        PopupMenuItem::new(t!("sidebar.move_to", name = name)).on_click(
+                            move |_, _, cx| {
+                                entity_update(&entity, cx, |this, cx| {
+                                    this.move_document(id, target, cx)
+                                })
+                            },
+                        ),
+                    )
                 })
             })
             .into_any_element()
@@ -549,7 +552,7 @@ impl Workspace {
                 })
                 .small(),
             )
-            .child(div().flex_1().child("Recent"))
+            .child(div().flex_1().child(t!("start.recent")))
             .child(div().text_xs().child(recent.len().to_string()))
             .on_click(cx.listener(|this, _, _, cx| {
                 this.sidebar.cursor = Some(Row::RecentHeader);

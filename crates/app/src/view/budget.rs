@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use gpui_kit::*;
+use zenkai_i18n::t;
 
 use super::{Severity, Workspace};
 use crate::memory::{self, Candidate};
@@ -65,11 +66,7 @@ impl Workspace {
             self.previews.forget(generation);
             self.last_unload = Some(Instant::now());
             self.probe_links(cx);
-            self.notify(
-                Severity::Info,
-                format!("Unloaded {name} to free memory, undo history included. It loads again when you open it."),
-                cx,
-            );
+            self.notify(Severity::Info, t!("notice.unloaded", name = name), cx);
         }
     }
 }

@@ -6,9 +6,10 @@ use gpui_kit::component::input::Input;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_datagen::{ColumnKind, Locale};
+use zenkai_i18n::t;
 use zenkai_types::ColIdx;
 
-use super::draft::{KindSource, NameRole, Placement, Source, count_label};
+use super::draft::{Counted, KindSource, NameRole, Placement, Source, count_label};
 use super::options::{self, KindChoice};
 use super::{GenerateDialog, Panel};
 use crate::actions::{
@@ -145,13 +146,13 @@ impl GenerateDialog {
             .iter()
             .filter(|column| column.kind_source == KindSource::Detected)
             .count();
-        let total = count_label(columns.len() as u32, "column");
+        let total = count_label(columns.len() as u32, Counted::Column);
         if detected == columns.len() {
-            format!("{total}, all detected from their headers")
+            t!("gen.note_all", total = total)
         } else if detected == 0 {
-            format!("{total}: name each one and choose its type")
+            t!("gen.note_none", total = total)
         } else {
-            format!("{total}, {detected} detected from their headers")
+            t!("gen.note_some", total = total, detected = detected)
         }
     }
 
@@ -166,19 +167,19 @@ impl GenerateDialog {
                         div()
                             .text_lg()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("Generate data"),
+                            .child(t!("gen.title")),
                     )
                     .child(
                         h_flex()
                             .gap_3()
                             .items_center()
-                            .child(caption("Range", cx))
+                            .child(caption(t!("gen.range"), cx))
                             .child(
                                 div()
                                     .w(px(150.0))
-                                    .child(Input::new(&self.range).aria_label("Range")),
+                                    .child(Input::new(&self.range).aria_label(t!("gen.range"))),
                             )
-                            .child(caption(format!("on {}", self.sheet_name), cx))
+                            .child(caption(t!("gen.on_sheet", sheet = self.sheet_name), cx))
                             .child(caption(self.detected_note(), cx)),
                     ),
             )
@@ -187,7 +188,7 @@ impl GenerateDialog {
                     .ghost()
                     .compact()
                     .label("✕")
-                    .accessibility_label("Close")
+                    .accessibility_label(t!("gen.close"))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(super::DialogEvent::Close))),
             )
     }
@@ -196,16 +197,16 @@ impl GenerateDialog {
         let locale = self.draft.locale();
         let placement = self.draft.placement();
         let locales = [
-            (Locale::SpanishArgentina, "Spanish (Argentina)"),
-            (Locale::EnglishUnitedStates, "English (US)"),
+            (Locale::SpanishArgentina, t!("gen.locale_es_ar")),
+            (Locale::EnglishUnitedStates, t!("gen.locale_en_us")),
         ]
         .map(|(value, label)| {
             choice_button(("locale", value as usize), label, locale == value)
                 .on_click(cx.listener(move |this, _, _, cx| this.set_locale(value, cx)))
         });
         let placements = [
-            (Placement::BelowHeaders, "Below headers"),
-            (Placement::AfterData, "After data"),
+            (Placement::BelowHeaders, t!("gen.placement_below")),
+            (Placement::AfterData, t!("gen.placement_after")),
         ]
         .map(|(value, label)| {
             choice_button(("placement", value as usize), label, placement == value).on_click(
@@ -217,29 +218,29 @@ impl GenerateDialog {
             .items_start()
             .gap_4()
             .child(labelled(
-                "Rows to generate",
+                t!("gen.rows"),
                 div().w(px(110.0)).child(
                     Input::new(&self.rows)
-                        .aria_label("Rows to generate")
+                        .aria_label(t!("gen.rows"))
                         .disabled(self.draft.rows_locked()),
                 ),
                 cx,
             ))
             .child(labelled(
-                "Placement",
+                t!("gen.placement"),
                 h_flex().gap_1().children(placements),
                 cx,
             ))
             .child(labelled(
-                "Language of the data",
+                t!("gen.language"),
                 h_flex().gap_1().children(locales),
                 cx,
             ))
             .child(labelled(
-                "Seed, same seed same rows",
+                t!("gen.seed_caption"),
                 div()
                     .w(px(110.0))
-                    .child(Input::new(&self.seed).aria_label("Seed")),
+                    .child(Input::new(&self.seed).aria_label(t!("gen.seed"))),
                 cx,
             ))
     }
@@ -252,11 +253,11 @@ impl GenerateDialog {
                 h_flex()
                     .gap_3()
                     .px_2()
-                    .child(div().w(px(176.0)).child(caption("Column", cx)))
-                    .child(div().w(px(220.0)).child(caption("Type", cx)))
-                    .child(div().flex_1().child(caption("Options", cx)))
-                    .child(div().w(px(84.0)).child(caption("Blanks", cx)))
-                    .child(div().w(px(64.0)).child(caption("Unique", cx))),
+                    .child(div().w(px(176.0)).child(caption(t!("gen.column"), cx)))
+                    .child(div().w(px(220.0)).child(caption(t!("gen.type"), cx)))
+                    .child(div().flex_1().child(caption(t!("gen.options"), cx)))
+                    .child(div().w(px(84.0)).child(caption(t!("gen.blanks"), cx)))
+                    .child(div().w(px(64.0)).child(caption(t!("gen.unique"), cx))),
             )
             .children(rows)
             .child(
@@ -264,7 +265,7 @@ impl GenerateDialog {
                     Button::new("generate-add-column")
                         .ghost()
                         .compact()
-                        .label("+ Add column")
+                        .label(t!("gen.add_column"))
                         .disabled(!self.draft.can_add_column())
                         .on_click(cx.listener(|this, _, window, cx| this.add_column(window, cx))),
                 ),
@@ -274,9 +275,10 @@ impl GenerateDialog {
     fn render_preview(&self, cx: &Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let shown = self.draft.rows().min(super::draft::PREVIEW_ROWS as u32);
-        let label = format!(
-            "Preview, {shown} of {}",
-            count_label(self.draft.rows(), "row")
+        let label = t!(
+            "gen.preview",
+            shown = shown,
+            total = count_label(self.draft.rows(), Counted::Row)
         );
         let table = match self.current_ready().map(|ready| &ready.result) {
             Some(Ok(table)) => {
@@ -303,16 +305,20 @@ impl GenerateDialog {
                                 .when(empty, |text| {
                                     text.italic().text_color(theme.muted_foreground)
                                 })
-                                .child(if empty { "empty".to_string() } else { cell })
+                                .child(if empty {
+                                    t!("gen.empty_cell").to_string()
+                                } else {
+                                    cell
+                                })
                         }))
                 });
                 v_flex().children(rows).into_any_element()
             }
             _ => {
                 let message = if self.working {
-                    "Updating the preview…"
+                    t!("gen.updating_preview")
                 } else {
-                    "No preview until the problems above are fixed."
+                    t!("gen.no_preview")
                 };
                 div()
                     .px_3()
@@ -348,10 +354,7 @@ impl GenerateDialog {
                     .min_w_0()
                     .gap_0p5()
                     .child(div().text_sm().child(self.draft.summary()))
-                    .child(caption(
-                        "Nothing is written until you confirm. Generated on this computer, without AI. One Ctrl+Z undoes it.",
-                        cx,
-                    ))
+                    .child(caption(t!("gen.footer_note"), cx))
                     .when_some(self.footer_error(), |column, message| {
                         column.child(
                             div()
@@ -363,13 +366,13 @@ impl GenerateDialog {
             )
             .child(
                 Button::new("generate-cancel")
-                    .label("Cancel")
+                    .label(t!("button.cancel"))
                     .on_click(cx.listener(|_, _, _, cx| cx.emit(super::DialogEvent::Close))),
             )
             .when(self.draft.changed_headers() > 0, |row| {
                 row.child(
                     Button::new("generate-headers")
-                        .label("Save headers only")
+                        .label(t!("gen.save_headers"))
                         .disabled(self.draft.has_local_issue())
                         .on_click(cx.listener(|this, _, _, cx| this.save_headers(cx))),
                 )
@@ -378,7 +381,7 @@ impl GenerateDialog {
                 Button::new("generate-run")
                     .primary()
                     .label(if waiting {
-                        "Generating…".to_string()
+                        t!("gen.generating").to_string()
                     } else {
                         self.draft.generate_label()
                     })

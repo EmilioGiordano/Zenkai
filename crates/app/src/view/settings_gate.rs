@@ -2,7 +2,8 @@ use gpui_kit::base::h_flex;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
-use zenkai_agent::settings::HeldChange;
+use zenkai_agent::settings::{Escalation, HeldChange};
+use zenkai_i18n::t;
 
 use super::{Severity, Workspace};
 use crate::actions::{ApplyHeldSettings, KeepCurrentSettings};
@@ -12,6 +13,13 @@ use crate::agent_settings::AgentConfig;
 pub(super) enum HeldDecision {
     Apply,
     Keep,
+}
+
+fn escalation_text(escalation: Escalation) -> &'static str {
+    match escalation {
+        Escalation::WriteWithoutAsking => t!("held.write_without_asking"),
+        Escalation::ExternalAgents => t!("held.external_agents"),
+    }
 }
 
 impl Workspace {
@@ -31,7 +39,7 @@ impl Workspace {
         if let Some(problem) = &state.problem {
             self.notify(
                 Severity::Warning,
-                format!("{problem}. Zenkai keeps using the last valid settings."),
+                t!("notice.settings_problem", problem = problem),
                 cx,
             );
         }
@@ -62,7 +70,7 @@ impl Workspace {
 
     pub(super) fn render_held_settings(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let HeldChange { escalations, .. } = self.shown_held.as_ref()?;
-        let asks: Vec<&str> = escalations.iter().map(|e| e.label()).collect();
+        let asks: Vec<&str> = escalations.iter().map(|e| escalation_text(*e)).collect();
         let theme = cx.theme();
         Some(
             h_flex()
@@ -76,19 +84,17 @@ impl Workspace {
                 .border_color(theme.border)
                 .bg(theme.secondary)
                 .child(div().text_color(theme.warning).child("⚠"))
-                .child(div().flex_1().min_w_0().child(format!(
-                    "settings.json asks to {}. Zenkai confirms this at every start and \
-                     whenever the file changes outside its Settings page. Press Alt+A to \
-                     apply it if you set it yourself; Enter keeps the current settings.",
-                    asks.join(" and ")
+                .child(div().flex_1().min_w_0().child(t!(
+                    "held.message",
+                    asks = asks.join(&format!(" {} ", t!("held.and")))
                 )))
-                .child(Button::new("held-apply").label("Apply (Alt+A)").on_click(
+                .child(Button::new("held-apply").label(t!("held.apply")).on_click(
                     |_, window, cx| window.dispatch_action(Box::new(ApplyHeldSettings), cx),
                 ))
                 .child(
                     Button::new("held-keep")
                         .primary()
-                        .label("Keep current (Enter)")
+                        .label(t!("held.keep"))
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(KeepCurrentSettings), cx)
                         }),

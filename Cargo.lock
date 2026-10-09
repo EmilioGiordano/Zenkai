@@ -9839,6 +9839,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "sys-locale",
  "sysinfo",
  "tempfile",
  "thiserror 2.0.21",
@@ -9850,6 +9851,7 @@ dependencies = [
  "zenkai-engine",
  "zenkai-formats",
  "zenkai-grid",
+ "zenkai-i18n",
  "zenkai-types",
 ]
 
@@ -9876,6 +9878,7 @@ dependencies = [
  "widestring",
  "windows-native-keyring-store",
  "zenkai-engine",
+ "zenkai-i18n",
  "zenkai-types",
 ]
 
@@ -9952,6 +9955,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "zenkai-i18n"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "tracing",
+ "zenkai-types",
+]
+
+[[package]]
 name = "zenkai-mcp"
 version = "0.1.0"
 dependencies = [
@@ -9966,6 +9978,11 @@ dependencies = [
 [[package]]
 name = "zenkai-types"
 version = "0.1.0"
+dependencies = [
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "zeno"

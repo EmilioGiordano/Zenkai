@@ -1,4 +1,5 @@
 use crate::space_appearance::{NewSpaceColor, SpaceOverride};
+use zenkai_i18n::t;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SpaceId(pub u64);
@@ -42,16 +43,16 @@ impl SpaceColor {
 
     pub fn label(self) -> &'static str {
         match self {
-            SpaceColor::Default => "Default",
-            SpaceColor::Gray => "Gray",
-            SpaceColor::Red => "Red",
-            SpaceColor::Orange => "Orange",
-            SpaceColor::Amber => "Amber",
-            SpaceColor::Green => "Green",
-            SpaceColor::Teal => "Teal",
-            SpaceColor::Blue => "Blue",
-            SpaceColor::Violet => "Violet",
-            SpaceColor::Pink => "Pink",
+            SpaceColor::Default => t!("space.color.default"),
+            SpaceColor::Gray => t!("space.color.gray"),
+            SpaceColor::Red => t!("space.color.red"),
+            SpaceColor::Orange => t!("space.color.orange"),
+            SpaceColor::Amber => t!("space.color.amber"),
+            SpaceColor::Green => t!("space.color.green"),
+            SpaceColor::Teal => t!("space.color.teal"),
+            SpaceColor::Blue => t!("space.color.blue"),
+            SpaceColor::Violet => t!("space.color.violet"),
+            SpaceColor::Pink => t!("space.color.pink"),
         }
     }
 
@@ -104,8 +105,13 @@ pub struct Spaces {
     next_id: u64,
 }
 
-pub const FIRST_SPACE_NAME: &str = "Workbooks";
-pub const NEW_SPACE_NAME: &str = "New space";
+pub fn first_space_name() -> &'static str {
+    t!("space.first_name")
+}
+
+pub fn new_space_name() -> &'static str {
+    t!("space.new_name")
+}
 
 impl Spaces {
     pub fn new() -> Spaces {
@@ -113,7 +119,7 @@ impl Spaces {
             spaces: Vec::new(),
             next_id: 0,
         };
-        spaces.add(FIRST_SPACE_NAME);
+        spaces.add(first_space_name());
         spaces
     }
 
@@ -224,7 +230,7 @@ mod tests {
     fn starts_with_one_space() {
         let spaces = Spaces::new();
         assert_eq!(spaces.iter().count(), 1);
-        assert_eq!(spaces.get(spaces.first()).unwrap().name, FIRST_SPACE_NAME);
+        assert_eq!(spaces.get(spaces.first()).unwrap().name, first_space_name());
     }
 
     #[test]

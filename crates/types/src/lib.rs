@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
 pub const MAX_ROWS: u32 = 1_048_576;
 pub const MAX_COLS: u16 = 16_384;
 
@@ -381,6 +384,26 @@ pub struct SheetSizes {
     pub rows: Vec<(RowIdx, f32)>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Language {
+    #[default]
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "es")]
+    Spanish,
+}
+
+impl Language {
+    pub fn from_locale_tag(tag: &str) -> Language {
+        let primary = tag.split(['-', '_']).next().unwrap_or_default();
+        if primary.eq_ignore_ascii_case("es") {
+            Language::Spanish
+        } else {
+            Language::English
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +441,27 @@ mod tests {
         assert_eq!(past.clip_to(used), None);
         let overlapping = Range::parse_a1("A2:F9").unwrap();
         assert_eq!(overlapping.clip_to(used).unwrap().to_string(), "A2:B2");
+    }
+
+    #[test]
+    fn language_serializes_as_its_code() {
+        assert_eq!(serde_json::to_string(&Language::English).unwrap(), "\"en\"");
+        assert_eq!(serde_json::to_string(&Language::Spanish).unwrap(), "\"es\"");
+        assert_eq!(
+            serde_json::from_str::<Language>("\"es\"").unwrap(),
+            Language::Spanish
+        );
+        assert!(serde_json::from_str::<Language>("\"fr\"").is_err());
+        assert_eq!(Language::default(), Language::English);
+    }
+
+    #[test]
+    fn language_follows_the_locale_tag() {
+        assert_eq!(Language::from_locale_tag("es-AR"), Language::Spanish);
+        assert_eq!(Language::from_locale_tag("es_MX"), Language::Spanish);
+        assert_eq!(Language::from_locale_tag("ES"), Language::Spanish);
+        assert_eq!(Language::from_locale_tag("en-US"), Language::English);
+        assert_eq!(Language::from_locale_tag("fr-FR"), Language::English);
+        assert_eq!(Language::from_locale_tag(""), Language::English);
     }
 }

@@ -1,6 +1,8 @@
 use zenkai_engine::{Engine, EngineError, Workbook};
+use zenkai_i18n::t;
 use zenkai_types::{
-    CellPos, ColIdx, MAX_COLS, MAX_ROWS, Range, Rgb, RowIdx, SheetId, SheetInfo, StyleChange,
+    BorderPreset, CellPos, ColIdx, HAlign, MAX_COLS, MAX_ROWS, NumberFormat, Range, Rgb, RowIdx,
+    SheetId, SheetInfo, StyleChange,
 };
 
 use crate::tools::approval_text::{shown_entry, shown_text};
@@ -106,27 +108,42 @@ pub fn plan_write(request: &WriteRequest, sheets: &[SheetInfo]) -> Result<Planne
 
 const SAMPLE_ENTRIES: usize = 4;
 
-fn on_off(on: bool) -> &'static str {
-    if on { "on" } else { "off" }
-}
-
 fn color_label(color: Option<Rgb>) -> String {
-    color.map_or_else(|| "none".to_string(), |Rgb(rgb)| format!("#{rgb:06X}"))
+    color.map_or_else(
+        || t!("plan.none").to_string(),
+        |Rgb(rgb)| format!("#{rgb:06X}"),
+    )
 }
 
 fn style_label(change: StyleChange) -> String {
     match change {
-        StyleChange::Bold(on) => format!("bold {}", on_off(on)),
-        StyleChange::Italic(on) => format!("italic {}", on_off(on)),
-        StyleChange::Underline(on) => format!("underline {}", on_off(on)),
-        StyleChange::Strike(on) => format!("strikethrough {}", on_off(on)),
-        StyleChange::Wrap(on) => format!("wrap text {}", on_off(on)),
-        StyleChange::FontSize(points) => format!("font size {points}"),
-        StyleChange::Align(align) => format!("align {align:?}").to_lowercase(),
-        StyleChange::NumberFormat(format) => format!("number format {format:?}").to_lowercase(),
-        StyleChange::Borders(preset) => format!("borders {preset:?}").to_lowercase(),
-        StyleChange::Fill(color) => format!("fill {}", color_label(color)),
-        StyleChange::FontColor(color) => format!("font colour {}", color_label(color)),
+        StyleChange::Bold(true) => t!("plan.bold_on").to_string(),
+        StyleChange::Bold(false) => t!("plan.bold_off").to_string(),
+        StyleChange::Italic(true) => t!("plan.italic_on").to_string(),
+        StyleChange::Italic(false) => t!("plan.italic_off").to_string(),
+        StyleChange::Underline(true) => t!("plan.underline_on").to_string(),
+        StyleChange::Underline(false) => t!("plan.underline_off").to_string(),
+        StyleChange::Strike(true) => t!("plan.strike_on").to_string(),
+        StyleChange::Strike(false) => t!("plan.strike_off").to_string(),
+        StyleChange::Wrap(true) => t!("plan.wrap_on").to_string(),
+        StyleChange::Wrap(false) => t!("plan.wrap_off").to_string(),
+        StyleChange::FontSize(points) => t!("plan.font_size", points = points),
+        StyleChange::Align(HAlign::General) => t!("plan.align_general").to_string(),
+        StyleChange::Align(HAlign::Left) => t!("plan.align_left").to_string(),
+        StyleChange::Align(HAlign::Center) => t!("plan.align_center").to_string(),
+        StyleChange::Align(HAlign::Right) => t!("plan.align_right").to_string(),
+        StyleChange::NumberFormat(NumberFormat::General) => t!("plan.format_general").to_string(),
+        StyleChange::NumberFormat(NumberFormat::Number) => t!("plan.format_number").to_string(),
+        StyleChange::NumberFormat(NumberFormat::Currency) => t!("plan.format_currency").to_string(),
+        StyleChange::NumberFormat(NumberFormat::Percent) => t!("plan.format_percent").to_string(),
+        StyleChange::NumberFormat(NumberFormat::Date) => t!("plan.format_date").to_string(),
+        StyleChange::NumberFormat(NumberFormat::Time) => t!("plan.format_time").to_string(),
+        StyleChange::Borders(BorderPreset::All) => t!("plan.borders_all").to_string(),
+        StyleChange::Borders(BorderPreset::Outside) => t!("plan.borders_outside").to_string(),
+        StyleChange::Borders(BorderPreset::Bottom) => t!("plan.borders_bottom").to_string(),
+        StyleChange::Borders(BorderPreset::None) => t!("plan.borders_none").to_string(),
+        StyleChange::Fill(color) => t!("plan.fill", color = color_label(color)),
+        StyleChange::FontColor(color) => t!("plan.font_color", color = color_label(color)),
     }
 }
 
@@ -158,15 +175,22 @@ impl PlannedWrite {
                     .flatten()
                     .filter(|entry| entry.starts_with('='))
                     .count();
-                let noun = if cells == 1 { "cell" } else { "cells" };
                 let formulas = match formulas {
                     0 => String::new(),
-                    1 => " (1 formula)".to_string(),
-                    count => format!(" ({count} formulas)"),
+                    count => format!(" ({})", t!("plan.formulas", count = count)),
                 };
-                format!("Write {cells} {noun} in {}{formulas}", self.place())
+                t!(
+                    "plan.headline_write",
+                    count = cells,
+                    place = self.place(),
+                    formulas = formulas
+                )
             }
-            Change::Style(change) => format!("Format {}: {}", self.place(), style_label(*change)),
+            Change::Style(change) => t!(
+                "plan.format",
+                place = self.place(),
+                change = style_label(*change)
+            ),
         }
     }
 
@@ -200,7 +224,11 @@ impl PlannedWrite {
         let place = format!("'{}'!{}", shown_text(&self.sheet_name), self.target);
         match &self.change {
             Change::Inputs(rows) if rows.len() == 1 && rows[0].len() == 1 => {
-                format!("Write {} in {place}", shown_entry(&rows[0][0]))
+                t!(
+                    "plan.describe_write",
+                    entry = shown_entry(&rows[0][0]),
+                    place = place
+                )
             }
             Change::Inputs(rows) => {
                 let sample: Vec<String> = rows
@@ -219,13 +247,18 @@ impl PlannedWrite {
                     .flatten()
                     .filter(|entry| entry.starts_with('='))
                     .count();
-                format!(
-                    "Write {} cells ({formulas} formulas in total) in {place}: {}{more}",
-                    self.target.cell_count(),
-                    sample.join(", ")
+                t!(
+                    "plan.describe_block",
+                    cells = self.target.cell_count(),
+                    formulas = formulas,
+                    place = place,
+                    sample = sample.join(", "),
+                    more = more
                 )
             }
-            Change::Style(change) => format!("Format {place}: {}", style_label(*change)),
+            Change::Style(change) => {
+                t!("plan.format", place = place, change = style_label(*change))
+            }
         }
     }
 

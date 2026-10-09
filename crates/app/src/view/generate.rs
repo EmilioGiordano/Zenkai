@@ -4,6 +4,7 @@ use chrono::Datelike;
 use gpui_kit::*;
 use zenkai_datagen::Date;
 use zenkai_engine::Engine;
+use zenkai_i18n::t;
 use zenkai_types::Range;
 
 use super::{Severity, Workspace};
@@ -36,19 +37,11 @@ impl Workspace {
             return;
         };
         if document.read_only {
-            self.notify(
-                Severity::Warning,
-                "This workbook is read-only, so data cannot be generated into it.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("generate.read_only"), cx);
             return;
         }
         let Some(today) = today() else {
-            self.notify(
-                Severity::Error,
-                "The system date is outside the years 1900 to 9999.",
-                cx,
-            );
+            self.notify(Severity::Error, t!("generate.date_out_of_range"), cx);
             return;
         };
         let (target, sheet) = (
@@ -66,11 +59,7 @@ impl Workspace {
             .unwrap_or_default();
         let selection = self.selection(cx);
         let Some(workbook) = document.workbook() else {
-            self.notify(
-                Severity::Warning,
-                "The workbook is recalculating; try again in a moment.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("generate.recalculating"), cx);
             return;
         };
         let layout = {
@@ -162,11 +151,7 @@ impl Workspace {
         };
         self.close_generate(window, cx);
         if !self.generate_target_is_active(write.target) {
-            self.notify(
-                Severity::Warning,
-                "The workbook or sheet changed while the dialog was open, so nothing was written.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("generate.target_changed"), cx);
             return;
         }
         let sheet = write.target.sheet;

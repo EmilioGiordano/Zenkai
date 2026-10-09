@@ -2,6 +2,7 @@ use gpui_kit::base::h_flex;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
 use gpui_kit::*;
+use zenkai_i18n::t;
 
 use super::{Workspace, command_overlay};
 use crate::actions::CloseSearch;
@@ -94,7 +95,7 @@ impl Workspace {
                     }))
             })
             .fold(Command::new(&search.state), Command::group)
-            .placeholder("Search workbooks, recent files and sheets")
+            .placeholder(t!("search.placeholder"))
             .on_confirm(move |path, window, cx| {
                 let update = entity.update(cx, |this, cx| {
                     this.confirm_search(path.section, path.row, window, cx)

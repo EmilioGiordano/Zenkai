@@ -1,4 +1,5 @@
 use super::*;
+use zenkai_i18n::t;
 
 impl GenerateDialog {
     pub(super) fn render_column(&self, index: usize, cx: &Context<Self>) -> impl IntoElement {
@@ -24,7 +25,7 @@ impl GenerateDialog {
                                 .w_full()
                                 .label(kind_label)
                                 .dropdown_caret(true)
-                                .accessibility_label(format!("Type of column {letter}"))
+                                .accessibility_label(t!("gen.aria_type", letter = letter))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.open_type_menu(index, cx)
                                 })),
@@ -38,7 +39,7 @@ impl GenerateDialog {
                                 .text_xs()
                                 .bg(theme.secondary)
                                 .text_color(theme.secondary_foreground)
-                                .child("auto"),
+                                .child(t!("gen.auto")),
                         )
                     }),
             )
@@ -53,7 +54,7 @@ impl GenerateDialog {
                     Button::new(("options", index))
                         .w_full()
                         .label(ellipsize(&options::summary(&column.kind), SUMMARY_CHARS))
-                        .accessibility_label(format!("Options of column {letter}"))
+                        .accessibility_label(t!("gen.aria_options", letter = letter))
                         .selected(options_open)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_options(index, window, cx)
@@ -70,7 +71,7 @@ impl GenerateDialog {
             .child(
                 Checkbox::new(("unique", index))
                     .checked(column.unique)
-                    .accessibility_label(format!("Unique values in column {letter}"))
+                    .accessibility_label(t!("gen.aria_unique", letter = letter))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle_unique(index, cx))),
             )
             .when(removable, |cell| {
@@ -79,7 +80,7 @@ impl GenerateDialog {
                         .ghost()
                         .compact()
                         .label("✕")
-                        .accessibility_label(format!("Remove column {letter}"))
+                        .accessibility_label(t!("gen.aria_remove", letter = letter))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.remove_column(index, window, cx)
                         })),
@@ -101,7 +102,7 @@ impl GenerateDialog {
                             .child(
                                 div().flex_1().min_w_0().child(
                                     Input::new(&inputs.header)
-                                        .aria_label(format!("Header of column {letter}")),
+                                        .aria_label(t!("gen.aria_header", letter = letter)),
                                 ),
                             ),
                     )
@@ -110,7 +111,7 @@ impl GenerateDialog {
                     .child(
                         div().w(px(84.0)).child(
                             Input::new(&inputs.blanks)
-                                .aria_label(format!("Blank percentage of column {letter}")),
+                                .aria_label(t!("gen.aria_blanks", letter = letter)),
                         ),
                     )
                     .child(unique_cell),
@@ -126,16 +127,14 @@ impl GenerateDialog {
                             div()
                                 .text_xs()
                                 .text_color(theme.warning)
-                                .child("Unsaved header"),
+                                .child(t!("gen.unsaved_header")),
                         )
                         .child(
                             Button::new(("discard", index))
                                 .ghost()
                                 .compact()
-                                .label("Discard")
-                                .accessibility_label(format!(
-                                    "Discard the new header of column {letter}"
-                                ))
+                                .label(t!("button.discard"))
+                                .accessibility_label(t!("gen.aria_discard", letter = letter))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.discard_header(index, window, cx)
                                 })),
@@ -204,8 +203,8 @@ impl GenerateDialog {
         let sources = matches!(column.kind, ColumnKind::Email { .. }).then(|| {
             v_flex()
                 .gap_2()
-                .child(self.render_sources(index, NameRole::First, "First name from", cx))
-                .child(self.render_sources(index, NameRole::Last, "Last name from", cx))
+                .child(self.render_sources(index, NameRole::First, t!("gen.first_name_from"), cx))
+                .child(self.render_sources(index, NameRole::Last, t!("gen.last_name_from"), cx))
         });
         let fields = options::fields(&column.kind);
         let inputs = fields.iter().zip(&panel.inputs).map(|(field, input)| {
@@ -215,7 +214,7 @@ impl GenerateDialog {
             Checkbox::new("strip-accents")
                 .checked(true)
                 .disabled(true)
-                .label("Strip accents and spaces (always applied)")
+                .label(t!("gen.strip_accents"))
         });
         menu_surface(OPTIONS_WIDTH, cx)
             .p_3()
@@ -243,9 +242,10 @@ impl GenerateDialog {
     ) -> impl IntoElement {
         let chosen = self.draft.resolved_source(index, role);
         let role_id = role as usize;
-        let none = choice_button(("source-none", role_id), "None", chosen.is_none()).on_click(
-            cx.listener(move |this, _, _, cx| this.set_source(index, role, Source::NoColumn, cx)),
-        );
+        let none = choice_button(("source-none", role_id), t!("gen.none"), chosen.is_none())
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_source(index, role, Source::NoColumn, cx)
+            }));
         let candidates = self
             .draft
             .source_candidates(index, role)
@@ -253,7 +253,7 @@ impl GenerateDialog {
             .map(|candidate| {
                 let header = self.draft.columns()[candidate].header.clone();
                 let name = if header.is_empty() {
-                    "(no header)".to_string()
+                    t!("gen.no_header").to_string()
                 } else {
                     header
                 };

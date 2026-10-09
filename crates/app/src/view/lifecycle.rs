@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use gpui_kit::*;
 use zenkai_engine::{EngineError, open_xlsx};
+use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
@@ -12,7 +13,6 @@ use crate::recovery;
 use crate::session::{self, Loaded, Session};
 use crate::space_settings;
 
-const CLOSING: &str = "Saving your session…";
 const CLOSE_POLL: Duration = Duration::from_millis(50);
 const CLOSE_POLLS_BEFORE_ASKING: u32 = 300;
 
@@ -53,7 +53,7 @@ impl Workspace {
                 tracing::warn!(%error, "could not lock the recovery session; autosave is off");
                 self.notify(
                     Severity::Warning,
-                    format!("Autosave is off, the recovery folder is not usable: {error}"),
+                    t!("notice.autosave_off_folder", error = error),
                     cx,
                 );
                 self.apply_session(Loaded::Absent, Vec::new(), initial, window, cx);
@@ -115,11 +115,9 @@ impl Workspace {
                 }
                 self.probe_links(cx);
             }
-            Loaded::Unreadable => self.notify(
-                Severity::Warning,
-                "The previous session could not be read. It was kept as session.json.unreadable.",
-                cx,
-            ),
+            Loaded::Unreadable => {
+                self.notify(Severity::Warning, t!("notice.session_unreadable"), cx)
+            }
             Loaded::Absent => {}
         }
         // Unsaved work the session points to comes back with its workbook; anything else a
@@ -185,7 +183,7 @@ impl Workspace {
                     tracing::warn!(%error, "autosave failed");
                     this.notify(
                         Severity::Warning,
-                        format!("Autosave failed, recovery is not protecting this work: {error}"),
+                        t!("notice.autosave_failed", error = error),
                         cx,
                     );
                 }
@@ -203,15 +201,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let detail = format!(
-            "Zenkai closed unexpectedly and kept {} unsaved workbook(s). Open them?",
-            leftovers.len()
-        );
+        let detail = t!("recovery.detail", count = leftovers.len());
         let answer = window.prompt(
             PromptLevel::Warning,
-            "Recover unsaved work?",
+            t!("recovery.title"),
             Some(&detail),
-            &["Open recovered", "Discard"],
+            &[t!("recovery.open"), t!("button.discard")],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -257,11 +252,13 @@ impl Workspace {
                     {
                         tracing::warn!(?path, %error, "could not adopt the recovery file");
                     }
-                    this.notify(Severity::Warning, "Recovered work. Save it to keep it.", cx);
+                    this.notify(Severity::Warning, t!("notice.recovered_work"), cx);
                 }
-                Err(error) => {
-                    this.notify(Severity::Error, format!("Could not recover: {error}"), cx)
-                }
+                Err(error) => this.notify(
+                    Severity::Error,
+                    t!("notice.recover_failed", error = error),
+                    cx,
+                ),
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during recovery");
@@ -278,7 +275,7 @@ impl Workspace {
         }
         self.lifecycle = Lifecycle::Closing;
         self.park_active(window, cx);
-        self.busy = Some(CLOSING.into());
+        self.busy = Some(t!("busy.closing").into());
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let mut polls = 0;
@@ -288,7 +285,7 @@ impl Workspace {
                     Ok(None) if polls < CLOSE_POLLS_BEFORE_ASKING => polls += 1,
                     Ok(None) => {
                         let asked = this.update_in(cx, |this, window, cx| {
-                            this.ask_to_quit_anyway("A workbook is still busy.", window, cx)
+                            this.ask_to_quit_anyway(t!("quit.busy_reason"), window, cx)
                         });
                         if let Err(error) = asked {
                             tracing::debug!(%error, "workspace gone while closing");
@@ -391,7 +388,7 @@ impl Workspace {
                 .iter()
                 .any(|document| document.needs_recovery());
         if unprotected {
-            self.ask_to_quit_anyway("Autosave is off, so nothing can be kept.", window, cx);
+            self.ask_to_quit_anyway(t!("quit.autosave_off_reason"), window, cx);
             return;
         }
         self.write_session_and_quit(cx);
@@ -465,14 +462,12 @@ impl Workspace {
     }
 
     fn ask_to_quit_anyway(&mut self, reason: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let detail = format!(
-            "{reason} Quitting now loses the changes that are not saved. Cancel to keep working."
-        );
+        let detail = t!("quit.detail", reason = reason);
         let answer = window.prompt(
             PromptLevel::Critical,
-            "Your unsaved work could not be kept",
+            t!("quit.title"),
             Some(&detail),
-            &["Cancel", "Quit anyway"],
+            &[t!("button.cancel"), t!("quit.anyway")],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -482,7 +477,7 @@ impl Workspace {
                     this.write_session_and_quit(cx);
                 } else {
                     this.lifecycle = Lifecycle::Running;
-                    this.clear_busy(CLOSING, cx);
+                    this.clear_busy(t!("busy.closing"), cx);
                 }
             });
             if let Err(error) = update {

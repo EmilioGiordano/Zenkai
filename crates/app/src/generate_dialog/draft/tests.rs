@@ -208,9 +208,9 @@ fn range_text_accepts_a_sheet_prefix() {
 
 #[test]
 fn labels_use_thousands_separators_and_singulars() {
-    assert_eq!(count_label(1000, "row"), "1,000 rows");
-    assert_eq!(count_label(1, "header"), "1 header");
-    assert_eq!(count_label(1_048_575, "row"), "1,048,575 rows");
+    assert_eq!(count_label(1000, Counted::Row), "1,000 rows");
+    assert_eq!(count_label(1, Counted::Header), "1 header");
+    assert_eq!(count_label(1_048_575, Counted::Row), "1,048,575 rows");
     let mut draft = draft(&["Nombre", "Mail"], 0);
     assert_eq!(draft.summary(), "Generates 1,000 rows");
     draft.rename(1, "Correo");

@@ -23,6 +23,7 @@ tokio = { version = "1", features = ["rt", "sync", "time", "io-util", "macros"] 
 tracing = "0.1"
 which = "8"
 zenkai-engine = { path = "../engine" }
+zenkai-i18n = { path = "../i18n" }
 zenkai-types = { path = "../types" }
 
 [target.'cfg(windows)'.dependencies]
