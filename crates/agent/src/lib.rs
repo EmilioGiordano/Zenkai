@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod bridge;
+pub mod chat;
 pub mod detect;
 pub mod presets;
 pub mod protected_view;
