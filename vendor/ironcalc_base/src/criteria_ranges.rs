@@ -21,6 +21,10 @@ const MIN_KEPT_CELLS: usize = 1024;
 // keeping. A 200k-row column costs about 10 MB, so this fits about twelve, against
 // 640 MB for the whole 200k-row workbook.
 const KEPT_BYTES: usize = 128 << 20;
+// Bounds what one incremental evaluation spends updating kept totals: changed cells checked
+// against kept areas, plus changed offsets taken out of totals. Past it everything is read
+// again instead. The 4M of the dependents walk cap; at about 25 ns each, about 100 ms.
+const DELTA_WORK: usize = 4_000_000;
 
 // (sheet, first row, first column, height, width)
 pub(crate) type Area = (u32, i32, i32, i32, i32);
@@ -47,6 +51,7 @@ pub(crate) struct CriteriaRanges {
     kept: HashMap<Area, Slots>,
     pub(crate) totals: HashMap<TotalKey, Total>,
     bytes_left: usize,
+    delta_work: usize,
     // Reads that returned a value without keeping it: a total that needs one cannot be
     // kept.
     pub(crate) misses: u64,
@@ -67,6 +72,7 @@ impl CriteriaRanges {
             kept: HashMap::new(),
             totals: HashMap::new(),
             bytes_left: bytes,
+            delta_work: DELTA_WORK,
             misses: 0,
             forgotten: false,
         }
@@ -80,42 +86,60 @@ impl CriteriaRanges {
     // Only valid when nothing but the `changed` cells changed since the last evaluation.
     pub(crate) fn start_incremental(&mut self, changed: &HashSet<CellKey>, locale: &Locale) {
         self.reading = true;
+        if self.kept.len().saturating_mul(changed.len()) > self.delta_work {
+            self.start_full();
+            return;
+        }
+        let mut changed_offsets: HashMap<Area, Vec<(i32, i32)>> = HashMap::new();
+        for area in self.kept.keys() {
+            let (sheet, row, column, height, width) = *area;
+            let offsets: Vec<(i32, i32)> = changed
+                .iter()
+                .filter(|(cell_sheet, _, _)| *cell_sheet == sheet)
+                .map(|&(_, cell_row, cell_column)| (cell_row - row, cell_column - column))
+                .filter(|(row_offset, column_offset)| {
+                    (0..height).contains(row_offset) && (0..width).contains(column_offset)
+                })
+                .collect();
+            if !offsets.is_empty() {
+                changed_offsets.insert(*area, offsets);
+            }
+        }
+        let work: usize = self
+            .totals
+            .keys()
+            .flat_map(TotalKey::areas)
+            .filter_map(|area| changed_offsets.get(&area))
+            .map(Vec::len)
+            .sum();
+        if work > self.delta_work {
+            self.start_full();
+            return;
+        }
         let mut refund = 0;
         let kept = &self.kept;
         self.totals.retain(|key, total| {
             refund += total.forget_users(changed);
-            let exact = total.take_out(key, kept, changed, locale);
+            let exact = total.take_out(key, kept, &changed_offsets, locale);
             if !exact {
                 refund += total.bytes();
             }
             exact
         });
-        let mut shared = false;
-        for (area, slots) in &mut self.kept {
-            let (sheet, row, column, height, width) = *area;
-            let Some(slots) = Arc::get_mut(slots) else {
-                shared = true;
-                break;
+        for (area, offsets) in &changed_offsets {
+            let width = area.4;
+            // Nothing holds the slots between evaluations; if something did, starting over
+            // is always correct.
+            let Some(slots) = self.kept.get_mut(area).and_then(Arc::get_mut) else {
+                self.start_full();
+                return;
             };
-            for &(cell_sheet, cell_row, cell_column) in changed {
-                let row_offset = cell_row - row;
-                let column_offset = cell_column - column;
-                if cell_sheet == sheet
-                    && (0..height).contains(&row_offset)
-                    && (0..width).contains(&column_offset)
-                {
-                    let index = row_offset as usize * width as usize + column_offset as usize;
-                    if let Some(value) = slots.get_mut(index).and_then(OnceLock::take) {
-                        refund += heap_bytes(&value);
-                    }
+            for &(row_offset, column_offset) in offsets {
+                let index = row_offset as usize * width as usize + column_offset as usize;
+                if let Some(value) = slots.get_mut(index).and_then(OnceLock::take) {
+                    refund += heap_bytes(&value);
                 }
             }
-        }
-        // Nothing holds the slots between evaluations; if something did, starting over is
-        // always correct.
-        if shared {
-            self.start_full();
-            return;
         }
         self.bytes_left += refund;
     }
@@ -421,5 +445,43 @@ mod tests {
         let needed = 1024 * SLOT_BYTES + key_bytes + USER_BYTES;
         assert_eq!(keep_a_total(needed), (true, needed));
         assert_eq!(keep_a_total(needed - 1), (false, needed - 1));
+    }
+
+    // A count of A1:A1024 kept, then `changed` rows of A edited with `delta_work` allowed.
+    fn update_a_total(changed_rows: i32, delta_work: usize) -> bool {
+        let mut model = new_empty_model();
+        for row in 1..=1024 {
+            model._set(&format!("A{row}"), &row.to_string());
+        }
+        model.evaluate();
+        model.criteria_ranges = reading(KEPT_BYTES);
+        let misses = model.criteria_ranges.misses;
+        let values = model.area_values(0, 1, 1, 1024, 1);
+        let mut count = ExactSum::default();
+        for row_offset in 0..1024 {
+            model.area_value(&values, row_offset, 0);
+            count.add(1.0);
+        }
+        let criteria = [CalcResult::String(">0".to_string())];
+        let key = TotalKey::new(std::slice::from_ref(&values), &criteria, None).unwrap();
+        let cell = CellReferenceIndex {
+            sheet: 0,
+            row: 1,
+            column: 2,
+        };
+        model.keep_total(key, count, misses, cell);
+        drop(values);
+        model.criteria_ranges.finish();
+        model.criteria_ranges.delta_work = delta_work;
+        let changed: HashSet<_> = (1..=changed_rows).map(|row| (0, row, 1)).collect();
+        let locale = model.locale;
+        model.criteria_ranges.start_incremental(&changed, locale);
+        model.criteria_ranges.totals.len() == 1
+    }
+
+    #[test]
+    fn deltas_past_the_work_cap_read_everything_again() {
+        assert!(update_a_total(100, 100));
+        assert!(!update_a_total(100, 99));
     }
 }

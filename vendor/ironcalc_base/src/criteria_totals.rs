@@ -174,24 +174,18 @@ impl Total {
         &mut self,
         key: &TotalKey,
         kept: &HashMap<Area, Slots>,
-        changed: &HashSet<CellKey>,
+        changed_offsets: &HashMap<Area, Vec<(i32, i32)>>,
         locale: &Locale,
     ) -> bool {
         let Some(&((_, _, _, height, width), _)) = key.cases.first() else {
             return false;
         };
-        let mut offsets = Vec::new();
-        for (sheet, row, column, _, _) in key.areas() {
-            for &(cell_sheet, cell_row, cell_column) in changed {
-                let offset = (cell_row - row, cell_column - column);
-                if cell_sheet == sheet
-                    && (0..height).contains(&offset.0)
-                    && (0..width).contains(&offset.1)
-                {
-                    offsets.push(offset);
-                }
-            }
-        }
+        let mut offsets: Vec<(i32, i32)> = key
+            .areas()
+            .filter_map(|area| changed_offsets.get(&area))
+            .flatten()
+            .copied()
+            .collect();
         if offsets.is_empty() {
             return true;
         }
