@@ -104,7 +104,7 @@ mod tests {
             id: WorkbookId(1),
             space: SpaceId(0),
             untitled: 0,
-            path: Some("C:\\data\\q3\\sales.xlsx".into()),
+            path: Some(Path::new("data").join("q3").join("sales.xlsx")),
             recovery: None,
             dirty: false,
             read_only: false,
