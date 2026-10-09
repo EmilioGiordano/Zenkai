@@ -1,3 +1,5 @@
+use crate::space_appearance::{NewSpaceColor, SpaceOverride};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SpaceId(pub u64);
 
@@ -21,10 +23,11 @@ pub enum SpaceColor {
     Teal,
     Blue,
     Violet,
+    Pink,
 }
 
 impl SpaceColor {
-    pub const ALL: [SpaceColor; 9] = [
+    pub const ALL: [SpaceColor; 10] = [
         SpaceColor::Default,
         SpaceColor::Gray,
         SpaceColor::Red,
@@ -34,6 +37,7 @@ impl SpaceColor {
         SpaceColor::Teal,
         SpaceColor::Blue,
         SpaceColor::Violet,
+        SpaceColor::Pink,
     ];
 
     pub fn label(self) -> &'static str {
@@ -47,21 +51,32 @@ impl SpaceColor {
             SpaceColor::Teal => "Teal",
             SpaceColor::Blue => "Blue",
             SpaceColor::Violet => "Violet",
+            SpaceColor::Pink => "Pink",
         }
     }
 
     pub fn rgb(self) -> Option<u32> {
         match self {
             SpaceColor::Default => None,
-            SpaceColor::Gray => Some(0x8a8f98),
-            SpaceColor::Red => Some(0xc2625d),
-            SpaceColor::Orange => Some(0xc98250),
-            SpaceColor::Amber => Some(0xbfa04a),
-            SpaceColor::Green => Some(0x6fa06f),
-            SpaceColor::Teal => Some(0x4f9a9a),
-            SpaceColor::Blue => Some(0x5b8abf),
-            SpaceColor::Violet => Some(0x8c74b8),
+            SpaceColor::Gray => Some(0x8b8e96),
+            SpaceColor::Red => Some(0xd0605e),
+            SpaceColor::Orange => Some(0xd9844f),
+            SpaceColor::Amber => Some(0xd9a35b),
+            SpaceColor::Green => Some(0x5fae7a),
+            SpaceColor::Teal => Some(0x4fb3a4),
+            SpaceColor::Blue => Some(0x5b8def),
+            SpaceColor::Violet => Some(0x9a86d6),
+            SpaceColor::Pink => Some(0xc97aa6),
         }
+    }
+
+    // The color a new space takes after one with this color; no color starts the rotation.
+    pub fn next_in_rotation(self) -> SpaceColor {
+        let index = Self::ALL
+            .iter()
+            .position(|color| *color == self)
+            .unwrap_or(0);
+        Self::ALL.get(index + 1).copied().unwrap_or(Self::ALL[1])
     }
 
     pub fn next(self) -> SpaceColor {
@@ -79,6 +94,7 @@ pub struct Space {
     pub name: String,
     pub collapsed: bool,
     pub color: SpaceColor,
+    pub appearance: SpaceOverride,
 }
 
 // At least one space always exists, so every document has somewhere to be listed.
@@ -109,7 +125,24 @@ impl Spaces {
             name: name.to_string(),
             collapsed: false,
             color: SpaceColor::Default,
+            appearance: SpaceOverride::Default,
         });
+        id
+    }
+
+    // A space the user creates takes the next color of the rotation, unless the default says
+    // new spaces have none. Restoring a session uses `add`, which never moves the rotation.
+    pub fn add_for_user(&mut self, name: &str, policy: NewSpaceColor) -> SpaceId {
+        let color = match policy {
+            NewSpaceColor::Auto => self
+                .spaces
+                .last()
+                .map_or(SpaceColor::Default, |last| last.color)
+                .next_in_rotation(),
+            NewSpaceColor::None => SpaceColor::Default,
+        };
+        let id = self.add(name);
+        self.set_color(id, color);
         id
     }
 
@@ -136,9 +169,17 @@ impl Spaces {
         }
     }
 
+    // Picking a palette color also drops a free color of the space, so the pick shows.
     pub fn set_color(&mut self, id: SpaceId, color: SpaceColor) {
         if let Some(space) = self.spaces.iter_mut().find(|space| space.id == id) {
             space.color = color;
+            space.appearance = space.appearance.with_palette_color();
+        }
+    }
+
+    pub fn set_appearance(&mut self, id: SpaceId, appearance: SpaceOverride) {
+        if let Some(space) = self.spaces.iter_mut().find(|space| space.id == id) {
+            space.appearance = appearance;
         }
     }
 
@@ -177,6 +218,7 @@ impl Spaces {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::space_appearance::{Custom, Look, Opacity, Rgba};
 
     #[test]
     fn starts_with_one_space() {
@@ -251,6 +293,55 @@ mod tests {
         let id = spaces.first();
         spaces.set_color(id, SpaceColor::Teal);
         assert_eq!(spaces.get(id).unwrap().color, SpaceColor::Teal);
+    }
+
+    #[test]
+    fn new_spaces_rotate_through_the_palette_and_wrap_after_the_last_color() {
+        let mut spaces = Spaces::new();
+        let mut seen = Vec::new();
+        for n in 0..10 {
+            let id = spaces.add_for_user(&n.to_string(), NewSpaceColor::Auto);
+            seen.push(spaces.get(id).unwrap().color);
+        }
+        assert_eq!(seen[0], SpaceColor::Gray);
+        assert_eq!(seen[8], SpaceColor::Pink);
+        assert_eq!(seen[9], SpaceColor::Gray);
+        assert!(seen.iter().all(|color| *color != SpaceColor::Default));
+        assert_eq!(
+            spaces.get(spaces.first()).unwrap().color,
+            SpaceColor::Default
+        );
+    }
+
+    #[test]
+    fn the_rotation_continues_after_the_color_of_the_last_space() {
+        let mut spaces = Spaces::new();
+        let last = spaces.add("B");
+        spaces.set_color(last, SpaceColor::Teal);
+        let id = spaces.add_for_user("C", NewSpaceColor::Auto);
+        assert_eq!(spaces.get(id).unwrap().color, SpaceColor::Blue);
+    }
+
+    #[test]
+    fn new_spaces_stay_without_color_when_the_default_says_so() {
+        let mut spaces = Spaces::new();
+        let id = spaces.add_for_user("B", NewSpaceColor::None);
+        assert_eq!(spaces.get(id).unwrap().color, SpaceColor::Default);
+    }
+
+    #[test]
+    fn picking_a_palette_color_drops_the_free_color_but_keeps_the_override() {
+        let mut spaces = Spaces::new();
+        let id = spaces.first();
+        let custom = SpaceOverride::Custom(Custom {
+            look: Look::default(),
+            color: Some(Rgba::new(0x123456, Opacity::OPAQUE)),
+        });
+        spaces.set_appearance(id, custom);
+        spaces.set_color(id, SpaceColor::Red);
+        let space = spaces.get(id).unwrap();
+        assert_eq!(space.color, SpaceColor::Red);
+        assert_eq!(space.appearance.custom().unwrap().color, None);
     }
 
     #[test]

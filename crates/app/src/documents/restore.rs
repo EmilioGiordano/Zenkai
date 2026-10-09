@@ -6,6 +6,7 @@ use super::{Documents, Intent};
 use crate::document::Document;
 use crate::entry::Slot;
 use crate::session::{self, Session, SpaceRecord};
+use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Spaces;
 
 impl Documents {
@@ -30,6 +31,7 @@ impl Documents {
         for (space, record) in groups {
             self.spaces.expand(space, !record.collapsed);
             self.spaces.set_color(space, record.color);
+            self.spaces.set_appearance(space, record.appearance);
             for file in &record.files {
                 let id = self.take_id();
                 self.next_untitled = self.next_untitled.max(file.untitled + 1);
@@ -52,6 +54,7 @@ impl Documents {
     pub fn snapshot(
         &self,
         sidebar_visible: bool,
+        space_appearance: SpaceAppearance,
         recovery_file: impl Fn(WorkbookId) -> Option<PathBuf>,
     ) -> Session {
         let active = self.wanted().unwrap_or_else(|| self.active_id());
@@ -62,6 +65,7 @@ impl Documents {
                 name: space.name.clone(),
                 collapsed: space.collapsed,
                 color: space.color,
+                appearance: space.appearance,
                 files: self
                     .members(space.id)
                     .filter(|entry| !entry.loaded().is_some_and(Document::is_pristine))
@@ -75,7 +79,7 @@ impl Documents {
                     .collect(),
             })
             .collect();
-        Session::new(sidebar_visible, spaces)
+        Session::new(sidebar_visible, spaces).with_space_appearance(space_appearance)
     }
 }
 
@@ -123,12 +127,14 @@ mod tests {
                     name: "Q3".to_string(),
                     collapsed: false,
                     color: Default::default(),
+                    appearance: Default::default(),
                     files: vec![file(Some("a.xlsx"), false), file(Some("gone.xlsx"), true)],
                 },
                 SpaceRecord {
                     name: "Suppliers".to_string(),
                     collapsed: true,
                     color: Default::default(),
+                    appearance: Default::default(),
                     files: vec![file(None, false)],
                 },
             ],
@@ -177,7 +183,7 @@ mod tests {
         documents.restore(&session(), None);
         let missing = documents.find_by_path(Path::new("a.xlsx")).unwrap();
         documents.set_link_status(missing, LinkStatus::Missing);
-        let snapshot = documents.snapshot(true, |_| None);
+        let snapshot = documents.snapshot(true, SpaceAppearance::default(), |_| None);
         let files: Vec<_> = snapshot
             .spaces
             .iter()
@@ -195,10 +201,32 @@ mod tests {
     }
 
     #[test]
+    fn restoring_and_snapshotting_keep_the_color_and_the_appearance_of_each_space() {
+        use crate::space_appearance::{Custom, Look, SpaceOverride, SpaceStyle};
+        use crate::spaces::SpaceColor;
+        let custom = SpaceOverride::Custom(Custom {
+            look: Look {
+                style: SpaceStyle::Border,
+                ..Look::default()
+            },
+            color: None,
+        });
+        let mut stored = session();
+        stored.spaces[1].color = SpaceColor::Violet;
+        stored.spaces[1].appearance = custom;
+        let mut documents = documents();
+        documents.restore(&stored, None);
+        let snapshot = documents.snapshot(true, SpaceAppearance::default(), |_| None);
+        assert_eq!(snapshot.spaces[1].color, SpaceColor::Violet);
+        assert_eq!(snapshot.spaces[1].appearance, custom);
+        assert_eq!(snapshot.spaces[0].appearance, SpaceOverride::Default);
+    }
+
+    #[test]
     fn the_snapshot_points_unsaved_work_at_its_recovery_copy() {
         let mut documents = documents();
         documents.active_mut().dirty = true;
-        let snapshot = documents.snapshot(false, |id| {
+        let snapshot = documents.snapshot(false, SpaceAppearance::default(), |id| {
             Some(PathBuf::from(format!("recovery/{}.xlsx", id.0)))
         });
         let record = &snapshot.spaces[0].files[0];
@@ -210,7 +238,7 @@ mod tests {
     fn unsaved_work_without_a_recovery_copy_is_listed_without_one() {
         let mut documents = documents();
         documents.active_mut().dirty = true;
-        let snapshot = documents.snapshot(false, |_| None);
+        let snapshot = documents.snapshot(false, SpaceAppearance::default(), |_| None);
         assert_eq!(snapshot.spaces[0].files[0].recovery, None);
     }
 
@@ -291,6 +319,7 @@ mod tests {
                 name: "Q3".to_string(),
                 collapsed: false,
                 color: Default::default(),
+                appearance: Default::default(),
                 files: vec![record],
             }],
         );

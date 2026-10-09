@@ -7,6 +7,7 @@ use zenkai_grid::{Selection, ViewState};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, WorkbookId};
 
 use crate::entry::{Link, LinkStatus};
+use crate::space_appearance::{SpaceAppearance, SpaceOverride};
 use crate::spaces::{SpaceColor, SpaceId};
 
 const VERSION: u32 = 1;
@@ -19,6 +20,8 @@ const MAX_FILES: usize = 5000;
 pub struct Session {
     pub version: u32,
     pub sidebar_visible: bool,
+    #[serde(default)]
+    pub space_appearance: SpaceAppearance,
     pub spaces: Vec<SpaceRecord>,
 }
 
@@ -28,6 +31,8 @@ pub struct SpaceRecord {
     pub collapsed: bool,
     #[serde(default)]
     pub color: SpaceColor,
+    #[serde(default)]
+    pub appearance: SpaceOverride,
     pub files: Vec<FileRecord>,
 }
 
@@ -68,7 +73,15 @@ impl Session {
         Session {
             version: VERSION,
             sidebar_visible,
+            space_appearance: SpaceAppearance::default(),
             spaces,
+        }
+    }
+
+    pub fn with_space_appearance(self, space_appearance: SpaceAppearance) -> Session {
+        Session {
+            space_appearance,
+            ..self
         }
     }
 
@@ -320,6 +333,7 @@ mod tests {
                 name: "Q3 close".to_string(),
                 collapsed: false,
                 color: Default::default(),
+                appearance: Default::default(),
                 files: vec![record()],
             }],
         )
@@ -329,6 +343,44 @@ mod tests {
     fn a_session_survives_the_json_round_trip() {
         let text = serde_json::to_string(&session()).unwrap();
         assert_eq!(serde_json::from_str::<Session>(&text).unwrap(), session());
+    }
+
+    #[test]
+    fn the_appearance_of_spaces_survives_the_json_round_trip() {
+        use crate::space_appearance::{
+            ApplyTo, Custom, Intensity, Look, NewSpaceColor, Opacity, Rgba, SpaceStyle,
+        };
+        let mut custom = session();
+        custom.spaces[0].color = SpaceColor::Pink;
+        custom.spaces[0].appearance = SpaceOverride::Custom(Custom {
+            look: Look {
+                style: SpaceStyle::FullTint,
+                intensity: Intensity::from(24),
+                apply_to: ApplyTo::WorkbooksOnly,
+            },
+            color: Some(Rgba::new(0x336699, Opacity::from(80))),
+        });
+        let custom = custom.with_space_appearance(SpaceAppearance {
+            look: Look {
+                style: SpaceStyle::Border,
+                ..Look::default()
+            },
+            new_space_color: NewSpaceColor::None,
+        });
+        let text = serde_json::to_string(&custom).unwrap();
+        assert_eq!(serde_json::from_str::<Session>(&text).unwrap(), custom);
+    }
+
+    #[test]
+    fn a_session_written_before_the_appearance_options_still_loads() {
+        let old = r#"{"version":1,"sidebar_visible":true,"spaces":[
+            {"name":"Q3","collapsed":false,"color":"teal","files":[]},
+            {"name":"Plain","collapsed":true,"files":[]}]}"#;
+        let loaded: Session = serde_json::from_str(old).unwrap();
+        assert_eq!(loaded.space_appearance, SpaceAppearance::default());
+        assert_eq!(loaded.spaces[0].color, SpaceColor::Teal);
+        assert_eq!(loaded.spaces[0].appearance, SpaceOverride::Default);
+        assert_eq!(loaded.spaces[1].color, SpaceColor::Default);
     }
 
     #[test]
@@ -459,6 +511,7 @@ mod tests {
                     name: n.to_string(),
                     collapsed: false,
                     color: Default::default(),
+                    appearance: Default::default(),
                     files: Vec::new(),
                 })
                 .collect(),

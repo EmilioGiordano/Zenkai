@@ -10,6 +10,7 @@ use crate::document::{self, FileJob, SharedWorkbook};
 use crate::documents::Intent;
 use crate::recovery;
 use crate::session::{self, Loaded, Session};
+use crate::space_settings;
 
 const CLOSING: &str = "Saving your session…";
 const CLOSE_POLL: Duration = Duration::from_millis(50);
@@ -99,6 +100,7 @@ impl Workspace {
         match loaded {
             Loaded::Restored(session) => {
                 self.sidebar.visible = session.sidebar_visible;
+                cx.set_global(session.space_appearance);
                 referenced = session
                     .recovery_files()
                     .into_iter()
@@ -395,13 +397,14 @@ impl Workspace {
         self.write_session_and_quit(cx);
     }
 
-    fn snapshot_session(&self) -> Session {
+    fn snapshot_session(&self, cx: &App) -> Session {
         let directory = self.recovery_dir.clone();
-        self.documents.snapshot(self.sidebar.visible, |id| {
-            directory
-                .as_deref()
-                .map(|directory| recovery::document_file(directory, id))
-        })
+        self.documents
+            .snapshot(self.sidebar.visible, space_settings::current(cx), |id| {
+                directory
+                    .as_deref()
+                    .map(|directory| recovery::document_file(directory, id))
+            })
     }
 
     // Written when something changed, so a crash leaves the spaces and files as they were a
@@ -413,7 +416,7 @@ impl Workspace {
         if self.lifecycle == Lifecycle::Closing {
             return;
         }
-        let session = self.snapshot_session();
+        let session = self.snapshot_session(cx);
         if self.saved_session.as_ref() == Some(&session) {
             return;
         }
@@ -430,7 +433,7 @@ impl Workspace {
     // The spaces and links are kept even when unsaved work could not be.
     fn write_session_and_quit(&mut self, cx: &mut Context<Self>) {
         let directory = self.recovery_dir.clone();
-        let session = self.snapshot_session();
+        let session = self.snapshot_session(cx);
         let session_directory = recovery::session_directory();
         let clean: Vec<PathBuf> = self
             .documents

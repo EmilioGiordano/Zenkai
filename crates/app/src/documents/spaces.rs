@@ -2,6 +2,7 @@ use zenkai_types::WorkbookId;
 
 use super::Documents;
 use crate::entry::Entry;
+use crate::space_appearance::{NewSpaceColor, SpaceOverride};
 use crate::spaces::{Neighbour, SpaceColor, SpaceId, Spaces};
 
 impl Documents {
@@ -13,8 +14,8 @@ impl Documents {
         self.entries().filter(move |entry| entry.space() == space)
     }
 
-    pub fn add_space(&mut self, name: &str) -> SpaceId {
-        self.spaces.add(name)
+    pub fn add_space(&mut self, name: &str, color: NewSpaceColor) -> SpaceId {
+        self.spaces.add_for_user(name, color)
     }
 
     pub fn rename_space(&mut self, id: SpaceId, name: &str) -> bool {
@@ -27,6 +28,10 @@ impl Documents {
 
     pub fn set_space_color(&mut self, id: SpaceId, color: SpaceColor) {
         self.spaces.set_color(id, color);
+    }
+
+    pub fn set_space_appearance(&mut self, id: SpaceId, appearance: SpaceOverride) {
+        self.spaces.set_appearance(id, appearance);
     }
 
     pub fn toggle_space(&mut self, id: SpaceId) {
@@ -80,7 +85,7 @@ mod tests {
     #[test]
     fn a_new_document_joins_the_space_of_the_one_before_it() {
         let mut documents = busy();
-        let second = documents.add_space("Q3");
+        let second = documents.add_space("Q3", NewSpaceColor::None);
         let first = documents.active_id();
         documents.move_to_space(first, second);
         open_file(&mut documents, "a.xlsx");
@@ -90,7 +95,7 @@ mod tests {
     #[test]
     fn moving_changes_the_space_without_touching_the_order_of_documents() {
         let mut documents = busy();
-        let q3 = documents.add_space("Q3");
+        let q3 = documents.add_space("Q3", NewSpaceColor::None);
         let a = open_file(&mut documents, "a.xlsx");
         open_file(&mut documents, "b.xlsx");
         assert!(documents.move_to_space(a, q3));
@@ -104,7 +109,7 @@ mod tests {
     fn shifting_moves_to_the_neighbouring_space_and_stops_at_the_ends() {
         let mut documents = documents();
         let first = documents.spaces().first();
-        let second = documents.add_space("Q3");
+        let second = documents.add_space("Q3", NewSpaceColor::None);
         let id = documents.active_id();
         assert!(!documents.shift_space(id, Neighbour::Previous));
         assert!(documents.shift_space(id, Neighbour::Next));
@@ -118,7 +123,7 @@ mod tests {
     fn deleting_a_space_keeps_its_documents_in_the_neighbour() {
         let mut documents = documents();
         let first = documents.spaces().first();
-        let second = documents.add_space("Q3");
+        let second = documents.add_space("Q3", NewSpaceColor::None);
         let id = documents.active_id();
         documents.move_to_space(id, second);
         assert!(documents.delete_space(second));

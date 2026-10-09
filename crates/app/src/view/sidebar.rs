@@ -7,9 +7,10 @@ use zenkai_types::WorkbookId;
 use super::{Severity, Workspace};
 use crate::entry::Entry;
 use crate::sidebar_rows::{self, Move, Row, SpaceRows};
+use crate::space_settings;
 use crate::spaces::{NEW_SPACE_NAME, Neighbour, SpaceColor, SpaceId};
 
-const WIDTH: f32 = 248.0;
+pub(super) const WIDTH: f32 = 248.0;
 
 mod render;
 
@@ -192,7 +193,7 @@ impl Workspace {
         self.set_space_color(target, current.next(), cx);
     }
 
-    fn sidebar_cursor_space(&self) -> Option<SpaceId> {
+    pub(super) fn sidebar_cursor_space(&self) -> Option<SpaceId> {
         match self.sidebar.cursor? {
             Row::Space(id) => Some(id),
             Row::File(id) => self.documents.get(id).map(|document| document.space),
@@ -243,7 +244,9 @@ impl Workspace {
 
     pub(super) fn new_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.sidebar.visible = true;
-        let id = self.documents.add_space(NEW_SPACE_NAME);
+        let id = self
+            .documents
+            .add_space(NEW_SPACE_NAME, space_settings::current(cx).new_space_color);
         self.sidebar.cursor = Some(Row::Space(id));
         self.begin_space_rename(id, window, cx);
     }

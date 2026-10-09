@@ -142,6 +142,7 @@ mod tests {
                 name: "Q3 close".to_string(),
                 collapsed: false,
                 color: Default::default(),
+                appearance: Default::default(),
                 files: vec![record("C:/data/sales.xlsx")],
             }],
         );
@@ -167,6 +168,7 @@ mod tests {
                 name: "Q3".to_string(),
                 collapsed: false,
                 color: Default::default(),
+                appearance: Default::default(),
                 files: vec![record("C:/data/sales.xlsx")],
             }],
         );
