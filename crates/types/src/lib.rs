@@ -384,9 +384,7 @@ pub struct SheetSizes {
     pub rows: Vec<(RowIdx, f32)>,
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum Language {
     #[default]
     #[serde(rename = "en")]
@@ -449,7 +447,10 @@ mod tests {
     fn language_serializes_as_its_code() {
         assert_eq!(serde_json::to_string(&Language::English).unwrap(), "\"en\"");
         assert_eq!(serde_json::to_string(&Language::Spanish).unwrap(), "\"es\"");
-        assert_eq!(serde_json::from_str::<Language>("\"es\"").unwrap(), Language::Spanish);
+        assert_eq!(
+            serde_json::from_str::<Language>("\"es\"").unwrap(),
+            Language::Spanish
+        );
         assert!(serde_json::from_str::<Language>("\"fr\"").is_err());
         assert_eq!(Language::default(), Language::English);
     }

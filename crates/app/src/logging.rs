@@ -27,7 +27,7 @@ pub fn init() {
     }
 }
 
-fn log_path() -> Option<PathBuf> {
+pub fn log_path() -> Option<PathBuf> {
     Some(crate::recovery::directory()?.parent()?.join("zenkai.log"))
 }
 
