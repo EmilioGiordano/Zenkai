@@ -7,6 +7,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::preferences::ColorMode;
 use zenkai_grid::HighContrast;
+use zenkai_i18n::t;
 
 use super::rows::RowInfo;
 
@@ -66,8 +67,8 @@ pub fn row(
                 Button::new(("reset", id))
                     .ghost()
                     .compact()
-                    .label("Reset")
-                    .accessibility_label(format!("Reset {title} to its default"))
+                    .label(t!("settings.reset"))
+                    .accessibility_label(t!("settings.reset_row", title = title))
                     .on_click(move |_, window, cx| on_reset(window, cx)),
             )
         });
@@ -148,7 +149,7 @@ pub fn select(
     Button::new(id)
         .w(px(NARROW_CONTROL))
         .selected(open)
-        .accessibility_label(format!("{label}: choose"))
+        .accessibility_label(t!("settings.choose", label = label))
         .on_click(move |_, window, cx| on_click(window, cx))
         .child(
             h_flex()
@@ -179,7 +180,7 @@ pub fn stepper(
                 .ghost()
                 .compact()
                 .label("−")
-                .accessibility_label(format!("Decrease {label}"))
+                .accessibility_label(t!("settings.decrease", label = label))
                 .disabled(!can_decrease)
                 .on_click(move |_, window, cx| down(false, window, cx)),
         )
@@ -197,7 +198,7 @@ pub fn stepper(
                 .ghost()
                 .compact()
                 .label("+")
-                .accessibility_label(format!("Increase {label}"))
+                .accessibility_label(t!("settings.increase", label = label))
                 .disabled(!can_increase)
                 .on_click(move |_, window, cx| on_step(true, window, cx)),
         )

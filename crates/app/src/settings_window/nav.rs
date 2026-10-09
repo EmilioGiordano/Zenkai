@@ -5,6 +5,7 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use zenkai_i18n::t;
 
 use super::rows::{Section, Values};
 use super::{SettingsWindow, update};
@@ -53,7 +54,11 @@ impl SettingsWindow {
                     .w_full()
                     .selected(active)
                     .accessibility_label(if count > 0 {
-                        format!("{}, {count} modified", section.label())
+                        t!(
+                            "settings.nav.modified",
+                            count = count,
+                            section = section.label()
+                        )
                     } else {
                         section.label().to_string()
                     })
@@ -99,7 +104,7 @@ impl SettingsWindow {
                                 .text_color(theme.muted_foreground)
                                 .child("Ctrl+F"),
                         )
-                        .aria_label("Search settings")
+                        .aria_label(t!("settings.search"))
                         .cleanable(true),
                 ),
             )
@@ -113,7 +118,7 @@ impl SettingsWindow {
                     .items_center()
                     .rounded_lg()
                     .bg(theme.secondary)
-                    .child(div().flex_1().child("Modified only"))
+                    .child(div().flex_1().child(t!("settings.modified_only")))
                     .child(
                         div()
                             .text_xs()
@@ -122,7 +127,7 @@ impl SettingsWindow {
                     )
                     .child(super::controls::switch(
                         "modified-only",
-                        "Modified only (Ctrl+Shift+M)",
+                        t!("settings.modified_only.shortcut"),
                         self.modified_only,
                         {
                             let window = cx.entity().downgrade();

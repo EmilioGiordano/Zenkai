@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use zenkai_i18n::t;
 
 pub const MIN_AUTOSAVE_SECONDS: u32 = 10;
 pub const MAX_AUTOSAVE_SECONDS: u32 = 600;
@@ -73,9 +74,9 @@ impl ColorMode {
 
     pub fn label(self) -> &'static str {
         match self {
-            ColorMode::Light => "Light",
-            ColorMode::Dark => "Dark",
-            ColorMode::System => "System",
+            ColorMode::Light => t!("settings.color_mode.light"),
+            ColorMode::Dark => t!("settings.color_mode.dark"),
+            ColorMode::System => t!("settings.color_mode.system"),
         }
     }
 }
@@ -114,14 +115,18 @@ impl ThemeChoice {
 
     pub fn name(self) -> &'static str {
         match self {
-            ThemeChoice::Dark(DarkTheme::ZenkaiDark) => "Zenkai Dark",
-            ThemeChoice::Dark(DarkTheme::HighContrast) => "High contrast",
-            ThemeChoice::Light(LightTheme::ZenkaiLight) => "Zenkai Light",
+            ThemeChoice::Dark(DarkTheme::ZenkaiDark) => t!("theme.zenkai_dark"),
+            ThemeChoice::Dark(DarkTheme::HighContrast) => t!("theme.high_contrast"),
+            ThemeChoice::Light(LightTheme::ZenkaiLight) => t!("theme.zenkai_light"),
         }
     }
 
     pub fn tag(self) -> &'static str {
-        if self.is_dark() { "Dark" } else { "Light" }
+        if self.is_dark() {
+            t!("settings.color_mode.dark")
+        } else {
+            t!("settings.color_mode.light")
+        }
     }
 }
 

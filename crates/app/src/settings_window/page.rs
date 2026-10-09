@@ -4,6 +4,7 @@ use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::*;
 use zenkai_agent::preferences::{ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS};
 use zenkai_agent::settings::{PermissionMode, Settings};
+use zenkai_i18n::t;
 
 use super::choices::{self, Choices};
 use super::controls::{self, RowParts, card, explanation, group_title, mode_cards, segmented};
@@ -35,18 +36,13 @@ impl SettingsWindow {
         let shortcut_blocks = keyboard::render(&shortcut_matches, cx);
         let (title, lead): (SharedString, SharedString) = if self.modified_only {
             (
-                "Modified settings".into(),
-                "Only what you changed from the defaults. Each row can go back to its default."
-                    .into(),
+                t!("settings.modified.title").into(),
+                t!("settings.modified.lead").into(),
             )
         } else if searching {
             (
-                "Search results".into(),
-                match results {
-                    1 => "1 match across all sections.".to_string(),
-                    count => format!("{count} matches across all sections."),
-                }
-                .into(),
+                t!("settings.search.title").into(),
+                t!("settings.search.matches", count = results).into(),
             )
         } else {
             (self.section.label().into(), self.section.lead().into())
@@ -88,9 +84,9 @@ impl SettingsWindow {
                 div()
                     .text_color(cx.theme().muted_foreground)
                     .child(if self.modified_only {
-                        "Nothing differs from the defaults."
+                        t!("settings.modified.empty")
                     } else {
-                        "No setting matches your search."
+                        t!("settings.search.empty")
                     })
                     .into_any_element(),
             );
@@ -184,7 +180,7 @@ impl SettingsWindow {
                 let seconds = settings.general.autosave_seconds;
                 parts.control = Some(controls::stepper(
                     "autosave",
-                    "the autosave interval",
+                    t!("settings.autosave_interval"),
                     format!("{seconds} s"),
                     seconds > MIN_AUTOSAVE_SECONDS,
                     seconds < MAX_AUTOSAVE_SECONDS,
@@ -228,7 +224,7 @@ impl SettingsWindow {
                 let percent = spaces.look.intensity.percent();
                 parts.control = Some(controls::stepper(
                     "space-intensity",
-                    "the space color intensity",
+                    t!("settings.space_intensity"),
                     format!("{percent}%"),
                     percent > 0,
                     percent < crate::space_appearance::MAX_INTENSITY,
@@ -302,8 +298,8 @@ impl SettingsWindow {
                 parts.code = self.claude_command.clone();
                 parts.control = Some(info::button(
                     ("row", id),
-                    "Copy (Alt+M)",
-                    "Copy the command that adds Zenkai to Claude Code",
+                    t!("settings.copy_command"),
+                    t!("palette.copy_claude_command"),
                     |_, cx| agents::copy_claude_command(cx),
                 ));
             }
@@ -314,8 +310,8 @@ impl SettingsWindow {
                 if let Some(folder) = folder {
                     parts.control = Some(info::button(
                         ("row", id),
-                        "Show folder",
-                        "Show the recovery folder in the file explorer",
+                        t!("settings.show_folder"),
+                        t!("settings.show_recovery_folder"),
                         move |_, cx| cx.reveal_path(&folder),
                     ));
                 }
@@ -326,8 +322,8 @@ impl SettingsWindow {
                 if let Some(file) = file {
                     parts.control = Some(info::button(
                         ("row", id),
-                        "Open",
-                        "Open settings.json in the default editor",
+                        t!("settings.open"),
+                        t!("settings.open_settings_file"),
                         move |_, cx| cx.open_with_system(&file),
                     ));
                 }
@@ -338,8 +334,8 @@ impl SettingsWindow {
                 if let Some(file) = file {
                     parts.control = Some(info::button(
                         ("row", id),
-                        "Show folder",
-                        "Show the log file in the file explorer",
+                        t!("settings.show_folder"),
+                        t!("settings.show_log_file"),
                         move |_, cx| cx.reveal_path(&file),
                     ));
                 }
@@ -392,7 +388,7 @@ impl SettingsWindow {
         let command = match choices {
             Choices::Themes { themes, current } => command
                 .items(theme_list::items(&themes, current))
-                .placeholder("Select theme…"),
+                .placeholder(t!("palette.select_theme")),
             Choices::Plain(options) => command.searchable(false).items(
                 options
                     .into_iter()

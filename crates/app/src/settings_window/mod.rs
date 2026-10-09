@@ -17,6 +17,7 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, TitleBar};
 use gpui_kit::*;
 use zenkai_agent::settings::{AgentId, HeldChange, SecretName};
+use zenkai_i18n::t;
 
 use crate::actions::*;
 use crate::agent_settings::{self, HeldDecision};
@@ -55,7 +56,7 @@ pub fn open(cx: &mut App) {
         ..TitleBar::window_options()
     };
     match gpui_kit::open_window(options, cx, |window, cx| {
-        window.set_window_title("Zenkai Settings");
+        window.set_window_title(t!("settings.window_title"));
         cx.new(|cx| SettingsWindow::new(window, cx))
     }) {
         Ok((handle, _)) => cx.set_global(OpenWindow(handle)),
@@ -98,7 +99,7 @@ pub struct SettingsWindow {
 impl SettingsWindow {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> SettingsWindow {
         agent_settings::detect_agents(cx);
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search settings"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("settings.search")));
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let subscriptions = vec![
@@ -238,7 +239,7 @@ impl Render for SettingsWindow {
                     div()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child("Zenkai Settings"),
+                        .child(t!("settings.window_title")),
                 ),
             )
             .child(h_flex().flex_1().min_h_0().child(nav).child(content))

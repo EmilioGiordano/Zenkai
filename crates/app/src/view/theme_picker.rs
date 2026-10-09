@@ -1,6 +1,7 @@
 use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::*;
 use zenkai_agent::preferences::ThemeChoice;
+use zenkai_i18n::t;
 
 use super::{Workspace, command_overlay};
 use crate::actions::CancelThemePicker;
@@ -82,7 +83,7 @@ impl Workspace {
                 &ThemeChoice::ALL,
                 picker.preview.original_shown(),
             ))
-            .placeholder("Select theme…")
+            .placeholder(t!("palette.select_theme"))
             .on_select(move |path, _, cx| {
                 if let Err(error) = selected.update(cx, |this, cx| this.preview_theme(path.row, cx))
                 {

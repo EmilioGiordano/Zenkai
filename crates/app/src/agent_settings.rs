@@ -212,7 +212,7 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
                 config.state.apply_from_page(settings, &approved);
                 config.failure = None;
             }
-            Err(error) => config.failure = Some(format!("Settings were not changed: {error}")),
+            Err(error) => config.failure = Some(t!("settings.not_changed", error = error)),
         });
         if written_failed {
             cx.update(crate::theme::revert_to_settings);
@@ -261,9 +261,7 @@ fn remember_confirmations(cx: &mut App) {
         if let Err(error) = saved {
             tracing::warn!(%error, "could not record the confirmed settings");
             cx.update_global::<AgentConfig, _>(|config, _| {
-                config.failure = Some(format!(
-                    "The confirmation of elevated permissions could not be stored, so Zenkai will ask again at the next start: {error}"
-                ))
+                config.failure = Some(t!("settings.confirmation_not_stored", error = error))
             });
         }
     })

@@ -1,6 +1,7 @@
 use gpui_kit::*;
 use zenkai_agent::preferences::{DarkTheme, LightTheme, ThemeChoice};
 use zenkai_agent::settings::Settings;
+use zenkai_i18n::t;
 use zenkai_types::Language;
 
 use super::rows::RowId;
@@ -18,7 +19,7 @@ pub enum Choices {
 
 fn language_label(language: Option<Language>) -> &'static str {
     match language {
-        None => "Follow Windows",
+        None => t!("settings.language.follow_windows"),
         Some(Language::English) => "English",
         Some(Language::Spanish) => "Español",
     }
@@ -29,8 +30,8 @@ const NEW_SPACE_COLORS: [NewSpaceColor; 2] = [NewSpaceColor::Auto, NewSpaceColor
 
 fn new_space_color_label(choice: NewSpaceColor) -> &'static str {
     match choice {
-        NewSpaceColor::Auto => "Automatic",
-        NewSpaceColor::None => "No color",
+        NewSpaceColor::Auto => t!("settings.new_space_color.automatic"),
+        NewSpaceColor::None => t!("settings.new_space_color.none"),
     }
 }
 

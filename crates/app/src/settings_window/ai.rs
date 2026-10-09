@@ -10,6 +10,7 @@ use zenkai_agent::detect::Detection;
 use zenkai_agent::presets::{PRESETS, Preset};
 use zenkai_agent::secrets::SecretStatus;
 use zenkai_agent::settings::{AgentId, AgentServer, SecretName, Settings};
+use zenkai_i18n::t;
 
 use super::{SettingsWindow, agents, brand, info, update};
 use crate::actions::DetectAgents;
@@ -36,9 +37,9 @@ struct AgentRow {
 
 fn account_of(preset: &Preset) -> &'static str {
     match preset.id {
-        "claude" => "Uses your Claude account",
-        "gemini" => "Uses your Google account",
-        _ => "Uses your OpenAI account",
+        "claude" => t!("settings.agent.account_claude"),
+        "gemini" => t!("settings.agent.account_google"),
+        _ => t!("settings.agent.account_openai"),
     }
 }
 
@@ -94,9 +95,9 @@ impl SettingsWindow {
     pub(super) fn add_custom_agent_button(&self, cx: &App) -> AnyElement {
         let file = info::settings_file(cx);
         Button::new("add-custom-agent")
-            .label("Add custom agent")
-            .accessibility_label("Add a custom agent by editing settings.json")
-            .tooltip("Opens settings.json: an agent is a name and a command under agents.servers")
+            .label(t!("settings.agent.add_custom"))
+            .accessibility_label(t!("settings.agent.add_custom.accessible"))
+            .tooltip(t!("settings.agent.add_custom.tooltip"))
             .disabled(file.is_none())
             .on_click(move |_, _, cx| {
                 if let Some(file) = &file {
@@ -133,7 +134,7 @@ impl SettingsWindow {
                         Button::new("detect-agents")
                             .ghost()
                             .compact()
-                            .label("Detect again (F5)")
+                            .label(t!("settings.agent.detect_again"))
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(DetectAgents), cx)
                             }),
@@ -151,10 +152,10 @@ impl SettingsWindow {
     ) -> AnyElement {
         let theme = cx.theme();
         let (dot, status_text) = match &agent.status {
-            Status::Ready => (theme.success, "Ready".to_string()),
-            Status::NeedsAttention(_) => (theme.warning, "Needs attention".to_string()),
-            Status::Checking => (theme.muted_foreground, "Checking".to_string()),
-            Status::NotInstalled => (theme.muted_foreground, "Not installed".to_string()),
+            Status::Ready => (theme.success, t!("settings.agent.ready")),
+            Status::NeedsAttention(_) => (theme.warning, t!("settings.agent.needs_attention")),
+            Status::Checking => (theme.muted_foreground, t!("settings.agent.checking")),
+            Status::NotInstalled => (theme.muted_foreground, t!("settings.agent.not_installed")),
         };
         let detail = match &agent.status {
             Status::NeedsAttention(problem) => problem.clone(),
@@ -166,9 +167,9 @@ impl SettingsWindow {
         let action = if agent.configured {
             let toggled = id.clone();
             Button::new(("configure-agent", index))
-                .label("Configure")
+                .label(t!("settings.agent.configure"))
                 .selected(configuring)
-                .accessibility_label(format!("Configure {}", agent.name))
+                .accessibility_label(t!("settings.agent.configure_named", name = agent.name))
                 .on_click(move |_, _, cx| {
                     let toggled = toggled.clone();
                     update(&weak, cx, move |this, cx| {
@@ -183,11 +184,11 @@ impl SettingsWindow {
         } else if let Some(preset) = agent.preset {
             Button::new(("install-agent", index))
                 .primary()
-                .label("Install")
-                .accessibility_label(format!("Install {}", agent.name))
+                .label(t!("settings.agent.install"))
+                .accessibility_label(t!("settings.agent.install_named", name = agent.name))
                 .on_click(move |_, _, cx| agents::add_preset(preset, cx))
         } else {
-            Button::new(("install-agent", index)).label("Install")
+            Button::new(("install-agent", index)).label(t!("settings.agent.install"))
         };
         let menu_id = id.clone();
         let (configured, is_default) = (agent.configured, agent.is_default);
@@ -195,21 +196,21 @@ impl SettingsWindow {
             .ghost()
             .compact()
             .icon(IconName::Ellipsis)
-            .accessibility_label(format!("More for {}", agent.name))
+            .accessibility_label(t!("settings.agent.more_named", name = agent.name))
             .dropdown_menu(move |menu, _, _| {
                 let make_default = menu_id.clone();
                 let remove = menu_id.clone();
                 menu.item(
                     PopupMenuItem::new(if is_default {
-                        "Default agent"
+                        t!("settings.agent.default_agent")
                     } else {
-                        "Make default"
+                        t!("settings.agent.make_default")
                     })
                     .disabled(!configured || is_default)
                     .on_click(move |_, _, cx| agents::make_default(make_default.clone(), cx)),
                 )
                 .item(
-                    PopupMenuItem::new("Remove from Zenkai")
+                    PopupMenuItem::new(t!("settings.agent.remove"))
                         .disabled(!configured)
                         .on_click(move |_, _, cx| agents::remove_agent(remove.clone(), cx)),
                 )
@@ -250,7 +251,7 @@ impl SettingsWindow {
                                                 .text_xs()
                                                 .bg(theme.secondary)
                                                 .text_color(theme.secondary_foreground)
-                                                .child("Default"),
+                                                .child(t!("settings.agent.default_badge")),
                                         )
                                     }),
                             )
@@ -304,10 +305,16 @@ impl SettingsWindow {
             .into_iter()
             .map(|name| {
                 let status = match secrets.get(&name) {
-                    Some(SecretState::Known(SecretStatus::Stored)) => "Stored".to_string(),
-                    Some(SecretState::Known(SecretStatus::Missing)) => "Not set".to_string(),
-                    Some(SecretState::Unavailable(why)) => format!("Unavailable: {why}"),
-                    None => "Checking".to_string(),
+                    Some(SecretState::Known(SecretStatus::Stored)) => {
+                        t!("settings.secret.stored").to_string()
+                    }
+                    Some(SecretState::Known(SecretStatus::Missing)) => {
+                        t!("settings.secret.missing").to_string()
+                    }
+                    Some(SecretState::Unavailable(why)) => {
+                        t!("settings.secret.unavailable", why = why)
+                    }
+                    None => t!("settings.agent.checking").to_string(),
                 };
                 let input = self.secret_input(&name, window, cx);
                 let target = name.clone();
@@ -325,7 +332,7 @@ impl SettingsWindow {
                     .child(div().flex_1().child(Input::new(&input)))
                     .child(
                         Button::new(SharedString::from(format!("secret-{name}")))
-                            .label("Save (Alt+S)")
+                            .label(t!("settings.secret.save"))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.save_secret(target.clone(), window, cx)
                             })),
@@ -351,7 +358,7 @@ impl SettingsWindow {
                         div()
                             .text_xs()
                             .text_color(theme.muted_foreground)
-                            .child("This agent needs no key here: it uses your own login. Keys, when an agent needs one, go to Windows Credential Manager and never to a file."),
+                            .child(t!("settings.agent.no_key")),
                     )
                 })
                 .children(secret_rows)
@@ -371,7 +378,7 @@ impl SettingsWindow {
                 cx.new(|cx| {
                     InputState::new(window, cx)
                         .masked(true)
-                        .placeholder("Paste the value")
+                        .placeholder(t!("settings.secret.placeholder"))
                 })
             })
             .clone()

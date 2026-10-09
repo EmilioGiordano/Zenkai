@@ -199,9 +199,9 @@ impl PermissionMode {
 
     pub fn label(self) -> &'static str {
         match self {
-            PermissionMode::ReadOnly => "Read only",
-            PermissionMode::AskBeforeWrite => "Ask before writing",
-            PermissionMode::Automatic => "Automatic",
+            PermissionMode::ReadOnly => t!("settings.permission.read_only"),
+            PermissionMode::AskBeforeWrite => t!("settings.permission.ask_before_write"),
+            PermissionMode::Automatic => t!("settings.permission.automatic"),
         }
     }
 }

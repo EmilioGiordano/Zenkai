@@ -1,4 +1,5 @@
 use zenkai_agent::settings::{ExternalAgents, PermissionMode, Settings};
+use zenkai_i18n::t;
 
 use crate::space_appearance::SpaceAppearance;
 
@@ -26,29 +27,25 @@ impl Section {
 
     pub fn label(self) -> &'static str {
         match self {
-            Section::General => "General",
-            Section::Appearance => "Appearance",
-            Section::Keyboard => "Keyboard",
-            Section::Ai => "AI",
-            Section::Files => "Files and recovery",
-            Section::Privacy => "Privacy",
-            Section::About => "About",
+            Section::General => t!("settings.section.general"),
+            Section::Appearance => t!("settings.section.appearance"),
+            Section::Keyboard => t!("settings.section.keyboard"),
+            Section::Ai => t!("settings.section.ai"),
+            Section::Files => t!("settings.section.files"),
+            Section::Privacy => t!("settings.section.privacy"),
+            Section::About => t!("settings.section.about"),
         }
     }
 
     pub fn lead(self) -> &'static str {
         match self {
-            Section::General => "How Zenkai starts, language and saving.",
-            Section::Appearance => "Theme and spaces. Everything applies at once.",
-            Section::Keyboard => {
-                "Every command and its shortcut. Changing shortcuts is not available yet."
-            }
-            Section::Ai => "Agents, what they may do and what leaves your computer.",
-            Section::Files => {
-                "Where Zenkai keeps your settings and the copies that protect your work."
-            }
-            Section::Privacy => "What Zenkai keeps on this computer.",
-            Section::About => "This version of Zenkai.",
+            Section::General => t!("settings.lead.general"),
+            Section::Appearance => t!("settings.lead.appearance"),
+            Section::Keyboard => t!("settings.lead.keyboard"),
+            Section::Ai => t!("settings.lead.ai"),
+            Section::Files => t!("settings.lead.files"),
+            Section::Privacy => t!("settings.lead.privacy"),
+            Section::About => t!("settings.lead.about"),
         }
     }
 }
@@ -122,79 +119,79 @@ impl RowId {
         match self {
             RowId::RestoreSession => row(
                 Section::General,
-                "STARTUP",
-                "Restore last session",
-                "Reopen your spaces and workbooks, including unsaved work.",
+                t!("settings.group.startup"),
+                t!("settings.row.restore_session"),
+                t!("settings.row.restore_session.description"),
                 &["start", "reopen", "recover"],
             ),
             RowId::Language => row(
                 Section::General,
-                "LANGUAGE",
-                "Interface language",
-                "Menus, dialogs and messages. Applies after restart.",
+                t!("settings.group.language"),
+                t!("settings.row.language"),
+                t!("settings.row.language.description"),
                 &["english", "spanish", "espanol", "locale"],
             ),
             RowId::Autosave => row(
                 Section::General,
-                "SAVING",
-                "Autosave every",
-                "Recovery copy of work you have not saved.",
+                t!("settings.group.saving"),
+                t!("settings.row.autosave"),
+                t!("settings.row.autosave.description"),
                 &["recovery", "backup", "seconds", "interval"],
             ),
             RowId::ColorMode => row(
                 Section::Appearance,
-                "THEME",
-                "Appearance",
-                "Follow the system: light by day, dark by night.",
+                t!("settings.group.theme"),
+                t!("settings.row.color_mode"),
+                t!("settings.row.color_mode.description"),
                 &["light", "dark", "system", "mode"],
             ),
             RowId::DarkTheme => row(
                 Section::Appearance,
-                "THEME",
-                "Dark theme",
-                "For the interface and the grid.",
+                t!("settings.group.theme"),
+                t!("settings.row.dark_theme"),
+                t!("settings.row.theme.description"),
                 &["contrast", "color"],
             ),
             RowId::LightTheme => row(
                 Section::Appearance,
-                "THEME",
-                "Light theme",
-                "For the interface and the grid.",
+                t!("settings.group.theme"),
+                t!("settings.row.light_theme"),
+                t!("settings.row.theme.description"),
                 &["color"],
             ),
             RowId::SpaceStyle => row(
                 Section::Appearance,
-                "SPACES",
-                "Space style",
-                "For every space that is not customized. Right-click a space to customize it.",
+                t!("settings.group.spaces"),
+                t!("settings.row.space_style"),
+                t!("settings.row.space_style.description"),
                 &["dot", "header", "border", "tint", "sidebar"],
             ),
             RowId::SpaceIntensity => row(
                 Section::Appearance,
-                "SPACES",
-                "Intensity",
-                "How strong the color is.",
+                t!("settings.group.spaces"),
+                t!("settings.row.space_intensity"),
+                t!("settings.row.space_intensity.description"),
                 &["space", "color", "strength"],
             ),
             RowId::SpaceTint => row(
                 Section::Appearance,
-                "SPACES",
-                "Tint workbooks too",
-                "Not only the space header.",
+                t!("settings.group.spaces"),
+                t!("settings.row.space_tint"),
+                t!("settings.row.space_tint.description"),
                 &["space", "color", "apply"],
             ),
             RowId::NewSpaceColor => row(
                 Section::Appearance,
-                "SPACES",
-                "Color for new spaces",
-                "Automatic rotates through the palette for each new space.",
+                t!("settings.group.spaces"),
+                t!("settings.row.new_space_color"),
+                t!("settings.row.new_space_color.description"),
                 &["space", "palette", "rotation"],
             ),
             RowId::Agents => row(
                 Section::Ai,
-                "AGENTS",
-                "Agents",
-                "Each agent uses your own login. API keys are kept in Windows Credential Manager, never in a file.",
+                t!("settings.group.agents"),
+                t!("settings.row.agents"),
+                t!("settings.row.agents.description"),
                 &[
                     "claude",
                     "gemini",
@@ -208,72 +205,72 @@ impl RowId {
             ),
             RowId::Permission => row(
                 Section::Ai,
-                "PERMISSIONS",
-                "Agent permissions",
-                "For the chat panel and for external agents.",
+                t!("settings.group.permissions"),
+                t!("settings.row.permission"),
+                t!("settings.row.permission.description"),
                 &["read only", "ask", "automatic", "write"],
             ),
             RowId::ConfirmElevated => row(
                 Section::Ai,
-                "PERMISSIONS",
-                "Confirm elevated permissions at every start",
-                "Automatic mode and external agents are confirmed again each time Zenkai starts.",
+                t!("settings.group.permissions"),
+                t!("settings.row.confirm_elevated"),
+                t!("settings.row.confirm_elevated.description"),
                 &["safety", "startup", "automatic"],
             ),
             RowId::ExternalAgents => row(
                 Section::Ai,
-                "EXTERNAL AGENTS",
-                "Allow MCP clients outside Zenkai",
-                "Claude Code or any MCP client can read and edit open workbooks, with the same approvals.",
+                t!("settings.group.external_agents"),
+                t!("settings.row.external_agents"),
+                t!("settings.row.external_agents.description"),
                 &["mcp", "claude code", "bridge"],
             ),
             RowId::ConnectionCommand => row(
                 Section::Ai,
-                "EXTERNAL AGENTS",
-                "Connection command",
-                "Copies the command to register Zenkai in Claude Code.",
+                t!("settings.group.external_agents"),
+                t!("settings.row.connection_command"),
+                t!("settings.row.connection_command.description"),
                 &["mcp", "copy", "claude code"],
             ),
             RowId::WhatLeaves => row(
                 Section::Ai,
-                "PRIVACY",
-                "What leaves your computer",
-                "Only the cells an agent reads are sent to its provider. Workbooks are never uploaded.",
+                t!("settings.group.privacy"),
+                t!("settings.row.what_leaves"),
+                t!("settings.row.what_leaves.description"),
                 &["privacy", "data", "upload", "cloud"],
             ),
             RowId::RecoveryFolder => row(
                 Section::Files,
-                "RECOVERY",
-                "Recovery folder",
-                "Copies of unsaved work and the last session.",
+                t!("settings.group.recovery"),
+                t!("settings.row.recovery_folder"),
+                t!("settings.row.recovery_folder.description"),
                 &["autosave", "backup", "crash"],
             ),
             RowId::SettingsFile => row(
                 Section::Files,
-                "SETTINGS",
-                "Settings file",
-                "Everything here is saved in this file; you can also edit it by hand.",
+                t!("settings.group.settings"),
+                t!("settings.row.settings_file"),
+                t!("settings.row.settings_file.description"),
                 &["json", "config"],
             ),
             RowId::LogsFolder => row(
                 Section::Privacy,
-                "LOGS",
-                "Log file",
-                "Diagnostics stay on this computer. Zenkai sends nothing anywhere.",
+                t!("settings.group.logs"),
+                t!("settings.row.logs_folder"),
+                t!("settings.row.logs_folder.description"),
                 &["diagnostics", "telemetry", "folder"],
             ),
             RowId::Version => row(
                 Section::About,
-                "ZENKAI",
-                "Version",
+                t!("settings.group.zenkai"),
+                t!("settings.row.version"),
                 "",
                 &["release", "build"],
             ),
             RowId::License => row(
                 Section::About,
-                "ZENKAI",
-                "License",
-                "Free and open source software.",
+                t!("settings.group.zenkai"),
+                t!("settings.row.license"),
+                t!("settings.row.license.description"),
                 &["apache", "open source", "licence"],
             ),
         }
@@ -411,11 +408,9 @@ pub fn visible_rows(
 
 pub fn permission_blurb(mode: PermissionMode) -> &'static str {
     match mode {
-        PermissionMode::ReadOnly => "Agents read and answer; they cannot change cells.",
-        PermissionMode::AskBeforeWrite => {
-            "Each change is highlighted and waits for your approval. Ctrl+Z always undoes it."
-        }
-        PermissionMode::Automatic => "Changes apply without asking. Ctrl+Z always undoes them.",
+        PermissionMode::ReadOnly => t!("settings.permission.read_only.blurb"),
+        PermissionMode::AskBeforeWrite => t!("settings.permission.ask_before_write.blurb"),
+        PermissionMode::Automatic => t!("settings.permission.automatic.blurb"),
     }
 }
 

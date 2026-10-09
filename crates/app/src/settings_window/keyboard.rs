@@ -1,6 +1,7 @@
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
+use zenkai_i18n::t;
 
 use super::controls::{card, group_title};
 use crate::palette;
@@ -94,7 +95,7 @@ fn keys_cell(keys: &[String], cx: &App) -> Div {
         return div()
             .text_xs()
             .text_color(theme.muted_foreground)
-            .child("No shortcut");
+            .child(t!("settings.no_shortcut"));
     }
     h_flex().gap_1p5().children(keys.iter().map(|keys| {
         div()
