@@ -80,12 +80,18 @@ impl ChatPanel {
             .detach();
     }
 
-    pub(crate) fn toggle_sessions(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_sessions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
         self.view = match self.view {
             View::Chat => View::Sessions,
             View::Sessions => View::Chat,
         };
+        if self.view == View::Sessions {
+            let search = self.sessions_query.clone();
+            search.update(cx, |state, cx| state.focus(window, cx));
+        } else {
+            self.focus_composer(window, cx);
+        }
         if self.view == View::Sessions
             && self.state.abilities.list_sessions
             && let Some(live) = &self.live

@@ -1,5 +1,6 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -15,15 +16,10 @@ impl ChatPanel {
     fn session_row(&self, index: usize, row: &Row, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let picked = row.clone();
-        h_flex()
-            .id(SharedString::from(format!("session-{index}")))
+        let content = h_flex()
             .gap_2p5()
             .items_center()
-            .p_2()
-            .rounded_lg()
-            .cursor_pointer()
-            .hover(|style| style.bg(theme.accent))
-            .on_click(cx.listener(move |this, _, window, cx| this.resume(&picked, window, cx)))
+            .w_full()
             .child(agent_mark(&row.agent, &row.agent.to_string(), cx))
             .child(
                 v_flex()
@@ -44,7 +40,13 @@ impl ChatPanel {
                     .text_xs()
                     .text_color(theme.muted_foreground)
                     .child(row.age.clone()),
-            )
+            );
+        Button::new(SharedString::from(format!("session-{index}")))
+            .ghost()
+            .w_full()
+            .h_auto()
+            .child(content)
+            .on_click(cx.listener(move |this, _, window, cx| this.resume(&picked, window, cx)))
             .into_any_element()
     }
 

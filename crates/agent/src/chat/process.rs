@@ -13,6 +13,19 @@ pub enum ProcessError {
     },
 }
 
+pub const WORK_PREFIX: &str = "zenkai-agent-";
+
+// Past sessions are listed by the agent for every folder the user ever used it in; only the ones
+// Zenkai started belong in this chat.
+pub fn is_work_folder(folder: &Path) -> bool {
+    let named = folder
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with(WORK_PREFIX));
+    let temp = std::env::temp_dir();
+    let in_temp = folder.parent().and_then(Path::file_name) == temp.file_name();
+    named && in_temp
+}
+
 // The folder an agent runs in: new, empty and outside every workbook's folder, so an agent
 // that obeys text planted in a cell finds no files next to it.
 #[derive(Debug)]
@@ -25,7 +38,7 @@ impl WorkFolder {
         let mut random = [0u8; 8];
         getrandom::fill(&mut random).map_err(|error| ProcessError::Random(error.to_string()))?;
         let name: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
-        let path = std::env::temp_dir().join(format!("zenkai-agent-{name}"));
+        let path = std::env::temp_dir().join(format!("{WORK_PREFIX}{name}"));
         // create_dir fails when the name exists, so a planted folder is never reused.
         std::fs::create_dir(&path).map_err(|source| ProcessError::WorkFolder {
             path: path.clone(),
@@ -124,6 +137,15 @@ fn kill_tree(pid: u32) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_folders_zenkai_made_in_temp_count_as_its_sessions() {
+        let own = std::env::temp_dir().join(format!("{WORK_PREFIX}abc"));
+        assert!(is_work_folder(&own));
+        assert!(!is_work_folder(Path::new("C:/Users/me/Code/project")));
+        assert!(!is_work_folder(Path::new("C:/elsewhere/zenkai-agent-abc")));
+        assert!(!is_work_folder(&std::env::temp_dir().join("other")));
+    }
 
     #[test]
     fn each_work_folder_is_new_empty_and_removed_on_drop() {

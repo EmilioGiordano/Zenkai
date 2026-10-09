@@ -20,7 +20,7 @@ use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use zenkai_agent::chat::history::History;
-use zenkai_agent::chat::session::PermissionAsk;
+use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
 use zenkai_agent::chat::state::AgentState;
 use zenkai_agent::chat::thread::{MessageId, Thread, TurnEnd, TurnState};
 use zenkai_agent::settings::{AgentId, PermissionMode};
@@ -204,7 +204,7 @@ impl ChatPanel {
     pub(super) fn prompt_context(&self, cx: &App) -> Option<String> {
         let (id, name) = self.active_workbook(cx)?;
         Some(format!(
-            "[Zenkai] The user is looking at the workbook \"{}\" (workbook id {}). Other open \
+            "{CONTEXT_MARKER} The user is looking at the workbook \"{}\" (workbook id {}). Other open \
              workbooks are listed by list_workbooks; address any of them by id.",
             plain_name(&name),
             id.0

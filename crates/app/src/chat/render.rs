@@ -31,6 +31,9 @@ impl Render for ChatPanel {
         if self.slash_open(cx) {
             context.add("Slash");
         }
+        if self.menu.is_some() {
+            context.add("Menu");
+        }
         let provider = provider_name(&cx.global::<AgentConfig>().state.current);
         let (sidebar, foreground, border, muted) = {
             let theme = cx.theme();
@@ -91,7 +94,9 @@ impl Render for ChatPanel {
             .on_action(cx.listener(|this, _: &DeclineAgentLaunch, window, cx| {
                 this.decline_launch(window, cx)
             }))
-            .on_action(cx.listener(|this, _: &ShowChatSessions, _, cx| this.toggle_sessions(cx)))
+            .on_action(cx.listener(|this, _: &ShowChatSessions, window, cx| {
+                this.toggle_sessions(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &PickChatModel, _, cx| this.toggle_model_menu(cx)))
             .on_action(cx.listener(|this, _: &CycleChatMode, _, cx| this.cycle_mode(cx)))
             .on_action(cx.listener(|this, _: &SlashNext, _, cx| this.slash_step(true, cx)))

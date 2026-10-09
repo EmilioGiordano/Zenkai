@@ -339,6 +339,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("up", SlashPrevious, Some("Slash > Input")),
         KeyBinding::new("tab", SlashAccept, Some("Slash > Input")),
         KeyBinding::new("escape", SlashClose, Some("Slash > Input")),
+        KeyBinding::new("escape", PickChatModel, Some("AgentChat && Menu")),
         KeyBinding::new("alt-l", ConfirmAgentLaunch, Some("AgentLaunchGate")),
         KeyBinding::new("enter", DeclineAgentLaunch, Some("AgentLaunchGate")),
         KeyBinding::new("escape", DeclineAgentLaunch, Some("AgentLaunchGate")),

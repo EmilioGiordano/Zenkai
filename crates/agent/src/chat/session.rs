@@ -19,11 +19,13 @@ use futures::{AsyncBufReadExt, StreamExt};
 
 use crate::bridge::{PIPE_VARIABLE, TOKEN_VARIABLE};
 use crate::chat::launch::{self, LaunchError, LaunchPlan, PackageSpec};
-use crate::chat::process::{ProcessError, ProcessTree, WorkFolder};
+use crate::chat::process::{ProcessError, ProcessTree, WorkFolder, is_work_folder};
 use crate::chat::state::{ConfigId, ConfigSource, StateChange};
 use crate::chat::thread::{AgentUpdate, ToolCallId, ToolCard, ToolKind, ToolStatus, TurnEnd};
 use crate::chat::wire;
 
+// The hidden first block of every prompt; replayed history must not show it as the user's words.
+pub const CONTEXT_MARKER: &str = "[Zenkai]";
 const STDERR_LINES_KEPT: usize = 20;
 const MAX_CHUNK_CHARS: usize = 200_000;
 
@@ -608,7 +610,12 @@ async fn converse_on(
                     Ok(response) => notify(
                         events,
                         SessionEvent::State(StateChange::PastSessions(
-                            response.sessions.iter().map(wire::past_session).collect(),
+                            response
+                                .sessions
+                                .iter()
+                                .filter(|info| is_work_folder(&info.cwd))
+                                .map(wire::past_session)
+                                .collect(),
                         )),
                     ),
                     Err(error) => notify(
@@ -738,6 +745,11 @@ fn content_detail(content: &[ToolCallContent]) -> String {
 fn incoming(update: SessionUpdate) -> Vec<SessionEvent> {
     let state = |change| vec![SessionEvent::State(change)];
     match update {
+        SessionUpdate::UserMessageChunk(chunk)
+            if block_text(&chunk.content).starts_with(CONTEXT_MARKER) =>
+        {
+            Vec::new()
+        }
         SessionUpdate::AvailableCommandsUpdate(update) => state(StateChange::Commands(
             wire::commands(&update.available_commands),
         )),

@@ -98,7 +98,12 @@ fn stdio_server(request: &NewSessionRequest) -> Option<McpCommand> {
 
 // A minimal MCP client over the stdio server the session was given, so a run without a
 // model still goes through the relay, the pipe and the tools.
-fn list_workbooks_over_mcp(program: PathBuf, env: Vec<(String, String)>) -> String {
+fn call_over_mcp(
+    program: PathBuf,
+    env: Vec<(String, String)>,
+    tool: &str,
+    arguments: serde_json::Value,
+) -> String {
     let mut child = match Command::new(program)
         .envs(env)
         .stdin(ProcessStdio::piped())
@@ -119,7 +124,7 @@ fn list_workbooks_over_mcp(program: PathBuf, env: Vec<(String, String)>) -> Stri
         "clientInfo": {"name": "fake-acp-agent", "version": "0"}}});
     let initialized = serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
     let call = serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-        "params": {"name": "list_workbooks", "arguments": {}}});
+        "params": {"name": tool, "arguments": arguments}});
     if ask(init).is_err() || lines.next().is_none() {
         return "the MCP server did not answer initialize".to_string();
     }
@@ -188,10 +193,18 @@ async fn run_prompt(
         say(&connection, &session, &format!("Session facts: {facts}"))?;
         return responder.respond(PromptResponse::new(StopReason::EndTurn));
     }
-    if text.contains("mcp") {
-        say(&connection, &session, "Listing the open workbooks.\n\n")?;
+    if text.contains("mcp") || text.contains("write") {
+        let (tool, arguments) = if text.contains("write") {
+            (
+                "write_cells",
+                serde_json::json!({"workbook": 0, "sheet": "Sheet1", "start": "A1", "rows": [["agent wrote"]]}),
+            )
+        } else {
+            ("list_workbooks", serde_json::json!({}))
+        };
+        say(&connection, &session, "Calling the workbook tools.\n\n")?;
         let answer = match mcp {
-            Some((program, env)) => list_workbooks_over_mcp(program, env),
+            Some((program, env)) => call_over_mcp(program, env, tool, arguments),
             None => "No MCP server was passed in the session.".to_string(),
         };
         say(&connection, &session, &answer)?;
@@ -250,6 +263,10 @@ async fn run_prompt(
         SessionUpdate::UsageUpdate(UsageUpdate::new(1_200, 10_000)),
     ))?;
     responder.respond(PromptResponse::new(StopReason::EndTurn))
+}
+
+fn zenkai_folder(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("zenkai-agent-{name}"))
 }
 
 type Choices = Arc<Mutex<(String, String)>>;
@@ -418,14 +435,21 @@ async fn serve(mode: Mode) -> Result<(), Error> {
         .on_receive_request(
             async move |_request: ListSessionsRequest, responder, _connection| {
                 responder.respond(ListSessionsResponse::new(vec![
-                    SessionInfo::new("old-1", "C:/work").title("Fix the dates"),
-                    SessionInfo::new("old-2", "C:/work").title("Chart of sales"),
+                    SessionInfo::new("old-1", zenkai_folder("old-1")).title("Fix the dates"),
+                    SessionInfo::new("foreign", "C:/other/project").title("Someone else"),
+                    SessionInfo::new("old-2", zenkai_folder("old-2")).title("Chart of sales"),
                 ]))
             },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
             async move |request: LoadSessionRequest, responder, connection| {
+                connection.send_notification(SessionNotification::new(
+                    request.session_id.clone(),
+                    SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::from(
+                        "[Zenkai] The user is looking at the workbook",
+                    ))),
+                ))?;
                 connection.send_notification(SessionNotification::new(
                     request.session_id.clone(),
                     SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::from(
