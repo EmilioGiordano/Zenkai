@@ -1,11 +1,43 @@
 use std::path::PathBuf;
 
+use gpui_kit::base::h_flex;
 use gpui_kit::component::ActiveTheme;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
+use zenkai_agent::settings::HeldChange;
 use zenkai_agent::settings_file::SettingsPaths;
 
-use crate::agent_settings::{AgentConfig, BridgeStatus};
+use crate::actions::{ApplyHeldSettings, KeepCurrentSettings};
+use crate::agent_settings::{self, AgentConfig, BridgeStatus};
+
+pub fn held_banner(held: &HeldChange, cx: &App) -> Div {
+    let theme = cx.theme();
+    h_flex()
+        .gap_3()
+        .px_4()
+        .py_3()
+        .items_center()
+        .rounded_xl()
+        .bg(theme.secondary)
+        .child(div().text_color(theme.warning).child("⚠"))
+        .child(div().flex_1().min_w_0().child(format!(
+            "{} Zenkai confirms this at every start and whenever the file changes outside this              window. Apply it only if you set it yourself.",
+            agent_settings::held_summary(held)
+        )))
+        .child(
+            Button::new("held-apply")
+                .label("Apply (Alt+A)")
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(ApplyHeldSettings), cx)),
+        )
+        .child(
+            Button::new("held-keep")
+                .primary()
+                .label("Keep current (Alt+K)")
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(Box::new(KeepCurrentSettings), cx)
+                }),
+        )
+}
 
 pub fn notices(cx: &App) -> Vec<Div> {
     let config = cx.global::<AgentConfig>();

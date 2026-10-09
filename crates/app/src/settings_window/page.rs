@@ -121,6 +121,11 @@ impl SettingsWindow {
                             )
                             .child(div().text_color(theme.muted_foreground).child(lead)),
                     )
+                    .children(
+                        self.shown_held
+                            .as_ref()
+                            .map(|held| info::held_banner(held, cx)),
+                    )
                     .children(info::notices(cx))
                     .children(blocks),
             )

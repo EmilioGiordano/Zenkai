@@ -223,6 +223,8 @@ pub enum SettingsError {
     },
     #[error("settings.json: the default agent \"{0}\" is not one of agents.servers")]
     UnknownDefault(AgentId),
+    #[error("settings.json is larger than 1 MB")]
+    TooLarge,
     #[error("could not read settings.json: {0}")]
     Read(String),
     #[error("could not encode the settings: {0}")]

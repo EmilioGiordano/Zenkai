@@ -25,12 +25,11 @@ mod settings_gate;
 mod space_panel;
 
 use agent_calls::{AgentLink, Decision};
-use settings_gate::HeldDecision;
 use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_agent::settings::{HeldChange, PermissionMode};
 
 use crate::actions::*;
-use crate::agent_settings::{self, AgentConfig};
+use crate::agent_settings::{self, AgentConfig, HeldDecision};
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;

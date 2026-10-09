@@ -5,7 +5,8 @@ use zenkai_agent::confirmed;
 use zenkai_agent::detect::{self, Detection};
 use zenkai_agent::secrets::{SecretStatus, Secrets};
 use zenkai_agent::settings::{
-    Escalation, SecretName, Settings, SettingsState, escalations, remembered_confirmations,
+    Escalation, HeldChange, SecretName, Settings, SettingsState, escalations,
+    remembered_confirmations,
 };
 use zenkai_agent::settings_file::{self, SettingsFileError, SettingsPaths, SettingsWatcher};
 
@@ -204,6 +205,7 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
             .background_executor()
             .spawn(async move { settings_file::update(&paths, edit) })
             .await;
+        let written_failed = written.is_err();
         cx.update_global::<AgentConfig, _>(|config, _| match written {
             Ok(settings) => {
                 config.state.apply_from_page(settings, &approved);
@@ -211,6 +213,9 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
             }
             Err(error) => config.failure = Some(format!("Settings were not changed: {error}")),
         });
+        if written_failed {
+            cx.update(crate::theme::revert_to_settings);
+        }
         refresh_secrets(cx);
     })
     .detach();
@@ -243,14 +248,47 @@ fn remember_confirmations(cx: &mut App) {
         return;
     }
     cx.set_global(Remembered(confirmed.clone()));
-    cx.background_executor()
-        .spawn(async move {
-            let saved = Secrets::platform()
-                .map_err(|error| error.to_string())
-                .and_then(|secrets| confirmed::save(&secrets, &confirmed));
-            if let Err(error) = saved {
-                tracing::warn!(%error, "could not record the confirmed settings");
-            }
-        })
-        .detach();
+    cx.spawn(async move |cx| {
+        let saved = cx
+            .background_executor()
+            .spawn(async move {
+                Secrets::platform()
+                    .map_err(|error| error.to_string())
+                    .and_then(|secrets| confirmed::save(&secrets, &confirmed))
+            })
+            .await;
+        if let Err(error) = saved {
+            tracing::warn!(%error, "could not record the confirmed settings");
+            cx.update_global::<AgentConfig, _>(|config, _| {
+                config.failure = Some(format!(
+                    "The confirmation of elevated permissions could not be stored, so Zenkai will ask again at the next start: {error}"
+                ))
+            });
+        }
+    })
+    .detach();
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeldDecision {
+    Apply,
+    Keep,
+}
+
+// Applies only the change the user was shown: a newer file change may have replaced it since.
+pub fn decide_held(cx: &mut App, shown: Option<HeldChange>, decision: HeldDecision) {
+    cx.update_global::<AgentConfig, _>(|config, _| {
+        if config.state.held != shown {
+            return;
+        }
+        match decision {
+            HeldDecision::Apply => config.state.accept_held(),
+            HeldDecision::Keep => config.state.decline_held(),
+        }
+    });
+}
+
+pub fn held_summary(held: &HeldChange) -> String {
+    let asks: Vec<&str> = held.escalations.iter().map(|e| e.label()).collect();
+    format!("settings.json asks to {}.", asks.join(" and "))
 }

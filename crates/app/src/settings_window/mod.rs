@@ -16,10 +16,11 @@ use gpui_kit::component::command::CommandState;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, TitleBar};
 use gpui_kit::*;
-use zenkai_agent::settings::{AgentId, SecretName};
+use zenkai_agent::settings::{AgentId, HeldChange, SecretName};
 
 use crate::actions::*;
-use crate::{agent_settings, space_settings};
+use crate::agent_settings::{self, HeldDecision};
+use crate::space_settings;
 use keyboard::Shortcut;
 use rows::{RowId, Section, Values};
 
@@ -89,6 +90,7 @@ pub struct SettingsWindow {
     secret_inputs: BTreeMap<SecretName, Entity<InputState>>,
     claude_command: Option<String>,
     shortcuts: Vec<Shortcut>,
+    shown_held: Option<HeldChange>,
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -122,6 +124,7 @@ impl SettingsWindow {
             secret_inputs: BTreeMap::new(),
             claude_command: agents::claude_command(),
             shortcuts: keyboard::collect(cx),
+            shown_held: None,
             scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
         }
@@ -180,13 +183,22 @@ impl SettingsWindow {
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let settings = agent_settings::settings(cx).clone();
+        self.shown_held = cx
+            .global::<agent_settings::AgentConfig>()
+            .state
+            .held
+            .clone();
         let spaces = space_settings::current(cx);
         let values = Self::values(&settings, &spaces);
         let nav = self.nav(values, cx);
         let content = self.content(values, window, cx);
         let theme = cx.theme();
         v_flex()
-            .key_context("SettingsWindow")
+            .key_context(if self.shown_held.is_some() {
+                "SettingsWindow HeldPending"
+            } else {
+                "SettingsWindow"
+            })
             .track_focus(&self.focus)
             .size_full()
             .bg(theme.background)
@@ -208,6 +220,12 @@ impl Render for SettingsWindow {
                     this.step_section(false, window, cx)
                 }),
             )
+            .on_action(cx.listener(|this, _: &ApplyHeldSettings, _, cx| {
+                agent_settings::decide_held(cx, this.shown_held.clone(), HeldDecision::Apply)
+            }))
+            .on_action(cx.listener(|this, _: &KeepCurrentSettings, _, cx| {
+                agent_settings::decide_held(cx, this.shown_held.clone(), HeldDecision::Keep)
+            }))
             .on_action(|_: &FocusNextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &FocusPreviousControl, window, cx| window.focus_prev(cx))
             .on_action(

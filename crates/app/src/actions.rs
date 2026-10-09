@@ -300,6 +300,16 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("alt-d", CycleDefaultAgent, Some("SettingsWindow")),
         KeyBinding::new("alt-s", SaveSecrets, Some("SettingsWindow")),
         KeyBinding::new("alt-m", CopyClaudeCommand, Some("SettingsWindow")),
+        KeyBinding::new(
+            "alt-a",
+            ApplyHeldSettings,
+            Some("SettingsWindow && HeldPending"),
+        ),
+        KeyBinding::new(
+            "alt-k",
+            KeepCurrentSettings,
+            Some("SettingsWindow && HeldPending"),
+        ),
         KeyBinding::new("enter", KeepCurrentSettings, Some("HeldSettings")),
         KeyBinding::new("escape", KeepCurrentSettings, Some("HeldSettings")),
         KeyBinding::new("alt-a", ApplyHeldSettings, Some("HeldSettings")),

@@ -82,6 +82,12 @@ pub fn follow_system(window: &mut Window, cx: &mut App) {
     window.refresh();
 }
 
+// A settings write that failed leaves the file as it was, so what is on screen goes back to it.
+pub fn revert_to_settings(cx: &mut App) {
+    let appearance = agent_settings::settings(cx).appearance;
+    show(appearance.effective(system_is_dark(cx)), cx);
+}
+
 pub fn choose(choice: ThemeChoice, cx: &mut App) {
     show(choice, cx);
     agent_settings::change(cx, move |settings| {

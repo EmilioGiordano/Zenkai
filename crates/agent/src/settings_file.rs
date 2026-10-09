@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -8,6 +9,7 @@ use crate::settings::{SCHEMA_FILE, Settings, SettingsError};
 
 pub const SETTINGS_FILE: &str = "settings.json";
 const LEGACY_REMEMBERED_FILE: &str = "confirmed-at-start.json";
+const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 const DEBOUNCE: Duration = Duration::from_millis(200);
 
 #[derive(Debug, thiserror::Error)]
@@ -67,8 +69,15 @@ impl SettingsPaths {
 }
 
 pub fn load(path: &Path) -> Result<Settings, SettingsError> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Settings::parse(&text),
+    let mut text = String::new();
+    let read = std::fs::File::open(path).and_then(|opened| {
+        opened
+            .take(MAX_SETTINGS_BYTES + 1)
+            .read_to_string(&mut text)
+    });
+    match read {
+        Ok(length) if length as u64 > MAX_SETTINGS_BYTES => Err(SettingsError::TooLarge),
+        Ok(_) => Settings::parse(&text),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
         Err(error) => Err(SettingsError::Read(error.to_string())),
     }
@@ -228,6 +237,16 @@ mod tests {
             load(&dir.path().join("none.json")).unwrap(),
             Settings::default()
         );
+    }
+
+    #[test]
+    fn a_settings_file_past_the_cap_is_refused_unread() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(SETTINGS_FILE);
+        std::fs::write(&file, " ".repeat(MAX_SETTINGS_BYTES as usize + 1)).unwrap();
+        assert_eq!(load(&file), Err(SettingsError::TooLarge));
+        std::fs::write(&file, " ".repeat(MAX_SETTINGS_BYTES as usize - 2) + "{}").unwrap();
+        assert_eq!(load(&file), Ok(Settings::default()));
     }
 
     #[test]
