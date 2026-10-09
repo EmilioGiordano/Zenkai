@@ -416,7 +416,7 @@ impl Workspace {
                 .placeholder(t!("palette.placeholder"))
                 .on_confirm(|_, window, cx| window.dispatch_action(Box::new(ClosePalette), cx))
                 .on_cancel(|window, cx| window.dispatch_action(Box::new(ClosePalette), cx)),
-            t!("palette.title"),
+            "Palette",
             || Box::new(ClosePalette),
         ))
     }
