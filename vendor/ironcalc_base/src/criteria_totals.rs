@@ -309,6 +309,8 @@ impl Model<'_> {
         if !store.spend(key_bytes + USER_BYTES) {
             return;
         }
+        let mut sum = sum;
+        sum.reserve_all();
         store.totals.insert(
             key,
             Total {

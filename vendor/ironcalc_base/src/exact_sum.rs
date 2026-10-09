@@ -48,6 +48,12 @@ impl ExactSum {
         self.partials.push(x);
     }
 
+    // A kept total never reallocates, so the bytes charged for it hold.
+    pub(crate) fn reserve_all(&mut self) {
+        self.partials
+            .reserve_exact(MAX_PARTIALS.saturating_sub(self.partials.len()));
+    }
+
     // Whether the value is the exact sum rounded once; past an overflow it is the plain
     // sum, which depends on the order values came in.
     pub(crate) fn is_exact(&self) -> bool {
@@ -178,5 +184,21 @@ mod tests {
             value /= 3.0;
         }
         assert!(total.partials.len() <= MAX_PARTIALS);
+    }
+
+    #[test]
+    fn reserved_partials_never_grow() {
+        let mut total = ExactSum::default();
+        total.add(1.0);
+        total.reserve_all();
+        let capacity = total.partials.capacity();
+        let mut value = f64::MAX / 2.0;
+        while value > 0.0 {
+            total.add(value);
+            total.add(-value / 7.0);
+            value /= 3.0;
+        }
+        assert_eq!(total.partials.capacity(), capacity);
+        assert!(capacity >= MAX_PARTIALS);
     }
 }
