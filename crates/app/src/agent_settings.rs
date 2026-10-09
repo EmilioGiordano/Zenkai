@@ -62,6 +62,7 @@ pub fn init(cx: &mut App) {
     cx.set_global(Remembered(Vec::new()));
     cx.observe_global::<AgentConfig>(|cx| {
         crate::theme::sync_with_settings(cx);
+        crate::keymap::sync_with_settings(cx);
         remember_confirmations(cx);
     })
     .detach();

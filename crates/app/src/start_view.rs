@@ -8,6 +8,7 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use crate::actions::*;
+use crate::keymap;
 
 const RECENT_ACTIONS: [fn() -> Box<dyn Action>; 5] = [
     || Box::new(OpenRecent1),
@@ -77,15 +78,17 @@ pub fn render(recent: &[PathBuf], focus: &FocusHandle, cx: &App) -> impl IntoEle
                         .child(
                             Button::new("start-new")
                                 .primary()
-                                .label(t!("start.new"))
+                                .label(keymap::labeled(cx, t!("start.new"), &NewWorkbook))
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(NewWorkbook), cx)
                                 }),
                         )
                         .child(
-                            Button::new("start-open").label(t!("start.open")).on_click(
-                                |_, window, cx| window.dispatch_action(Box::new(Open), cx),
-                            ),
+                            Button::new("start-open")
+                                .label(keymap::labeled(cx, t!("start.open"), &Open))
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(Box::new(Open), cx)
+                                }),
                         ),
                 )
                 .when(!recent.is_empty(), |column| {
