@@ -281,11 +281,17 @@ mod tests {
     }
 
     #[test]
+    fn local_paths_are_probed() {
+        assert!(!is_remote_or_device(Path::new("/data/a.xlsx")));
+        assert!(!is_remote_or_device(Path::new("relative/a.xlsx")));
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn network_and_device_paths_are_not_probed() {
         assert!(is_remote_or_device(Path::new(r"\\host\share\a.xlsx")));
         assert!(is_remote_or_device(Path::new(r"\\.\pipe\x")));
         assert!(!is_remote_or_device(Path::new(r"C:\data\a.xlsx")));
-        assert!(!is_remote_or_device(Path::new("relative/a.xlsx")));
     }
 
     #[test]
