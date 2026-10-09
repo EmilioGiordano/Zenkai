@@ -23,10 +23,12 @@ use zenkai_types::{
 
 mod agent_calls;
 mod agent_review;
+mod chat_dock;
 mod settings_gate;
 mod space_panel;
 
 use agent_calls::{AgentLink, Decision};
+use chat_dock::ChatDock;
 use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_agent::settings::{HeldChange, PermissionMode};
 
@@ -173,6 +175,7 @@ pub struct Workspace {
     cell_refresh: CellRefresh,
     space_panel: Option<space_panel::SpacePanel>,
     agent: AgentLink,
+    chat: ChatDock,
     // The settings problem already shown, so a reload with the same error stays quiet.
     shown_settings_problem: Option<SettingsError>,
     // A settings.json change that gives agents more power, as last shown for confirmation.
@@ -224,9 +227,15 @@ impl Workspace {
             this.persist_session(cx);
             cx.notify();
         });
-        let quit = cx.on_app_quit(|this, _| {
+        let quit = cx.on_app_quit(|this, cx| {
             this.stop_bridge();
-            async {}
+            let tree = this.shutdown_chat(cx);
+            let executor = cx.background_executor().clone();
+            async move {
+                if let Some(tree) = tree {
+                    executor.spawn(async move { tree.close() }).await;
+                }
+            }
         });
         let mut workspace = Workspace {
             documents: Documents::new(empty_workbook()),
@@ -273,6 +282,7 @@ impl Workspace {
             cell_refresh: CellRefresh::Idle,
             space_panel: None,
             agent: Self::start_tool_service(window, cx),
+            chat: ChatDock::default(),
             shown_settings_problem: None,
             shown_held: None,
             held_focus: cx.focus_handle(),
@@ -3274,6 +3284,21 @@ impl Render for Workspace {
                 cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
             .on_action(
+                cx.listener(|this, _: &ToggleAgentChat, window, cx| this.toggle_chat(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &AddSelectionToChat, window, cx| {
+                this.add_selection_to_chat(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NewAgentConversation, window, cx| {
+                this.new_agent_conversation(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AllowChatPermission, _, cx| {
+                this.answer_chat_permission(true, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DenyChatPermission, _, cx| {
+                this.answer_chat_permission(false, cx)
+            }))
+            .on_action(
                 cx.listener(|this, _: &FocusSidebar, window, cx| this.focus_sidebar(window, cx)),
             )
             .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.new_space(window, cx)))
@@ -3350,7 +3375,8 @@ impl Render for Workspace {
                         self.render_workbook(cx).into_any_element()
                     } else {
                         self.render_empty(cx).into_any_element()
-                    }),
+                    })
+                    .children(self.render_chat()),
             )
             .children(self.render_palette())
             .children(self.render_theme_picker(cx))

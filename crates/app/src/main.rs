@@ -8,6 +8,7 @@ mod agent_settings;
 mod assets;
 mod chart;
 mod chart_panel;
+mod chat;
 mod clipboard;
 mod csv_preview;
 mod decimals;

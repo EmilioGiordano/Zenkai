@@ -1,0 +1,6 @@
+{
+  "name": "zenkai-agent-codex",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": { "@agentclientprotocol/codex-acp": "2.1.1" }
+}

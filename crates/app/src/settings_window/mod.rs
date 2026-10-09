@@ -29,6 +29,7 @@ const DEFAULT_SIZE: (f32, f32) = (1120.0, 820.0);
 const MIN_SIZE: (f32, f32) = (760.0, 520.0);
 
 pub use agents::register as register_agent_actions;
+pub use agents::{relay_program, set_permission};
 
 struct OpenWindow(AnyWindowHandle);
 
