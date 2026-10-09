@@ -33,10 +33,21 @@ argument, they review the current directory.
    target. If any changed path is under `crates/engine`, `crates/grid`, `crates/formats`
    or `bench/`, include `perf-auditor`.
 
-3. Launch the agents in a single message so they run in parallel:
+3. Each agent gets only the target directory and what was asked (the task or the spec
+   section, if the caller gave one). Never pass on what the implementer did, its reasons or
+   its decisions: a reviewer that shares the implementer's model and reasoning makes the
+   same mistakes and misses the same defects. Launch the agents in a single message so
+   they run in parallel:
    - `Agent({ subagent_type: 'quality-reviewer', description: 'Quality review', prompt: 'Review <target directory> per your instructions and return the required report.' })`
    - `Agent({ subagent_type: 'security-reviewer', description: 'Security review', prompt: 'Review <target directory> per your instructions and return the required report.' })`
    - Only if step 2 applies: `Agent({ subagent_type: 'perf-auditor', description: 'Performance audit', prompt: 'Audit <target directory> per your instructions and return the required report.' })`
+   - Only if the change touches `crates/engine`, `vendor/`, file reading or writing, or the
+     agent security boundary (`crates/agent`, `crates/mcp-relay`, settings): a second
+     opinion from a different model family, run read-only from the target directory, for
+     example `gemini -p "<prompt>"` or `codex exec "<prompt>"`. The prompt asks for a
+     review of `git diff main...HEAD` against `AGENTS.md` and the spec, reporting concrete
+     defects with file and line, and contains nothing else. It sends the diff to that
+     provider, so run it only where the user has agreed to that.
 
 4. Wait for all of them. Do not summarize or act on one while another is still running,
    and never predict what a pending agent will say.
@@ -49,8 +60,8 @@ argument, they review the current directory.
      a lead to check, not a defect to fix on sight.
 
 6. Sanity-check the findings before relaying them. The agents run without the
-   implementer's context, so they can flag a deliberate decision as a defect. If a
-   finding contradicts a decision stated in the implementer's message or recorded in
-   `DECISIONS.md`, say so next to it instead of dropping it silently.
+   implementer's context on purpose, so they can flag a deliberate decision as a defect.
+   If a finding contradicts a decision recorded in `DECISIONS.md`, say so next to it
+   instead of dropping it silently; the user decides whether the decision still holds.
 
 7. Do not commit, push, merge or open anything as part of this skill.

@@ -182,11 +182,13 @@ justifications of the implementer.
 2. It implements in logical commits. It uses `test-engineer` to cover what changed and,
    if the change touches engine, grid or formats, `perf-auditor` to measure.
 3. It runs the validation commands above. A task is never sent to review with red checks.
-4. It sends Zenkai-review a message with: the branch or worktree path, what was asked,
-   what was done, and the decisions taken with their reason. The reasons let the reviewer
-   tell a deliberate decision from a defect.
+4. It sends Zenkai-review a message with only the branch or worktree path and what was
+   asked (the task or the spec section). Never what was done, why, or which decisions were
+   taken: a reviewer that runs on the same model and reads the implementer's reasoning tends
+   to find the same things reasonable and miss the same things.
 5. Zenkai-review runs `/review-changes` on that target and returns the full report with the
-   combined verdict.
+   combined verdict. Findings that contradict a recorded decision are triaged afterwards
+   against `DECISIONS.md` by whoever reads the report, not filtered out beforehand.
 6. On FAIL, the implementer fixes `CONFIRMED` findings in new commits, verifies `PLAUSIBLE`
    ones before touching them, and goes back to step 4. If it disagrees with a finding, it
    says so in the message instead of ignoring it.
@@ -194,6 +196,24 @@ justifications of the implementer.
    decides the merge.
 
 After two FAIL rounds, the implementer stops and asks the user instead of iterating.
+
+### Evidence that does not depend on a model's judgment
+
+Agent review catches mechanical problems; it is not proof. Prefer objective checks, and
+grow them with every bug found:
+
+- Property tests and invariants for anything that can lose or corrupt data: undo/redo,
+  open/edit/save/reopen, session close and restore, incremental versus full recalculation.
+- Fuzz targets for every parser of untrusted input: xlsx, csv, session.json,
+  settings.json, MCP messages.
+- Mutation testing (`cargo mutants`) on changed modules, to check the tests would notice a
+  broken implementation.
+- Values computed by real Excel for the compatibility corpus, compared with the engine.
+- For changes to the engine, file I/O or the agent security boundary, a second review by a
+  model of a different family (for example the Gemini or Codex CLI), given only the spec,
+  this file and the diff.
+- Design judgment (UX, scope, trade-offs) stays with the user: manual testing of a build
+  and the approved mockups in `docs/design/`.
 
 ## Agents and skills
 
@@ -203,6 +223,8 @@ After two FAIL rounds, the implementer stops and asks the user instead of iterat
 - `.claude/agents/perf-auditor.md`: benchmark and budgets, read-only on code.
 - `.claude/agents/test-engineer.md`: writes and runs tests.
 - `.claude/agents/frontend-implementer.md`: implements UI in GPUI.
+- `.claude/agents/engine-implementer.md`: implements engine work in `crates/engine` and the
+  vendored IronCalc, with the correctness gates that work requires.
 - `.claude/skills/review-changes/SKILL.md`: runs the reviewers in parallel and combines
   the verdict. It never fixes anything.
 
