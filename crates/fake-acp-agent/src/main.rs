@@ -185,8 +185,7 @@ fn hidden_context(request: &PromptRequest) -> String {
             _ => None,
         })
         .collect();
-    blocks.join("
-")
+    blocks.join("\n")
 }
 
 async fn run_prompt(
