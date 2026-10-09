@@ -184,6 +184,12 @@ pub fn table() -> Vec<Group> {
             [
                 item(t!("palette.settings"), OpenSettings),
                 item(t!("palette.show_agent_change"), ShowAgentChange),
+                item("Go to the next change an agent made", NextAgentChange),
+                item("Go to the previous change an agent made", PreviousAgentChange),
+                item("Keep the agent's change in the selected cell", KeepAgentChange),
+                item("Reject the agent's change in the selected cell", RejectAgentChange),
+                item("Keep all the changes an agent made", KeepAllAgentChanges),
+                item("Reject all the changes an agent made", RejectAllAgentChanges),
                 item(t!("palette.detect_agents"), DetectAgents),
                 item(t!("palette.add_claude"), AddClaudeAgent),
                 item(t!("palette.add_gemini"), AddGeminiAgent),

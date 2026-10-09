@@ -192,6 +192,7 @@ impl Workspace {
             grid.restore_view(view, cx);
         });
         self.sync_pending_highlight(cx);
+        self.sync_review_marks(cx);
         self.refresh_cells(cx);
         window.set_window_title(&self.window_title());
         let focus = self.grid.focus_handle(cx);
