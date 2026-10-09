@@ -64,3 +64,7 @@ local computation); Zenkai's edge is being native: faster start, less memory, lo
 
 8. **Presentation video.** A short product video of Zenkai in action: speed on large files,
    spaces, data generation and the agent. Real footage for every speed claim.
+
+9. **Localized function names** (=SUMA, =SI, =BUSCARV). IronCalc can parse and print
+   function names in other languages. It would be a separate option from the interface
+   language, and files would always be saved with the English names.
