@@ -10,6 +10,7 @@ use zenkai_i18n::t;
 use super::sidebar::WIDTH;
 use super::{Severity, Workspace};
 use crate::actions::{CloseSpacePanel, ResetSpaceAppearance};
+use crate::keymap;
 use crate::space_appearance::{
     ApplyTo, Custom, Intensity, MAX_INTENSITY, Opacity, Resolved, Rgba, SpaceOverride, resolve,
 };
@@ -401,7 +402,11 @@ impl Workspace {
                                 .items_center()
                                 .child(
                                     Button::new("space-reset")
-                                        .label(t!("space.back_to_default"))
+                                        .label(keymap::labeled(
+                                            cx,
+                                            t!("space.back_to_default"),
+                                            &ResetSpaceAppearance,
+                                        ))
                                         .disabled(!is_custom)
                                         .on_click(|_, window, cx| {
                                             window

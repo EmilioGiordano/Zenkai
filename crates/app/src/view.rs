@@ -42,6 +42,7 @@ use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
 use crate::jump::jump_target;
+use crate::keymap;
 use crate::memory;
 use crate::palette;
 use crate::previews::TypedPreviews;
@@ -1857,11 +1858,15 @@ impl Workspace {
                                     } else {
                                         gpui_kit::assets::IconName::PanelLeftOpen
                                     })
-                                    .tooltip(if self.sidebar.visible {
-                                        t!("sidebar.hide_tooltip")
-                                    } else {
-                                        t!("sidebar.show_tooltip")
-                                    })
+                                    .tooltip(keymap::labeled(
+                                        cx,
+                                        if self.sidebar.visible {
+                                            t!("sidebar.hide_tooltip")
+                                        } else {
+                                            t!("sidebar.show_tooltip")
+                                        },
+                                        &ToggleSidebar,
+                                    ))
                                     .on_click(|event, window, cx| {
                                         if sidebar::is_primary_click(event) {
                                             window.dispatch_action(ToggleSidebar.boxed_clone(), cx)

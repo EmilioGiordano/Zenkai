@@ -199,6 +199,8 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.allow_agent_change"), AllowAgentChange),
                 item(t!("palette.deny_agent_change"), DenyAgentChange),
                 item(t!("palette.let_agents_edit"), LetAgentsEdit),
+                item(t!("palette.record_shortcut_keys"), RecordShortcutKeys),
+                item(t!("palette.reset_all_shortcuts"), ResetAllShortcuts),
             ],
         ),
     ]
