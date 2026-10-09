@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::EngineError;
 use crate::preflight;
+use crate::sheet_settings::{self, SheetSettings};
 use crate::workbook::{Engine, Workbook};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -19,6 +20,8 @@ pub enum Unsupported {
     ExternalLinks,
     AutoFilter,
     SheetProtection,
+    Outline,
+    PageBreaks,
 }
 
 impl Unsupported {
@@ -35,6 +38,8 @@ impl Unsupported {
             Unsupported::ExternalLinks => "links to other workbooks",
             Unsupported::AutoFilter => "filters (AutoFilter)",
             Unsupported::SheetProtection => "sheet protection",
+            Unsupported::Outline => "row and column grouping",
+            Unsupported::PageBreaks => "manual page breaks",
         }
     }
 }
@@ -58,15 +63,16 @@ pub fn open_xlsx(path: &Path) -> Result<Opened, EngineError> {
         )));
     }
     let bytes = fs::read(path).map_err(read_error)?;
-    let unsupported = scan_unsupported(&bytes)?;
+    let scan = scan(&bytes)?;
     let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Book".to_string());
-    let workbook = load_guarded(&bytes, &name)?;
+    let mut workbook = load_guarded(&bytes, &name)?;
+    workbook.carry(scan.settings);
     Ok(Opened {
         workbook,
-        unsupported,
+        unsupported: scan.unsupported,
     })
 }
 
@@ -76,7 +82,12 @@ fn load_guarded(bytes: &[u8], name: &str) -> Result<Workbook, EngineError> {
     preflight::run_with_engine_stack(|| Workbook::from_xlsx_bytes(bytes, name))
 }
 
-pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
+struct Scan {
+    unsupported: Vec<Unsupported>,
+    settings: Vec<SheetSettings>,
+}
+
+fn scan(bytes: &[u8]) -> Result<Scan, EngineError> {
     let invalid = |e: zip::result::ZipError| EngineError::InvalidFile(e.to_string());
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(invalid)?;
     if archive.len() > preflight::MAX_ENTRIES {
@@ -103,9 +114,13 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
             total / 1024 / 1024
         )));
     }
+    let sheet_parts = worksheet_parts(&mut archive);
+    let mut settings = vec![SheetSettings::default(); sheet_parts.len()];
     let mut found = Vec::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(invalid)?;
+        let is_sheet = sheet_parts.iter().any(|part| part == entry.name());
+        let entry_name = entry.name().to_string();
         let name = entry.name().to_ascii_lowercase();
         let by_name = [
             ("xl/charts/", Unsupported::Charts),
@@ -132,6 +147,14 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
             .read_to_end(&mut part)
             .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
         let features = preflight::check_part(&part)?;
+        if is_sheet && let Ok(text) = std::str::from_utf8(&part) {
+            let read = sheet_settings::read(text);
+            for (part, slot) in sheet_parts.iter().zip(&mut settings) {
+                if *part == entry_name {
+                    *slot = read.clone();
+                }
+            }
+        }
         if features.hyperlinks {
             found.push(Unsupported::Hyperlinks);
         }
@@ -147,7 +170,56 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
     }
     found.sort();
     found.dedup();
-    Ok(found)
+    Ok(Scan {
+        unsupported: found,
+        settings,
+    })
+}
+
+// The worksheet parts in the order IronCalc loads them: the sheets of xl/workbook.xml
+// whose relationship is a worksheet. A file IronCalc cannot read this way fails to open.
+fn worksheet_parts(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Vec<String> {
+    let mut read = |name: &str| {
+        let mut text = String::new();
+        let entry = archive.by_name(name).ok()?;
+        entry
+            .take(preflight::MAX_ENTRY_BYTES)
+            .read_to_string(&mut text)
+            .ok()?;
+        Some(text)
+    };
+    let (Some(workbook), Some(relationships)) =
+        (read("xl/workbook.xml"), read("xl/_rels/workbook.xml.rels"))
+    else {
+        return Vec::new();
+    };
+    let (Ok(workbook), Ok(relationships)) = (
+        roxmltree::Document::parse(&workbook),
+        roxmltree::Document::parse(&relationships),
+    ) else {
+        return Vec::new();
+    };
+    let by_id: std::collections::HashMap<&str, roxmltree::Node> = relationships
+        .descendants()
+        .filter(|n| n.has_tag_name("Relationship"))
+        .filter_map(|n| Some((n.attribute("Id")?, n)))
+        .collect();
+    const RELATIONSHIPS: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    workbook
+        .descendants()
+        .filter(|n| n.has_tag_name("sheet"))
+        .filter_map(|sheet| by_id.get(sheet.attribute((RELATIONSHIPS, "id"))?))
+        .filter(|rel| {
+            rel.attribute("Type")
+                .is_some_and(|t| t.ends_with("worksheet"))
+        })
+        .filter_map(|rel| rel.attribute("Target"))
+        .map(|target| match target.strip_prefix('/') {
+            Some(absolute) => absolute.to_string(),
+            None => format!("xl/{target}"),
+        })
+        .collect()
 }
 
 // Write to a sibling temp file, prove it reopens, then replace: the original is

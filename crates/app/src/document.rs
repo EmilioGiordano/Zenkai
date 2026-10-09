@@ -67,6 +67,8 @@ fn unsupported_label(unsupported: Unsupported) -> &'static str {
         Unsupported::ExternalLinks => t!("unsupported.external_links"),
         Unsupported::AutoFilter => t!("unsupported.auto_filter"),
         Unsupported::SheetProtection => t!("unsupported.sheet_protection"),
+        Unsupported::Outline => t!("unsupported.outline"),
+        Unsupported::PageBreaks => t!("unsupported.page_breaks"),
     }
 }
 
@@ -241,8 +243,17 @@ impl Document {
             return false;
         }
         self.batch_running = false;
-        if let Some(sheets) = self.workbook().map(|workbook| workbook.sheets()) {
+        if let Some((sheets, dropped)) = self
+            .workbook()
+            .map(|workbook| (workbook.sheets(), workbook.dropped_on_save()))
+        {
             self.sheets = sheets;
+            for lost in dropped {
+                if !self.unsupported.contains(&lost) {
+                    self.unsupported.push(lost);
+                }
+            }
+            self.unsupported.sort();
         }
         let last = u32::try_from(self.sheets.len().saturating_sub(1)).unwrap_or(0);
         if self.sheet.0 > last {

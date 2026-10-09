@@ -119,7 +119,7 @@ impl Session {
     }
 }
 
-const ALL_UNSUPPORTED: [Unsupported; 11] = [
+const ALL_UNSUPPORTED: [Unsupported; 13] = [
     Unsupported::Charts,
     Unsupported::Images,
     Unsupported::PivotTables,
@@ -131,6 +131,8 @@ const ALL_UNSUPPORTED: [Unsupported; 11] = [
     Unsupported::ExternalLinks,
     Unsupported::AutoFilter,
     Unsupported::SheetProtection,
+    Unsupported::Outline,
+    Unsupported::PageBreaks,
 ];
 
 fn unsupported_code(unsupported: Unsupported) -> &'static str {
@@ -146,6 +148,8 @@ fn unsupported_code(unsupported: Unsupported) -> &'static str {
         Unsupported::ExternalLinks => "external-links",
         Unsupported::AutoFilter => "auto-filter",
         Unsupported::SheetProtection => "sheet-protection",
+        Unsupported::Outline => "outline",
+        Unsupported::PageBreaks => "page-breaks",
     }
 }
 

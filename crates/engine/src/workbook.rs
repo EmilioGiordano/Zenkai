@@ -9,7 +9,9 @@ use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx_bytes;
 
 use crate::error::EngineError;
+use crate::file::Unsupported;
 use crate::model::CachedModel;
+use crate::sheet_settings::{Carried, SheetSettings};
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
     RowIdx, SheetId, SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign, ValueKind,
@@ -166,6 +168,7 @@ pub trait Engine: Send {
 
 pub struct Workbook {
     model: CachedModel,
+    carried: Carried,
 }
 
 // What a copy produced: the text Excel and other apps understand, plus the engine's
@@ -395,6 +398,7 @@ impl Workbook {
             UserModel::new_empty("Book1", LOCALE, timezone(), LANGUAGE).map_err(rejected)?;
         Ok(Workbook {
             model: CachedModel::new(model),
+            carried: Carried::default(),
         })
     }
 
@@ -407,12 +411,58 @@ impl Workbook {
         model.evaluate();
         let workbook = Workbook {
             model: CachedModel::new(model),
+            carried: Carried::default(),
         };
         workbook.warm_used_areas();
         Ok(workbook)
     }
 
     // Call on a background thread after building or editing, so the UI thread never walks a sheet.
+    // `settings` are by position among the file's worksheets, the order IronCalc loads them in.
+    pub(crate) fn carry(&mut self, settings: Vec<SheetSettings>) {
+        let ids: Vec<u32> = self
+            .model
+            .get_model()
+            .workbook
+            .worksheets
+            .iter()
+            .map(|sheet| sheet.sheet_id)
+            .collect();
+        if ids.len() != settings.len() {
+            tracing::error!(
+                sheets = ids.len(),
+                read = settings.len(),
+                "sheet settings do not match the loaded sheets; they are not kept"
+            );
+            return;
+        }
+        self.carried = Carried::new(ids.into_iter().zip(settings).collect());
+    }
+
+    // What a save will leave out because an edit made it wrong, such as grouping after
+    // rows were inserted above it.
+    pub fn dropped_on_save(&self) -> Vec<Unsupported> {
+        self.carried.dropped()
+    }
+
+    fn sheet_id(&self, sheet: SheetId) -> Option<u32> {
+        let worksheets = &self.model.get_model().workbook.worksheets;
+        let index = usize::try_from(sheet.0).ok()?;
+        worksheets.get(index).map(|ws| ws.sheet_id)
+    }
+
+    fn rows_moved(&mut self, sheet: SheetId, from: RowIdx) {
+        if let Some(id) = self.sheet_id(sheet) {
+            self.carried.rows_moved(id, from.get() + 1);
+        }
+    }
+
+    fn columns_moved(&mut self, sheet: SheetId, from: ColIdx) {
+        if let Some(id) = self.sheet_id(sheet) {
+            self.carried.columns_moved(id, u32::from(from.get()) + 1);
+        }
+    }
+
     pub fn warm_used_areas(&self) {
         for sheet in self.sheets() {
             self.model.used_end(sheet.id);
@@ -1167,14 +1217,18 @@ impl Engine for Workbook {
         let count = i32::try_from(count).map_err(|e| rejected(e.to_string()))?;
         self.model
             .insert_rows(sheet.0, row_i32(at), count)
-            .map_err(rejected)
+            .map_err(rejected)?;
+        self.rows_moved(sheet, at);
+        Ok(())
     }
 
     fn delete_rows(&mut self, sheet: SheetId, at: RowIdx, count: u32) -> Result<(), EngineError> {
         let count = i32::try_from(count).map_err(|e| rejected(e.to_string()))?;
         self.model
             .delete_rows(sheet.0, row_i32(at), count)
-            .map_err(rejected)
+            .map_err(rejected)?;
+        self.rows_moved(sheet, at);
+        Ok(())
     }
 
     fn insert_columns(
@@ -1185,7 +1239,9 @@ impl Engine for Workbook {
     ) -> Result<(), EngineError> {
         self.model
             .insert_columns(sheet.0, col_i32(at), i32::from(count))
-            .map_err(rejected)
+            .map_err(rejected)?;
+        self.columns_moved(sheet, at);
+        Ok(())
     }
 
     fn delete_columns(
@@ -1196,7 +1252,9 @@ impl Engine for Workbook {
     ) -> Result<(), EngineError> {
         self.model
             .delete_columns(sheet.0, col_i32(at), i32::from(count))
-            .map_err(rejected)
+            .map_err(rejected)?;
+        self.columns_moved(sheet, at);
+        Ok(())
     }
 
     fn merged(&self, sheet: SheetId) -> Vec<Range> {
@@ -1272,7 +1330,7 @@ impl Engine for Workbook {
         let xlsx = save_xlsx_to_writer(self.model.get_model(), Cursor::new(Vec::new()))
             .map(Cursor::into_inner)
             .map_err(|e| rejected(format!("{e:?}")))?;
-        crate::empty_rows::restore_empty_rows(self.model.get_model(), xlsx)
+        crate::sheet_patch::patch_sheets(self.model.get_model(), &self.carried, xlsx)
     }
 }
 
