@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zenkai Settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7fb894}a:hover{color:#a6d3b5}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 100%; height: 820px; display: flex; flex-direction: column; overflow: hidden; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; background: {{c.bg}}; color: {{c.text}}">
+
+  <header style="height: 40px; flex-shrink: 0; display: flex; align-items: center; padding-left: 16px; background: {{c.side}}; color: {{c.muted}}">
+    <span style="font-size: 12px">Zenkai Settings</span>
+    <span style="flex-grow: 1"></span>
+    <div style="display: flex; height: 40px">
+      <button aria-label="Minimize" style="width: 46px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 5h10"></path></svg></button>
+      <button aria-label="Maximize" style="width: 46px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"></rect></svg></button>
+      <button aria-label="Close" style="width: 46px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 0l10 10M10 0L0 10"></path></svg></button>
+    </div>
+  </header>
+
+  <div style="flex-grow: 1; min-height: 0; display: flex">
+    <nav aria-label="Sections" style="flex: 0 0 232px; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; padding: 12px 10px; background: {{c.side}}">
+      <label style="display: flex; align-items: center; gap: 8px; height: 34px; margin-bottom: 10px; padding: 0 10px; border-radius: 8px; background: {{c.field}}; color: {{c.faint}}">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
+        <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Search settings</span>
+        <input placeholder="Search settings" style="flex-grow: 1; min-width: 0; border: 0; background: transparent; color: {{c.text}}; font: inherit">
+        <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px">Ctrl+F</span>
+      </label>
+      <sc-for list="{{nav}}" as="n" hint-placeholder-count="7">
+        <button style="display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: 8px; text-align: left; background: {{n.bg}}; color: {{n.color}}; font-weight: {{n.weight}}">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" style="flex-shrink: 0; opacity: 0.85"><path d="{{n.icon}}"></path></svg>
+          <span style="flex-grow: 1">{{n.label}}</span>
+          <sc-if value="{{n.hasCount}}" hint-placeholder-val="{{ false }}">
+            <span style="min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; background: {{c.badge}}; color: {{c.badgeText}}">{{n.count}}</span>
+          </sc-if>
+        </button>
+      </sc-for>
+      <span style="flex-grow: 1"></span>
+      <label style="display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 10px; border-radius: 8px; background: {{c.field}}">
+        <span style="flex-grow: 1">Modified only</span>
+        <span style="font-size: 11.5px; color: {{c.faint}}">7</span>
+        <span role="switch" aria-checked="{{modifiedOnlyText}}" style="width: 32px; height: 18px; border-radius: 9px; position: relative; background: {{c.switchBg}}">
+          <span style="position: absolute; top: 2px; left: {{c.knobLeft}}; width: 14px; height: 14px; border-radius: 50%; background: #ffffff"></span>
+        </span>
+      </label>
+    </nav>
+
+    <main style="flex-grow: 1; min-width: 0; overflow: hidden; padding: 28px 40px 40px; box-sizing: border-box; display: flex; flex-direction: column; gap: 22px">
+      <div style="display: flex; flex-direction: column; gap: 4px">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 600">{{pageTitle}}</h1>
+        <p style="margin: 0; color: {{c.muted}}">{{pageLead}}</p>
+      </div>
+
+      <sc-for list="{{groups}}" as="g" hint-placeholder-count="3">
+        <section style="display: flex; flex-direction: column; gap: 8px">
+          <h2 style="margin: 0; padding-left: 4px; font-size: 12px; font-weight: 600; letter-spacing: 0.03em; color: {{c.faint}}">{{g.title}}</h2>
+          <div style="display: flex; flex-direction: column; border-radius: 12px; background: {{c.card}}">
+            <sc-for list="{{g.rows}}" as="r" hint-placeholder-count="3">
+              <div style="position: relative; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border-top: {{r.sep}}">
+                <div style="display: flex; align-items: center; gap: 16px">
+                  <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px">
+                    <span style="display: flex; align-items: center; gap: 8px">
+                      <span style="font-weight: 500">{{r.label}}</span>
+                      <sc-if value="{{r.modified}}" hint-placeholder-val="{{ false }}">
+                        <svg width="8" height="16" viewBox="0 0 8 16" style="display: block"><circle cx="4" cy="8" r="3" fill="#d9a679"></circle></svg>
+                        <button style="font-size: 11.5px; color: {{c.faint}}">Reset</button>
+                      </sc-if>
+                    </span>
+                    <span style="font-size: 12px; color: {{c.muted}}">{{r.desc}}</span>
+                    <sc-if value="{{r.code}}" hint-placeholder-val="{{ false }}">
+                      <span style="margin-top: 4px; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: {{c.code}}">{{r.code}}</span>
+                    </sc-if>
+                  </span>
+                  <sc-if value="{{r.isSwitch}}" hint-placeholder-val="{{ false }}">
+                    <span role="switch" aria-checked="{{r.onText}}" aria-label="{{r.label}}" style="width: 36px; height: 20px; border-radius: 10px; position: relative; flex-shrink: 0; background: {{r.switchBg}}">
+                      <span style="position: absolute; top: 3px; left: {{r.knob}}; width: 14px; height: 14px; border-radius: 50%; background: #ffffff"></span>
+                    </span>
+                  </sc-if>
+                  <sc-if value="{{r.isSelect}}" hint-placeholder-val="{{ false }}">
+                    <button style="height: 30px; min-width: 170px; padding: 0 10px; border-radius: 8px; display: flex; align-items: center; gap: 8px; background: {{r.selectBg}}; flex-shrink: 0">
+                      <span style="flex-grow: 1; text-align: left">{{r.value}}</span>
+                      <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="color: {{c.faint}}"><path d="M4 6l4 4 4-4"></path></svg>
+                    </button>
+                  </sc-if>
+                  <sc-if value="{{r.isStepper}}" hint-placeholder-val="{{ false }}">
+                    <span style="display: flex; align-items: center; height: 30px; border-radius: 8px; background: {{c.field}}; flex-shrink: 0">
+                      <button aria-label="Decrease" style="width: 30px; height: 30px">−</button>
+                      <span style="min-width: 48px; text-align: center; font-family: 'IBM Plex Mono', monospace; font-size: 12px">{{r.value}}</span>
+                      <button aria-label="Increase" style="width: 30px; height: 30px">+</button>
+                    </span>
+                  </sc-if>
+                  <sc-if value="{{r.isButton}}" hint-placeholder-val="{{ false }}">
+                    <button style="height: 30px; padding: 0 12px; border-radius: 8px; background: {{c.field}}; flex-shrink: 0">{{r.value}}</button>
+                  </sc-if>
+                </div>
+
+                <sc-if value="{{r.isModes}}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; gap: 14px">
+                    <sc-for list="{{modes}}" as="m" hint-placeholder-count="3">
+                      <button role="radio" aria-checked="{{m.checkedText}}" style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+                        <span style="width: 124px; height: 78px; border-radius: 10px; overflow: hidden; display: flex; box-shadow: {{m.ring}}">
+                          <sc-for list="{{m.halves}}" as="h" hint-placeholder-count="1">
+                            <span style="flex: 1 1 0; display: flex; background: {{h.bg}}">
+                              <span style="width: 26%; background: {{h.side}}"></span>
+                              <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 6px; padding: 10px 8px">
+                                <span style="height: 5px; width: 70%; border-radius: 3px; background: {{h.line}}"></span>
+                                <span style="height: 5px; width: 45%; border-radius: 3px; background: {{h.line}}; opacity: 0.6"></span>
+                                <span style="height: 10px; width: 36%; border-radius: 3px; box-shadow: inset 0 0 0 2px #4caf7a"></span>
+                              </span>
+                            </span>
+                          </sc-for>
+                        </span>
+                        <span style="font-weight: {{m.weight}}; color: {{m.color}}">{{m.name}}</span>
+                      </button>
+                    </sc-for>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{r.isThemeList}}" hint-placeholder-val="{{ false }}">
+                  <div role="listbox" aria-label="Dark theme" style="position: absolute; z-index: 3; right: 16px; top: 50px; width: 420px; border-radius: 10px; background: {{c.popover}}; box-shadow: 0 18px 48px rgba(0,0,0,0.4); display: flex; flex-direction: column">
+                    <input placeholder="Select theme…" style="height: 40px; padding: 0 14px; border: 0; border-bottom: 1px solid {{c.line}}; background: transparent; color: {{c.text}}; font: inherit">
+                    <div style="display: flex; flex-direction: column; padding: 6px">
+                      <sc-for list="{{themeList}}" as="t" hint-placeholder-count="9">
+                        <div role="option" aria-selected="{{t.selText}}" style="display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border-radius: 7px; background: {{t.bg}}">
+                          <span style="flex-grow: 1">{{t.name}}</span>
+                          <span style="font-size: 11px; padding: 1px 7px; border-radius: 5px; background: {{t.tagBg}}; color: {{t.tagText}}">{{t.tag}}</span>
+                          <span style="width: 16px; text-align: right; color: {{c.text}}; font-weight: 600">{{t.check}}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; padding: 10px 14px; border-top: 1px solid {{c.line}}; font-size: 12.5px; color: {{c.muted}}">
+                      <button>Import Zed theme…</button>
+                      <button>Open themes folder</button>
+                    </div>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{r.isSpaceStyles}}" hint-placeholder-val="{{ false }}">
+                  <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px">
+                    <sc-for list="{{spaceStyles}}" as="st" hint-placeholder-count="4">
+                      <button role="radio" aria-checked="{{st.checkedText}}" style="display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; text-align: left; background: {{c.field}}; box-shadow: {{st.ring}}">
+                        <span style="height: 48px; border-radius: 7px; padding: 8px; box-sizing: border-box; display: flex; flex-direction: column; gap: 5px; box-shadow: {{st.previewRing}}; background-color: {{st.previewBg}}">
+                          <span style="display: flex; align-items: center; gap: 5px; height: 12px; border-radius: 4px; padding: 0 5px; background: {{st.previewHead}}">
+                            <svg width="6" height="6" viewBox="0 0 6 6" style="display: {{st.dotDisplay}}"><circle cx="3" cy="3" r="3" fill="#5b8def"></circle></svg>
+                            <span style="height: 4px; width: 40%; border-radius: 2px; background: {{c.muted}}"></span>
+                          </span>
+                          <span style="height: 10px; border-radius: 4px; background: {{st.previewItem}}"></span>
+                        </span>
+                        <span style="font-weight: 500">{{st.name}}</span>
+                      </button>
+                    </sc-for>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{r.isAgents}}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; flex-direction: column; margin: 0 -16px -14px">
+                    <sc-for list="{{agents}}" as="a" hint-placeholder-count="4">
+                      <div style="display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-top: 1px solid {{c.line}}">
+                        <span style="width: 32px; height: 32px; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: {{a.markBg}}">
+                          <svg width="20" height="20" viewBox="0 0 20 20" style="display: block"><path d="{{a.markPath}}" fill="{{a.markFill}}" stroke="{{a.markStroke}}" stroke-width="{{a.markStrokeWidth}}" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+                        </span>
+                        <span style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+                          <span style="display: flex; align-items: center; gap: 8px">
+                            <span style="font-weight: 500">{{a.name}}</span>
+                            <sc-if value="{{a.isDefault}}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; padding: 1px 6px; border-radius: 4px; background: {{c.badge}}; color: {{c.badgeText}}">Default</span></sc-if>
+                          </span>
+                          <span style="font-size: 12px; color: {{c.faint}}">{{a.detail}}</span>
+                        </span>
+                        <span style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: {{a.statusColor}}; flex-shrink: 0">
+                          <svg width="8" height="16" viewBox="0 0 8 16" style="display: block"><circle cx="4" cy="8" r="3" fill="{{a.dot}}"></circle></svg>
+                          {{a.status}}
+                        </span>
+                        <button style="height: 28px; padding: 0 12px; border-radius: 7px; flex-shrink: 0; background: {{a.btnBg}}; color: {{a.btnText}}">{{a.action}}</button>
+                        <button aria-label="More for {{a.name}}" style="width: 28px; height: 28px; border-radius: 7px; flex-shrink: 0; color: {{c.faint}}">
+                          <svg width="14" height="14" viewBox="0 0 16 16" style="display: block; margin: auto"><circle cx="3" cy="8" r="1.3" fill="currentColor"></circle><circle cx="8" cy="8" r="1.3" fill="currentColor"></circle><circle cx="13" cy="8" r="1.3" fill="currentColor"></circle></svg>
+                        </button>
+                      </div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+
+                <sc-if value="{{r.isPermission}}" hint-placeholder-val="{{ false }}">
+                  <div style="display: flex; flex-direction: column; gap: 10px">
+                    <div role="radiogroup" aria-label="What agents may do" style="display: flex; padding: 3px; border-radius: 9px; background: {{c.field}}; align-self: flex-start">
+                      <sc-for list="{{permissions}}" as="p" hint-placeholder-count="3">
+                        <button role="radio" aria-checked="{{p.checkedText}}" style="height: 30px; padding: 0 14px; border-radius: 7px; background: {{p.bg}}; color: {{p.color}}; font-weight: {{p.weight}}">{{p.name}}</button>
+                      </sc-for>
+                    </div>
+                    <span style="display: flex; align-items: center; gap: 8px; font-size: 12px; color: {{c.muted}}">
+                      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" style="flex-shrink: 0"><path d="M8 2l5 2v4c0 3-2.2 5.2-5 6-2.8-.8-5-3-5-6V4z"></path></svg>
+                      Each change is highlighted in the grid and waits for your approval. Ctrl+Z always undoes it.
+                    </span>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+      </sc-for>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"section":{"editor":"enum","options":["appearance","general","ai","modified"],"default":"appearance"},"light":{"editor":"boolean","default":false},"$preview":{"width":1120,"height":820}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const section = this.props.section ?? 'appearance';
+    const light = this.props.light ?? false;
+    const modifiedOnly = section === 'modified';
+    const c = light ? {
+      bg: '#ffffff', side: '#f4f4f5', card: '#f4f4f5', field: '#e9e9ec', popover: '#ffffff', text: '#1c1d1f',
+      muted: '#55585e', faint: '#6e7178', badge: '#e3efe7', badgeText: '#1b5e3a', sel: '#e6e7ea',
+      sep: '1px solid #e6e6e9', line: '#e6e6e9', code: '#9a5a1f'
+    } : {
+      bg: '#18191b', side: '#1f2023', card: '#1f2023', field: '#26272a', popover: '#26272a', text: '#e4e4e6',
+      muted: '#a3a5ab', faint: '#767880', badge: '#2b3a31', badgeText: '#9fd3b4', sel: '#2a2b2f',
+      sep: '1px solid #26272a', line: '#34353a', code: '#d9a679'
+    };
+    c.switchBg = modifiedOnly ? '#4caf7a' : (light ? '#c9cace' : '#3a3b40');
+    c.knobLeft = modifiedOnly ? '16px' : '2px';
+
+    const icons = {
+      general: 'M2 4h12M2 8h12M2 12h12',
+      appearance: 'M8 2a6 6 0 100 12c1 0 1.5-.6 1.5-1.3 0-1.2-1.5-1.2-1.5-2.4 0-.8.7-1.3 1.5-1.3H12a2 2 0 002-2C14 4.4 11.3 2 8 2z',
+      keys: 'M2 5h12v7H2zM5 8h1M8 8h1M11 8h1',
+      ai: 'M8 2l1.6 3.4L13 7l-3.4 1.6L8 12l-1.6-3.4L3 7l3.4-1.6z',
+      files: 'M3 2h6l4 4v8H3zM9 2v4h4',
+      privacy: 'M8 2l5 2v4c0 3-2.2 5.2-5 6-2.8-.8-5-3-5-6V4z',
+      about: 'M8 2a6 6 0 100 12A6 6 0 008 2zM8 7v4M8 5v.5'
+    };
+    const counts = { general: 2, appearance: 4, keys: 1, ai: 1, files: 0, privacy: 0, about: 0 };
+    const current = section === 'general' ? 'general' : section === 'ai' ? 'ai' : 'appearance';
+    const nav = [
+      ['general', 'General'], ['appearance', 'Appearance'], ['keys', 'Keyboard'], ['ai', 'AI'],
+      ['files', 'Files and recovery'], ['privacy', 'Privacy'], ['about', 'About']
+    ].map(([id, label]) => ({
+      label, icon: icons[id], count: String(counts[id]), hasCount: counts[id] > 0,
+      bg: id === current ? c.sel : 'transparent',
+      color: id === current ? c.text : c.muted,
+      weight: id === current ? 600 : 400
+    }));
+
+    const row = (o) => ({
+      desc: '', code: '', modified: false, isSwitch: false, isSelect: false, isStepper: false, isButton: false,
+      isModes: false, isThemeList: false, isSpaceStyles: false, isAgents: false, isPermission: false,
+      value: '', onText: 'false', selectBg: c.field,
+      switchBg: light ? '#c9cace' : '#3a3b40', knob: '3px', ...o
+    });
+    const on = (o) => row({ ...o, isSwitch: true, onText: 'true', switchBg: '#4caf7a', knob: '19px' });
+    const off = (o) => row({ ...o, isSwitch: true });
+    const sel = (o) => row({ ...o, isSelect: true });
+
+    let groups;
+    if (section === 'general') {
+      groups = [
+        { title: 'STARTUP', rows: [
+          on({ label: 'Restore last session', desc: 'Reopen your spaces and workbooks, including unsaved work.' }),
+          sel({ label: 'Window on launch', desc: 'Window state when Zenkai starts.', value: 'Maximized', modified: true }),
+          on({ label: 'Remember size and position', desc: 'Reopen the window where you left it.' })
+        ] },
+        { title: 'LANGUAGE AND REGION', rows: [
+          sel({ label: 'Interface language', desc: 'Menus, dialogs and messages.', value: 'English' }),
+          sel({ label: 'Regional format', desc: 'Decimal separator, dates and default currency.', value: 'Spanish (Argentina)', modified: true })
+        ] },
+        { title: 'SAVING', rows: [
+          row({ label: 'Autosave every', desc: 'Recovery copy of work you have not saved.', isStepper: true, value: '60 s' }),
+          off({ label: 'Ask before closing a workbook with changes', desc: 'When off, unsaved work is kept for next time.' })
+        ] }
+      ];
+    } else if (section === 'ai') {
+      groups = [
+        { title: 'AGENTS', rows: [
+          row({ label: 'Agents', desc: 'Each agent uses your own login. API keys are kept in Windows Credential Manager, never in a file.', isAgents: true, isButton: true, value: 'Add custom agent' })
+        ] },
+        { title: 'PERMISSIONS', rows: [
+          row({ label: 'Agent permissions', desc: 'For the chat panel and for external agents.', isPermission: true }),
+          on({ label: 'Confirm elevated permissions at every start', desc: 'Automatic mode and external agents are confirmed again each time Zenkai starts.', modified: false })
+        ] },
+        { title: 'EXTERNAL AGENTS', rows: [
+          on({ label: 'Allow MCP clients outside Zenkai', desc: 'Claude Code or any MCP client can read and edit open workbooks, with the same approvals.', code: 'claude mcp add zenkai -- zenkai-mcp', modified: true }),
+          row({ label: 'Connection command', desc: 'Copies the command to register Zenkai in Claude Code.', isButton: true, value: 'Copy' })
+        ] },
+        { title: 'PRIVACY', rows: [
+          row({ label: 'What leaves your computer', desc: 'Only the cells an agent reads are sent to its provider. Workbooks are never uploaded, and a local model (Ollama) keeps everything on this machine.' })
+        ] }
+      ];
+    } else {
+      const all = [
+        { title: 'THEME', rows: [
+          row({ label: 'Appearance', desc: 'Follow the system: light by day, dark by night.', isModes: true, modified: true }),
+          sel({ label: 'Dark theme', desc: 'For the interface and the grid.', value: 'One Dark', modified: true, isThemeList: !modifiedOnly && !light, selectBg: !modifiedOnly && !light ? c.sel : c.field }),
+          sel({ label: 'Light theme', desc: 'For the interface and the grid.', value: 'Zenkai Light' })
+        ] },
+        { title: 'GRID', rows: [
+          sel({ label: 'Font', desc: 'For cells and the formula bar.', value: 'IBM Plex Sans' }),
+          row({ label: 'Font size', desc: 'In points.', isStepper: true, value: '13 pt', modified: true }),
+          on({ label: 'Show gridlines', desc: 'The soft lines between cells.' })
+        ] },
+        { title: 'SPACES', rows: [
+          row({ label: 'Space style', desc: 'For every space that is not customized. Right-click a space to customize it.', isSpaceStyles: true, modified: true }),
+          row({ label: 'Intensity', desc: 'How strong the color is.', isStepper: true, value: '18%' }),
+          on({ label: 'Tint workbooks too', desc: 'Not only the space header.' }),
+          sel({ label: 'Color for new spaces', desc: 'Automatic rotates through the palette for each new space.', value: 'Automatic' })
+        ] }
+      ];
+      groups = modifiedOnly
+        ? all.map((g) => ({ ...g, rows: g.rows.filter((r) => r.modified) })).filter((g) => g.rows.length > 0)
+        : all;
+    }
+    groups = groups.map((g) => ({ ...g, rows: g.rows.map((r, i) => ({ ...r, sep: i === 0 ? 'none' : c.sep })) }));
+
+    const halvesOf = (kind) => {
+      const lightHalf = { bg: '#ffffff', side: '#ececee', line: '#55585e' };
+      const darkHalf = { bg: '#18191b', side: '#26272a', line: '#a3a5ab' };
+      return kind === 'Light' ? [lightHalf] : kind === 'Dark' ? [darkHalf] : [lightHalf, darkHalf];
+    };
+    const modes = ['Light', 'Dark', 'System'].map((name) => ({
+      name, halves: halvesOf(name),
+      checkedText: name === 'System' ? 'true' : 'false',
+      ring: name === 'System' ? '0 0 0 2px #4caf7a' : '0 0 0 1px ' + (light ? '#dcdce0' : '#34353a'),
+      weight: name === 'System' ? 600 : 400,
+      color: name === 'System' ? c.text : c.muted
+    }));
+
+    const themeList = [
+      ['Zenkai Dark', 'Dark'], ['Ayu Mirage', 'Dark'], ['Catppuccin Mocha', 'Dark'], ['Dracula', 'Dark'],
+      ['Gruvbox Dark', 'Dark'], ['Nord', 'Dark'], ['One Dark', 'Dark'], ['Rosé Pine', 'Dark'], ['Tokyo Night', 'Dark']
+    ].map(([name, tag], i) => ({
+      name, tag,
+      check: name === 'One Dark' ? '✓' : '',
+      selText: name === 'One Dark' ? 'true' : 'false',
+      bg: name === 'One Dark' ? c.sel : 'transparent',
+      tagBg: light ? '#e9e9ec' : '#34353a', tagText: c.muted
+    }));
+
+    const blue = '#5b8def';
+    const rgba = (hex, a) => {
+      const n = parseInt(hex.slice(1), 16);
+      return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+    };
+    const spaceStyles = [
+      { id: 'dot', name: 'Dot' }, { id: 'header', name: 'Header' },
+      { id: 'border', name: 'Border' }, { id: 'tint', name: 'Full tint' }
+    ].map((st) => ({
+      ...st,
+      checkedText: st.id === 'header' ? 'true' : 'false',
+      ring: st.id === 'header' ? 'inset 0 0 0 2px #4caf7a' : 'none',
+      dotDisplay: st.id === 'dot' || st.id === 'border' ? 'block' : 'none',
+      previewHead: st.id === 'header' || st.id === 'tint' ? rgba(blue, 0.25) : 'transparent',
+      previewItem: st.id === 'tint' ? rgba(blue, 0.14) : (light ? '#dcdce0' : '#34353a'),
+      previewRing: st.id === 'border' ? 'inset 0 0 0 1px ' + rgba(blue, 0.6) : 'none',
+      previewBg: st.id === 'tint' ? rgba(blue, 0.08) : (light ? '#ffffff' : '#1c1d20')
+    }));
+
+    const marks = {
+      claude: { bg: '#d97757', fill: 'none', stroke: '#ffffff', width: '1.8',
+        path: 'M10 3v14M3 10h14M5 5l10 10M15 5L5 15' },
+      gemini: { bg: light ? '#e8efff' : '#1e2a44', fill: '#5b8def', stroke: 'none', width: '0',
+        path: 'M10 2C10.8 6.6 13.4 9.2 18 10C13.4 10.8 10.8 13.4 10 18C9.2 13.4 6.6 10.8 2 10C6.6 9.2 9.2 6.6 10 2Z' },
+      codex: { bg: light ? '#1c1d1f' : '#f2f2f4', fill: 'none', stroke: light ? '#ffffff' : '#1c1d1f', width: '1.6',
+        path: 'M10 3l6 3.5v7L10 17l-6-3.5v-7zM10 3v14M4 6.5l12 7M16 6.5l-12 7' },
+      ollama: { bg: light ? '#e9e9ec' : '#34353a', fill: 'none', stroke: c.muted, width: '1.6',
+        path: 'M6 17v-5c0-3 1.5-5 4-5s4 2 4 5v5M7.5 7V3.5M12.5 7V3.5M8.5 12h.01M11.5 12h.01' }
+    };
+    const agents = [
+      { key: 'claude', name: 'Claude Code', detail: 'Uses your Claude account', status: 'Ready', ok: true, isDefault: true, action: 'Configure' },
+      { key: 'gemini', name: 'Gemini CLI', detail: 'Uses your Google account', status: 'Ready', ok: true, action: 'Configure' },
+      { key: 'codex', name: 'Codex', detail: 'Needs Node 22 or later', status: 'Not installed', ok: false, action: 'Install' },
+      { key: 'ollama', name: 'Ollama', detail: 'Local models, data stays on this computer', status: 'Not found', ok: false, action: 'Get Ollama' }
+    ].map((a) => ({
+      isDefault: false, ...a,
+      markBg: marks[a.key].bg, markFill: marks[a.key].fill, markStroke: marks[a.key].stroke,
+      markStrokeWidth: marks[a.key].width, markPath: marks[a.key].path,
+      dot: a.ok ? '#4caf7a' : (light ? '#b8babf' : '#5d5f66'),
+      statusColor: a.ok ? (light ? '#1f7a4a' : '#8fc9a6') : c.faint,
+      btnBg: a.ok ? (light ? '#e9e9ec' : '#34353a') : '#4caf7a',
+      btnText: a.ok ? c.text : '#0f2418'
+    }));
+    const permissions = [
+      { name: 'Read only', desc: 'Agents read and answer; they cannot change cells.' },
+      { name: 'Ask before writing', desc: 'Each change is highlighted and waits for your approval.', checked: true },
+      { name: 'Automatic', desc: 'Changes apply without asking. Ctrl+Z always undoes them.' }
+    ].map((p) => ({ ...p, checkedText: p.checked ? 'true' : 'false', bg: p.checked ? (light ? '#ffffff' : '#3a3b40') : 'transparent', color: p.checked ? c.text : c.muted, weight: p.checked ? 500 : 400 }));
+
+    const titles = { general: 'General', ai: 'AI', appearance: 'Appearance', modified: 'Appearance' };
+    const leads = {
+      general: 'How Zenkai starts, language and saving.',
+      ai: 'Agents, what they may do and what leaves your computer.',
+      appearance: 'Theme, grid and spaces. Everything applies at once.',
+      modified: 'Only what you changed from the defaults. Each row can go back to its default.'
+    };
+    return {
+      c, nav, groups, modes, themeList, spaceStyles, agents, permissions,
+      modifiedOnlyText: modifiedOnly ? 'true' : 'false',
+      pageTitle: titles[section], pageLead: leads[section]
+    };
+  }
+}
+</script>
+</body>
+</html>
