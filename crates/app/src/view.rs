@@ -23,6 +23,7 @@ use zenkai_types::{
 
 mod agent_calls;
 mod settings_gate;
+mod space_panel;
 
 use agent_calls::{AgentLink, Decision};
 use settings_gate::HeldDecision;
@@ -50,6 +51,7 @@ use crate::recovery;
 use crate::region;
 use crate::session::Session;
 use crate::settings_page::{self, SettingsPage};
+use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Neighbour;
 use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
@@ -171,6 +173,7 @@ pub struct Workspace {
     saved_session: Option<Session>,
     cell_refresh: CellRefresh,
     settings_page: Option<Entity<SettingsPage>>,
+    space_panel: Option<space_panel::SpacePanel>,
     agent: AgentLink,
     // The settings problem already shown, so a reload with the same error stays quiet.
     shown_settings_problem: Option<SettingsError>,
@@ -219,6 +222,7 @@ impl Workspace {
             }
         });
         let settings = cx.observe_global_in::<AgentConfig>(window, Self::on_settings_changed);
+        let space_look = cx.observe_global::<SpaceAppearance>(|_, cx| cx.notify());
         let quit = cx.on_app_quit(|this, _| {
             this.stop_bridge();
             async {}
@@ -266,6 +270,7 @@ impl Workspace {
             saved_session: None,
             cell_refresh: CellRefresh::Idle,
             settings_page: None,
+            space_panel: None,
             agent: Self::start_tool_service(window, cx),
             shown_settings_problem: None,
             shown_held: None,
@@ -276,6 +281,7 @@ impl Workspace {
                 appearance,
                 activation,
                 settings,
+                space_look,
                 quit,
                 font_color,
                 fill_color,
@@ -2161,6 +2167,7 @@ impl Workspace {
         self.settings_page = None;
         let focus = self.grid.focus_handle(cx);
         window.focus(&focus, cx);
+        self.persist_session(cx);
         cx.notify();
     }
 
@@ -3119,6 +3126,19 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, _: &DeleteSpace, _, cx| this.delete_space(cx)))
             .on_action(cx.listener(|this, _: &CycleSpaceColor, _, cx| this.cycle_space_color(cx)))
+            .on_action(
+                cx.listener(|this, _: &CustomizeSpace, window, cx| {
+                    this.customize_space(window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &ResetSpaceAppearance, _, cx| {
+                    this.reset_space_appearance(cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &CloseSpacePanel, window, cx| {
+                this.close_space_panel(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &DeleteFile, window, cx| this.delete_file(window, cx)))
             .on_action(cx.listener(|this, _: &CloseSpaceRename, window, cx| {
                 this.close_space_rename(window, cx)
@@ -3219,6 +3239,7 @@ impl Render for Workspace {
             .children(self.render_format_dialog(cx))
             .children(self.render_generate())
             .children(self.render_settings())
+            .children(self.render_space_panel(window, cx))
     }
 }
 
