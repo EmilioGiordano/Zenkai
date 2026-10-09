@@ -42,10 +42,12 @@ impl Access {
         }
     }
 
-    // Plan keeps asking before each write: after the agent leaves plan mode, Zenkai still gates.
+    // Plan is read-only for the MCP bridge too: the agent's own plan mode does not promise to
+    // block MCP write tools.
     pub fn setting(self) -> PermissionMode {
         match self {
-            Access::AskBeforeWriting | Access::Plan => PermissionMode::AskBeforeWrite,
+            Access::Plan => PermissionMode::ReadOnly,
+            Access::AskBeforeWriting => PermissionMode::AskBeforeWrite,
             Access::EditAutomatically => PermissionMode::Automatic,
         }
     }
@@ -130,6 +132,14 @@ mod tests {
         for access in Access::ALL {
             let writes_freely = access.setting() == PermissionMode::Automatic;
             assert_eq!(writes_freely, access == Access::EditAutomatically);
+        }
+    }
+
+    #[test]
+    fn plan_cannot_write_through_the_bridge() {
+        assert_eq!(Access::Plan.setting(), PermissionMode::ReadOnly);
+        for access in Access::ALL {
+            assert_eq!(Access::from_setting(access.setting()), access);
         }
     }
 }
