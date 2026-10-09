@@ -17,6 +17,7 @@ const SETTINGS_WINDOW: Option<&str> = Some("SettingsWindow");
 fn is_locked(name: &str) -> bool {
     [
         <AllowAgentChange as Action>::name_for_type(),
+        <AllowChatPermission as Action>::name_for_type(),
         <LetAgentsEdit as Action>::name_for_type(),
         <ApplyHeldSettings as Action>::name_for_type(),
         <PermissionAutomatic as Action>::name_for_type(),
@@ -357,6 +358,7 @@ mod tests {
         let model = Model::build();
         for name in [
             "zenkai::AllowAgentChange",
+            "zenkai::AllowChatPermission",
             "zenkai::LetAgentsEdit",
             "zenkai::ApplyHeldSettings",
             "zenkai::PermissionAutomatic",
