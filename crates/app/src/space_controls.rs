@@ -5,6 +5,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::slider::{Slider, SliderState};
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::*;
+use zenkai_i18n::t;
 
 use crate::space_appearance::{
     ApplyTo, Intensity, Look, MAX_INTENSITY, Opacity, Resolved, Rgba, SpaceStyle,
@@ -175,7 +176,7 @@ pub fn intensity_row(
         .child(
             h_flex()
                 .justify_between()
-                .child(caption("Intensity", cx))
+                .child(caption(t!("space.intensity"), cx))
                 .child(div().text_xs().child(format!("{}%", intensity.percent()))),
         )
         .child(
@@ -186,7 +187,7 @@ pub fn intensity_row(
                     Button::new("intensity-down")
                         .compact()
                         .label("−")
-                        .accessibility_label("Less intensity")
+                        .accessibility_label(t!("space.less_intensity"))
                         .disabled(intensity.percent() == 0)
                         .on_click(move |_, window, cx| down(false, window, cx)),
                 )
@@ -195,7 +196,7 @@ pub fn intensity_row(
                     Button::new("intensity-up")
                         .compact()
                         .label("+")
-                        .accessibility_label("More intensity")
+                        .accessibility_label(t!("space.more_intensity"))
                         .disabled(intensity.percent() == MAX_INTENSITY)
                         .on_click(move |_, window, cx| on_step(true, window, cx)),
                 ),
@@ -211,11 +212,11 @@ pub fn apply_to_checkboxes(
     let header_change = on_change.clone();
     v_flex()
         .gap_2()
-        .child(caption("Apply to", cx))
+        .child(caption(t!("space.apply_to"), cx))
         .child(
             Checkbox::new((prefix, 0usize))
                 .checked(apply_to.header())
-                .label("Space header")
+                .label(t!("space.apply_header"))
                 .on_click(move |checked, window, cx| {
                     header_change(ApplyTo::of(*checked, apply_to.workbooks()), window, cx)
                 }),
@@ -223,7 +224,7 @@ pub fn apply_to_checkboxes(
         .child(
             Checkbox::new((prefix, 1usize))
                 .checked(apply_to.workbooks())
-                .label("Space workbooks")
+                .label(t!("space.apply_workbooks"))
                 .on_click(move |checked, window, cx| {
                     on_change(ApplyTo::of(apply_to.header(), *checked), window, cx)
                 }),

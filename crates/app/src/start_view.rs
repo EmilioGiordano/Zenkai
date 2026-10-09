@@ -5,6 +5,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use zenkai_i18n::t;
 
 use crate::actions::*;
 
@@ -69,20 +70,20 @@ pub fn render(recent: &[PathBuf], focus: &FocusHandle, cx: &App) -> impl IntoEle
             v_flex()
                 .w(px(520.0))
                 .gap_4()
-                .child(div().text_xl().child("No workbook open"))
+                .child(div().text_xl().child(t!("start.title")))
                 .child(
                     h_flex()
                         .gap_2()
                         .child(
                             Button::new("start-new")
                                 .primary()
-                                .label("New workbook (Ctrl+N)")
+                                .label(t!("start.new"))
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(NewWorkbook), cx)
                                 }),
                         )
                         .child(
-                            Button::new("start-open").label("Open… (Ctrl+O)").on_click(
+                            Button::new("start-open").label(t!("start.open")).on_click(
                                 |_, window, cx| window.dispatch_action(Box::new(Open), cx),
                             ),
                         ),
@@ -93,7 +94,7 @@ pub fn render(recent: &[PathBuf], focus: &FocusHandle, cx: &App) -> impl IntoEle
                             div()
                                 .text_sm()
                                 .text_color(theme.muted_foreground)
-                                .child("Recent"),
+                                .child(t!("start.recent")),
                         )
                         .child(v_flex().children(entries))
                 }),

@@ -5,6 +5,7 @@ use zenkai_engine::{
     Engine, EngineError, Unsupported, Workbook, open_xlsx, run_with_engine_stack, write_atomic,
 };
 use zenkai_formats::{Delimiter, ParsedCsv, parse_csv, read_values, write_csv};
+use zenkai_i18n::t;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
 const REPLACED_EXTENSIONS: [&str; 4] = ["xlsm", "xls", "xlsb", "ods"];
@@ -88,8 +89,8 @@ pub fn is_delimited_text(path: &Path) -> bool {
 }
 
 pub fn read_csv(path: &Path) -> Result<(Vec<u8>, ParsedCsv), String> {
-    let bytes =
-        std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+    let bytes = std::fs::read(path)
+        .map_err(|e| t!("file.read_failed", path = path.display(), error = e))?;
     let hint = (extension(path).as_deref() == Some("tsv")).then_some(Delimiter::Tab);
     let parsed = parse_csv(&bytes, hint).map_err(|e| e.to_string())?;
     Ok((bytes, parsed))
@@ -148,10 +149,10 @@ const MAX_VALUES_FILE_BYTES: u64 = 512 * 1024 * 1024;
 // read by calamine, in a workbook that is never saved over the original.
 pub fn open_values(path: &Path) -> Result<Workbook, String> {
     let size = std::fs::metadata(path)
-        .map_err(|e| format!("Could not read {}: {e}", path.display()))?
+        .map_err(|e| t!("file.read_failed", path = path.display(), error = e))?
         .len();
     if size > MAX_VALUES_FILE_BYTES {
-        return Err(format!("{} is larger than 512 MB", path.display()));
+        return Err(t!("file.too_large", path = path.display()));
     }
     let path = path.to_path_buf();
     run_with_engine_stack(move || {
@@ -207,7 +208,7 @@ pub fn write_csv_file(path: &Path, rows: &[Vec<String>]) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| EngineError::VerifyFailed(e.to_string()))
     })
-    .map_err(|e| format!("Could not write {}: {e}", path.display()))
+    .map_err(|e| t!("file.write_failed", path = path.display(), error = e))
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use crate::entry::{Entry, Link, LinkStatus};
@@ -41,22 +42,26 @@ pub fn folder_name(path: &Path) -> Option<String> {
 }
 
 fn link_meta(link: &Link) -> String {
-    let unsaved = if link.dirty { "unsaved changes, " } else { "" };
-    match link.status {
-        LinkStatus::Loading => format!("{unsaved}loading…"),
-        LinkStatus::Missing => format!("{unsaved}not found"),
-        LinkStatus::NotLoaded => match link.size {
-            Some(size) => format!("{unsaved}not loaded, {}", human_size(size)),
-            None => format!("{unsaved}not loaded"),
-        },
+    let mut parts = Vec::new();
+    if link.dirty {
+        parts.push(t!("sidebar.unsaved_changes").to_string());
     }
+    match link.status {
+        LinkStatus::Loading => parts.push(t!("sidebar.loading").to_string()),
+        LinkStatus::Missing => parts.push(t!("sidebar.not_found").to_string()),
+        LinkStatus::NotLoaded => {
+            parts.push(t!("sidebar.not_loaded").to_string());
+            parts.extend(link.size.map(human_size));
+        }
+    }
+    parts.join(", ")
 }
 
 pub fn describe(entry: Entry, active: bool) -> FileItem {
     let (meta, state) = match entry {
         Entry::Loaded(document) => {
             let count = document.sheets.len();
-            let meta = format!("{count} {}", if count == 1 { "sheet" } else { "sheets" });
+            let meta = t!("sidebar.sheets", count = count);
             let state = if document.dirty {
                 FileState::Dirty
             } else {
@@ -76,7 +81,7 @@ pub fn describe(entry: Entry, active: bool) -> FileItem {
     let folder = entry
         .path()
         .and_then(folder_name)
-        .unwrap_or_else(|| "not saved".to_string());
+        .unwrap_or_else(|| t!("sidebar.not_saved").to_string());
     FileItem {
         id: entry.id(),
         name: entry.name(),

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::spaces::SpaceColor;
+use zenkai_i18n::t;
 
 pub const MAX_INTENSITY: u8 = 60;
 const STEP: u8 = 5;
@@ -25,19 +26,19 @@ impl SpaceStyle {
 
     pub fn label(self) -> &'static str {
         match self {
-            SpaceStyle::Dot => "Dot",
-            SpaceStyle::Header => "Header",
-            SpaceStyle::Border => "Border",
-            SpaceStyle::FullTint => "Full tint",
+            SpaceStyle::Dot => t!("space.style.dot"),
+            SpaceStyle::Header => t!("space.style.header"),
+            SpaceStyle::Border => t!("space.style.border"),
+            SpaceStyle::FullTint => t!("space.style.full_tint"),
         }
     }
 
     pub fn description(self) -> &'static str {
         match self {
-            SpaceStyle::Dot => "Only a colored dot next to the name.",
-            SpaceStyle::Header => "The space header with a soft tint.",
-            SpaceStyle::Border => "A colored outline around the space.",
-            SpaceStyle::FullTint => "The whole space, header and workbooks, tinted.",
+            SpaceStyle::Dot => t!("space.style.dot_description"),
+            SpaceStyle::Header => t!("space.style.header_description"),
+            SpaceStyle::Border => t!("space.style.border_description"),
+            SpaceStyle::FullTint => t!("space.style.full_tint_description"),
         }
     }
 }

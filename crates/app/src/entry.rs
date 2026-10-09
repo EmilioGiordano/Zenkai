@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::Unsupported;
 use zenkai_grid::ViewState;
+use zenkai_i18n::t;
 use zenkai_types::{SheetId, WorkbookId};
 
 use crate::document::{Document, FileJob};
@@ -38,7 +39,7 @@ pub struct Link {
 
 pub fn display_name(path: Option<&Path>, untitled: u32) -> String {
     path.and_then(|path| path.file_name()).map_or_else(
-        || format!("Book{untitled}"),
+        || t!("document.untitled", number = untitled),
         |name| name.to_string_lossy().into_owned(),
     )
 }

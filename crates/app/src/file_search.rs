@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use zenkai_i18n::t;
 use zenkai_types::{SheetId, WorkbookId};
 
 use crate::documents::Documents;
@@ -62,15 +63,15 @@ pub fn collect(documents: &Documents, recent: &[PathBuf]) -> Vec<Group> {
         .collect();
     [
         Group {
-            heading: "Workbooks",
+            heading: t!("search.group_workbooks"),
             hits: workbooks,
         },
         Group {
-            heading: "Recent",
+            heading: t!("search.group_recent"),
             hits: recent,
         },
         Group {
-            heading: "Sheets",
+            heading: t!("search.group_sheets"),
             hits: sheets,
         },
     ]
@@ -83,7 +84,7 @@ fn folder_of(entry: Entry) -> String {
     entry
         .path()
         .and_then(sidebar_item::folder_name)
-        .unwrap_or_else(|| "not saved".to_string())
+        .unwrap_or_else(|| t!("sidebar.not_saved").to_string())
 }
 
 #[cfg(test)]
