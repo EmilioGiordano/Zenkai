@@ -345,8 +345,11 @@ pub fn write_snapshot(
 }
 
 pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError> {
+    let waited = Instant::now();
     let mut guard = shared.write().unwrap_or_else(PoisonError::into_inner);
+    let started = Instant::now();
     let workbook: &mut Workbook = &mut guard;
+    let count = edits.len();
     let run = zenkai_engine::run_with_engine_stack(|| {
         let errors = edits
             .into_iter()
@@ -355,7 +358,18 @@ pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError
         workbook.warm_used_areas();
         Ok(errors)
     });
-    run.unwrap_or_else(|error| vec![error])
+    let errors = run.unwrap_or_else(|error| vec![error]);
+    let (waited_ms, ran_ms) = (
+        started.duration_since(waited).as_millis(),
+        started.elapsed().as_millis(),
+    );
+    match errors.first() {
+        None => tracing::info!(count, waited_ms, ran_ms, "edit batch done"),
+        Some(error) => {
+            tracing::warn!(count, waited_ms, ran_ms, failed = errors.len(), %error, "edit batch had errors")
+        }
+    }
+    errors
 }
 
 #[cfg(test)]
