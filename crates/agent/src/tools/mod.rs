@@ -1,7 +1,9 @@
 mod approval_text;
 mod channel;
 mod client;
+mod create;
 mod error;
+mod folder;
 #[cfg(test)]
 mod generate_tests;
 #[cfg(any(test, feature = "test-support"))]
@@ -16,18 +18,23 @@ mod write;
 pub use approval_text::{shown_entry, shown_text};
 pub use channel::{ToolCall, ToolEndpoint, ToolResult, channel};
 pub use client::client_label;
+pub use create::{
+    MAX_NEW_SHEETS, NewWorkbook, OPENABLE_EXTENSIONS, check_openable, create_workbook_file,
+    relative_text,
+};
 pub use error::{AgentAccess, ReadOnlyReason, ToolError};
+pub use folder::{InsidePath, PathError, WorkingFolder};
 #[cfg(any(test, feature = "test-support"))]
 pub use local_host::LocalHost;
 pub use read::{LONG_TEXT_CHARS, MAX_FIND_RESULTS, MAX_READ_CELLS, read};
 pub use reply::{
-    CellPage, FindResult, FoundCell, HiddenContent, Nonce, SheetSummary, ToolReply,
-    UNTRUSTED_NOTICE, WorkbookSummary, WriteSummary,
+    CellPage, FindResult, FoundCell, HiddenContent, Nonce, OpenedWorkbook, Opening, SheetSummary,
+    ToolReply, UNTRUSTED_NOTICE, WorkbookSummary, WriteSummary,
 };
 pub use request::{
-    Alignment, Borders, Find, FormatChange, FormatRange, GenerateData, GetSelection, ListSheets,
-    ListWorkbooks, NumberFormatName, ReadRange, ReadRequest, SetFormula, ToolRequest, WriteCells,
-    WriteRequest,
+    Alignment, Borders, CreateWorkbook, Find, FormatChange, FormatRange, GenerateData,
+    GetSelection, ListSheets, ListWorkbooks, NumberFormatName, OpenWorkbook, ReadRange,
+    ReadRequest, SetFormula, ToolRequest, WriteCells, WriteRequest,
 };
 pub use write::{
     MAX_CELL_CHARS, MAX_FORMAT_CELLS, MAX_GENERATE_BYTES, MAX_GENERATE_CELLS, MAX_WRITE_CELLS,

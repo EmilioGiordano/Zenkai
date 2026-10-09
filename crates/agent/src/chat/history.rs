@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -6,6 +7,7 @@ use crate::settings::AgentId;
 
 const MAX_RECORDS: usize = 50;
 const MAX_TITLE_CHARS: usize = 80;
+const MAX_SESSIONS: usize = 500;
 
 // Metadata only: no message text is kept. It stands in for the agent's own session list when
 // the agent cannot list or load sessions, and a conversation resumed from it starts fresh on
@@ -31,6 +33,9 @@ pub enum HistoryError {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct History {
     records: Vec<Record>,
+    // Agent session ids this chat started, newest first.
+    #[serde(default)]
+    sessions: Vec<String>,
 }
 
 fn title_of(first_message: &str) -> String {
@@ -67,6 +72,18 @@ impl History {
         self.records.truncate(MAX_RECORDS);
     }
 
+    pub fn remember_session(&mut self, id: &str) {
+        if self.sessions.iter().any(|known| known == id) {
+            return;
+        }
+        self.sessions.insert(0, id.to_string());
+        self.sessions.truncate(MAX_SESSIONS);
+    }
+
+    pub fn started_sessions(&self) -> BTreeSet<String> {
+        self.sessions.iter().cloned().collect()
+    }
+
     pub fn load(path: &Path) -> Result<History, HistoryError> {
         match std::fs::read_to_string(path) {
             Ok(text) => serde_json::from_str(&text).map_err(HistoryError::Damaged),
@@ -99,6 +116,12 @@ impl History {
         self.records
             .sort_by_key(|record| std::cmp::Reverse(record.started_unix_seconds));
         self.records.truncate(MAX_RECORDS);
+        for id in loaded.sessions {
+            if !self.sessions.contains(&id) {
+                self.sessions.push(id);
+            }
+        }
+        self.sessions.truncate(MAX_SESSIONS);
     }
 
     pub fn save(&self, path: &Path) -> Result<(), HistoryError> {
@@ -190,6 +213,27 @@ mod tests {
         current.merge(older);
         let titles: Vec<&str> = current.records().iter().map(|r| r.title.as_str()).collect();
         assert_eq!(titles, ["new", "old"]);
+    }
+
+    #[test]
+    fn started_sessions_are_kept_once_and_merge_with_the_loaded_ones() {
+        let mut older = History::default();
+        older.remember_session("old");
+        let mut current = History::default();
+        current.remember_session("new");
+        current.remember_session("new");
+        current.merge(older);
+        let started = current.started_sessions();
+        assert_eq!(started.len(), 2);
+        assert!(started.contains("old") && started.contains("new"));
+    }
+
+    #[test]
+    fn a_history_written_before_sessions_were_kept_still_loads() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("history.json");
+        std::fs::write(&path, r#"{"records": []}"#).unwrap();
+        assert!(History::load(&path).unwrap().started_sessions().is_empty());
     }
 
     #[test]

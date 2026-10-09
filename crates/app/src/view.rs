@@ -22,6 +22,7 @@ use zenkai_types::{
 };
 
 mod agent_calls;
+mod agent_files;
 mod agent_review;
 mod chat_dock;
 mod settings_gate;

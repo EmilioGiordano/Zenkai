@@ -7,7 +7,7 @@ use gpui_kit::component::{ActiveTheme, Icon, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::chat::session::ChoiceKind;
-use zenkai_agent::chat::thread::{Entry, NoticeKind, ToolCard, ToolStatus, worked_label};
+use zenkai_agent::chat::thread::{Entry, FileCard, NoticeKind, ToolCard, ToolStatus, worked_label};
 use zenkai_i18n::t;
 
 use super::{ChatPanel, MONO};
@@ -82,7 +82,8 @@ impl ChatPanel {
         self.thread
             .entries()
             .iter()
-            .map(|entry| match entry {
+            .enumerate()
+            .map(|(index, entry)| match entry {
                 Entry::User(text) => user_bubble(text, cx).into_any_element(),
                 Entry::Worked { seconds } => worked_divider(*seconds, cx).into_any_element(),
                 Entry::Notice { kind, text } => notice(*kind, text, cx).into_any_element(),
@@ -95,8 +96,58 @@ impl ChatPanel {
                     None => div().child(text.clone()).into_any_element(),
                 },
                 Entry::Tool(card) => self.render_tool_card(card, cx).into_any_element(),
+                Entry::File(card) => self.render_file_card(index, card, cx).into_any_element(),
             })
             .collect()
+    }
+
+    fn render_file_card(
+        &self,
+        index: usize,
+        card: &FileCard,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        let path = card.path.clone();
+        h_flex()
+            .gap_2p5()
+            .items_center()
+            .px_3()
+            .py_2p5()
+            .rounded_lg()
+            .bg(theme.secondary)
+            .child(
+                Icon::new(IconName::Grid2x2)
+                    .size_4()
+                    .flex_shrink_0()
+                    .text_color(theme.success),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_0p5()
+                    .child(
+                        div()
+                            .truncate()
+                            .child(t!("chat.file.created", name = card.name.clone())),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(card.place.clone()),
+                    ),
+            )
+            .child(
+                Button::new(SharedString::from(format!("open-created-{index}")))
+                    .small()
+                    .label(t!("chat.file.open"))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_created(path.clone(), window, cx)
+                    })),
+            )
     }
 
     fn render_tool_card(&self, card: &ToolCard, cx: &mut Context<Self>) -> impl IntoElement {

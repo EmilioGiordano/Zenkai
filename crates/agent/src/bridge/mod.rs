@@ -16,7 +16,7 @@ pub use server::ZenkaiServer;
 
 use line_limit::LineLimited;
 
-use crate::tools::ToolEndpoint;
+use crate::tools::{ToolEndpoint, WorkingFolder};
 
 pub const PIPE_VARIABLE: &str = "ZENKAI_MCP_PIPE";
 pub const TOKEN_VARIABLE: &str = "ZENKAI_MCP_TOKEN";
@@ -92,7 +92,12 @@ fn listener_options(pipe: &str) -> std::io::Result<ListenerOptions<'static>> {
     Ok(options)
 }
 
-async fn serve_connection(stream: LocalSocketStream, token: String, endpoint: ToolEndpoint) {
+async fn serve_connection(
+    stream: LocalSocketStream,
+    token: String,
+    endpoint: ToolEndpoint,
+    folder: Option<WorkingFolder>,
+) {
     let (receive, send) = stream.split();
     let mut reader = BufReader::new(LineLimited::new(receive));
     let mut line = Vec::new();
@@ -106,7 +111,10 @@ async fn serve_connection(stream: LocalSocketStream, token: String, endpoint: To
         tracing::warn!("refused an MCP client without the session token");
         return;
     }
-    match (ZenkaiServer { endpoint }).serve((reader, send)).await {
+    match (ZenkaiServer { endpoint, folder })
+        .serve((reader, send))
+        .await
+    {
         Ok(service) => {
             if let Err(error) = service.waiting().await {
                 tracing::debug!(%error, "MCP client session ended with an error");
@@ -128,6 +136,7 @@ impl Bridge {
     pub fn start(
         endpoint: ToolEndpoint,
         endpoint_file: Option<&Path>,
+        folder: Option<WorkingFolder>,
     ) -> Result<Bridge, BridgeError> {
         let address = BridgeAddress::random()?;
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -136,7 +145,7 @@ impl Bridge {
         let token = address.token.clone();
         std::thread::Builder::new()
             .name("mcp-bridge".to_string())
-            .spawn(move || run(pipe, token, endpoint, stopped, ready))
+            .spawn(move || run(pipe, token, endpoint, folder, stopped, ready))
             .map_err(BridgeError::Start)?;
         started
             .recv()
@@ -163,6 +172,7 @@ fn run(
     pipe: String,
     token: String,
     endpoint: ToolEndpoint,
+    folder: Option<WorkingFolder>,
     mut stopped: tokio::sync::oneshot::Receiver<()>,
     ready: std::sync::mpsc::Sender<std::io::Result<()>>,
 ) {
@@ -196,7 +206,12 @@ fn run(
                 _ = &mut stopped => break,
                 accepted = listener.accept() => match accepted {
                     Ok(stream) => {
-                        tokio::spawn(serve_connection(stream, token.clone(), endpoint.clone()));
+                        tokio::spawn(serve_connection(
+                            stream,
+                            token.clone(),
+                            endpoint.clone(),
+                            folder.clone(),
+                        ));
                     }
                     Err(error) => tracing::warn!(%error, "MCP bridge could not accept a client"),
                 },

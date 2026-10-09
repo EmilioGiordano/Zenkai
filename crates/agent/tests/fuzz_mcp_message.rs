@@ -61,6 +61,11 @@ fn messages() -> Vec<Value> {
             "generate_data",
             json!({ "workbook": 1, "sheet": "Sheet1", "start": "A1", "spec": { "rows": 3, "locale": "en-US", "seed": 7, "columns": [{ "header": "Id", "kind": { "type": "sequential_id" } }] } }),
         ),
+        call(
+            "create_workbook",
+            json!({ "path": "reports/budget.xlsx", "sheets": ["Income", "Expenses"] }),
+        ),
+        call("open_workbook", json!({ "path": "sales.xlsx" })),
     ]
 }
 
@@ -72,8 +77,11 @@ fn handle(bytes: &[u8]) {
         && let ClientRequest::CallToolRequest(call) = request.request
     {
         let params = call.params;
-        match parse_call(&params.name, params.arguments) {
-            Ok(_) | Err(CallError::UnknownTool(_) | CallError::Arguments { .. }) => {}
+        match parse_call(&params.name, params.arguments, None) {
+            Ok(_)
+            | Err(
+                CallError::UnknownTool(_) | CallError::Arguments { .. } | CallError::Refused(_),
+            ) => {}
         }
     }
 }
@@ -84,7 +92,7 @@ fn every_baseline_message_is_understood() {
         let parsed = serde_json::from_value::<ClientJsonRpcMessage>(message.clone());
         assert!(parsed.is_ok(), "{message}");
     }
-    assert_eq!(tools().len(), 9);
+    assert_eq!(tools().len(), 11);
 }
 
 proptest! {
@@ -114,7 +122,7 @@ proptest! {
         bytes in prop::sample::select(messages()).prop_flat_map(json_mutation::mutated),
     ) {
         if let Ok(Value::Object(arguments)) = serde_json::from_slice::<Value>(&bytes) {
-            let _ = parse_call(&name, Some(arguments));
+            let _ = parse_call(&name, Some(arguments), None);
         }
     }
 }

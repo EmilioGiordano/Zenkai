@@ -15,10 +15,11 @@ impl ChatPanel {
         self.link = Link::Preparing;
         let epoch = self.epoch;
         let settings = cx.global::<AgentConfig>().state.current.clone();
+        let hint = self.folder_hint(cx);
         cx.spawn_in(window, async move |this, cx| {
             let planned = cx
                 .background_executor()
-                .spawn(async move { launch::plan_launch(&settings) })
+                .spawn(async move { launch::plan_launch(&settings, &hint) })
                 .await;
             closed(this.update_in(cx, |this, window, cx| {
                 this.planned(epoch, planned, window, cx)
@@ -94,6 +95,7 @@ impl ChatPanel {
             handle,
             agent: prepared.id,
             ready: false,
+            folder: prepared.folder,
             _bridge: armed.bridge,
         });
         self.link = Link::Starting;

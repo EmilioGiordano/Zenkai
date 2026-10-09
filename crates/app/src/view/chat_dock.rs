@@ -1,8 +1,12 @@
+use std::path::{Path, PathBuf};
+
 use gpui_kit::*;
+use zenkai_agent::chat::thread::FileCard;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
+use crate::agent_folder::FolderHint;
 use crate::chat::{ChatEvent, ChatPanel, reference};
 
 #[derive(Default)]
@@ -16,6 +20,45 @@ impl Workspace {
     pub(crate) fn active_workbook_for_chat(&self) -> Option<(WorkbookId, String)> {
         let document = self.documents.active()?;
         Some((document.id, document.name()))
+    }
+
+    pub(crate) fn add_chat_card(&mut self, card: FileCard, cx: &mut Context<Self>) {
+        if let Some(panel) = self.chat.panel.clone() {
+            panel.update(cx, |panel, cx| panel.file_created(card, cx));
+        }
+    }
+
+    pub(crate) fn open_from_chat(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_path(path, window, cx);
+    }
+
+    pub(crate) fn selection_for_chat(&self, cx: &App) -> Option<String> {
+        let document = self.documents.active()?;
+        let sheet = document
+            .sheets
+            .iter()
+            .find(|info| info.id == document.sheet)?;
+        Some(reference::sheet_range(&sheet.name, self.selection(cx)))
+    }
+
+    pub(crate) fn folder_hint_for_chat(&self) -> FolderHint {
+        let space = self.documents.current_space();
+        FolderHint {
+            space_files: self
+                .documents
+                .members(space)
+                .filter_map(|entry| entry.path().map(Path::to_path_buf))
+                .collect(),
+            active_file: self
+                .documents
+                .active()
+                .and_then(|document| document.path.clone()),
+        }
     }
 
     fn chat_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ChatPanel> {

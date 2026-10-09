@@ -2,6 +2,7 @@ mod cards;
 mod composer;
 mod events;
 mod extras;
+mod files;
 mod header;
 mod launch;
 mod permissions;
@@ -14,7 +15,7 @@ mod startup;
 mod transcript;
 
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::text::TextViewState;
@@ -93,6 +94,8 @@ pub struct ChatPanel {
     gate: Option<Gate>,
     problem: Option<Problem>,
     turn_started: Option<Instant>,
+    // Wall-clock start of the turn, to find the files the agent wrote during it.
+    turn_began: Option<SystemTime>,
     state: AgentState,
     history: History,
     history_saves: async_channel::Sender<History>,
@@ -123,6 +126,26 @@ fn plain_name(name: &str) -> String {
         .filter(|c| !c.is_control() && *c != '"')
         .take(MAX_NAME_CHARS)
         .collect()
+}
+
+fn context_line(workbook: Option<(WorkbookId, String)>, selection: Option<&str>) -> String {
+    let Some((id, name)) = workbook else {
+        return format!(
+            "{CONTEXT_MARKER} No workbook is open. New workbooks are made with create_workbook."
+        );
+    };
+    let mut line = format!(
+        "{CONTEXT_MARKER} The user is looking at the workbook \"{}\" (workbook id {})",
+        plain_name(&name),
+        id.0
+    );
+    if let Some(selection) = selection {
+        line.push_str(&format!(", selection {}", plain_name(selection)));
+    }
+    line.push_str(
+        ". Other open workbooks are listed by list_workbooks; address any of them by id.",
+    );
+    line
 }
 
 impl ChatPanel {
@@ -176,6 +199,7 @@ impl ChatPanel {
             gate: None,
             problem: None,
             turn_started: None,
+            turn_began: None,
             state: AgentState::default(),
             history: History::default(),
             history_saves,
@@ -216,14 +240,19 @@ impl ChatPanel {
             .flatten()
     }
 
+    fn folder_hint(&self, cx: &App) -> crate::agent_folder::FolderHint {
+        self.workspace
+            .read_with(cx, |workspace, _| workspace.folder_hint_for_chat())
+            .unwrap_or_default()
+    }
+
     pub(super) fn prompt_context(&self, cx: &App) -> Option<String> {
-        let (id, name) = self.active_workbook(cx)?;
-        Some(format!(
-            "{CONTEXT_MARKER} The user is looking at the workbook \"{}\" (workbook id {}). Other open \
-             workbooks are listed by list_workbooks; address any of them by id.",
-            plain_name(&name),
-            id.0
-        ))
+        let selection = self
+            .workspace
+            .read_with(cx, |workspace, cx| workspace.selection_for_chat(cx))
+            .ok()
+            .flatten();
+        Some(context_line(self.active_workbook(cx), selection.as_deref()))
     }
 
     pub(super) fn at_bottom(&self) -> bool {
@@ -243,6 +272,7 @@ impl ChatPanel {
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.turn_started = Some(Instant::now());
+        self.turn_began = Some(SystemTime::now());
         self.problem = None;
         self.view = View::Chat;
         self.menu = None;
@@ -335,7 +365,26 @@ impl ChatPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::plain_name;
+    use zenkai_types::WorkbookId;
+
+    use super::{context_line, plain_name};
+
+    #[test]
+    fn the_context_names_the_workbook_sheet_and_selection() {
+        let line = context_line(
+            Some((WorkbookId(3), "Ventas.xlsx".to_string())),
+            Some("'Cash flow'!A5:B11"),
+        );
+        assert!(line.starts_with("[Zenkai] "));
+        assert!(line.contains("\"Ventas.xlsx\" (workbook id 3)"), "{line}");
+        assert!(line.contains("selection 'Cash flow'!A5:B11"), "{line}");
+    }
+
+    #[test]
+    fn without_a_workbook_the_context_says_so() {
+        let line = context_line(None, None);
+        assert!(line.contains("No workbook is open"), "{line}");
+    }
 
     #[test]
     fn a_file_name_loses_quotes_and_control_characters_before_an_agent_reads_it() {

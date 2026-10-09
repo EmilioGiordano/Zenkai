@@ -66,7 +66,7 @@ fn read_link(link: &Link) -> LinkLoad {
     }
 }
 
-fn failure_text(failure: &LoadFailure) -> String {
+pub(super) fn failure_text(failure: &LoadFailure) -> String {
     match failure {
         LoadFailure::Missing => t!("open.not_found").to_string(),
         LoadFailure::Engine(error) => error.to_string(),

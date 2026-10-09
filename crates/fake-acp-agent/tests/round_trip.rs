@@ -23,6 +23,10 @@ struct Running {
 }
 
 fn config(mode: &str, extra_env: &[(&str, String)]) -> SessionConfig {
+    config_in(mode, extra_env, std::env::temp_dir())
+}
+
+fn config_in(mode: &str, extra_env: &[(&str, String)], folder: PathBuf) -> SessionConfig {
     let mut env = vec![("FAKE_ACP_MODE".to_string(), mode.to_string())];
     env.extend(extra_env.iter().map(|(k, v)| (k.to_string(), v.clone())));
     SessionConfig {
@@ -30,6 +34,7 @@ fn config(mode: &str, extra_env: &[(&str, String)]) -> SessionConfig {
             program: PathBuf::from(env!("CARGO_BIN_EXE_zenkai-fake-acp-agent")),
             args: Vec::new(),
         },
+        folder,
         env,
         relay: Some(McpRelay {
             program: PathBuf::from("zenkai-mcp.exe"),
@@ -191,29 +196,61 @@ fn stop_cancels_a_turn_in_progress() {
 }
 
 #[test]
-fn the_session_runs_in_an_empty_folder_and_passes_only_the_zenkai_tools_and_no_capabilities() {
-    let session = launch(config("normal", &[]));
+fn the_session_runs_in_the_given_folder_keeps_it_and_passes_only_the_zenkai_tools() {
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(folder.path().join("ventas.xlsx"), b"user data").unwrap();
+    let session = launch(config_in("normal", &[], folder.path().to_path_buf()));
     // The fake agent refuses to initialize when file-system or terminal access is advertised,
     // so reaching Ready proves none was.
     session.ready();
     session.handle.prompt("echo".to_string(), None);
     let (text, _) = session.text_until_turn_end();
-    assert!(text.contains("empty true"), "{text}");
+    assert!(
+        text.contains(&format!("cwd {} empty false", folder.path().display())),
+        "{text}"
+    );
     assert!(
         text.contains("mcp zenkai env ZENKAI_MCP_PIPE+ZENKAI_MCP_TOKEN"),
         "{text}"
     );
-    let folder = text
-        .split("cwd ")
-        .nth(1)
-        .and_then(|rest| rest.split(" empty").next())
-        .unwrap()
-        .to_string();
+    // The session also carries the prompt in `_meta` for agents that read it there.
+    assert!(text.contains("prompt in meta true"), "{text}");
     session.close();
-    assert!(
-        !PathBuf::from(folder).exists(),
-        "work folder was not removed"
+    assert!(folder.path().join("ventas.xlsx").is_file());
+}
+
+#[test]
+fn an_agent_without_a_session_prompt_reads_it_once_in_the_first_message() {
+    let session = launch(config("normal", &[]));
+    session.ready();
+    session.handle.prompt(
+        "echo".to_string(),
+        Some("[Zenkai] The user is looking at Ventas".to_string()),
     );
+    let (first, _) = session.text_until_turn_end();
+    assert!(
+        first.contains("You are an assistant inside Zenkai"),
+        "{first}"
+    );
+    assert!(first.contains("The user is looking at Ventas"), "{first}");
+    session.handle.prompt("echo".to_string(), None);
+    let (second, _) = session.text_until_turn_end();
+    assert!(
+        !second.contains("You are an assistant inside Zenkai"),
+        "{second}"
+    );
+    session.close();
+}
+
+#[test]
+fn a_new_session_reports_its_id_so_the_chat_can_list_it_later() {
+    let session = launch(config("normal", &[]));
+    let id = session.until(|event| match event {
+        SessionEvent::Started(id) => Some(id),
+        _ => None,
+    });
+    assert_eq!(id, "session-1");
+    session.close();
 }
 
 #[test]
@@ -354,7 +391,11 @@ fn context_usage_arrives_after_a_turn() {
 fn past_sessions_are_listed_and_one_can_be_resumed_with_its_history() {
     let session = launch(config("normal", &[]));
     session.ready();
-    session.handle.list_sessions();
+    let started = ["old-1", "old-2", "unknown"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    session.handle.list_sessions(started);
     let listed = session.state_until(|state| !state.past_sessions.is_empty());
     let titles: Vec<Option<&str>> = listed
         .past_sessions

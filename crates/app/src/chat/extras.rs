@@ -114,7 +114,7 @@ impl ChatPanel {
             && let Some(live) = &self.live
             && live.ready
         {
-            live.handle.list_sessions();
+            live.handle.list_sessions(self.history.started_sessions());
         }
         cx.notify();
     }

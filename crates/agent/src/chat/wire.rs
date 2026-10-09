@@ -9,6 +9,32 @@ use crate::chat::state::{
     SlashCommand,
 };
 
+// Modes in which the agent stops asking before it writes outside its folder or runs commands
+// (Claude's bypass and classifier modes, Codex's full access, Gemini's yolo). The chat never
+// offers them, so every write outside the folder and every command reaches the user.
+const UNGUARDED_MODES: [&str; 4] = ["bypassPermissions", "auto", "full-access", "yolo"];
+
+fn offered(kind: ConfigKind, value: &str) -> bool {
+    kind != ConfigKind::Mode || !UNGUARDED_MODES.contains(&value)
+}
+
+// A session that starts in an unguarded mode (from the user's own agent settings) is moved
+// to the first mode the chat offers.
+pub fn leave_unguarded_mode(selects: &[Select]) -> Option<(ConfigId, ConfigSource, String)> {
+    let mode = selects
+        .iter()
+        .find(|select| select.kind == ConfigKind::Mode)?;
+    if mode
+        .choices
+        .iter()
+        .any(|choice| choice.value == mode.current)
+    {
+        return None;
+    }
+    let safe = mode.choices.first()?;
+    Some((mode.id.clone(), mode.source, safe.value.clone()))
+}
+
 fn kind_of(option: &SessionConfigOption) -> ConfigKind {
     match &option.category {
         Some(SessionConfigOptionCategory::Mode) => ConfigKind::Mode,
@@ -41,14 +67,16 @@ pub fn selects_from_options(options: &[SessionConfigOption]) -> Vec<Select> {
                     .collect::<Vec<_>>(),
                 _ => Vec::new(),
             };
+            let kind = kind_of(option);
             Some(Select {
                 id: ConfigId::new(&*option.id.0),
                 label: option.name.clone(),
-                kind: kind_of(option),
+                kind,
                 source: ConfigSource::ConfigOption,
                 current: select.current_value.0.to_string(),
                 choices: flat
                     .into_iter()
+                    .filter(|choice| offered(kind, &choice.value.0))
                     .map(|choice| Choice {
                         value: choice.value.0.to_string(),
                         label: choice.name.clone(),
@@ -70,6 +98,7 @@ pub fn select_from_modes(modes: &SessionModeState) -> Select {
         choices: modes
             .available_modes
             .iter()
+            .filter(|mode| offered(ConfigKind::Mode, &mode.id.0))
             .map(|mode| Choice {
                 value: mode.id.0.to_string(),
                 label: mode.name.clone(),
@@ -127,5 +156,49 @@ pub fn past_session(info: &SessionInfo) -> PastSession {
         id: info.session_id.0.to_string(),
         title: info.title.clone(),
         updated_at: info.updated_at.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use agent_client_protocol::schema::v1::SessionMode;
+
+    use super::*;
+
+    fn claude_modes(current: &str) -> SessionModeState {
+        SessionModeState::new(
+            current.to_string(),
+            [
+                "default",
+                "acceptEdits",
+                "plan",
+                "auto",
+                "bypassPermissions",
+            ]
+            .into_iter()
+            .map(|id| SessionMode::new(id, id))
+            .collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn modes_that_never_ask_are_not_offered() {
+        let select = select_from_modes(&claude_modes("default"));
+        let offered: Vec<&str> = select.choices.iter().map(|c| c.value.as_str()).collect();
+        assert_eq!(offered, ["default", "acceptEdits", "plan"]);
+        assert_eq!(leave_unguarded_mode(&[select]), None);
+    }
+
+    #[test]
+    fn a_session_that_starts_unguarded_moves_to_the_first_offered_mode() {
+        let select = select_from_modes(&claude_modes("auto"));
+        assert_eq!(
+            leave_unguarded_mode(&[select]),
+            Some((
+                ConfigId::new("mode"),
+                ConfigSource::LegacyMode,
+                "default".to_string()
+            ))
+        );
     }
 }

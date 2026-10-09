@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 async-channel = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+dirs = "=6.0.0"
 gpui-kit = "=0.7.1"
 memory-stats = "1"
 serde = { version = "1", features = ["derive"] }
