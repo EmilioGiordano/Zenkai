@@ -1788,6 +1788,10 @@ impl Workspace {
                 (height, width)
             }
         };
+        let cut_source = internal
+            .as_ref()
+            .filter(|clip| clip.cut)
+            .map(|clip| clip.range);
         if let Some(clip) = internal {
             let keep = (!clip.cut).then(|| clip.clone());
             self.edit(window, cx, move |wb| {
@@ -1800,6 +1804,10 @@ impl Workspace {
             origin.row.offset(i64::from(height.saturating_sub(1))),
             origin.col.offset(i64::from(width.saturating_sub(1))),
         );
+        self.forget_review_range(sheet, Range::new(origin, end), cx);
+        if let Some(source) = cut_source {
+            self.forget_review_range(sheet, source, cx);
+        }
         self.grid.update(cx, |grid, cx| {
             grid.set_marquee(None, cx);
             grid.select(origin, end, cx);
@@ -1847,6 +1855,7 @@ impl Workspace {
             origin.row.offset(height.saturating_sub(1)),
             origin.col.offset(width.saturating_sub(1)),
         );
+        self.forget_review_range(sheet, Range::new(origin, end), cx);
         self.grid.update(cx, |grid, cx| {
             grid.set_marquee(None, cx);
             grid.select(origin, end, cx);
@@ -2165,6 +2174,7 @@ impl Workspace {
             );
             return;
         }
+        self.forget_review_range(sheet, range, cx);
         self.edit(window, cx, move |wb| wb.sort(sheet, range, key, descending));
     }
 

@@ -3,13 +3,12 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
 use zenkai_agent::tools::{shown_entry, shown_text};
-use zenkai_engine::Engine;
 use zenkai_grid::PENDING_COLOR;
 use zenkai_types::{CellRef, Range, SheetId, WorkbookId};
 
 use super::Workspace;
 use crate::actions::*;
-use crate::agent_review::{CellChange, restore_blocks};
+use crate::agent_review::{CellChange, reject_unchanged};
 
 const POPOVER_WIDTH: f32 = 300.0;
 
@@ -183,11 +182,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if resolution == Resolution::Reject && !changes.is_empty() {
-            let blocks = restore_blocks(&changes);
             self.edit(window, cx, move |workbook| {
-                blocks.iter().try_for_each(|block| {
-                    workbook.set_inputs(block.sheet, block.origin, &block.rows)
-                })
+                reject_unchanged(workbook, &changes)
             });
         }
         self.sync_review_marks(cx);
@@ -214,6 +210,12 @@ impl Workspace {
         let batch = document.review.current()?;
         let position = document.review.position()?;
         let total = batch.cells().len();
+        let writes = document.review.batch_count();
+        let progress = if writes > 1 {
+            format!("{position} of {total}, {writes} writes waiting")
+        } else {
+            format!("{position} of {total}")
+        };
         let theme = cx.theme();
         let amber: Hsla = rgb(PENDING_COLOR).into();
         Some(
@@ -253,7 +255,7 @@ impl Workspace {
                     div()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child(format!("{position} of {total}")),
+                        .child(progress),
                 )
                 .child(
                     Button::new("review-previous")
@@ -293,9 +295,9 @@ impl Workspace {
             sheet: document.sheet,
             pos: grid.selection().active,
         };
-        let change = document.review.find(cell)?;
+        let (batch, change) = document.review.find(cell)?;
         let corner = grid.active_cell_corner()?;
-        let agent = document.review.current().map(|batch| batch.agent.clone())?;
+        let agent = batch.agent.clone();
         let theme = cx.theme();
         Some(
             v_flex()

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use zenkai_engine::{Engine, Workbook};
+use zenkai_engine::{Engine, EngineError, Workbook};
 use zenkai_types::{CellPos, CellRef, Range, SheetId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,7 +22,19 @@ impl Batch {
     pub fn cells(&self) -> &[CellChange] {
         &self.cells
     }
+
+    fn bytes(&self) -> usize {
+        self.cells
+            .iter()
+            .map(|change| change.old.len() + change.new.len())
+            .sum()
+    }
 }
+
+// A write holds at most 5,000 cells (MAX_WRITE_CELLS), so 64 MiB keeps every old and new
+// input of several typical writes (a few dozen bytes per cell) while bounding the worst
+// case of long texts; past it the oldest writes are kept automatically.
+pub const MAX_REVIEW_BYTES: usize = 64 * 1024 * 1024;
 
 fn row_major(change: &CellChange) -> (SheetId, u32, u16) {
     (
@@ -34,13 +46,32 @@ fn row_major(change: &CellChange) -> (SheetId, u32, u16) {
 
 // What the agents changed and the user has not decided on yet, oldest write first. The bar
 // works on the oldest batch; a cell written again moves to the newer batch.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Review {
     batches: Vec<Batch>,
     cursor: usize,
+    budget: usize,
+}
+
+impl Default for Review {
+    fn default() -> Review {
+        Review::with_budget(MAX_REVIEW_BYTES)
+    }
 }
 
 impl Review {
+    pub fn with_budget(budget: usize) -> Review {
+        Review {
+            batches: Vec::new(),
+            cursor: 0,
+            budget,
+        }
+    }
+
+    pub fn batch_count(&self) -> usize {
+        self.batches.len()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.batches.is_empty()
     }
@@ -78,13 +109,20 @@ impl Review {
             description,
             cells,
         });
+        while self.batches.iter().map(Batch::bytes).sum::<usize>() > self.budget {
+            self.batches.remove(0);
+            self.cursor = 0;
+        }
     }
 
-    pub fn find(&self, cell: CellRef) -> Option<&CellChange> {
-        self.batches
-            .iter()
-            .flat_map(|batch| &batch.cells)
-            .find(|change| change.cell == cell)
+    pub fn find(&self, cell: CellRef) -> Option<(&Batch, &CellChange)> {
+        self.batches.iter().find_map(|batch| {
+            batch
+                .cells
+                .iter()
+                .find(|change| change.cell == cell)
+                .map(|change| (batch, change))
+        })
     }
 
     pub fn marks(&self, sheet: SheetId) -> HashSet<CellPos> {
@@ -203,6 +241,22 @@ impl RestoreBlock {
     fn last_row(&self) -> u32 {
         self.origin.row.get() + self.rows.len() as u32 - 1
     }
+}
+
+// A cell that no longer holds what the agent wrote (changed since by anything the review
+// did not see) is left alone.
+pub fn reject_unchanged(
+    workbook: &mut Workbook,
+    changes: &[CellChange],
+) -> Result<(), EngineError> {
+    let still_written: Vec<CellChange> = changes
+        .iter()
+        .filter(|change| workbook.input(change.cell.sheet, change.cell.pos) == change.new)
+        .cloned()
+        .collect();
+    restore_blocks(&still_written)
+        .iter()
+        .try_for_each(|block| workbook.set_inputs(block.sheet, block.origin, &block.rows))
 }
 
 // The old inputs back as few rectangles as possible, so each is one engine paste and one
@@ -383,7 +437,7 @@ mod tests {
             vec![change("A1", "2", "9"), change("C1", "", "x")],
         );
         assert_eq!(review.current().unwrap().cells().len(), 2);
-        assert_eq!(review.find(cell("A1")).unwrap().new, "9");
+        assert_eq!(review.find(cell("A1")).unwrap().1.new, "9");
         review.take_all();
         assert_eq!(review.current().unwrap().agent, "Codex");
     }
@@ -465,5 +519,68 @@ mod tests {
         assert_eq!(workbook.input(sheet.id, cell("B3").pos), "b");
         workbook.undo().unwrap();
         assert_eq!(workbook.input(sheet.id, cell("B3").pos), "y");
+    }
+
+    #[test]
+    fn a_cell_names_the_batch_that_owns_it() {
+        let mut review = three();
+        review.record(
+            "Codex".into(),
+            "Sales".into(),
+            "Write".into(),
+            vec![change("A1", "2", "9")],
+        );
+        assert_eq!(review.find(cell("A1")).unwrap().0.agent, "Codex");
+        assert_eq!(review.find(cell("B1")).unwrap().0.agent, "Claude Code");
+    }
+
+    #[test]
+    fn reject_leaves_a_cell_that_is_no_longer_what_the_agent_wrote() {
+        let mut workbook = Workbook::new_empty().unwrap();
+        let sheet = workbook.sheets().remove(0).id;
+        let rows = vec![vec!["a".to_string(), "b".to_string()]];
+        workbook.set_inputs(sheet, cell("A1").pos, &rows).unwrap();
+        let changes = vec![change("A1", "a", "x"), change("B1", "b", "y")];
+        let rows = vec![vec!["x".to_string(), "y".to_string()]];
+        workbook.set_inputs(sheet, cell("A1").pos, &rows).unwrap();
+        workbook
+            .set_input(sheet, cell("B1").pos, "by hand")
+            .unwrap();
+        reject_unchanged(&mut workbook, &changes).unwrap();
+        assert_eq!(workbook.input(sheet, cell("A1").pos), "a");
+        assert_eq!(workbook.input(sheet, cell("B1").pos), "by hand");
+    }
+
+    #[test]
+    fn the_oldest_writes_are_kept_when_the_budget_is_exceeded() {
+        let mut review = Review::with_budget(8);
+        review.record(
+            "A".into(),
+            "S".into(),
+            "w".into(),
+            vec![change("A1", "ab", "cd")],
+        );
+        review.record(
+            "B".into(),
+            "S".into(),
+            "w".into(),
+            vec![change("A2", "ef", "gh")],
+        );
+        assert_eq!(review.batch_count(), 2);
+        review.record(
+            "C".into(),
+            "S".into(),
+            "w".into(),
+            vec![change("A3", "i", "j")],
+        );
+        assert_eq!(review.batch_count(), 2);
+        assert_eq!(review.current().unwrap().agent, "B");
+        review.record(
+            "D".into(),
+            "S".into(),
+            "w".into(),
+            vec![change("A4", "klmno", "pqrst")],
+        );
+        assert_eq!(review.batch_count(), 0);
     }
 }
