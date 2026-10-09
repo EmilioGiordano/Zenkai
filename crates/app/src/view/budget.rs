@@ -42,7 +42,7 @@ impl Workspace {
             .map(|document| Candidate {
                 id: document.id,
                 last_used: document.last_used,
-                idle: document.id != active
+                idle: Some(document.id) != active
                     && Some(document.id) != wanted
                     && Some(document.id) != awaiting_approval
                     && document.can_unload(),

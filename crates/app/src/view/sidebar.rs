@@ -93,7 +93,7 @@ impl Workspace {
         }
         self.sidebar.visible = true;
         if self.sidebar.cursor.is_none() {
-            self.sidebar.cursor = Some(Row::File(self.documents.active_id()));
+            self.sidebar.cursor = self.documents.active_id().map(Row::File);
         }
         window.focus(&self.sidebar.focus, cx);
         cx.notify();
@@ -123,10 +123,12 @@ impl Workspace {
 
     pub(super) fn delete_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = match self.sidebar.cursor {
-            Some(Row::File(id)) => id,
+            Some(Row::File(id)) => Some(id),
             _ => self.documents.active_id(),
         };
-        self.delete_file_of(id, window, cx);
+        if let Some(id) = id {
+            self.delete_file_of(id, window, cx);
+        }
     }
 
     // Never deletes for good: the file goes to the Recycle Bin, then its workbook is closed.
@@ -186,7 +188,7 @@ impl Workspace {
     pub(super) fn cycle_space_color(&mut self, cx: &mut Context<Self>) {
         let target = self
             .sidebar_cursor_space()
-            .unwrap_or_else(|| self.documents.active().space);
+            .unwrap_or_else(|| self.documents.current_space());
         let Some(current) = self.documents.spaces().get(target).map(|space| space.color) else {
             return;
         };
@@ -254,7 +256,7 @@ impl Workspace {
     pub(super) fn rename_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target = self
             .sidebar_cursor_space()
-            .unwrap_or_else(|| self.documents.active().space);
+            .unwrap_or_else(|| self.documents.current_space());
         self.sidebar.visible = true;
         self.begin_space_rename(target, window, cx);
     }
@@ -300,7 +302,7 @@ impl Workspace {
     pub(super) fn delete_space(&mut self, cx: &mut Context<Self>) {
         let target = self
             .sidebar_cursor_space()
-            .unwrap_or_else(|| self.documents.active().space);
+            .unwrap_or_else(|| self.documents.current_space());
         let count = self.documents.members(target).count();
         if !self.documents.delete_space(target) {
             self.notify(Severity::Warning, "At least one space is needed.", cx);
@@ -327,8 +329,11 @@ impl Workspace {
 
     pub(super) fn shift_document(&mut self, side: Neighbour, cx: &mut Context<Self>) {
         let id = match self.sidebar.cursor {
-            Some(Row::File(id)) => id,
+            Some(Row::File(id)) => Some(id),
             _ => self.documents.active_id(),
+        };
+        let Some(id) = id else {
+            return;
         };
         if self.documents.shift_space(id, side) {
             self.sidebar.cursor = Some(Row::File(id));

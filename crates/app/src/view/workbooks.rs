@@ -6,7 +6,7 @@ use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{Unsupported, Workbook, open_xlsx};
 use zenkai_types::WorkbookId;
 
-use super::{Severity, Workspace, empty_workbook, file_label};
+use super::{Severity, Workspace, file_label};
 use crate::document::Document;
 use crate::documents::{Installed, Intent, Loaded, Step};
 use crate::entry::{Entry, Link, LinkStatus};
@@ -116,7 +116,7 @@ impl Workspace {
                 self.documents.want(id, Intent::Switch);
                 self.begin_load(id, window, cx);
             }
-            Some(Entry::Loaded(_)) if id == self.documents.active_id() => {
+            Some(Entry::Loaded(_)) if self.documents.active_id() == Some(id) => {
                 self.documents.activate(id);
             }
             Some(Entry::Loaded(_)) => {
@@ -133,10 +133,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.documents.len() < 2 {
+        let Some(id) = self.documents.step(step) else {
+            return;
+        };
+        if self.documents.active_id() == Some(id) {
             return;
         }
-        let id = self.documents.step(step);
         self.switch_to(id, window, cx);
         let name = self
             .documents
@@ -155,12 +157,17 @@ impl Workspace {
     // Everything tied to the workbook on screen is put away or dropped: a pending copy,
     // the Format Cells dialog and open bars would otherwise act on the next one.
     pub(super) fn park_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(sheet) = self.active_sheet() else {
+            return;
+        };
         self.close_formula_bar(true, window, cx);
         if let Some((pos, text)) = self.grid.update(cx, |grid, cx| grid.take_edit(cx)) {
-            self.commit_text(self.documents.active().sheet, pos, text, window, cx);
+            self.commit_text(sheet, pos, text, window, cx);
         }
         let view = self.grid.read(cx).view_state();
-        self.documents.active_mut().view = view;
+        if let Some(document) = self.documents.active_mut() {
+            document.view = view;
+        }
         self.clipboard_source = None;
         self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
         self.format_dialog = None;
@@ -170,7 +177,10 @@ impl Workspace {
     }
 
     pub(super) fn present_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let view = self.documents.active().view;
+        let Some(view) = self.documents.active().map(|document| document.view) else {
+            self.show_empty(window, cx);
+            return;
+        };
         self.forget_find_results();
         let sheet = self.sheet_view();
         self.grid.update(cx, |grid, cx| {
@@ -179,13 +189,23 @@ impl Workspace {
         });
         self.sync_pending_highlight(cx);
         self.refresh_cells(cx);
-        window.set_window_title(&self.documents.active().title());
+        window.set_window_title(&self.window_title());
         let focus = self.grid.focus_handle(cx);
         window.focus(&focus, cx);
     }
 
+    fn show_empty(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.stats = None;
+        self.forget_find_results();
+        window.set_window_title(&self.window_title());
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
     pub(super) fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_document(self.documents.active_id(), window, cx);
+        if let Some(id) = self.documents.active_id() {
+            self.close_document(id, window, cx);
+        }
     }
 
     pub(super) fn close_document(
@@ -195,7 +215,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // Typing in the cell or the formula bar counts as an edit of the document being closed.
-        if id == self.documents.active_id() {
+        if self.documents.active_id() == Some(id) {
             self.park_active(window, cx);
         }
         let Some(entry) = self.documents.entry(id) else {
@@ -241,7 +261,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let was_active = id == self.documents.active_id();
+        let was_active = self.documents.active_id() == Some(id);
         if was_active {
             self.park_active(window, cx);
         }
@@ -260,7 +280,7 @@ impl Workspace {
                 .spawn(async move { recovery::remove_with_lock(&file) })
                 .detach();
         }
-        self.documents.close(id, empty_workbook);
+        self.documents.close(id);
         self.refuse_orphaned_agent_change(window, cx);
         if was_active {
             self.present_active(window, cx);
@@ -331,7 +351,9 @@ impl Workspace {
     }
 
     fn announce_opened(&mut self, started: Option<Instant>, cx: &mut Context<Self>) {
-        let document = self.documents.active();
+        let Some(document) = self.documents.active() else {
+            return;
+        };
         if document.read_only {
             self.notify(
                 Severity::Warning,

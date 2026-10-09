@@ -30,7 +30,8 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
 - Search (Ctrl+E, which replaces Excel's Flash Fill): workbooks in your spaces, recent files and
   the sheets of open workbooks.
 - Several workbooks open at once: Ctrl+Tab / Ctrl+Shift+Tab switch, Ctrl+W closes (asking about
-  unsaved changes), Ctrl+Shift+T reopens the last closed one.
+  unsaved changes), Ctrl+Shift+T reopens the last closed one. Closing the last workbook leaves
+  Zenkai open with a start view (New, Open, recent files), as Excel does; Ctrl+W is then a no-op.
 - Toolbar, editable formula bar, sheet tabs, status bar with
   Average/Sum/Count of the selection.
 - Live chart of the selection (Alt+F1): column, line or pie, export as SVG or copy as

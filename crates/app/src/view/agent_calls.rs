@@ -148,7 +148,7 @@ impl Workspace {
             .find(|info| info.id == document.sheet)
             .map(|info| info.name.clone())
             .ok_or_else(|| ToolError::UnknownSheet(format!("#{}", document.sheet.0 + 1)))?;
-        let range = if id == self.documents.active_id() {
+        let range = if self.documents.active_id() == Some(id) {
             self.selection(cx)
         } else {
             document.view.selection.range()
@@ -229,7 +229,7 @@ impl Workspace {
         let document = agent_routing::target(&self.documents, id)?;
         agent_routing::access(document, Self::permission(cx)).check_write()?;
         // An agent write landing under the user's typing would mix the two edits.
-        if id == self.documents.active_id() && self.user_is_editing(cx) {
+        if self.documents.active_id() == Some(id) && self.user_is_editing(cx) {
             return Err(ToolError::UserEditing);
         }
         tools::plan_write(request, &document.sheets)
@@ -388,8 +388,8 @@ impl Workspace {
             .documents
             .get(pending.id)
             .map_or_else(|| "a closed workbook".to_string(), Document::name);
-        let on_screen = self.documents.active_id() == pending.id
-            && self.documents.active().sheet == pending.plan.sheet();
+        let on_screen = self.documents.active_id() == Some(pending.id)
+            && self.active_sheet() == Some(pending.plan.sheet());
         Some(
             v_flex()
                 .key_context("AgentApproval")
@@ -457,8 +457,8 @@ impl Workspace {
             .pending
             .as_ref()
             .filter(|pending| {
-                pending.id == self.documents.active_id()
-                    && pending.plan.sheet() == self.documents.active().sheet
+                self.documents.active_id() == Some(pending.id)
+                    && self.active_sheet() == Some(pending.plan.sheet())
             })
             .map(|pending| pending.plan.target());
         self.grid.update(cx, |grid, cx| grid.set_pending(range, cx));
@@ -474,7 +474,7 @@ impl Workspace {
             return;
         };
         self.switch_to(id, window, cx);
-        if self.documents.active_id() != id {
+        if self.documents.active_id() != Some(id) {
             return;
         }
         self.switch_sheet(sheet, window, cx);
@@ -496,7 +496,10 @@ impl Workspace {
             || self.search.is_some()
             || self.generate.is_some()
             || self.sidebar.renaming.is_some()
-            || self.documents.active().find.is_some()
+            || self
+                .documents
+                .active()
+                .is_some_and(|document| document.find.is_some())
     }
 
     // A bar that asks the user something takes the keyboard only when the user is not
@@ -572,7 +575,9 @@ impl Workspace {
 
     // As Excel's Enable Editing: the user vouches for this file, for this session only.
     pub(super) fn let_agents_edit(&mut self, cx: &mut Context<Self>) {
-        let document = self.documents.active_mut();
+        let Some(document) = self.documents.active_mut() else {
+            return;
+        };
         if document.origin == FileOrigin::Internet {
             document.origin = FileOrigin::Local;
             self.notify(

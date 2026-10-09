@@ -75,7 +75,7 @@ mod tests {
 
     fn two_documents() -> (Documents, WorkbookId, WorkbookId) {
         let mut documents = Documents::new(Workbook::new_empty().unwrap());
-        documents.active_mut().dirty = true;
+        documents.active_mut().unwrap().dirty = true;
         let first = open(&mut documents, "first.xlsx");
         let second = open(&mut documents, "second.xlsx");
         (documents, first, second)
@@ -132,7 +132,7 @@ mod tests {
     #[test]
     fn each_write_lands_in_the_document_its_id_names() {
         let (mut documents, first, second) = two_documents();
-        assert_eq!(documents.active_id(), second);
+        assert_eq!(documents.active_id().unwrap(), second);
         write(&mut documents, first, "one");
         write(&mut documents, second, "two");
         assert_eq!(read_a1(&documents, first).unwrap(), "one");
@@ -143,7 +143,7 @@ mod tests {
     fn a_closed_document_id_is_unknown_and_the_other_still_works() {
         let (mut documents, first, second) = two_documents();
         write(&mut documents, first, "kept");
-        documents.close(second, || Workbook::new_empty().unwrap());
+        documents.close(second);
         assert_eq!(
             read_a1(&documents, second),
             Err(ToolError::UnknownWorkbook(second))
@@ -154,13 +154,25 @@ mod tests {
     #[test]
     fn an_untouched_blank_replaced_by_an_open_has_no_id_any_more() {
         let mut documents = Documents::new(Workbook::new_empty().unwrap());
-        let blank = documents.active_id();
+        let blank = documents.active_id().unwrap();
         let opened = open(&mut documents, "opened.xlsx");
         assert_eq!(
             target(&documents, blank).err(),
             Some(ToolError::UnknownWorkbook(blank))
         );
         assert!(target(&documents, opened).is_ok());
+    }
+
+    #[test]
+    fn with_nothing_open_no_workbook_is_listed_and_every_target_is_unknown() {
+        let mut documents = Documents::new(Workbook::new_empty().unwrap());
+        let only = documents.active_id().unwrap();
+        documents.close(only);
+        assert!(summaries(&documents, PermissionMode::AskBeforeWrite).is_empty());
+        assert_eq!(
+            target(&documents, only).err(),
+            Some(ToolError::UnknownWorkbook(only))
+        );
     }
 
     #[test]

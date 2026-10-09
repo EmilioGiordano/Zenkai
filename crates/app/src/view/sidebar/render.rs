@@ -43,7 +43,7 @@ impl Render for DraggedWorkbook {
 
 struct Paint {
     focused: bool,
-    active: WorkbookId,
+    active: Option<WorkbookId>,
     spaces: Vec<Space>,
     entity: WeakEntity<Workspace>,
 }
@@ -274,7 +274,7 @@ impl Workspace {
         let files: Vec<FileItem> = self
             .documents
             .members(id)
-            .map(|entry| sidebar_item::describe(entry, entry.id() == paint.active))
+            .map(|entry| sidebar_item::describe(entry, Some(entry.id()) == paint.active))
             .collect();
         let count = files.len();
         let renaming = self

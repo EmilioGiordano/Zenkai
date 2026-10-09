@@ -115,6 +115,13 @@ impl<'a> Entry<'a> {
         }
     }
 
+    pub fn untitled(self) -> u32 {
+        match self {
+            Entry::Loaded(document) => document.untitled(),
+            Entry::Link(link) => link.untitled,
+        }
+    }
+
     pub fn dirty(self) -> bool {
         match self {
             Entry::Loaded(document) => document.dirty,

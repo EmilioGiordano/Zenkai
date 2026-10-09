@@ -35,6 +35,7 @@ mod space_controls;
 mod space_parts;
 mod space_settings;
 mod spaces;
+mod start_view;
 mod stats;
 mod theme;
 mod toolbar;

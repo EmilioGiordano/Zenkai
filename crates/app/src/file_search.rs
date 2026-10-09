@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn a_hit_for_a_sheet_points_at_its_workbook_and_sheet() {
         let documents = Documents::new(blank());
-        let id = documents.active_id();
+        let id = documents.active_id().unwrap();
         let groups = collect(&documents, &[]);
         let sheets = groups.iter().find(|g| g.heading == "Sheets").unwrap();
         assert_eq!(sheets.hits[0].target, Target::Sheet(id, SheetId(0)));

@@ -34,7 +34,6 @@ impl Documents {
             self.spaces.set_appearance(space, record.appearance);
             for file in &record.files {
                 let id = self.take_id();
-                self.next_untitled = self.next_untitled.max(file.untitled + 1);
                 let link = session::link_of(file, id, space, recovery_directory);
                 self.after.push(Slot::Link(link));
                 if file.active {
@@ -42,7 +41,10 @@ impl Documents {
                 }
             }
         }
-        self.active.space = first_space;
+        self.empty_space = first_space;
+        if let Some(active) = self.active.as_deref_mut() {
+            active.space = first_space;
+        }
         if let Some(id) = active {
             self.want(id, Intent::Restore);
         }
@@ -57,7 +59,7 @@ impl Documents {
         space_appearance: SpaceAppearance,
         recovery_file: impl Fn(WorkbookId) -> Option<PathBuf>,
     ) -> Session {
-        let active = self.wanted().unwrap_or_else(|| self.active_id());
+        let active = self.wanted().or_else(|| self.active_id());
         let spaces = self
             .spaces
             .iter()
@@ -74,7 +76,7 @@ impl Documents {
                         if entry.loaded().is_some_and(Document::needs_recovery) {
                             link.recovery = recovery_file(link.id);
                         }
-                        session::record_of(&link, link.id == active)
+                        session::record_of(&link, Some(link.id) == active)
                     })
                     .collect(),
             })
@@ -157,16 +159,16 @@ mod tests {
         assert_eq!(member_names(&documents, spaces[1].id), ["Book3"]);
         assert_eq!(documents.entry(active).unwrap().name(), "gone.xlsx");
         assert!(documents.entry(active).unwrap().loaded().is_none());
-        assert_eq!(documents.active().name(), "Book1");
+        assert_eq!(documents.active().unwrap().name(), "Book1");
     }
 
     #[test]
-    fn untitled_numbers_continue_after_the_restored_ones() {
+    fn untitled_numbers_fill_the_gaps_left_by_the_restored_ones() {
         let mut documents = documents();
         documents.restore(&session(), None);
-        documents.active_mut().dirty = true;
+        documents.active_mut().unwrap().dirty = true;
         documents.create(blank());
-        assert_eq!(documents.active().name(), "Book4");
+        assert_eq!(documents.active().unwrap().name(), "Book2");
     }
 
     #[test]
@@ -225,7 +227,7 @@ mod tests {
     #[test]
     fn the_snapshot_points_unsaved_work_at_its_recovery_copy() {
         let mut documents = documents();
-        documents.active_mut().dirty = true;
+        documents.active_mut().unwrap().dirty = true;
         let snapshot = documents.snapshot(false, SpaceAppearance::default(), |id| {
             Some(PathBuf::from(format!("recovery/{}.xlsx", id.0)))
         });
@@ -237,7 +239,7 @@ mod tests {
     #[test]
     fn unsaved_work_without_a_recovery_copy_is_listed_without_one() {
         let mut documents = documents();
-        documents.active_mut().dirty = true;
+        documents.active_mut().unwrap().dirty = true;
         let snapshot = documents.snapshot(false, SpaceAppearance::default(), |_| None);
         assert_eq!(snapshot.spaces[0].files[0].recovery, None);
     }
@@ -250,10 +252,13 @@ mod tests {
             documents.install(loaded(active)),
             Installed::OnScreen
         ));
-        assert_eq!(documents.active_id(), active);
+        assert_eq!(documents.active_id().unwrap(), active);
         assert_eq!(documents.len(), 3);
-        assert_eq!(documents.active().sheet, SheetId(0));
-        assert_eq!(documents.active().view.selection.active.row.get(), 9);
+        assert_eq!(documents.active().unwrap().sheet, SheetId(0));
+        assert_eq!(
+            documents.active().unwrap().view.selection.active.row.get(),
+            9
+        );
         assert_eq!(names(&documents), ["a.xlsx", "gone.xlsx", "Book3"]);
     }
 
@@ -261,12 +266,12 @@ mod tests {
     fn a_workbook_loaded_while_the_user_works_elsewhere_stays_in_the_background() {
         let mut documents = documents();
         let active = documents.restore(&session(), None).unwrap();
-        documents.active_mut().dirty = true;
+        documents.active_mut().unwrap().dirty = true;
         assert!(matches!(
             documents.install(loaded(active)),
             Installed::Background
         ));
-        assert_eq!(documents.active().name(), "Book1");
+        assert_eq!(documents.active().unwrap().name(), "Book1");
         assert!(documents.get(active).is_some());
     }
 
@@ -284,7 +289,7 @@ mod tests {
             documents.install(loaded(other)),
             Installed::OnScreen
         ));
-        assert_eq!(documents.active_id(), other);
+        assert_eq!(documents.active_id().unwrap(), other);
     }
 
     #[test]
@@ -294,18 +299,18 @@ mod tests {
         let a = documents.find_by_path(Path::new("a.xlsx")).unwrap();
         let gone = documents.find_by_path(Path::new("gone.xlsx")).unwrap();
         documents.want(a, Intent::Switch);
-        assert_eq!(documents.step(super::super::Step::Next), gone);
+        assert_eq!(documents.step(super::super::Step::Next).unwrap(), gone);
     }
 
     #[test]
-    fn closing_the_active_workbook_never_lands_on_a_link() {
+    fn closing_the_active_workbook_leaves_the_screen_empty_instead_of_landing_on_a_link() {
         let mut documents = busy();
-        let first = documents.active_id();
+        let first = documents.active_id().unwrap();
         documents.restore(&session(), None);
         let a = documents.find_by_path(Path::new("a.xlsx")).unwrap();
-        documents.close(first, blank);
+        documents.close(first);
         assert!(documents.entry(a).unwrap().loaded().is_none());
-        assert_eq!(documents.active().name(), "Book4");
+        assert!(documents.active().is_none());
     }
 
     #[test]
@@ -330,7 +335,7 @@ mod tests {
         let mut recovered = loaded(id);
         recovered.from_recovery = true;
         documents.install(recovered);
-        let document = documents.active();
+        let document = documents.active().unwrap();
         assert!(document.dirty);
         assert_eq!(document.unsupported, [Unsupported::Charts]);
         assert_eq!(document.path.as_deref(), Some(Path::new("a.xlsx")));
@@ -341,7 +346,7 @@ mod tests {
         let mut documents = documents();
         documents.restore(&session(), None);
         let a = documents.find_by_path(Path::new("a.xlsx")).unwrap();
-        documents.close(a, blank);
+        documents.close(a);
         assert_eq!(documents.take_reopenable(), Some(PathBuf::from("a.xlsx")));
     }
 }

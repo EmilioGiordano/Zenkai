@@ -32,7 +32,9 @@ impl Workspace {
         if self.generate.is_some() || self.user_is_editing(cx) {
             return;
         }
-        let document = self.documents.active();
+        let Some(document) = self.documents.active() else {
+            return;
+        };
         if document.read_only {
             self.notify(
                 Severity::Warning,
@@ -63,7 +65,7 @@ impl Workspace {
             .map(|info| info.name.clone())
             .unwrap_or_default();
         let selection = self.selection(cx);
-        let Some(workbook) = self.documents.active().workbook() else {
+        let Some(workbook) = document.workbook() else {
             self.notify(
                 Severity::Warning,
                 "The workbook is recalculating; try again in a moment.",
@@ -122,10 +124,11 @@ impl Workspace {
     }
 
     fn generate_target_is_active(&self, target: Target) -> bool {
-        let document = self.documents.active();
-        document.id == target.document
-            && document.generation() == target.generation
-            && document.sheet == target.sheet
+        self.documents.active().is_some_and(|document| {
+            document.id == target.document
+                && document.generation() == target.generation
+                && document.sheet == target.sheet
+        })
     }
 
     fn relayout_generate(&mut self, range: Range, window: &mut Window, cx: &mut Context<Self>) {
@@ -136,7 +139,11 @@ impl Workspace {
         if !self.generate_target_is_active(target) {
             return;
         }
-        let Some(workbook) = self.documents.active().workbook() else {
+        let Some(workbook) = self
+            .documents
+            .active()
+            .and_then(|document| document.workbook())
+        else {
             return;
         };
         let layout = Layout::from_range(range, |pos| workbook.input(target.sheet, pos));

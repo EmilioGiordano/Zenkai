@@ -17,7 +17,7 @@ pub fn documents() -> Documents {
 // The workbook on screen has work, so opening another adds a tab instead of replacing it.
 pub fn busy() -> Documents {
     let mut documents = documents();
-    documents.active_mut().dirty = true;
+    documents.active_mut().unwrap().dirty = true;
     documents
 }
 

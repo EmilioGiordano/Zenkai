@@ -43,16 +43,17 @@ enum Side {
     After,
 }
 
-// The workbook on screen is held apart from the rest, so there is always exactly one and it
-// is always loaded. The others, in tab order around it, may be links that load on activation.
-// Closing the last one opens a new blank.
+// The workbook on screen, when there is one, is held apart from the rest and is always
+// loaded. The others, in tab order around it, may be links that load on activation. With
+// nothing on screen every slot is in `before`.
 pub struct Documents {
     before: Vec<Slot>,
-    active: Box<Document>,
+    active: Option<Box<Document>>,
     after: Vec<Slot>,
     wanted: Option<Want>,
     next_id: u64,
-    next_untitled: u32,
+    // The space a workbook created while nothing is open joins.
+    empty_space: SpaceId,
     closed: Vec<PathBuf>,
     spaces: Spaces,
 }
@@ -115,21 +116,21 @@ impl Documents {
     pub fn new(first: Workbook) -> Documents {
         let spaces = Spaces::new();
         let space = spaces.first();
-        let active = Box::new(Document::new(
+        let active = Some(Box::new(Document::new(
             WorkbookId(0),
             space,
             1,
             first,
             None,
             Vec::new(),
-        ));
+        )));
         Documents {
             before: Vec::new(),
             active,
             after: Vec::new(),
             wanted: None,
             next_id: 1,
-            next_untitled: 2,
+            empty_space: space,
             closed: Vec::new(),
             spaces,
         }
@@ -156,15 +157,15 @@ impl Documents {
         unsupported: Vec<Unsupported>,
         replace_blank: bool,
     ) -> WorkbookId {
-        let space = self.active.space;
+        let space = self.current_space();
         let document = Box::new(self.new_document(space, workbook, path, unsupported));
         let id = document.id;
-        if replace_blank && self.active.is_pristine() {
-            self.active = document;
-        } else {
-            let old = std::mem::replace(&mut self.active, document);
-            self.before.push(Slot::Loaded(old));
-            self.before.append(&mut self.after);
+        match self.active.replace(document) {
+            Some(old) if replace_blank && old.is_pristine() => {}
+            old => {
+                self.before.extend(old.map(Slot::Loaded));
+                self.before.append(&mut self.after);
+            }
         }
         self.wanted = None;
         id
@@ -179,7 +180,7 @@ impl Documents {
     ) -> Document {
         let id = self.take_id();
         let untitled = if path.is_none() {
-            self.take_untitled()
+            self.lowest_free_untitled()
         } else {
             0
         };
@@ -191,21 +192,30 @@ impl Documents {
         WorkbookId(self.next_id - 1)
     }
 
-    fn take_untitled(&mut self) -> u32 {
-        self.next_untitled += 1;
-        self.next_untitled - 1
+    fn lowest_free_untitled(&self) -> u32 {
+        let taken: Vec<u32> = self
+            .entries()
+            .filter(|entry| entry.path().is_none())
+            .map(Entry::untitled)
+            .collect();
+        (1..).find(|number| !taken.contains(number)).unwrap_or(1)
     }
 
-    pub fn active(&self) -> &Document {
-        &self.active
+    pub fn active(&self) -> Option<&Document> {
+        self.active.as_deref()
     }
 
-    pub fn active_mut(&mut self) -> &mut Document {
-        &mut self.active
+    pub fn active_mut(&mut self) -> Option<&mut Document> {
+        self.active.as_deref_mut()
     }
 
-    pub fn active_id(&self) -> WorkbookId {
-        self.active.id
+    // The space where a workbook created now would land.
+    pub fn current_space(&self) -> SpaceId {
+        self.active.as_ref().map_or(self.empty_space, |a| a.space)
+    }
+
+    pub fn active_id(&self) -> Option<WorkbookId> {
+        self.active.as_ref().map(|document| document.id)
     }
 
     // Every workbook in tab order, the one on screen included.
@@ -213,7 +223,7 @@ impl Documents {
         self.before
             .iter()
             .map(Slot::as_entry)
-            .chain(std::iter::once(Entry::Loaded(&self.active)))
+            .chain(self.active.as_deref().map(Entry::Loaded))
             .chain(self.after.iter().map(Slot::as_entry))
     }
 
@@ -222,8 +232,8 @@ impl Documents {
     }
 
     fn slot_mut(&mut self, id: WorkbookId) -> Option<SlotMut<'_>> {
-        if self.active.id == id {
-            return Some(SlotMut::Active(&mut self.active));
+        if let Some(active) = self.active.as_deref_mut().filter(|a| a.id == id) {
+            return Some(SlotMut::Active(active));
         }
         self.before
             .iter_mut()
@@ -267,12 +277,12 @@ impl Documents {
         self.before
             .iter_mut()
             .filter_map(Slot::loaded_mut)
-            .chain(std::iter::once(&mut *self.active))
+            .chain(self.active.as_deref_mut())
             .chain(self.after.iter_mut().filter_map(Slot::loaded_mut))
     }
 
     pub fn len(&self) -> usize {
-        self.before.len() + 1 + self.after.len()
+        self.before.len() + usize::from(self.active.is_some()) + self.after.len()
     }
 
     pub fn position_of(&self, id: WorkbookId) -> usize {
@@ -307,8 +317,8 @@ impl Documents {
 
     // Only a loaded workbook can be on screen; a link asks for loading with `want`.
     pub fn activate(&mut self, id: WorkbookId) -> bool {
-        if self.active.id == id {
-            self.active.last_used = Instant::now();
+        if let Some(active) = self.active.as_deref_mut().filter(|a| a.id == id) {
+            active.last_used = Instant::now();
             self.wanted = None;
             return true;
         }
@@ -338,22 +348,24 @@ impl Documents {
     fn promote(&mut self, side: Side, index: usize, target: Box<Document>, keep_old: bool) {
         let mut target = target;
         target.last_used = Instant::now();
-        let mut old = std::mem::replace(&mut self.active, target);
-        old.last_used = Instant::now();
+        let old = self
+            .active
+            .replace(target)
+            .filter(|_| keep_old)
+            .map(|mut old| {
+                old.last_used = Instant::now();
+                Slot::Loaded(old)
+            });
         match side {
             Side::Before => {
                 let mut tail = self.before.split_off(index);
-                if keep_old {
-                    tail.push(Slot::Loaded(old));
-                }
+                tail.extend(old);
                 tail.append(&mut self.after);
                 self.after = tail;
             }
             Side::After => {
                 let rest = self.after.split_off(index);
-                if keep_old {
-                    self.before.push(Slot::Loaded(old));
-                }
+                self.before.extend(old);
                 self.before.append(&mut self.after);
                 self.after = rest;
             }
@@ -373,16 +385,18 @@ impl Documents {
 
     // Stepping starts from the workbook being waited for, so repeated presses keep moving
     // while a link is still loading.
-    pub fn step(&self, step: Step) -> WorkbookId {
+    pub fn step(&self, step: Step) -> Option<WorkbookId> {
         let ids: Vec<WorkbookId> = self.entries().map(Entry::id).collect();
-        let from = self.wanted().unwrap_or_else(|| self.active_id());
-        let index = ids.iter().position(|id| *id == from).unwrap_or(0);
+        let from = self.wanted().or_else(|| self.active_id());
+        let index = from.and_then(|from| ids.iter().position(|id| *id == from));
         let count = ids.len();
-        let target = match step {
-            Step::Next => (index + 1) % count,
-            Step::Previous => (index + count - 1) % count,
+        let target = match (step, index) {
+            (Step::Next, Some(index)) => (index + 1) % count,
+            (Step::Previous, Some(index)) => (index + count - 1) % count,
+            (Step::Next, None) => 0,
+            (Step::Previous, None) => count.checked_sub(1)?,
         };
-        ids.get(target).copied().unwrap_or(from)
+        ids.get(target).copied()
     }
 
     pub fn start_loading(&mut self, id: WorkbookId) -> Option<Link> {
@@ -413,7 +427,7 @@ impl Documents {
         match self.wanted {
             Some(Want { id: wanted, intent }) if wanted == id => match intent {
                 Intent::Switch => true,
-                Intent::Restore => self.active.is_pristine(),
+                Intent::Restore => self.active.as_ref().is_none_or(|a| a.is_pristine()),
             },
             _ => false,
         }
@@ -424,7 +438,7 @@ impl Documents {
     pub fn install(&mut self, loaded: Loaded) -> Installed {
         let id = loaded.id;
         let on_screen = self.shows_when_loaded(id);
-        let blank = self.active.is_pristine();
+        let blank = self.active.as_ref().is_some_and(|a| a.is_pristine());
         let found = self
             .before
             .iter()
@@ -475,12 +489,12 @@ impl Documents {
     }
 
     // The nearest loaded neighbour takes over, to the right first, so the screen never lands
-    // on a link.
-    pub fn close(&mut self, id: WorkbookId, empty: impl FnOnce() -> Workbook) -> bool {
+    // on a link. With none left nothing is on screen, as in Excel.
+    pub fn close(&mut self, id: WorkbookId) -> bool {
         if self.wanted() == Some(id) {
             self.wanted = None;
         }
-        if self.active.id != id {
+        if self.active_id() != Some(id) {
             let removed = [&mut self.before, &mut self.after]
                 .into_iter()
                 .find_map(|slots| {
@@ -497,29 +511,28 @@ impl Documents {
         }
         let next_right = self.after.iter().position(Slot::is_loaded);
         let next_left = self.before.iter().rposition(Slot::is_loaded);
-        let closed = if let Some(index) = next_right
+        let target = if let Some(index) = next_right
             && let Some(target) = take_loaded(&mut self.after, index)
         {
-            let closed = std::mem::replace(&mut self.active, target);
             let rest = self.after.split_off(index);
             self.before.append(&mut self.after);
             self.after = rest;
-            closed
+            Some(target)
         } else if let Some(index) = next_left
             && let Some(target) = take_loaded(&mut self.before, index)
         {
-            let closed = std::mem::replace(&mut self.active, target);
             let mut tail = self.before.split_off(index);
             tail.append(&mut self.after);
             self.after = tail;
-            closed
+            Some(target)
         } else {
-            let space = self.active.space;
-            let blank = Box::new(self.new_document(space, empty(), None, Vec::new()));
-            let closed = std::mem::replace(&mut self.active, blank);
             self.before.append(&mut self.after);
-            closed
+            None
         };
+        let Some(closed) = std::mem::replace(&mut self.active, target) else {
+            return false;
+        };
+        self.empty_space = closed.space;
         self.remember(closed.path.as_deref());
         true
     }
@@ -553,12 +566,42 @@ enum SlotMut<'a> {
 mod tests {
     use super::test_support::*;
     use super::*;
+    use crate::session::{FileRecord, Session, SpaceRecord, ViewRecord};
+    use crate::space_appearance::{NewSpaceColor, SpaceAppearance};
+
+    fn session_with_files() -> SpaceRecord {
+        let file = |path: &str| FileRecord {
+            path: Some(path.to_string()),
+            recovery: None,
+            untitled: 0,
+            dirty: false,
+            read_only: false,
+            unsupported: Vec::new(),
+            active: false,
+            sheet: 0,
+            view: ViewRecord {
+                active_row: 0,
+                active_col: 0,
+                corner_row: 0,
+                corner_col: 0,
+                top: 0,
+                left: 0,
+            },
+        };
+        SpaceRecord {
+            name: "Q3".to_string(),
+            collapsed: false,
+            color: Default::default(),
+            appearance: Default::default(),
+            files: vec![file("b.xlsx"), file("c.xlsx")],
+        }
+    }
 
     #[test]
     fn starts_with_one_active_blank_workbook() {
         let documents = documents();
         assert_eq!(documents.len(), 1);
-        assert_eq!(documents.active().name_with_marker(), "Book1");
+        assert_eq!(documents.active().unwrap().name_with_marker(), "Book1");
     }
 
     #[test]
@@ -566,7 +609,7 @@ mod tests {
         let mut documents = documents();
         let id = open_file(&mut documents, "a.xlsx");
         assert_eq!(documents.len(), 1);
-        assert_eq!(documents.active_id(), id);
+        assert_eq!(documents.active_id().unwrap(), id);
     }
 
     #[test]
@@ -574,7 +617,7 @@ mod tests {
         let mut documents = documents();
         let id = documents.create(blank());
         assert_eq!(names(&documents), ["Book1", "Book2"]);
-        assert_eq!(documents.active_id(), id);
+        assert_eq!(documents.active_id().unwrap(), id);
         assert_eq!(documents.position_of(id), 2);
     }
 
@@ -583,7 +626,7 @@ mod tests {
         let mut documents = busy();
         let id = open_file(&mut documents, "a.xlsx");
         assert_eq!(names(&documents), ["Book1", "a.xlsx"]);
-        assert_eq!(documents.active_id(), id);
+        assert_eq!(documents.active_id().unwrap(), id);
     }
 
     #[test]
@@ -596,11 +639,11 @@ mod tests {
     #[test]
     fn ids_grow_and_are_never_reused_after_a_close() {
         let mut documents = busy();
-        let first = documents.active_id();
+        let first = documents.active_id().unwrap();
         let second = open_file(&mut documents, "a.xlsx");
         let third = open_file(&mut documents, "b.xlsx");
         assert!(first < second && second < third);
-        documents.close(third, blank);
+        documents.close(third);
         let fourth = open_file(&mut documents, "c.xlsx");
         assert!(fourth > third);
     }
@@ -608,79 +651,176 @@ mod tests {
     #[test]
     fn activate_finds_by_id_and_refuses_unknown_ids() {
         let mut documents = busy();
-        let first = documents.active_id();
+        let first = documents.active_id().unwrap();
         open_file(&mut documents, "a.xlsx");
         assert!(documents.activate(first));
-        assert_eq!(documents.active_id(), first);
+        assert_eq!(documents.active_id().unwrap(), first);
         assert!(!documents.activate(WorkbookId(99)));
-        assert_eq!(documents.active_id(), first);
+        assert_eq!(documents.active_id().unwrap(), first);
     }
 
     #[test]
     fn activating_keeps_the_tab_order() {
         let mut documents = busy();
-        let first = documents.active_id();
+        let first = documents.active_id().unwrap();
         open_file(&mut documents, "a.xlsx");
         open_file(&mut documents, "b.xlsx");
         documents.activate(first);
         assert_eq!(names(&documents), ["Book1", "a.xlsx", "b.xlsx"]);
-        assert_eq!(documents.active().name(), "Book1");
+        assert_eq!(documents.active().unwrap().name(), "Book1");
     }
 
     #[test]
     fn next_and_previous_wrap_around() {
         let mut documents = busy();
-        let first = documents.active_id();
+        let first = documents.active_id().unwrap();
         let second = open_file(&mut documents, "a.xlsx");
         let third = open_file(&mut documents, "b.xlsx");
-        assert_eq!(documents.step(Step::Next), first);
+        assert_eq!(documents.step(Step::Next).unwrap(), first);
         documents.activate(first);
-        assert_eq!(documents.step(Step::Next), second);
+        assert_eq!(documents.step(Step::Next).unwrap(), second);
         documents.activate(second);
-        assert_eq!(documents.step(Step::Previous), first);
+        assert_eq!(documents.step(Step::Previous).unwrap(), first);
         documents.activate(first);
-        assert_eq!(documents.step(Step::Previous), third);
+        assert_eq!(documents.step(Step::Previous).unwrap(), third);
     }
 
     #[test]
     fn closing_the_active_activates_its_right_neighbour_then_the_left() {
         let mut documents = busy();
-        let first = documents.active_id();
+        let first = documents.active_id().unwrap();
         let second = open_file(&mut documents, "a.xlsx");
         let third = open_file(&mut documents, "b.xlsx");
         documents.activate(second);
-        documents.close(second, blank);
-        assert_eq!(documents.active_id(), third);
+        documents.close(second);
+        assert_eq!(documents.active_id().unwrap(), third);
         assert_eq!(names(&documents), ["Book1", "b.xlsx"]);
-        documents.close(third, blank);
-        assert_eq!(documents.active_id(), first);
+        documents.close(third);
+        assert_eq!(documents.active_id().unwrap(), first);
     }
 
     #[test]
     fn closing_another_document_keeps_the_active_one() {
         let mut documents = busy();
-        let first = documents.active_id();
+        let first = documents.active_id().unwrap();
         open_file(&mut documents, "a.xlsx");
         let third = open_file(&mut documents, "b.xlsx");
-        documents.close(first, blank);
-        assert_eq!(documents.active_id(), third);
+        documents.close(first);
+        assert_eq!(documents.active_id().unwrap(), third);
         assert_eq!(documents.len(), 2);
     }
 
     #[test]
-    fn closing_the_last_document_leaves_a_fresh_blank() {
+    fn closing_the_last_document_leaves_nothing_open() {
         let mut documents = documents();
-        let only = documents.active_id();
-        assert!(documents.close(only, blank));
+        let only = documents.active_id().unwrap();
+        assert!(documents.close(only));
+        assert_eq!(documents.len(), 0);
+        assert!(documents.active().is_none());
+        assert_eq!(documents.active_id(), None);
+        assert_eq!(documents.entries().count(), 0);
+        assert!(!documents.close(only));
+    }
+
+    #[test]
+    fn a_workbook_created_from_the_empty_state_is_book1_again() {
+        let mut documents = documents();
+        let only = documents.active_id().unwrap();
+        documents.close(only);
+        let id = documents.create(blank());
+        assert_eq!(documents.active_id(), Some(id));
+        assert_eq!(documents.active().unwrap().name(), "Book1");
         assert_eq!(documents.len(), 1);
-        assert_ne!(documents.active_id(), only);
-        assert_eq!(documents.active().name_with_marker(), "Book2");
+    }
+
+    #[test]
+    fn untitled_numbers_reuse_the_lowest_free_one() {
+        let mut documents = busy();
+        let second = documents.create(blank());
+        documents.create(blank());
+        assert_eq!(names(&documents), ["Book1", "Book2", "Book3"]);
+        documents.close(second);
+        documents.create(blank());
+        assert_eq!(names(&documents), ["Book1", "Book3", "Book2"]);
+    }
+
+    #[test]
+    fn opening_a_file_from_the_empty_state_makes_it_the_only_workbook() {
+        let mut documents = documents();
+        let only = documents.active_id().unwrap();
+        documents.close(only);
+        let id = open_file(&mut documents, "a.xlsx");
+        assert_eq!(documents.active_id(), Some(id));
+        assert_eq!(names(&documents), ["a.xlsx"]);
+    }
+
+    #[test]
+    fn the_empty_state_keeps_the_space_of_the_closed_workbook() {
+        let mut documents = documents();
+        let q3 = documents.add_space("Q3", NewSpaceColor::None);
+        let only = documents.active_id().unwrap();
+        documents.move_to_space(only, q3);
+        documents.close(only);
+        assert_eq!(documents.current_space(), q3);
+        let id = documents.create(blank());
+        assert_eq!(documents.get(id).unwrap().space, q3);
+    }
+
+    #[test]
+    fn closing_the_active_with_only_links_left_leaves_nothing_on_screen() {
+        let mut documents = busy();
+        let first = documents.active_id().unwrap();
+        documents.restore(&Session::new(false, vec![session_with_files()]), None);
+        documents.close(first);
+        assert!(documents.active().is_none());
+        assert_eq!(documents.len(), 2);
+    }
+
+    #[test]
+    fn stepping_from_the_empty_state_starts_at_either_end() {
+        let mut documents = busy();
+        let first = documents.active_id().unwrap();
+        let second = open_file(&mut documents, "a.xlsx");
+        documents.restore(&Session::new(false, vec![session_with_files()]), None);
+        documents.close(first);
+        documents.close(second);
+        assert!(documents.active().is_none());
+        let ids: Vec<_> = documents.entries().map(Entry::id).collect();
+        assert_eq!(documents.step(Step::Next), ids.first().copied());
+        assert_eq!(documents.step(Step::Previous), ids.last().copied());
+    }
+
+    #[test]
+    fn stepping_with_nothing_at_all_goes_nowhere() {
+        let mut documents = documents();
+        let only = documents.active_id().unwrap();
+        documents.close(only);
+        assert_eq!(documents.step(Step::Next), None);
+        assert_eq!(documents.step(Step::Previous), None);
+    }
+
+    #[test]
+    fn the_snapshot_of_the_empty_state_lists_no_files() {
+        let mut documents = documents();
+        let only = documents.active_id().unwrap();
+        documents.close(only);
+        let snapshot = documents.snapshot(true, SpaceAppearance::default(), |_| None);
+        assert!(snapshot.spaces.iter().all(|space| space.files.is_empty()));
+    }
+
+    #[test]
+    fn a_reopened_file_comes_back_from_the_empty_state() {
+        let mut documents = documents();
+        let a = open_file(&mut documents, "a.xlsx");
+        documents.close(a);
+        assert!(documents.active().is_none());
+        assert_eq!(documents.take_reopenable(), Some(PathBuf::from("a.xlsx")));
     }
 
     #[test]
     fn closing_an_unknown_id_changes_nothing() {
         let mut documents = documents();
-        assert!(!documents.close(WorkbookId(99), blank));
+        assert!(!documents.close(WorkbookId(99)));
         assert_eq!(documents.len(), 1);
     }
 
@@ -689,8 +829,8 @@ mod tests {
         let mut documents = documents();
         let a = open_file(&mut documents, "a.xlsx");
         let b = open_file(&mut documents, "b.xlsx");
-        documents.close(a, blank);
-        documents.close(b, blank);
+        documents.close(a);
+        documents.close(b);
         assert_eq!(documents.take_reopenable(), Some(PathBuf::from("b.xlsx")));
         assert_eq!(documents.take_reopenable(), Some(PathBuf::from("a.xlsx")));
         assert_eq!(documents.take_reopenable(), None);
@@ -701,8 +841,8 @@ mod tests {
         let mut documents = documents();
         let a = open_file(&mut documents, "a.xlsx");
         let untitled = documents.open(blank(), None, Vec::new());
-        documents.close(a, blank);
-        documents.close(untitled, blank);
+        documents.close(a);
+        documents.close(untitled);
         open_file(&mut documents, "a.xlsx");
         assert_eq!(documents.take_reopenable(), None);
     }
@@ -718,10 +858,10 @@ mod tests {
     #[test]
     fn a_batch_finishing_in_an_inactive_document_releases_that_document() {
         let mut documents = busy();
-        let first = documents.active_id();
-        documents.active_mut().queue(Box::new(|_| Ok(())));
-        let generation = documents.active().generation();
-        assert!(documents.active_mut().take_batch().is_some());
+        let first = documents.active_id().unwrap();
+        documents.active_mut().unwrap().queue(Box::new(|_| Ok(())));
+        let generation = documents.active().unwrap().generation();
+        assert!(documents.active_mut().unwrap().take_batch().is_some());
         open_file(&mut documents, "a.xlsx");
         let background = documents.get_mut(first).unwrap();
         assert!(background.has_pending());
@@ -733,8 +873,8 @@ mod tests {
     fn an_edit_during_closing_shows_in_the_unsaved_edit_counts() {
         let mut documents = busy();
         let before = documents.unsaved_edits();
-        assert_eq!(before, [(documents.active_id(), 0)]);
-        documents.active_mut().queue(Box::new(|_| Ok(())));
+        assert_eq!(before, [(documents.active_id().unwrap(), 0)]);
+        documents.active_mut().unwrap().queue(Box::new(|_| Ok(())));
         assert_ne!(documents.unsaved_edits(), before);
     }
 
@@ -742,7 +882,7 @@ mod tests {
     fn a_workbook_that_becomes_dirty_shows_in_the_unsaved_edit_counts() {
         let mut documents = documents();
         assert!(documents.unsaved_edits().is_empty());
-        documents.active_mut().dirty = true;
+        documents.active_mut().unwrap().dirty = true;
         assert_eq!(documents.unsaved_edits().len(), 1);
     }
 
@@ -750,11 +890,11 @@ mod tests {
     fn an_idle_workbook_unloads_to_a_link_that_keeps_its_place_and_view() {
         let mut documents = documents();
         let a = open_file(&mut documents, "a.xlsx");
-        documents.active_mut().view.top = zenkai_types::RowIdx::clamped(40);
+        documents.active_mut().unwrap().view.top = zenkai_types::RowIdx::clamped(40);
         let b = open_file(&mut documents, "b.xlsx");
         assert!(documents.unload(a));
         assert!(documents.entry(a).unwrap().loaded().is_none());
-        assert_eq!(documents.active_id(), b);
+        assert_eq!(documents.active_id().unwrap(), b);
         assert_eq!(names(&documents), ["a.xlsx", "b.xlsx"]);
         let Some(Entry::Link(link)) = documents.entry(a) else {
             panic!("expected a link");
@@ -796,14 +936,14 @@ mod tests {
     fn an_unloaded_workbook_comes_back_where_it_was() {
         let mut documents = documents();
         let a = open_file(&mut documents, "a.xlsx");
-        documents.active_mut().view.top = zenkai_types::RowIdx::clamped(40);
+        documents.active_mut().unwrap().view.top = zenkai_types::RowIdx::clamped(40);
         open_file(&mut documents, "b.xlsx");
         documents.unload(a);
         documents.want(a, Intent::Switch);
         assert!(matches!(documents.install(loaded(a)), Installed::OnScreen));
-        assert_eq!(documents.active().view.top.get(), 40);
+        assert_eq!(documents.active().unwrap().view.top.get(), 40);
         assert_eq!(
-            documents.active().path.as_deref(),
+            documents.active().unwrap().path.as_deref(),
             Some(Path::new("a.xlsx"))
         );
         assert_eq!(names(&documents), ["a.xlsx", "b.xlsx"]);

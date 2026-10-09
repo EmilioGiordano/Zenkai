@@ -47,8 +47,11 @@ impl Documents {
         let Some(heir) = self.spaces.remove(id) else {
             return false;
         };
-        if self.active.space == id {
-            self.active.space = heir;
+        if let Some(active) = self.active.as_deref_mut().filter(|a| a.space == id) {
+            active.space = heir;
+        }
+        if self.empty_space == id {
+            self.empty_space = heir;
         }
         self.before
             .iter_mut()
@@ -86,7 +89,7 @@ mod tests {
     fn a_new_document_joins_the_space_of_the_one_before_it() {
         let mut documents = busy();
         let second = documents.add_space("Q3", NewSpaceColor::None);
-        let first = documents.active_id();
+        let first = documents.active_id().unwrap();
         documents.move_to_space(first, second);
         open_file(&mut documents, "a.xlsx");
         assert_eq!(member_names(&documents, second), ["Book1", "a.xlsx"]);
@@ -110,13 +113,13 @@ mod tests {
         let mut documents = documents();
         let first = documents.spaces().first();
         let second = documents.add_space("Q3", NewSpaceColor::None);
-        let id = documents.active_id();
+        let id = documents.active_id().unwrap();
         assert!(!documents.shift_space(id, Neighbour::Previous));
         assert!(documents.shift_space(id, Neighbour::Next));
-        assert_eq!(documents.active().space, second);
+        assert_eq!(documents.active().unwrap().space, second);
         assert!(!documents.shift_space(id, Neighbour::Next));
         assert!(documents.shift_space(id, Neighbour::Previous));
-        assert_eq!(documents.active().space, first);
+        assert_eq!(documents.active().unwrap().space, first);
     }
 
     #[test]
@@ -124,10 +127,10 @@ mod tests {
         let mut documents = documents();
         let first = documents.spaces().first();
         let second = documents.add_space("Q3", NewSpaceColor::None);
-        let id = documents.active_id();
+        let id = documents.active_id().unwrap();
         documents.move_to_space(id, second);
         assert!(documents.delete_space(second));
-        assert_eq!(documents.active().space, first);
+        assert_eq!(documents.active().unwrap().space, first);
         assert_eq!(documents.len(), 1);
         assert!(!documents.delete_space(first));
     }

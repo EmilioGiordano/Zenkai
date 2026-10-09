@@ -59,7 +59,7 @@ impl Workspace {
     pub(super) fn customize_space(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let target = self
             .sidebar_cursor_space()
-            .unwrap_or_else(|| self.documents.active().space);
+            .unwrap_or_else(|| self.documents.current_space());
         if self.documents.spaces().get(target).is_none() {
             return;
         }
@@ -115,7 +115,7 @@ impl Workspace {
             .as_ref()
             .map(|panel| panel.space)
             .or_else(|| self.sidebar_cursor_space())
-            .unwrap_or_else(|| self.documents.active().space);
+            .unwrap_or_else(|| self.documents.current_space());
         self.documents
             .set_space_appearance(target, SpaceOverride::Default);
         self.notify(

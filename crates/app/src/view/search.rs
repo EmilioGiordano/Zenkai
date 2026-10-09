@@ -56,7 +56,7 @@ impl Workspace {
             Some(Target::Workbook(id)) => self.switch_to(id, window, cx),
             Some(Target::Sheet(id, sheet)) => {
                 self.switch_to(id, window, cx);
-                if self.documents.active_id() == id {
+                if self.documents.active_id() == Some(id) {
                     self.switch_sheet(sheet, window, cx);
                 }
             }
