@@ -84,7 +84,7 @@ fn every_baseline_message_is_understood() {
         let parsed = serde_json::from_value::<ClientJsonRpcMessage>(message.clone());
         assert!(parsed.is_ok(), "{message}");
     }
-    assert_eq!(tools().len(), 8);
+    assert_eq!(tools().len(), 9);
 }
 
 proptest! {
