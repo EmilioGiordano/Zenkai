@@ -195,6 +195,14 @@ fn generated_size(spec: &GenerationSpec) -> String {
     )
 }
 
+fn shown_headers(spec: &GenerationSpec) -> Vec<String> {
+    spec.columns
+        .iter()
+        .take(SAMPLE_ENTRIES)
+        .map(|column| shown_entry(&column.header_input()))
+        .collect()
+}
+
 impl PlannedWrite {
     pub fn sheet(&self) -> SheetId {
         self.sheet
@@ -276,12 +284,7 @@ impl PlannedWrite {
                 .take(SAMPLE_ENTRIES)
                 .cloned()
                 .collect(),
-            Change::Generated(spec) => spec
-                .columns
-                .iter()
-                .take(SAMPLE_ENTRIES)
-                .map(|column| column.header_input())
-                .collect(),
+            Change::Generated(spec) => return Some(shown_headers(spec)),
             Change::Style(_) => return None,
         };
         Some(entries.iter().map(|entry| shown_entry(entry)).collect())
@@ -337,7 +340,7 @@ impl PlannedWrite {
                 "plan.describe_generate",
                 size = generated_size(spec),
                 place = place,
-                headers = self.first_entries().unwrap_or_default().join(", ")
+                headers = shown_headers(spec).join(", ")
             ),
         }
     }
