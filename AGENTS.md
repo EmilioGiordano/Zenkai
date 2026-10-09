@@ -207,6 +207,12 @@ After two FAIL rounds, the implementer stops and asks the user instead of iterat
 - `.claude/agents/perf-auditor.md`: benchmark and budgets, read-only on code.
 - `.claude/agents/test-engineer.md`: writes and runs tests.
 - `.claude/agents/frontend-implementer.md`: implements UI in GPUI.
+- `.claude/agents/engine-implementer.md`: implements engine work (Opus).
+- `.claude/agents/implementer.md`: implements everything else: merges, agent and MCP crates, CI.
+
+Models: implementers and reviewers run on Sonnet, perf-auditor on Haiku, engine work on Opus.
+Never delegate to the built-in general-purpose agent for implementation; it runs on the
+session's model.
 - `.claude/skills/review-changes/SKILL.md`: runs the reviewers in parallel and combines
   the verdict. It never fixes anything.
 

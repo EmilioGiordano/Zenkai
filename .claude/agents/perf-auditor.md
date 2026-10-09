@@ -2,7 +2,7 @@
 name: perf-auditor
 description: Read-only performance audit of Zenkai changes that touch the engine, grid, formats or bench crates. Runs the benchmark in release, compares against the saved baseline and the spec budgets, reviews the diff for per-frame and allocation issues, and returns a fixed-format report with a PASS or FAIL verdict. Use through /review-changes or directly from the implementer.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: haiku
 ---
 
 # Performance Auditor
