@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use gpui_kit::*;
 use zenkai_agent::detect::{self, Detection};
 use zenkai_agent::secrets::{SecretStatus, Secrets};
-use zenkai_agent::settings::{SecretName, Settings, SettingsState, escalations};
+use zenkai_agent::settings::{
+    Escalation, SecretName, Settings, SettingsState, escalations, remembered_confirmations,
+};
 use zenkai_agent::settings_file::{self, SettingsFileError, SettingsPaths, SettingsWatcher};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,8 +37,29 @@ pub struct AgentConfig {
 
 impl Global for AgentConfig {}
 
+impl AgentConfig {
+    pub fn settings(&self) -> &Settings {
+        &self.state.current
+    }
+}
+
+// The confirmations on disk, so the file is rewritten only when what is in force changes.
+struct Remembered(Vec<Escalation>);
+
+impl Global for Remembered {}
+
+pub fn settings(cx: &App) -> &Settings {
+    cx.global::<AgentConfig>().settings()
+}
+
 pub fn init(cx: &mut App) {
     cx.set_global(AgentConfig::default());
+    cx.set_global(Remembered(Vec::new()));
+    cx.observe_global::<AgentConfig>(|cx| {
+        crate::theme::sync_with_settings(cx);
+        remember_confirmations(cx);
+    })
+    .detach();
     let (sender, reloads) = async_channel::unbounded();
     cx.spawn(async move |cx| {
         let started = cx
@@ -44,19 +67,23 @@ pub fn init(cx: &mut App) {
             .spawn(async move {
                 let paths = SettingsPaths::from_environment()?;
                 let loaded = settings_file::prepare(&paths);
+                let remembered = settings_file::load_remembered(&paths);
                 let watcher = settings_file::watch(&paths, move |loaded| {
                     if sender.send_blocking(loaded).is_err() {
                         tracing::debug!("settings reload arrived after the app closed");
                     }
                 });
-                Ok::<_, SettingsFileError>((paths, loaded, watcher))
+                Ok::<_, SettingsFileError>((paths, loaded, remembered, watcher))
             })
             .await;
+        if let Ok((_, _, remembered, _)) = &started {
+            cx.update(|cx| cx.set_global(Remembered(remembered.clone())));
+        }
         cx.update_global::<AgentConfig, _>(|config, _| match started {
-            Ok((paths, loaded, watcher)) => {
+            Ok((paths, loaded, remembered, watcher)) => {
                 config.paths = Some(paths);
                 match loaded {
-                    Ok(settings) => config.state.apply_file(Ok(settings)),
+                    Ok(settings) => config.state.apply_startup(Ok(settings), &remembered),
                     Err(error) => {
                         tracing::warn!(%error, "could not prepare the settings folder");
                         config.failure = Some(error.to_string());
@@ -194,4 +221,25 @@ pub fn store_secret(cx: &mut App, name: SecretName, value: String) {
         refresh_secrets(cx);
     })
     .detach();
+}
+
+// Written whenever the elevated values in force change, never from a file edit alone: the
+// record only ever follows what the user confirmed, so it cannot be widened from outside.
+fn remember_confirmations(cx: &mut App) {
+    let config = cx.global::<AgentConfig>();
+    let Some(paths) = config.paths.clone() else {
+        return;
+    };
+    let confirmed = remembered_confirmations(&config.state.current);
+    if confirmed == cx.global::<Remembered>().0 {
+        return;
+    }
+    cx.set_global(Remembered(confirmed.clone()));
+    cx.background_executor()
+        .spawn(async move {
+            if let Err(error) = settings_file::save_remembered(&paths, &confirmed) {
+                tracing::warn!(%error, "could not record the confirmed settings");
+            }
+        })
+        .detach();
 }

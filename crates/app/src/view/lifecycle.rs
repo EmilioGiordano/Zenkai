@@ -9,6 +9,9 @@ use super::{Severity, Workspace};
 use crate::document::{self, FileJob, SharedWorkbook};
 use crate::documents::Intent;
 use crate::recovery;
+use zenkai_agent::settings_file::{self, SettingsPaths};
+
+use crate::agent_settings;
 use crate::session::{self, Loaded, Session};
 use crate::space_settings;
 
@@ -34,6 +37,46 @@ struct RecoveryWrite {
     target: PathBuf,
 }
 
+// Read from the file itself: the settings state loads in parallel with the window, so it may
+// not be ready when the session is.
+fn restore_enabled() -> bool {
+    let Ok(paths) = SettingsPaths::from_environment() else {
+        return true;
+    };
+    match settings_file::load(&paths.settings()) {
+        Ok(settings) => settings.general.restore_session,
+        Err(error) => {
+            tracing::warn!(%error, "settings could not be read; restoring the session");
+            true
+        }
+    }
+}
+
+// With the restore off the last session is not reopened, so its unsaved work is not
+// reopened either: it must be offered like the leftovers of a crash.
+fn kept_recovery_files(session: &Session, restore: bool) -> Vec<String> {
+    if !restore {
+        return Vec::new();
+    }
+    session
+        .recovery_files()
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
+fn strays(leftovers: Vec<PathBuf>, referenced: &[String]) -> Vec<PathBuf> {
+    leftovers
+        .into_iter()
+        .filter(|path| {
+            !path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| referenced.iter().any(|kept| kept == name))
+        })
+        .collect()
+}
+
 impl Workspace {
     // A file on the command line wins the screen over the restored workbook.
     pub(super) fn start_session(
@@ -44,7 +87,7 @@ impl Workspace {
     ) {
         let Some(directory) = recovery::directory() else {
             tracing::warn!("no data directory for recovery files; autosave is off");
-            self.apply_session(Loaded::Absent, Vec::new(), initial, window, cx);
+            self.apply_session(Loaded::Absent, true, Vec::new(), initial, window, cx);
             return;
         };
         match recovery::lock_session(&directory) {
@@ -56,30 +99,39 @@ impl Workspace {
                     format!("Autosave is off, the recovery folder is not usable: {error}"),
                     cx,
                 );
-                self.apply_session(Loaded::Absent, Vec::new(), initial, window, cx);
+                self.apply_session(Loaded::Absent, true, Vec::new(), initial, window, cx);
                 return;
             }
         }
         self.recovery_dir = Some(directory.clone());
         cx.spawn_in(window, async move |this, cx| {
             let task_directory = directory.clone();
-            let (session, leftovers) = cx
+            let (session, restore, leftovers) = cx
                 .background_executor()
                 .spawn(async move {
                     let session = recovery::session_directory()
                         .map_or(Loaded::Absent, |directory| session::load(&directory));
-                    (session, recovery::leftovers(&task_directory))
+                    (
+                        session,
+                        restore_enabled(),
+                        recovery::leftovers(&task_directory),
+                    )
                 })
                 .await;
             if let Err(error) = this.update_in(cx, |this, window, cx| {
-                this.apply_session(session, leftovers, initial, window, cx)
+                this.apply_session(session, restore, leftovers, initial, window, cx)
             }) {
                 tracing::debug!(%error, "workspace closed before the session was restored");
             }
             loop {
-                cx.background_executor()
-                    .timer(recovery::AUTOSAVE_EVERY)
-                    .await;
+                let Ok(every) = this.update(cx, |_, cx| {
+                    Duration::from_secs(u64::from(
+                        agent_settings::settings(cx).general.autosave_seconds,
+                    ))
+                }) else {
+                    break;
+                };
+                cx.background_executor().timer(every).await;
                 if this.update(cx, |this, cx| this.autosave_all(cx)).is_err() {
                     break;
                 }
@@ -91,6 +143,7 @@ impl Workspace {
     fn apply_session(
         &mut self,
         loaded: Loaded,
+        restore: bool,
         leftovers: Vec<PathBuf>,
         initial: Option<PathBuf>,
         window: &mut Window,
@@ -99,21 +152,19 @@ impl Workspace {
         let mut referenced: Vec<String> = Vec::new();
         match loaded {
             Loaded::Restored(session) => {
-                self.sidebar.visible = session.sidebar_visible;
                 cx.set_global(session.space_appearance);
-                referenced = session
-                    .recovery_files()
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect();
-                if let Some(active) = self
-                    .documents
-                    .restore(&session, self.recovery_dir.as_deref())
-                {
-                    self.documents.want(active, Intent::Restore);
-                    self.begin_load(active, window, cx);
+                referenced = kept_recovery_files(&session, restore);
+                if restore {
+                    self.sidebar.visible = session.sidebar_visible;
+                    if let Some(active) = self
+                        .documents
+                        .restore(&session, self.recovery_dir.as_deref())
+                    {
+                        self.documents.want(active, Intent::Restore);
+                        self.begin_load(active, window, cx);
+                    }
+                    self.probe_links(cx);
                 }
-                self.probe_links(cx);
             }
             Loaded::Unreadable => self.notify(
                 Severity::Warning,
@@ -124,15 +175,7 @@ impl Workspace {
         }
         // Unsaved work the session points to comes back with its workbook; anything else a
         // crashed run left behind is still offered.
-        let strays: Vec<PathBuf> = leftovers
-            .into_iter()
-            .filter(|path| {
-                !path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| referenced.iter().any(|kept| kept == name))
-            })
-            .collect();
+        let strays = strays(leftovers, &referenced);
         if !strays.is_empty() {
             self.offer_recovery(strays, window, cx);
         }
@@ -490,5 +533,68 @@ impl Workspace {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{kept_recovery_files, strays};
+    use crate::session::Session;
+    use crate::session::{FileRecord, SpaceRecord, ViewRecord};
+
+    fn session_pointing_at(recovery_file: &str) -> Session {
+        let file = FileRecord {
+            path: None,
+            recovery: Some(recovery_file.to_string()),
+            untitled: 1,
+            dirty: true,
+            read_only: false,
+            unsupported: Vec::new(),
+            active: true,
+            sheet: 0,
+            view: ViewRecord {
+                active_row: 0,
+                active_col: 0,
+                corner_row: 0,
+                corner_col: 0,
+                top: 0,
+                left: 0,
+            },
+        };
+        Session::new(
+            true,
+            vec![SpaceRecord {
+                name: "Work".to_string(),
+                collapsed: false,
+                color: Default::default(),
+                appearance: Default::default(),
+                files: vec![file],
+            }],
+        )
+    }
+
+    #[test]
+    fn a_restored_session_keeps_its_unsaved_work_out_of_the_recovery_offer() {
+        let session = session_pointing_at("autosave-1-2-3.xlsx");
+        let kept = kept_recovery_files(&session, true);
+        let leftovers = vec![
+            PathBuf::from("recovery/autosave-1-2-3.xlsx"),
+            PathBuf::from("recovery/autosave-9-9-9.xlsx"),
+        ];
+        assert_eq!(
+            strays(leftovers, &kept),
+            [PathBuf::from("recovery/autosave-9-9-9.xlsx")]
+        );
+    }
+
+    #[test]
+    fn without_a_restore_the_previous_sessions_unsaved_work_is_still_offered() {
+        let session = session_pointing_at("autosave-1-2-3.xlsx");
+        let kept = kept_recovery_files(&session, false);
+        assert!(kept.is_empty());
+        let leftovers = vec![PathBuf::from("recovery/autosave-1-2-3.xlsx")];
+        assert_eq!(strays(leftovers.clone(), &kept), leftovers);
     }
 }
