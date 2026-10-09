@@ -1780,25 +1780,28 @@ impl Workspace {
                         .items_center()
                         .gap_2()
                         .text_color(muted)
-                        .when(!self.sidebar.visible, |this| {
-                            this.child(
-                                div().occlude().child(
-                                    Button::new("show-sidebar")
-                                        .ghost()
-                                        .compact()
-                                        .icon(gpui_kit::assets::IconName::PanelLeft)
-                                        .tooltip("Show sidebar (Ctrl+Alt+B)")
-                                        .on_click(|event, window, cx| {
-                                            if sidebar::is_primary_click(event) {
-                                                window.dispatch_action(
-                                                    ToggleSidebar.boxed_clone(),
-                                                    cx,
-                                                )
-                                            }
-                                        }),
-                                ),
-                            )
-                        })
+                        .child(
+                            div().occlude().child(
+                                Button::new("toggle-sidebar")
+                                    .ghost()
+                                    .compact()
+                                    .icon(if self.sidebar.visible {
+                                        gpui_kit::assets::IconName::PanelLeftClose
+                                    } else {
+                                        gpui_kit::assets::IconName::PanelLeftOpen
+                                    })
+                                    .tooltip(if self.sidebar.visible {
+                                        "Hide sidebar (Ctrl+Alt+B)"
+                                    } else {
+                                        "Show sidebar (Ctrl+Alt+B)"
+                                    })
+                                    .on_click(|event, window, cx| {
+                                        if sidebar::is_primary_click(event) {
+                                            window.dispatch_action(ToggleSidebar.boxed_clone(), cx)
+                                        }
+                                    }),
+                            ),
+                        )
                         .child("Zenkai"),
                 )
                 .child(

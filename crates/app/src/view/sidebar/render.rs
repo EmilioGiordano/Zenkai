@@ -1,6 +1,5 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
-use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::spinner::Spinner;
@@ -185,24 +184,10 @@ impl Workspace {
                 .flex_shrink_0()
                 .h_full()
                 .px(px(10.0))
-                .pb_3()
+                .py_3()
                 .bg(background)
                 .text_color(foreground)
                 .text_sm()
-                .child(
-                    h_flex().h(px(40.0)).items_center().child(
-                        Button::new("hide-sidebar")
-                            .ghost()
-                            .compact()
-                            .icon(IconName::PanelLeft)
-                            .tooltip("Hide sidebar (Ctrl+Alt+B)")
-                            .on_click(|event, window, cx| {
-                                if super::is_primary_click(event) {
-                                    window.dispatch_action(ToggleSidebar.boxed_clone(), cx)
-                                }
-                            }),
-                    ),
-                )
                 .child(self.nav_row(new_workbook, &paint, cx))
                 .child(self.nav_row(search_files, &paint, cx))
                 .child(
