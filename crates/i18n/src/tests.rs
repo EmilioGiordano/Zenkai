@@ -57,8 +57,10 @@ fn used_keys() -> BTreeSet<String> {
     let mut keys = BTreeSet::new();
     let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     for member in fs::read_dir(&crates).unwrap() {
-        let source = member.unwrap().path().join("src");
-        if source.is_dir() {
+        let member = member.unwrap().path();
+        let source = member.join("src");
+        // This crate's own sources hold the scanner and deliberately undefined sample keys.
+        if member.file_name().is_some_and(|name| name != "i18n") && source.is_dir() {
             visit(&source, &mut keys);
         }
     }
