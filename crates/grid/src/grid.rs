@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -177,6 +177,7 @@ pub struct Grid {
     dragging: bool,
     marquee: Option<Range>,
     pending: Option<Range>,
+    review_marks: Rc<HashSet<CellPos>>,
     tab_start: Option<ColIdx>,
     frozen_rows: u32,
     frozen_cols: u16,
@@ -235,6 +236,7 @@ impl Grid {
             dragging: false,
             marquee: None,
             pending: None,
+            review_marks: Rc::new(HashSet::new()),
             tab_start: None,
             frozen_rows: 0,
             frozen_cols: 0,
@@ -396,6 +398,54 @@ impl Grid {
             self.pending = range;
             cx.notify();
         }
+    }
+
+    pub fn set_review_marks(&mut self, marks: HashSet<CellPos>, cx: &mut Context<Self>) {
+        if *self.review_marks != marks {
+            self.review_marks = Rc::new(marks);
+            cx.notify();
+        }
+    }
+
+    // Bottom-left corner of the active cell relative to the grid, or `None` when it is
+    // scrolled out of view.
+    pub fn active_cell_corner(&self) -> Option<Point<Pixels>> {
+        let pos = self.selection.active;
+        let origin = self.scroll_origin();
+        let (frozen_w, frozen_h) = self.frozen_size();
+        let x = if pos.col.get() < self.frozen_cols {
+            (0..=pos.col.get())
+                .map(|c| self.layout.col_width(ColIdx::clamped(i64::from(c))))
+                .sum()
+        } else {
+            let span = pos.col.get().checked_sub(origin.col.get())?;
+            if span >= self.visible_cols {
+                return None;
+            }
+            frozen_w
+                + (origin.col.get()..=pos.col.get())
+                    .map(|c| self.layout.col_width(ColIdx::clamped(i64::from(c))))
+                    .sum::<f32>()
+        };
+        let y = if pos.row.get() < self.frozen_rows {
+            (0..=pos.row.get())
+                .map(|r| self.layout.row_height(RowIdx::clamped(i64::from(r))))
+                .sum()
+        } else {
+            let span = pos.row.get().checked_sub(origin.row.get())?;
+            if span >= self.visible_rows {
+                return None;
+            }
+            frozen_h
+                + (origin.row.get()..=pos.row.get())
+                    .map(|r| self.layout.row_height(RowIdx::clamped(i64::from(r))))
+                    .sum::<f32>()
+        };
+        let left = (self.row_header() + x) * self.zoom;
+        let top = (HEADER_HEIGHT + y) * self.zoom;
+        let inside =
+            left <= f32::from(self.bounds.size.width) && top <= f32::from(self.bounds.size.height);
+        inside.then(|| point(px(left), px(top)))
     }
 
     pub fn set_zoom(&mut self, zoom: f32, cx: &mut Context<Self>) {
@@ -1301,6 +1351,7 @@ impl Render for Grid {
             editor: self.editor.clone(),
             marquee: self.marquee,
             pending: self.pending,
+            review_marks: self.review_marks.clone(),
             fill_target: self.fill_target,
             zoom: self.zoom,
             focused: self.focus.is_focused(window),
@@ -1329,6 +1380,11 @@ impl Render for Grid {
             format!("{active}, blank")
         } else {
             format!("{active}, {active_text}")
+        };
+        let active_label = if self.review_marks.contains(&active) {
+            format!("{active_label}, changed by an agent")
+        } else {
+            active_label
         };
         div()
             .id("grid")
