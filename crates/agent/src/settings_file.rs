@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
 
-use crate::settings::{SCHEMA_FILE, Settings, SettingsError};
+use crate::settings::{Escalation, SCHEMA_FILE, Settings, SettingsError};
 
 pub const SETTINGS_FILE: &str = "settings.json";
+const REMEMBERED_FILE: &str = "confirmed-at-start.json";
 const DEBOUNCE: Duration = Duration::from_millis(200);
 
 #[derive(Debug, thiserror::Error)]
@@ -55,6 +56,10 @@ impl SettingsPaths {
         self.folder.join(SETTINGS_FILE)
     }
 
+    pub fn remembered(&self) -> PathBuf {
+        self.folder.join(REMEMBERED_FILE)
+    }
+
     pub fn schema(&self) -> PathBuf {
         self.folder.join(SCHEMA_FILE)
     }
@@ -66,6 +71,31 @@ pub fn load(path: &Path) -> Result<Settings, SettingsError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Settings::default()),
         Err(error) => Err(SettingsError::Read(error.to_string())),
     }
+}
+
+// A missing or unreadable record means nothing was confirmed, which is the safe side:
+// elevated settings are then held for the user as at any other start.
+pub fn load_remembered(paths: &SettingsPaths) -> Vec<Escalation> {
+    match std::fs::read_to_string(paths.remembered()) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|error| {
+            tracing::warn!(%error, "ignoring the record of confirmed settings");
+            Vec::new()
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => {
+            tracing::warn!(%error, "could not read the record of confirmed settings");
+            Vec::new()
+        }
+    }
+}
+
+pub fn save_remembered(
+    paths: &SettingsPaths,
+    remembered: &[Escalation],
+) -> Result<(), SettingsFileError> {
+    let text = serde_json::to_string(remembered)
+        .map_err(|error| SettingsError::Encode(error.to_string()))?;
+    write_atomic(&paths.remembered(), &text)
 }
 
 // The schema is rewritten on every start so it always matches this build; the settings
@@ -222,6 +252,19 @@ mod tests {
             load(&dir.path().join("none.json")).unwrap(),
             Settings::default()
         );
+    }
+
+    #[test]
+    fn confirmations_are_remembered_and_a_broken_record_remembers_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        prepare(&paths).unwrap();
+        assert_eq!(load_remembered(&paths), []);
+        let confirmed = [Escalation::WriteWithoutAsking];
+        save_remembered(&paths, &confirmed).unwrap();
+        assert_eq!(load_remembered(&paths), confirmed);
+        std::fs::write(paths.remembered(), "[\"something else\"]").unwrap();
+        assert_eq!(load_remembered(&paths), []);
     }
 
     #[test]

@@ -2,6 +2,7 @@
 
 pub mod bridge;
 pub mod detect;
+pub mod preferences;
 pub mod presets;
 pub mod protected_view;
 pub mod secrets;
