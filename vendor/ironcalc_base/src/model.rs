@@ -3149,6 +3149,11 @@ impl<'a> Model<'a> {
         if !self.can_clear_range(range)? {
             return Err("Cannot clear the range because it contains array formulas".to_string());
         }
+        self.clear_area_contents(range)
+    }
+
+    // Clears without checking that array formulas lie wholly inside the area.
+    pub(crate) fn clear_area_contents(&mut self, range: &Area) -> Result<(), String> {
         let sheet = range.sheet;
         let ws = self.workbook.worksheet_mut(sheet)?;
         for row in range.row..range.row + range.height {
@@ -3176,14 +3181,19 @@ impl<'a> Model<'a> {
     // Returns true if for every array formula in the range, the whole spill is included in the range,
     // false otherwise.
     pub(crate) fn can_clear_range(&self, range: &Area) -> Result<bool, String> {
-        let sheet = range.sheet;
-        for row in range.row..range.row + range.height {
-            for column in range.column..range.column + range.width {
+        self.arrays_inside(range, range)
+    }
+
+    // Returns true if every array formula with a cell in `area` lies wholly inside `bounds`.
+    pub(crate) fn arrays_inside(&self, area: &Area, bounds: &Area) -> Result<bool, String> {
+        let sheet = area.sheet;
+        for row in area.row..area.row + area.height {
+            for column in area.column..area.column + area.width {
                 match self.get_cell_structure(sheet, row, column)? {
                     CellStructure::ArrayFormula { range: r } => {
                         let (width, height) = r;
-                        if column + width > range.column + range.width
-                            || row + height > range.row + range.height
+                        if column + width > bounds.column + bounds.width
+                            || row + height > bounds.row + bounds.height
                         {
                             return Ok(false);
                         }
@@ -3194,10 +3204,10 @@ impl<'a> Model<'a> {
                     } => {
                         let (anchor_row, anchor_column) = a;
                         let (width, height) = r;
-                        if anchor_column < range.column
-                            || anchor_row < range.row
-                            || anchor_column + width > range.column + range.width
-                            || anchor_row + height > range.row + range.height
+                        if anchor_column < bounds.column
+                            || anchor_row < bounds.row
+                            || anchor_column + width > bounds.column + bounds.width
+                            || anchor_row + height > bounds.row + bounds.height
                         {
                             return Ok(false);
                         }
