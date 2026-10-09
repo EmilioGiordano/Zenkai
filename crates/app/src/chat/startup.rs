@@ -23,8 +23,11 @@ impl ChatPanel {
         self.link = Link::Preparing;
         let epoch = self.epoch;
         let settings = cx.global::<AgentConfig>().state.current.clone();
-        let hint = self.folder_hint(cx);
         cx.spawn_in(window, async move |this, cx| {
+            // Read after the caller returns: the workspace is still being updated when it opens the chat.
+            let Ok(hint) = this.read_with(cx, |this, cx| this.folder_hint(cx)) else {
+                return;
+            };
             let planned = cx
                 .background_executor()
                 .spawn(async move { launch::plan_launch(&settings, &hint) })
