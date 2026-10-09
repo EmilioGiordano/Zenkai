@@ -58,6 +58,17 @@ fn specs_over_the_budget_or_the_sheet_are_refused_before_generating() {
         host.handle(&generate_at("A1", too_many_cells).into()),
         Err(ToolError::Generation(DatagenError::TooManyCells { .. }))
     ));
+    let long_text: GenerationSpec = serde_json::from_value(json!({
+        "rows": 1_000_000,
+        "locale": "en-US",
+        "seed": 1,
+        "columns": [{ "header": "Notes", "kind": { "type": "lorem", "min_words": 200, "max_words": 200 } }]
+    }))
+    .unwrap();
+    assert!(matches!(
+        host.handle(&generate_at("A1", long_text).into()),
+        Err(ToolError::Generation(DatagenError::OutputTooLarge { .. }))
+    ));
     let mut no_columns = spec(3);
     no_columns.columns.clear();
     assert_eq!(
