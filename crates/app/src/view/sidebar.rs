@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use gpui_kit::component::input::{InputEvent, InputState, SelectAll};
 use gpui_kit::*;
+use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
@@ -142,18 +143,19 @@ impl Workspace {
             return;
         };
         let Some(path) = entry.path().map(PathBuf::from) else {
-            self.notify(Severity::Warning, "Only saved files can be deleted.", cx);
+            self.notify(
+                Severity::Warning,
+                t!("notice.only_saved_files_deletable"),
+                cx,
+            );
             return;
         };
-        let detail = format!(
-            "{} will be moved to the Recycle Bin and closed in Zenkai. Unsaved changes in it are lost.",
-            path.display()
-        );
+        let detail = t!("sidebar.delete_detail", path = path.display());
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("Delete {}?", entry.name()),
+            &t!("sidebar.delete_title", name = entry.name()),
             Some(&detail),
-            &["Cancel", "Move to Recycle Bin"],
+            &[t!("button.cancel"), t!("sidebar.move_to_recycle_bin")],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -164,7 +166,7 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     if !path.is_file() {
-                        return Err("the file is not on disk".to_string());
+                        return Err(t!("sidebar.not_on_disk").to_string());
                     }
                     trash::delete(&path).map_err(|error| error.to_string())
                 })
@@ -172,11 +174,13 @@ impl Workspace {
             let update = this.update_in(cx, |this, window, cx| match result {
                 Ok(()) => {
                     this.finish_close(id, window, cx);
-                    this.notify(Severity::Info, "Moved the file to the Recycle Bin.", cx);
+                    this.notify(Severity::Info, t!("notice.moved_to_recycle_bin"), cx);
                 }
-                Err(error) => {
-                    this.notify(Severity::Error, format!("Could not delete: {error}"), cx)
-                }
+                Err(error) => this.notify(
+                    Severity::Error,
+                    t!("notice.delete_failed", error = error),
+                    cx,
+                ),
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during delete");
@@ -266,7 +270,7 @@ impl Workspace {
             return;
         };
         let input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).placeholder("Space name");
+            let mut state = InputState::new(window, cx).placeholder(t!("space.name_placeholder"));
             state.set_value(name, window, cx);
             state
         });
@@ -305,14 +309,14 @@ impl Workspace {
             .unwrap_or_else(|| self.documents.current_space());
         let count = self.documents.members(target).count();
         if !self.documents.delete_space(target) {
-            self.notify(Severity::Warning, "At least one space is needed.", cx);
+            self.notify(Severity::Warning, t!("notice.last_space"), cx);
             return;
         }
         self.sidebar.cursor = None;
         if count > 0 {
             self.notify(
                 Severity::Info,
-                format!("Moved {count} workbook(s) to the neighbouring space."),
+                t!("notice.moved_workbooks", count = count),
                 cx,
             );
         }

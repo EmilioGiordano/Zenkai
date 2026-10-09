@@ -45,6 +45,10 @@ pub fn active() -> &'static Translator {
     ACTIVE.get_or_init(|| build(Language::English))
 }
 
+pub fn number(value: u64) -> String {
+    active().group_digits(value)
+}
+
 #[macro_export]
 macro_rules! t {
     ($key:literal) => {

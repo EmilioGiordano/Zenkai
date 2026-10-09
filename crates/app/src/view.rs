@@ -16,6 +16,7 @@ use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
 };
+use zenkai_i18n::t;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, ColIdx, Contents, HAlign, NumberFormat, Range, Rgb, SheetId,
     StyleChange, WorkbookId,
@@ -110,10 +111,6 @@ const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 const UI_SCALE_STEP: f32 = 0.125;
 const MAX_REPLACE_CELLS: usize = 100_000;
 const FONT_SIZES: [u16; 16] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
-const IMPORTING: &str = "Importing…";
-const SAVING: &str = "Saving…";
-const CALCULATING: &str = "Calculating…";
-const SEARCHING: &str = "Searching…";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Severity {
@@ -416,10 +413,10 @@ impl Workspace {
             palette::groups(&self.recent)
                 .into_iter()
                 .fold(Command::new(state), Command::group)
-                .placeholder("Type a command")
+                .placeholder(t!("palette.placeholder"))
                 .on_confirm(|_, window, cx| window.dispatch_action(Box::new(ClosePalette), cx))
                 .on_cancel(|window, cx| window.dispatch_action(Box::new(ClosePalette), cx)),
-            "Palette",
+            t!("palette.title"),
             || Box::new(ClosePalette),
         ))
     }
@@ -442,7 +439,8 @@ impl Workspace {
         let input = match &document.find {
             Some(bar) => bar.input.clone(),
             None => {
-                let input = cx.new(|cx| InputState::new(window, cx).placeholder("Find in sheet"));
+                let input =
+                    cx.new(|cx| InputState::new(window, cx).placeholder(t!("find.placeholder")));
                 let subscription = cx.subscribe_in(&input, window, Self::on_find_event);
                 self._subscriptions.push(subscription);
                 document.find = Some(FindBar {
@@ -468,7 +466,8 @@ impl Workspace {
             return;
         };
         if bar.replace.is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Replace with"));
+            let input = cx
+                .new(|cx| InputState::new(window, cx).placeholder(t!("find.replace_placeholder")));
             let subscription = cx.subscribe_in(&input, window, |this, _, event, window, cx| {
                 if let InputEvent::PressEnter { .. } = event {
                     this.replace_all(window, cx);
@@ -501,16 +500,15 @@ impl Workspace {
         self.edit(window, cx, move |wb| {
             let changes = find::replacements(wb, sheet, &query, &replacement);
             if changes.is_empty() {
-                return Err(EngineError::Rejected(format!(
-                    "no cell contains \"{query}\""
-                )));
+                return Err(EngineError::Rejected(t!("find.no_match", query = query)));
             }
             // Every replaced cell is one undo entry, so huge replacements are refused
             // whole rather than cut short.
             if changes.len() > MAX_REPLACE_CELLS {
-                return Err(EngineError::Rejected(format!(
-                    "{} cells match; Replace All handles up to {MAX_REPLACE_CELLS} at once",
-                    changes.len()
+                return Err(EngineError::Rejected(t!(
+                    "find.too_many",
+                    count = changes.len(),
+                    limit = zenkai_i18n::number(MAX_REPLACE_CELLS as u64)
                 )));
             }
             wb.set_scattered_inputs(sheet, &changes)
@@ -559,23 +557,15 @@ impl Workspace {
             return;
         };
         if document.has_pending() {
-            self.notify(
-                Severity::Warning,
-                "Still calculating, try again in a moment.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
             return;
         }
         let Some(shared) = document.begin_read() else {
-            self.notify(
-                Severity::Warning,
-                "Still calculating, try again in a moment.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
             return;
         };
         let (id, sheet, generation) = (document.id, document.sheet, document.generation());
-        self.busy = Some(SEARCHING.into());
+        self.busy = Some(t!("busy.searching").into());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let task_query = query.clone();
@@ -586,7 +576,7 @@ impl Workspace {
                     })
                     .await;
             let update = this.update(cx, |this, cx| {
-                this.clear_busy(SEARCHING, cx);
+                this.clear_busy(t!("busy.searching"), cx);
                 let shown = this.documents.active_id() == Some(id);
                 let Some(document) = this.documents.get_mut(id) else {
                     return;
@@ -636,7 +626,7 @@ impl Workspace {
                         .child(
                             Button::new("replace-all")
                                 .small()
-                                .label("Replace all")
+                                .label(t!("find.replace_all"))
                                 .on_click(
                                     cx.listener(|this, _, window, cx| this.replace_all(window, cx)),
                                 ),
@@ -684,7 +674,7 @@ impl Workspace {
         if let Some(panel) = &self.chart {
             let text = chart::to_mermaid(&panel.data, panel.kind);
             cx.write_to_clipboard(ClipboardItem::new_string(text));
-            self.notify(Severity::Info, "Chart copied as Mermaid", cx);
+            self.notify(Severity::Info, t!("chart.copied_mermaid"), cx);
         }
     }
 
@@ -724,14 +714,12 @@ impl Workspace {
             let update = this.update(cx, |this, cx| match written {
                 Ok(()) => this.notify(
                     Severity::Info,
-                    format!("Chart saved to {}", chosen.display()),
+                    t!("chart.saved", path = chosen.display()),
                     cx,
                 ),
-                Err(error) => this.notify(
-                    Severity::Error,
-                    format!("Could not save the chart: {error}"),
-                    cx,
-                ),
+                Err(error) => {
+                    this.notify(Severity::Error, t!("chart.save_failed", error = error), cx)
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during chart export");
@@ -848,11 +836,7 @@ impl Workspace {
                     .and_then(|document| Some((document.workbook()?, document.sheet)))
                     .map(|(wb, sheet)| wb.input(sheet, *pos))
                 else {
-                    self.notify(
-                        Severity::Warning,
-                        "Still calculating, try again in a moment.",
-                        cx,
-                    );
+                    self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
                     return;
                 };
                 let pos = *pos;
@@ -1004,7 +988,7 @@ impl Workspace {
         };
         let generation = document.generation();
         self.previews.batch_started(generation);
-        self.busy = Some(CALCULATING.into());
+        self.busy = Some(t!("busy.calculating").into());
         cx.notify();
         let started = Instant::now();
         cx.spawn(async move |this, cx| {
@@ -1064,7 +1048,7 @@ impl Workspace {
     // Another document may still be recalculating; the label stays until all are done.
     fn clear_calculating(&mut self, cx: &mut Context<Self>) {
         if !self.documents.iter().any(Document::has_pending) {
-            self.clear_busy(CALCULATING, cx);
+            self.clear_busy(t!("busy.calculating"), cx);
         }
     }
 
@@ -1080,7 +1064,7 @@ impl Workspace {
     }
 
     fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.busy = Some(format!("Reading {}…", file_label(&path)).into());
+        self.busy = Some(t!("busy.reading", name = file_label(&path)).into());
         cx.notify();
         let label = self.busy.clone().unwrap_or_default();
         let request = self.next_csv_request();
@@ -1160,16 +1144,16 @@ impl Workspace {
             return;
         };
         let request = self.next_csv_request();
-        let summary = format!(
-            "Imported {} ({}, {}). Save to keep it as .xlsx.",
-            preview
+        let summary = t!(
+            "csv.imported",
+            name = preview
                 .path
                 .file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
-            preview.parsed.delimiter.label(),
-            preview.parsed.encoding.label()
+            delimiter = preview.parsed.delimiter.label(),
+            encoding = preview.parsed.encoding.label()
         );
-        self.busy = Some(IMPORTING.into());
+        self.busy = Some(t!("busy.importing").into());
         cx.notify();
         let CsvPreview {
             path,
@@ -1194,7 +1178,7 @@ impl Workspace {
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.clear_busy(IMPORTING, cx);
+                this.clear_busy(t!("busy.importing"), cx);
                 match result {
                     Ok(_) if this.csv_request != request => {}
                     Ok(workbook) => {
@@ -1231,7 +1215,10 @@ impl Workspace {
         self.ui_scale = scale.clamp(0.75, 2.0);
         self.notify(
             Severity::Info,
-            format!("Interface size {:.0}%", self.ui_scale * 100.0),
+            t!(
+                "notice.interface_size",
+                percent = format!("{:.0}", self.ui_scale * 100.0)
+            ),
             cx,
         );
         cx.notify();
@@ -1288,11 +1275,7 @@ impl Workspace {
             return;
         };
         let Some(workbook) = document.workbook() else {
-            self.notify(
-                Severity::Warning,
-                "Still calculating, try again in a moment.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
             return;
         };
         let rows = files::sheet_rows(&workbook, document.sheet);
@@ -1306,10 +1289,14 @@ impl Workspace {
             let update = this.update(cx, |this, cx| match written {
                 Ok(()) if sheets > 1 => this.notify(
                     Severity::Warning,
-                    format!("Saved the active sheet only to {}", path.display()),
+                    t!("notice.saved_active_sheet_only", path = path.display()),
                     cx,
                 ),
-                Ok(()) => this.notify(Severity::Info, format!("Saved {}", path.display()), cx),
+                Ok(()) => this.notify(
+                    Severity::Info,
+                    t!("notice.saved_to", path = path.display()),
+                    cx,
+                ),
                 Err(error) => this.notify(Severity::Error, error, cx),
             });
             if let Err(error) = update {
@@ -1381,7 +1368,7 @@ impl Workspace {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Open".into()),
+            prompt: Some(t!("dialog.open_button").into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             let chosen = match paths.await {
@@ -1419,26 +1406,22 @@ impl Workspace {
             Some(path) if !must_rename => self.save_to(id, path, window, cx),
             Some(_) => {
                 let detail = if document.read_only {
-                    "This file was opened read-only with its values only. Save a copy with a new name; the original is never overwritten.".to_string()
+                    t!("save.read_only_detail").to_string()
                 } else if document.is_macro_enabled() {
-                    let mut text =
-                        "Macros are not kept. The original .xlsm file will not be overwritten."
-                            .to_string();
+                    let mut text = t!("save.macros_detail").to_string();
                     if !document.unsupported.is_empty() {
-                        text.push_str(&format!(" Also lost: {}.", document.unsupported_labels()));
+                        text.push(' ');
+                        text.push_str(&t!("save.also_lost", list = document.unsupported_labels()));
                     }
                     text
                 } else {
-                    format!(
-                        "Saving will lose: {}. Save a copy with a new name to keep the original intact.",
-                        document.unsupported_labels()
-                    )
+                    t!("save.loses_detail", list = document.unsupported_labels())
                 };
                 let answer = window.prompt(
                     PromptLevel::Warning,
-                    "This workbook has content Zenkai cannot save yet",
+                    t!("save.cannot_save_title"),
                     Some(&detail),
-                    &["Save As…", "Cancel"],
+                    &[t!("button.save_as"), t!("button.cancel")],
                     cx,
                 );
                 cx.spawn_in(window, async move |this, cx| {
@@ -1534,24 +1517,17 @@ impl Workspace {
         let lost = document.unsupported_labels();
         let loses_content = !document.unsupported.is_empty();
         let (title, detail) = if replaces_source && never_overwritten {
-            self.notify(
-                Severity::Error,
-                "This original is never overwritten. Choose a new name.",
-                cx,
-            );
+            self.notify(Severity::Error, t!("save.original_protected"), cx);
             return;
         } else if replaces_source && loses_content {
             (
-                "Replace the original file?",
-                format!("Replacing the original loses: {lost}. This cannot be undone."),
+                t!("save.replace_original_title"),
+                t!("save.replace_original_detail", list = lost),
             )
         } else if renamed && path.exists() {
             (
-                "Replace the existing file?",
-                format!(
-                    "Zenkai saves as .xlsx, so the workbook goes to {}, which already exists.",
-                    path.display()
-                ),
+                t!("save.replace_existing_title"),
+                t!("save.replace_existing_detail", path = path.display()),
             )
         } else {
             self.save_to(id, path, window, cx);
@@ -1561,7 +1537,7 @@ impl Workspace {
             PromptLevel::Critical,
             title,
             Some(&detail),
-            &["Cancel", "Replace"],
+            &[t!("button.cancel"), t!("button.replace")],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -1587,15 +1563,15 @@ impl Workspace {
         };
         let Some(shared) = document.begin_file_job(FileJob::Saving) else {
             let reason = match document.file_job() {
-                FileJob::Idle => "Still calculating, try again in a moment.",
-                FileJob::Saving | FileJob::Autosaving => "Still saving, try again in a moment.",
+                FileJob::Idle => t!("notice.still_calculating"),
+                FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
             };
             self.notify(Severity::Warning, reason, cx);
             return;
         };
         let edits_at_start = document.edit_count();
         let generation = document.generation();
-        self.busy = Some(SAVING.into());
+        self.busy = Some(t!("busy.saving").into());
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
@@ -1604,7 +1580,7 @@ impl Workspace {
                 .spawn(async move { save_xlsx_atomic(&document::read_shared(&shared), &target) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.clear_busy(SAVING, cx);
+                this.clear_busy(t!("busy.saving"), cx);
                 let shown = this.documents.active_id() == Some(id);
                 let current = this.documents.get_mut(id).is_some_and(|document| {
                     document.end_file_job(generation);
@@ -1614,7 +1590,7 @@ impl Workspace {
                     if let Err(error) = result {
                         this.notify(
                             Severity::Error,
-                            format!("Saving {} failed: {error}", path.display()),
+                            t!("notice.save_failed", path = path.display(), error = error),
                             cx,
                         );
                     }
@@ -1630,13 +1606,13 @@ impl Workspace {
                         if shown {
                             window.set_window_title(&document.title());
                         }
-                        this.notify(Severity::Info, "Saved", cx);
+                        this.notify(Severity::Info, t!("notice.saved"), cx);
                     }
                     Err(error) => {
                         let asks_again = document.path.as_ref() == Some(&path);
                         this.notify(
                             Severity::Error,
-                            format!("{error}. Pick another location to keep your changes."),
+                            t!("notice.save_failed_pick_another", error = error),
                             cx,
                         );
                         this.flush_edits(id, cx);
@@ -1733,13 +1709,13 @@ impl Workspace {
             Some(workbook.copy(sheet, clipped))
         });
         match outcome {
-            None => self.notify(
-                Severity::Warning,
-                "Still calculating, try again in a moment.",
-                cx,
-            ),
+            None => self.notify(Severity::Warning, t!("notice.still_calculating"), cx),
             Some(None) => {
-                self.notify(Severity::Warning, "The selection is too large to copy.", cx);
+                self.notify(
+                    Severity::Warning,
+                    t!("notice.selection_too_large_to_copy"),
+                    cx,
+                );
             }
             Some(Some(Ok(copied))) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(copied.text.clone()));
@@ -1878,9 +1854,9 @@ impl Workspace {
                                         gpui_kit::assets::IconName::PanelLeftOpen
                                     })
                                     .tooltip(if self.sidebar.visible {
-                                        "Hide sidebar (Ctrl+Alt+B)"
+                                        t!("sidebar.hide_tooltip")
                                     } else {
-                                        "Show sidebar (Ctrl+Alt+B)"
+                                        t!("sidebar.show_tooltip")
                                     })
                                     .on_click(|event, window, cx| {
                                         if sidebar::is_primary_click(event) {
@@ -1935,7 +1911,7 @@ impl Workspace {
                 None => div()
                     .id("name-box")
                     .role(Role::Button)
-                    .aria_label(format!("Name box, {name}, press to go to a cell"))
+                    .aria_label(t!("grid.name_box_label", name = name))
                     .w(px(96.0))
                     .h(px(24.0))
                     .px_2()
@@ -1963,7 +1939,7 @@ impl Workspace {
                     .id("formula-bar-edit")
                     .key_context("FormulaBar")
                     .role(Role::Group)
-                    .aria_label("Formula bar")
+                    .aria_label(t!("grid.formula_bar_label"))
                     .flex_1()
                     .child(Input::new(&bar.input))
             }))
@@ -1972,7 +1948,7 @@ impl Workspace {
                     div()
                         .id("formula-content")
                         .role(Role::TextInput)
-                        .aria_label("Formula bar")
+                        .aria_label(t!("grid.formula_bar_label"))
                         .aria_value(content.clone())
                         .flex_1()
                         .h(px(24.0))
@@ -2090,11 +2066,7 @@ impl Workspace {
             StructureEdit::FreezePanes => false,
         };
         if refused {
-            self.notify(
-                Severity::Warning,
-                "Select whole rows or columns, not the entire sheet, to insert or delete.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("notice.select_rows_or_columns"), cx);
             return;
         }
         match action {
@@ -2126,7 +2098,7 @@ impl Workspace {
                 if rows >= visible_rows || cols >= visible_cols {
                     self.notify(
                         Severity::Warning,
-                        "Scroll to the top-left and pick a visible cell: the rows above it and the columns to its left are frozen.",
+                        t!("notice.freeze_needs_visible_cell"),
                         cx,
                     );
                     return;
@@ -2148,11 +2120,7 @@ impl Workspace {
             range = self.select_current_region(cx);
         }
         if range.rows() < 2 {
-            self.notify(
-                Severity::Info,
-                "Nothing to sort: select rows of data first.",
-                cx,
-            );
+            self.notify(Severity::Info, t!("notice.nothing_to_sort"), cx);
             return;
         }
         self.edit(window, cx, move |wb| wb.sort(sheet, range, key, descending));
@@ -2173,11 +2141,7 @@ impl Workspace {
             .and_then(Document::workbook)
             .map(|workbook| workbook.cell(sheet, active))
         else {
-            self.notify(
-                Severity::Warning,
-                "Still calculating, try again in a moment.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
             return;
         };
         let Some(code) = decimals::step_decimals(
@@ -2205,11 +2169,7 @@ impl Workspace {
             .and_then(Document::workbook)
             .map(|wb| wb.cell(sheet, active).style.wrap)
         else {
-            self.notify(
-                Severity::Warning,
-                "Still calculating, try again in a moment.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
             return;
         };
         let wrap = !wrapped;
@@ -2234,11 +2194,7 @@ impl Workspace {
             range.cols() == zenkai_types::MAX_COLS
         };
         if hidden && whole_sheet {
-            self.notify(
-                Severity::Warning,
-                "Hiding every row or column is not supported.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("notice.cannot_hide_everything"), cx);
             return;
         }
         self.edit(window, cx, move |wb| {
@@ -2326,7 +2282,7 @@ impl Workspace {
         if let Err(error) = zenkai_engine::format_preview(1234.5678, &code) {
             self.notify(
                 Severity::Warning,
-                format!("Invalid number format: {error}"),
+                t!("notice.invalid_number_format", error = error),
                 cx,
             );
             return;
@@ -2339,7 +2295,7 @@ impl Workspace {
             self.close_format_dialog(window, cx);
             self.notify(
                 Severity::Warning,
-                "The sheet changed; open Format Cells again on the cells to format.",
+                t!("notice.sheet_changed_reopen_format"),
                 cx,
             );
             return;
@@ -2365,7 +2321,7 @@ impl Workspace {
         let dialog = self.format_dialog.as_ref()?;
         let code = dialog.code.read(cx).value().to_string();
         let preview = zenkai_engine::format_preview(dialog.sample, &code)
-            .unwrap_or_else(|_| "Invalid format".to_string());
+            .unwrap_or_else(|_| t!("format.invalid_preview").to_string());
         let input = dialog.code.clone();
         let on_category = move |code: &'static str, window: &mut Window, cx: &mut App| {
             input.update(cx, |state, cx| state.set_value(code, window, cx));
@@ -2597,7 +2553,7 @@ impl Workspace {
 
     fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("A1 or A1:C10"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("goto.placeholder")));
         let subscription =
             cx.subscribe_in(
                 &input,
@@ -2612,7 +2568,7 @@ impl Workspace {
                             }
                             None => this.notify(
                                 Severity::Warning,
-                                format!("\"{target}\" is not a cell or range reference"),
+                                t!("notice.not_a_reference", target = target),
                                 cx,
                             ),
                         }
@@ -2647,7 +2603,7 @@ impl Workspace {
             .map(|s| s.name.clone())
             .unwrap_or_default();
         let input = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).placeholder("Sheet name");
+            let mut state = InputState::new(window, cx).placeholder(t!("rename.placeholder"));
             state.set_value(current, window, cx);
             state
         });
@@ -2688,13 +2644,13 @@ impl Workspace {
                 .border_t_1()
                 .border_color(theme.border)
                 .bg(theme.background)
-                .child(div().text_sm().child("Rename sheet"))
+                .child(div().text_sm().child(t!("rename.label")))
                 .child(div().w(px(260.0)).child(Input::new(input)))
                 .child(
                     div()
                         .text_xs()
                         .text_color(theme.muted_foreground)
-                        .child("Enter to apply, Esc to cancel"),
+                        .child(t!("rename.hint")),
                 ),
         )
     }
@@ -2704,11 +2660,7 @@ impl Workspace {
             return;
         };
         if document.sheets.len() < 2 {
-            self.notify(
-                Severity::Warning,
-                "A workbook must contain at least one sheet.",
-                cx,
-            );
+            self.notify(Severity::Warning, t!("notice.last_sheet"), cx);
             return;
         }
         let Some(sheet) = self.active_sheet() else {
@@ -2721,9 +2673,9 @@ impl Workspace {
             .unwrap_or_default();
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("Delete sheet \"{name}\"?"),
-            Some("Its data is removed. You can undo with Ctrl+Z."),
-            &["Cancel", "Delete"],
+            &t!("sheet.delete_title", name = name),
+            Some(t!("sheet.delete_detail")),
+            &[t!("button.cancel"), t!("button.delete")],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -2772,7 +2724,7 @@ impl Workspace {
         let busy = self
             .busy
             .clone()
-            .filter(|busy| busy.as_ref() != CALCULATING)?;
+            .filter(|busy| busy.as_ref() != t!("busy.calculating"))?;
         let theme = cx.theme();
         let indicator = if cx.reduce_motion() {
             div().child("…").into_any_element()
@@ -2824,7 +2776,11 @@ impl Workspace {
                     .child(notice.text.clone()),
             );
         } else {
-            left = left.child(div().text_color(theme.muted_foreground).child("Ready"));
+            left = left.child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child(t!("status.ready")),
+            );
         }
         let automatic =
             cx.global::<AgentConfig>().state.current.agents.permission == PermissionMode::Automatic;
@@ -2836,39 +2792,39 @@ impl Workspace {
                 this.child(
                     div()
                         .text_color(theme.warning)
-                        .child("⚠ Agents write without asking"),
+                        .child(t!("status.agents_automatic")),
                 )
             })
             .when(
                 self.documents
                     .active()
                     .is_some_and(|document| document.origin == FileOrigin::Internet),
-                |this| this.child("Protected View: agents read only"),
+                |this| this.child(t!("status.protected_view")),
             );
         match self.stats.filter(|_| self.documents.active().is_some()) {
             Some(stats) if stats.count > 1 => {
                 if let Some(avg) = stats.average() {
                     right = right
-                        .child(format!("Average: {}", format_number(avg)))
-                        .child(format!("Sum: {}", format_number(stats.sum)));
+                        .child(t!("status.average", value = format_number(avg)))
+                        .child(t!("status.sum", value = format_number(stats.sum)));
                 }
-                right = right.child(format!("Count: {}", stats.count));
+                right = right.child(t!("status.count", value = stats.count));
             }
             None if self.documents.active().is_some() => {
-                right = right.child("Selection too large to summarize")
+                right = right.child(t!("status.selection_too_large"))
             }
             _ => {}
         }
         // Modes that change what the sheet shows or allows are named, never only implied.
         if self.show_formulas {
-            right = right.child("Showing formulas");
+            right = right.child(t!("status.showing_formulas"));
         }
         if self
             .documents
             .active()
             .is_some_and(|document| document.read_only)
         {
-            right = right.child("Read-only");
+            right = right.child(t!("status.read_only"));
         }
         let zoom = self.grid.read(cx).zoom();
         right = right.child(format!("{:.0}%", zoom * 100.0));
@@ -2878,12 +2834,12 @@ impl Workspace {
                 .map_or("-".to_string(), |d| format!("{} ms", d.as_millis()));
             let frame = self.grid.read(cx).last_paint();
             right = right
-                .child(format!("Memory: {} MB", self.memory_mb))
-                .child(format!(
-                    "Grid paint: {:.1} ms",
-                    frame.as_secs_f64() * 1000.0
+                .child(t!("status.memory", mb = self.memory_mb))
+                .child(t!(
+                    "status.grid_paint",
+                    ms = format!("{:.1}", frame.as_secs_f64() * 1000.0)
                 ))
-                .child(format!("Last recalc: {recalc}"));
+                .child(t!("status.last_recalc", value = recalc));
         }
         h_flex()
             .h(px(26.0))
@@ -3091,16 +3047,12 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleFormulas, _, cx| {
                 this.show_formulas = !this.show_formulas;
-                let shown = if this.show_formulas {
-                    "formulas"
+                let message = if this.show_formulas {
+                    t!("notice.showing_formulas")
                 } else {
-                    "values"
+                    t!("notice.showing_values")
                 };
-                this.notify(
-                    Severity::Info,
-                    format!("Showing {shown} (Ctrl+` to switch)"),
-                    cx,
-                );
+                this.notify(Severity::Info, message, cx);
                 this.refresh_cells(cx);
             }))
             .on_action(
@@ -3192,8 +3144,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleReduceMotion, _, cx| {
                 let reduce = !cx.reduce_motion();
                 cx.set_reduce_motion(reduce);
-                let state = if reduce { "on" } else { "off" };
-                this.notify(Severity::Info, format!("Reduce motion {state}"), cx);
+                let message = if reduce {
+                    t!("notice.reduce_motion_on")
+                } else {
+                    t!("notice.reduce_motion_off")
+                };
+                this.notify(Severity::Info, message, cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() + 0.1, cx));
@@ -3453,38 +3409,38 @@ fn file_label(path: &Path) -> String {
 // they act on the selection the right click just set.
 fn cell_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
     menu.action_context(grid_focus)
-        .menu("Cut", Box::new(Cut))
-        .menu("Copy", Box::new(Copy))
-        .menu("Paste", Box::new(Paste))
-        .menu("Paste values", Box::new(PasteValues))
+        .menu(t!("menu.cut"), Box::new(Cut))
+        .menu(t!("menu.copy"), Box::new(Copy))
+        .menu(t!("menu.paste"), Box::new(Paste))
+        .menu(t!("menu.paste_values"), Box::new(PasteValues))
         .separator()
-        .menu("Insert rows above", Box::new(InsertRows))
-        .menu("Insert columns to the left", Box::new(InsertColumns))
-        .menu("Delete rows", Box::new(DeleteRows))
-        .menu("Delete columns", Box::new(DeleteColumns))
+        .menu(t!("menu.insert_rows"), Box::new(InsertRows))
+        .menu(t!("menu.insert_columns"), Box::new(InsertColumns))
+        .menu(t!("menu.delete_rows"), Box::new(DeleteRows))
+        .menu(t!("menu.delete_columns"), Box::new(DeleteColumns))
         .separator()
-        .menu("Clear contents", Box::new(DeleteForward))
-        .menu("Clear formats", Box::new(ClearFormats))
-        .menu("Clear all", Box::new(ClearAll))
+        .menu(t!("menu.clear_contents"), Box::new(DeleteForward))
+        .menu(t!("menu.clear_formats"), Box::new(ClearFormats))
+        .menu(t!("menu.clear_all"), Box::new(ClearAll))
         .separator()
-        .menu("Sort A to Z", Box::new(SortAscending))
-        .menu("Sort Z to A", Box::new(SortDescending))
+        .menu(t!("menu.sort_ascending"), Box::new(SortAscending))
+        .menu(t!("menu.sort_descending"), Box::new(SortDescending))
         .separator()
-        .menu("Generate data…", Box::new(GenerateData))
+        .menu(t!("menu.generate_data"), Box::new(GenerateData))
         .separator()
-        .menu("Insert chart", Box::new(InsertChart))
+        .menu(t!("menu.insert_chart"), Box::new(InsertChart))
 }
 
 // Excel's sheet tab menu; it acts on the active sheet.
 fn sheet_menu(menu: PopupMenu, grid_focus: FocusHandle) -> PopupMenu {
     menu.action_context(grid_focus)
-        .menu("Insert sheet", Box::new(NewSheet))
-        .menu("Rename", Box::new(RenameSheet))
-        .menu("Duplicate", Box::new(DuplicateSheet))
-        .menu("Delete", Box::new(DeleteSheet))
+        .menu(t!("menu.insert_sheet"), Box::new(NewSheet))
+        .menu(t!("menu.rename"), Box::new(RenameSheet))
+        .menu(t!("menu.duplicate"), Box::new(DuplicateSheet))
+        .menu(t!("menu.delete"), Box::new(DeleteSheet))
         .separator()
-        .menu("Move left", Box::new(MoveSheetLeft))
-        .menu("Move right", Box::new(MoveSheetRight))
+        .menu(t!("menu.move_left"), Box::new(MoveSheetLeft))
+        .menu(t!("menu.move_right"), Box::new(MoveSheetRight))
 }
 
 fn rgb_of(color: Hsla) -> Rgb {

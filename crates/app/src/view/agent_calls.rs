@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use zenkai_i18n::t;
 
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
@@ -206,11 +207,7 @@ impl Workspace {
             call.respond(result);
             if saw_hidden {
                 let notified = this.update(cx, |this, cx| {
-                    this.notify(
-                        Severity::Warning,
-                        "An agent read content you cannot see (hidden sheets, rows or columns, or very long text).",
-                        cx,
-                    )
+                    this.notify(Severity::Warning, t!("notice.agent_read_hidden"), cx)
                 });
                 if notified.is_err() {
                     tracing::debug!("workspace closed after an agent read");
@@ -339,7 +336,7 @@ impl Workspace {
         });
         self.notify(
             Severity::Info,
-            format!("Agent in {name}: {description}"),
+            t!("notice.agent_wrote", name = name, description = description),
             cx,
         );
         cx.spawn(async move |_, _| {
@@ -383,11 +380,11 @@ impl Workspace {
             .call
             .client
             .clone()
-            .unwrap_or_else(|| "An external agent".to_string());
-        let workbook = self
-            .documents
-            .get(pending.id)
-            .map_or_else(|| "a closed workbook".to_string(), Document::name);
+            .unwrap_or_else(|| t!("approval.external_agent").to_string());
+        let workbook = self.documents.get(pending.id).map_or_else(
+            || t!("approval.closed_workbook").to_string(),
+            Document::name,
+        );
         let on_screen = self.documents.active_id() == Some(pending.id)
             && self.active_sheet() == Some(pending.plan.sheet());
         Some(
@@ -407,35 +404,42 @@ impl Workspace {
                                 .flex_1()
                                 .min_w_0()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(format!("{who} wants to change {workbook}")),
+                                .child(t!(
+                                    "approval.wants_to_change",
+                                    who = who,
+                                    workbook = workbook
+                                )),
                         )
                         .when(!on_screen, |row| {
-                            row.child(Button::new("agent-show").label("Show (Alt+W)").on_click(
-                                |_, window, cx| {
-                                    window.dispatch_action(Box::new(ShowAgentChange), cx)
-                                },
-                            ))
+                            row.child(
+                                Button::new("agent-show")
+                                    .label(t!("approval.show"))
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(ShowAgentChange), cx)
+                                    }),
+                            )
                         })
                         .child(
                             Button::new("agent-deny")
                                 .primary()
-                                .label("Deny (Enter)")
+                                .label(t!("approval.deny"))
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(DenyAgentChange), cx)
                                 }),
                         )
-                        .child(Button::new("agent-allow").label("Allow (Alt+Y)").on_click(
-                            |_, window, cx| window.dispatch_action(Box::new(AllowAgentChange), cx),
-                        )),
+                        .child(
+                            Button::new("agent-allow")
+                                .label(t!("approval.allow"))
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(Box::new(AllowAgentChange), cx)
+                                }),
+                        ),
                 )
                 .child(
                     div()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child(format!(
-                            "{}. Not saved; Ctrl+Z undoes it.",
-                            pending.plan.headline()
-                        )),
+                        .child(t!("approval.not_saved", headline = pending.plan.headline())),
                 )
                 .children(pending.plan.sample().map(|sample| {
                     div()
@@ -580,11 +584,7 @@ impl Workspace {
         };
         if document.origin == FileOrigin::Internet {
             document.origin = FileOrigin::Local;
-            self.notify(
-                Severity::Info,
-                "Agents may now edit this file (until it is closed).",
-                cx,
-            );
+            self.notify(Severity::Info, t!("notice.agents_may_edit"), cx);
         }
     }
 

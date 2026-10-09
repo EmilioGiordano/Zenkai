@@ -70,7 +70,7 @@ impl Translator {
             .map(|(_, value)| value.clone())
     }
 
-    fn group_digits(&self, number: u64) -> String {
+    pub fn group_digits(&self, number: u64) -> String {
         let separator = match self.language {
             Language::English => ',',
             Language::Spanish => '.',
