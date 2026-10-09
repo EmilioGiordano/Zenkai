@@ -129,3 +129,24 @@ pub fn past_session(info: &SessionInfo) -> PastSession {
         updated_at: info.updated_at.clone(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use agent_client_protocol::schema::v1::NewSessionResponse;
+
+    use super::*;
+
+    const CLAUDE_NEW_SESSION: &str = include_str!("claude_new_session.json");
+
+    #[test]
+    fn the_claude_adapter_session_lists_modes_models_and_effort() {
+        let response: NewSessionResponse = serde_json::from_str(CLAUDE_NEW_SESSION).unwrap();
+        let selects =
+            selects_from_session(response.config_options.as_deref(), response.modes.as_ref());
+        let kinds: Vec<ConfigKind> = selects.iter().map(|select| select.kind).collect();
+        assert_eq!(
+            kinds,
+            [ConfigKind::Mode, ConfigKind::Model, ConfigKind::Effort]
+        );
+    }
+}
