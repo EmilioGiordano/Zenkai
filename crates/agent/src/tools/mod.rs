@@ -2,6 +2,7 @@ mod approval_text;
 mod channel;
 mod client;
 mod error;
+mod folder;
 #[cfg(test)]
 mod generate_tests;
 #[cfg(any(test, feature = "test-support"))]
@@ -17,6 +18,7 @@ pub use approval_text::{shown_entry, shown_text};
 pub use channel::{ToolCall, ToolEndpoint, ToolResult, channel};
 pub use client::client_label;
 pub use error::{AgentAccess, ReadOnlyReason, ToolError};
+pub use folder::{InsidePath, PathError, WorkingFolder};
 #[cfg(any(test, feature = "test-support"))]
 pub use local_host::LocalHost;
 pub use read::{LONG_TEXT_CHARS, MAX_FIND_RESULTS, MAX_READ_CELLS, read};
