@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4152b9d948036e1d00e454ae3d62877a541133479894a59fcbacbfa28df5df8d # shrinks to atoms = [(Relative(0, 0), ":"), (Function("SEQUENCE", [Relative(0, 0)]), "+")], places = [(1, 1, false), (1, 1, false)]
