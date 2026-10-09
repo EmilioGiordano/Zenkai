@@ -14,6 +14,9 @@ const ENDPOINT_FILE: &str = "mcp-endpoint.txt";
 // Zenkai refuses longer messages; the relay stops before buffering one.
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 
+const NOT_AVAILABLE: &str = "Zenkai is not running, or \"Allow MCP clients outside Zenkai\" is off. \
+     Start Zenkai, press Ctrl+, and turn that option on in the Agents settings (External agents).";
+
 struct Endpoint {
     pipe: String,
     token: String,
@@ -36,11 +39,7 @@ fn endpoint() -> Result<Endpoint, String> {
         return Ok(Endpoint { pipe, token });
     }
     let path = endpoint_file().ok_or("no folder for the Zenkai endpoint file")?;
-    let text = std::fs::read_to_string(&path).map_err(|_| {
-        "Zenkai is not running with external agents allowed. Open Zenkai, then Settings \
-         (Ctrl+,) and turn on \"Allow MCP clients outside Zenkai\"."
-            .to_string()
-    })?;
+    let text = std::fs::read_to_string(&path).map_err(|_| NOT_AVAILABLE.to_string())?;
     let mut lines = text.lines().map(str::trim);
     match (lines.next(), lines.next()) {
         (Some(pipe), Some(token)) if !pipe.is_empty() && !token.is_empty() => Ok(Endpoint {
@@ -70,9 +69,7 @@ fn relay() -> Result<(), String> {
         .clone()
         .to_ns_name::<GenericNamespaced>()
         .map_err(|error| format!("invalid pipe name: {error}"))?;
-    let stream = Stream::connect(name).map_err(|error| {
-        format!("could not reach Zenkai ({error}); is it running with agents allowed?")
-    })?;
+    let stream = Stream::connect(name).map_err(|error| format!("{NOT_AVAILABLE} ({error})"))?;
     let (receive, mut send) = stream.split();
     send.write_all(format!("{}\n", endpoint.token).as_bytes())
         .map_err(|error| format!("could not send the session token: {error}"))?;

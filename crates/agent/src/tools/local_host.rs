@@ -6,7 +6,7 @@ use crate::tools::channel::{ToolCall, ToolResult};
 use crate::tools::error::{AgentAccess, ToolError};
 use crate::tools::reply::ToolReply;
 use crate::tools::request::ToolRequest;
-use crate::tools::{check_workbook, plan_write, read, workbook_summary};
+use crate::tools::{WorkbookPlace, check_workbook, plan_write, read, workbook_summary};
 use zenkai_types::WorkbookId;
 
 // Serves tools straight on a workbook, writes approved automatically: what Zenkai's
@@ -25,6 +25,10 @@ impl LocalHost {
             ToolRequest::ListWorkbooks => Ok(ToolReply::Workbooks(vec![workbook_summary(
                 self.id,
                 &self.name,
+                &WorkbookPlace {
+                    space: "Workbooks",
+                    location: "not saved",
+                },
                 &self.workbook.sheets(),
                 self.access,
             )])),

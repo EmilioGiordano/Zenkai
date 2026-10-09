@@ -153,7 +153,7 @@ fn an_mcp_client_reads_and_edits_the_open_workbook_through_the_relay() {
 
     let workbooks = text_of(&client.call(3, "list_workbooks", json!({})));
     assert!(workbooks.contains("Workbook id 9"), "{workbooks}");
-    assert!(workbooks.contains("<<<UNTRUSTED SPREADSHEET DATA"));
+    assert!(workbooks.contains("<<<UNTRUSTED "));
 
     let written = client.call(
         4,

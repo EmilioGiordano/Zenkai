@@ -33,9 +33,21 @@ pub fn summaries(documents: &Documents, permission: PermissionMode) -> Vec<Workb
     documents
         .iter()
         .map(|document| {
+            let space = documents
+                .spaces()
+                .get(document.space)
+                .map_or("", |space| space.name.as_str());
+            let path = document
+                .path
+                .as_ref()
+                .map(|path| path.display().to_string());
             tools::workbook_summary(
                 document.id,
                 &document.name(),
+                &tools::WorkbookPlace {
+                    space,
+                    location: path.as_deref().unwrap_or("not saved"),
+                },
                 &document.sheets,
                 access(document, permission),
             )

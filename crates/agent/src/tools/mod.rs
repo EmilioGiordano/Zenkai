@@ -38,15 +38,23 @@ pub fn check_workbook(open: WorkbookId, requested: WorkbookId) -> Result<(), Too
     }
 }
 
+pub struct WorkbookPlace<'a> {
+    pub space: &'a str,
+    pub location: &'a str,
+}
+
 pub fn workbook_summary(
     id: WorkbookId,
     name: &str,
+    place: &WorkbookPlace,
     sheets: &[SheetInfo],
     access: AgentAccess,
 ) -> WorkbookSummary {
     WorkbookSummary {
         id,
         name: name.to_string(),
+        space: place.space.to_string(),
+        location: place.location.to_string(),
         sheets: sheets.len(),
         access,
     }
