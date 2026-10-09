@@ -30,6 +30,7 @@ mod settings_page;
 mod sidebar_item;
 mod sidebar_rows;
 mod space_appearance;
+mod space_controls;
 mod space_parts;
 mod space_settings;
 mod spaces;

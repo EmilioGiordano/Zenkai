@@ -1,5 +1,6 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
+use gpui_kit::component::Side;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_kit::component::spinner::Spinner;
@@ -13,6 +14,10 @@ use super::WIDTH;
 use crate::actions::*;
 use crate::sidebar_item::{self, FileItem, FileState};
 use crate::sidebar_rows::{Move, Row};
+use crate::space_appearance::resolve;
+use crate::space_controls::swatch_dot;
+use crate::space_parts::{self, Fill, HeaderText};
+use crate::space_settings;
 use crate::spaces::{Space, SpaceColor, SpaceId};
 
 #[derive(Clone)]
@@ -260,8 +265,12 @@ impl Workspace {
 
     fn render_space(&self, space: &Space, paint: &Paint, cx: &mut Context<Self>) -> AnyElement {
         let muted = cx.theme().muted_foreground;
+        let strong = cx.theme().sidebar_foreground;
         let accent = cx.theme().sidebar_accent;
         let id = space.id;
+        let resolved = resolve(&space_settings::current(cx), space.color, &space.appearance);
+        let shape = space_parts::parts(&resolved, space_settings::contrast(cx));
+        let tint = |fill: Option<Fill>| fill.map(space_settings::paint);
         let files: Vec<FileItem> = self
             .documents
             .members(id)
@@ -293,8 +302,12 @@ impl Workspace {
             .px(px(8.0))
             .items_center()
             .gap(px(6.0))
-            .text_color(muted)
+            .text_color(match shape.header_text {
+                HeaderText::Muted => muted,
+                HeaderText::Strong => strong,
+            })
             .font_weight(FontWeight::MEDIUM)
+            .when_some(tint(shape.header_fill), |header, fill| header.bg(fill))
             .child(
                 Icon::new(if space.collapsed {
                     IconName::ChevronRight
@@ -303,12 +316,12 @@ impl Workspace {
                 })
                 .small(),
             )
-            .children(space.color.rgb().map(|value| {
+            .children(shape.dot.map(|dot| {
                 div()
                     .flex_shrink_0()
                     .size(px(8.0))
                     .rounded_full()
-                    .bg(rgb(value))
+                    .bg(space_settings::paint(dot))
             }))
             .child(title)
             .child(div().text_xs().child(count.to_string()))
@@ -332,32 +345,60 @@ impl Workspace {
                 let entity = paint.entity.clone();
                 move |menu, window, cx| {
                     let entity = entity.clone();
+                    let current = entity
+                        .upgrade()
+                        .and_then(|workspace| {
+                            let workspace = workspace.read(cx);
+                            let space = workspace.documents.spaces().get(id)?;
+                            let own_color = space
+                                .appearance
+                                .custom()
+                                .is_some_and(|custom| custom.color.is_some());
+                            Some((!own_color).then_some(space.color))
+                        })
+                        .flatten();
                     menu.action_context(focus.clone())
+                        .check_side(Side::Right)
                         .menu("Rename space", Box::new(RenameSpace))
                         .submenu("Color", window, cx, move |menu, _, _| {
                             SpaceColor::ALL.iter().fold(menu, |menu, color| {
                                 let (entity, color) = (entity.clone(), *color);
-                                menu.item(PopupMenuItem::new(color.label()).on_click(
-                                    move |_, _, cx| {
-                                        entity_update(&entity, cx, |this, cx| {
-                                            this.set_space_color(id, color, cx)
-                                        })
-                                    },
-                                ))
+                                menu.item(
+                                    PopupMenuItem::element(move |_, cx| {
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
+                                            .child(swatch_dot(color, false, cx))
+                                            .child(color.label())
+                                    })
+                                    .checked(current == Some(color))
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            entity_update(&entity, cx, |this, cx| {
+                                                this.set_space_color(id, color, cx)
+                                            })
+                                        },
+                                    ),
+                                )
                             })
                         })
+                        .menu("Customize…", Box::new(CustomizeSpace))
                         .menu("Delete space", Box::new(DeleteSpace))
                 }
             });
         let items: Vec<_> = files
             .into_iter()
             .filter(|_| !space.collapsed)
-            .map(|file| self.render_file(file, id, paint, cx))
+            .map(|file| self.render_file(file, id, tint(shape.row_fill), paint, cx))
             .collect();
         v_flex()
             .id(("section", id.0))
             .gap_0p5()
-            .rounded(px(8.0))
+            .rounded(px(10.0))
+            .p(px(shape.inset))
+            .border_1()
+            .border_color(tint(shape.outline).unwrap_or_else(gpui_kit::transparent_black))
+            .when_some(tint(shape.container_fill), |section, fill| section.bg(fill))
             .drag_over::<DraggedWorkbook>(move |style, _, _, _| style.bg(accent.opacity(0.5)))
             .on_drop(cx.listener(move |this, dragged: &DraggedWorkbook, _, cx| {
                 this.move_document(dragged.id, id, cx)
@@ -371,6 +412,7 @@ impl Workspace {
         &self,
         file: FileItem,
         space: SpaceId,
+        tint: Option<Hsla>,
         paint: &Paint,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -391,6 +433,7 @@ impl Workspace {
             .gap(px(3.0))
             .px(px(10.0))
             .py(px(8.0))
+            .when_some(tint, |frame, fill| frame.bg(fill))
             .when(file.active, |frame| frame.bg(active_background))
             .child(
                 h_flex()

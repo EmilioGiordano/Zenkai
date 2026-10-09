@@ -130,6 +130,14 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
             item("Diagnostics in the status bar", ToggleDiagnostics),
             item("Show or hide the sidebar", ToggleSidebar),
             item("Change the color of the selected space", CycleSpaceColor),
+            item(
+                "Customize the appearance of the selected space",
+                CustomizeSpace,
+            ),
+            item(
+                "Reset the selected space to the default appearance",
+                ResetSpaceAppearance,
+            ),
             item("Delete the selected file (Recycle Bin)", DeleteFile),
             item("Move focus between the grid and the sidebar", FocusSidebar),
         ]),
