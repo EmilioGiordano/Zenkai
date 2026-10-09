@@ -45,6 +45,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `Model::criteria_deltas`). Tests: `src/test/test_criteria_totals.rs`,
   `src/criteria_ranges.rs`. Needs the incremental recalculation, the exact sum and the
   per-evaluation criteria ranges above.
+- COUNTIF and COUNTIFS walk the sheet for its used area only when a range is a whole
+  row or column (`src/functions/statistical/if_ifs.rs`); the walk cost about 60 ms per
+  call on a 3M-cell sheet. Covered by `src/test/test_criteria_semantics.rs`.
 - COUNTIFS over a whole-sheet range like `A:XFD` counted its blank tail in i32, which
   overflowed (`src/functions/statistical/if_ifs.rs`). Tests:
   `src/test/test_criteria_semantics.rs`.
