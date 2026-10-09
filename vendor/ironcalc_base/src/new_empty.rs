@@ -700,7 +700,8 @@ impl<'a> Model<'a> {
             dependencies: None,
             circular_hits: 0,
             last_recalculation: Recalculation::Full,
-            criteria_ranges: CriteriaRanges::Off,
+            criteria_ranges: CriteriaRanges::new(),
+            criteria_deltas: 0,
         };
         model.parse_formulas();
         model.evaluate_conditional_formatting();
