@@ -44,6 +44,7 @@ pub(super) struct Live {
     pub handle: SessionHandle,
     pub agent: AgentId,
     pub ready: bool,
+    pub folder: WorkingFolder,
     pub _bridge: Bridge,
 }
 

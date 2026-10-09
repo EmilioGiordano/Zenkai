@@ -213,8 +213,13 @@ async fn run_prompt(
         say(&connection, &session, &format!("Session facts: {facts}"))?;
         return responder.respond(PromptResponse::new(StopReason::EndTurn));
     }
-    if text.contains("mcp") || text.contains("write") {
-        let (tool, arguments) = if text.contains("write") {
+    if text.contains("mcp") || text.contains("write") || text.contains("create") {
+        let (tool, arguments) = if text.contains("create") {
+            (
+                "create_workbook",
+                serde_json::json!({"path": "budget-september.xlsx", "sheets": ["Income", "Expenses"]}),
+            )
+        } else if text.contains("write") {
             (
                 "write_cells",
                 serde_json::json!({"workbook": 0, "sheet": "Sheet1", "start": "A1", "rows": [["agent wrote"]]}),

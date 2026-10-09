@@ -95,6 +95,7 @@ impl ChatPanel {
             handle,
             agent: prepared.id,
             ready: false,
+            folder: prepared.folder,
             _bridge: armed.bridge,
         });
         self.link = Link::Starting;

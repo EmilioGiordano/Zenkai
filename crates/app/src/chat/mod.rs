@@ -2,6 +2,7 @@ mod cards;
 mod composer;
 mod events;
 mod extras;
+mod files;
 mod header;
 mod launch;
 mod permissions;
@@ -14,7 +15,7 @@ mod startup;
 mod transcript;
 
 use std::collections::BTreeMap;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::text::TextViewState;
@@ -93,6 +94,8 @@ pub struct ChatPanel {
     gate: Option<Gate>,
     problem: Option<Problem>,
     turn_started: Option<Instant>,
+    // Wall-clock start of the turn, to find the files the agent wrote during it.
+    turn_began: Option<SystemTime>,
     state: AgentState,
     history: History,
     history_saves: async_channel::Sender<History>,
@@ -196,6 +199,7 @@ impl ChatPanel {
             gate: None,
             problem: None,
             turn_started: None,
+            turn_began: None,
             state: AgentState::default(),
             history: History::default(),
             history_saves,
@@ -268,6 +272,7 @@ impl ChatPanel {
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.turn_started = Some(Instant::now());
+        self.turn_began = Some(SystemTime::now());
         self.problem = None;
         self.view = View::Chat;
         self.menu = None;

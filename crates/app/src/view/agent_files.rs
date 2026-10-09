@@ -1,17 +1,20 @@
 use std::path::Path;
 
 use gpui_kit::*;
+use zenkai_agent::chat::thread::FileCard;
 use zenkai_agent::settings::PermissionMode;
 use zenkai_agent::tools::{
     self, InsidePath, NewWorkbook, OpenedWorkbook, Opening, ReadOnlyReason, ToolCall, ToolError,
-    ToolReply, WorkbookId,
+    ToolReply, WorkbookId, WorkingFolder,
 };
 use zenkai_engine::Engine;
 
 use super::Workspace;
 use super::agent_calls::Change;
 use super::workbooks::failure_text;
+use crate::agent_folder::FoundFile;
 use crate::document::Document;
+use crate::entry::display_name;
 use crate::files::{self, FileLoad};
 
 fn sheet_names(document: Option<&Document>) -> Vec<String> {
@@ -65,6 +68,7 @@ impl Workspace {
                 let path = new.path.path().to_path_buf();
                 let id = this.open_document(workbook, Some(path.clone()), Vec::new(), window, cx);
                 this.remember_recent(&path, cx);
+                this.show_created_in_chat(&new.folder, &new.path, cx);
                 call.respond(Ok(ToolReply::Opened(OpenedWorkbook {
                     id,
                     how: Opening::Created,
@@ -140,6 +144,65 @@ impl Workspace {
         }
         self.remember_recent(path, cx);
         id
+    }
+
+    // "Q3 close / Finanzas": the space it is listed in, then the subfolder of the working folder.
+    fn place_in_space(&self, relative: &Path) -> String {
+        let space = self.documents.current_space();
+        let mut place = self
+            .documents
+            .spaces()
+            .get(space)
+            .map(|space| space.name.clone())
+            .unwrap_or_default();
+        if let Some(folder) = relative
+            .parent()
+            .filter(|folder| !folder.as_os_str().is_empty())
+        {
+            place.push_str(" / ");
+            place.push_str(&folder.display().to_string());
+        }
+        place
+    }
+
+    fn show_created_in_chat(
+        &mut self,
+        folder: &WorkingFolder,
+        path: &InsidePath,
+        cx: &mut Context<Self>,
+    ) {
+        let card = FileCard {
+            name: display_name(Some(path.path()), 0),
+            place: self.place_in_space(path.relative()),
+            path: folder.path().join(path.relative()),
+        };
+        self.add_chat_card(card, cx);
+    }
+
+    // Files the agent wrote by other means than the tools are listed in the current space,
+    // unloaded, so the user sees them without Zenkai reading them.
+    pub(crate) fn list_agent_files(
+        &mut self,
+        found: Vec<FoundFile>,
+        cx: &mut Context<Self>,
+    ) -> Vec<FileCard> {
+        let mut cards = Vec::new();
+        for file in found {
+            if self.documents.find_by_path(&file.path).is_some() {
+                continue;
+            }
+            self.documents.add_link(file.path.clone(), Some(file.size));
+            cards.push(FileCard {
+                name: display_name(Some(&file.path), 0),
+                place: self.place_in_space(&file.relative),
+                path: file.path,
+            });
+        }
+        if !cards.is_empty() {
+            self.persist_session(cx);
+            cx.notify();
+        }
+        cards
     }
 }
 

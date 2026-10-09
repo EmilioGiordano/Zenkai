@@ -78,7 +78,12 @@ impl ChatPanel {
                 cx.emit(ChatEvent::NeedsAnswer);
                 self.scroll_to_end();
             }
-            SessionEvent::TurnEnded(end) => self.finish_turn(end, cx),
+            SessionEvent::TurnEnded(end) => {
+                if let Some(since) = self.turn_began.take() {
+                    self.list_files_written(since, cx);
+                }
+                self.finish_turn(end, cx);
+            }
             SessionEvent::AuthRequired => self.require_sign_in(cx),
             SessionEvent::Failed(error) => {
                 if error == SessionError::AuthRequired {

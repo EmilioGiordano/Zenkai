@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::PathBuf;
 
 use zenkai_i18n::t;
 
@@ -86,6 +87,14 @@ pub struct ToolCard {
     pub input: String,
 }
 
+// A file the agent made in its working folder, shown with a button that opens it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileCard {
+    pub name: String,
+    pub place: String,
+    pub path: PathBuf,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoticeKind {
     Info,
@@ -99,6 +108,7 @@ pub enum Entry {
     Tool(ToolCard),
     Worked { seconds: u64 },
     Notice { kind: NoticeKind, text: String },
+    File(FileCard),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -427,6 +437,12 @@ impl Thread {
             kind,
             text: text.to_string(),
         });
+    }
+
+    // Text the agent streams after the card starts a new message below it.
+    pub fn file_created(&mut self, card: FileCard) {
+        self.open_message = None;
+        self.push_entry(Entry::File(card));
     }
 
     pub fn clear(&mut self) {

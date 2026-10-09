@@ -1,6 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::*;
+use zenkai_agent::chat::thread::FileCard;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
@@ -19,6 +20,21 @@ impl Workspace {
     pub(crate) fn active_workbook_for_chat(&self) -> Option<(WorkbookId, String)> {
         let document = self.documents.active()?;
         Some((document.id, document.name()))
+    }
+
+    pub(crate) fn add_chat_card(&mut self, card: FileCard, cx: &mut Context<Self>) {
+        if let Some(panel) = self.chat.panel.clone() {
+            panel.update(cx, |panel, cx| panel.file_created(card, cx));
+        }
+    }
+
+    pub(crate) fn open_from_chat(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_path(path, window, cx);
     }
 
     pub(crate) fn selection_for_chat(&self, cx: &App) -> Option<String> {

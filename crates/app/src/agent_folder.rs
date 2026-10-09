@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use zenkai_agent::tools::WorkingFolder;
 use zenkai_i18n::t;
@@ -6,6 +7,9 @@ use zenkai_i18n::t;
 use crate::files;
 
 const DEFAULT_FOLDER_NAME: &str = "Zenkai";
+const LISTED_EXTENSIONS: [&str; 7] = ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"];
+const SCAN_DEPTH: usize = 3;
+const SCAN_ENTRIES: usize = 5_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FolderError {
@@ -68,6 +72,69 @@ pub fn prepare(hint: &FolderHint) -> Result<WorkingFolder, FolderError> {
     })
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoundFile {
+    pub path: PathBuf,
+    pub relative: PathBuf,
+    pub size: u64,
+}
+
+// Spreadsheets written in the folder since `since`, a few levels deep and a bounded number of
+// entries, so a huge folder cannot stall the scan. Links and junctions are not followed, and
+// Excel's "~$" lock and temp files are skipped. Runs off the UI thread.
+pub fn spreadsheets_written_since(folder: &Path, since: SystemTime) -> Vec<FoundFile> {
+    let mut found = Vec::new();
+    let mut pending = vec![(folder.to_path_buf(), 0)];
+    let mut visited = 0;
+    while let Some((directory, depth)) = pending.pop() {
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::debug!(%error, folder = %directory.display(), "could not list a folder");
+                continue;
+            }
+        };
+        for entry in entries.flatten() {
+            visited += 1;
+            if visited > SCAN_ENTRIES {
+                return found;
+            }
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            if kind.is_dir() && depth + 1 < SCAN_DEPTH {
+                pending.push((path, depth + 1));
+            } else if kind.is_file()
+                && is_listed_spreadsheet(&path)
+                && let Ok(metadata) = entry.metadata()
+                && metadata.modified().is_ok_and(|modified| modified >= since)
+                && let Ok(relative) = path.strip_prefix(folder)
+            {
+                found.push(FoundFile {
+                    relative: relative.to_path_buf(),
+                    size: metadata.len(),
+                    path,
+                });
+            }
+        }
+    }
+    found.sort_by(|a, b| a.path.cmp(&b.path));
+    found
+}
+
+fn is_listed_spreadsheet(path: &Path) -> bool {
+    let name = path.file_name().map(|name| name.to_string_lossy());
+    let lock_or_temp = name.as_deref().is_some_and(|name| name.starts_with("~$"));
+    let extension = path
+        .extension()
+        .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
+    !lock_or_temp
+        && extension
+            .as_deref()
+            .is_some_and(|extension| LISTED_EXTENSIONS.contains(&extension))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +187,44 @@ mod tests {
         })
         .unwrap();
         assert_eq!(prepared.path(), temp.path());
+    }
+
+    #[test]
+    fn only_spreadsheets_written_during_the_turn_are_found() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = temp.path().join("old.xlsx");
+        std::fs::write(&old, b"x").unwrap();
+        let since = SystemTime::now();
+        let file = |name: &str| {
+            std::fs::File::options()
+                .write(true)
+                .open(temp.path().join(name))
+                .unwrap()
+        };
+        file("old.xlsx")
+            .set_modified(since - std::time::Duration::from_secs(60))
+            .unwrap();
+        std::fs::create_dir_all(temp.path().join("reports")).unwrap();
+        for name in [
+            "budget.xlsx",
+            "reports/data.csv",
+            "notes.txt",
+            "~$budget.xlsx",
+            "build.py",
+        ] {
+            std::fs::write(temp.path().join(name), b"x").unwrap();
+            file(name)
+                .set_modified(since + std::time::Duration::from_secs(1))
+                .unwrap();
+        }
+        let found = spreadsheets_written_since(temp.path(), since);
+        let relative: Vec<PathBuf> = found.iter().map(|file| file.relative.clone()).collect();
+        assert_eq!(
+            relative,
+            [
+                PathBuf::from("budget.xlsx"),
+                Path::new("reports").join("data.csv")
+            ]
+        );
     }
 }
