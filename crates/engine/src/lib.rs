@@ -5,6 +5,7 @@ mod error;
 mod file;
 mod model;
 mod preflight;
+mod rectangles;
 mod workbook;
 
 pub use error::EngineError;

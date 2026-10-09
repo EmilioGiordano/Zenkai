@@ -10,6 +10,7 @@ use ironcalc::import::load_from_xlsx_bytes;
 
 use crate::error::EngineError;
 use crate::model::CachedModel;
+use crate::rectangles::covering_rectangles;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
     RowIdx, SheetId, SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign, ValueKind,
@@ -928,32 +929,21 @@ impl Engine for Workbook {
             .map_err(rejected)
     }
 
-    // IronCalc visits every cell of the range it clears, so only the box around the
-    // contents inside the range is cleared (a whole sheet has 17 billion cells, and a
-    // formatted far cell makes the used area that big). Contents scattered so far apart
-    // that the box is huge are cleared cell by cell. Nothing to clear writes nothing, so
-    // no empty cells are created to grow the used area.
+    // IronCalc visits every cell of an area it clears, so only the cells holding contents
+    // are cleared, as rectangles of them: the work and the undo record follow the contents,
+    // never the selection (a whole sheet has 17 billion cells), and gaps get no empty cells
+    // that would grow the used area. All rectangles go in one call, so one undo step.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
         let cells = self.content_cells_in(sheet, range)?;
-        let Some(first) = cells.first() else {
+        if cells.is_empty() {
             return Ok(());
-        };
-        let (mut top, mut left, mut bottom, mut right) =
-            (first.row, first.col, first.row, first.col);
-        for pos in &cells {
-            top = top.min(pos.row);
-            bottom = bottom.max(pos.row);
-            left = left.min(pos.col);
-            right = right.max(pos.col);
         }
-        let bounds = Range::new(CellPos::new(top, left), CellPos::new(bottom, right));
-        if bounds.cell_count() > MAX_FILL_CELLS {
-            let empties: Vec<(CellPos, String)> =
-                cells.into_iter().map(|pos| (pos, String::new())).collect();
-            return self.set_scattered_inputs(sheet, &empties);
-        }
+        let areas: Vec<Area> = covering_rectangles(cells)
+            .into_iter()
+            .map(|rectangle| area(sheet, rectangle))
+            .collect();
         self.model
-            .range_clear_contents(&area(sheet, bounds))
+            .range_clear_contents_of_areas(&area(sheet, range), &areas)
             .map_err(rejected)
     }
 

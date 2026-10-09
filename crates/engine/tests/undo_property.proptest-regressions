@@ -7,3 +7,4 @@
 cc e9455ce81f0ff7a49a9be1a5e413ca9dba09e0946a59afbcdacd757aa7ebb8e9 # shrinks to ops = [Fill(0, 0, 0, 0, false)]
 cc 578fe8e75092b4eab02a7842a3da7395b41c040a5065d847ad5f34631b82984b # shrinks to ops = [Clear(0, 3, 0, 3)]
 cc 4cadf011fcc57f194fd202ddc4b5805b2e194b914321dbcb1241ed45162d8581 # shrinks to ops = [Block(0, 4, [[""]]), Clear(0, 3, 0, 3)]
+cc 6fca087085b0dd71c75be1b53a29d872729eb424e174ca993930c1321192c941 # shrinks to far = [(414092, 0, "0")], block_rows = 1, (top, left, bottom, right) = (0, 6, 0, 3), whole_sheet = false
