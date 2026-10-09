@@ -5,9 +5,11 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ClientCapabilities, ContentBlock, EnvVariable, Implementation,
-    InitializeRequest, McpServer, McpServerStdio, NewSessionRequest, PermissionOptionKind,
-    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, SessionUpdate, StopReason, ToolCallContent,
+    InitializeRequest, ListSessionsRequest, LoadSessionRequest, McpServer, McpServerStdio,
+    NewSessionRequest, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+    SessionConfigValueId, SessionId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, StopReason, ToolCallContent,
 };
 use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, ErrorCode};
 use async_channel::{Receiver, Sender};
@@ -18,7 +20,9 @@ use futures::{AsyncBufReadExt, StreamExt};
 use crate::bridge::{PIPE_VARIABLE, TOKEN_VARIABLE};
 use crate::chat::launch::{self, LaunchError, LaunchPlan, PackageSpec};
 use crate::chat::process::{ProcessError, ProcessTree, WorkFolder};
+use crate::chat::state::{ConfigId, ConfigSource, StateChange};
 use crate::chat::thread::{AgentUpdate, ToolCallId, ToolCard, ToolKind, ToolStatus, TurnEnd};
+use crate::chat::wire;
 
 const STDERR_LINES_KEPT: usize = 20;
 const MAX_CHUNK_CHARS: usize = 200_000;
@@ -126,6 +130,10 @@ pub enum SessionEvent {
     AuthRequired,
     Failed(SessionError),
     Closed,
+    State(StateChange),
+    // Something the user asked for failed, but the conversation goes on.
+    Problem(String),
+    Resumed,
 }
 
 #[derive(Debug)]
@@ -135,6 +143,13 @@ pub enum Command {
         context: Option<String>,
     },
     Cancel,
+    SetConfig {
+        id: ConfigId,
+        source: ConfigSource,
+        value: String,
+    },
+    ListSessions,
+    Resume(String),
 }
 
 #[derive(Clone)]
@@ -151,6 +166,18 @@ impl SessionHandle {
 
     pub fn cancel(&self) {
         self.send(Command::Cancel);
+    }
+
+    pub fn set_config(&self, id: ConfigId, source: ConfigSource, value: String) {
+        self.send(Command::SetConfig { id, source, value });
+    }
+
+    pub fn list_sessions(&self) {
+        self.send(Command::ListSessions);
+    }
+
+    pub fn resume(&self, session: String) {
+        self.send(Command::Resume(session));
     }
 
     fn send(&self, command: Command) {
@@ -382,8 +409,8 @@ async fn converse(
         .name("zenkai")
         .on_receive_notification(
             async move |notification: SessionNotification, _connection| {
-                if let Some(update) = agent_update(notification.update) {
-                    notify(&for_updates, SessionEvent::Update(update));
+                for event in incoming(notification.update) {
+                    notify(&for_updates, event);
                 }
                 Ok(())
             },
@@ -462,20 +489,28 @@ async fn converse_on(
         )
         .block_task()
         .await?;
+    let abilities = wire::abilities(&initialized);
     let agent = initialized
         .agent_info
         .map(|info| info.title.unwrap_or(info.name))
         .unwrap_or_else(|| "Agent".to_string());
-    let mut request = NewSessionRequest::new(folder);
-    if let Some(relay) = relay {
-        let server = McpServerStdio::new("zenkai", relay.program).env(vec![
-            EnvVariable::new(PIPE_VARIABLE, relay.pipe),
-            EnvVariable::new(TOKEN_VARIABLE, relay.token),
-        ]);
-        request = request.mcp_servers(vec![McpServer::Stdio(server)]);
-    }
-    let session = connection.send_request(request).block_task().await?;
-    let session_id = session.session_id;
+    let servers = mcp_servers(relay);
+    let session = connection
+        .send_request(NewSessionRequest::new(folder.clone()).mcp_servers(servers.clone()))
+        .block_task()
+        .await?;
+    let mut session_id = session.session_id;
+    notify(
+        events,
+        SessionEvent::State(StateChange::Abilities(abilities)),
+    );
+    notify(
+        events,
+        SessionEvent::State(StateChange::Selects(wire::selects_from_session(
+            session.config_options.as_deref(),
+            session.modes.as_ref(),
+        ))),
+    );
     notify(
         events,
         SessionEvent::Connection(Connection::Ready { agent }),
@@ -529,8 +564,105 @@ async fn converse_on(
             Command::Cancel => {
                 connection.send_notification(CancelNotification::new(session_id.clone()))?;
             }
+            Command::SetConfig { id, source, value } => {
+                let outcome = match source {
+                    ConfigSource::ConfigOption => connection
+                        .send_request(SetSessionConfigOptionRequest::new(
+                            session_id.clone(),
+                            id.as_str().to_string(),
+                            SessionConfigValueId::new(value.clone()),
+                        ))
+                        .block_task()
+                        .await
+                        .map(|response| {
+                            StateChange::Selects(wire::selects_from_options(
+                                &response.config_options,
+                            ))
+                        }),
+                    ConfigSource::LegacyMode => connection
+                        .send_request(SetSessionModeRequest::new(
+                            session_id.clone(),
+                            value.clone(),
+                        ))
+                        .block_task()
+                        .await
+                        .map(|_| StateChange::CurrentMode(value.clone())),
+                };
+                match outcome {
+                    Ok(change) => notify(events, SessionEvent::State(change)),
+                    Err(error) => notify(
+                        events,
+                        SessionEvent::Problem(format!(
+                            "The agent refused the change: {}",
+                            error.message
+                        )),
+                    ),
+                }
+            }
+            Command::ListSessions => {
+                match connection
+                    .send_request(ListSessionsRequest::new())
+                    .block_task()
+                    .await
+                {
+                    Ok(response) => notify(
+                        events,
+                        SessionEvent::State(StateChange::PastSessions(
+                            response.sessions.iter().map(wire::past_session).collect(),
+                        )),
+                    ),
+                    Err(error) => notify(
+                        events,
+                        SessionEvent::Problem(format!(
+                            "Could not list sessions: {}",
+                            error.message
+                        )),
+                    ),
+                }
+            }
+            Command::Resume(id) => {
+                let loaded = connection
+                    .send_request(
+                        LoadSessionRequest::new(id.clone(), folder.clone())
+                            .mcp_servers(servers.clone()),
+                    )
+                    .block_task()
+                    .await;
+                match loaded {
+                    Ok(response) => {
+                        session_id = SessionId::new(id.clone());
+                        notify(
+                            events,
+                            SessionEvent::State(StateChange::Selects(wire::selects_from_session(
+                                response.config_options.as_deref(),
+                                response.modes.as_ref(),
+                            ))),
+                        );
+                        notify(events, SessionEvent::Resumed);
+                    }
+                    Err(error) => notify(
+                        events,
+                        SessionEvent::Problem(format!(
+                            "Could not resume that session: {}",
+                            error.message
+                        )),
+                    ),
+                }
+            }
         }
     }
+}
+
+fn mcp_servers(relay: Option<McpRelay>) -> Vec<McpServer> {
+    relay
+        .map(|relay| {
+            McpServer::Stdio(McpServerStdio::new("zenkai", relay.program).env(vec![
+                EnvVariable::new(PIPE_VARIABLE, relay.pipe),
+                EnvVariable::new(TOKEN_VARIABLE, relay.token),
+            ]))
+        })
+        .into_iter()
+        .collect()
 }
 
 fn turn_end(reason: StopReason) -> TurnEnd {
@@ -603,8 +735,30 @@ fn content_detail(content: &[ToolCallContent]) -> String {
         .join("\n")
 }
 
+fn incoming(update: SessionUpdate) -> Vec<SessionEvent> {
+    let state = |change| vec![SessionEvent::State(change)];
+    match update {
+        SessionUpdate::AvailableCommandsUpdate(update) => state(StateChange::Commands(
+            wire::commands(&update.available_commands),
+        )),
+        SessionUpdate::UsageUpdate(update) => state(StateChange::Usage(wire::usage(&update))),
+        SessionUpdate::ConfigOptionUpdate(update) => state(StateChange::Selects(
+            wire::selects_from_options(&update.config_options),
+        )),
+        SessionUpdate::CurrentModeUpdate(update) => state(StateChange::CurrentMode(
+            update.current_mode_id.0.to_string(),
+        )),
+        other => agent_update(other)
+            .map(|update| vec![SessionEvent::Update(update)])
+            .unwrap_or_default(),
+    }
+}
+
 fn agent_update(update: SessionUpdate) -> Option<AgentUpdate> {
     match update {
+        SessionUpdate::UserMessageChunk(chunk) => {
+            Some(AgentUpdate::UserText(block_text(&chunk.content)))
+        }
         SessionUpdate::AgentMessageChunk(chunk) => {
             Some(AgentUpdate::Message(block_text(&chunk.content)))
         }

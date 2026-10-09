@@ -93,6 +93,7 @@ pub enum Entry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentUpdate {
     Message(String),
+    UserText(String),
     Thought,
     ToolStarted(ToolCard),
     ToolChanged {
@@ -135,6 +136,8 @@ pub struct Thread {
     // The assistant message the next chunk continues; a tool call or the end of the turn closes it.
     open_message: Option<usize>,
     next_message: u64,
+    // Replayed user text arrives in chunks; they join until something else arrives.
+    open_user: bool,
 }
 
 pub fn worked_label(seconds: u64) -> String {
@@ -205,7 +208,19 @@ impl Thread {
     }
 
     pub fn apply(&mut self, update: AgentUpdate) -> Effect {
+        if !matches!(update, AgentUpdate::UserText(_)) {
+            self.open_user = false;
+        }
         match update {
+            AgentUpdate::UserText(text) => {
+                self.open_message = None;
+                match self.entries.last_mut() {
+                    Some(Entry::User(last)) if self.open_user => last.push_str(&text),
+                    _ => self.entries.push(Entry::User(text)),
+                }
+                self.open_user = true;
+                Effect::Changed
+            }
             AgentUpdate::Message(text) => self.append_text(text),
             AgentUpdate::Thought => Effect::Nothing,
             AgentUpdate::ToolStarted(card) => {
@@ -639,6 +654,19 @@ mod tests {
             panic!("expected a tool call");
         };
         assert_eq!(shown.detail.chars().count(), MAX_DETAIL_CHARS + 1);
+    }
+
+    #[test]
+    fn replayed_history_rebuilds_both_sides_without_starting_a_turn() {
+        let mut thread = Thread::default();
+        thread.apply(AgentUpdate::UserText("Hel".to_string()));
+        thread.apply(AgentUpdate::UserText("lo".to_string()));
+        thread.apply(AgentUpdate::Message("Hi.".to_string()));
+        thread.apply(AgentUpdate::UserText("Again".to_string()));
+        assert_eq!(thread.turn(), TurnState::Idle);
+        assert_eq!(thread.entries().len(), 3);
+        assert_eq!(thread.entries()[0], Entry::User("Hello".to_string()));
+        assert_eq!(thread.entries()[2], Entry::User("Again".to_string()));
     }
 
     #[test]

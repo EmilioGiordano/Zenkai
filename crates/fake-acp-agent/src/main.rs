@@ -8,12 +8,16 @@ use std::time::Duration;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Implementation,
-    InitializeRequest, InitializeResponse, McpServer, NewSessionRequest, NewSessionResponse,
-    PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
-    RequestPermissionOutcome, RequestPermissionRequest, SessionId, SessionNotification,
-    SessionUpdate, StopReason, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
-    ToolKind,
+    AgentCapabilities, AvailableCommand, AvailableCommandsUpdate, CancelNotification, ContentBlock,
+    ContentChunk, Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest,
+    ListSessionsResponse, LoadSessionRequest, LoadSessionResponse, McpServer, NewSessionRequest,
+    NewSessionResponse, PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
+    RequestPermissionOutcome, RequestPermissionRequest, SessionCapabilities, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigSelectOption, SessionId,
+    SessionInfo, SessionListCapabilities, SessionMode, SessionModeState, SessionNotification,
+    SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    SetSessionModeRequest, SetSessionModeResponse, StopReason, ToolCall, ToolCallStatus,
+    ToolCallUpdate, ToolCallUpdateFields, ToolKind, UsageUpdate,
 };
 use agent_client_protocol::{Agent, Client, ConnectionTo, Error, Responder, Stdio};
 
@@ -241,7 +245,59 @@ async fn run_prompt(
             "Understood, I did not read it."
         },
     )?;
+    connection.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::UsageUpdate(UsageUpdate::new(1_200, 10_000)),
+    ))?;
     responder.respond(PromptResponse::new(StopReason::EndTurn))
+}
+
+type Choices = Arc<Mutex<(String, String)>>;
+
+fn config_options(model: &str, effort: &str) -> Vec<SessionConfigOption> {
+    let choices =
+        |values: &'static [(&'static str, &'static str)]| -> Vec<SessionConfigSelectOption> {
+            values
+                .iter()
+                .map(|(value, name)| SessionConfigSelectOption::new(*value, *name))
+                .collect()
+        };
+    vec![
+        SessionConfigOption::select(
+            "model",
+            "Model",
+            model.to_string(),
+            choices(&[("fast", "Fast model"), ("deep", "Deep model")]),
+        )
+        .category(SessionConfigOptionCategory::Model),
+        SessionConfigOption::select(
+            "effort",
+            "Reasoning effort",
+            effort.to_string(),
+            choices(&[("low", "Low"), ("high", "High")]),
+        )
+        .category(SessionConfigOptionCategory::ThoughtLevel),
+    ]
+}
+
+fn modes() -> SessionModeState {
+    SessionModeState::new(
+        "ask",
+        vec![
+            SessionMode::new("ask", "Ask"),
+            SessionMode::new("plan", "Plan"),
+        ],
+    )
+}
+
+fn announce_commands(connection: &ConnectionTo<Client>, session: &SessionId) -> Result<(), Error> {
+    connection.send_notification(SessionNotification::new(
+        session.clone(),
+        SessionUpdate::AvailableCommandsUpdate(AvailableCommandsUpdate::new(vec![
+            AvailableCommand::new("compact", "Summarize the conversation"),
+            AvailableCommand::new("review", "Review the open workbook"),
+        ])),
+    ))
 }
 
 async fn serve(mode: Mode) -> Result<(), Error> {
@@ -251,6 +307,9 @@ async fn serve(mode: Mode) -> Result<(), Error> {
     let new_session_facts = facts.clone();
     let new_session_mcp = mcp.clone();
     let prompt_facts = facts.clone();
+    let choices: Choices = Arc::new(Mutex::new(("fast".to_string(), "low".to_string())));
+    let new_session_choices = choices.clone();
+    let config_choices = choices.clone();
     Agent
         .builder()
         .name("fake-acp-agent")
@@ -269,7 +328,14 @@ async fn serve(mode: Mode) -> Result<(), Error> {
                 }
                 responder.respond(
                     InitializeResponse::new(ProtocolVersion::V1)
-                        .agent_capabilities(AgentCapabilities::new())
+                        .agent_capabilities(
+                            AgentCapabilities::new()
+                                .load_session(true)
+                                .session_capabilities(
+                                    SessionCapabilities::new()
+                                        .list(SessionListCapabilities::default()),
+                                ),
+                        )
                         .agent_info(
                             Implementation::new("fake-acp-agent", "0.1.0").title("Fake agent"),
                         ),
@@ -278,7 +344,7 @@ async fn serve(mode: Mode) -> Result<(), Error> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            async move |request: NewSessionRequest, responder, _connection| {
+            async move |request: NewSessionRequest, responder, connection| {
                 if mode == Mode::AuthRequired {
                     return responder.respond_with_error(Error::auth_required());
                 }
@@ -288,7 +354,16 @@ async fn serve(mode: Mode) -> Result<(), Error> {
                 if let Ok(mut slot) = new_session_mcp.lock() {
                     *slot = stdio_server(&request);
                 }
-                responder.respond(NewSessionResponse::new("session-1"))
+                let (model, effort) = new_session_choices
+                    .lock()
+                    .map(|c| c.clone())
+                    .unwrap_or_default();
+                announce_commands(&connection, &SessionId::new("session-1"))?;
+                responder.respond(
+                    NewSessionResponse::new("session-1")
+                        .config_options(config_options(&model, &effort))
+                        .modes(modes()),
+                )
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -309,6 +384,56 @@ async fn serve(mode: Mode) -> Result<(), Error> {
                     cancel,
                     mcp,
                 ))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: SetSessionConfigOptionRequest, responder, _connection| {
+                let value = match &request.value {
+                    SessionConfigOptionValue::ValueId { value } => value.0.to_string(),
+                    _ => String::new(),
+                };
+                let (model, effort) = {
+                    let Ok(mut current) = config_choices.lock() else {
+                        return responder.respond_with_internal_error("poisoned");
+                    };
+                    match &*request.config_id.0 {
+                        "model" => current.0 = value,
+                        _ => current.1 = value,
+                    }
+                    current.clone()
+                };
+                responder.respond(SetSessionConfigOptionResponse::new(config_options(
+                    &model, &effort,
+                )))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: SetSessionModeRequest, responder, _connection| {
+                responder.respond(SetSessionModeResponse::new())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |_request: ListSessionsRequest, responder, _connection| {
+                responder.respond(ListSessionsResponse::new(vec![
+                    SessionInfo::new("old-1", "C:/work").title("Fix the dates"),
+                    SessionInfo::new("old-2", "C:/work").title("Chart of sales"),
+                ]))
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: LoadSessionRequest, responder, connection| {
+                connection.send_notification(SessionNotification::new(
+                    request.session_id.clone(),
+                    SessionUpdate::UserMessageChunk(ContentChunk::new(ContentBlock::from(
+                        "Earlier question",
+                    ))),
+                ))?;
+                say(&connection, &request.session_id, "Earlier answer")?;
+                responder.respond(LoadSessionResponse::new())
             },
             agent_client_protocol::on_receive_request!(),
         )

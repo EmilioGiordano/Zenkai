@@ -12,6 +12,7 @@ use zenkai_agent::chat::session::{
     ChoiceKind, Connection, McpRelay, PermissionAsk, SessionConfig, SessionError, SessionEvent,
     SessionHandle, start,
 };
+use zenkai_agent::chat::state::{AgentState, ConfigId, ConfigKind, ConfigSource};
 use zenkai_agent::chat::thread::{AgentUpdate, ToolStatus, TurnEnd};
 
 const WAIT: Duration = Duration::from_secs(30);
@@ -272,4 +273,111 @@ fn is_running(pid: u32) -> bool {
         .output()
         .unwrap();
     String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
+}
+
+impl Running {
+    // Folds state changes into an AgentState until `done` holds for it.
+    fn state_until(&self, done: impl Fn(&AgentState) -> bool) -> AgentState {
+        let mut state = AgentState::default();
+        loop {
+            if done(&state) {
+                return state;
+            }
+            if let SessionEvent::State(change) = self.next() {
+                state.apply(change);
+            }
+        }
+    }
+}
+
+#[test]
+fn what_the_agent_advertises_becomes_typed_state() {
+    let session = launch(config("normal", &[]));
+    let state = session.state_until(|state| {
+        !state.selects.is_empty() && !state.commands.is_empty() && state.abilities.load_session
+    });
+    assert!(state.abilities.list_sessions && state.can_resume());
+    let model = state.select(ConfigKind::Model).unwrap();
+    assert_eq!(model.current_label(), "Fast model");
+    assert!(model.offers("deep"));
+    assert_eq!(model.source, ConfigSource::ConfigOption);
+    assert_eq!(state.select(ConfigKind::Effort).unwrap().current, "low");
+    let mode = state.select(ConfigKind::Mode).unwrap();
+    assert_eq!(mode.source, ConfigSource::LegacyMode);
+    assert_eq!(mode.current, "ask");
+    let names: Vec<&str> = state.commands.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["compact", "review"]);
+    session.close();
+}
+
+#[test]
+fn changing_the_model_or_mode_is_confirmed_by_the_agent() {
+    let session = launch(config("normal", &[]));
+    let mut state = session.state_until(|state| state.selects.len() == 3);
+    session.handle.set_config(
+        ConfigId::new("model"),
+        ConfigSource::ConfigOption,
+        "deep".to_string(),
+    );
+    session.handle.set_config(
+        ConfigId::new("mode"),
+        ConfigSource::LegacyMode,
+        "plan".to_string(),
+    );
+    while state.select(ConfigKind::Model).unwrap().current != "deep"
+        || state.select(ConfigKind::Mode).unwrap().current != "plan"
+    {
+        if let SessionEvent::State(change) = session.next() {
+            state.apply(change);
+        }
+    }
+    session.close();
+}
+
+#[test]
+fn context_usage_arrives_after_a_turn() {
+    let session = launch(config("normal", &[]));
+    session.ready();
+    session.handle.prompt("please read".to_string(), None);
+    let ask = session.permission();
+    let allow = ask.choices[0].clone();
+    ask.choose(&allow);
+    let usage = session.until(|event| match event {
+        SessionEvent::State(zenkai_agent::chat::state::StateChange::Usage(usage)) => Some(usage),
+        _ => None,
+    });
+    assert_eq!(usage.fraction(), Some(0.12));
+    session.close();
+}
+
+#[test]
+fn past_sessions_are_listed_and_one_can_be_resumed_with_its_history() {
+    let session = launch(config("normal", &[]));
+    session.ready();
+    session.handle.list_sessions();
+    let listed = session.state_until(|state| !state.past_sessions.is_empty());
+    let titles: Vec<Option<&str>> = listed
+        .past_sessions
+        .iter()
+        .map(|past| past.title.as_deref())
+        .collect();
+    assert_eq!(titles, [Some("Fix the dates"), Some("Chart of sales")]);
+    session.handle.resume(listed.past_sessions[0].id.clone());
+    let mut replayed = Vec::new();
+    session.until(|event| match event {
+        SessionEvent::Update(update) => {
+            replayed.push(update);
+            None
+        }
+        SessionEvent::Resumed => Some(()),
+        _ => None,
+    });
+    assert_eq!(
+        replayed,
+        [
+            AgentUpdate::UserText("Earlier question".to_string()),
+            AgentUpdate::Message("Earlier answer".to_string()),
+        ]
+    );
+    session.close();
 }
