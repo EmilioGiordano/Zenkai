@@ -1919,7 +1919,14 @@ impl Workspace {
                                 .map_or_else(|| "Zenkai".to_string(), Document::name_with_marker),
                         ),
                 )
-                .child(div().w(px(160.0))),
+                .child(
+                    h_flex()
+                        .w(px(160.0))
+                        .items_center()
+                        .justify_end()
+                        .text_color(muted)
+                        .child(self.render_chat_toggle(cx)),
+                ),
         )
     }
 

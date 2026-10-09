@@ -35,6 +35,9 @@ impl Render for ChatPanel {
         if self.menu.is_some() {
             context.add("Menu");
         }
+        if self.view == View::Chat {
+            context.add("ChatComposer");
+        }
         let provider = provider_name(&cx.global::<AgentConfig>().state.current);
         let (sidebar, foreground, border, muted) = {
             let theme = cx.theme();
@@ -85,9 +88,7 @@ impl Render for ChatPanel {
             .on_action(
                 cx.listener(|this, _: &CycleChatAgent, window, cx| this.cycle_agent(window, cx)),
             )
-            .on_action(
-                cx.listener(|this, _: &CycleChatPermission, _, cx| this.cycle_permission(cx)),
-            )
+            .on_action(cx.listener(|this, _: &CycleChatPermission, _, cx| this.cycle_access(cx)))
             .on_action(cx.listener(|this, _: &CopyLoginCommand, _, cx| this.copy_login_command(cx)))
             .on_action(cx.listener(|this, _: &ConfirmAgentLaunch, window, cx| {
                 this.confirm_launch(window, cx)
@@ -99,7 +100,12 @@ impl Render for ChatPanel {
                 this.toggle_sessions(window, cx)
             }))
             .on_action(cx.listener(|this, _: &PickChatModel, _, cx| this.toggle_model_menu(cx)))
-            .on_action(cx.listener(|this, _: &CycleChatMode, _, cx| this.cycle_mode(cx)))
+            .on_action(
+                cx.listener(|this, _: &PickChatPermission, _, cx| this.toggle_access_menu(cx)),
+            )
+            .on_action(cx.listener(|this, _: &CloseChatMenu, _, cx| this.close_menu(cx)))
+            .on_action(cx.listener(|this, _: &ChatMenuNext, _, cx| this.menu_step(true, cx)))
+            .on_action(cx.listener(|this, _: &ChatMenuPrevious, _, cx| this.menu_step(false, cx)))
             .on_action(cx.listener(|this, _: &SlashNext, _, cx| this.slash_step(true, cx)))
             .on_action(cx.listener(|this, _: &SlashPrevious, _, cx| this.slash_step(false, cx)))
             .on_action(

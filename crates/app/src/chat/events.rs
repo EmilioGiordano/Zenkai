@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use zenkai_agent::chat::session::{Connection, SessionError, SessionEvent};
@@ -5,8 +7,8 @@ use zenkai_agent::chat::thread::{Effect, MessageId, NoticeKind, TurnEnd};
 use zenkai_agent::presets::Preset;
 use zenkai_i18n::t;
 
-use super::launch;
 use super::{ChatEvent, ChatPanel, Link, MAX_PENDING_ASKS, Problem, View};
+use super::{launch, reference_scan};
 use crate::agent_settings::AgentConfig;
 
 impl ChatPanel {
@@ -26,8 +28,25 @@ impl ChatPanel {
         } else if let TurnEnd::Failed(text) = end {
             self.thread.notice(NoticeKind::Error, &text);
         }
+        self.link_references(cx);
         self.scroll_to_end();
         cx.notify();
+    }
+
+    // Streamed text is shown as it arrives; once complete, references in it become badges.
+    pub(super) fn link_references(&mut self, cx: &mut Context<Self>) {
+        for (id, state) in &self.texts {
+            if self.linked_messages.contains(id) {
+                continue;
+            }
+            let Some(raw) = self.thread.message_text(*id) else {
+                continue;
+            };
+            if let Cow::Owned(linked) = reference_scan::link_references(raw) {
+                state.update(cx, |state, cx| state.set_text(&linked, cx));
+            }
+            self.linked_messages.insert(*id);
+        }
     }
 
     pub(super) fn login_command(&self, cx: &App) -> Option<&'static str> {
@@ -47,6 +66,7 @@ impl ChatPanel {
             SessionEvent::Connection(Connection::Starting) => self.link = Link::Starting,
             SessionEvent::Connection(Connection::Ready { agent }) => {
                 self.link = Link::Ready(agent.into());
+                self.apply_choices(cx);
                 if let Some(live) = &mut self.live {
                     live.ready = true;
                     if self.state.abilities.list_sessions {
@@ -88,7 +108,10 @@ impl ChatPanel {
                 self.finish_turn(TurnEnd::Failed(error.to_string()), cx);
             }
             SessionEvent::Closed => self.end_session(cx),
-            SessionEvent::State(change) => self.state.apply(change),
+            SessionEvent::State(change) => {
+                self.state.apply(change);
+                self.follow_agent_mode();
+            }
             SessionEvent::Problem(text) => {
                 if let Some(backup) = self.resume_backup.take() {
                     self.thread = backup.thread;
@@ -99,6 +122,7 @@ impl ChatPanel {
             }
             SessionEvent::Resumed => {
                 self.resume_backup = None;
+                self.link_references(cx);
                 self.scroll_to_end();
             }
         }

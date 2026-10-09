@@ -2,7 +2,9 @@ use std::path::PathBuf;
 
 use zenkai_agent::bridge::Bridge;
 use zenkai_agent::chat::environment::{self, EnvironmentError};
-use zenkai_agent::chat::launch::{self, LaunchEnvironment, LaunchError, LaunchPlan};
+use zenkai_agent::chat::launch::{
+    self, INSTALLED_MARKER, LaunchEnvironment, LaunchError, LaunchPlan,
+};
 use zenkai_agent::chat::session::{McpRelay, SessionConfig, SessionHandle};
 use zenkai_agent::detect;
 use zenkai_agent::secrets::Secrets;
@@ -71,6 +73,14 @@ pub(super) fn plan_launch(settings: &Settings) -> Result<Prepared, PrepareError>
         },
     )?;
     Ok(Prepared { id, server, plan })
+}
+
+// A package that is not installed yet needs a download, which only a message may start.
+pub(super) fn needs_install(plan: &LaunchPlan) -> bool {
+    match plan {
+        LaunchPlan::Direct { .. } => false,
+        LaunchPlan::Package { folder, .. } => !folder.join(INSTALLED_MARKER).is_file(),
+    }
 }
 
 pub(super) struct Armed {

@@ -5,13 +5,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui_kit::*;
 use zenkai_agent::chat::history::History;
-use zenkai_agent::chat::state::{ConfigKind, slash_query};
+use zenkai_agent::chat::state::slash_query;
 use zenkai_agent::chat::thread::NoticeKind;
 use zenkai_i18n::t;
 
 use super::session_rows::{Row, Source};
 use super::slash::{self, Entry, Target, ZenkaiCommand};
-use super::{Backup, ChatPanel, Menu, View, closed, launch};
+use super::{Backup, ChatPanel, View, closed, launch};
 use crate::actions::*;
 use crate::agent_settings::AgentConfig;
 
@@ -159,47 +159,6 @@ impl ChatPanel {
         self.view = View::Chat;
         self.focus_composer(window, cx);
         cx.notify();
-    }
-
-    pub(crate) fn toggle_model_menu(&mut self, cx: &mut Context<Self>) {
-        if self.state.select(ConfigKind::Model).is_none()
-            && self.state.select(ConfigKind::Effort).is_none()
-        {
-            return;
-        }
-        self.menu = match self.menu {
-            Some(Menu::Model) => None,
-            None => Some(Menu::Model),
-        };
-        cx.notify();
-    }
-
-    pub(super) fn choose(&mut self, kind: ConfigKind, value: &str, cx: &mut Context<Self>) {
-        let Some(select) = self.state.select(kind) else {
-            return;
-        };
-        if !select.offers(value) {
-            return;
-        }
-        if let Some(live) = &self.live {
-            live.handle
-                .set_config(select.id.clone(), select.source, value.to_string());
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn cycle_mode(&mut self, cx: &mut Context<Self>) {
-        let Some(select) = self.state.select(ConfigKind::Mode) else {
-            return;
-        };
-        let values: Vec<String> = select.choices.iter().map(|c| c.value.clone()).collect();
-        let position = values
-            .iter()
-            .position(|v| *v == select.current)
-            .unwrap_or(0);
-        if let Some(next) = values.get((position + 1) % values.len().max(1)).cloned() {
-            self.choose(ConfigKind::Mode, &next, cx);
-        }
     }
 
     fn typed_slash(&self, cx: &App) -> Option<String> {
