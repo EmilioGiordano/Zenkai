@@ -196,12 +196,28 @@ fn select(model: &mut UserModel<'static>, sheet: SheetId, range: Range) -> Resul
 fn check_input(text: &str) -> Result<(), EngineError> {
     // The engine, like Excel, turns "+1+2" and "-1+2" into formulas too.
     if text.starts_with(['=', '+', '-']) {
-        crate::preflight::check_formula_text(text).map_err(EngineError::Rejected)?;
+        zenkai_xlsx_reader::limits::check_formula_text(text).map_err(EngineError::Rejected)?;
     }
     Ok(())
 }
 
 // TODAY() and NOW() must follow the user clock, as in Excel.
+pub(crate) fn read_book(
+    bytes: &[u8],
+    name: &str,
+) -> Result<ironcalc::base::types::Workbook, EngineError> {
+    load_from_xlsx_bytes(bytes, name, LOCALE, timezone())
+        .map_err(|e| EngineError::InvalidFile(format!("{e:?}")))
+}
+
+pub(crate) fn read_book_fast(
+    bytes: &[u8],
+    name: &str,
+    inspect: &zenkai_xlsx_reader::Inspect<'_>,
+) -> Result<ironcalc::base::types::Workbook, zenkai_xlsx_reader::ReadError> {
+    zenkai_xlsx_reader::read_xlsx(bytes, name, LOCALE, timezone(), inspect)
+}
+
 fn timezone() -> &'static str {
     static TIMEZONE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     TIMEZONE.get_or_init(|| {
@@ -399,8 +415,12 @@ impl Workbook {
     }
 
     pub fn from_xlsx_bytes(bytes: &[u8], name: &str) -> Result<Workbook, EngineError> {
-        let book = load_from_xlsx_bytes(bytes, name, LOCALE, timezone())
-            .map_err(|e| EngineError::InvalidFile(format!("{e:?}")))?;
+        Workbook::from_book(read_book(bytes, name)?)
+    }
+
+    pub(crate) fn from_book(
+        book: ironcalc::base::types::Workbook,
+    ) -> Result<Workbook, EngineError> {
         let model = ironcalc::base::Model::from_workbook(book, LANGUAGE)
             .map_err(EngineError::InvalidFile)?;
         let mut model = UserModel::from_model(model);
