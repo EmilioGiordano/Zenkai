@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Zenkai, Apariencia de espacios</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7fb894}a:hover{color:#a6d3b5}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 100%; height: 900px; display: flex; overflow: hidden; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; background: #18191b; color: #e4e4e6">
+
+  <nav aria-label="Espacios" style="flex: 0 0 280px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px; background: #1f2023; padding: 14px 10px">
+    <sc-for list="{{spaces}}" as="s" hint-placeholder-count="4">
+      <section style="display: flex; flex-direction: column; gap: 3px; padding: {{s.pad}}; border-radius: 10px; background: {{s.boxBg}}; box-shadow: {{s.boxRing}}">
+        <div style="display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px; border-radius: 7px; background: {{s.headBg}}; box-shadow: {{s.headRing}}">
+          <sc-if value="{{s.dot}}" hint-placeholder-val="{{ true }}">
+            <svg width="10" height="10" viewBox="0 0 10 10" style="flex-shrink: 0; display: block"><circle cx="5" cy="5" r="4" fill="{{s.color}}"></circle></svg>
+          </sc-if>
+          <span style="flex-grow: 1; font-size: 11.5px; font-weight: 600; letter-spacing: 0.02em; color: {{s.headText}}">{{s.name}}</span>
+          <span style="font-size: 11px; color: #767880">{{s.count}}</span>
+        </div>
+        <sc-for list="{{s.files}}" as="f" hint-placeholder-count="2">
+          <div style="display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border-radius: 8px; background: {{f.bg}}; box-shadow: {{f.ring}}">
+            <span style="color: {{f.text}}; font-weight: {{f.weight}}">{{f.name}}</span>
+            <span style="font-size: 11.5px; color: #767880">{{f.meta}}</span>
+          </div>
+        </sc-for>
+      </section>
+    </sc-for>
+  </nav>
+
+  <main style="flex-grow: 1; position: relative; display: flex; flex-direction: column; gap: 18px; padding: 40px 48px; box-sizing: border-box">
+    <h1 style="margin: 0; font-size: 20px; font-weight: 600">{{title}}</h1>
+    <p style="margin: 0; max-width: 640px; color: #a3a5ab; line-height: 1.55">{{lead}}</p>
+
+    <sc-if value="{{isMenu}}" hint-placeholder-val="{{ true }}">
+      <div style="display: flex; gap: 10px; align-items: flex-start">
+        <div role="menu" aria-label="Espacio Proveedores" style="width: 230px; padding: 6px; border-radius: 10px; background: #26272a; box-shadow: 0 18px 48px rgba(0,0,0,0.45); display: flex; flex-direction: column">
+          <sc-for list="{{menu}}" as="m" hint-placeholder-count="6">
+            <sc-if value="{{m.sep}}" hint-placeholder-val="{{ false }}"><div style="height: 1px; margin: 5px 6px; background: #34353a"></div></sc-if>
+            <sc-if value="{{m.label}}" hint-placeholder-val="{{ true }}">
+              <button role="menuitem" style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-radius: 6px; text-align: left; background: {{m.bg}}">
+                <span style="flex-grow: 1">{{m.label}}</span>
+                <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #767880">{{m.keys}}</span>
+              </button>
+            </sc-if>
+          </sc-for>
+        </div>
+        <div role="menu" aria-label="Color" style="width: 250px; padding: 10px; border-radius: 10px; background: #26272a; box-shadow: 0 18px 48px rgba(0,0,0,0.45); display: flex; flex-direction: column; gap: 10px; margin-top: 108px">
+          <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px">
+            <sc-for list="{{swatches}}" as="w" hint-placeholder-count="10">
+              <button role="menuitemradio" aria-checked="{{w.checked}}" aria-label="{{w.name}}" style="height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: {{w.tile}}; box-shadow: {{w.ring}}">
+                <svg width="18" height="18" viewBox="0 0 18 18" style="display: block"><circle cx="9" cy="9" r="7" fill="{{w.fill}}" stroke="{{w.stroke}}" stroke-width="1.5"></circle></svg>
+              </button>
+            </sc-for>
+          </div>
+          <div style="height: 1px; background: #34353a"></div>
+          <button role="menuitem" style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 8px; border-radius: 6px; text-align: left">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" style="color: #a3a5ab"><circle cx="8" cy="8" r="6"></circle><path d="M8 2v12M2 8h12" opacity="0.5"></path></svg>
+            <span style="flex-grow: 1">Personalizar…</span>
+          </button>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{isCustom}}" hint-placeholder-val="{{ false }}">
+      <div role="dialog" aria-label="Personalizar espacio" style="width: 640px; max-width: 100%; border-radius: 14px; background: #1f2023; box-shadow: 0 24px 64px rgba(0,0,0,0.45); padding: 20px; display: flex; flex-direction: column; gap: 18px; box-sizing: border-box">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <svg width="12" height="12" viewBox="0 0 10 10" style="display: block"><circle cx="5" cy="5" r="4" fill="#5b8def"></circle></svg>
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600; flex-grow: 1">Finanzas</h2>
+          <button aria-label="Cerrar" style="width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: #a3a5ab"><svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M1 1l8 8M9 1L1 9"></path></svg></button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <div role="radiogroup" aria-label="Apariencia de este espacio" style="display: flex; padding: 3px; border-radius: 9px; background: #18191b; align-self: flex-start">
+            <button role="radio" aria-checked="false" style="height: 28px; padding: 0 12px; border-radius: 7px; color: #a3a5ab">Predeterminado</button>
+            <button role="radio" aria-checked="true" style="height: 28px; padding: 0 12px; border-radius: 7px; background: #34353a; color: #e4e4e6; font-weight: 500">Personalizado</button>
+          </div>
+          <span style="font-size: 12px; color: #767880">Solo Finanzas usa esto. Los demás espacios siguen el estilo predeterminado de Ajustes.</span>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <span style="font-size: 11.5px; color: #767880">Estilo</span>
+          <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px">
+            <sc-for list="{{styles}}" as="st" hint-placeholder-count="4">
+              <button role="radio" aria-checked="{{st.checked}}" style="display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; text-align: left; background: #18191b; box-shadow: {{st.ring}}">
+                <span style="height: 64px; border-radius: 7px; background: #222326; padding: 8px; box-sizing: border-box; display: flex; flex-direction: column; gap: 5px; box-shadow: {{st.previewRing}}; background-color: {{st.previewBg}}">
+                  <span style="display: flex; align-items: center; gap: 5px; height: 14px; border-radius: 4px; padding: 0 5px; background: {{st.previewHead}}">
+                    <svg width="6" height="6" viewBox="0 0 6 6" style="display: {{st.dotDisplay}}"><circle cx="3" cy="3" r="3" fill="#5b8def"></circle></svg>
+                    <span style="height: 4px; width: 40%; border-radius: 2px; background: #a3a5ab"></span>
+                  </span>
+                  <span style="height: 12px; border-radius: 4px; background: {{st.previewItem}}"></span>
+                  <span style="height: 12px; border-radius: 4px; background: {{st.previewItem}}"></span>
+                </span>
+                <span style="font-weight: 500">{{st.name}}</span>
+                <span style="font-size: 11.5px; color: #767880; line-height: 1.4">{{st.desc}}</span>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <span style="font-size: 11.5px; color: #767880">Color</span>
+          <div style="display: flex; flex-wrap: wrap; gap: 16px">
+            <div style="display: flex; flex-direction: column; gap: 10px; width: 260px">
+              <div role="slider" aria-label="Saturación y brillo" style="position: relative; height: 140px; border-radius: 8px; background: linear-gradient(to top, #000, rgba(0,0,0,0)), linear-gradient(to right, #fff, hsl(220, 100%, 50%))">
+                <span style="position: absolute; left: 62%; top: 7%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0,0,0,0.4)"></span>
+              </div>
+              <div role="slider" aria-label="Tono" style="position: relative; height: 12px; border-radius: 6px; background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)">
+                <span style="position: absolute; left: 61%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: #5b8def; box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0,0,0,0.4)"></span>
+              </div>
+              <div role="slider" aria-label="Opacidad" style="position: relative; height: 12px; border-radius: 6px; background: linear-gradient(to right, rgba(91,141,239,0), #5b8def), repeating-conic-gradient(#3a3b40 0% 25%, #26272a 0% 50%) 0 0 / 8px 8px">
+                <span style="position: absolute; left: 100%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; background: #5b8def; box-shadow: 0 0 0 2px #fff, 0 0 0 3px rgba(0,0,0,0.4)"></span>
+              </div>
+            </div>
+            <div style="flex: 1 1 200px; display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; gap: 8px">
+                <label style="flex: 1 1 0; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 8px; background: #18191b">
+                  <svg width="14" height="14" viewBox="0 0 14 14" style="display: block; flex-shrink: 0"><rect x="1" y="1" width="12" height="12" rx="3" fill="#5b8def"></rect></svg>
+                  <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Hexadecimal</span>
+                  <input value="#5B8DEF" style="width: 100%; min-width: 0; border: 0; background: transparent; color: #e4e4e6; font-family: 'IBM Plex Mono', monospace; font-size: 12px">
+                </label>
+                <label style="width: 72px; display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 10px; border-radius: 8px; background: #18191b">
+                  <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Opacidad</span>
+                  <input value="100" style="width: 100%; min-width: 0; border: 0; background: transparent; color: #e4e4e6; font-family: 'IBM Plex Mono', monospace; font-size: 12px">
+                  <span style="font-size: 11.5px; color: #767880">%</span>
+                </label>
+              </div>
+              <span style="font-size: 11.5px; color: #767880">Paleta</span>
+              <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                <sc-for list="{{swatches}}" as="w" hint-placeholder-count="10">
+                  <button aria-label="{{w.name}}" style="width: 26px; height: 26px; border-radius: 7px; display: flex; align-items: center; justify-content: center; box-shadow: {{w.ring}}">
+                    <svg width="16" height="16" viewBox="0 0 18 18" style="display: block"><circle cx="9" cy="9" r="7" fill="{{w.fill}}" stroke="{{w.stroke}}" stroke-width="1.5"></circle></svg>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+          <label style="display: flex; flex-direction: column; gap: 8px">
+            <span style="display: flex; justify-content: space-between; font-size: 11.5px; color: #767880"><span>Intensidad</span><span style="font-family: 'IBM Plex Mono', monospace; color: #c9cace">18%</span></span>
+            <input type="range" min="0" max="100" value="18" style="accent-color: #5b8def">
+          </label>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 11.5px; color: #767880">Aplicar a</span>
+            <label style="display: flex; align-items: center; gap: 8px"><input type="checkbox" checked="{{yes}}" style="width: 15px; height: 15px; accent-color: #5b8def">Encabezado del espacio</label>
+            <label style="display: flex; align-items: center; gap: 8px"><input type="checkbox" checked="{{yes}}" style="width: 15px; height: 15px; accent-color: #5b8def">Workbooks del espacio</label>
+          </div>
+        </div>
+
+        <div style="display: flex; align-items: center; gap: 10px">
+          <button style="height: 32px; padding: 0 12px; border-radius: 8px; color: #a3a5ab">Volver al predeterminado</button>
+          <span style="flex-grow: 1; font-size: 11.5px; color: #767880">Los cambios se ven en vivo en la barra lateral.</span>
+          <button style="height: 32px; padding: 0 16px; border-radius: 8px; background: #e4e4e6; color: #18191b; font-weight: 500">Listo</button>
+        </div>
+      </div>
+    </sc-if>
+    <sc-if value="{{isDefaults}}" hint-placeholder-val="{{ false }}">
+      <div style="width: 680px; max-width: 100%; border-radius: 14px; background: #1f2023; padding: 20px; display: flex; flex-direction: column; gap: 18px; box-sizing: border-box">
+        <div style="display: flex; flex-direction: column; gap: 4px">
+          <span style="font-size: 11.5px; color: #767880">Ajustes, Apariencia</span>
+          <h2 style="margin: 0; font-size: 15px; font-weight: 600">Espacios</h2>
+          <span style="font-size: 12px; color: #a3a5ab">Se aplica a todos los espacios que no estén personalizados.</span>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px">
+          <sc-for list="{{styles}}" as="st" hint-placeholder-count="4">
+            <button role="radio" aria-checked="{{st.defChecked}}" style="display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; text-align: left; background: #18191b; box-shadow: {{st.defRing}}">
+              <span style="height: 56px; border-radius: 7px; padding: 8px; box-sizing: border-box; display: flex; flex-direction: column; gap: 5px; box-shadow: {{st.previewRing}}; background-color: {{st.previewBg}}">
+                <span style="display: flex; align-items: center; gap: 5px; height: 12px; border-radius: 4px; padding: 0 5px; background: {{st.previewHead}}">
+                  <svg width="6" height="6" viewBox="0 0 6 6" style="display: {{st.dotDisplay}}"><circle cx="3" cy="3" r="3" fill="#5b8def"></circle></svg>
+                  <span style="height: 4px; width: 40%; border-radius: 2px; background: #a3a5ab"></span>
+                </span>
+                <span style="height: 10px; border-radius: 4px; background: {{st.previewItem}}"></span>
+              </span>
+              <span style="font-weight: 500">{{st.name}}</span>
+            </button>
+          </sc-for>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+          <label style="display: flex; flex-direction: column; gap: 8px">
+            <span style="display: flex; justify-content: space-between; font-size: 11.5px; color: #767880"><span>Intensidad</span><span style="font-family: 'IBM Plex Mono', monospace; color: #c9cace">18%</span></span>
+            <input type="range" min="0" max="60" value="18" style="accent-color: #4caf7a">
+          </label>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <span style="font-size: 11.5px; color: #767880">Aplicar a</span>
+            <label style="display: flex; align-items: center; gap: 8px"><input type="checkbox" checked="{{yes}}" style="width: 15px; height: 15px; accent-color: #4caf7a">Encabezado del espacio</label>
+            <label style="display: flex; align-items: center; gap: 8px"><input type="checkbox" checked="{{yes}}" style="width: 15px; height: 15px; accent-color: #4caf7a">Workbooks del espacio</label>
+          </div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 8px">
+          <span style="font-size: 11.5px; color: #767880">Color de los espacios nuevos</span>
+          <label style="display: flex; align-items: center; gap: 8px"><input type="radio" name="newcolor" checked="{{yes}}" style="accent-color: #4caf7a">Automático: cada espacio nuevo toma el siguiente color de la paleta</label>
+          <div style="display: flex; gap: 6px; padding-left: 24px">
+            <sc-for list="{{rotation}}" as="r" hint-placeholder-count="9">
+              <svg width="16" height="16" viewBox="0 0 18 18" style="display: block"><circle cx="9" cy="9" r="7" fill="{{r}}"></circle></svg>
+            </sc-for>
+          </div>
+          <label style="display: flex; align-items: center; gap: 8px"><input type="radio" name="newcolor" style="accent-color: #4caf7a">Siempre sin color</label>
+        </div>
+        <span style="font-size: 12px; color: #767880">Para cambiar un solo espacio: clic derecho, Personalizar. El resto no cambia.</span>
+      </div>
+    </sc-if>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"view":{"editor":"enum","options":["menu","custom","defaults"],"default":"menu"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const view = this.props.view ?? 'menu';
+    const rgba = (hex, a) => {
+      const n = parseInt(hex.slice(1), 16);
+      return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+    };
+    const defs = [
+      { name: 'CIERRE Q3', count: '3', color: '#d9a35b', style: 'dot', files: [
+        ['ventas-2024.xlsx', 'Finanzas, 3 hojas', true], ['gastos.csv', 'Finanzas, 2 MB', false] ] },
+      { name: 'PROVEEDORES', count: '2', color: '#4fb3a4', style: 'header', files: [
+        ['proveedores.xlsx', 'Compras, 14 min', false], ['pagos-octubre.csv', 'Compras, sin cargar', false] ] },
+      { name: 'PERSONAL', count: '2', color: '#9a86d6', style: 'border', files: [
+        ['presupuesto.xlsx', 'Documentos, 1 hoja', false], ['viajes.xlsx', 'Documentos, 2 hojas', false] ] },
+      { name: 'FINANZAS', count: '2', color: '#5b8def', style: 'tint', files: [
+        ['contabilidad.xlsx', 'Drive, 4 hojas', false], ['excel 2.xlsx', 'Drive, 1 hoja', false] ] }
+    ];
+    const spaces = defs.map((d) => {
+      const s = d.style;
+      return {
+        name: d.name, count: d.count, color: d.color,
+        dot: s === 'dot' || s === 'border',
+        pad: s === 'border' || s === 'tint' ? '6px' : '0',
+        boxBg: s === 'tint' ? rgba(d.color, 0.08) : 'transparent',
+        boxRing: s === 'border' ? 'inset 0 0 0 1px ' + rgba(d.color, 0.55) : 'none',
+        headBg: s === 'header' ? rgba(d.color, 0.18) : s === 'tint' ? rgba(d.color, 0.16) : 'transparent',
+        headRing: 'none',
+        headText: s === 'header' || s === 'tint' ? '#e4e4e6' : '#a3a5ab',
+        files: d.files.map(([name, meta, active]) => ({
+          name, meta,
+          bg: active ? '#2a2b2f' : s === 'tint' ? rgba(d.color, 0.06) : 'transparent',
+          ring: s === 'header' && !active ? 'none' : 'none',
+          text: meta.includes('sin cargar') ? '#a3a5ab' : '#e4e4e6',
+          weight: active ? 500 : 400
+        }))
+      };
+    });
+    const menu = [
+      { label: 'Renombrar', keys: 'F2' }, { label: 'Nuevo workbook aquí', keys: '' },
+      { sep: true },
+      { label: 'Color', keys: '›', active: true }, { label: 'Personalizar…', keys: '' },
+      { sep: true },
+      { label: 'Eliminar espacio', keys: 'Supr' }
+    ].map((m) => ({ sep: false, label: '', keys: '', ...m, bg: m.active ? '#34353a' : 'transparent' }));
+    const palette = [
+      ['Predeterminado', 'none'], ['Gris', '#8b8e96'], ['Rojo', '#d0605e'], ['Naranja', '#d9844f'], ['Ámbar', '#d9a35b'],
+      ['Verde', '#5fae7a'], ['Turquesa', '#4fb3a4'], ['Azul', '#5b8def'], ['Violeta', '#9a86d6'], ['Rosa', '#c97aa6']
+    ];
+    const selected = view === 'custom' ? 'Azul' : 'Turquesa';
+    const swatches = palette.map(([name, hex]) => ({
+      name,
+      fill: hex === 'none' ? 'transparent' : hex,
+      stroke: hex === 'none' ? '#767880' : hex,
+      tile: name === selected ? '#34353a' : 'transparent',
+      ring: name === selected ? 'inset 0 0 0 2px #e4e4e6' : 'none',
+      checked: name === selected ? 'true' : 'false'
+    }));
+    const styleDefs = [
+      { id: 'dot', name: 'Punto', desc: 'Solo un punto de color junto al nombre.' },
+      { id: 'header', name: 'Encabezado', desc: 'El encabezado del espacio con un tinte suave.' },
+      { id: 'border', name: 'Borde', desc: 'Un contorno de color alrededor del espacio.' },
+      { id: 'tint', name: 'Tinte completo', desc: 'Todo el espacio, encabezado y workbooks, tintado.' }
+    ];
+    const blue = '#5b8def';
+    const styles = styleDefs.map((st) => ({
+      ...st,
+      checked: st.id === 'tint' ? 'true' : 'false',
+      defChecked: st.id === 'header' ? 'true' : 'false',
+      defRing: st.id === 'header' ? 'inset 0 0 0 2px #4caf7a' : 'none',
+      ring: st.id === 'tint' ? 'inset 0 0 0 2px ' + blue : 'none',
+      dotDisplay: st.id === 'dot' || st.id === 'border' ? 'block' : 'none',
+      previewHead: st.id === 'header' || st.id === 'tint' ? rgba(blue, 0.25) : 'transparent',
+      previewItem: st.id === 'tint' ? rgba(blue, 0.12) : '#2a2b2f',
+      previewRing: st.id === 'border' ? 'inset 0 0 0 1px ' + rgba(blue, 0.6) : 'none',
+      previewBg: st.id === 'tint' ? rgba(blue, 0.08) : '#222326'
+    }));
+    return {
+      spaces, menu, swatches, styles, yes: true,
+      isMenu: view === 'menu', isCustom: view === 'custom', isDefaults: view === 'defaults',
+      rotation: palette.filter((entry) => entry[1] !== 'none').map((entry) => entry[1]),
+      title: view === 'menu' ? 'Color rápido desde el clic derecho' : view === 'custom' ? 'Personalizar un espacio' : 'Estilo predeterminado de los espacios',
+      lead: view === 'menu'
+        ? 'En la barra lateral, cada espacio usa un estilo distinto: Cierre Q3 con punto, Proveedores con encabezado tintado, Personal con borde y Finanzas con tinte completo. El submenú Color muestra los tonos reales y Personalizar abre el panel completo.'
+        : view === 'custom'
+          ? 'Personalizado aplica solo a este espacio. Color con selector libre (tono, saturación, brillo y opacidad), hexadecimal o la paleta. Volver al predeterminado lo deja como el resto.'
+          : 'Un solo estilo para todos los espacios, con la intensidad y las partes que se tiñen. Los espacios nuevos toman el siguiente color de la paleta automáticamente.'
+    };
+  }
+}
+</script>
+</body>
+</html>
