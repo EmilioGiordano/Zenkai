@@ -7,6 +7,7 @@ mod fixtures;
 mod ironcalc_run;
 mod logisheets_run;
 mod measure;
+mod save_losses;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

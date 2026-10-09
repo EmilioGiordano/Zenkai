@@ -1,5 +1,6 @@
 use std::fmt;
 
+use zenkai_datagen::DatagenError;
 use zenkai_types::WorkbookId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +65,16 @@ pub enum ToolError {
     NotAFormula,
     #[error("an entry has {chars} characters; Excel allows at most {limit} in a cell")]
     TextTooLong { chars: usize, limit: usize },
+    #[error("the generation spec cannot be used: {0}")]
+    Generation(DatagenError),
+    #[error(
+        "{cells} cells is more than the {limit} an agent may generate in one call; generate smaller blocks, or ask the user to use Zenkai's Generate data dialog (Ctrl+Alt+G) for bigger tables"
+    )]
+    TooManyGeneratedCells { cells: u64, limit: u64 },
+    #[error(
+        "the table could take up to {bytes} bytes, more than the {limit} an agent may generate in one call; generate fewer rows or shorter text, or ask the user to use Zenkai's Generate data dialog (Ctrl+Alt+G)"
+    )]
+    GeneratedTextTooLarge { bytes: u64, limit: u64 },
     #[error("writing is not allowed: {0}")]
     ReadOnly(ReadOnlyReason),
     #[error("the user is editing a cell in Zenkai; try again when they finish")]

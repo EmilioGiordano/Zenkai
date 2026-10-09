@@ -415,10 +415,10 @@ fn result_is_equal_to_empty(calc_result: &CalcResult) -> bool {
 /// it as a date and, on success, fall back to numeric comparison against the
 /// resulting Excel serial. This is what lets COUNTIF/SUMIF/AVERAGEIF (and the
 /// *IFS variants) match date-serial cells with date-string criteria.
-pub(crate) fn build_criteria<'a>(
-    value: &'a CalcResult,
-    locale: &'a Locale,
-) -> Box<dyn Fn(&CalcResult) -> bool + 'a> {
+/// A compiled criterion predicate, as returned by `build_criteria`.
+pub(crate) type Criterion<'c> = Box<dyn Fn(&CalcResult) -> bool + 'c>;
+
+pub(crate) fn build_criteria<'a>(value: &'a CalcResult, locale: &'a Locale) -> Criterion<'a> {
     match value {
         CalcResult::String(s) => {
             if let Some(v) = s.strip_prefix("<=") {

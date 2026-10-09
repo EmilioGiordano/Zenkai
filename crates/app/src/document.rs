@@ -10,6 +10,7 @@ use zenkai_engine::{Engine, EngineError, Unsupported, Workbook};
 use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
+use crate::agent_review::Review;
 use crate::entry::display_name;
 use crate::find::FindBar;
 use crate::spaces::SpaceId;
@@ -49,6 +50,7 @@ pub struct Document {
     pub pending_sheet: Option<SheetId>,
     pub view: ViewState,
     pub find: Option<FindBar>,
+    pub review: Review,
     pub last_used: Instant,
 }
 
@@ -65,6 +67,8 @@ fn unsupported_label(unsupported: Unsupported) -> &'static str {
         Unsupported::ExternalLinks => t!("unsupported.external_links"),
         Unsupported::AutoFilter => t!("unsupported.auto_filter"),
         Unsupported::SheetProtection => t!("unsupported.sheet_protection"),
+        Unsupported::Outline => t!("unsupported.outline"),
+        Unsupported::PageBreaks => t!("unsupported.page_breaks"),
     }
 }
 
@@ -98,6 +102,7 @@ impl Document {
             pending_sheet: None,
             view: ViewState::default(),
             find: None,
+            review: Review::default(),
             last_used: Instant::now(),
         }
     }
@@ -129,6 +134,18 @@ impl Document {
                 Some(poisoned.into_inner())
             }
         }
+    }
+
+    // Called when a batch of edits ends; a busy workbook is checked after the next one.
+    pub fn revalidate_review(&mut self) {
+        if self.review.is_empty() {
+            return;
+        }
+        let Ok(workbook) = self.workbook.try_read() else {
+            return;
+        };
+        self.review
+            .retain_unchanged(|cell| workbook.input(cell.sheet, cell.pos));
     }
 
     pub fn queue(&mut self, edit: Edit) {
@@ -226,8 +243,17 @@ impl Document {
             return false;
         }
         self.batch_running = false;
-        if let Some(sheets) = self.workbook().map(|workbook| workbook.sheets()) {
+        if let Some((sheets, dropped)) = self
+            .workbook()
+            .map(|workbook| (workbook.sheets(), workbook.dropped_on_save()))
+        {
             self.sheets = sheets;
+            for lost in dropped {
+                if !self.unsupported.contains(&lost) {
+                    self.unsupported.push(lost);
+                }
+            }
+            self.unsupported.sort();
         }
         let last = u32::try_from(self.sheets.len().saturating_sub(1)).unwrap_or(0);
         if self.sheet.0 > last {

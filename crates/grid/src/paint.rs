@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui_kit::component::ActiveTheme;
@@ -73,6 +73,7 @@ pub struct Frame {
     pub editor: Option<Editor>,
     pub marquee: Option<Range>,
     pub pending: Option<Range>,
+    pub review_marks: Rc<HashSet<CellPos>>,
     pub fill_target: Option<Range>,
     pub zoom: f32,
     pub focused: bool,
@@ -86,7 +87,8 @@ pub struct Frame {
 }
 
 const FILL_HANDLE: f32 = 7.0;
-const PENDING_COLOR: u32 = 0xD9_A0_3F;
+pub const PENDING_COLOR: u32 = 0xD9_A0_3F;
+const REVIEW_STRIPE: f32 = 3.0;
 const MAX_WRAPPED_CHARS: usize = 2_000;
 
 // Excel's reference colours while editing a formula, in order of appearance.
@@ -204,11 +206,14 @@ pub fn paint(frame: &Frame, bounds: Bounds<Pixels>, window: &mut Window, cx: &mu
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (row, y, h) in &rows.ys {
             for (col, x, w) in &columns.xs {
-                let Some(cell) = frame.cells.get(&CellPos::new(*row, *col)) else {
-                    continue;
-                };
-                if let Some(fill_color) = cell.style.fill {
+                let pos = CellPos::new(*row, *col);
+                if let Some(fill_color) = frame.cells.get(&pos).and_then(|cell| cell.style.fill) {
                     window.paint_quad(fill(rect(origin, *x, *y, *w, *h), rgb_to_hsla(fill_color)));
+                }
+                if frame.review_marks.contains(&pos) {
+                    let amber: Hsla = rgb(PENDING_COLOR).into();
+                    window.paint_quad(fill(rect(origin, *x, *y, *w, *h), amber.opacity(0.18)));
+                    window.paint_quad(fill(rect(origin, *x, *y, REVIEW_STRIPE * z, *h), amber));
                 }
             }
         }

@@ -231,6 +231,8 @@ pub struct Model<'a> {
     pub(crate) circular_hits: u64,
     pub(crate) last_recalculation: Recalculation,
     pub(crate) criteria_ranges: CriteriaRanges,
+    /// How many SUMIF(S) and COUNTIF(S) totals were updated by what changed.
+    pub(crate) criteria_deltas: u64,
 }
 
 // FIXME: Maybe this should be the same as CellReference
@@ -1748,7 +1750,8 @@ impl<'a> Model<'a> {
             dependencies: None,
             circular_hits: 0,
             last_recalculation: Recalculation::Full,
-            criteria_ranges: CriteriaRanges::Off,
+            criteria_ranges: CriteriaRanges::new(),
+            criteria_deltas: 0,
         };
 
         model.parse_formulas();
@@ -3070,7 +3073,7 @@ impl<'a> Model<'a> {
             retry = false;
             self.cells.clear();
             self.support.clear();
-            self.criteria_ranges = CriteriaRanges::on();
+            self.criteria_ranges.start_full();
             self.clear_variable_stack();
             self.clear_lambdas();
 
@@ -3110,7 +3113,7 @@ impl<'a> Model<'a> {
                 column: cell.column,
             });
         }
-        self.criteria_ranges = CriteriaRanges::Off;
+        self.criteria_ranges.finish();
         self.evaluate_conditional_formatting();
     }
 

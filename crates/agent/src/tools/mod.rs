@@ -2,6 +2,8 @@ mod approval_text;
 mod channel;
 mod client;
 mod error;
+#[cfg(test)]
+mod generate_tests;
 #[cfg(any(test, feature = "test-support"))]
 mod local_host;
 mod read;
@@ -11,6 +13,7 @@ mod request;
 mod tests;
 mod write;
 
+pub use approval_text::{shown_entry, shown_text};
 pub use channel::{ToolCall, ToolEndpoint, ToolResult, channel};
 pub use client::client_label;
 pub use error::{AgentAccess, ReadOnlyReason, ToolError};
@@ -22,10 +25,14 @@ pub use reply::{
     UNTRUSTED_NOTICE, WorkbookSummary, WriteSummary,
 };
 pub use request::{
-    Alignment, Borders, Find, FormatChange, FormatRange, GetSelection, ListSheets, ListWorkbooks,
-    NumberFormatName, ReadRange, ReadRequest, SetFormula, ToolRequest, WriteCells, WriteRequest,
+    Alignment, Borders, Find, FormatChange, FormatRange, GenerateData, GetSelection, ListSheets,
+    ListWorkbooks, NumberFormatName, ReadRange, ReadRequest, SetFormula, ToolRequest, WriteCells,
+    WriteRequest,
 };
-pub use write::{MAX_CELL_CHARS, MAX_FORMAT_CELLS, MAX_WRITE_CELLS, PlannedWrite, plan_write};
+pub use write::{
+    MAX_CELL_CHARS, MAX_FORMAT_CELLS, MAX_GENERATE_BYTES, MAX_GENERATE_CELLS, MAX_WRITE_CELLS,
+    PlannedWrite, plan_write,
+};
 
 use zenkai_types::SheetInfo;
 pub use zenkai_types::WorkbookId;

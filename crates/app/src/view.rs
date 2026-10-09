@@ -22,10 +22,13 @@ use zenkai_types::{
 };
 
 mod agent_calls;
+mod agent_review;
+mod chat_dock;
 mod settings_gate;
 mod space_panel;
 
 use agent_calls::{AgentLink, Decision};
+use chat_dock::ChatDock;
 use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_agent::settings::{HeldChange, PermissionMode};
 
@@ -42,6 +45,7 @@ use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
 use crate::jump::jump_target;
+use crate::keymap;
 use crate::memory;
 use crate::palette;
 use crate::previews::TypedPreviews;
@@ -172,6 +176,7 @@ pub struct Workspace {
     cell_refresh: CellRefresh,
     space_panel: Option<space_panel::SpacePanel>,
     agent: AgentLink,
+    chat: ChatDock,
     // The settings problem already shown, so a reload with the same error stays quiet.
     shown_settings_problem: Option<SettingsError>,
     // A settings.json change that gives agents more power, as last shown for confirmation.
@@ -223,9 +228,15 @@ impl Workspace {
             this.persist_session(cx);
             cx.notify();
         });
-        let quit = cx.on_app_quit(|this, _| {
+        let quit = cx.on_app_quit(|this, cx| {
             this.stop_bridge();
-            async {}
+            let tree = this.shutdown_chat(cx);
+            let executor = cx.background_executor().clone();
+            async move {
+                if let Some(tree) = tree {
+                    executor.spawn(async move { tree.close() }).await;
+                }
+            }
         });
         let mut workspace = Workspace {
             documents: Documents::new(empty_workbook()),
@@ -272,6 +283,7 @@ impl Workspace {
             cell_refresh: CellRefresh::Idle,
             space_panel: None,
             agent: Self::start_tool_service(window, cx),
+            chat: ChatDock::default(),
             shown_settings_problem: None,
             shown_held: None,
             held_focus: cx.focus_handle(),
@@ -322,6 +334,7 @@ impl Workspace {
         let view = self.sheet_view();
         self.grid.update(cx, |grid, cx| grid.reset(view, cx));
         self.sync_pending_highlight(cx);
+        self.sync_review_marks(cx);
         self.refresh_cells(cx);
     }
 
@@ -828,7 +841,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match event {
-            GridEvent::SelectionChanged => self.refresh_stats(cx),
+            GridEvent::SelectionChanged => {
+                self.refresh_stats(cx);
+                self.follow_review(cx);
+            }
             GridEvent::ViewportChanged => self.schedule_cell_refresh(window, cx),
             GridEvent::EditChanged => cx.notify(),
             GridEvent::EditRequested(pos) => {
@@ -850,6 +866,7 @@ impl Workspace {
             }
             GridEvent::Commit { pos, text } => {
                 if let Some(sheet) = self.active_sheet() {
+                    self.forget_review_range(sheet, Range::single(*pos), cx);
                     self.commit_text(sheet, *pos, text.clone(), window, cx);
                 }
             }
@@ -858,6 +875,7 @@ impl Workspace {
                     return;
                 };
                 let (pos, text, range) = (*pos, text.clone(), *range);
+                self.forget_review_range(sheet, range, cx);
                 self.show_typed(range, &text, cx);
                 self.edit(window, cx, move |wb| wb.fill_with(sheet, pos, &text, range));
             }
@@ -866,6 +884,7 @@ impl Workspace {
                     return;
                 };
                 let range = *range;
+                self.forget_review_range(sheet, range, cx);
                 self.edit(window, cx, move |wb| wb.clear(sheet, range));
             }
             GridEvent::Jump { direction, extend } => self.jump(*direction, *extend, cx),
@@ -1014,6 +1033,7 @@ impl Workspace {
                     this.clear_calculating(cx);
                     return;
                 }
+                document.revalidate_review();
                 if let Some(target) = pending_sheet
                     && errors.is_empty()
                 {
@@ -1034,6 +1054,7 @@ impl Workspace {
                         let view = this.sheet_view();
                         this.grid.update(cx, |grid, cx| grid.update_view(view, cx));
                     }
+                    this.sync_review_marks(cx);
                     this.refresh_cells(cx);
                     this.refresh_stats(cx);
                     this.refresh_chart();
@@ -1758,6 +1779,10 @@ impl Workspace {
                 (height, width)
             }
         };
+        let cut_source = internal
+            .as_ref()
+            .filter(|clip| clip.cut)
+            .map(|clip| clip.range);
         if let Some(clip) = internal {
             let keep = (!clip.cut).then(|| clip.clone());
             self.edit(window, cx, move |wb| {
@@ -1770,6 +1795,10 @@ impl Workspace {
             origin.row.offset(i64::from(height.saturating_sub(1))),
             origin.col.offset(i64::from(width.saturating_sub(1))),
         );
+        self.forget_review_range(sheet, Range::new(origin, end), cx);
+        if let Some(source) = cut_source {
+            self.forget_review_range(sheet, source, cx);
+        }
         self.grid.update(cx, |grid, cx| {
             grid.set_marquee(None, cx);
             grid.select(origin, end, cx);
@@ -1817,6 +1846,7 @@ impl Workspace {
             origin.row.offset(height.saturating_sub(1)),
             origin.col.offset(width.saturating_sub(1)),
         );
+        self.forget_review_range(sheet, Range::new(origin, end), cx);
         self.grid.update(cx, |grid, cx| {
             grid.set_marquee(None, cx);
             grid.select(origin, end, cx);
@@ -1857,11 +1887,15 @@ impl Workspace {
                                     } else {
                                         gpui_kit::assets::IconName::PanelLeftOpen
                                     })
-                                    .tooltip(if self.sidebar.visible {
-                                        t!("sidebar.hide_tooltip")
-                                    } else {
-                                        t!("sidebar.show_tooltip")
-                                    })
+                                    .tooltip(keymap::labeled(
+                                        cx,
+                                        if self.sidebar.visible {
+                                            t!("sidebar.hide_tooltip")
+                                        } else {
+                                            t!("sidebar.show_tooltip")
+                                        },
+                                        &ToggleSidebar,
+                                    ))
                                     .on_click(|event, window, cx| {
                                         if sidebar::is_primary_click(event) {
                                             window.dispatch_action(ToggleSidebar.boxed_clone(), cx)
@@ -2127,6 +2161,7 @@ impl Workspace {
             self.notify(Severity::Info, t!("notice.nothing_to_sort"), cx);
             return;
         }
+        self.forget_review_range(sheet, range, cx);
         self.edit(window, cx, move |wb| wb.sort(sheet, range, key, descending));
     }
 
@@ -2853,6 +2888,7 @@ impl Workspace {
             .h_full()
             .child(toolbar::render(&self.active_style, &self.colors, cx))
             .child(self.render_formula_bar(cx))
+            .children(self.render_agent_review(cx))
             .children(self.render_held_settings(cx))
             .children(self.render_find(cx))
             .child(
@@ -2862,10 +2898,12 @@ impl Workspace {
                     .child(
                         div()
                             .id("grid-area")
+                            .relative()
                             .flex_1()
                             .min_w_0()
                             .h_full()
                             .child(self.grid.clone())
+                            .children(self.render_review_popover(cx))
                             .context_menu({
                                 let grid_focus = self.grid.focus_handle(cx);
                                 move |menu, _, _| cell_menu(menu, grid_focus.clone())
@@ -3251,6 +3289,21 @@ impl Render for Workspace {
                 cx.listener(|this, _: &ToggleSidebar, window, cx| this.toggle_sidebar(window, cx)),
             )
             .on_action(
+                cx.listener(|this, _: &ToggleAgentChat, window, cx| this.toggle_chat(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &AddSelectionToChat, window, cx| {
+                this.add_selection_to_chat(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &NewAgentConversation, window, cx| {
+                this.new_agent_conversation(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &AllowChatPermission, _, cx| {
+                this.answer_chat_permission(true, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DenyChatPermission, _, cx| {
+                this.answer_chat_permission(false, cx)
+            }))
+            .on_action(
                 cx.listener(|this, _: &FocusSidebar, window, cx| this.focus_sidebar(window, cx)),
             )
             .on_action(cx.listener(|this, _: &NewSpace, window, cx| this.new_space(window, cx)))
@@ -3292,6 +3345,24 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &AllowAgentChange, window, cx| {
                 this.decide_agent_change(Decision::Allow, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &NextAgentChange, window, cx| {
+                this.step_review(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PreviousAgentChange, window, cx| {
+                this.step_review(false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &KeepAgentChange, window, cx| {
+                this.keep_review_cell(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &RejectAgentChange, window, cx| {
+                this.reject_review_cell(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &KeepAllAgentChanges, window, cx| {
+                this.keep_all_review(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &RejectAllAgentChanges, window, cx| {
+                this.reject_all_review(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ShowAgentChange, window, cx| {
                 this.show_agent_change(window, cx)
             }))
@@ -3309,7 +3380,8 @@ impl Render for Workspace {
                         self.render_workbook(cx).into_any_element()
                     } else {
                         self.render_empty(cx).into_any_element()
-                    }),
+                    })
+                    .children(self.render_chat()),
             )
             .children(self.render_palette())
             .children(self.render_theme_picker(cx))
