@@ -11,8 +11,8 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::super::Workspace;
-use super::WIDTH;
 use crate::actions::*;
+use crate::panel_width::Panel;
 use crate::sidebar_item::{self, FileItem, FileState};
 use crate::sidebar_rows::{Move, Row};
 use crate::space_appearance::resolve;
@@ -186,7 +186,8 @@ impl Workspace {
                         this.leave_sidebar(window, cx)
                     }),
                 )
-                .w(px(WIDTH))
+                .relative()
+                .w(px(self.panel_width(Panel::Sidebar, window)))
                 .flex_shrink_0()
                 .h_full()
                 .px(px(10.0))
@@ -218,7 +219,8 @@ impl Workspace {
                         .text_xs()
                         .text_color(muted)
                         .child(format!("{} MB", self.memory_mb)),
-                ),
+                )
+                .child(self.panel_edge(Panel::Sidebar, window, cx)),
         )
     }
 

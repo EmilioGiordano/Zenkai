@@ -27,6 +27,7 @@ mod language;
 mod logging;
 mod memory;
 mod palette;
+mod panel_width;
 mod previews;
 mod recent;
 mod recovery;

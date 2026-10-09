@@ -159,6 +159,7 @@ impl Workspace {
                     .map(str::to_string)
                     .collect();
                 self.sidebar.visible = session.sidebar_visible;
+                self.panels.widths = session.panel_widths.validated();
                 if let Some(active) = self
                     .documents
                     .restore(&session, self.recovery_dir.as_deref())
@@ -462,6 +463,7 @@ impl Workspace {
                     .as_deref()
                     .map(|directory| recovery::document_file(directory, id))
             })
+            .with_panel_widths(self.panels.widths)
     }
 
     // Written when something changed, so a crash leaves the spaces and files as they were a

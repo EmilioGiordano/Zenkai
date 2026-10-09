@@ -11,8 +11,6 @@ use super::{ChatEvent, ChatPanel, View};
 use crate::actions::*;
 use crate::agent_settings::AgentConfig;
 
-const PANEL_WIDTH_REMS: f32 = 29.0;
-
 fn provider_name(settings: &Settings) -> String {
     match chosen_agent(settings) {
         Some((id, server)) => {
@@ -72,9 +70,7 @@ impl Render for ChatPanel {
         let root = v_flex()
             .id("agent-chat")
             .key_context(context)
-            .flex_shrink_0()
-            .w(rems(PANEL_WIDTH_REMS))
-            .h_full()
+            .size_full()
             .bg(sidebar)
             .text_color(foreground)
             .border_l_1()
