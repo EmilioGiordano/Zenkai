@@ -469,6 +469,7 @@ async fn converse_on(
     // No file-system or terminal capability: the agent reaches the workbook only through
     // the MCP tools Zenkai passes in the session.
     let capabilities = ClientCapabilities::new();
+    let started = std::time::Instant::now();
     let initialized = connection
         .send_request(
             InitializeRequest::new(ProtocolVersion::V1)
@@ -477,6 +478,7 @@ async fn converse_on(
         )
         .block_task()
         .await?;
+    tracing::info!(elapsed = ?started.elapsed(), "the agent answered initialize");
     let abilities = wire::abilities(&initialized);
     let route = instructions::prompt_route(initialized.agent_info.as_ref());
     let mut introduced = route == PromptRoute::SessionMeta;
@@ -493,6 +495,7 @@ async fn converse_on(
         )
         .block_task()
         .await?;
+    tracing::info!(elapsed = ?started.elapsed(), "the agent created the session");
     let mut session_id = session.session_id;
     notify(events, SessionEvent::Started(session_id.to_string()));
     notify(

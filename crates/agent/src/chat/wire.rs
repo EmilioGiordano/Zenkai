@@ -161,9 +161,11 @@ pub fn past_session(info: &SessionInfo) -> PastSession {
 
 #[cfg(test)]
 mod tests {
-    use agent_client_protocol::schema::v1::SessionMode;
+    use agent_client_protocol::schema::v1::{NewSessionResponse, SessionMode};
 
     use super::*;
+
+    const CLAUDE_NEW_SESSION: &str = include_str!("claude_new_session.json");
 
     fn claude_modes(current: &str) -> SessionModeState {
         SessionModeState::new(
@@ -199,6 +201,18 @@ mod tests {
                 ConfigSource::LegacyMode,
                 "default".to_string()
             ))
+        );
+    }
+
+    #[test]
+    fn the_claude_adapter_session_lists_modes_models_and_effort() {
+        let response: NewSessionResponse = serde_json::from_str(CLAUDE_NEW_SESSION).unwrap();
+        let selects =
+            selects_from_session(response.config_options.as_deref(), response.modes.as_ref());
+        let kinds: Vec<ConfigKind> = selects.iter().map(|select| select.kind).collect();
+        assert_eq!(
+            kinds,
+            [ConfigKind::Mode, ConfigKind::Model, ConfigKind::Effort]
         );
     }
 }

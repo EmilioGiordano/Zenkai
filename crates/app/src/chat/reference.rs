@@ -8,6 +8,21 @@ fn needs_quotes(sheet: &str) -> bool {
     !plain || zenkai_types::CellPos::parse_a1(sheet).is_some() || Range::parse_a1(sheet).is_some()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Reference {
+    pub sheet: Option<String>,
+    pub range: Range,
+}
+
+impl Reference {
+    pub fn text(&self) -> String {
+        match &self.sheet {
+            Some(sheet) => sheet_range(sheet, self.range),
+            None => self.range.to_string(),
+        }
+    }
+}
+
 pub fn sheet_range(sheet: &str, range: Range) -> String {
     if needs_quotes(sheet) {
         format!("'{}'!{range}", sheet.replace('\'', "''"))

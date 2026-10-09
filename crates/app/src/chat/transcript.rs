@@ -2,7 +2,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::text::TextView;
+use gpui_kit::component::text::{MarkdownExtensions, TextView};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -10,9 +10,10 @@ use zenkai_agent::chat::session::ChoiceKind;
 use zenkai_agent::chat::thread::{Entry, FileCard, NoticeKind, ToolCard, ToolStatus, worked_label};
 use zenkai_i18n::t;
 
+use super::badge::{self, ReferencePlugin};
 use super::{ChatPanel, MONO};
 
-fn user_bubble(text: &str, cx: &App) -> impl IntoElement {
+fn user_bubble(text: &str, panel: &WeakEntity<ChatPanel>, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     div().flex().justify_end().child(
         div()
@@ -23,7 +24,10 @@ fn user_bubble(text: &str, cx: &App) -> impl IntoElement {
             .bg(theme.secondary)
             .text_color(theme.secondary_foreground)
             .line_height(relative(1.5))
-            .child(text.to_string()),
+            .child(match badge::user_message(text, panel, cx) {
+                Some(message) => message,
+                None => div().child(text.to_string()).into_any_element(),
+            }),
     )
 }
 
@@ -79,16 +83,22 @@ fn status_mark(status: ToolStatus, cx: &App) -> AnyElement {
 
 impl ChatPanel {
     pub(super) fn render_entries(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let panel = cx.weak_entity();
         self.thread
             .entries()
             .iter()
             .enumerate()
             .map(|(index, entry)| match entry {
-                Entry::User(text) => user_bubble(text, cx).into_any_element(),
+                Entry::User(text) => user_bubble(text, &panel, cx).into_any_element(),
                 Entry::Worked { seconds } => worked_divider(*seconds, cx).into_any_element(),
                 Entry::Notice { kind, text } => notice(*kind, text, cx).into_any_element(),
                 Entry::Assistant { id, text } => match self.texts.get(id) {
                     Some(state) => TextView::new(state)
+                        .markdown_extensions(
+                            MarkdownExtensions::default()
+                                .parser_revision(1)
+                                .plugin(ReferencePlugin::new(panel.clone())),
+                        )
                         .selectable(true)
                         .stream_fade(true)
                         .line_height(relative(1.6))

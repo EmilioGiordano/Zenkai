@@ -181,19 +181,5 @@ impl ChatPanel {
                         window.dispatch_action(Box::new(NewAgentConversation), cx)
                     }),
             )
-            .child(
-                Button::new("chat-close")
-                    .ghost()
-                    .compact()
-                    .icon(IconName::PanelRightClose)
-                    .tooltip(keymap::labeled(
-                        cx,
-                        t!("chat.close.tooltip"),
-                        &ToggleAgentChat,
-                    ))
-                    .on_click(|_, window, cx| {
-                        window.dispatch_action(Box::new(ToggleAgentChat), cx)
-                    }),
-            )
     }
 }

@@ -15,7 +15,7 @@ pub enum ReadOnlyReason {
 impl fmt::Display for ReadOnlyReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            ReadOnlyReason::Settings => "the user set agents to read only in Zenkai's settings",
+            ReadOnlyReason::Settings => "agents are read only: the user chose Plan in the chat or set read only in Zenkai's settings",
             ReadOnlyReason::ProtectedView => {
                 "the file came from the internet (Protected View), so agents may only read it"
             }

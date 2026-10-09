@@ -4,11 +4,19 @@ use zenkai_agent::chat::thread::TurnEnd;
 use zenkai_i18n::t;
 
 use super::launch::{self, Live, Prepared};
-use super::{ChatPanel, Gate, Link, closed};
+use super::{ChatPanel, Gate, Link, Start, View, closed};
 use crate::agent_settings::AgentConfig;
 
 impl ChatPanel {
-    pub(super) fn begin(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    // Starts the agent when the chat opens so its models and modes are listed before the first
+    // message. It never installs, asks or reports: only sending a message does that.
+    pub(crate) fn warm_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view == View::Chat && self.thread.is_empty() && self.problem.is_none() {
+            self.begin(Start::WarmUp, window, cx);
+        }
+    }
+
+    pub(super) fn begin(&mut self, start: Start, window: &mut Window, cx: &mut Context<Self>) {
         if self.link != Link::Idle {
             return;
         }
@@ -22,7 +30,7 @@ impl ChatPanel {
                 .spawn(async move { launch::plan_launch(&settings, &hint) })
                 .await;
             closed(this.update_in(cx, |this, window, cx| {
-                this.planned(epoch, planned, window, cx)
+                this.planned(epoch, start, planned, window, cx)
             }));
         })
         .detach();
@@ -31,6 +39,7 @@ impl ChatPanel {
     pub(super) fn planned(
         &mut self,
         epoch: u64,
+        start: Start,
         planned: Result<Prepared, launch::PrepareError>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -38,7 +47,9 @@ impl ChatPanel {
         if epoch != self.epoch {
             return;
         }
+        let warming = start == Start::WarmUp && self.queued.is_none();
         match planned {
+            Err(_) if warming => self.link = Link::Idle,
             Err(error) => self.fail_before_start(error.to_string(), cx),
             Ok(prepared) => {
                 let approved = cx.update_global::<AgentConfig, _>(|config, _| {
@@ -46,7 +57,9 @@ impl ChatPanel {
                         .approvals
                         .is_approved(&prepared.id, &prepared.server, &prepared.plan)
                 });
-                if approved {
+                if warming && (!approved || launch::needs_install(&prepared.plan)) {
+                    self.link = Link::Idle;
+                } else if approved {
                     self.arm(prepared, window, cx);
                 } else {
                     let focus = cx.focus_handle();

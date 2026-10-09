@@ -132,7 +132,7 @@ impl AgentState {
             StateChange::PastSessions(sessions) => self.past_sessions = sessions,
             StateChange::CurrentMode(mode) => {
                 for select in &mut self.selects {
-                    if select.source == ConfigSource::LegacyMode && select.offers(&mode) {
+                    if select.kind == ConfigKind::Mode && select.offers(&mode) {
                         select.current = mode.clone();
                     }
                 }

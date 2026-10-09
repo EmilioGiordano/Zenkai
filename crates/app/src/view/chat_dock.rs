@@ -1,13 +1,20 @@
 use std::path::{Path, PathBuf};
 
+use gpui_kit::assets::IconName;
+use gpui_kit::base::Selectable;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
 use zenkai_agent::chat::thread::FileCard;
 use zenkai_i18n::t;
-use zenkai_types::WorkbookId;
+use zenkai_types::{SheetId, WorkbookId};
 
-use super::{Severity, Workspace};
+use super::{Severity, Workspace, sidebar};
+use crate::actions::ToggleAgentChat;
 use crate::agent_folder::FolderHint;
+use crate::chat::reference::Reference;
 use crate::chat::{ChatEvent, ChatPanel, reference};
+use crate::document::Document;
+use crate::keymap;
 use crate::panel_width::Panel;
 
 #[derive(Default)]
@@ -88,6 +95,27 @@ impl Workspace {
         panel
     }
 
+    pub(super) fn render_chat_toggle(&self, cx: &App) -> impl IntoElement {
+        let label = if self.chat.open {
+            t!("chat.hide.tooltip")
+        } else {
+            t!("chat.show.tooltip")
+        };
+        div().occlude().child(
+            Button::new("toggle-chat")
+                .ghost()
+                .compact()
+                .icon(IconName::PanelRight)
+                .selected(self.chat.open)
+                .tooltip(keymap::labeled(cx, label, &ToggleAgentChat))
+                .on_click(|event, window, cx| {
+                    if sidebar::is_primary_click(event) {
+                        window.dispatch_action(ToggleAgentChat.boxed_clone(), cx)
+                    }
+                }),
+        )
+    }
+
     pub(super) fn toggle_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.chat.open {
             self.close_chat(window, cx);
@@ -99,7 +127,10 @@ impl Workspace {
     fn open_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ChatPanel> {
         let panel = self.chat_panel(window, cx);
         self.chat.open = true;
-        panel.update(cx, |panel, cx| panel.focus_composer(window, cx));
+        panel.update(cx, |panel, cx| {
+            panel.focus_composer(window, cx);
+            panel.warm_up(window, cx);
+        });
         cx.notify();
         panel
     }
@@ -129,9 +160,57 @@ impl Workspace {
             .find(|info| info.id == document.sheet)
             .map(|info| info.name.clone())
             .unwrap_or_default();
-        let text = format!("{} ", reference::sheet_range(&sheet, self.selection(cx)));
+        let reference = Reference {
+            sheet: Some(sheet),
+            range: self.selection(cx),
+        };
         let panel = self.open_chat(window, cx);
-        panel.update(cx, |panel, cx| panel.insert_text(&text, window, cx));
+        panel.update(cx, |panel, cx| panel.add_reference(reference, window, cx));
+    }
+
+    pub(crate) fn reveal_reference(
+        &mut self,
+        reference: &Reference,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((id, sheet)) = self.sheet_of_reference(reference.sheet.as_deref()) else {
+            let sheet = reference.sheet.clone().unwrap_or_default();
+            self.notify(
+                Severity::Warning,
+                t!("chat.reference.not_open", sheet = sheet),
+                cx,
+            );
+            return;
+        };
+        self.switch_to(id, window, cx);
+        if self.documents.active_id() != Some(id) {
+            return;
+        }
+        self.switch_sheet(sheet, window, cx);
+        self.grid
+            .update(cx, |grid, cx| grid.show_range(reference.range, cx));
+    }
+
+    // The active workbook wins, then any other open workbook with a sheet of that name.
+    fn sheet_of_reference(&self, name: Option<&str>) -> Option<(WorkbookId, SheetId)> {
+        let in_document = |document: &Document| match name {
+            Some(name) => document
+                .sheets
+                .iter()
+                .find(|info| info.name.to_lowercase() == name.to_lowercase())
+                .map(|info| info.id),
+            None => Some(document.sheet),
+        };
+        self.documents
+            .active()
+            .and_then(|document| in_document(document).map(|sheet| (document.id, sheet)))
+            .or_else(|| {
+                name?;
+                self.documents
+                    .iter()
+                    .find_map(|document| in_document(document).map(|sheet| (document.id, sheet)))
+            })
     }
 
     pub(super) fn new_agent_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -1,3 +1,5 @@
+mod access;
+mod badge;
 mod cards;
 mod composer;
 mod events;
@@ -5,8 +7,10 @@ mod extras;
 mod files;
 mod header;
 mod launch;
+mod menus;
 mod permissions;
 pub(crate) mod reference;
+mod reference_scan;
 mod render;
 mod session_rows;
 mod sessions;
@@ -14,7 +18,7 @@ mod slash;
 mod startup;
 mod transcript;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Instant, SystemTime};
 
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
@@ -24,13 +28,15 @@ use zenkai_agent::chat::history::History;
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
 use zenkai_agent::chat::state::AgentState;
 use zenkai_agent::chat::thread::{MessageId, Thread, TurnEnd, TurnState};
-use zenkai_agent::settings::{AgentId, PermissionMode};
+use zenkai_agent::settings::AgentId;
 use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
 
 use crate::agent_settings::{self, AgentConfig};
 use crate::view::Workspace;
+use access::Access;
 use launch::{Live, Prepared};
+use reference::Reference;
 use zenkai_i18n::t;
 
 const SCROLL_FOLLOW_SLACK: f32 = 48.0;
@@ -50,8 +56,15 @@ enum View {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Start {
+    Message,
+    WarmUp,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Menu {
     Model,
+    Access,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +100,8 @@ pub struct ChatPanel {
     scroll: ScrollHandle,
     thread: Thread,
     texts: BTreeMap<MessageId, Entity<TextViewState>>,
+    linked_messages: BTreeSet<MessageId>,
+    references: Vec<Reference>,
     link: Link,
     live: Option<Live>,
     queued: Option<(String, Option<String>)>,
@@ -101,6 +116,11 @@ pub struct ChatPanel {
     history_saves: async_channel::Sender<History>,
     view: View,
     menu: Option<Menu>,
+    menu_index: usize,
+    access: Access,
+    model_choice: Option<String>,
+    effort_choice: Option<String>,
+    mode_synced: bool,
     title: Option<String>,
     resume_backup: Option<Backup>,
     sessions_query: Entity<InputState>,
@@ -166,7 +186,9 @@ impl ChatPanel {
             window,
             |this, _, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter { shift: false, .. } => {
-                    if this.slash_open(cx) {
+                    if this.menu.is_some() {
+                        this.menu_accept(cx);
+                    } else if this.slash_open(cx) {
                         this.slash_accept(window, cx);
                     } else {
                         this.send(window, cx);
@@ -180,7 +202,10 @@ impl ChatPanel {
                 InputEvent::PressEnter { .. } => {}
             },
         );
-        let settings = cx.observe_global::<AgentConfig>(|_, cx| cx.notify());
+        let settings = cx.observe_global::<AgentConfig>(|this, cx| {
+            this.follow_setting(cx);
+            cx.notify();
+        });
         let sessions_query =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("chat.sessions.search")));
         let searching = cx.subscribe(&sessions_query, |_, _, _: &InputEvent, cx| cx.notify());
@@ -192,6 +217,8 @@ impl ChatPanel {
             scroll: ScrollHandle::new(),
             thread: Thread::default(),
             texts: BTreeMap::new(),
+            linked_messages: BTreeSet::new(),
+            references: Vec::new(),
             link: Link::Idle,
             live: None,
             queued: None,
@@ -205,6 +232,13 @@ impl ChatPanel {
             history_saves,
             view: View::Chat,
             menu: None,
+            menu_index: 0,
+            access: Access::from_setting(
+                cx.global::<AgentConfig>().state.current.agents.permission,
+            ),
+            model_choice: None,
+            effort_choice: None,
+            mode_synced: false,
             title: None,
             resume_backup: None,
             sessions_query,
@@ -222,11 +256,49 @@ impl ChatPanel {
         composer.update(cx, |state, cx| state.focus(window, cx));
     }
 
-    pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let text = text.to_string();
-        self.composer
-            .update(cx, |state, cx| state.insert(text, window, cx));
+    pub fn add_reference(
+        &mut self,
+        reference: Reference,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.references.contains(&reference) {
+            self.references.push(reference);
+        }
         self.focus_composer(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn remove_reference(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.references.len() {
+            self.references.remove(index);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn open_reference(
+        &mut self,
+        reference: &Reference,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        closed(self.workspace.update(cx, |workspace, cx| {
+            workspace.reveal_reference(reference, window, cx)
+        }));
+    }
+
+    // Chips go in front of the message, except before a slash command, which must stay first.
+    fn message_with_references(&self, typed: &str) -> String {
+        if self.references.is_empty() || typed.trim().is_empty() {
+            return typed.to_string();
+        }
+        let references: Vec<String> = self.references.iter().map(Reference::text).collect();
+        let references = references.join(" ");
+        if typed.starts_with('/') {
+            format!("{typed} {references}")
+        } else {
+            format!("{references} {typed}")
+        }
     }
 
     pub(super) fn busy(&self) -> bool {
@@ -265,10 +337,12 @@ impl ChatPanel {
     }
 
     pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.composer.read(cx).value().to_string();
+        let typed = self.composer.read(cx).value().to_string();
+        let text = self.message_with_references(&typed);
         if !self.thread.submit(text.clone()) {
             return;
         }
+        self.references.clear();
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.turn_started = Some(Instant::now());
@@ -282,7 +356,7 @@ impl ChatPanel {
             Some(live) if live.ready => live.handle.prompt(text, context),
             _ => {
                 self.queued = Some((text, context));
-                self.begin(window, cx);
+                self.begin(Start::Message, window, cx);
             }
         }
         self.scroll_to_end();
@@ -318,16 +392,23 @@ impl ChatPanel {
         }
         self.thread.clear();
         self.texts.clear();
+        self.linked_messages.clear();
+        self.references.clear();
         self.queued = None;
         self.gate = None;
         self.resume_backup = None;
         self.problem = None;
         self.turn_started = None;
-        self.state = AgentState::default();
+        self.state = AgentState {
+            selects: std::mem::take(&mut self.state.selects),
+            ..AgentState::default()
+        };
+        self.mode_synced = false;
         self.view = View::Chat;
         self.menu = None;
         self.title = None;
         self.focus_composer(window, cx);
+        self.warm_up(window, cx);
         cx.notify();
     }
 
@@ -345,15 +426,10 @@ impl ChatPanel {
         agent_settings::change(cx, move |settings| {
             settings.agents.default = Some(next.clone());
         });
+        self.state.selects.clear();
+        self.model_choice = None;
+        self.effort_choice = None;
         self.new_conversation(window, cx);
-    }
-
-    pub(super) fn cycle_permission(&mut self, cx: &mut Context<Self>) {
-        let current = cx.global::<AgentConfig>().state.current.agents.permission;
-        let modes = PermissionMode::ALL;
-        let index = modes.iter().position(|mode| *mode == current).unwrap_or(0);
-        let next = modes[(index + 1) % modes.len()];
-        crate::settings_window::set_permission(next, cx);
     }
 
     pub(super) fn copy_login_command(&self, cx: &mut Context<Self>) {
