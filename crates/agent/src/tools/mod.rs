@@ -22,7 +22,7 @@ pub use create::{
     MAX_NEW_SHEETS, NewWorkbook, OPENABLE_EXTENSIONS, check_openable, create_workbook_file,
     relative_text,
 };
-pub use error::{AgentAccess, ReadOnlyReason, ToolError};
+pub use error::{AgentAccess, ReadOnlyReason, ToolError, is_protected_view_refusal};
 pub use folder::{InsidePath, PathError, WorkingFolder};
 #[cfg(any(test, feature = "test-support"))]
 pub use local_host::LocalHost;
