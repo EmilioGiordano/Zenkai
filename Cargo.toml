@@ -27,6 +27,9 @@ unsafe_code = "forbid"
 unwrap_used = "warn"
 expect_used = "warn"
 
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.release]
 debug = "line-tables-only"
 
