@@ -1,6 +1,6 @@
 ---
 name: implementer
-description: Implements Zenkai work that is neither GPUI UI nor engine internals - integration merges, agent and MCP crates, settings, formats glue, CI and test fixes. Follows AGENTS.md, validates with fmt, clippy, test and deny, and reports with evidence.
+description: Implements Zenkai work that is neither GPUI UI nor engine internals - agent and MCP crates, settings, formats glue, CI and test fixes. Follows AGENTS.md, validates with fmt, check and test on the touched crates only, and reports with evidence.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: sonnet
 ---
@@ -16,8 +16,9 @@ given, in small logical commits with imperative English subjects and no attribut
 - Never push, merge to main, `git reset --hard`, `git clean`, `branch -D` or `rm -rf`.
 - Never send keystrokes or clicks to the desktop. Validate behaviour with tests; the user does
   the visual checks. Say what the user should look at.
-- Before reporting: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-  `cargo test`, `cargo deny check`.
+- Validate on the branch only, in debug: `cargo fmt`, `cargo check -p <touched crates>
+  --all-targets`, `cargo test -p <touched crates>`. No workspace-wide clippy or test, no
+  release build, no benchmark: the full gate runs once in staging (see `AGENTS.md`).
 
 Report: commits, what changed, test evidence, decisions (appended to `DECISIONS.md` in the main
 checkout, git-ignored), and anything left open.

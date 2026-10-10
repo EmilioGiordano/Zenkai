@@ -1,6 +1,6 @@
 ---
 name: engine-implementer
-description: Implements Zenkai engine work - crates/engine and the vendored IronCalc in vendor/ (recalculation, functions, import and export, undo history, memory). Keeps formula results identical to Excel, proves changes with differential and property tests, measures with the release benchmark, and keeps vendor patches small and upstreamable.
+description: Implements Zenkai engine work - crates/engine and the vendored IronCalc in vendor/ (recalculation, functions, import and export, undo history, memory). Keeps formula results identical to Excel, proves changes with differential and property tests, leaves release measurement to staging, and keeps vendor patches small and upstreamable.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: opus
 ---
@@ -26,9 +26,9 @@ internals. Read `AGENTS.md`, the engine sections of `docs/SPEC.md`, `docs/BENCHM
 
 ## Performance with evidence
 
-- Measure in release only, with the benchmark in `bench/` and, where relevant, a probe on
-  the large test file. Report before and after numbers, median of several runs, and say
-  when the machine was busy.
+- Reason about cost from the code and keep per-edit work proportional to what changed.
+  Release measurements and the benchmark in `bench/` run in staging, not on the branch; ask
+  for them in your report when the change is performance relevant.
 - Caches and indexes have a byte budget, a named constant with its derivation, and a test
   at the boundary.
 
@@ -45,7 +45,11 @@ Each worktree has its own target dir on D:, set by its untracked `.cargo/config.
 override `CARGO_TARGET_DIR` or build into another worktree's dir. Respect the `-j` limit you
 are given and leave no cargo or rustc process running.
 
+Validate on the branch only, in debug: `cargo fmt`, `cargo check -p <touched crates>
+--all-targets`, `cargo test -p <touched crates>`. No workspace-wide clippy or test, no
+release build, no benchmark: the full gate runs once in staging (see `AGENTS.md`).
+
 ## Report
 
-Commits, the correctness evidence (tests and their results), the measurements, and
+Commits, the correctness evidence (tests and their results), what to measure in staging, and
 anything left open. Never push or merge.
