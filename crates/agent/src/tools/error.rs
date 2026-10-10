@@ -5,6 +5,15 @@ use zenkai_types::WorkbookId;
 
 use crate::tools::folder::PathError;
 
+// The chat looks for this text to offer the unlock button next to a failed call.
+const PROTECTED_VIEW_MARKER: &str = "the file came from the internet (Protected View)";
+
+const PROTECTED_VIEW_REFUSAL: &str = "the file came from the internet (Protected View), so agents may only read it. Only the user can unlock it, with Ctrl+Shift+E or the command \"Let agents edit this file (leave Protected View)\"; there is no bar or button in the window for it";
+
+pub fn is_protected_view_refusal(text: &str) -> bool {
+    text.contains(PROTECTED_VIEW_MARKER)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadOnlyReason {
     Settings,
@@ -16,9 +25,7 @@ impl fmt::Display for ReadOnlyReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             ReadOnlyReason::Settings => "agents are read only: the user chose Plan in the chat or set read only in Zenkai's settings",
-            ReadOnlyReason::ProtectedView => {
-                "the file came from the internet (Protected View), so agents may only read it"
-            }
+            ReadOnlyReason::ProtectedView => PROTECTED_VIEW_REFUSAL,
             ReadOnlyReason::ValuesOnlyFile => {
                 "Zenkai opened this file read-only because it could only read its values"
             }
@@ -115,4 +122,18 @@ pub enum ToolError {
     TooManySheets { count: usize, limit: usize },
     #[error("the file could not be written or read: {0}")]
     File(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ReadOnlyReason, ToolError, is_protected_view_refusal};
+
+    #[test]
+    fn the_protected_view_refusal_tells_the_agent_how_the_user_unlocks_it() {
+        let text = ToolError::ReadOnly(ReadOnlyReason::ProtectedView).to_string();
+        assert!(text.contains("Ctrl+Shift+E"), "{text}");
+        assert!(text.contains("Let agents edit this file (leave Protected View)"), "{text}");
+        assert!(is_protected_view_refusal(&text));
+        assert!(!is_protected_view_refusal("agents are read only"));
+    }
 }
