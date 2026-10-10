@@ -6,11 +6,25 @@ use crate::settings::{AgentId, AgentServer};
 // (https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json), pinned so an
 // agent update never changes what Zenkai starts without a Zenkai update.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativeBinary {
+    pub os: &'static str,
+    pub arch: &'static str,
+    pub path: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Entry {
+    Node,
+    Native(&'static [NativeBinary]),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Preset {
     pub id: &'static str,
     pub name: &'static str,
     pub package: &'static str,
     pub extra_args: &'static [&'static str],
+    pub entry: Entry,
     pub min_node_major: u32,
     pub login_command: &'static str,
     pub provider: &'static str,
@@ -24,6 +38,7 @@ pub const CLAUDE: Preset = Preset {
     name: "Claude",
     package: "@agentclientprotocol/claude-agent-acp@0.88.0",
     extra_args: &[],
+    entry: Entry::Node,
     min_node_major: 22,
     login_command: "claude /login",
     provider: "Anthropic",
@@ -38,6 +53,7 @@ pub const GEMINI: Preset = Preset {
     name: "Gemini CLI",
     package: "@google/gemini-cli@0.63.0",
     extra_args: &["--acp"],
+    entry: Entry::Node,
     min_node_major: 20,
     login_command: "gemini",
     provider: "Google",
@@ -52,6 +68,7 @@ pub const CODEX: Preset = Preset {
     name: "Codex",
     package: "@agentclientprotocol/codex-acp@2.1.1",
     extra_args: &[],
+    entry: Entry::Node,
     min_node_major: 20,
     login_command: "codex login",
     provider: "OpenAI",
@@ -84,6 +101,18 @@ impl Preset {
 
     pub fn for_agent(id: &AgentId) -> Option<Preset> {
         PRESETS.into_iter().find(|preset| preset.id == id.as_str())
+    }
+
+    pub fn native_path(&self) -> Option<&'static str> {
+        let Entry::Native(binaries) = self.entry else {
+            return None;
+        };
+        binaries
+            .iter()
+            .find(|binary| {
+                binary.os == std::env::consts::OS && binary.arch == std::env::consts::ARCH
+            })
+            .map(|binary| binary.path)
     }
 
     pub fn agent_id(&self) -> AgentId {

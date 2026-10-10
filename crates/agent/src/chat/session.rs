@@ -26,6 +26,7 @@ use crate::chat::process::ProcessTree;
 use crate::chat::state::{ConfigId, ConfigSource, StateChange};
 use crate::chat::thread::{AgentUpdate, ToolCallId, ToolCard, ToolKind, ToolStatus, TurnEnd};
 use crate::chat::wire;
+use crate::presets::Preset;
 
 // The hidden first block of every prompt; replayed history must not show it as the user's words.
 pub const CONTEXT_MARKER: &str = "[Zenkai]";
@@ -293,6 +294,27 @@ async fn resolve(
             let mut arguments = vec![entry.to_string_lossy().into_owned()];
             arguments.extend(args.iter().cloned());
             Ok((node.clone(), arguments))
+        }
+        LaunchPlan::Native {
+            node,
+            package,
+            folder,
+            args,
+            ..
+        } => {
+            if !folder.join(INSTALLED_MARKER).is_file() {
+                notify(events, SessionEvent::Connection(Connection::Installing));
+                install(node, package, folder, tree).await?;
+            }
+            // The plan only names the binary; it must be there now that the install finished.
+            let relative = Preset::for_package(&package.spec())
+                .and_then(|preset| preset.native_path())
+                .ok_or_else(|| LaunchError::UnsupportedPlatform {
+                    package: package.spec(),
+                    platform: launch::platform_name(),
+                })?;
+            let program = launch::native_program(folder, package, relative)?;
+            Ok((program, args.clone()))
         }
     }
 }

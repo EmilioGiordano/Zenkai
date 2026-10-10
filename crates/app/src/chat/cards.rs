@@ -44,7 +44,10 @@ impl ChatPanel {
                         .child(spec.to_string()),
                 )
                 .when(
-                    matches!(gate.prepared.plan, LaunchPlan::Package { .. }),
+                    matches!(
+                        gate.prepared.plan,
+                        LaunchPlan::Package { .. } | LaunchPlan::Native { .. }
+                    ),
                     |card| {
                         card.child(div().text_xs().text_color(theme.muted_foreground).child(t!(
                             "chat.gate.will_run",
