@@ -8,7 +8,7 @@ use crate::tools::folder::PathError;
 // The chat looks for this text to offer the unlock button next to a failed call.
 const PROTECTED_VIEW_MARKER: &str = "the file came from the internet (Protected View)";
 
-const PROTECTED_VIEW_REFUSAL: &str = "the file came from the internet (Protected View), so agents may only read it. Only the user can unlock it, with Ctrl+Shift+E or the command \"Let agents edit this file (leave Protected View)\"; there is no bar or button in the window for it";
+const PROTECTED_VIEW_REFUSAL: &str = "the file came from the internet (Protected View), so agents may only read it. Only the user can unlock it: they press Ctrl+Shift+E, run the command \"Let agents edit this file (leave Protected View)\", or use the button the chat shows under the failed call";
 
 pub fn is_protected_view_refusal(text: &str) -> bool {
     text.contains(PROTECTED_VIEW_MARKER)
@@ -136,7 +136,10 @@ mod tests {
             text.contains("Let agents edit this file (leave Protected View)"),
             "{text}"
         );
+        assert!(text.contains("button the chat shows"), "{text}");
         assert!(is_protected_view_refusal(&text));
+        let listed = format!("read only: {}", ReadOnlyReason::ProtectedView);
+        assert!(is_protected_view_refusal(&listed));
         assert!(!is_protected_view_refusal("agents are read only"));
     }
 }
