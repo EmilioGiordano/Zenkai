@@ -174,8 +174,10 @@ mod tests {
     fn nothing_saved_means_no_choice_and_the_default_folder() {
         assert_eq!(choose(&hint(&[], None)), None);
         assert_eq!(choose(&hint(&["C:/A/x.xlsx", "C:/B/y.xlsx"], None)), None);
-        let default = default_folder().unwrap();
-        assert!(default.ends_with(DEFAULT_FOLDER_NAME));
+        match dirs::document_dir() {
+            Some(_) => assert!(default_folder().unwrap().ends_with(DEFAULT_FOLDER_NAME)),
+            None => assert_eq!(default_folder(), None),
+        }
     }
 
     #[test]
