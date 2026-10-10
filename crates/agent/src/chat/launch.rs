@@ -593,14 +593,6 @@ mod tests {
         )
     }
 
-    fn absolute(name: &str) -> PathBuf {
-        if cfg!(windows) {
-            PathBuf::from(format!("C:\\{name}"))
-        } else {
-            PathBuf::from(format!("/{name}"))
-        }
-    }
-
     const NODE: (&str, &str) = ("node", "C:\\Program Files\\nodejs\\node.exe");
 
     #[test]
@@ -650,7 +642,7 @@ mod tests {
 
     #[test]
     fn a_native_preset_plans_its_platform_binary() {
-        let agents = absolute("agents");
+        let agents = PathBuf::from(absolute("agents"));
         let planned = plan_in(&OPENCODE.server(), &[NODE], agents.clone());
         match OPENCODE.native_path() {
             Some(native) => {
