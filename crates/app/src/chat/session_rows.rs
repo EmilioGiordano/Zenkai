@@ -1,13 +1,12 @@
 use std::collections::BTreeSet;
 
-use chrono::DateTime;
+use chrono::{DateTime, Datelike, Local};
 use zenkai_agent::chat::history::History;
-use zenkai_agent::chat::state::AgentState;
+use zenkai_agent::chat::state::{AgentState, ContextUsage};
 use zenkai_agent::settings::AgentId;
 use zenkai_i18n::t;
 
-const MINUTE: u64 = 60;
-const HOUR: u64 = 60 * MINUTE;
+const HOUR: u64 = 3_600;
 const DAY: u64 = 24 * HOUR;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,11 +38,13 @@ pub struct Row {
     pub source: Source,
     pub title: String,
     pub meta: String,
-    pub age: String,
+    pub active: String,
     pub group: Group,
     pub agent: AgentId,
     pub agent_name: String,
     pub started: Option<u64>,
+    pub size_bytes: Option<u64>,
+    pub context: Option<ContextUsage>,
 }
 
 pub fn group_of(age_seconds: u64) -> Group {
@@ -53,15 +54,6 @@ pub fn group_of(age_seconds: u64) -> Group {
         Group::ThisWeek
     } else {
         Group::Earlier
-    }
-}
-
-pub fn age_label(age_seconds: u64) -> String {
-    match age_seconds {
-        s if s < MINUTE => t!("chat.age.now").to_string(),
-        s if s < HOUR => format!("{}m", s / MINUTE),
-        s if s < DAY => format!("{}h", s / HOUR),
-        s => format!("{}d", s / DAY),
     }
 }
 
@@ -83,16 +75,37 @@ fn row(
         }
         .to_string(),
         meta,
-        age: if started.is_some() {
-            age_label(age)
-        } else {
-            String::new()
-        },
+        active: last_active(now, started),
         group: group_of(age),
         agent: agent.clone(),
         agent_name: agent_name.to_string(),
         started,
+        // Neither the agent lists nor the local history report per-session files or
+        // context use; the row shows the agent name until a source reports them.
+        size_bytes: None,
+        context: None,
     }
+}
+
+pub fn last_active(now: u64, started: Option<u64>) -> String {
+    let Some(started) = started else {
+        return String::new();
+    };
+    let local =
+        |unix: u64| DateTime::from_timestamp(unix as i64, 0).map(|utc| utc.with_timezone(&Local));
+    let (Some(now), Some(when)) = (local(now), local(started)) else {
+        return String::new();
+    };
+    if when.date_naive() == now.date_naive() {
+        return when.format("%H:%M").to_string();
+    }
+    if when.date_naive() == now.date_naive().pred_opt().unwrap_or_default() {
+        return t!("chat.sessions.yesterday").to_string();
+    }
+    if when.year() == now.year() {
+        return when.format("%b %-d").to_string();
+    }
+    when.format("%b %-d %Y").to_string()
 }
 
 fn order_key(row: &Row) -> (Group, std::cmp::Reverse<u64>) {
@@ -175,6 +188,18 @@ pub fn filter(mut rows: Vec<Row>, query: &str, hidden: &BTreeSet<AgentId>) -> Ve
     rows
 }
 
+pub fn format_tokens(tokens: u64) -> String {
+    if tokens >= 1000 {
+        format!("{}k", tokens / 1000)
+    } else {
+        tokens.to_string()
+    }
+}
+
+pub fn context_over_threshold(usage: &ContextUsage) -> bool {
+    usage.fraction().is_some_and(|fraction| fraction > 0.75)
+}
+
 pub fn format_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
     let mut size = bytes as f64;
@@ -213,14 +238,61 @@ mod tests {
     }
 
     #[test]
-    fn ages_read_short_and_group_by_recency() {
-        assert_eq!(age_label(30), "now");
-        assert_eq!(age_label(12 * MINUTE), "12m");
-        assert_eq!(age_label(5 * HOUR), "5h");
-        assert_eq!(age_label(3 * DAY), "3d");
+    fn ages_group_by_recency() {
         assert_eq!(group_of(5 * HOUR), Group::Today);
         assert_eq!(group_of(3 * DAY), Group::ThisWeek);
         assert_eq!(group_of(30 * DAY), Group::Earlier);
+    }
+
+    #[test]
+    fn last_activity_reads_today_yesterday_and_month_day() {
+        use chrono::{Local, TimeZone};
+
+        let now = Local::now();
+        let unix = now.timestamp() as u64;
+        assert_eq!(last_active(unix, None), "");
+        let time = last_active(unix, Some(unix));
+        assert_eq!(time.len(), 5);
+        assert_eq!(&time[3..4], ":");
+        let noon = |days_ago: i64| {
+            (now.date_naive() - chrono::Duration::days(days_ago))
+                .and_hms_opt(12, 0, 0)
+                .expect("valid noon")
+                .and_local_timezone(Local)
+                .unwrap()
+                .timestamp() as u64
+        };
+        assert_eq!(last_active(unix, Some(noon(1))), "Yesterday");
+        let old = noon(40);
+        let expected = DateTime::from_timestamp(old as i64, 0)
+            .expect("valid old date")
+            .with_timezone(&Local);
+        let same_year = expected.date_naive().year() == now.date_naive().year();
+        let text = last_active(unix, Some(old));
+        assert_eq!(
+            text,
+            if same_year {
+                expected.format("%b %-d").to_string()
+            } else {
+                expected.format("%b %-d %Y").to_string()
+            }
+        );
+        assert_ne!(text, "Yesterday");
+    }
+
+    #[test]
+    fn tokens_format_in_thousands_and_the_bar_warns_past_three_quarters() {
+        assert_eq!(format_tokens(38_000), "38k");
+        assert_eq!(format_tokens(200_000), "200k");
+        assert_eq!(format_tokens(999), "999");
+        assert!(!context_over_threshold(&ContextUsage {
+            used: 75_000,
+            size: 100_000
+        }));
+        assert!(context_over_threshold(&ContextUsage {
+            used: 75_001,
+            size: 100_000
+        }));
     }
 
     #[test]
@@ -250,7 +322,10 @@ mod tests {
         let found = rows(&agent(), "Claude", &state, &history, now);
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].title, "Fix the dates");
-        assert_eq!(found[0].age, "12m");
+        let started = DateTime::from_timestamp(now as i64 - 12 * 60, 0)
+            .expect("valid started")
+            .with_timezone(&Local);
+        assert_eq!(found[0].active, started.format("%H:%M").to_string());
         assert_eq!(found[0].group, Group::Today);
         assert_eq!(
             found[0].source,
@@ -271,7 +346,10 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].source, Source::Local);
         assert_eq!(found[0].meta, "Claude, ventas.xlsx");
-        assert_eq!(found[0].age, "10m");
+        let started = DateTime::from_timestamp(1_000, 0)
+            .expect("valid started")
+            .with_timezone(&Local);
+        assert_eq!(found[0].active, started.format("%H:%M").to_string());
     }
 
     #[test]

@@ -133,16 +133,65 @@ impl ChatPanel {
                     .flex_1()
                     .min_w_0()
                     .gap_0p5()
-                    .child(div().truncate().child(row.title.clone()))
                     .child(
-                        div()
-                            .truncate()
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .w_full()
+                            .child(div().flex_1().truncate().child(row.title.clone()))
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(row.active.clone()),
+                            ),
+                    )
+                    .child({
+                        let mut meta = h_flex()
+                            .gap_2()
+                            .items_center()
                             .text_xs()
                             .text_color(muted)
-                            .child(row.meta.clone()),
-                    ),
-            )
-            .child(div().text_xs().text_color(muted).child(row.age.clone()));
+                            .child(row.agent_name.clone());
+                        if let Some(size) = row.size_bytes {
+                            meta = meta.child(session_rows::format_size(size));
+                        }
+                        if let Some(usage) = row.context {
+                            let fraction = usage.fraction().unwrap_or(0.0).clamp(0.0, 1.0);
+                            meta = meta
+                                .child(
+                                    div()
+                                        .w(px(46.0))
+                                        .h(px(6.0))
+                                        .rounded_full()
+                                        .bg(theme.muted)
+                                        .flex()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .w(px(46.0 * fraction))
+                                                .h_full()
+                                                .rounded_full()
+                                                .bg(
+                                                    if session_rows::context_over_threshold(&usage)
+                                                    {
+                                                        theme.warning
+                                                    } else {
+                                                        theme.success
+                                                    },
+                                                ),
+                                        ),
+                                )
+                                .child(format!(
+                                    "{} / {}",
+                                    session_rows::format_tokens(usage.used),
+                                    session_rows::format_tokens(usage.size)
+                                ));
+                        }
+                        div().truncate().child(meta)
+                    }),
+            );
         Button::new(SharedString::from(format!(
             "session-{}-{}",
             row.agent.as_str(),
@@ -170,7 +219,8 @@ impl ChatPanel {
                 (id, name)
             })
             .collect();
-        let summary = session_rows::summary(rows.len(), None);
+        let total = rows.iter().map(|row| row.size_bytes).sum();
+        let summary = session_rows::summary(rows.len(), total);
         let mut list = v_flex().gap_1().px_2().pb_2();
         let mut group: Option<Group> = None;
         for (index, row) in rows.iter().enumerate() {
