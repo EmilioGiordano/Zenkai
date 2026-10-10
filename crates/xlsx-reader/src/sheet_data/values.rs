@@ -4,6 +4,16 @@ use ironcalc::base::types::{ArrayKind, Cell, FormulaValue, SpillValue};
 use super::{CellArray, Scanner, Slot};
 use crate::text::decode_xlsx_escapes;
 
+pub(super) struct ValueCell<'a> {
+    pub(super) cell_type: &'a str,
+    pub(super) value: Option<&'a str>,
+    pub(super) metadata: Option<&'a str>,
+    pub(super) style: i32,
+    pub(super) anchor: Option<(i32, i32)>,
+    pub(super) inline: Option<String>,
+    pub(super) place: Slot,
+}
+
 impl Scanner<'_, '_> {
     pub(super) fn formula_value(
         &self,
@@ -40,17 +50,16 @@ impl Scanner<'_, '_> {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn value_cell(
-        &mut self,
-        cell_type: &str,
-        value: Option<&str>,
-        metadata: Option<&str>,
-        style: i32,
-        anchor: Option<(i32, i32)>,
-        inline: Option<String>,
-        place: Slot,
-    ) -> Cell {
+    pub(super) fn value_cell(&mut self, cell: ValueCell<'_>) -> Cell {
+        let ValueCell {
+            cell_type,
+            value,
+            metadata,
+            style,
+            anchor,
+            inline,
+            place,
+        } = cell;
         let s = style;
         match (cell_type, anchor) {
             ("b", Some(a)) => Cell::SpillCell {

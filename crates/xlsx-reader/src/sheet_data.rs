@@ -14,7 +14,7 @@ mod xml;
 use crate::ReadError;
 use crate::limits;
 use crate::text::parse_bool_false;
-use values::formula_cell;
+use values::{ValueCell, formula_cell};
 
 // Anything the checker in the engine's preflight looks at; inside <sheetData> only <f> is
 // expected, so any other one means a file this reader does not handle.
@@ -390,15 +390,15 @@ impl<'a> Scanner<'a, '_> {
                     ),
                 )
             }
-            None => self.value_cell(
+            None => self.value_cell(ValueCell {
                 cell_type,
-                value.as_deref(),
-                vm.as_deref(),
+                value: value.as_deref(),
+                metadata: vm.as_deref(),
                 style,
                 anchor,
-                content.inline,
+                inline: content.inline,
                 place,
-            ),
+            }),
         };
         cells.push((column_index, cell));
         Ok(())
