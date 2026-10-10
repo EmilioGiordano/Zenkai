@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
-use crate::presets::{Entry, NativeBinary, Preset};
+use crate::presets::{Entry, Preset};
 use crate::settings::{AgentId, AgentServer, EnvValue};
 
 const SHIM_EXTENSIONS: [&str; 4] = ["cmd", "bat", "com", "ps1"];
@@ -134,6 +134,7 @@ pub enum LaunchPlan {
         package: PackageSpec,
         folder: PathBuf,
         args: Vec<String>,
+        relative: String,
     },
 }
 
@@ -271,9 +272,9 @@ fn plan_package(
     check_program("node", &node)?;
     let folder = environment.agents_folder.join(package.folder_name());
     if let Some(preset) = Preset::for_package(&package.spec())
-        && let Entry::Native(binaries) = preset.entry
+        && let Entry::Native(_) = preset.entry
     {
-        return plan_native(&package, binaries, args, node, folder);
+        return plan_native(&package, preset, args, node, folder);
     }
     Ok(LaunchPlan::Package {
         node,
@@ -289,15 +290,13 @@ pub fn platform_name() -> String {
 
 fn plan_native(
     package: &PackageSpec,
-    binaries: &[NativeBinary],
+    preset: Preset,
     args: Vec<String>,
     node: PathBuf,
     folder: PathBuf,
 ) -> Result<LaunchPlan, LaunchError> {
-    let relative = binaries
-        .iter()
-        .find(|binary| binary.os == std::env::consts::OS && binary.arch == std::env::consts::ARCH)
-        .map(|binary| binary.path)
+    let relative = preset
+        .native_path()
         .ok_or_else(|| LaunchError::UnsupportedPlatform {
             package: package.spec(),
             platform: platform_name(),
@@ -310,6 +309,7 @@ fn plan_native(
         package: package.clone(),
         folder,
         args,
+        relative: relative.to_string(),
     })
 }
 
@@ -542,7 +542,7 @@ impl LaunchApprovals {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presets::{CLAUDE, CODEX, GEMINI, OPENCODE};
+    use crate::presets::{CLAUDE, CODEX, GEMINI, NativeBinary, OPENCODE};
     use crate::settings::SecretName;
 
     fn server(command: &str, args: &[&str]) -> AgentServer {
@@ -653,7 +653,7 @@ mod tests {
                     package,
                     folder,
                     args,
-                    ..
+                    relative,
                 } = plan
                 else {
                     panic!("expected a native plan");
@@ -661,6 +661,7 @@ mod tests {
                 assert_eq!(node, PathBuf::from(NODE.1));
                 assert_eq!(folder, agents.join("opencode-ai@1.18.32"));
                 assert_eq!(program, folder.join(native));
+                assert_eq!(relative, native);
                 assert_eq!(package.spec(), "opencode-ai@1.18.32");
                 assert_eq!(args, ["acp"]);
             }
@@ -671,22 +672,40 @@ mod tests {
         }
     }
 
-    fn current_platform_binaries(path: &'static str) -> [NativeBinary; 1] {
-        [NativeBinary {
-            os: std::env::consts::OS,
-            arch: std::env::consts::ARCH,
-            path,
-        }]
+    static ESCAPING_BINARIES: [NativeBinary; 1] = [NativeBinary {
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        path: "../../evil.exe",
+    }];
+
+    static FOREIGN_BINARIES: [NativeBinary; 1] = [NativeBinary {
+        os: "plan9",
+        arch: "mips",
+        path: "bin/agent",
+    }];
+
+    fn native_preset(binaries: &'static [NativeBinary]) -> Preset {
+        Preset {
+            id: "test-native",
+            name: "Test native",
+            package: "test-native@1.0.0",
+            extra_args: &[],
+            entry: Entry::Native(binaries),
+            min_node_major: 20,
+            login_command: "test login",
+            provider: "Test",
+            lock: ("", ""),
+        }
     }
 
     #[test]
     fn a_native_path_that_leaves_the_folder_is_refused() {
-        let binaries = current_platform_binaries("../../evil.exe");
+        let preset = native_preset(&ESCAPING_BINARIES);
         let package = PackageSpec::parse("opencode-ai@1.18.32").unwrap();
         let folder = tempfile::tempdir().unwrap();
         let planned = plan_native(
             &package,
-            &binaries,
+            preset,
             vec!["acp".to_string()],
             PathBuf::from(NODE.1),
             folder.path().to_path_buf(),
@@ -718,17 +737,13 @@ mod tests {
 
     #[test]
     fn a_platform_with_no_binary_is_a_typed_error() {
-        let binaries = [NativeBinary {
-            os: "plan9",
-            arch: "mips",
-            path: "bin/agent",
-        }];
+        let preset = native_preset(&FOREIGN_BINARIES);
         let package = PackageSpec::parse("opencode-ai@1.18.32").unwrap();
         let folder = tempfile::tempdir().unwrap();
         assert_eq!(
             plan_native(
                 &package,
-                &binaries,
+                preset,
                 vec![],
                 PathBuf::from(NODE.1),
                 folder.path().to_path_buf(),
@@ -747,6 +762,7 @@ mod tests {
             package: PackageSpec::parse("opencode-ai@1.18.32").unwrap(),
             folder: PathBuf::from("C:\\agents"),
             args: vec!["acp".to_string()],
+            relative: String::from("node_modules/test-native/bin/agent.exe"),
         }
     }
 

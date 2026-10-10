@@ -300,6 +300,7 @@ async fn resolve(
             package,
             folder,
             args,
+            relative,
             ..
         } => {
             if !folder.join(INSTALLED_MARKER).is_file() {
@@ -307,12 +308,6 @@ async fn resolve(
                 install(node, package, folder, tree).await?;
             }
             // The plan only names the binary; it must be there now that the install finished.
-            let relative = Preset::for_package(&package.spec())
-                .and_then(|preset| preset.native_path())
-                .ok_or_else(|| LaunchError::UnsupportedPlatform {
-                    package: package.spec(),
-                    platform: launch::platform_name(),
-                })?;
             let program = launch::native_program(folder, package, relative)?;
             Ok((program, args.clone()))
         }
