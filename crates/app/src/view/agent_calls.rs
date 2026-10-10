@@ -8,7 +8,6 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::bridge::{Bridge, ENDPOINT_FILE};
-use zenkai_agent::protected_view::FileOrigin;
 use zenkai_agent::settings::{ExternalAgents, PermissionMode, Settings};
 use zenkai_agent::tools::{
     self, NewWorkbook, PlannedWrite, ReadRequest, ToolCall, ToolEndpoint, ToolError, ToolReply,
@@ -683,22 +682,6 @@ impl Workspace {
     // Dropping the bridge removes the endpoint file, so no client finds a dead pipe.
     pub(super) fn stop_bridge(&mut self) {
         self.agent.bridge = BridgeState::Off;
-    }
-
-    // As Excel's Enable Editing: the user vouches for this file, for this session only.
-    pub(crate) fn let_agents_edit(&mut self, cx: &mut Context<Self>) {
-        let Some(document) = self.documents.active_mut() else {
-            return;
-        };
-        if document.origin == FileOrigin::Internet {
-            document.origin = FileOrigin::Local;
-            let file = document.name();
-            self.notify(
-                Severity::Info,
-                t!("notice.agents_may_edit", file = file),
-                cx,
-            );
-        }
     }
 
     pub(super) fn sync_bridge(&mut self, cx: &mut Context<Self>) {

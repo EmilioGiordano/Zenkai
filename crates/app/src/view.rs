@@ -21,6 +21,7 @@ use zenkai_types::{
     StyleChange, WorkbookId,
 };
 
+mod agent_access;
 mod agent_calls;
 mod agent_files;
 mod agent_review;
@@ -140,6 +141,8 @@ pub struct Workspace {
     active_input: SharedString,
     active_style: CellStyle,
     notice: Option<Notice>,
+    toast: Option<agent_access::Toast>,
+    toast_generation: u64,
     busy: Option<SharedString>,
     last_recalc: Option<Duration>,
     diagnostics: bool,
@@ -252,6 +255,8 @@ impl Workspace {
             active_input: SharedString::default(),
             active_style: CellStyle::default(),
             notice: None,
+            toast: None,
+            toast_generation: 0,
             busy: None,
             last_recalc: None,
             diagnostics: false,
@@ -3378,7 +3383,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &KeepCurrentSettings, window, cx| {
                 this.decide_held_settings(HeldDecision::Keep, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.let_agents_edit(cx)))
+            .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.toggle_agent_editing(cx)))
             .on_action(cx.listener(|this, _: &AllowAgentChange, window, cx| {
                 this.decide_agent_change(Decision::Allow, window, cx)
             }))
@@ -3424,6 +3429,7 @@ impl Render for Workspace {
             .children(self.render_theme_picker(cx))
             .children(self.render_search(cx))
             .children(self.render_busy(cx))
+            .children(self.render_toast(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
             .children(self.render_generate())

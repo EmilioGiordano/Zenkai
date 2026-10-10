@@ -434,7 +434,7 @@ impl ChatPanel {
     pub(super) fn let_agents_edit(&mut self, cx: &mut Context<Self>) {
         closed(
             self.workspace
-                .update(cx, |workspace, cx| workspace.let_agents_edit(cx)),
+                .update(cx, |workspace, cx| workspace.allow_agent_editing(cx)),
         );
     }
 
