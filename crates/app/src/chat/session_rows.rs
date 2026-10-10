@@ -486,7 +486,8 @@ mod tests {
         let mut history = History::default();
         history.push(agent(), "Fresh work", "gastos.xlsx", 10 * DAY);
         history.push(agent(), "Old work", "ventas.xlsx", 0);
-        history.attach_session(&agent(), "s-old").unwrap();
+        let old = history.records()[0].identity();
+        history.attach_session_to(&old, "s-old").unwrap();
         let usage = ContextUsage {
             used: 40_000,
             size: 100_000,
@@ -537,7 +538,8 @@ mod tests {
         ]));
         let mut history = History::default();
         history.push(agent(), "Linked", "w", 1);
-        history.attach_session(&agent(), "s1").unwrap();
+        let linked = history.records()[0].identity();
+        history.attach_session_to(&linked, "s1").unwrap();
         let usage = ContextUsage {
             used: 80_000,
             size: 100_000,

@@ -140,15 +140,9 @@ impl ChatPanel {
             SessionEvent::Started(id) => {
                 self.live_session = Some(id.clone());
                 self.history.remember_session(&id);
-                if self.pending_record {
-                    let agent =
-                        super::launch::chosen_agent(&cx.global::<AgentConfig>().state.current)
-                            .map(|(id, _)| id);
-                    if let Some(agent) = agent {
-                        self.pending_record = false;
-                        if self.history.attach_session(&agent, &id).is_some() {
-                            self.refresh_size(&id);
-                        }
+                if let Some(identity) = self.pending_record.take() {
+                    if self.history.attach_session_to(&identity, &id).is_some() {
+                        self.refresh_size(&id);
                     }
                 }
                 if self.history_saves.try_send(self.history.clone()).is_err() {
@@ -220,7 +214,7 @@ impl ChatPanel {
     pub(super) fn end_session(&mut self, cx: &mut Context<Self>) {
         self.link = Link::Idle;
         self.live_session = None;
-        self.pending_record = false;
+        self.pending_record = None;
         if let Some(live) = self.live.take() {
             let tree = live.handle.process_tree();
             cx.background_executor()

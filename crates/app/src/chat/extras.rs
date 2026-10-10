@@ -91,9 +91,17 @@ impl ChatPanel {
             .active_workbook(cx)
             .map(|(_, name)| name)
             .unwrap_or_default();
-        self.pending_record =
-            self.history
-                .push(agent.clone(), first_message, &workbook, now_seconds());
+        if self
+            .history
+            .push(agent.clone(), first_message, &workbook, now_seconds())
+        {
+            self.pending_record = self
+                .history
+                .newest_for(&agent)
+                .map(|record| record.identity());
+        } else {
+            self.pending_record = None;
+        }
         if let Some(record) = self.history.newest_for(&agent) {
             let key = record.identity();
             let size = History::record_size(record);
@@ -164,7 +172,7 @@ impl ChatPanel {
                 // The resumed session has no local record; its usage reports are dropped
                 // rather than filed under another conversation.
                 self.live_session = Some(session.clone());
-                self.pending_record = false;
+                self.pending_record = None;
                 if let Some(live) = &self.live {
                     live.handle.resume(session.clone());
                 }

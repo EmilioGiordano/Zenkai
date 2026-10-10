@@ -26,7 +26,7 @@ use std::time::{Instant, SystemTime};
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
-use zenkai_agent::chat::history::History;
+use zenkai_agent::chat::history::{History, RecordId};
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
 use zenkai_agent::chat::state::{AgentState, Select};
 use zenkai_agent::chat::thread::{MessageId, Thread, TurnEnd, TurnState};
@@ -120,8 +120,9 @@ pub struct ChatPanel {
     history_saves: async_channel::Sender<History>,
     // The agent's id for the live conversation; usage reports are filed under it.
     live_session: Option<String>,
-    // The live conversation recorded history but the agent has not reported its id yet.
-    pending_record: bool,
+    // The identity of the record the live conversation pushed; the agent's session id
+    // is linked to it once reported, so out-of-order starts cannot swap records.
+    pending_record: Option<RecordId>,
     // What the sessions list shows per conversation, computed off the UI thread.
     session_sizes: session_rows::SessionSizes,
     view: View,
@@ -274,7 +275,7 @@ impl ChatPanel {
             history: History::default(),
             history_saves,
             live_session: None,
-            pending_record: false,
+            pending_record: None,
             session_sizes: session_rows::SessionSizes::new(),
             view: View::Chat,
             menu: None,

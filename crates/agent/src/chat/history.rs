@@ -29,10 +29,12 @@ pub struct Record {
     pub context: Option<ContextUsage>,
 }
 
+pub type RecordId = (AgentId, String, u64, String);
+
 impl Record {
     // What makes two records the same conversation; the session id and the context are
     // annotations added later, never identity.
-    pub fn identity(&self) -> (AgentId, String, u64, String) {
+    pub fn identity(&self) -> RecordId {
         (
             self.agent.clone(),
             self.title.clone(),
@@ -103,14 +105,14 @@ impl History {
         self.records.iter().find(|record| &record.agent == agent)
     }
 
-    // Links the agent's session id to the conversation this chat just recorded. Only the
-    // newest record without one is linked, so a resumed conversation never adopts an id
-    // that belongs to another one.
-    pub fn attach_session(&mut self, agent: &AgentId, session: &str) -> Option<Record> {
+    // Links the agent's session id to the exact record the pending send created. The
+    // caller carries that record's identity with the pending start; a record that
+    // already has an id never adopts another one.
+    pub fn attach_session_to(&mut self, identity: &RecordId, session: &str) -> Option<Record> {
         let record = self
             .records
             .iter_mut()
-            .find(|record| &record.agent == agent && record.session.is_none())?;
+            .find(|record| record.session.is_none() && record.identity() == *identity)?;
         record.session = Some(session.to_string());
         Some(record.clone())
     }
@@ -177,14 +179,17 @@ impl History {
 
     // Records loaded from disk join the ones made since the app started, newest first.
     // A record that only gained its session id or context after the load keeps the newer
-    // annotations and fills the ones it still lacks; it is never listed twice.
+    // annotations and fills the ones it still lacks; it is never listed twice. Two
+    // records with different session ids are different conversations sharing metadata,
+    // so both are kept.
     pub fn merge(&mut self, loaded: History) {
         for record in loaded.records {
-            match self
-                .records
-                .iter_mut()
-                .find(|known| known.identity() == record.identity())
-            {
+            match self.records.iter_mut().find(|known| {
+                known.identity() == record.identity()
+                    && (known.session == record.session
+                        || known.session.is_none()
+                        || record.session.is_none())
+            }) {
                 Some(known) => {
                     if known.session.is_none() {
                         known.session = record.session.clone();
@@ -339,7 +344,8 @@ mod tests {
             size: 8_000,
         };
         assert!(history.note_context("s1", usage).is_none());
-        history.attach_session(&AgentId::new("a"), "s1").unwrap();
+        let identity = history.records()[0].identity();
+        history.attach_session_to(&identity, "s1").unwrap();
         assert_eq!(
             history.note_context("s1", usage).unwrap().context,
             Some(usage)
@@ -374,28 +380,33 @@ mod tests {
     }
 
     #[test]
-    fn the_session_id_links_the_newest_record_still_missing_one() {
+    fn session_ids_link_their_own_record_when_starts_arrive_out_of_order() {
         let mut history = History::default();
         history.push(AgentId::new("a"), "first", "w", 1);
+        let first = history.records()[0].identity();
         history.push(AgentId::new("a"), "second", "w", 2);
-        history.attach_session(&AgentId::new("a"), "s2").unwrap();
-        history.attach_session(&AgentId::new("a"), "s1").unwrap();
+        let second = history.records()[0].identity();
+        history.attach_session_to(&second, "s2").unwrap();
+        history.attach_session_to(&first, "s1").unwrap();
         assert_eq!(history.record_for_session("s2").unwrap().title, "second");
         assert_eq!(history.record_for_session("s1").unwrap().title, "first");
+        assert!(history.attach_session_to(&first, "s3").is_none());
     }
 
     #[test]
     fn merging_fills_the_annotations_it_lacks_without_duplicating() {
         let mut current = History::default();
         current.push(AgentId::new("a"), "live", "w", 1);
-        current.attach_session(&AgentId::new("a"), "s1").unwrap();
+        let live = current.records()[0].identity();
+        current.attach_session_to(&live, "s1").unwrap();
         let usage = ContextUsage {
             used: 500,
             size: 1_000,
         };
         let mut older = History::default();
         older.push(AgentId::new("a"), "live", "w", 1);
-        older.attach_session(&AgentId::new("a"), "s1").unwrap();
+        let live = older.records()[0].identity();
+        older.attach_session_to(&live, "s1").unwrap();
         older.note_context("s1", usage);
         current.merge(older);
         assert_eq!(current.records().len(), 1);
@@ -404,6 +415,22 @@ mod tests {
         assert_eq!(record.context, Some(usage));
         current.merge(History::default());
         assert_eq!(current.records().len(), 1);
+    }
+
+    #[test]
+    fn merging_keeps_records_with_different_session_ids() {
+        let mut current = History::default();
+        current.push(AgentId::new("a"), "same", "w", 1);
+        let live = current.records()[0].identity();
+        current.attach_session_to(&live, "s1").unwrap();
+        let mut older = History::default();
+        older.push(AgentId::new("a"), "same", "w", 1);
+        let live = older.records()[0].identity();
+        older.attach_session_to(&live, "s2").unwrap();
+        current.merge(older);
+        assert_eq!(current.records().len(), 2);
+        assert_eq!(current.record_for_session("s1").unwrap().title, "same");
+        assert_eq!(current.record_for_session("s2").unwrap().title, "same");
     }
 
     #[test]
