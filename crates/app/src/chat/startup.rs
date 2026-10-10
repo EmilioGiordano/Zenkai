@@ -52,7 +52,7 @@ impl ChatPanel {
         }
         let warming = start == Start::WarmUp && self.queued.is_none();
         match planned {
-            Err(_) if warming => self.link = Link::Idle,
+            Err(_) if warming || start == Start::Switch => self.link = Link::Idle,
             Err(error) => self.fail_before_start(error.to_string(), cx),
             Ok(prepared) => {
                 let approved = cx.update_global::<AgentConfig, _>(|config, _| {

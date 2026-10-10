@@ -378,6 +378,12 @@ impl ChatPanel {
         if self.failed_to_start() {
             return t!("chat.menu.not_running", agent = self.agent_name(cx));
         }
+        if matches!(
+            self.link,
+            Link::Preparing | Link::Installing | Link::Starting
+        ) {
+            return t!("chat.menu.starting", agent = self.agent_name(cx));
+        }
         if !matches!(self.link, Link::Ready(_)) {
             return t!("chat.menu.pending").to_string();
         }
@@ -468,8 +474,8 @@ impl ChatPanel {
         let models = self.state.select(ConfigKind::Model).cloned();
         let effort = self.state.select(ConfigKind::Effort).cloned();
         let model_count = models.as_ref().map_or(0, |models| models.choices.len());
-        if models.is_none() && effort.is_none() && self.failed_to_start() {
-            return Some(self.not_running_menu(cx));
+        if models.is_none() && effort.is_none() {
+            return Some(self.unavailable_menu(cx));
         }
         let mut menu = popover(
             "chat-model-menu",
@@ -496,29 +502,33 @@ impl ChatPanel {
         Some(menu.into_any_element())
     }
 
-    fn not_running_menu(&self, cx: &mut Context<Self>) -> AnyElement {
-        popover(
+    // One line instead of empty sections while the lists are not known.
+    fn unavailable_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let menu = popover(
             "chat-model-menu",
             t!("chat.model.heading"),
             MODEL_MENU_WIDTH,
             cx,
         )
-        .child(note(self.absent_note(ConfigKind::Model, cx), cx))
-        .child(rule(cx))
-        .child(
-            item(
-                Item {
-                    id: "model-manage".into(),
-                    name: t!("chat.agent.manage").into(),
-                    note: None,
-                    checked: false,
-                    highlighted: self.menu_index == 0,
-                },
-                cx,
+        .child(note(self.absent_note(ConfigKind::Model, cx), cx));
+        if !self.failed_to_start() {
+            return menu.into_any_element();
+        }
+        menu.child(rule(cx))
+            .child(
+                item(
+                    Item {
+                        id: "model-manage".into(),
+                        name: t!("chat.agent.manage").into(),
+                        note: None,
+                        checked: false,
+                        highlighted: self.menu_index == 0,
+                    },
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.open_agent_settings(cx))),
             )
-            .on_click(cx.listener(|this, _, _, cx| this.open_agent_settings(cx))),
-        )
-        .into_any_element()
+            .into_any_element()
     }
 
     pub(super) fn render_access_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
