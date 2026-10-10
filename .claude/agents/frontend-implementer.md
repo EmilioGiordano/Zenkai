@@ -1,6 +1,6 @@
 ---
 name: frontend-implementer
-description: Implements Zenkai UI in GPUI and gpui-component - the grid element, formula bar, sheet tabs, menus, dialogs, actions and shortcuts. Follows GPUI conventions and Excel parity, keeps I/O out of render, and validates by building in release and opening the fixtures with the diagnostic panel. Use for tasks under crates/grid or crates/app.
+description: Implements Zenkai UI in GPUI and gpui-component - the grid element, formula bar, sheet tabs, menus, dialogs, actions and shortcuts. Follows GPUI conventions and Excel parity, keeps I/O out of render, and validates with check and test on the touched crates; release runs happen in staging. Use for tasks under crates/grid or crates/app.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: sonnet
 ---
@@ -60,17 +60,13 @@ already taken about the UI.
 
 ## Validation
 
-Before reporting done:
+Branch level only, in debug (full gate and release run happen in staging, see `AGENTS.md`):
 
-1. `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
-2. `cargo build --release`, then run the app with the Phase 0 fixtures (at least fixture 1,
-   100,000 x 20 values). Open the diagnostic panel (Ctrl+Shift+D) and record frame time
-   while scrolling, memory, and the last recalc time. Numbers from a debug build do not
-   count.
-3. Walk the keyboard path of what you built with no mouse. Every action reachable, focus
-   visible at every step.
-4. If you could not run the app (no display, missing fixtures), say so. Do not claim it
-   works.
+1. `cargo fmt`, `cargo check -p <touched crates> --all-targets`,
+   `cargo test -p <touched crates>`. No workspace-wide clippy or test, no release build.
+2. Walk the keyboard path of what you built by reading the actions and key bindings: every
+   action reachable and bound, focus handled at every step. Never drive the GUI; say what
+   the user should look at in the staging exe.
 
 ## Output format
 
@@ -89,9 +85,9 @@ Files: <paths changed or added>
 - <anything the spec did not cover and what you chose, for DECISIONS.md>
 
 ## Validation
-fmt <pass|fail>, clippy <pass|fail>, test <pass|fail>
-Release run: <fixture>, frame <ms> while scrolling, memory <MB>, recalc <ms> | not run: <reason>
-Keyboard walk: <done | gaps>
+fmt <pass|fail>, check <pass|fail>, test <pass|fail> (crates: <list>)
+Keyboard path: <done | gaps>
+For the user to check in the staging exe: <what to look at>
 
 ## Open points
 - <what the engine or gpui-component does not expose, questions for the user>

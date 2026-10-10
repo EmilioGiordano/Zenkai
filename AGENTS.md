@@ -162,53 +162,77 @@ Good subjects: `Add atomic save with temp file swap`, `Fix range selection past 
 
 ## Validation
 
-Run before asking for review. Nothing goes to review with any of these red:
+Builds are expensive, so they are batched: branches get cheap checks, one staging branch gets
+the full gate once per batch. Never run workspace-wide clippy or test, a release build or the
+benchmark on a feature branch.
+
+Per branch, in its own worktree, for the crates it touches (`<crates>`):
+
+```
+cargo fmt
+cargo check -p <crates> --all-targets
+cargo test -p <crates>
+```
+
+Debug builds only. Parallel `cargo` invocations use at most `-j 8` in total.
+
+Staging, once per batch, in this order:
 
 ```
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo deny check
+cargo build --release
 ```
 
-Plus the benchmark in `bench/` (release build) when the change touches `crates/engine`,
+Plus the benchmark in `bench/` (release build) when the batch touches `crates/engine`,
 `crates/grid`, `crates/formats` or `bench/`. Never draw performance conclusions from a
-debug build.
+debug build. Nothing goes to the user with any of these red.
 
-## Implementer / reviewer workflow
+## Workflow
 
-Two separate sessions on purpose: **Zenkai-implementer** talks to the user and implements;
-**Zenkai-review** only reviews and never touches code. The reviewer must not inherit the
-justifications of the implementer.
+Branches are developed in parallel, one agent and one worktree each, and validated together
+in a staging branch.
 
-1. The user gives Zenkai-implementer a task. It creates the branch and, if the task is
-   large, proposes a plan before writing code.
-2. It implements in logical commits. It uses `test-engineer` to cover what changed and,
-   if the change touches engine, grid or formats, `perf-auditor` to measure.
-3. It runs the validation commands above. A task is never sent to review with red checks.
-4. It sends Zenkai-review a message with: the branch or worktree path, what was asked,
-   what was done, and the decisions taken with their reason. The reasons let the reviewer
-   tell a deliberate decision from a defect.
-5. Zenkai-review runs `/review-changes` on that target and returns the full report with the
-   combined verdict.
-6. On FAIL, the implementer fixes `CONFIRMED` findings in new commits, verifies `PLAUSIBLE`
-   ones before touching them, and goes back to step 4. If it disagrees with a finding, it
-   says so in the message instead of ignoring it.
-7. On PASS, the implementer reports to the user with the summary and the report. The user
-   decides the merge.
+1. **Design.** A UI task gets a design artifact approved before implementation.
+2. **Branch.** The implementer works per the code rules and runs the per-branch checks above.
+   It commits in logical commits and never pushes.
+3. **Static review, in parallel, no builds.** `quality-reviewer`, `security-reviewer` and
+   `perf-auditor` read the diff against `AGENTS.md`, the security threat model and the
+   `docs/SPEC.md` performance budgets. Fixes go on the branch as new commits. The reviewers
+   do not inherit the implementer's justifications: they get the spec and the diff, plus the
+   decisions taken with their reason.
+4. **Staging.** `staging-integrator` (one agent, fresh context) creates `staging/<date>` from
+   `main` and merges the ready branches one at a time with `--no-ff`. After each merge it
+   runs `cargo check --workspace --all-targets` to attribute breakage to a branch. Then,
+   once, it runs the staging gate above. It copies the release exe to
+   `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`, overwriting; if the file is locked it
+   reports it and never kills the process. Staging uses the persistent target dir
+   `D:/More-Code-Projects/Zenkai-compiled/staging`, which is never cleaned.
+5. **Failures.** A fix for one branch goes back to the owning branch and the branch is
+   merged again. A fix caused only by the combination is committed on the staging branch.
+6. **Manual test.** The user tests the staging exe by hand. Agents never drive the GUI or
+   send input to the desktop.
+7. **Merge.** On the user's approval staging is merged into `main` and the user pushes.
+   Never merge to `main` before the manual test.
 
-After two FAIL rounds, the implementer stops and asks the user instead of iterating.
+Long commands run in the background and the agent waits for them; it never hands back early.
+After two failed review rounds on a branch, stop and ask the user instead of iterating.
 
 ## Agents and skills
 
 - `.claude/agents/quality-reviewer.md`: blocking quality review, read-only.
 - `.claude/agents/security-reviewer.md`: security review, threat model = a malicious file,
   read-only.
-- `.claude/agents/perf-auditor.md`: benchmark and budgets, read-only on code.
+- `.claude/agents/perf-auditor.md`: static performance review on branches, benchmark in
+  staging, read-only on code.
 - `.claude/agents/test-engineer.md`: writes and runs tests.
 - `.claude/agents/frontend-implementer.md`: implements UI in GPUI.
 - `.claude/agents/engine-implementer.md`: implements engine work (Opus).
-- `.claude/agents/implementer.md`: implements everything else: merges, agent and MCP crates, CI.
+- `.claude/agents/implementer.md`: implements everything else: agent and MCP crates, CI.
+- `.claude/agents/staging-integrator.md`: merges ready branches into `staging/<date>`, runs
+  the full gate once and delivers the test exe.
 
 Models: implementers and reviewers run on Sonnet, perf-auditor on Haiku, engine work on Opus.
 Never delegate to the built-in general-purpose agent for implementation; it runs on the

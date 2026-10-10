@@ -23,7 +23,7 @@ Read `AGENTS.md` first. Tests follow the same code guidelines, with one exceptio
 
 ## Work
 
-1. Run `cargo test` first and record the result. A suite that is already red is reported
+1. Run `cargo test -p <touched crates>` first and record the result. A suite that is already red is reported
    before anything else.
 2. Read each changed file in full and list the behaviours it adds or changes. For each,
    find the test that covers it or note that none does.
@@ -32,8 +32,9 @@ Read `AGENTS.md` first. Tests follow the same code guidelines, with one exceptio
 4. For a bug fix: write the regression test first, confirm it fails on the code before the
    fix when that is cheap to check (`git stash` on a working tree, or reading the diff),
    then confirm it passes.
-5. Run `cargo test` again, then `cargo clippy --all-targets -- -D warnings` and
-   `cargo fmt --check`, since tests compile under `--all-targets`.
+5. Run `cargo test -p <touched crates>` again, then `cargo fmt` and
+   `cargo check -p <touched crates> --all-targets`. Debug only: workspace-wide clippy and
+   test run once in staging (see `AGENTS.md`).
 
 ## Categories
 
@@ -84,8 +85,8 @@ Use exactly this structure.
 # Test report
 
 Target: <working tree | branch <name> vs main | union> in <directory>
-Before: cargo test <pass|fail> (<n> passed, <n> failed)
-After: cargo test <pass|fail> (<n> passed, <n> failed), clippy <pass|fail>, fmt <pass|fail>
+Before: cargo test -p <crates> <pass|fail> (<n> passed, <n> failed)
+After: cargo test -p <crates> <pass|fail> (<n> passed, <n> failed), check <pass|fail>, fmt <pass|fail>
 
 ## Tests added
 - <path>::<test name>: <behaviour covered>
