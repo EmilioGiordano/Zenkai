@@ -37,7 +37,6 @@ pub enum Source {
 pub struct Row {
     pub source: Source,
     pub title: String,
-    pub meta: String,
     pub active: String,
     pub group: Group,
     pub agent: AgentId,
@@ -71,7 +70,6 @@ pub fn sizes_for(records: &[Record]) -> SessionSizes {
 fn row(
     source: Source,
     title: &str,
-    meta: String,
     started: Option<u64>,
     now: u64,
     agent: &AgentId,
@@ -87,7 +85,6 @@ fn row(
             title
         }
         .to_string(),
-        meta,
         active: last_active(now, started),
         group: group_of(age),
         agent: agent.clone(),
@@ -131,7 +128,6 @@ fn order_key(row: &Row) -> (Group, std::cmp::Reverse<u64>) {
 // a stored value show neither.
 pub fn rows(
     agent: &AgentId,
-    agent_name: &str,
     state: &AgentState,
     history: &History,
     sizes: &SessionSizes,
@@ -153,7 +149,6 @@ pub fn rows(
                         session: past.id.clone(),
                     },
                     past.title.as_deref().unwrap_or(""),
-                    agent_name.to_string(),
                     started,
                     now,
                     agent,
@@ -169,7 +164,6 @@ pub fn rows(
                 row(
                     Source::Local,
                     &record.title,
-                    format!("{agent_name}, {}", record.workbook),
                     Some(record.started_unix_seconds),
                     now,
                     agent,
@@ -281,7 +275,10 @@ mod tests {
                 .unwrap()
                 .timestamp() as u64
         };
-        assert_eq!(last_active(unix, Some(noon(1))), "Yesterday");
+        assert_eq!(
+            last_active(unix, Some(noon(1))),
+            t!("chat.sessions.yesterday").to_string()
+        );
         let old = noon(40);
         let expected = DateTime::from_timestamp(old as i64, 0)
             .expect("valid old date")
@@ -296,7 +293,7 @@ mod tests {
                 expected.format("%b %-d %Y").to_string()
             }
         );
-        assert_ne!(text, "Yesterday");
+        assert_ne!(text, t!("chat.sessions.yesterday").to_string());
     }
 
     #[test]
@@ -338,14 +335,7 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-10-09T10:12:00Z")
             .unwrap()
             .timestamp() as u64;
-        let found = rows(
-            &agent(),
-            "Claude",
-            &state,
-            &history,
-            &SessionSizes::new(),
-            now,
-        );
+        let found = rows(&agent(), &state, &history, &SessionSizes::new(), now);
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].title, "Fix the dates");
         let started = DateTime::from_timestamp(now as i64 - 12 * 60, 0)
@@ -370,7 +360,6 @@ mod tests {
         history.push(AgentId::new("gemini"), "Other agent", "w", 1_000);
         let found = rows(
             &agent(),
-            "Claude",
             &AgentState::default(),
             &history,
             &SessionSizes::new(),
@@ -378,7 +367,6 @@ mod tests {
         );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].source, Source::Local);
-        assert_eq!(found[0].meta, "Claude, ventas.xlsx");
         let started = DateTime::from_timestamp(1_000, 0)
             .expect("valid started")
             .with_timezone(&Local);
@@ -393,7 +381,6 @@ mod tests {
         let now = 10 * DAY + 60;
         let all = rows(
             &agent(),
-            "Claude",
             &AgentState::default(),
             &history,
             &SessionSizes::new(),
@@ -413,7 +400,6 @@ mod tests {
         let now = 10 * DAY;
         let all = rows(
             &agent(),
-            "Claude",
             &AgentState::default(),
             &history,
             &SessionSizes::new(),
@@ -431,7 +417,6 @@ mod tests {
         let now = 10 * DAY;
         let mut all = rows(
             &agent(),
-            "Claude",
             &AgentState::default(),
             &history,
             &SessionSizes::new(),
@@ -439,7 +424,6 @@ mod tests {
         );
         all.extend(rows(
             &AgentId::new("codex"),
-            "Codex",
             &AgentState::default(),
             &history,
             &SessionSizes::new(),
@@ -495,14 +479,7 @@ mod tests {
         history.note_context("s-old", usage);
         let sizes = sizes_for(history.records());
         let now = 10 * DAY + 60;
-        let all = rows(
-            &agent(),
-            "Claude",
-            &AgentState::default(),
-            &history,
-            &sizes,
-            now,
-        );
+        let all = rows(&agent(), &AgentState::default(), &history, &sizes, now);
         let old = all.iter().find(|row| row.title == "Old work").unwrap();
         assert_eq!(old.context, Some(usage));
         assert_eq!(
@@ -549,7 +526,7 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-10-09T10:12:00Z")
             .unwrap()
             .timestamp() as u64;
-        let found = rows(&agent(), "Claude", &state, &history, &sizes, now);
+        let found = rows(&agent(), &state, &history, &sizes, now);
         let linked = found.iter().find(|row| row.title == "Linked").unwrap();
         assert_eq!(linked.context, Some(usage));
         assert!(linked.size_bytes.is_some());

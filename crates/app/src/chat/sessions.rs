@@ -53,7 +53,6 @@ impl ChatPanel {
             };
             all.extend(session_rows::rows(
                 &id,
-                &agent_name(&settings.agents.servers, &id),
                 state,
                 &self.history,
                 &self.session_sizes,
@@ -258,11 +257,7 @@ impl ChatPanel {
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(muted)
-                        .child(match row.group {
-                            Group::Today => t!("chat.sessions.today"),
-                            Group::ThisWeek => t!("chat.sessions.this_week"),
-                            Group::Earlier => t!("chat.sessions.earlier"),
-                        }),
+                        .child(row.group.title()),
                 );
             }
             list = list.child(self.session_row(row, index == self.menu_index, cx));

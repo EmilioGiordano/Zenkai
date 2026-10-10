@@ -38,7 +38,8 @@ takes the surrounding text colour. Custom agents keep the letter mark.
 - Source: `packages/console/app/src/asset/brand/opencode-logo-dark-square.svg`
   in https://github.com/sst/opencode (dev branch).
 - Terms: MIT License, Copyright (c) 2025 opencode. Adapted: the frame and the
-  block merged into one path, fills removed for the monochrome tile.
+  block merged into one path, and `fill="currentColor"` added to the path so it
+  takes the tile colour. That is a colour attribute only; the artwork is unchanged.
 - Note: this is the mark of sst/opencode, the terminal agent Zenkai starts. It
   is not the logo of the newer OpenCode v2 product at opencode.ai/brand.
 
