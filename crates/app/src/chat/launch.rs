@@ -93,7 +93,9 @@ pub(super) fn plan_launch(
 pub(super) fn needs_install(plan: &LaunchPlan) -> bool {
     match plan {
         LaunchPlan::Direct { .. } => false,
-        LaunchPlan::Package { folder, .. } => !folder.join(INSTALLED_MARKER).is_file(),
+        LaunchPlan::Package { folder, .. } | LaunchPlan::Native { folder, .. } => {
+            !folder.join(INSTALLED_MARKER).is_file()
+        }
     }
 }
 

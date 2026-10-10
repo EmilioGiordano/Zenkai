@@ -39,6 +39,7 @@ fn account_of(preset: &Preset) -> &'static str {
     match preset.id {
         "claude" => t!("settings.agent.account_claude"),
         "gemini" => t!("settings.agent.account_google"),
+        "opencode" => t!("settings.agent.account_opencode"),
         _ => t!("settings.agent.account_openai"),
     }
 }

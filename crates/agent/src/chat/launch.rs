@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
+use crate::presets::{Entry, Preset};
 use crate::settings::{AgentId, AgentServer, EnvValue};
 
 const SHIM_EXTENSIONS: [&str; 4] = ["cmd", "bat", "com", "ps1"];
@@ -63,6 +64,8 @@ pub enum LaunchError {
     PackageSpec(String),
     #[error("the installed package {package} has no usable program: {reason}")]
     Entry { package: String, reason: String },
+    #[error("\"{package}\" has no binary for {platform}. Choose another agent in Settings.")]
+    UnsupportedPlatform { package: String, platform: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,6 +128,14 @@ pub enum LaunchPlan {
         folder: PathBuf,
         args: Vec<String>,
     },
+    Native {
+        node: PathBuf,
+        program: PathBuf,
+        package: PackageSpec,
+        folder: PathBuf,
+        args: Vec<String>,
+        relative: String,
+    },
 }
 
 impl LaunchPlan {
@@ -144,6 +155,25 @@ impl LaunchPlan {
                     "{} {} (npm package {}, installed under {})",
                     node.display(),
                     package.name,
+                    package.spec(),
+                    folder.display()
+                );
+                for arg in args {
+                    line.push(' ');
+                    line.push_str(arg);
+                }
+                line
+            }
+            LaunchPlan::Native {
+                program,
+                package,
+                folder,
+                args,
+                ..
+            } => {
+                let mut line = format!(
+                    "{} (npm package {}, installed under {})",
+                    program.display(),
                     package.spec(),
                     folder.display()
                 );
@@ -241,12 +271,87 @@ fn plan_package(
     let node = (environment.find)("node").ok_or(LaunchError::NodeMissing)?;
     check_program("node", &node)?;
     let folder = environment.agents_folder.join(package.folder_name());
+    if let Some(preset) = Preset::for_package(&package.spec())
+        && let Entry::Native(_) = preset.entry
+    {
+        return plan_native(&package, preset, args, node, folder);
+    }
     Ok(LaunchPlan::Package {
         node,
         package,
         folder,
         args,
     })
+}
+
+pub fn platform_name() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+fn plan_native(
+    package: &PackageSpec,
+    preset: Preset,
+    args: Vec<String>,
+    node: PathBuf,
+    folder: PathBuf,
+) -> Result<LaunchPlan, LaunchError> {
+    let relative = preset
+        .native_path()
+        .ok_or_else(|| LaunchError::UnsupportedPlatform {
+            package: package.spec(),
+            platform: platform_name(),
+        })?;
+    let program = join_inside(&folder, package, relative)?;
+    check_program(&package.spec(), &program)?;
+    Ok(LaunchPlan::Native {
+        node,
+        program,
+        package: package.clone(),
+        folder,
+        args,
+        relative: relative.to_string(),
+    })
+}
+
+// The binary a native preset runs, checked after the install: it must have arrived with
+// the platform package, so a missing file is reported instead of spawned.
+pub fn native_program(
+    folder: &Path,
+    package: &PackageSpec,
+    relative: &str,
+) -> Result<PathBuf, LaunchError> {
+    let program = join_inside(folder, package, relative)?;
+    if program.is_file() {
+        Ok(program)
+    } else {
+        Err(entry_error(
+            package,
+            format!("{} is missing", program.display()),
+        ))
+    }
+}
+
+fn join_inside(
+    folder: &Path,
+    package: &PackageSpec,
+    relative: &str,
+) -> Result<PathBuf, LaunchError> {
+    let relative = Path::new(relative);
+    if !stays_inside(relative) {
+        return Err(entry_error(package, "the binary path leaves the package"));
+    }
+    let program = folder.join(relative);
+    if program.is_absolute() {
+        Ok(program)
+    } else {
+        Err(entry_error(package, "the install folder is not absolute"))
+    }
+}
+
+fn stays_inside(relative: &Path) -> bool {
+    relative
+        .components()
+        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
 }
 
 pub fn plan(
@@ -323,10 +428,7 @@ pub fn package_entry(folder: &Path, package: &PackageSpec) -> Result<PathBuf, La
         _ => return Err(entry_error(package, "package.json has no bin")),
     };
     let relative = Path::new(relative);
-    let stays_inside = relative
-        .components()
-        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir));
-    if !stays_inside {
+    if !stays_inside(relative) {
         return Err(entry_error(package, "the bin path leaves the package"));
     }
     let entry = package_folder.join(relative);
@@ -401,6 +503,7 @@ fn program_of(plan: &LaunchPlan) -> &Path {
     match plan {
         LaunchPlan::Direct { program, .. } => program,
         LaunchPlan::Package { node, .. } => node,
+        LaunchPlan::Native { program, .. } => program,
     }
 }
 
@@ -408,10 +511,9 @@ impl LaunchApprovals {
     // A changed command, argument, variable or resolved executable is a new launch.
     pub fn is_approved(&mut self, id: &AgentId, server: &AgentServer, plan: &LaunchPlan) -> bool {
         let spec = LaunchSpec::of(server);
-        if crate::presets::PRESETS
-            .iter()
-            .any(|preset| LaunchSpec::of(&preset.server()) == spec)
-        {
+        if crate::presets::PRESETS.iter().any(|preset| {
+            matches!(preset.entry, Entry::Node) && LaunchSpec::of(&preset.server()) == spec
+        }) {
             return true;
         }
         match self.approved.get_mut(id) {
@@ -440,7 +542,7 @@ impl LaunchApprovals {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presets::{CLAUDE, GEMINI};
+    use crate::presets::{CLAUDE, CODEX, GEMINI, NativeBinary, OPENCODE};
     use crate::settings::SecretName;
 
     fn absolute(path: &str) -> String {
@@ -464,6 +566,14 @@ mod tests {
         server: &AgentServer,
         installed: &[(&str, &str)],
     ) -> Result<LaunchPlan, LaunchError> {
+        plan_in(server, installed, PathBuf::from("C:\\agents"))
+    }
+
+    fn plan_in(
+        server: &AgentServer,
+        installed: &[(&str, &str)],
+        folder: PathBuf,
+    ) -> Result<LaunchPlan, LaunchError> {
         let installed: Vec<(String, PathBuf)> = installed
             .iter()
             .map(|(name, path)| (name.to_string(), PathBuf::from(path)))
@@ -478,9 +588,17 @@ mod tests {
             server,
             &LaunchEnvironment {
                 find: &find,
-                agents_folder: PathBuf::from("C:\\agents"),
+                agents_folder: folder,
             },
         )
+    }
+
+    fn absolute(name: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!("C:\\{name}"))
+        } else {
+            PathBuf::from(format!("/{name}"))
+        }
     }
 
     const NODE: (&str, &str) = ("node", "C:\\Program Files\\nodejs\\node.exe");
@@ -511,6 +629,168 @@ mod tests {
             panic!("expected a package plan");
         };
         assert_eq!(args, ["--acp"]);
+    }
+
+    #[test]
+    fn node_presets_still_plan_node_with_the_package_entry() {
+        let plan = plan_with(&CODEX.server(), &[NODE]).unwrap();
+        let LaunchPlan::Package {
+            node,
+            package,
+            args,
+            ..
+        } = plan
+        else {
+            panic!("expected a package plan");
+        };
+        assert_eq!(node, PathBuf::from(NODE.1));
+        assert_eq!(package.spec(), "@agentclientprotocol/codex-acp@2.1.1");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn a_native_preset_plans_its_platform_binary() {
+        let agents = absolute("agents");
+        let planned = plan_in(&OPENCODE.server(), &[NODE], agents.clone());
+        match OPENCODE.native_path() {
+            Some(native) => {
+                let plan = planned.unwrap();
+                let LaunchPlan::Native {
+                    node,
+                    program,
+                    package,
+                    folder,
+                    args,
+                    relative,
+                } = plan
+                else {
+                    panic!("expected a native plan");
+                };
+                assert_eq!(node, PathBuf::from(NODE.1));
+                assert_eq!(folder, agents.join("opencode-ai@1.18.32"));
+                assert_eq!(program, folder.join(native));
+                assert_eq!(relative, native);
+                assert_eq!(package.spec(), "opencode-ai@1.18.32");
+                assert_eq!(args, ["acp"]);
+            }
+            None => assert!(matches!(
+                planned,
+                Err(LaunchError::UnsupportedPlatform { .. })
+            )),
+        }
+    }
+
+    static ESCAPING_BINARIES: [NativeBinary; 1] = [NativeBinary {
+        os: std::env::consts::OS,
+        arch: std::env::consts::ARCH,
+        path: "../../evil.exe",
+    }];
+
+    static FOREIGN_BINARIES: [NativeBinary; 1] = [NativeBinary {
+        os: "plan9",
+        arch: "mips",
+        path: "bin/agent",
+    }];
+
+    fn native_preset(binaries: &'static [NativeBinary]) -> Preset {
+        Preset {
+            id: "test-native",
+            name: "Test native",
+            package: "test-native@1.0.0",
+            extra_args: &[],
+            entry: Entry::Native(binaries),
+            min_node_major: 20,
+            login_command: "test login",
+            provider: "Test",
+            lock: ("", ""),
+        }
+    }
+
+    #[test]
+    fn a_native_path_that_leaves_the_folder_is_refused() {
+        let preset = native_preset(&ESCAPING_BINARIES);
+        let package = PackageSpec::parse("opencode-ai@1.18.32").unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let planned = plan_native(
+            &package,
+            preset,
+            vec!["acp".to_string()],
+            PathBuf::from(NODE.1),
+            folder.path().to_path_buf(),
+        );
+        assert!(matches!(planned, Err(LaunchError::Entry { .. })));
+        assert!(matches!(
+            native_program(folder.path(), &package, "../../evil.exe"),
+            Err(LaunchError::Entry { .. })
+        ));
+    }
+
+    #[test]
+    fn the_native_binary_must_exist_after_the_install() {
+        let folder = tempfile::tempdir().unwrap();
+        let package = PackageSpec::parse("opencode-ai@1.18.32").unwrap();
+        let relative = "node_modules/opencode-windows-x64/bin/opencode.exe";
+        assert!(matches!(
+            native_program(folder.path(), &package, relative),
+            Err(LaunchError::Entry { .. })
+        ));
+        let program = folder.path().join(relative);
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        std::fs::write(&program, "").unwrap();
+        assert_eq!(
+            native_program(folder.path(), &package, relative).unwrap(),
+            program
+        );
+    }
+
+    #[test]
+    fn a_platform_with_no_binary_is_a_typed_error() {
+        let preset = native_preset(&FOREIGN_BINARIES);
+        let package = PackageSpec::parse("opencode-ai@1.18.32").unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let planned = plan_native(
+            &package,
+            preset,
+            vec![],
+            PathBuf::from(NODE.1),
+            folder.path().to_path_buf(),
+        );
+        assert_eq!(
+            planned,
+            Err(LaunchError::UnsupportedPlatform {
+                package: "opencode-ai@1.18.32".to_string(),
+                platform: platform_name(),
+            })
+        );
+        assert!(
+            planned
+                .unwrap_err()
+                .to_string()
+                .contains("Choose another agent")
+        );
+    }
+
+    fn native_plan(program: &str) -> LaunchPlan {
+        LaunchPlan::Native {
+            node: PathBuf::from(NODE.1),
+            program: PathBuf::from(program),
+            package: PackageSpec::parse("opencode-ai@1.18.32").unwrap(),
+            folder: PathBuf::from("C:\\agents"),
+            args: vec!["acp".to_string()],
+            relative: String::from("node_modules/test-native/bin/agent.exe"),
+        }
+    }
+
+    #[test]
+    fn a_native_preset_pins_its_executable_like_any_other_program() {
+        let mut approvals = LaunchApprovals::default();
+        let id = AgentId::new("opencode");
+        let server = OPENCODE.server();
+        let first = native_plan("C:\\agents\\opencode.exe");
+        assert!(!approvals.is_approved(&id, &server, &first));
+        approvals.approve(&id, &server, Some(&first));
+        assert!(approvals.is_approved(&id, &server, &first));
+        assert!(!approvals.is_approved(&id, &server, &native_plan("C:\\planted\\opencode.exe")));
     }
 
     #[test]

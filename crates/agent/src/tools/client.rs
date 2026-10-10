@@ -45,6 +45,10 @@ mod tests {
             Some("Gemini CLI 0.3")
         );
         assert_eq!(client_label("codex", "").as_deref(), Some("Codex"));
+        assert_eq!(
+            client_label("opencode", "1.18.32").as_deref(),
+            Some("OpenCode 1.18.32")
+        );
     }
 
     #[test]
