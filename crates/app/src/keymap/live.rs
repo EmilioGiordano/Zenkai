@@ -123,17 +123,20 @@ fn foreign_claims(cx: &App, model: &Model) -> Vec<Claim> {
 
 // The label with the shortcut the command has right now, for tooltips and buttons.
 pub fn labeled(cx: &App, label: &str, action: &dyn Action) -> String {
-    let keymap = cx.key_bindings();
-    let keymap = keymap.borrow();
-    let keys = keymap
-        .bindings_for_action(action)
-        .next()
-        .and_then(|binding| binding.keystrokes().first())
-        .map(|stroke| display(stroke.inner()));
-    match keys {
+    match shortcut(cx, action) {
         Some(keys) => format!("{label} ({keys})"),
         None => label.to_string(),
     }
+}
+
+pub fn shortcut(cx: &App, action: &dyn Action) -> Option<String> {
+    let keymap = cx.key_bindings();
+    let keymap = keymap.borrow();
+    keymap
+        .bindings_for_action(action)
+        .next()
+        .and_then(|binding| binding.keystrokes().first())
+        .map(|stroke| display(stroke.inner()))
 }
 
 fn mentions(predicate: &KeyBindingContextPredicate, name: &str) -> bool {

@@ -294,6 +294,22 @@ async fn resolve(
             arguments.extend(args.iter().cloned());
             Ok((node.clone(), arguments))
         }
+        LaunchPlan::Native {
+            node,
+            package,
+            folder,
+            args,
+            relative,
+            ..
+        } => {
+            if !folder.join(INSTALLED_MARKER).is_file() {
+                notify(events, SessionEvent::Connection(Connection::Installing));
+                install(node, package, folder, tree).await?;
+            }
+            // The plan only names the binary; it must be there now that the install finished.
+            let program = launch::native_program(folder, package, relative)?;
+            Ok((program, args.clone()))
+        }
     }
 }
 

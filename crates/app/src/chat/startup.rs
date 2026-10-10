@@ -7,6 +7,24 @@ use super::launch::{self, Live, Prepared};
 use super::{ChatPanel, Gate, Link, Start, View, closed};
 use crate::agent_settings::AgentConfig;
 
+#[derive(Debug, PartialEq, Eq)]
+enum LaunchStep {
+    Wait,
+    Arm,
+    Confirm,
+}
+
+// A warm-up never installs or asks; a switch chosen by the user confirms an install first.
+fn launch_step(start: Start, warming: bool, approved: bool, needs_install: bool) -> LaunchStep {
+    if warming && (!approved || needs_install) {
+        LaunchStep::Wait
+    } else if approved && !(start == Start::Switch && needs_install) {
+        LaunchStep::Arm
+    } else {
+        LaunchStep::Confirm
+    }
+}
+
 impl ChatPanel {
     // Starts the agent when the chat opens so its models and modes are listed before the first
     // message. It never installs, asks or reports: only sending a message does that.
@@ -60,16 +78,17 @@ impl ChatPanel {
                         .approvals
                         .is_approved(&prepared.id, &prepared.server, &prepared.plan)
                 });
-                if warming && (!approved || launch::needs_install(&prepared.plan)) {
-                    self.link = Link::Idle;
-                } else if approved {
-                    self.arm(prepared, window, cx);
-                } else {
-                    let focus = cx.focus_handle();
-                    window.focus(&focus, cx);
-                    self.link = Link::Confirming;
-                    self.gate = Some(Gate { prepared, focus });
-                    cx.notify();
+                let needs_install = launch::needs_install(&prepared.plan);
+                match launch_step(start, warming, approved, needs_install) {
+                    LaunchStep::Wait => self.link = Link::Idle,
+                    LaunchStep::Arm => self.arm(prepared, window, cx),
+                    LaunchStep::Confirm => {
+                        let focus = cx.focus_handle();
+                        window.focus(&focus, cx);
+                        self.link = Link::Confirming;
+                        self.gate = Some(Gate { prepared, focus });
+                        cx.notify();
+                    }
                 }
             }
         }
@@ -158,5 +177,42 @@ impl ChatPanel {
         self.link = Link::Idle;
         self.finish_turn(TurnEnd::Failed(t!("chat.not_confirmed").to_string()), cx);
         self.focus_composer(window, cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LaunchStep, Start, launch_step};
+
+    #[test]
+    fn a_warm_up_waits_instead_of_installing_or_asking() {
+        assert_eq!(
+            launch_step(Start::WarmUp, true, true, true),
+            LaunchStep::Wait
+        );
+        assert_eq!(
+            launch_step(Start::WarmUp, true, false, false),
+            LaunchStep::Wait
+        );
+        assert_eq!(
+            launch_step(Start::WarmUp, true, true, false),
+            LaunchStep::Arm
+        );
+    }
+
+    #[test]
+    fn a_switch_confirms_an_install_even_when_approved() {
+        assert_eq!(
+            launch_step(Start::Switch, false, true, true),
+            LaunchStep::Confirm
+        );
+        assert_eq!(
+            launch_step(Start::Switch, false, false, false),
+            LaunchStep::Confirm
+        );
+        assert_eq!(
+            launch_step(Start::Switch, false, true, false),
+            LaunchStep::Arm
+        );
     }
 }

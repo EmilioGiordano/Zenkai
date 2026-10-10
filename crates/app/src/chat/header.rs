@@ -19,13 +19,14 @@ fn mark_color(agent: &AgentId, fallback: Hsla) -> Hsla {
         "claude" => rgb(0xd97757).into(),
         "gemini" => rgb(0x1e2a44).into(),
         "codex" => rgb(0xf2f2f4).into(),
+        "opencode" => rgb(0x2b2d31).into(),
         _ => fallback,
     }
 }
 
 pub(super) fn agent_mark(agent: &AgentId, name: &str, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
-    let known = matches!(agent.as_str(), "claude" | "gemini" | "codex");
+    let known = matches!(agent.as_str(), "claude" | "gemini" | "codex" | "opencode");
     let background = mark_color(agent, theme.secondary);
     let light = background.l > 0.6;
     div()

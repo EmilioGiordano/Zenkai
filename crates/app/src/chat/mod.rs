@@ -1,4 +1,5 @@
 mod access;
+mod agent_menu;
 mod badge;
 mod cards;
 mod composer;
@@ -8,6 +9,7 @@ mod files;
 mod header;
 mod launch;
 mod menus;
+mod model_search;
 mod permissions;
 pub(crate) mod reference;
 mod reference_scan;
@@ -26,13 +28,13 @@ use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use zenkai_agent::chat::history::History;
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
-use zenkai_agent::chat::state::AgentState;
+use zenkai_agent::chat::state::{AgentState, Select};
 use zenkai_agent::chat::thread::{MessageId, Thread, TurnEnd, TurnState};
 use zenkai_agent::settings::AgentId;
 use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
 
-use crate::agent_settings::{self, AgentConfig};
+use crate::agent_settings::AgentConfig;
 use crate::view::Workspace;
 use access::Access;
 use launch::{Live, Prepared};
@@ -59,10 +61,12 @@ enum View {
 enum Start {
     Message,
     WarmUp,
+    Switch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Menu {
+    Agent,
     Model,
     Access,
 }
@@ -117,6 +121,9 @@ pub struct ChatPanel {
     view: View,
     menu: Option<Menu>,
     menu_index: usize,
+    // Shown right after a switch so the menu is not empty while the agent restarts.
+    remembered_selects: BTreeMap<AgentId, Vec<Select>>,
+    pending_agent: Option<agent_menu::PendingAgent>,
     access: Access,
     model_choice: Option<String>,
     effort_choice: Option<String>,
@@ -124,6 +131,8 @@ pub struct ChatPanel {
     title: Option<String>,
     resume_backup: Option<Backup>,
     sessions_query: Entity<InputState>,
+    model_query: Entity<InputState>,
+    model_scroll: ScrollHandle,
     slash_index: usize,
     // The composer text for which the user closed the slash list.
     slash_dismissed: Option<String>,
@@ -202,13 +211,29 @@ impl ChatPanel {
                 InputEvent::PressEnter { .. } => {}
             },
         );
-        let settings = cx.observe_global::<AgentConfig>(|this, cx| {
+        let settings = cx.observe_global_in::<AgentConfig>(window, |this, window, cx| {
             this.follow_setting(cx);
+            this.follow_agent_switch(window, cx);
             cx.notify();
         });
         let sessions_query =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("chat.sessions.search")));
         let searching = cx.subscribe(&sessions_query, |_, _, _: &InputEvent, cx| cx.notify());
+        let model_query =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("chat.model.search")));
+        let filtering = cx.subscribe_in(
+            &model_query,
+            window,
+            |this, _, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
+                    this.menu_index = 0;
+                    this.model_scroll.scroll_to_item(0);
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => this.menu_accept(cx),
+                InputEvent::Focus | InputEvent::Blur => cx.notify(),
+            },
+        );
         let (history_saves, history_queue) = async_channel::unbounded();
         let mut panel = ChatPanel {
             workspace,
@@ -233,6 +258,8 @@ impl ChatPanel {
             view: View::Chat,
             menu: None,
             menu_index: 0,
+            remembered_selects: BTreeMap::new(),
+            pending_agent: None,
             access: Access::from_setting(
                 cx.global::<AgentConfig>().state.current.agents.permission,
             ),
@@ -242,10 +269,12 @@ impl ChatPanel {
             title: None,
             resume_backup: None,
             sessions_query,
+            model_query,
+            model_scroll: ScrollHandle::new(),
             slash_index: 0,
             slash_dismissed: None,
             epoch: 0,
-            _subscriptions: vec![sending, settings, searching],
+            _subscriptions: vec![sending, settings, searching, filtering],
         };
         panel.load_history(history_queue, cx);
         panel
@@ -385,6 +414,11 @@ impl ChatPanel {
     }
 
     pub(crate) fn new_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset_conversation(window, cx);
+        self.warm_up(window, cx);
+    }
+
+    fn reset_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.epoch += 1;
         self.end_session(cx);
         for ask in self.permissions.drain(..) {
@@ -408,28 +442,27 @@ impl ChatPanel {
         self.menu = None;
         self.title = None;
         self.focus_composer(window, cx);
-        self.warm_up(window, cx);
         cx.notify();
     }
 
-    pub(super) fn cycle_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let settings = cx.global::<AgentConfig>().state.current.clone();
-        let ids: Vec<AgentId> = settings.agents.servers.keys().cloned().collect();
-        if ids.len() < 2 {
-            return;
-        }
-        let current = launch::chosen_agent(&settings).map(|(id, _)| id);
-        let next = current
-            .and_then(|id| ids.iter().position(|candidate| *candidate == id))
-            .map_or(0, |index| (index + 1) % ids.len());
-        let next = ids[next].clone();
-        agent_settings::change(cx, move |settings| {
-            settings.agents.default = Some(next.clone());
-        });
-        self.state.selects.clear();
-        self.model_choice = None;
-        self.effort_choice = None;
-        self.new_conversation(window, cx);
+    // The user chose this agent, so a launch that needs confirming asks right away.
+    pub(super) fn switch_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset_conversation(window, cx);
+        self.begin(Start::Switch, window, cx);
+    }
+
+    pub(super) fn toggle_agent_editing(&mut self, cx: &mut Context<Self>) {
+        closed(
+            self.workspace
+                .update(cx, |workspace, cx| workspace.toggle_agent_editing(cx)),
+        );
+    }
+
+    pub(super) fn allow_agent_editing(&mut self, cx: &mut Context<Self>) {
+        closed(
+            self.workspace
+                .update(cx, |workspace, cx| workspace.allow_agent_editing(cx)),
+        );
     }
 
     pub(super) fn copy_login_command(&self, cx: &mut Context<Self>) {

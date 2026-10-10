@@ -8,6 +8,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::chat::session::ChoiceKind;
 use zenkai_agent::chat::thread::{Entry, FileCard, NoticeKind, ToolCard, ToolStatus, worked_label};
+use zenkai_agent::tools::is_protected_view_refusal;
 use zenkai_i18n::t;
 
 use super::badge::{self, ReferencePlugin};
@@ -244,6 +245,23 @@ impl ChatPanel {
                         .child(card.detail.clone()),
                 )
             })
+            .when(
+                card.status == ToolStatus::Failed && is_protected_view_refusal(&card.detail),
+                |card_view| {
+                    card_view.child(
+                        h_flex().child(
+                            Button::new(SharedString::from(format!(
+                                "let-agents-edit-{}",
+                                card.id.as_str()
+                            )))
+                            .outline()
+                            .small()
+                            .label(t!("chat.tool.let_agents_edit"))
+                            .on_click(cx.listener(|this, _, _, cx| this.allow_agent_editing(cx))),
+                        ),
+                    )
+                },
+            )
             .when(!buttons.is_empty(), |card_view| {
                 card_view
                     .child(

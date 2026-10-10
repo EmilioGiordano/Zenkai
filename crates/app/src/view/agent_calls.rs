@@ -8,7 +8,6 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::bridge::{Bridge, ENDPOINT_FILE};
-use zenkai_agent::protected_view::FileOrigin;
 use zenkai_agent::settings::{ExternalAgents, PermissionMode, Settings};
 use zenkai_agent::tools::{
     self, NewWorkbook, PlannedWrite, ReadRequest, ToolCall, ToolEndpoint, ToolError, ToolReply,
@@ -685,17 +684,6 @@ impl Workspace {
         self.agent.bridge = BridgeState::Off;
     }
 
-    // As Excel's Enable Editing: the user vouches for this file, for this session only.
-    pub(super) fn let_agents_edit(&mut self, cx: &mut Context<Self>) {
-        let Some(document) = self.documents.active_mut() else {
-            return;
-        };
-        if document.origin == FileOrigin::Internet {
-            document.origin = FileOrigin::Local;
-            self.notify(Severity::Info, t!("notice.agents_may_edit"), cx);
-        }
-    }
-
     pub(super) fn sync_bridge(&mut self, cx: &mut Context<Self>) {
         let current = cx.global::<AgentConfig>().state.current.clone();
         let since = match &self.agent.bridge {
@@ -728,7 +716,9 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let started = cx
                 .background_executor()
-                .spawn(async move { Bridge::start(endpoint, endpoint_file().as_deref(), None) })
+                .spawn(
+                    async move { Bridge::start(endpoint, endpoint_file().as_deref(), None, None) },
+                )
                 .await;
             let update = this.update(cx, |this, cx| {
                 match started {

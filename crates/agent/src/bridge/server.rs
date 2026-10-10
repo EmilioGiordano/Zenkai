@@ -16,11 +16,20 @@ const INSTRUCTIONS: &str = "Zenkai is a spreadsheet. These tools read and change
      workbooks the user has open, live: changes show at once, recalculate, can be undone by \
      the user and are never saved by Zenkai. Start with list_workbooks.";
 
+fn named_client(
+    chat_agent: Option<&str>,
+    handshake: impl FnOnce() -> Option<String>,
+) -> Option<String> {
+    chat_agent.map(str::to_string).or_else(handshake)
+}
+
 #[derive(Clone)]
 pub struct ZenkaiServer {
     pub endpoint: ToolEndpoint,
     // Only the chat's own bridge has one; external agents cannot create or open files.
     pub folder: Option<WorkingFolder>,
+    // The agent the chat launched; its calls are named after it, whatever it calls itself.
+    pub chat_agent: Option<String>,
 }
 
 impl ServerHandler for ZenkaiServer {
@@ -53,10 +62,12 @@ impl ServerHandler for ZenkaiServer {
             Ok(nonce) => nonce,
             Err(error) => return Ok(failed(error.to_string()).into()),
         };
-        let client = context
-            .peer
-            .peer_info()
-            .and_then(|info| client_label(&info.client_info.name, &info.client_info.version));
+        let client = named_client(self.chat_agent.as_deref(), || {
+            context
+                .peer
+                .peer_info()
+                .and_then(|info| client_label(&info.client_info.name, &info.client_info.version))
+        });
         // rmcp keeps this handler running after the client leaves; dropping the pending call
         // is what tells Zenkai nobody waits for the user's answer any more.
         let call = self.endpoint.call_from(call, client);
@@ -80,5 +91,22 @@ impl ServerHandler for ZenkaiServer {
             None => failed("the client closed the connection".to_string()),
         };
         Ok(result.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::named_client;
+
+    #[test]
+    fn calls_from_the_chat_are_named_after_its_agent() {
+        let client = named_client(Some("Claude"), || Some("zenkai-mcp 1".to_string()));
+        assert_eq!(client.as_deref(), Some("Claude"));
+    }
+
+    #[test]
+    fn an_external_client_keeps_its_handshake_name() {
+        let client = named_client(None, || Some("Codex".to_string()));
+        assert_eq!(client.as_deref(), Some("Codex"));
     }
 }
