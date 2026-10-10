@@ -120,7 +120,7 @@ pub struct ChatPanel {
     view: View,
     menu: Option<Menu>,
     menu_index: usize,
-    // The model and effort lists each agent reported earlier in this run.
+    // Shown right after a switch so the menu is not empty while the agent restarts.
     remembered_selects: BTreeMap<AgentId, Vec<Select>>,
     pending_agent: Option<agent_menu::PendingAgent>,
     access: Access,
@@ -431,10 +431,17 @@ impl ChatPanel {
         self.begin(Start::Switch, window, cx);
     }
 
-    pub(super) fn let_agents_edit(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn toggle_agent_editing(&mut self, cx: &mut Context<Self>) {
         closed(
             self.workspace
-                .update(cx, |workspace, cx| workspace.let_agents_edit(cx)),
+                .update(cx, |workspace, cx| workspace.toggle_agent_editing(cx)),
+        );
+    }
+
+    pub(super) fn allow_agent_editing(&mut self, cx: &mut Context<Self>) {
+        closed(
+            self.workspace
+                .update(cx, |workspace, cx| workspace.allow_agent_editing(cx)),
         );
     }
 
