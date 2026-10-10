@@ -14,6 +14,8 @@ use crate::actions::*;
 use crate::keymap;
 
 const PICKER_LABEL_WIDTH: f32 = 150.0;
+const MENU_GAP: f32 = 8.0;
+const FOCUSED_EDGE: f32 = 0.16;
 
 fn icon_button(
     id: &'static str,
@@ -33,7 +35,7 @@ fn picker(
     id: &'static str,
     label: impl Into<SharedString>,
     tooltip: impl Into<SharedString>,
-    action: impl Action + Clone,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Button {
     Button::new(id)
         .ghost()
@@ -51,7 +53,7 @@ fn picker(
                 .child(Icon::new(IconName::ChevronDown).size_3()),
         )
         .tooltip(tooltip)
-        .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
+        .on_click(on_click)
 }
 
 impl ChatPanel {
@@ -158,8 +160,57 @@ impl ChatPanel {
             )
     }
 
-    fn picker_slot(&self, button: Button, menu: Option<AnyElement>) -> Div {
-        div().relative().child(button).children(menu)
+    // Drawn in the window's overlay layer so the composer border and the transcript cannot
+    // cover it. The backdrop takes the click that dismisses it, which also keeps the button
+    // from reopening the menu it just closed.
+    fn picker_slot(
+        &self,
+        button: Button,
+        menu: Option<AnyElement>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let slot = div().relative().child(button);
+        let Some(menu) = menu else {
+            return slot;
+        };
+        let viewport = window.viewport_size();
+        let backdrop = div()
+            .occlude()
+            .w(viewport.width)
+            .h(viewport.height)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.close_menu(cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, _, _, cx| this.close_menu(cx)),
+            );
+        slot.child(
+            deferred(
+                anchored()
+                    .anchor(Anchor::TopLeft)
+                    .position(point(px(0.0), px(0.0)))
+                    .child(backdrop),
+            )
+            .priority(1),
+        )
+        .child(
+            deferred(
+                anchored()
+                    .anchor(Anchor::BottomLeft)
+                    .offset(point(px(0.0), px(-MENU_GAP)))
+                    .snap_to_window_with_margin(px(MENU_GAP))
+                    .child(menu),
+            )
+            .priority(2),
+        )
+    }
+
+    fn open_picker(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
+        self.focus_composer(window, cx);
+        self.toggle_menu(menu, cx);
     }
 
     pub(super) fn render_composer(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -185,28 +236,34 @@ impl ChatPanel {
         let slash = self.render_slash(cx);
         let model_menu = self.render_model_menu(cx);
         let access_menu = self.render_access_menu(cx);
+        let agent_menu = self.render_agent_menu(cx);
         let model_picker = picker(
             "chat-model",
             self.model_label(),
             keymap::labeled(cx, t!("chat.model_and_effort"), &PickChatModel),
-            PickChatModel,
+            cx.listener(|this, _, window, cx| this.open_picker(Menu::Model, window, cx)),
         )
         .selected(self.menu == Some(Menu::Model));
         let access_picker = picker(
             "chat-access",
             self.access.label(),
             keymap::labeled(cx, t!("chat.change_access"), &PickChatPermission),
-            PickChatPermission,
+            cx.listener(|this, _, window, cx| this.open_picker(Menu::Access, window, cx)),
         )
         .selected(self.menu == Some(Menu::Access));
         let agent_picker = picker(
             "chat-agent",
             agent,
             keymap::labeled(cx, t!("chat.switch_agent"), &CycleChatAgent),
-            CycleChatAgent,
-        );
+            cx.listener(|this, _, window, cx| this.open_picker(Menu::Agent, window, cx)),
+        )
+        .selected(self.menu == Some(Menu::Agent));
         let theme = cx.theme();
-        let border = if focused { theme.ring } else { theme.border };
+        let border = if focused {
+            theme.border.blend(theme.foreground.opacity(FOCUSED_EDGE))
+        } else {
+            theme.border
+        };
         v_flex()
             .relative()
             .flex_shrink_0()
@@ -244,9 +301,9 @@ impl ChatPanel {
                     .items_center()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child(agent_picker)
-                    .child(self.picker_slot(model_picker, model_menu))
-                    .child(self.picker_slot(access_picker, access_menu))
+                    .child(self.picker_slot(agent_picker, agent_menu, window, cx))
+                    .child(self.picker_slot(model_picker, model_menu, window, cx))
+                    .child(self.picker_slot(access_picker, access_menu, window, cx))
                     .child(div().flex_1())
                     .child(icon_button(
                         "chat-selection",

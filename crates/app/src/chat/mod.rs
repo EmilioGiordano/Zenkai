@@ -1,4 +1,5 @@
 mod access;
+mod agent_menu;
 mod badge;
 mod cards;
 mod composer;
@@ -32,7 +33,7 @@ use zenkai_agent::settings::AgentId;
 use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
 
-use crate::agent_settings::{self, AgentConfig};
+use crate::agent_settings::AgentConfig;
 use crate::view::Workspace;
 use access::Access;
 use launch::{Live, Prepared};
@@ -63,6 +64,7 @@ enum Start {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Menu {
+    Agent,
     Model,
     Access,
 }
@@ -117,6 +119,7 @@ pub struct ChatPanel {
     view: View,
     menu: Option<Menu>,
     menu_index: usize,
+    pending_agent: Option<AgentId>,
     access: Access,
     model_choice: Option<String>,
     effort_choice: Option<String>,
@@ -202,8 +205,9 @@ impl ChatPanel {
                 InputEvent::PressEnter { .. } => {}
             },
         );
-        let settings = cx.observe_global::<AgentConfig>(|this, cx| {
+        let settings = cx.observe_global_in::<AgentConfig>(window, |this, window, cx| {
             this.follow_setting(cx);
+            this.follow_agent_switch(window, cx);
             cx.notify();
         });
         let sessions_query =
@@ -233,6 +237,7 @@ impl ChatPanel {
             view: View::Chat,
             menu: None,
             menu_index: 0,
+            pending_agent: None,
             access: Access::from_setting(
                 cx.global::<AgentConfig>().state.current.agents.permission,
             ),
@@ -410,26 +415,6 @@ impl ChatPanel {
         self.focus_composer(window, cx);
         self.warm_up(window, cx);
         cx.notify();
-    }
-
-    pub(super) fn cycle_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let settings = cx.global::<AgentConfig>().state.current.clone();
-        let ids: Vec<AgentId> = settings.agents.servers.keys().cloned().collect();
-        if ids.len() < 2 {
-            return;
-        }
-        let current = launch::chosen_agent(&settings).map(|(id, _)| id);
-        let next = current
-            .and_then(|id| ids.iter().position(|candidate| *candidate == id))
-            .map_or(0, |index| (index + 1) % ids.len());
-        let next = ids[next].clone();
-        agent_settings::change(cx, move |settings| {
-            settings.agents.default = Some(next.clone());
-        });
-        self.state.selects.clear();
-        self.model_choice = None;
-        self.effort_choice = None;
-        self.new_conversation(window, cx);
     }
 
     pub(super) fn copy_login_command(&self, cx: &mut Context<Self>) {
