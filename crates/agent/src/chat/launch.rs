@@ -716,7 +716,10 @@ mod tests {
             package_entry(folder.path(), &package),
             Err(LaunchError::Entry { .. })
         ));
-        let (folder, package) = installed_package(&serde_json::json!({ "bin": absolute("evil.js") }).to_string(), &[]);
+        let (folder, package) = installed_package(
+            &serde_json::json!({ "bin": absolute("evil.js") }).to_string(),
+            &[],
+        );
         assert!(package_entry(folder.path(), &package).is_err());
         let (folder, package) = installed_package(r#"{"bin": "gone.js"}"#, &[]);
         assert!(package_entry(folder.path(), &package).is_err());
