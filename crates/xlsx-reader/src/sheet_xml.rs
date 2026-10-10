@@ -3,7 +3,7 @@ use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::ReadError;
-use crate::sheet_data::{SheetCells, Slot, scan_rows};
+use crate::sheet_data::{SheetCells, Slot, remap_strings, scan_rows};
 
 // Below this the rows are read on one thread; above it, in pieces of about this size.
 const PIECE_BYTES: usize = 4 * 1024 * 1024;
@@ -238,18 +238,7 @@ fn join(pieces: Vec<SheetCells<'_>>) -> Result<SheetCells<'_>, ReadError> {
             strings.push(index);
         }
         let mut data = piece.data;
-        for slot in &piece.string_cells {
-            let Some((_, Cell::SharedString { si, .. })) = data
-                .get_mut(slot.row)
-                .and_then(|(_, row)| row.get_mut(slot.cell))
-            else {
-                return Err(unsupported("a lost string"));
-            };
-            *si = *usize::try_from(*si)
-                .ok()
-                .and_then(|local| strings.get(local))
-                .ok_or_else(|| unsupported("a lost string"))?;
-        }
+        remap_strings(&mut data, &piece.string_cells, &strings)?;
         for (_, row) in &mut data {
             for (_, cell) in row {
                 if let Cell::CellFormula { f, .. } | Cell::ArrayFormula { f, .. } = cell {

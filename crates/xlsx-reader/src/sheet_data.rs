@@ -51,6 +51,27 @@ pub(crate) struct Slot {
     pub(crate) cell: usize,
 }
 
+// Points each shared-string cell at `table[its local index]`.
+pub(crate) fn remap_strings(
+    data: &mut [(i32, Vec<(i32, Cell)>)],
+    slots: &[Slot],
+    table: &[i32],
+) -> Result<(), ReadError> {
+    for slot in slots {
+        let Some((_, Cell::SharedString { si, .. })) = data
+            .get_mut(slot.row)
+            .and_then(|(_, row)| row.get_mut(slot.cell))
+        else {
+            return Err(unsupported("a lost string"));
+        };
+        *si = *usize::try_from(*si)
+            .ok()
+            .and_then(|local| table.get(local))
+            .ok_or_else(|| unsupported("a lost string"))?;
+    }
+    Ok(())
+}
+
 pub(crate) enum FormulaEvent {
     Convert { job: usize },
     SharedAnchor { si: i32, job: usize },

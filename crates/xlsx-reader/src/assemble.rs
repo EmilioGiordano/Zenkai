@@ -4,7 +4,7 @@ use ironcalc::base::types::{Cell, Workbook};
 
 use crate::ReadError;
 use crate::formulas::Converted;
-use crate::sheet_data::{FormulaEvent, SheetCells};
+use crate::sheet_data::{FormulaEvent, SheetCells, remap_strings};
 
 fn unsupported(what: &str) -> ReadError {
     ReadError::Unsupported(what.to_string())
@@ -55,18 +55,7 @@ pub(crate) fn fill(
             resolve_formulas(&cells.events, ids, &converted.distinct)?;
 
         let mut data = cells.data;
-        for slot in cells.string_cells {
-            let Some((_, Cell::SharedString { si, .. })) = data
-                .get_mut(slot.row)
-                .and_then(|(_, row)| row.get_mut(slot.cell))
-            else {
-                return Err(unsupported("a lost string"));
-            };
-            *si = *usize::try_from(*si)
-                .ok()
-                .and_then(|local_index| local.get(local_index))
-                .ok_or_else(|| unsupported("a lost string"))?;
-        }
+        remap_strings(&mut data, &cells.string_cells, &local)?;
         for (_, row) in &mut data {
             for (_, cell) in row {
                 if let Cell::CellFormula { f, .. } | Cell::ArrayFormula { f, .. } = cell {
