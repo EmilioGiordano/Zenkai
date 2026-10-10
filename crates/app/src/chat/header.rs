@@ -11,7 +11,7 @@ use zenkai_i18n::t;
 
 use super::{ChatPanel, View};
 use crate::actions::*;
-use crate::assets::OPENCODE_MARK;
+use crate::assets::{CLAUDE_AGENT_MARK, CODEX_AGENT_MARK, OPENCODE_MARK};
 use crate::keymap;
 
 pub(super) fn agent_mark(agent: &AgentId, name: &str, cx: &App) -> impl IntoElement {
@@ -32,16 +32,24 @@ fn mark_sized(agent: &AgentId, name: &str, tile: f32, glyph: f32, cx: &App) -> i
         .items_center()
         .justify_center()
         .bg(theme.secondary);
-    match agent.as_str() {
-        "opencode" => tile
+    // The registry marks paint with the surrounding text colour, so they sit on the
+    // tile exactly like the monochrome opencode mark.
+    let mark = match agent.as_str() {
+        "claude" => Some(CLAUDE_AGENT_MARK),
+        "codex" => Some(CODEX_AGENT_MARK),
+        "opencode" => Some(OPENCODE_MARK),
+        _ => None,
+    };
+    match mark {
+        Some(path) => tile
             .child(
                 svg()
-                    .path(OPENCODE_MARK)
+                    .path(path)
                     .size(px(glyph))
                     .text_color(theme.muted_foreground),
             )
             .into_any_element(),
-        _ => tile
+        None => tile
             .text_xs()
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(theme.secondary_foreground)

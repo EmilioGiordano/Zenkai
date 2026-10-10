@@ -3,6 +3,36 @@
 One file per agent in this folder. Each mark is a single monochrome path that
 takes the surrounding text colour. Custom agents keep the letter mark.
 
+## claude.svg
+
+- Source: `https://cdn.agentclientprotocol.com/registry/v1/latest/claude-acp.svg`
+  (agent id `claude-acp` in
+  `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`),
+  fetched 2026-10-10.
+- Terms: the registry entry lists a proprietary license for the Claude Agent
+  wrapper by Anthropic, Zed Industries and JetBrains
+  (`https://github.com/agentclientprotocol/claude-agent-acp/blob/main/LICENSE`).
+  Used unmodified to identify the agent, the same way the ACP registry and Zed
+  use it.
+- Note: the file as published contains no scripts and no editor metadata, so
+  nothing was stripped. It paints with the surrounding text colour
+  (`fill="currentColor"`), which is why the tile renders it as-is.
+
+## codex.svg
+
+- Source: `https://cdn.agentclientprotocol.com/registry/v1/latest/codex-acp.svg`
+  (agent id `codex-acp` in
+  `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`),
+  fetched 2026-10-10.
+- Terms: the registry entry lists Apache-2.0 for the Codex adapter by OpenAI,
+  JetBrains s.r.o. and Zed Industries
+  (`https://github.com/agentclientprotocol/codex-acp/blob/main/LICENSE`).
+  Used unmodified to identify the agent, the same way the ACP registry and Zed
+  use it.
+- Note: the file as published contains no scripts and no editor metadata, so
+  nothing was stripped. It paints with the surrounding text colour
+  (`fill="currentColor"`), which is why the tile renders it as-is.
+
 ## opencode.svg
 
 - Source: `packages/console/app/src/asset/brand/opencode-logo-dark-square.svg`
@@ -14,14 +44,6 @@ takes the surrounding text colour. Custom agents keep the letter mark.
 
 ## Skipped brands
 
-- Claude: the official press kit (https://www.anthropic.com/press-kit) exists,
-  but the trademark guidelines (https://www.anthropic.com/legal/trademark-guidelines,
-  effective 2024-08-01) allow use only as specifically permitted and only in
-  materials approved beforehand, with no alterations. Not embedded.
-- Codex: OpenAI publishes the Blossom at https://openai.com/brand, but there is
-  no Codex-specific mark, and the usage terms require the logo exactly as
-  provided with no added colours or alterations. A 16px monochrome glyph cannot
-  comply. Not embedded.
-- Gemini: excluded from this task. Google retired Gemini CLI for free and
+- Gemini: stays on the letter mark (deprecated). Google retired Gemini CLI for free and
   individual accounts on 2026-06-18; its successor is Antigravity CLI. No
   official standalone SVG was pursued.
