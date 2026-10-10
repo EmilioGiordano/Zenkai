@@ -11,12 +11,14 @@ use zenkai_agent::bridge::{Bridge, ENDPOINT_FILE};
 use zenkai_agent::protected_view::FileOrigin;
 use zenkai_agent::settings::{ExternalAgents, PermissionMode, Settings};
 use zenkai_agent::tools::{
-    self, PlannedWrite, ReadRequest, ToolCall, ToolEndpoint, ToolError, ToolReply, ToolRequest,
-    WorkbookId, WriteRequest,
+    self, NewWorkbook, PlannedWrite, ReadRequest, ToolCall, ToolEndpoint, ToolError, ToolReply,
+    ToolRequest, WorkbookId, WriteRequest,
 };
 
+use super::agent_review::AgentWrite;
 use super::{Severity, Workspace};
 use crate::actions::{AllowAgentChange, DenyAgentChange, ShowAgentChange};
+use crate::agent_review::{CellChange, changes_since, inputs_in};
 use crate::agent_routing;
 use crate::agent_settings::{AgentConfig, BridgeStatus};
 use crate::document::{self, Document};
@@ -32,13 +34,33 @@ pub(super) enum Decision {
     Deny,
 }
 
-pub(super) struct PendingWrite {
+pub(super) enum Change {
+    Write {
+        plan: PlannedWrite,
+        id: WorkbookId,
+        generation: u64,
+    },
+    Create(NewWorkbook),
+}
+
+impl Change {
+    fn write(&self) -> Option<(&PlannedWrite, WorkbookId, u64)> {
+        match self {
+            Change::Write {
+                plan,
+                id,
+                generation,
+            } => Some((plan, *id, *generation)),
+            Change::Create(_) => None,
+        }
+    }
+}
+
+pub(super) struct PendingChange {
     call: ToolCall,
-    plan: PlannedWrite,
+    change: Change,
     serial: u64,
     asked_at: Instant,
-    id: WorkbookId,
-    generation: u64,
     focus: FocusHandle,
     return_focus: Option<FocusHandle>,
 }
@@ -80,12 +102,18 @@ fn bridge_step(state: &BridgeState, wanted: ExternalAgents, since: SinceFailure)
 pub(super) struct AgentLink {
     endpoint: ToolEndpoint,
     bridge: BridgeState,
-    pending: Option<PendingWrite>,
+    pending: Option<PendingChange>,
     next_serial: u64,
 }
 
 fn endpoint_file() -> Option<PathBuf> {
     Some(crate::recovery::directory()?.parent()?.join(ENDPOINT_FILE))
+}
+
+impl AgentLink {
+    pub(super) fn endpoint(&self) -> ToolEndpoint {
+        self.endpoint.clone()
+    }
 }
 
 impl Workspace {
@@ -111,7 +139,7 @@ impl Workspace {
         }
     }
 
-    fn permission(cx: &App) -> PermissionMode {
+    pub(super) fn permission(cx: &App) -> PermissionMode {
         cx.global::<AgentConfig>().state.current.agents.permission
     }
 
@@ -136,6 +164,8 @@ impl Workspace {
                 Ok(plan) => self.route_agent_write(call, id, plan, window, cx),
                 Err(error) => call.respond(Err(error)),
             },
+            ToolRequest::CreateWorkbook(new) => self.route_agent_create(call, new, window, cx),
+            ToolRequest::OpenWorkbook(path) => self.open_for_agent(call, path, window, cx),
         }
     }
 
@@ -244,25 +274,43 @@ impl Workspace {
             self.apply_agent_write(call, id, plan, window, cx);
             return;
         }
-        if self.agent.pending.is_some() {
-            call.respond(Err(ToolError::AwaitingApproval));
-            return;
-        }
         let Some(generation) = self.documents.get(id).map(Document::generation) else {
             call.respond(Err(ToolError::UnknownWorkbook(id)));
             return;
         };
+        self.ask_for_approval(
+            call,
+            Change::Write {
+                plan,
+                id,
+                generation,
+            },
+            window,
+            cx,
+        );
+    }
+
+    // One change waits for the user at a time; the bar takes the keyboard when it can.
+    pub(super) fn ask_for_approval(
+        &mut self,
+        call: ToolCall,
+        change: Change,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.agent.pending.is_some() {
+            call.respond(Err(ToolError::AwaitingApproval));
+            return;
+        }
         let focus = cx.focus_handle();
         let return_focus = self.take_focus_for_bar(&focus, window, cx);
         let serial = self.agent.next_serial;
         self.agent.next_serial += 1;
-        self.agent.pending = Some(PendingWrite {
+        self.agent.pending = Some(PendingChange {
             call,
-            plan,
+            change,
             serial,
             asked_at: Instant::now(),
-            id,
-            generation,
             focus,
             return_focus,
         });
@@ -325,10 +373,27 @@ impl Workspace {
         };
         let summary = plan.summary();
         let description = plan.describe();
-        let (done, finished) = async_channel::bounded::<Result<(), String>>(1);
+        let write = AgentWrite {
+            id,
+            generation: self.documents.get(id).map_or(0, Document::generation),
+            agent: call
+                .client
+                .clone()
+                .unwrap_or_else(|| t!("approval.external_agent").to_string()),
+            description: plan.headline(),
+            sheet_name: plan.sheet_name().to_string(),
+        };
+        let (sheet, block) = (plan.sheet(), plan.input_block());
+        let (done, finished) = async_channel::bounded::<Result<Vec<CellChange>, String>>(1);
         self.edit_document(id, window, cx, move |workbook| {
+            let before = block.map(|block| inputs_in(workbook, sheet, block));
             let applied = plan.apply(workbook);
-            let outcome = applied.as_ref().map(|_| ()).map_err(ToString::to_string);
+            let outcome = applied
+                .as_ref()
+                .map(|_| {
+                    before.map_or_else(Vec::new, |before| changes_since(workbook, sheet, before))
+                })
+                .map_err(ToString::to_string);
             if done.try_send(outcome).is_err() {
                 tracing::debug!("nobody waits for this agent write any more");
             }
@@ -339,9 +404,16 @@ impl Workspace {
             t!("notice.agent_wrote", name = name, description = description),
             cx,
         );
-        cx.spawn(async move |_, _| {
+        cx.spawn(async move |this, cx| {
             let reply = match finished.recv().await {
-                Ok(Ok(())) => Ok(ToolReply::Written(summary)),
+                Ok(Ok(changes)) => {
+                    let recorded =
+                        this.update(cx, |this, cx| this.record_agent_review(write, changes, cx));
+                    if recorded.is_err() {
+                        tracing::debug!("workspace closed before an agent write was recorded");
+                    }
+                    Ok(ToolReply::Written(summary))
+                }
                 Ok(Err(message)) => Err(ToolError::Engine(message)),
                 Err(_) => Err(ToolError::Closed),
             };
@@ -362,14 +434,25 @@ impl Workspace {
         self.release_focus_from_bar(&pending.focus, pending.return_focus.clone(), window, cx);
         self.sync_pending_highlight(cx);
         cx.notify();
-        if decision == Decision::Deny {
-            pending.call.respond(Err(ToolError::Declined));
-        } else if !self.holds_document(pending.id, pending.generation) {
-            pending
-                .call
-                .respond(Err(ToolError::UnknownWorkbook(pending.id)));
-        } else {
-            self.apply_agent_write(pending.call, pending.id, pending.plan, window, cx);
+        match (decision, pending.change) {
+            (Decision::Deny, _) => pending.call.respond(Err(ToolError::Declined)),
+            (Decision::Allow, Change::Create(new)) => {
+                self.create_for_agent(pending.call, new, window, cx)
+            }
+            (
+                Decision::Allow,
+                Change::Write {
+                    plan,
+                    id,
+                    generation,
+                },
+            ) => {
+                if self.holds_document(id, generation) {
+                    self.apply_agent_write(pending.call, id, plan, window, cx);
+                } else {
+                    pending.call.respond(Err(ToolError::UnknownWorkbook(id)));
+                }
+            }
         }
     }
 
@@ -381,12 +464,34 @@ impl Workspace {
             .client
             .clone()
             .unwrap_or_else(|| t!("approval.external_agent").to_string());
-        let workbook = self.documents.get(pending.id).map_or_else(
-            || t!("approval.closed_workbook").to_string(),
-            Document::name,
-        );
-        let on_screen = self.documents.active_id() == Some(pending.id)
-            && self.active_sheet() == Some(pending.plan.sheet());
+        let (title, detail, sample, on_screen) = match &pending.change {
+            Change::Write { plan, id, .. } => {
+                let workbook = self.documents.get(*id).map_or_else(
+                    || t!("approval.closed_workbook").to_string(),
+                    Document::name,
+                );
+                (
+                    t!("approval.wants_to_change", who = who, workbook = workbook),
+                    t!("approval.not_saved", headline = plan.headline()),
+                    plan.sample(),
+                    self.documents.active_id() == Some(*id)
+                        && self.active_sheet() == Some(plan.sheet()),
+                )
+            }
+            Change::Create(new) => (
+                t!(
+                    "approval.wants_to_create",
+                    who = who,
+                    name = tools::relative_text(&new.path)
+                ),
+                t!(
+                    "approval.create_detail",
+                    folder = new.folder.path().display()
+                ),
+                None,
+                true,
+            ),
+        };
         Some(
             v_flex()
                 .key_context("AgentApproval")
@@ -404,11 +509,7 @@ impl Workspace {
                                 .flex_1()
                                 .min_w_0()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child(t!(
-                                    "approval.wants_to_change",
-                                    who = who,
-                                    workbook = workbook
-                                )),
+                                .child(title),
                         )
                         .when(!on_screen, |row| {
                             row.child(
@@ -439,9 +540,9 @@ impl Workspace {
                     div()
                         .text_sm()
                         .text_color(theme.muted_foreground)
-                        .child(t!("approval.not_saved", headline = pending.plan.headline())),
+                        .child(detail),
                 )
-                .children(pending.plan.sample().map(|sample| {
+                .children(sample.map(|sample| {
                     div()
                         .text_sm()
                         .font_family(theme.mono_font_family.clone())
@@ -460,11 +561,11 @@ impl Workspace {
             .agent
             .pending
             .as_ref()
-            .filter(|pending| {
-                self.documents.active_id() == Some(pending.id)
-                    && self.active_sheet() == Some(pending.plan.sheet())
+            .and_then(|pending| pending.change.write())
+            .filter(|(plan, id, _)| {
+                self.documents.active_id() == Some(*id) && self.active_sheet() == Some(plan.sheet())
             })
-            .map(|pending| pending.plan.target());
+            .map(|(plan, _, _)| plan.target());
         self.grid.update(cx, |grid, cx| grid.set_pending(range, cx));
     }
 
@@ -473,7 +574,8 @@ impl Workspace {
             .agent
             .pending
             .as_ref()
-            .map(|pending| (pending.id, pending.plan.sheet(), pending.plan.target()))
+            .and_then(|pending| pending.change.write())
+            .map(|(plan, id, _)| (id, plan.sheet(), plan.target()))
         else {
             return;
         };
@@ -492,7 +594,7 @@ impl Workspace {
         self.formula_bar.is_some() || self.grid.read(cx).editor().is_some()
     }
 
-    fn typing_in_a_field(&self, cx: &App) -> bool {
+    pub(super) fn typing_in_a_field(&self, cx: &App) -> bool {
         self.user_is_editing(cx)
             || self.rename.is_some()
             || self.go_to.is_some()
@@ -554,22 +656,28 @@ impl Workspace {
             .agent
             .pending
             .as_ref()
-            .is_some_and(|pending| !self.holds_document(pending.id, pending.generation));
-        if !orphaned {
+            .and_then(|pending| pending.change.write())
+            .filter(|(_, id, generation)| !self.holds_document(*id, *generation))
+            .map(|(_, id, _)| id);
+        let Some(orphaned) = orphaned else {
             return;
-        }
+        };
         if let Some(pending) = self.agent.pending.take() {
             self.release_focus_from_bar(&pending.focus, pending.return_focus.clone(), window, cx);
             pending
                 .call
-                .respond(Err(ToolError::UnknownWorkbook(pending.id)));
+                .respond(Err(ToolError::UnknownWorkbook(orphaned)));
             self.sync_pending_highlight(cx);
             cx.notify();
         }
     }
 
     pub(super) fn awaiting_approval(&self) -> Option<WorkbookId> {
-        self.agent.pending.as_ref().map(|pending| pending.id)
+        self.agent
+            .pending
+            .as_ref()
+            .and_then(|pending| pending.change.write())
+            .map(|(_, id, _)| id)
     }
 
     // Dropping the bridge removes the endpoint file, so no client finds a dead pipe.
@@ -620,7 +728,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let started = cx
                 .background_executor()
-                .spawn(async move { Bridge::start(endpoint, endpoint_file().as_deref()) })
+                .spawn(async move { Bridge::start(endpoint, endpoint_file().as_deref(), None) })
                 .await;
             let update = this.update(cx, |this, cx| {
                 match started {

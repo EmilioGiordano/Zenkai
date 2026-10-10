@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use proptest::prelude::*;
 
-pub const TOKENS: [&str; 14] = [
+pub const TOKENS: [&str; 17] = [
     "<f>",
     "</row>",
     r#" r="A0""#,
@@ -23,6 +23,9 @@ pub const TOKENS: [&str; 14] = [
     "<mergeCell ref=\"A1:A1\"/>",
     "<col min=\"0\" max=\"99999\" width=\"1e9\"/>",
     "<xf numFmtId=\"999\" fontId=\"99\" fillId=\"99\" borderId=\"99\"/>",
+    r#" outlineLevel="8" collapsed="yes""#,
+    "<rowBreaks><brk id=\"4294967296\" max=\"-1\"/></rowBreaks>",
+    "<pageMargins left=\"NaN\"/><pageSetup paperSize=\"0\" r:id=\"rId99\"/>",
 ];
 
 #[derive(Clone, Debug)]

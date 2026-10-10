@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{
     cell::CellValue,
     criteria_ranges::CriteriaRanges,
@@ -48,6 +50,8 @@ impl Model<'_> {
         // in, which only a full evaluation reproduces.
         if self.circular_hits == 0 {
             self.dependencies = Some(Box::new(self.build_dependencies()));
+        } else {
+            self.criteria_ranges = CriteriaRanges::new();
         }
     }
 
@@ -93,11 +97,13 @@ impl Model<'_> {
         self.clear_variable_stack();
         self.clear_lambdas();
         let circular_hits = self.circular_hits;
-        self.criteria_ranges = CriteriaRanges::on();
+        let changed: HashSet<CellKey> = edited.iter().chain(&dirty).copied().collect();
+        self.criteria_ranges
+            .start_incremental(&changed, self.locale);
         for cell in &dirty {
             self.evaluate_cell(reference(*cell));
         }
-        self.criteria_ranges = CriteriaRanges::Off;
+        self.criteria_ranges.finish();
         // A formula that now spills writes into cells nothing was watching.
         if self.circular_hits != circular_hits
             || dirty.iter().any(|cell| self.is_array_formula(*cell))
@@ -113,6 +119,12 @@ impl Model<'_> {
     /// How the last evaluation was done.
     pub fn last_recalculation(&self) -> Recalculation {
         self.last_recalculation
+    }
+
+    /// How many SUMIF, SUMIFS, COUNTIF and COUNTIFS results were updated by what changed
+    /// instead of reading their whole ranges again, since the model was created.
+    pub fn criteria_deltas(&self) -> u64 {
+        self.criteria_deltas
     }
 
     fn build_dependencies(&self) -> Dependencies {

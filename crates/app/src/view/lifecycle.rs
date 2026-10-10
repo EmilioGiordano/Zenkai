@@ -159,6 +159,7 @@ impl Workspace {
                     .map(str::to_string)
                     .collect();
                 self.sidebar.visible = session.sidebar_visible;
+                self.panels.widths = session.panel_widths.validated();
                 if let Some(active) = self
                     .documents
                     .restore(&session, self.recovery_dir.as_deref())
@@ -202,19 +203,30 @@ impl Workspace {
         };
         let target = recovery::document_file(&directory, id);
         if !document.needs_recovery() {
+            document.set_autosaved_at(None);
             cx.background_executor()
                 .spawn(async move { recovery::remove(&target) })
                 .detach();
             return;
         }
+        // Writing a large workbook takes seconds; nothing changed means the copy on disk
+        // already holds this state.
+        if document.recovery_is_current() {
+            return;
+        }
         let Some(shared) = document.begin_file_job(FileJob::Autosaving) else {
             return;
         };
+        let edits = document.edit_count();
         let generation = document.generation();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { recovery::write(&document::read_shared(&shared), &target) })
+                .spawn(async move {
+                    document::write_snapshot(&shared, FileJob::Autosaving, |bytes| {
+                        recovery::write(bytes, &target)
+                    })
+                })
                 .await;
             let update = this.update(cx, |this, cx| {
                 let Some(document) = this.documents.get_mut(id) else {
@@ -224,13 +236,13 @@ impl Workspace {
                 if !document.is_current(generation) {
                     return;
                 }
-                if let Err(error) = result {
-                    tracing::warn!(%error, "autosave failed");
-                    this.notify(
+                match result {
+                    Ok(()) => document.set_autosaved_at(Some(edits)),
+                    Err(error) => this.notify(
                         Severity::Warning,
                         t!("notice.autosave_failed", error = error),
                         cx,
-                    );
+                    ),
                 }
             });
             if let Err(error) = update {
@@ -352,7 +364,11 @@ impl Workspace {
                     writes
                         .into_iter()
                         .map(|write| {
-                            recovery::write(&document::read_shared(&write.workbook), &write.target)
+                            document::write_snapshot(
+                                &write.workbook,
+                                FileJob::Autosaving,
+                                |bytes| recovery::write(bytes, &write.target),
+                            )
                         })
                         .collect::<Vec<Result<(), EngineError>>>()
                 })
@@ -447,6 +463,7 @@ impl Workspace {
                     .as_deref()
                     .map(|directory| recovery::document_file(directory, id))
             })
+            .with_panel_widths(self.panels.widths)
     }
 
     // Written when something changed, so a crash leaves the spaces and files as they were a

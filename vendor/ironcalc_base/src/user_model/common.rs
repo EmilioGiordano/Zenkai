@@ -802,6 +802,64 @@ impl<'a> UserModel<'a> {
         Ok(())
     }
 
+    /// Deletes the content in several areas of one sheet as a single undo step, keeping
+    /// the style. Every array formula with a cell in an area must lie wholly inside
+    /// `bounds`, so an array split across areas can still be cleared.
+    ///
+    /// See also:
+    /// * [UserModel::range_clear_contents]
+    pub fn range_clear_contents_of_areas(
+        &mut self,
+        bounds: &Area,
+        areas: &[Area],
+    ) -> Result<(), String> {
+        for area in areas {
+            let inside = area.sheet == bounds.sheet
+                && area.row >= bounds.row
+                && area.column >= bounds.column
+                && area.row + area.height <= bounds.row + bounds.height
+                && area.column + area.width <= bounds.column + bounds.width;
+            if !inside {
+                return Err("Every area must lie inside the bounds".to_string());
+            }
+            if !self.model.arrays_inside(area, bounds)? {
+                return Err(
+                    "Cannot clear the range because it contains array formulas".to_string()
+                );
+            }
+        }
+        if areas.is_empty() {
+            return Ok(());
+        }
+        // Every old value is read before anything is cleared: clearing a dynamic formula
+        // also clears its spill, which may lie in a later area.
+        let mut diff_list = Vec::with_capacity(areas.len());
+        for area in areas {
+            let worksheet = self.model.workbook.worksheet(area.sheet)?;
+            let old_value = (area.row..area.row + area.height)
+                .map(|row| {
+                    (area.column..area.column + area.width)
+                        .map(|column| worksheet.cell(row, column).cloned())
+                        .collect()
+                })
+                .collect();
+            diff_list.push(Diff::RangeClearContents {
+                sheet: area.sheet,
+                row: area.row,
+                column: area.column,
+                width: area.width,
+                height: area.height,
+                old_value,
+            });
+        }
+        for area in areas {
+            self.model.clear_area_contents(area)?;
+        }
+        self.push_diff_list(diff_list);
+        self.evaluate_if_not_paused();
+        Ok(())
+    }
+
     fn clear_column_formatting(
         &mut self,
         sheet: u32,

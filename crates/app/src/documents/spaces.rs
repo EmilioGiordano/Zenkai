@@ -1,7 +1,10 @@
-use zenkai_types::WorkbookId;
+use std::path::PathBuf;
+
+use zenkai_grid::ViewState;
+use zenkai_types::{SheetId, WorkbookId};
 
 use super::Documents;
-use crate::entry::Entry;
+use crate::entry::{Entry, Link, LinkStatus, Slot};
 use crate::space_appearance::{NewSpaceColor, SpaceOverride};
 use crate::spaces::{Neighbour, SpaceColor, SpaceId, Spaces};
 
@@ -59,6 +62,28 @@ impl Documents {
             .filter(|slot| slot.as_entry().space() == id)
             .for_each(|slot| slot.set_space(heir));
         true
+    }
+
+    // A file that appeared in the agent's folder, listed in the current space without loading it.
+    pub fn add_link(&mut self, path: PathBuf, size: Option<u64>) -> WorkbookId {
+        let id = self.take_id();
+        self.after.push(Slot::Link(Link {
+            id,
+            space: self.current_space(),
+            untitled: 0,
+            path: Some(path),
+            recovery: None,
+            dirty: false,
+            read_only: false,
+            unsupported: Vec::new(),
+            sheet: SheetId(0),
+            view: ViewState::default(),
+            size,
+            status: LinkStatus::NotLoaded,
+            recovery_lost: false,
+            origin: None,
+        }));
+        id
     }
 
     pub fn move_to_space(&mut self, id: WorkbookId, space: SpaceId) -> bool {

@@ -7,6 +7,7 @@ use zenkai_grid::{Selection, ViewState};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, WorkbookId};
 
 use crate::entry::{Link, LinkStatus};
+use crate::panel_width::PanelWidths;
 use crate::space_appearance::{SpaceAppearance, SpaceOverride};
 use crate::spaces::{SpaceColor, SpaceId};
 
@@ -22,6 +23,8 @@ pub struct Session {
     pub sidebar_visible: bool,
     #[serde(default)]
     pub space_appearance: SpaceAppearance,
+    #[serde(default)]
+    pub panel_widths: PanelWidths,
     pub spaces: Vec<SpaceRecord>,
 }
 
@@ -74,7 +77,15 @@ impl Session {
             version: VERSION,
             sidebar_visible,
             space_appearance: SpaceAppearance::default(),
+            panel_widths: PanelWidths::default(),
             spaces,
+        }
+    }
+
+    pub fn with_panel_widths(self, panel_widths: PanelWidths) -> Session {
+        Session {
+            panel_widths,
+            ..self
         }
     }
 
@@ -119,7 +130,7 @@ impl Session {
     }
 }
 
-const ALL_UNSUPPORTED: [Unsupported; 11] = [
+const ALL_UNSUPPORTED: [Unsupported; 13] = [
     Unsupported::Charts,
     Unsupported::Images,
     Unsupported::PivotTables,
@@ -131,6 +142,8 @@ const ALL_UNSUPPORTED: [Unsupported; 11] = [
     Unsupported::ExternalLinks,
     Unsupported::AutoFilter,
     Unsupported::SheetProtection,
+    Unsupported::Outline,
+    Unsupported::PageBreaks,
 ];
 
 fn unsupported_code(unsupported: Unsupported) -> &'static str {
@@ -146,6 +159,8 @@ fn unsupported_code(unsupported: Unsupported) -> &'static str {
         Unsupported::ExternalLinks => "external-links",
         Unsupported::AutoFilter => "auto-filter",
         Unsupported::SheetProtection => "sheet-protection",
+        Unsupported::Outline => "outline",
+        Unsupported::PageBreaks => "page-breaks",
     }
 }
 
@@ -318,6 +333,7 @@ pub fn save(directory: &Path, session: &Session) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::panel_width::{Panel, Shown};
 
     fn record() -> FileRecord {
         FileRecord {
@@ -351,6 +367,40 @@ mod tests {
                 files: vec![record()],
             }],
         )
+    }
+
+    #[test]
+    fn panel_widths_survive_the_session_round_trip() {
+        let widths = PanelWidths::default().resized(
+            Panel::Chat,
+            600.0,
+            3000.0,
+            Shown {
+                sidebar: true,
+                chat: true,
+            },
+        );
+        let kept = session().with_panel_widths(widths);
+        let text = serde_json::to_string(&kept).unwrap();
+        let back = serde_json::from_str::<Session>(&text).unwrap();
+        assert_eq!(back.panel_widths, widths);
+        assert_eq!(back.panel_widths.width_of(Panel::Chat), 600.0);
+    }
+
+    #[test]
+    fn a_session_without_panel_widths_gets_the_defaults() {
+        let mut value = serde_json::to_value(session()).unwrap();
+        value.as_object_mut().unwrap().remove("panel_widths");
+        let back = serde_json::from_value::<Session>(value).unwrap();
+        assert_eq!(back.panel_widths, PanelWidths::default());
+    }
+
+    #[test]
+    fn a_session_with_unusable_panel_widths_still_loads_and_falls_back() {
+        let mut value = serde_json::to_value(session()).unwrap();
+        value["panel_widths"] = serde_json::json!({"sidebar": -4.0, "chat": "wide"});
+        let back = serde_json::from_value::<Session>(value).unwrap();
+        assert_eq!(back.panel_widths.validated(), PanelWidths::default());
     }
 
     #[test]

@@ -68,7 +68,7 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
     }
 }
 
-fn failure_text(failure: &LoadFailure) -> String {
+pub(super) fn failure_text(failure: &LoadFailure) -> String {
     match failure {
         LoadFailure::Missing => t!("open.not_found").to_string(),
         LoadFailure::Engine(error) => error.to_string(),
@@ -194,6 +194,7 @@ impl Workspace {
             grid.restore_view(view, cx);
         });
         self.sync_pending_highlight(cx);
+        self.sync_review_marks(cx);
         self.refresh_cells(cx);
         window.set_window_title(&self.window_title());
         let focus = self.grid.focus_handle(cx);

@@ -11,6 +11,7 @@ members = [
     "crates/grid",
     "crates/agent",
     "crates/mcp-relay",
+    "crates/fake-acp-agent",
     "crates/app",
 ]
 # Third-party code patched for Zenkai: built as a dependency, outside our fmt and clippy gates.

@@ -108,5 +108,7 @@ mod tests {
             secrets.status(&name("other")).unwrap(),
             SecretStatus::Missing
         );
+        assert_eq!(secrets.read(&key).unwrap().as_deref(), Some("sk-test"));
+        assert_eq!(secrets.read(&name("other")).unwrap(), None);
     }
 }

@@ -4,6 +4,7 @@ mod test_autofill_columns;
 mod test_autofill_rows;
 mod test_batch_row_column_diff;
 mod test_border;
+mod test_clear_areas;
 mod test_clear_cells;
 mod test_column_style;
 mod test_conditional_formatting;

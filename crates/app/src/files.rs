@@ -1,4 +1,5 @@
 use std::path::{Component, Path, PathBuf};
+use std::time::Instant;
 
 use zenkai_agent::preferences::XlsxReaderChoice;
 use zenkai_agent::protected_view::{FileOrigin, file_origin};
@@ -136,6 +137,30 @@ pub enum LoadFailure {
 }
 
 pub fn load_workbook(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFailure> {
+    let started = Instant::now();
+    let loaded = load_any(path, reader);
+    let elapsed_ms = started.elapsed().as_millis();
+    match &loaded {
+        Ok(load) => tracing::info!(
+            ?path,
+            elapsed_ms,
+            read_only = load.read_only,
+            "workbook opened"
+        ),
+        Err(LoadFailure::Missing) => {
+            tracing::warn!(?path, elapsed_ms, "workbook to open is missing")
+        }
+        Err(LoadFailure::Engine(error)) => {
+            tracing::warn!(?path, elapsed_ms, %error, "workbook could not be opened")
+        }
+        Err(LoadFailure::Unreadable { reason, fallback }) => {
+            tracing::warn!(?path, elapsed_ms, %reason, %fallback, "workbook is unreadable")
+        }
+    }
+    loaded
+}
+
+fn load_any(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFailure> {
     match open_xlsx_with(path, reader) {
         Ok(opened) => Ok(FileLoad {
             workbook: opened.workbook,
@@ -299,11 +324,17 @@ mod tests {
     }
 
     #[test]
+    fn local_paths_are_probed() {
+        assert!(!is_remote_or_device(Path::new("/data/a.xlsx")));
+        assert!(!is_remote_or_device(Path::new("relative/a.xlsx")));
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn network_and_device_paths_are_not_probed() {
         assert!(is_remote_or_device(Path::new(r"\\host\share\a.xlsx")));
         assert!(is_remote_or_device(Path::new(r"\\.\pipe\x")));
         assert!(!is_remote_or_device(Path::new(r"C:\data\a.xlsx")));
-        assert!(!is_remote_or_device(Path::new("relative/a.xlsx")));
     }
 
     #[test]

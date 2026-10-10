@@ -12,6 +12,11 @@ pub struct Preset {
     pub package: &'static str,
     pub extra_args: &'static [&'static str],
     pub min_node_major: u32,
+    pub login_command: &'static str,
+    pub provider: &'static str,
+    // package.json and package-lock.json committed with Zenkai: `npm ci` installs exactly these
+    // tarballs and checks their integrity hashes.
+    pub lock: (&'static str, &'static str),
 }
 
 pub const CLAUDE: Preset = Preset {
@@ -20,6 +25,12 @@ pub const CLAUDE: Preset = Preset {
     package: "@agentclientprotocol/claude-agent-acp@0.88.0",
     extra_args: &[],
     min_node_major: 22,
+    login_command: "claude /login",
+    provider: "Anthropic",
+    lock: (
+        include_str!("../lockfiles/claude/package.json"),
+        include_str!("../lockfiles/claude/package-lock.json"),
+    ),
 };
 
 pub const GEMINI: Preset = Preset {
@@ -28,6 +39,12 @@ pub const GEMINI: Preset = Preset {
     package: "@google/gemini-cli@0.63.0",
     extra_args: &["--acp"],
     min_node_major: 20,
+    login_command: "gemini",
+    provider: "Google",
+    lock: (
+        include_str!("../lockfiles/gemini/package.json"),
+        include_str!("../lockfiles/gemini/package-lock.json"),
+    ),
 };
 
 pub const CODEX: Preset = Preset {
@@ -36,11 +53,25 @@ pub const CODEX: Preset = Preset {
     package: "@agentclientprotocol/codex-acp@2.1.1",
     extra_args: &[],
     min_node_major: 20,
+    login_command: "codex login",
+    provider: "OpenAI",
+    lock: (
+        include_str!("../lockfiles/codex/package.json"),
+        include_str!("../lockfiles/codex/package-lock.json"),
+    ),
 };
 
 pub const PRESETS: [Preset; 3] = [CLAUDE, GEMINI, CODEX];
 
 impl Preset {
+    pub fn for_package(package: &str) -> Option<Preset> {
+        PRESETS.into_iter().find(|preset| preset.package == package)
+    }
+
+    pub fn for_agent(id: &AgentId) -> Option<Preset> {
+        PRESETS.into_iter().find(|preset| preset.id == id.as_str())
+    }
+
     pub fn agent_id(&self) -> AgentId {
         AgentId::new(self.id)
     }

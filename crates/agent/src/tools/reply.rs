@@ -84,6 +84,22 @@ pub enum ToolReply {
     Cells(CellPage),
     Found(FindResult),
     Written(WriteSummary),
+    Opened(OpenedWorkbook),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Opening {
+    Created,
+    Opened,
+    AlreadyOpen,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenedWorkbook {
+    pub id: WorkbookId,
+    pub how: Opening,
+    pub path: String,
+    pub sheets: Vec<String>,
 }
 
 fn push_line(text: &mut String, line: String) {
@@ -259,6 +275,20 @@ impl ToolReply {
                     })
                     .collect();
                 text += &untrusted(nonce, &json!({ "matches": found }));
+            }
+            ToolReply::Opened(opened) => {
+                let line = match opened.how {
+                    Opening::Created => {
+                        "Created an empty workbook, saved in the working folder and open in                          Zenkai on the user's screen. Fill it with the tools; changes are not                          saved until the user saves."
+                    }
+                    Opening::Opened => "Opened the workbook in Zenkai on the user's screen.",
+                    Opening::AlreadyOpen => "The workbook was already open in Zenkai.",
+                };
+                push_line(&mut text, format!("{line} Workbook id {}.", opened.id.0));
+                text += &untrusted(
+                    nonce,
+                    &json!({ "path": opened.path, "sheets": opened.sheets }),
+                );
             }
             ToolReply::Written(summary) => {
                 push_line(

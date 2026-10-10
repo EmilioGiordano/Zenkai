@@ -25,7 +25,7 @@ const _: () = assert!(MAX_PATTERN_CHARS < CELL_CHAR_LIMIT);
 const _: () = assert!(MAX_OPTION_CHARS < CELL_CHAR_LIMIT);
 const _: () = assert!(lorem::MAX_WORDS as usize * (lorem::LONGEST_WORD + 1) <= CELL_CHAR_LIMIT);
 
-pub(crate) fn estimated_output_bytes(spec: &GenerationSpec) -> u64 {
+pub fn estimated_output_bytes(spec: &GenerationSpec) -> u64 {
     let locale = crate::locale::data(spec.locale);
     let row_bytes: u64 = spec
         .columns
