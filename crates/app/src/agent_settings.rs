@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 
 use gpui_kit::*;
+use zenkai_agent::chat::launch::LaunchApprovals;
 use zenkai_agent::confirmed;
 use zenkai_agent::detect::{self, Detection};
 use zenkai_agent::secrets::{SecretStatus, Secrets};
 use zenkai_agent::settings::{
-    Escalation, HeldChange, SecretName, Settings, SettingsState, escalations,
+    AgentId, AgentServer, Escalation, HeldChange, SecretName, Settings, SettingsState, escalations,
     remembered_confirmations,
 };
 use zenkai_agent::settings_file::{self, SettingsFileError, SettingsPaths, SettingsWatcher};
@@ -35,6 +36,7 @@ pub struct AgentConfig {
     // The last failure of something the user asked for (saving, storing a secret).
     pub failure: Option<String>,
     pub bridge: BridgeStatus,
+    pub approvals: LaunchApprovals,
     watcher: Option<SettingsWatcher>,
 }
 
@@ -60,6 +62,7 @@ pub fn init(cx: &mut App) {
     cx.set_global(Remembered(Vec::new()));
     cx.observe_global::<AgentConfig>(|cx| {
         crate::theme::sync_with_settings(cx);
+        crate::keymap::sync_with_settings(cx);
         remember_confirmations(cx);
     })
     .detach();
@@ -201,6 +204,7 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
     let mut edited = current.clone();
     edit(&mut edited);
     let approved = escalations(&current, &edited);
+    let launches = servers_changed(&current, &edited);
     cx.spawn(async move |cx| {
         let written = cx
             .background_executor()
@@ -210,6 +214,9 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
         cx.update_global::<AgentConfig, _>(|config, _| match written {
             Ok(settings) => {
                 config.state.apply_from_page(settings, &approved);
+                for (id, server) in &launches {
+                    config.approvals.approve(id, server, None);
+                }
                 config.failure = None;
             }
             Err(error) => config.failure = Some(t!("settings.not_changed", error = error)),
@@ -293,4 +300,51 @@ pub fn held_summary(held: &HeldChange) -> String {
         "held.summary",
         asks = asks.join(&format!(" {} ", t!("held.and")))
     )
+}
+
+// Only the servers a click changed count as approved; a file edit that is still waiting
+// stays unconfirmed even though the Settings window writes the whole file.
+fn servers_changed(current: &Settings, edited: &Settings) -> Vec<(AgentId, AgentServer)> {
+    edited
+        .agents
+        .servers
+        .iter()
+        .filter(|(id, server)| current.agents.servers.get(*id) != Some(*server))
+        .map(|(id, server)| (id.clone(), server.clone()))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use zenkai_agent::settings::Settings;
+
+    use super::servers_changed;
+
+    fn settings(json: &str) -> Settings {
+        Settings::parse(json).unwrap()
+    }
+
+    #[test]
+    fn only_servers_the_edit_added_or_changed_are_approved() {
+        let current = settings(
+            r#"{"agents": {"servers": {"kept": {"name": "K", "command": "a"},
+                "edited": {"name": "E", "command": "b"}}}}"#,
+        );
+        let edited = settings(
+            r#"{"agents": {"servers": {"kept": {"name": "K", "command": "a"},
+                "edited": {"name": "E", "command": "c"},
+                "new": {"name": "N", "command": "d"}}}}"#,
+        );
+        let ids: Vec<String> = servers_changed(&current, &edited)
+            .into_iter()
+            .map(|(id, _)| id.to_string())
+            .collect();
+        assert_eq!(ids, ["edited", "new"]);
+    }
+
+    #[test]
+    fn a_click_that_changes_no_server_approves_nothing() {
+        let current = settings(r#"{"agents": {"servers": {"a": {"name": "A", "command": "x"}}}}"#);
+        assert!(servers_changed(&current, &current.clone()).is_empty());
+    }
 }

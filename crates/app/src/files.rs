@@ -1,4 +1,5 @@
 use std::path::{Component, Path, PathBuf};
+use std::time::Instant;
 
 use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_engine::{
@@ -120,6 +121,30 @@ pub enum LoadFailure {
 }
 
 pub fn load_workbook(path: &Path) -> Result<FileLoad, LoadFailure> {
+    let started = Instant::now();
+    let loaded = load_any(path);
+    let elapsed_ms = started.elapsed().as_millis();
+    match &loaded {
+        Ok(load) => tracing::info!(
+            ?path,
+            elapsed_ms,
+            read_only = load.read_only,
+            "workbook opened"
+        ),
+        Err(LoadFailure::Missing) => {
+            tracing::warn!(?path, elapsed_ms, "workbook to open is missing")
+        }
+        Err(LoadFailure::Engine(error)) => {
+            tracing::warn!(?path, elapsed_ms, %error, "workbook could not be opened")
+        }
+        Err(LoadFailure::Unreadable { reason, fallback }) => {
+            tracing::warn!(?path, elapsed_ms, %reason, %fallback, "workbook is unreadable")
+        }
+    }
+    loaded
+}
+
+fn load_any(path: &Path) -> Result<FileLoad, LoadFailure> {
     match open_xlsx(path) {
         Ok(opened) => Ok(FileLoad {
             workbook: opened.workbook,

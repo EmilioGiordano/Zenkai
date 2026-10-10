@@ -9,11 +9,11 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use zenkai_engine::{Engine, open_xlsx, save_xlsx_atomic, scan_unsupported};
+use zenkai_engine::{Engine, open_xlsx, save_xlsx_atomic, xlsx_bytes};
 
 const HANG_AFTER: Duration = Duration::from_secs(60);
 
-const TOKENS: [&str; 14] = [
+const TOKENS: [&str; 17] = [
     "<f>",
     "</row>",
     r#" r="A0""#,
@@ -28,6 +28,9 @@ const TOKENS: [&str; 14] = [
     "<mergeCell ref=\"A1:A1\"/>",
     "<col min=\"0\" max=\"99999\" width=\"1e9\"/>",
     "<xf numFmtId=\"999\" fontId=\"99\" fillId=\"99\" borderId=\"99\"/>",
+    r#" outlineLevel="8" collapsed="yes""#,
+    "<rowBreaks><brk id=\"4294967296\" max=\"-1\"/></rowBreaks>",
+    "<pageMargins left=\"NaN\"/><pageSetup paperSize=\"0\" r:id=\"rId99\"/>",
 ];
 
 #[derive(Clone, Debug)]
@@ -125,11 +128,12 @@ fn open_with_watchdog(bytes: Vec<u8>) {
             let folder = tempfile::tempdir().unwrap();
             let path = folder.path().join("fuzzed.xlsx");
             std::fs::write(&path, &bytes).unwrap();
-            let _ = scan_unsupported(&bytes);
             if let Ok(opened) = open_xlsx(&path) {
                 opened.workbook.sheets();
                 let saved = folder.path().join("saved.xlsx");
-                match save_xlsx_atomic(&opened.workbook, &saved) {
+                match xlsx_bytes(&opened.workbook)
+                    .and_then(|bytes| save_xlsx_atomic(&bytes, &saved))
+                {
                     Ok(()) => {
                         open_xlsx(&saved).expect("a file Zenkai just wrote must reopen");
                     }

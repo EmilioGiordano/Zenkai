@@ -21,31 +21,64 @@ use zenkai_i18n::t;
 
 use crate::actions::*;
 use crate::agent_settings::{self, HeldDecision};
+use crate::keymap::KeymapState;
 use crate::space_settings;
-use keyboard::Shortcut;
+use keyboard::{KeyboardState, Shortcut};
 use rows::{RowId, Section, Values};
 
 const DEFAULT_SIZE: (f32, f32) = (1120.0, 820.0);
 const MIN_SIZE: (f32, f32) = (760.0, 520.0);
 
 pub use agents::register as register_agent_actions;
+pub use agents::{relay_program, set_permission};
 
-struct OpenWindow(AnyWindowHandle);
+struct OpenWindow {
+    handle: AnyWindowHandle,
+    window: WeakEntity<SettingsWindow>,
+}
 
 impl Global for OpenWindow {}
 
 pub fn open(cx: &mut App) {
+    show(cx);
+}
+
+pub fn open_to_find_shortcut(cx: &mut App) {
+    let Some((handle, window)) = show(cx) else {
+        return;
+    };
+    if let Err(error) = handle.update(cx, |_, native, cx| {
+        window.update(cx, |this, cx| this.start_finding(native, cx))
+    }) {
+        tracing::debug!(%error, "the settings window is already being updated");
+    }
+}
+
+pub fn open_to_keyboard(cx: &mut App) {
+    let Some((handle, window)) = show(cx) else {
+        return;
+    };
+    if let Err(error) = handle.update(cx, |_, native, cx| {
+        window.update(cx, |this, cx| {
+            this.select_section(rows::Section::Keyboard, native, cx)
+        })
+    }) {
+        tracing::debug!(%error, "the settings window is already being updated");
+    }
+}
+
+fn show(cx: &mut App) -> Option<(AnyWindowHandle, Entity<SettingsWindow>)> {
     let existing = cx
         .try_global::<OpenWindow>()
-        .map(|open| open.0)
-        .filter(|handle| cx.windows().contains(handle));
-    if let Some(handle) = existing {
+        .filter(|open| cx.windows().contains(&open.handle))
+        .and_then(|open| Some((open.handle, open.window.upgrade()?)));
+    if let Some((handle, window)) = existing {
         // Fails when the request comes from inside the settings window, which is already
         // in front.
         if let Err(error) = handle.update(cx, |_, window, _| window.activate_window()) {
             tracing::debug!(%error, "the settings window is already being updated");
         }
-        return;
+        return Some((handle, window));
     }
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::centered(
@@ -59,8 +92,17 @@ pub fn open(cx: &mut App) {
         window.set_window_title(t!("settings.window_title"));
         cx.new(|cx| SettingsWindow::new(window, cx))
     }) {
-        Ok((handle, _)) => cx.set_global(OpenWindow(handle)),
-        Err(error) => tracing::error!(%error, "could not open the settings window"),
+        Ok((handle, window)) => {
+            cx.set_global(OpenWindow {
+                handle,
+                window: window.downgrade(),
+            });
+            Some((handle, window))
+        }
+        Err(error) => {
+            tracing::error!(%error, "could not open the settings window");
+            None
+        }
     }
 }
 
@@ -91,6 +133,7 @@ pub struct SettingsWindow {
     secret_inputs: BTreeMap<SecretName, Entity<InputState>>,
     claude_command: Option<String>,
     shortcuts: Vec<Shortcut>,
+    keyboard: KeyboardState,
     shown_held: Option<HeldChange>,
     scroll: ScrollHandle,
     _subscriptions: Vec<Subscription>,
@@ -106,12 +149,19 @@ impl SettingsWindow {
             cx.subscribe(&search, |this, search, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.query = search.read(cx).value().to_string();
+                    if this.keyboard.pressed.as_deref() != Some(&this.query) {
+                        this.keyboard.pressed = None;
+                    }
                     this.dropdown = None;
                     this.scroll.set_offset(point(px(0.0), px(0.0)));
                     cx.notify();
                 }
             }),
             cx.observe_global::<agent_settings::AgentConfig>(|_, cx| cx.notify()),
+            cx.observe_global::<KeymapState>(|this, cx| {
+                this.shortcuts = keyboard::collect(cx);
+                cx.notify();
+            }),
             cx.observe_global::<crate::space_appearance::SpaceAppearance>(|_, cx| cx.notify()),
         ];
         SettingsWindow {
@@ -125,6 +175,7 @@ impl SettingsWindow {
             secret_inputs: BTreeMap::new(),
             claude_command: agents::claude_command(),
             shortcuts: keyboard::collect(cx),
+            keyboard: KeyboardState::default(),
             shown_held: None,
             scroll: ScrollHandle::new(),
             _subscriptions: subscriptions,
@@ -132,7 +183,9 @@ impl SettingsWindow {
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.dropdown.take().is_some() {
+        if self.keyboard.cancel() | crate::keymap::disarm_reset(cx) {
+            cx.notify();
+        } else if self.dropdown.take().is_some() {
             window.focus(&self.focus, cx);
             cx.notify();
         } else {
@@ -144,6 +197,7 @@ impl SettingsWindow {
         self.search
             .update(cx, |search, cx| search.set_value("", window, cx));
         self.query.clear();
+        self.keyboard.pressed = None;
     }
 
     fn select_section(&mut self, section: Section, window: &mut Window, cx: &mut Context<Self>) {
@@ -176,8 +230,13 @@ impl SettingsWindow {
     fn values<'a>(
         settings: &'a zenkai_agent::settings::Settings,
         spaces: &'a crate::space_appearance::SpaceAppearance,
+        shortcuts: usize,
     ) -> Values<'a> {
-        Values { settings, spaces }
+        Values {
+            settings,
+            spaces,
+            shortcuts,
+        }
     }
 }
 
@@ -190,7 +249,7 @@ impl Render for SettingsWindow {
             .held
             .clone();
         let spaces = space_settings::current(cx);
-        let values = Self::values(&settings, &spaces);
+        let values = Self::values(&settings, &spaces, keyboard::modified_count(cx));
         let nav = self.nav(values, cx);
         let content = self.content(values, window, cx);
         let theme = cx.theme();
@@ -206,6 +265,9 @@ impl Render for SettingsWindow {
             .text_color(theme.foreground)
             .on_action(cx.listener(|this, _: &CloseSettings, window, cx| this.close(window, cx)))
             .on_action(|_: &OpenSettings, window, _| window.activate_window())
+            .on_action(cx.listener(|this, _: &RecordShortcutKeys, window, cx| {
+                this.start_finding(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &FocusSettingsSearch, window, cx| {
                 this.search
                     .update(cx, |search, cx| search.focus(window, cx));

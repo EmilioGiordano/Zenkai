@@ -10,6 +10,7 @@ use zenkai_i18n::t;
 
 use crate::actions::{ApplyHeldSettings, KeepCurrentSettings};
 use crate::agent_settings::{self, AgentConfig, BridgeStatus};
+use crate::keymap::KeymapState;
 
 pub fn held_banner(held: &HeldChange, cx: &App) -> Div {
     let theme = cx.theme();
@@ -52,6 +53,12 @@ pub fn notices(cx: &App) -> Vec<Div> {
     }
     if let Some(failure) = &config.failure {
         notices.push(div().text_color(theme.danger).child(format!("⚠ {failure}")));
+    }
+    for problem in &cx.global::<KeymapState>().problems {
+        notices.push(div().text_color(theme.warning).child(format!(
+            "⚠ {}",
+            t!("notice.keymap_problem", problem = problem.text())
+        )));
     }
     for warning in config.state.current.plain_secret_warnings() {
         notices.push(

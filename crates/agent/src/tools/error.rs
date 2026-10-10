@@ -1,6 +1,9 @@
 use std::fmt;
 
+use zenkai_datagen::DatagenError;
 use zenkai_types::WorkbookId;
+
+use crate::tools::folder::PathError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadOnlyReason {
@@ -12,7 +15,7 @@ pub enum ReadOnlyReason {
 impl fmt::Display for ReadOnlyReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            ReadOnlyReason::Settings => "the user set agents to read only in Zenkai's settings",
+            ReadOnlyReason::Settings => "agents are read only: the user chose Plan in the chat or set read only in Zenkai's settings",
             ReadOnlyReason::ProtectedView => {
                 "the file came from the internet (Protected View), so agents may only read it"
             }
@@ -64,6 +67,16 @@ pub enum ToolError {
     NotAFormula,
     #[error("an entry has {chars} characters; Excel allows at most {limit} in a cell")]
     TextTooLong { chars: usize, limit: usize },
+    #[error("the generation spec cannot be used: {0}")]
+    Generation(DatagenError),
+    #[error(
+        "{cells} cells is more than the {limit} an agent may generate in one call; generate smaller blocks, or ask the user to use Zenkai's Generate data dialog (Ctrl+Alt+G) for bigger tables"
+    )]
+    TooManyGeneratedCells { cells: u64, limit: u64 },
+    #[error(
+        "the table could take up to {bytes} bytes, more than the {limit} an agent may generate in one call; generate fewer rows or shorter text, or ask the user to use Zenkai's Generate data dialog (Ctrl+Alt+G)"
+    )]
+    GeneratedTextTooLarge { bytes: u64, limit: u64 },
     #[error("writing is not allowed: {0}")]
     ReadOnly(ReadOnlyReason),
     #[error("the user is editing a cell in Zenkai; try again when they finish")]
@@ -82,4 +95,24 @@ pub enum ToolError {
     Closed,
     #[error("could not create a random marker for the reply: {0}")]
     Random(String),
+    #[error(
+        "this connection has no working folder: only the agent in Zenkai's chat can create or open files"
+    )]
+    NoWorkingFolder,
+    #[error(transparent)]
+    Path(#[from] PathError),
+    #[error("\"{0}\" already exists; choose another name, or open it with open_workbook")]
+    AlreadyExists(String),
+    #[error("\"{0}\" does not exist in the working folder")]
+    FileNotFound(String),
+    #[error("create_workbook makes .xlsx files; \"{0}\" has another extension")]
+    NotNewWorkbookFile(String),
+    #[error(
+        "\"{0}\" is not a spreadsheet Zenkai opens with this tool (.xlsx, .xlsm, .xls, .xlsb or .ods)"
+    )]
+    NotOpenableFile(String),
+    #[error("{count} sheets is more than the {limit} a new workbook may start with")]
+    TooManySheets { count: usize, limit: usize },
+    #[error("the file could not be written or read: {0}")]
+    File(String),
 }

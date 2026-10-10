@@ -110,6 +110,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "agent-client-protocol"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0d09e5bd7214b0aa5f0fd3f2eefae4a8c0069fd6a4c1ae4e733d3691e36ec19"
+dependencies = [
+ "agent-client-protocol-derive",
+ "agent-client-protocol-schema",
+ "blocking",
+ "futures",
+ "futures-concurrency",
+ "rustc-hash 2.1.3",
+ "serde",
+ "serde_json",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "agent-client-protocol-derive"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8b4e3a708345c6c952bd0091abb58f3169e839ee9c7023285a7e22ab96ba4f3"
+dependencies = [
+ "quote",
+ "syn 3.0.6",
+]
+
+[[package]]
+name = "agent-client-protocol-schema"
+version = "1.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c3ffd489b0e2f96a134d7966c2f43d874d91299e951b66093b91b54b00b7f8f"
+dependencies = [
+ "anyhow",
+ "derive_more",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "strum",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9833,6 +9875,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "chrono",
+ "dirs 6.0.0",
  "embed-resource",
  "gpui-kit",
  "memory-stats",
@@ -9859,7 +9902,10 @@ dependencies = [
 name = "zenkai-agent"
 version = "0.1.0"
 dependencies = [
+ "agent-client-protocol",
  "async-channel",
+ "async-process",
+ "futures",
  "futures-lite",
  "getrandom 0.3.4",
  "interprocess",
@@ -9878,6 +9924,7 @@ dependencies = [
  "which",
  "widestring",
  "windows-native-keyring-store",
+ "zenkai-datagen",
  "zenkai-engine",
  "zenkai-i18n",
  "zenkai-types",
@@ -9930,6 +9977,18 @@ dependencies = [
  "tracing",
  "zenkai-types",
  "zip 0.6.6",
+]
+
+[[package]]
+name = "zenkai-fake-acp-agent"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "async-channel",
+ "futures",
+ "serde_json",
+ "tempfile",
+ "zenkai-agent",
 ]
 
 [[package]]

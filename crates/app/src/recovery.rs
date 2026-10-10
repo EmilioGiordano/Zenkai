@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use zenkai_engine::{EngineError, Workbook, save_xlsx_atomic};
+use zenkai_engine::{EngineError, save_xlsx_atomic};
 use zenkai_types::WorkbookId;
 
 pub fn session_directory() -> Option<PathBuf> {
@@ -92,14 +92,14 @@ pub fn leftovers(directory: &Path) -> Vec<PathBuf> {
     found
 }
 
-pub fn write(workbook: &Workbook, path: &Path) -> Result<(), EngineError> {
+pub fn write(bytes: &[u8], path: &Path) -> Result<(), EngineError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|source| EngineError::Write {
             path: parent.to_path_buf(),
             source,
         })?;
     }
-    save_xlsx_atomic(workbook, path)
+    save_xlsx_atomic(bytes, path)
 }
 
 // Moves a dead session's copy under this session's name; the copy stays where it was when the
@@ -133,7 +133,7 @@ pub fn remove(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zenkai_engine::Engine;
+    use zenkai_engine::{Engine, Workbook, xlsx_bytes};
     use zenkai_types::{CellPos, SheetId, WorkbookId};
 
     #[test]
@@ -144,9 +144,10 @@ mod tests {
             .unwrap();
         let own = document_file(dir.path(), WorkbookId(0));
         let sibling = document_file(dir.path(), WorkbookId(1));
-        write(&book, &own).unwrap();
-        write(&book, &own).unwrap();
-        write(&book, &sibling).unwrap();
+        let bytes = xlsx_bytes(&book).unwrap();
+        write(&bytes, &own).unwrap();
+        write(&bytes, &own).unwrap();
+        write(&bytes, &sibling).unwrap();
         let other = dir.path().join("autosave-1-1-0.xlsx");
         std::fs::copy(&own, &other).unwrap();
         std::fs::write(dir.path().join("notes.txt"), "x").unwrap();

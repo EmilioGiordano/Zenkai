@@ -133,4 +133,18 @@ mod tests {
         assert_eq!(taken.claim("ana.paz", "gmail.com"), "ana.paz3@gmail.com");
         assert_eq!(taken.claim("ana.paz", "yahoo.com"), "ana.paz@yahoo.com");
     }
+
+    #[test]
+    fn one_name_on_one_domain_claims_each_suffix_once() {
+        let mut taken = TakenAddresses::default();
+        for row in 1..=50_000u32 {
+            let expected = match row {
+                1 => "ana@x.com".to_string(),
+                _ => format!("ana{row}@x.com"),
+            };
+            assert_eq!(taken.claim("ana", "x.com"), expected);
+        }
+        assert_eq!(taken.claim("ana50001", "x.com"), "ana50001@x.com");
+        assert_eq!(taken.claim("ana", "x.com"), "ana50002@x.com");
+    }
 }
