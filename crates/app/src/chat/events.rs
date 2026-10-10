@@ -2,8 +2,9 @@ use std::borrow::Cow;
 
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
+use zenkai_agent::chat::history::History;
 use zenkai_agent::chat::session::{Connection, SessionError, SessionEvent};
-use zenkai_agent::chat::state::ConfigKind;
+use zenkai_agent::chat::state::{ConfigKind, ContextUsage, StateChange};
 use zenkai_agent::chat::thread::{Effect, MessageId, NoticeKind, TurnEnd};
 use zenkai_agent::presets::Preset;
 use zenkai_i18n::t;
@@ -119,6 +120,9 @@ impl ChatPanel {
                     .state
                     .select(ConfigKind::Mode)
                     .map(|m| m.current.clone());
+                if let StateChange::Usage(usage) = &change {
+                    self.note_context(*usage);
+                }
                 self.state.apply(change);
                 let after = self.state.select(ConfigKind::Mode).map(|m| &m.current);
                 if before.as_ref() != after {
@@ -134,7 +138,19 @@ impl ChatPanel {
                 self.thread.notice(NoticeKind::Error, &text);
             }
             SessionEvent::Started(id) => {
+                self.live_session = Some(id.clone());
                 self.history.remember_session(&id);
+                if self.pending_record {
+                    let agent =
+                        super::launch::chosen_agent(&cx.global::<AgentConfig>().state.current)
+                            .map(|(id, _)| id);
+                    if let Some(agent) = agent {
+                        self.pending_record = false;
+                        if self.history.attach_session(&agent, &id).is_some() {
+                            self.refresh_size(&id);
+                        }
+                    }
+                }
                 if self.history_saves.try_send(self.history.clone()).is_err() {
                     tracing::debug!("conversation history writer is not running");
                 }
@@ -174,9 +190,37 @@ impl ChatPanel {
         }
     }
 
+    // Files the latest context usage under the live conversation and queues the same
+    // atomic history save the other writers use. A usage report without a live record
+    // is a resumed agent session; it is dropped, never misattributed.
+    fn note_context(&mut self, usage: ContextUsage) {
+        let Some(session) = self.live_session.clone() else {
+            return;
+        };
+        if self.history.note_context(&session, usage).is_none() {
+            return;
+        }
+        self.refresh_size(&session);
+        if self.history_saves.try_send(self.history.clone()).is_err() {
+            tracing::debug!("conversation history writer is not running");
+        }
+    }
+
+    // Recomputes one record's size after it changed; the whole map refreshes off the
+    // UI thread when the list loads.
+    fn refresh_size(&mut self, session: &str) {
+        if let Some(record) = self.history.record_for_session(session) {
+            let key = record.identity();
+            let size = History::record_size(record);
+            self.session_sizes.insert(key, size);
+        }
+    }
+
     // The tree is ended off the UI thread; the bridge closes when `live` is dropped.
     pub(super) fn end_session(&mut self, cx: &mut Context<Self>) {
         self.link = Link::Idle;
+        self.live_session = None;
+        self.pending_record = false;
         if let Some(live) = self.live.take() {
             let tree = live.handle.process_tree();
             cx.background_executor()

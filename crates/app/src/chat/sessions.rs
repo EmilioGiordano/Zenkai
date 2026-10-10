@@ -16,7 +16,7 @@ use super::extras::now_seconds;
 use super::header::{agent_mark, session_mark};
 use super::menus::Group;
 use super::session_rows::{self, Row};
-use super::{ChatPanel, View, launch};
+use super::{ChatPanel, View, closed, launch};
 use crate::actions::*;
 use crate::agent_settings::AgentConfig;
 use crate::keymap;
@@ -57,6 +57,7 @@ impl ChatPanel {
                 &agent_name(&settings.agents.servers, &id),
                 state,
                 &self.history,
+                &self.session_sizes,
                 now,
             ));
         }
@@ -80,6 +81,22 @@ impl ChatPanel {
     fn show_all_agents(&mut self, cx: &mut Context<Self>) {
         self.hidden_agents.clear();
         cx.notify();
+    }
+
+    // Recomputes every record's size off the UI thread; render only reads the map.
+    pub(super) fn refresh_session_sizes(&self, cx: &mut Context<Self>) {
+        let history = self.history.clone();
+        cx.spawn(async move |this, cx| {
+            let sizes = cx
+                .background_executor()
+                .spawn(async move { session_rows::sizes_for(history.records()) })
+                .await;
+            closed(this.update(cx, |this, cx| {
+                this.session_sizes = sizes;
+                cx.notify();
+            }));
+        })
+        .detach();
     }
 
     pub(crate) fn sessions_step(&mut self, forward: bool, cx: &mut Context<Self>) {

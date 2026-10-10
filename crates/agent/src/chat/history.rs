@@ -3,6 +3,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use super::state::ContextUsage;
 use crate::settings::AgentId;
 
 const MAX_RECORDS: usize = 50;
@@ -18,6 +19,27 @@ pub struct Record {
     pub title: String,
     pub started_unix_seconds: u64,
     pub workbook: String,
+    // The agent's session id for a conversation this chat started, so usage reports and
+    // the agent's own session list can find their record. Conversations resumed from the
+    // agent's list never had a record pushed, so they keep none.
+    #[serde(default)]
+    pub session: Option<String>,
+    // The latest context usage the live session reported. Old files predate the field.
+    #[serde(default)]
+    pub context: Option<ContextUsage>,
+}
+
+impl Record {
+    // What makes two records the same conversation; the session id and the context are
+    // annotations added later, never identity.
+    pub fn identity(&self) -> (AgentId, String, u64, String) {
+        (
+            self.agent.clone(),
+            self.title.clone(),
+            self.started_unix_seconds,
+            self.workbook.clone(),
+        )
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -55,10 +77,10 @@ impl History {
             .filter(move |record| &record.agent == agent)
     }
 
-    pub fn push(&mut self, agent: AgentId, first_message: &str, workbook: &str, now: u64) {
+    pub fn push(&mut self, agent: AgentId, first_message: &str, workbook: &str, now: u64) -> bool {
         let title = title_of(first_message);
         if title.is_empty() {
-            return;
+            return false;
         }
         self.records.insert(
             0,
@@ -67,9 +89,56 @@ impl History {
                 title,
                 started_unix_seconds: now,
                 workbook: workbook.chars().take(MAX_TITLE_CHARS).collect(),
+                session: None,
+                context: None,
             },
         );
         self.records.truncate(MAX_RECORDS);
+        true
+    }
+
+    // Newest record of this agent, which is the live conversation when this chat pushed
+    // one for it.
+    pub fn newest_for(&self, agent: &AgentId) -> Option<&Record> {
+        self.records.iter().find(|record| &record.agent == agent)
+    }
+
+    // Links the agent's session id to the conversation this chat just recorded. Only the
+    // newest record without one is linked, so a resumed conversation never adopts an id
+    // that belongs to another one.
+    pub fn attach_session(&mut self, agent: &AgentId, session: &str) -> Option<Record> {
+        let record = self
+            .records
+            .iter_mut()
+            .find(|record| &record.agent == agent && record.session.is_none())?;
+        record.session = Some(session.to_string());
+        Some(record.clone())
+    }
+
+    // Stores the latest context usage the live session reported. A session without a
+    // record is a conversation resumed from the agent's list; there is nothing to file
+    // it under, so it is dropped rather than attributed to another conversation.
+    pub fn note_context(&mut self, session: &str, usage: ContextUsage) -> Option<Record> {
+        let record = self
+            .records
+            .iter_mut()
+            .find(|record| record.session.as_deref() == Some(session))?;
+        record.context = Some(usage);
+        Some(record.clone())
+    }
+
+    pub fn record_for_session(&self, session: &str) -> Option<&Record> {
+        self.records
+            .iter()
+            .find(|record| record.session.as_deref() == Some(session))
+    }
+
+    // The bytes of the record's serialized entry, which is what the sessions list shows
+    // as the session's size: Zenkai keeps no per-session file.
+    pub fn record_size(record: &Record) -> u64 {
+        serde_json::to_vec(record)
+            .map(|bytes| bytes.len() as u64)
+            .unwrap_or(0)
     }
 
     pub fn remember_session(&mut self, id: &str) {
@@ -107,10 +176,24 @@ impl History {
     }
 
     // Records loaded from disk join the ones made since the app started, newest first.
+    // A record that only gained its session id or context after the load keeps the newer
+    // annotations and fills the ones it still lacks; it is never listed twice.
     pub fn merge(&mut self, loaded: History) {
         for record in loaded.records {
-            if !self.records.contains(&record) {
-                self.records.push(record);
+            match self
+                .records
+                .iter_mut()
+                .find(|known| known.identity() == record.identity())
+            {
+                Some(known) => {
+                    if known.session.is_none() {
+                        known.session = record.session.clone();
+                    }
+                    if known.context.is_none() {
+                        known.context = record.context;
+                    }
+                }
+                None => self.records.push(record),
             }
         }
         self.records
@@ -245,5 +328,96 @@ mod tests {
             History::load(&path),
             Err(HistoryError::Damaged(_))
         ));
+    }
+
+    #[test]
+    fn context_is_stored_with_the_session_and_survives_a_round_trip() {
+        let mut history = History::default();
+        history.push(AgentId::new("a"), "hello", "w", 5);
+        let usage = ContextUsage {
+            used: 1_000,
+            size: 8_000,
+        };
+        assert!(history.note_context("s1", usage).is_none());
+        history.attach_session(&AgentId::new("a"), "s1").unwrap();
+        assert_eq!(
+            history.note_context("s1", usage).unwrap().context,
+            Some(usage)
+        );
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("history.json");
+        history.save(&path).unwrap();
+        let loaded = History::load(&path).unwrap();
+        let record = &loaded.records()[0];
+        assert_eq!(record.session.as_deref(), Some("s1"));
+        assert_eq!(record.context, Some(usage));
+        assert_eq!(
+            loaded.record_for_session("s1").unwrap().context,
+            Some(usage)
+        );
+    }
+
+    #[test]
+    fn a_history_written_before_context_and_session_still_loads() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("history.json");
+        std::fs::write(
+            &path,
+            r#"{"records": [{"agent": "a", "title": "old", "started_unix_seconds": 1, "workbook": "w"}], "sessions": []}"#,
+        )
+        .unwrap();
+        let loaded = History::load(&path).unwrap();
+        let record = &loaded.records()[0];
+        assert_eq!(record.session, None);
+        assert_eq!(record.context, None);
+        assert!(loaded.record_for_session("s1").is_none());
+    }
+
+    #[test]
+    fn the_session_id_links_the_newest_record_still_missing_one() {
+        let mut history = History::default();
+        history.push(AgentId::new("a"), "first", "w", 1);
+        history.push(AgentId::new("a"), "second", "w", 2);
+        history.attach_session(&AgentId::new("a"), "s2").unwrap();
+        history.attach_session(&AgentId::new("a"), "s1").unwrap();
+        assert_eq!(history.record_for_session("s2").unwrap().title, "second");
+        assert_eq!(history.record_for_session("s1").unwrap().title, "first");
+    }
+
+    #[test]
+    fn merging_fills_the_annotations_it_lacks_without_duplicating() {
+        let mut current = History::default();
+        current.push(AgentId::new("a"), "live", "w", 1);
+        current.attach_session(&AgentId::new("a"), "s1").unwrap();
+        let usage = ContextUsage {
+            used: 500,
+            size: 1_000,
+        };
+        let mut older = History::default();
+        older.push(AgentId::new("a"), "live", "w", 1);
+        older.attach_session(&AgentId::new("a"), "s1").unwrap();
+        older.note_context("s1", usage);
+        current.merge(older);
+        assert_eq!(current.records().len(), 1);
+        let record = &current.records()[0];
+        assert_eq!(record.session.as_deref(), Some("s1"));
+        assert_eq!(record.context, Some(usage));
+        current.merge(History::default());
+        assert_eq!(current.records().len(), 1);
+    }
+
+    #[test]
+    fn the_size_is_the_bytes_of_the_serialized_entry() {
+        let mut history = History::default();
+        history.push(AgentId::new("a"), "short", "w", 1);
+        history.push(AgentId::new("a"), "a much longer title", "w", 2);
+        let small = History::record_size(&history.records()[1]);
+        let big = History::record_size(&history.records()[0]);
+        assert!(small > 0);
+        assert!(big > small);
+        assert_eq!(
+            big,
+            serde_json::to_string(&history.records()[0]).unwrap().len() as u64
+        );
     }
 }

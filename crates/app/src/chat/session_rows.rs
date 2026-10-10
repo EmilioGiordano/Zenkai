@@ -1,7 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Datelike, Local};
-use zenkai_agent::chat::history::History;
+use zenkai_agent::chat::history::{History, Record};
 use zenkai_agent::chat::state::{AgentState, ContextUsage};
 use zenkai_agent::settings::AgentId;
 use zenkai_i18n::t;
@@ -57,6 +57,17 @@ pub fn group_of(age_seconds: u64) -> Group {
     }
 }
 
+// The size of every record, keyed by what makes it a conversation. The panel computes
+// the whole map off the UI thread when the list loads; render only reads it.
+pub type SessionSizes = BTreeMap<(AgentId, String, u64, String), u64>;
+
+pub fn sizes_for(records: &[Record]) -> SessionSizes {
+    records
+        .iter()
+        .map(|record| (record.identity(), History::record_size(record)))
+        .collect()
+}
+
 fn row(
     source: Source,
     title: &str,
@@ -64,6 +75,8 @@ fn row(
     started: Option<u64>,
     now: u64,
     agent: &AgentId,
+    size_bytes: Option<u64>,
+    context: Option<ContextUsage>,
 ) -> Row {
     let age = started.map_or(u64::MAX, |started| now.saturating_sub(started));
     Row {
@@ -80,10 +93,8 @@ fn row(
         agent: agent.clone(),
         agent_name: agent_name.to_string(),
         started,
-        // Neither the agent lists nor the local history report per-session files or
-        // context use; the row shows the agent name until a source reports them.
-        size_bytes: None,
-        context: None,
+        size_bytes,
+        context,
     }
 }
 
@@ -116,11 +127,14 @@ fn order_key(row: &Row) -> (Group, std::cmp::Reverse<u64>) {
 }
 
 // The agent's own list when it can list sessions, otherwise Zenkai's local metadata.
+// A row shows the context and size Zenkai stored for its conversation; sessions without
+// a stored value show neither.
 pub fn rows(
     agent: &AgentId,
     agent_name: &str,
     state: &AgentState,
     history: &History,
+    sizes: &SessionSizes,
     now: u64,
 ) -> Vec<Row> {
     let mut rows: Vec<Row> = if state.abilities.list_sessions {
@@ -133,6 +147,7 @@ pub fn rows(
                     .as_deref()
                     .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
                     .and_then(|time| u64::try_from(time.timestamp()).ok());
+                let stored = history.record_for_session(&past.id);
                 row(
                     Source::Agent {
                         session: past.id.clone(),
@@ -142,6 +157,8 @@ pub fn rows(
                     started,
                     now,
                     agent,
+                    stored.and_then(|record| sizes.get(&record.identity()).copied()),
+                    stored.and_then(|record| record.context),
                 )
             })
             .collect()
@@ -156,6 +173,8 @@ pub fn rows(
                     Some(record.started_unix_seconds),
                     now,
                     agent,
+                    sizes.get(&record.identity()).copied(),
+                    record.context,
                 )
             })
             .collect()
@@ -319,7 +338,14 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-10-09T10:12:00Z")
             .unwrap()
             .timestamp() as u64;
-        let found = rows(&agent(), "Claude", &state, &history, now);
+        let found = rows(
+            &agent(),
+            "Claude",
+            &state,
+            &history,
+            &SessionSizes::new(),
+            now,
+        );
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].title, "Fix the dates");
         let started = DateTime::from_timestamp(now as i64 - 12 * 60, 0)
@@ -342,7 +368,14 @@ mod tests {
         let mut history = History::default();
         history.push(agent(), "Chart of sales", "ventas.xlsx", 1_000);
         history.push(AgentId::new("gemini"), "Other agent", "w", 1_000);
-        let found = rows(&agent(), "Claude", &AgentState::default(), &history, 1_600);
+        let found = rows(
+            &agent(),
+            "Claude",
+            &AgentState::default(),
+            &history,
+            &SessionSizes::new(),
+            1_600,
+        );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].source, Source::Local);
         assert_eq!(found[0].meta, "Claude, ventas.xlsx");
@@ -358,7 +391,14 @@ mod tests {
         history.push(agent(), "Old work", "ventas.xlsx", 0);
         history.push(agent(), "Fresh work", "gastos.xlsx", 10 * DAY);
         let now = 10 * DAY + 60;
-        let all = rows(&agent(), "Claude", &AgentState::default(), &history, now);
+        let all = rows(
+            &agent(),
+            "Claude",
+            &AgentState::default(),
+            &history,
+            &SessionSizes::new(),
+            now,
+        );
         let found = filter(all.clone(), "fresh", &BTreeSet::new());
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].title, "Fresh work");
@@ -371,7 +411,14 @@ mod tests {
         history.push(agent(), "Older", "a.xlsx", 0);
         history.push(agent(), "Newer", "b.xlsx", DAY);
         let now = 10 * DAY;
-        let all = rows(&agent(), "Claude", &AgentState::default(), &history, now);
+        let all = rows(
+            &agent(),
+            "Claude",
+            &AgentState::default(),
+            &history,
+            &SessionSizes::new(),
+            now,
+        );
         let shown = filter(all, "", &BTreeSet::new());
         let titles: Vec<_> = shown.iter().map(|row| row.title.as_str()).collect();
         assert_eq!(titles, ["Newer", "Older"]);
@@ -382,12 +429,20 @@ mod tests {
         history.push(agent(), "Claude work", "a.xlsx", HOUR);
         history.push(AgentId::new("codex"), "Codex work", "b.xlsx", 2 * HOUR);
         let now = 10 * DAY;
-        let mut all = rows(&agent(), "Claude", &AgentState::default(), &history, now);
+        let mut all = rows(
+            &agent(),
+            "Claude",
+            &AgentState::default(),
+            &history,
+            &SessionSizes::new(),
+            now,
+        );
         all.extend(rows(
             &AgentId::new("codex"),
             "Codex",
             &AgentState::default(),
             &history,
+            &SessionSizes::new(),
             now,
         ));
         all
@@ -424,5 +479,80 @@ mod tests {
         assert_eq!(summary(0, None), "0 sessions");
         assert_eq!(summary(14, None), "14 sessions");
         assert_eq!(summary(14, Some(19_081_625)), "14 sessions, 18.2 MB");
+    }
+
+    #[test]
+    fn local_rows_show_the_stored_context_and_size() {
+        let mut history = History::default();
+        history.push(agent(), "Fresh work", "gastos.xlsx", 10 * DAY);
+        history.push(agent(), "Old work", "ventas.xlsx", 0);
+        history.attach_session(&agent(), "s-old").unwrap();
+        let usage = ContextUsage {
+            used: 40_000,
+            size: 100_000,
+        };
+        history.note_context("s-old", usage);
+        let sizes = sizes_for(history.records());
+        let now = 10 * DAY + 60;
+        let all = rows(
+            &agent(),
+            "Claude",
+            &AgentState::default(),
+            &history,
+            &sizes,
+            now,
+        );
+        let old = all.iter().find(|row| row.title == "Old work").unwrap();
+        assert_eq!(old.context, Some(usage));
+        assert_eq!(
+            old.size_bytes,
+            Some(History::record_size(&history.records()[0]))
+        );
+        let fresh = all.iter().find(|row| row.title == "Fresh work").unwrap();
+        assert_eq!(fresh.context, None);
+        assert_eq!(
+            fresh.size_bytes,
+            Some(History::record_size(&history.records()[1]))
+        );
+    }
+
+    #[test]
+    fn agent_rows_show_stored_values_only_for_their_linked_session() {
+        let mut state = AgentState::default();
+        state.apply(StateChange::Abilities(Abilities {
+            list_sessions: true,
+            load_session: true,
+        }));
+        state.apply(StateChange::PastSessions(vec![
+            PastSession {
+                id: "s1".to_string(),
+                title: Some("Linked".to_string()),
+                updated_at: Some("2026-10-09T10:00:00Z".to_string()),
+            },
+            PastSession {
+                id: "s9".to_string(),
+                title: Some("Resumed".to_string()),
+                updated_at: Some("2026-10-09T10:00:00Z".to_string()),
+            },
+        ]));
+        let mut history = History::default();
+        history.push(agent(), "Linked", "w", 1);
+        history.attach_session(&agent(), "s1").unwrap();
+        let usage = ContextUsage {
+            used: 80_000,
+            size: 100_000,
+        };
+        history.note_context("s1", usage);
+        let sizes = sizes_for(history.records());
+        let now = DateTime::parse_from_rfc3339("2026-10-09T10:12:00Z")
+            .unwrap()
+            .timestamp() as u64;
+        let found = rows(&agent(), "Claude", &state, &history, &sizes, now);
+        let linked = found.iter().find(|row| row.title == "Linked").unwrap();
+        assert_eq!(linked.context, Some(usage));
+        assert!(linked.size_bytes.is_some());
+        let resumed = found.iter().find(|row| row.title == "Resumed").unwrap();
+        assert_eq!(resumed.context, None);
+        assert_eq!(resumed.size_bytes, None);
     }
 }

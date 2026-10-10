@@ -48,6 +48,7 @@ impl ChatPanel {
             let on_disk = loaded.clone();
             closed(this.update(cx, |this, cx| {
                 this.history.merge(loaded);
+                this.refresh_session_sizes(cx);
                 cx.notify();
             }));
             cx.background_executor()
@@ -90,8 +91,14 @@ impl ChatPanel {
             .active_workbook(cx)
             .map(|(_, name)| name)
             .unwrap_or_default();
-        self.history
-            .push(agent, first_message, &workbook, now_seconds());
+        self.pending_record =
+            self.history
+                .push(agent.clone(), first_message, &workbook, now_seconds());
+        if let Some(record) = self.history.newest_for(&agent) {
+            let key = record.identity();
+            let size = History::record_size(record);
+            self.session_sizes.insert(key, size);
+        }
         if self.history_saves.try_send(self.history.clone()).is_err() {
             tracing::debug!("conversation history writer is not running");
         }
@@ -106,6 +113,7 @@ impl ChatPanel {
         if self.view == View::Sessions {
             self.menu_index = 0;
             self.hidden_agents.clear();
+            self.refresh_session_sizes(cx);
             let search = self.sessions_query.clone();
             search.update(cx, |state, cx| state.focus(window, cx));
         } else {
@@ -153,6 +161,10 @@ impl ChatPanel {
                     title: old_title,
                 });
                 self.problem = None;
+                // The resumed session has no local record; its usage reports are dropped
+                // rather than filed under another conversation.
+                self.live_session = Some(session.clone());
+                self.pending_record = false;
                 if let Some(live) = &self.live {
                     live.handle.resume(session.clone());
                 }

@@ -118,6 +118,12 @@ pub struct ChatPanel {
     state: AgentState,
     history: History,
     history_saves: async_channel::Sender<History>,
+    // The agent's id for the live conversation; usage reports are filed under it.
+    live_session: Option<String>,
+    // The live conversation recorded history but the agent has not reported its id yet.
+    pending_record: bool,
+    // What the sessions list shows per conversation, computed off the UI thread.
+    session_sizes: session_rows::SessionSizes,
     view: View,
     menu: Option<Menu>,
     menu_index: usize,
@@ -267,6 +273,9 @@ impl ChatPanel {
             state: AgentState::default(),
             history: History::default(),
             history_saves,
+            live_session: None,
+            pending_record: false,
+            session_sizes: session_rows::SessionSizes::new(),
             view: View::Chat,
             menu: None,
             menu_index: 0,
