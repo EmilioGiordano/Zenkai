@@ -3,11 +3,12 @@ use std::time::Instant;
 
 use gpui_kit::*;
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Unsupported, Workbook, open_xlsx};
+use zenkai_engine::{Unsupported, Workbook, XlsxReader, open_xlsx};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace, file_label};
+use crate::agent_settings;
 use crate::document::Document;
 use crate::documents::{Installed, Intent, Loaded, Step};
 use crate::entry::{Entry, Link, LinkStatus};
@@ -27,7 +28,7 @@ pub(super) enum LinkLoad {
 
 // Runs on the background executor. The recovery copy, when there is one, holds the unsaved
 // work and is read instead of the file.
-fn read_link(link: &Link) -> LinkLoad {
+fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
     let mut recovery_lost = link.recovery_lost;
     if let Some(copy) = link.recovery.as_ref().filter(|copy| copy.exists()) {
         match open_xlsx(copy) {
@@ -39,6 +40,7 @@ fn read_link(link: &Link) -> LinkLoad {
                         read_only: false,
                         // A recovery copy does not record where the work came from; it fails closed.
                         origin: FileOrigin::Internet,
+                        reader_fallback: None,
                     }),
                     copy: Some(copy.clone()),
                     recovery_lost: false,
@@ -55,7 +57,7 @@ fn read_link(link: &Link) -> LinkLoad {
     let Some(path) = &link.path else {
         return LinkLoad::Missing;
     };
-    match files::load_workbook(path) {
+    match files::load_workbook(path, reader) {
         Ok(file) => LinkLoad::Loaded {
             file: Box::new(file),
             copy: None,
@@ -311,11 +313,12 @@ impl Workspace {
         self.busy = Some(t!("busy.opening", name = file_label(&path)).into());
         cx.notify();
         let started = Instant::now();
+        let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { files::load_workbook(&task_path) })
+                .spawn(async move { files::load_workbook(&task_path, reader) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.busy = None;
@@ -331,6 +334,7 @@ impl Workspace {
                             unsupported,
                             read_only,
                             origin,
+                            reader_fallback,
                         } = file;
                         let id = this.open_document(workbook, Some(path), unsupported, window, cx);
                         if let Some(document) = this.documents.get_mut(id) {
@@ -338,6 +342,9 @@ impl Workspace {
                             document.origin = origin;
                         }
                         this.announce_opened(Some(started), cx);
+                        if reader_fallback.is_some() {
+                            this.notify(Severity::Info, t!("notice.fast_reader_fallback"), cx);
+                        }
                     }
                     Err(LoadFailure::Missing) => this.notify(
                         Severity::Error,
@@ -384,10 +391,11 @@ impl Workspace {
             return;
         };
         cx.notify();
+        let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
         cx.spawn_in(window, async move |this, cx| {
             let load = cx
                 .background_executor()
-                .spawn(async move { read_link(&link) })
+                .spawn(async move { read_link(&link, reader) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.finish_load(id, load, window, cx)

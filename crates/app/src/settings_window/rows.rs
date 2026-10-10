@@ -70,6 +70,7 @@ pub enum RowId {
     WhatLeaves,
     RecoveryFolder,
     SettingsFile,
+    FastXlsxReader,
     LogsFolder,
     Version,
     License,
@@ -84,7 +85,7 @@ pub struct RowInfo {
 }
 
 impl RowId {
-    pub const ALL: [RowId; 21] = [
+    pub const ALL: [RowId; 22] = [
         RowId::RestoreSession,
         RowId::Language,
         RowId::Autosave,
@@ -103,6 +104,7 @@ impl RowId {
         RowId::WhatLeaves,
         RowId::RecoveryFolder,
         RowId::SettingsFile,
+        RowId::FastXlsxReader,
         RowId::LogsFolder,
         RowId::Version,
         RowId::License,
@@ -252,6 +254,13 @@ impl RowId {
                 t!("settings.row.settings_file.description"),
                 &["json", "config"],
             ),
+            RowId::FastXlsxReader => row(
+                Section::Files,
+                t!("settings.group.advanced"),
+                t!("settings.row.fast_xlsx_reader"),
+                t!("settings.row.fast_xlsx_reader.description"),
+                &["xlsx", "open", "speed", "reader", "advanced"],
+            ),
             RowId::LogsFolder => row(
                 Section::Privacy,
                 t!("settings.group.logs"),
@@ -309,6 +318,7 @@ impl RowId {
             RowId::ExternalAgents => {
                 settings.agents.external_agents != default.agents.external_agents
             }
+            RowId::FastXlsxReader => settings.advanced.xlsx_reader != default.advanced.xlsx_reader,
             RowId::Agents
             | RowId::ConnectionCommand
             | RowId::WhatLeaves
@@ -338,6 +348,7 @@ impl RowId {
             RowId::ExternalAgents => {
                 settings.agents.external_agents = default.agents.external_agents
             }
+            RowId::FastXlsxReader => settings.advanced.xlsx_reader = default.advanced.xlsx_reader,
             _ => {}
         }
     }

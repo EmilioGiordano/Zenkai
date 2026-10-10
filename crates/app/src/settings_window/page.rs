@@ -2,7 +2,9 @@ use gpui_kit::base::v_flex;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::*;
-use zenkai_agent::preferences::{ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS};
+use zenkai_agent::preferences::{
+    ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS, XlsxReaderChoice,
+};
 use zenkai_agent::settings::{PermissionMode, Settings};
 use zenkai_i18n::t;
 
@@ -159,6 +161,22 @@ impl SettingsWindow {
                     |on, _, cx| {
                         agent_settings::change(cx, move |settings| {
                             settings.general.restore_session = on
+                        })
+                    },
+                ));
+            }
+            RowId::FastXlsxReader => {
+                parts.control = Some(controls::switch(
+                    ("row", id),
+                    info.title,
+                    settings.advanced.xlsx_reader == XlsxReaderChoice::Fast,
+                    |on, _, cx| {
+                        agent_settings::change(cx, move |settings| {
+                            settings.advanced.xlsx_reader = if on {
+                                XlsxReaderChoice::Fast
+                            } else {
+                                XlsxReaderChoice::Standard
+                            }
                         })
                     },
                 ));

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use zenkai_i18n::t;
 use zenkai_types::Language;
 
-use crate::preferences::{AppearanceSettings, GeneralSettings};
+use crate::preferences::{AdvancedSettings, AppearanceSettings, GeneralSettings};
 
 pub const SCHEMA_FILE: &str = "settings.schema.json";
 const SCHEMA_REFERENCE: &str = "./settings.schema.json";
@@ -30,6 +30,8 @@ pub struct Settings {
     pub appearance: AppearanceSettings,
     #[serde(default)]
     pub agents: AgentSettings,
+    #[serde(default)]
+    pub advanced: AdvancedSettings,
 }
 
 fn schema_reference() -> String {
@@ -44,6 +46,7 @@ impl Default for Settings {
             general: GeneralSettings::default(),
             appearance: AppearanceSettings::default(),
             agents: AgentSettings::default(),
+            advanced: AdvancedSettings::default(),
         }
     }
 }

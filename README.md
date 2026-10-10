@@ -184,6 +184,15 @@ values or loses data on round trip):
 `bench-current.csv` has the same format as `bench\baseline.csv`; copy it over the
 baseline to accept new numbers. Fixture 3 is not in the baseline: one run takes minutes.
 
+xlsx readers (IronCalc's and the fast one, which the Settings switch "Fast xlsx reader" or
+`ZENKAI_XLSX_READER=fast` turns on):
+
+```powershell
+.\target\release\zenkai-bench.exe reader-bench big.xlsx 3        # median read/open time and peak memory of each
+.\target\release\zenkai-bench.exe reader-compare fixtures\compat # field-by-field comparison of both
+$env:ZENKAI_READER_CORPUS = "C:\files;D:\big.xlsx"; cargo test -p zenkai-engine --test reader_differential
+```
+
 ## CI
 
 GitHub Actions, in `.github/workflows/`:
