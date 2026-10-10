@@ -470,7 +470,9 @@ mod tests {
 
     #[test]
     fn a_few_array_formulas_are_read() {
-        let rows: String = (1..=3).map(|n| array_row(n, &format!("A{n}:B{n}"))).collect();
+        let rows: String = (1..=3)
+            .map(|n| array_row(n, &format!("A{n}:B{n}")))
+            .collect();
         assert!(scan(&rows).is_ok());
     }
 }

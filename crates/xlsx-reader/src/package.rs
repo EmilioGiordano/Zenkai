@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ironcalc::base::expressions::parser::DefinedNameS;
 
@@ -30,13 +31,43 @@ fn unreadable(error: impl ToString) -> ReadError {
     ReadError::Unreadable(error.to_string())
 }
 
-pub(crate) fn read_entry(entry: zip::read::ZipFile<'_>) -> Result<Vec<u8>, ReadError> {
+// Declared sizes in an archive can lie, so what is really decompressed is counted here.
+pub(crate) struct ByteBudget {
+    remaining: AtomicU64,
+}
+
+impl ByteBudget {
+    pub(crate) fn new(total: u64) -> Self {
+        Self {
+            remaining: AtomicU64::new(total),
+        }
+    }
+
+    fn charge(&self, bytes: u64) -> Result<(), ReadError> {
+        self.remaining
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(bytes)
+            })
+            .map(|_| ())
+            .map_err(|_| {
+                ReadError::Unsafe(
+                    "the workbook expands past the size the reader allows".to_string(),
+                )
+            })
+    }
+}
+
+pub(crate) fn read_entry(
+    entry: zip::read::ZipFile<'_>,
+    budget: &ByteBudget,
+) -> Result<Vec<u8>, ReadError> {
     let mut bytes =
         Vec::with_capacity(usize::try_from(entry.size().min(MAX_ENTRY_BYTES)).unwrap_or(0));
     entry
         .take(MAX_ENTRY_BYTES + 1)
         .read_to_end(&mut bytes)
         .map_err(unreadable)?;
+    budget.charge(bytes.len() as u64)?;
     if bytes.len() as u64 > MAX_ENTRY_BYTES {
         return Err(ReadError::Unsupported(
             "a part expands past the size its archive declares".to_string(),
@@ -48,15 +79,17 @@ pub(crate) fn read_entry(entry: zip::read::ZipFile<'_>) -> Result<Vec<u8>, ReadE
 fn read_text<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     name: &str,
+    budget: &ByteBudget,
 ) -> Result<String, ReadError> {
     let entry = archive.by_name(name).map_err(unreadable)?;
-    String::from_utf8(read_entry(entry)?).map_err(unreadable)
+    String::from_utf8(read_entry(entry, budget)?).map_err(unreadable)
 }
 
 pub(crate) fn read_package<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
+    budget: &ByteBudget,
 ) -> Result<Package, ReadError> {
-    let workbook = read_text(archive, "xl/workbook.xml")?;
+    let workbook = read_text(archive, "xl/workbook.xml", budget)?;
     let workbook = roxmltree::Document::parse(&workbook).map_err(unreadable)?;
     let mut sheets = Vec::new();
     for node in workbook.descendants().filter(|n| n.has_tag_name("sheet")) {
@@ -106,7 +139,7 @@ pub(crate) fn read_package<R: Read + Seek>(
         ));
     }
 
-    let rels = read_text(archive, "xl/_rels/workbook.xml.rels")?;
+    let rels = read_text(archive, "xl/_rels/workbook.xml.rels", budget)?;
     let rels = roxmltree::Document::parse(&rels).map_err(unreadable)?;
     let mut targets = HashMap::new();
     for node in rels
@@ -176,4 +209,33 @@ pub(crate) fn stub_archive<R: Read + Seek>(
         }
     }
     Ok(writer.finish().map_err(unreadable)?.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn archive_of(parts: &[(&str, usize)]) -> zip::ZipArchive<Cursor<Vec<u8>>> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, size) in parts {
+            writer
+                .start_file(*name, zip::write::FileOptions::default())
+                .unwrap();
+            writer.write_all(&vec![b'a'; *size]).unwrap();
+        }
+        zip::ZipArchive::new(writer.finish().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_bytes_really_read_are_counted_across_entries() {
+        let mut archive = archive_of(&[("a", 600), ("b", 600)]);
+        let budget = ByteBudget::new(1000);
+        let first = archive.by_name("a").unwrap();
+        assert_eq!(read_entry(first, &budget).unwrap().len(), 600);
+        let second = archive.by_name("b").unwrap();
+        assert!(matches!(
+            read_entry(second, &budget),
+            Err(ReadError::Unsafe(_))
+        ));
+    }
 }

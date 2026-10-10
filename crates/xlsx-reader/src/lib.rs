@@ -19,7 +19,7 @@ use ironcalc::base::types::Workbook;
 pub use diff::workbook_differences;
 
 use crate::formulas::Names;
-use crate::package::{read_entry, read_package, stub_archive};
+use crate::package::{ByteBudget, read_entry, read_package, stub_archive};
 use crate::sheet_xml::{ScannedSheet, scan_worksheet};
 
 #[derive(Debug, thiserror::Error)]
@@ -48,7 +48,8 @@ pub fn read_xlsx(
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
     limits::check_archive(&mut archive)?;
-    let package = read_package(&mut archive)?;
+    let budget = ByteBudget::new(limits::MAX_TOTAL_BYTES);
+    let package = read_package(&mut archive, &budget)?;
 
     let mut worksheet_entries = vec![None; package.worksheets.len()];
     for index in 0..archive.len() {
@@ -60,7 +61,7 @@ pub fn read_xlsx(
             worksheet_entries[position] = Some(index);
             continue;
         }
-        let part = read_entry(entry)?;
+        let part = read_entry(entry, &budget)?;
         inspect(&entry_name, &part).map_err(ReadError::Unsafe)?;
     }
     let worksheet_entries = worksheet_entries
@@ -73,7 +74,8 @@ pub fn read_xlsx(
         let entry = archive
             .by_index(worksheet_entries[position])
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-        String::from_utf8(read_entry(entry)?).map_err(|e| ReadError::Unreadable(e.to_string()))
+        String::from_utf8(read_entry(entry, &budget)?)
+            .map_err(|e| ReadError::Unreadable(e.to_string()))
     })?;
     let scanned: Vec<ScannedSheet<'_>> = in_parallel(texts.len(), |position| {
         let worksheet = &package.worksheets[position];
