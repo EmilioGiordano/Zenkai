@@ -29,7 +29,6 @@ use zenkai_agent::chat::history::History;
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
 use zenkai_agent::chat::state::AgentState;
 use zenkai_agent::chat::thread::{MessageId, Thread, TurnEnd, TurnState};
-use zenkai_agent::settings::AgentId;
 use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
 
@@ -119,7 +118,7 @@ pub struct ChatPanel {
     view: View,
     menu: Option<Menu>,
     menu_index: usize,
-    pending_agent: Option<AgentId>,
+    pending_agent: Option<agent_menu::PendingAgent>,
     access: Access,
     model_choice: Option<String>,
     effort_choice: Option<String>,

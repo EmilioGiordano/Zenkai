@@ -50,6 +50,34 @@ pub(super) fn agent_options(settings: &Settings) -> Vec<AgentOption> {
     presets.chain(custom).collect()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PendingAgent {
+    pub id: AgentId,
+    pub failure_before: Option<String>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SwitchOutcome {
+    Waiting,
+    Reached,
+    Failed,
+}
+
+// A failure already showing when the switch began belongs to something else.
+fn switch_outcome(
+    reached: bool,
+    failure_before: &Option<String>,
+    failure_now: &Option<String>,
+) -> SwitchOutcome {
+    if reached {
+        SwitchOutcome::Reached
+    } else if failure_now.is_some() && failure_now != failure_before {
+        SwitchOutcome::Failed
+    } else {
+        SwitchOutcome::Waiting
+    }
+}
+
 impl ChatPanel {
     pub(super) fn agent_rows(&self, cx: &App) -> Vec<AgentOption> {
         agent_options(&cx.global::<AgentConfig>().state.current)
@@ -67,7 +95,10 @@ impl ChatPanel {
         match option {
             Some(option) if option.active => {}
             Some(option) if option.installed => {
-                self.pending_agent = Some(id.clone());
+                self.pending_agent = Some(PendingAgent {
+                    id: id.clone(),
+                    failure_before: cx.global::<AgentConfig>().failure.clone(),
+                });
                 agent_settings::change(cx, move |settings| {
                     settings.agents.default = Some(id.clone());
                 });
@@ -88,16 +119,17 @@ impl ChatPanel {
             return;
         };
         let config = cx.global::<AgentConfig>();
-        let reached = chosen_agent(&config.state.current).is_some_and(|(id, _)| id == pending);
-        if !reached && config.failure.is_none() {
-            return;
-        }
-        self.pending_agent = None;
-        if reached {
-            self.state.selects.clear();
-            self.model_choice = None;
-            self.effort_choice = None;
-            self.new_conversation(window, cx);
+        let reached = chosen_agent(&config.state.current).is_some_and(|(id, _)| id == pending.id);
+        match switch_outcome(reached, &pending.failure_before, &config.failure) {
+            SwitchOutcome::Waiting => {}
+            SwitchOutcome::Failed => self.pending_agent = None,
+            SwitchOutcome::Reached => {
+                self.pending_agent = None;
+                self.state.selects.clear();
+                self.model_choice = None;
+                self.effort_choice = None;
+                self.new_conversation(window, cx);
+            }
         }
     }
 
@@ -155,7 +187,7 @@ impl ChatPanel {
 mod tests {
     use zenkai_agent::settings::Settings;
 
-    use super::agent_options;
+    use super::{SwitchOutcome, agent_options, switch_outcome};
 
     fn settings(json: &str) -> Settings {
         Settings::parse(json).unwrap()
@@ -196,5 +228,21 @@ mod tests {
         ));
         assert_eq!(options.last().map(|o| o.name.as_str()), Some("Mine"));
         assert!(options.last().is_some_and(|o| o.installed && o.active));
+    }
+
+    #[test]
+    fn a_failure_from_before_the_switch_does_not_cancel_it() {
+        let stale = Some("could not write".to_string());
+        assert_eq!(
+            switch_outcome(false, &stale, &stale),
+            SwitchOutcome::Waiting
+        );
+    }
+
+    #[test]
+    fn a_new_failure_cancels_the_switch_and_the_new_default_completes_it() {
+        let new = Some("disk full".to_string());
+        assert_eq!(switch_outcome(false, &None, &new), SwitchOutcome::Failed);
+        assert_eq!(switch_outcome(true, &None, &None), SwitchOutcome::Reached);
     }
 }
