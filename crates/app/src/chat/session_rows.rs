@@ -261,7 +261,7 @@ mod tests {
         assert_eq!(last_active(unix, None), "");
         let time = last_active(unix, Some(unix));
         assert_eq!(time.len(), 5);
-        assert_eq!(&time[3..4], ":");
+        assert_eq!(&time[2..3], ":");
         let noon = |days_ago: i64| {
             (now.date_naive() - chrono::Duration::days(days_ago))
                 .and_hms_opt(12, 0, 0)
