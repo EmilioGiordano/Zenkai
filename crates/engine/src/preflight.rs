@@ -1,15 +1,6 @@
-use zenkai_types::Range;
-
 use crate::error::EngineError;
 
 pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
-pub const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
-pub const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-pub const MAX_ENTRIES: usize = 20_000;
-// Excel's own limit; it also bounds how deep any formula's syntax tree can get.
-pub const MAX_FORMULA_CHARS: usize = 8_192;
-pub const MAX_FORMULA_DEPTH: usize = 256;
-pub const MAX_FORMULA_AREA: u64 = 1_000_000;
 // Engine parsing and evaluation recurse on the formula tree; a dedicated stack
 // this large keeps any formula within MAX_FORMULA_CHARS far from overflowing.
 pub const ENGINE_STACK_BYTES: usize = 256 * 1024 * 1024;
@@ -93,48 +84,11 @@ pub struct SheetFeatures {
 }
 
 fn check_formula(node: &roxmltree::Node<'_, '_>) -> Result<(), EngineError> {
-    if let Some(area) = node.attribute("ref")
-        && let Some(range) = Range::parse_a1(area)
-        && range.cell_count() > MAX_FORMULA_AREA
-    {
-        return Err(reject(format!(
-            "a formula covers {} cells, more than the {MAX_FORMULA_AREA} supported",
-            range.cell_count()
-        )));
-    }
-    check_formula_text(node.text().unwrap_or_default()).map_err(reject)
-}
-
-pub fn check_formula_text(formula: &str) -> Result<(), String> {
-    let chars = formula.chars().count();
-    if chars > MAX_FORMULA_CHARS {
-        return Err(format!(
-            "a formula has {chars} characters, more than the {MAX_FORMULA_CHARS} Excel allows"
-        ));
-    }
-    let depth = max_depth(formula);
-    if depth > MAX_FORMULA_DEPTH {
-        return Err(format!(
-            "a formula is nested {depth} levels deep, more than the {MAX_FORMULA_DEPTH} supported"
-        ));
-    }
-    Ok(())
-}
-
-fn max_depth(formula: &str) -> usize {
-    let mut depth = 0usize;
-    let mut deepest = 0usize;
-    for c in formula.chars() {
-        match c {
-            '(' => {
-                depth += 1;
-                deepest = deepest.max(depth);
-            }
-            ')' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-    }
-    deepest
+    zenkai_xlsx_reader::limits::check_formula(
+        node.text().unwrap_or_default(),
+        node.attribute("ref"),
+    )
+    .map_err(reject)
 }
 
 pub fn run_with_engine_stack<T: Send>(
@@ -246,7 +200,10 @@ mod tests {
 
     #[test]
     fn engine_stack_survives_the_longest_allowed_chain() {
-        let formula = format!("={}1", "1+".repeat((MAX_FORMULA_CHARS - 2) / 2));
+        let formula = format!(
+            "={}1",
+            "1+".repeat((zenkai_xlsx_reader::limits::MAX_FORMULA_CHARS - 2) / 2)
+        );
         let result = run_with_engine_stack(move || {
             let mut book = crate::Workbook::new_empty()?;
             crate::Engine::set_input(

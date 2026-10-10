@@ -1,9 +1,11 @@
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
+use zenkai_agent::preferences::XlsxReaderChoice;
 use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_engine::{
-    Engine, EngineError, Unsupported, Workbook, open_xlsx, run_with_engine_stack, write_atomic,
+    Engine, EngineError, Unsupported, Workbook, XlsxReader, open_xlsx_with, run_with_engine_stack,
+    write_atomic,
 };
 use zenkai_formats::{Delimiter, ParsedCsv, parse_csv, read_values, write_csv};
 use zenkai_i18n::t;
@@ -112,6 +114,20 @@ pub struct FileLoad {
     pub unsupported: Vec<Unsupported>,
     pub read_only: bool,
     pub origin: FileOrigin,
+    pub reader_fallback: Option<String>,
+}
+
+// ZENKAI_XLSX_READER=fast, shadow or standard overrides the setting, for testing.
+pub fn xlsx_reader(choice: XlsxReaderChoice) -> XlsxReader {
+    match std::env::var("ZENKAI_XLSX_READER").as_deref() {
+        Ok("fast") => XlsxReader::Fast,
+        Ok("shadow") => XlsxReader::Shadow,
+        Ok("standard") => XlsxReader::IronCalc,
+        _ => match choice {
+            XlsxReaderChoice::Standard => XlsxReader::IronCalc,
+            XlsxReaderChoice::Fast => XlsxReader::Fast,
+        },
+    }
 }
 
 pub enum LoadFailure {
@@ -120,9 +136,9 @@ pub enum LoadFailure {
     Unreadable { reason: String, fallback: String },
 }
 
-pub fn load_workbook(path: &Path) -> Result<FileLoad, LoadFailure> {
+pub fn load_workbook(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFailure> {
     let started = Instant::now();
-    let loaded = load_any(path);
+    let loaded = load_any(path, reader);
     let elapsed_ms = started.elapsed().as_millis();
     match &loaded {
         Ok(load) => tracing::info!(
@@ -144,13 +160,14 @@ pub fn load_workbook(path: &Path) -> Result<FileLoad, LoadFailure> {
     loaded
 }
 
-fn load_any(path: &Path) -> Result<FileLoad, LoadFailure> {
-    match open_xlsx(path) {
+fn load_any(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFailure> {
+    match open_xlsx_with(path, reader) {
         Ok(opened) => Ok(FileLoad {
             workbook: opened.workbook,
             unsupported: opened.unsupported,
             read_only: false,
             origin: file_origin(path),
+            reader_fallback: opened.fallback,
         }),
         Err(EngineError::InvalidFile(reason)) => match open_values(path) {
             Ok(workbook) => Ok(FileLoad {
@@ -158,6 +175,7 @@ fn load_any(path: &Path) -> Result<FileLoad, LoadFailure> {
                 unsupported: Vec::new(),
                 read_only: true,
                 origin: file_origin(path),
+                reader_fallback: None,
             }),
             Err(fallback) => Err(LoadFailure::Unreadable { reason, fallback }),
         },

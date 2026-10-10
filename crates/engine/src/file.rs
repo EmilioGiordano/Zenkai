@@ -2,10 +2,13 @@ use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
+use zenkai_xlsx_reader::ReadError;
+
 use crate::error::EngineError;
 use crate::preflight;
 use crate::sheet_settings::{self, SheetSettings};
 use crate::workbook::{Engine, Workbook};
+use crate::xlsx_read::{self, XlsxReader};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Unsupported {
@@ -47,9 +50,14 @@ impl Unsupported {
 pub struct Opened {
     pub workbook: Workbook,
     pub unsupported: Vec<Unsupported>,
+    pub fallback: Option<String>,
 }
 
 pub fn open_xlsx(path: &Path) -> Result<Opened, EngineError> {
+    open_xlsx_with(path, XlsxReader::IronCalc)
+}
+
+pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineError> {
     let read_error = |source| EngineError::Read {
         path: path.to_path_buf(),
         source,
@@ -63,16 +71,27 @@ pub fn open_xlsx(path: &Path) -> Result<Opened, EngineError> {
         )));
     }
     let bytes = fs::read(path).map_err(read_error)?;
-    let scan = scan(&bytes)?;
     let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Book".to_string());
-    let mut workbook = load_guarded(&bytes, &name)?;
-    workbook.carry(scan.settings);
+    // Settings are read beside the reader, whichever one runs: the fast reader's worksheet
+    // stubs drop the rows, and a save must keep page layout, view and outline either way.
+    let (read, settings) = std::thread::scope(|scope| {
+        let settings = scope.spawn(|| read_sheet_settings(&bytes));
+        let read = xlsx_read::read_xlsx_bytes(&bytes, &name, reader);
+        let settings = settings
+            .join()
+            .unwrap_or_else(|_| Err(EngineError::InvalidFile("sheet settings unreadable".into())));
+        (read, settings)
+    });
+    let read = read?;
+    let mut workbook = preflight::run_with_engine_stack(|| Workbook::from_book(read.book))?;
+    workbook.carry(settings?);
     Ok(Opened {
         workbook,
-        unsupported: scan.unsupported,
+        unsupported: read.unsupported,
+        fallback: read.fallback,
     })
 }
 
@@ -82,98 +101,52 @@ fn load_guarded(bytes: &[u8], name: &str) -> Result<Workbook, EngineError> {
     preflight::run_with_engine_stack(|| Workbook::from_xlsx_bytes(bytes, name))
 }
 
-struct Scan {
-    unsupported: Vec<Unsupported>,
-    settings: Vec<SheetSettings>,
-}
-
-fn scan(bytes: &[u8]) -> Result<Scan, EngineError> {
+fn read_sheet_settings(bytes: &[u8]) -> Result<Vec<SheetSettings>, EngineError> {
     let invalid = |e: zip::result::ZipError| EngineError::InvalidFile(e.to_string());
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(invalid)?;
-    if archive.len() > preflight::MAX_ENTRIES {
-        return Err(EngineError::Unsafe(format!(
-            "{} entries in the archive",
-            archive.len()
-        )));
+    check_limits(&mut archive)?;
+    let mut settings = Vec::new();
+    for part in worksheet_parts(&mut archive) {
+        let mut text = String::new();
+        let entry = archive.by_name(&part).map_err(invalid)?;
+        let read = entry
+            .take(zenkai_xlsx_reader::limits::MAX_ENTRY_BYTES)
+            .read_to_string(&mut text);
+        settings.push(match read {
+            Ok(_) => sheet_settings::read(&text),
+            Err(_) => SheetSettings::default(),
+        });
     }
-    let mut total = 0u64;
-    for index in 0..archive.len() {
-        let entry = archive.by_index(index).map_err(invalid)?;
-        if entry.size() > preflight::MAX_ENTRY_BYTES {
-            return Err(EngineError::Unsafe(format!(
-                "part {} expands to {} MB",
-                entry.name(),
-                entry.size() / 1024 / 1024
-            )));
-        }
-        total = total.saturating_add(entry.size());
-    }
-    if total > preflight::MAX_TOTAL_BYTES {
-        return Err(EngineError::Unsafe(format!(
-            "the workbook expands to {} MB",
-            total / 1024 / 1024
-        )));
-    }
-    let sheet_parts = worksheet_parts(&mut archive);
-    let mut settings = vec![SheetSettings::default(); sheet_parts.len()];
+    Ok(settings)
+}
+
+fn check_limits(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<(), EngineError> {
+    zenkai_xlsx_reader::limits::check_archive(archive).map_err(|error| match error {
+        ReadError::Unsafe(reason) => EngineError::Unsafe(reason),
+        other => EngineError::InvalidFile(other.to_string()),
+    })
+}
+
+pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
+    let invalid = |e: zip::result::ZipError| EngineError::InvalidFile(e.to_string());
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(invalid)?;
+    check_limits(&mut archive)?;
     let mut found = Vec::new();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(invalid)?;
-        let is_sheet = sheet_parts.iter().any(|part| part == entry.name());
-        let entry_name = entry.name().to_string();
-        let name = entry.name().to_ascii_lowercase();
-        let by_name = [
-            ("xl/charts/", Unsupported::Charts),
-            ("xl/media/", Unsupported::Images),
-            ("xl/drawings/", Unsupported::Images),
-            ("xl/pivottables/", Unsupported::PivotTables),
-            ("xl/vbaproject", Unsupported::Macros),
-            ("xl/comments", Unsupported::Comments),
-            ("xl/threadedcomments/", Unsupported::Comments),
-            ("xl/externallinks/", Unsupported::ExternalLinks),
-            ("xl/tables/", Unsupported::Tables),
-        ];
-        for (prefix, kind) in by_name {
-            if name.starts_with(prefix) {
-                found.push(kind);
-            }
-        }
-        if entry.is_dir() {
-            continue;
-        }
+        let name = entry.name().to_string();
         let mut part = Vec::new();
-        (&mut entry)
-            .take(preflight::MAX_ENTRY_BYTES)
-            .read_to_end(&mut part)
-            .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
-        let features = preflight::check_part(&part)?;
-        if is_sheet && let Ok(text) = std::str::from_utf8(&part) {
-            let read = sheet_settings::read(text);
-            for (part, slot) in sheet_parts.iter().zip(&mut settings) {
-                if *part == entry_name {
-                    *slot = read.clone();
-                }
-            }
+        if !entry.is_dir() {
+            (&mut entry)
+                .take(zenkai_xlsx_reader::limits::MAX_ENTRY_BYTES)
+                .read_to_end(&mut part)
+                .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
         }
-        if features.hyperlinks {
-            found.push(Unsupported::Hyperlinks);
-        }
-        if features.data_validation {
-            found.push(Unsupported::DataValidation);
-        }
-        if features.auto_filter {
-            found.push(Unsupported::AutoFilter);
-        }
-        if features.protection {
-            found.push(Unsupported::SheetProtection);
-        }
+        found.extend(part_unsupported(&name, &part)?);
     }
     found.sort();
     found.dedup();
-    Ok(Scan {
-        unsupported: found,
-        settings,
-    })
+    Ok(found)
 }
 
 // The worksheet parts in the order IronCalc loads them: the sheets of xl/workbook.xml
@@ -183,7 +156,7 @@ fn worksheet_parts(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Vec<String> 
         let mut text = String::new();
         let entry = archive.by_name(name).ok()?;
         entry
-            .take(preflight::MAX_ENTRY_BYTES)
+            .take(zenkai_xlsx_reader::limits::MAX_ENTRY_BYTES)
             .read_to_string(&mut text)
             .ok()?;
         Some(text)
@@ -224,6 +197,38 @@ fn worksheet_parts(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Vec<String> 
 
 pub fn xlsx_bytes(workbook: &Workbook) -> Result<Vec<u8>, EngineError> {
     preflight::run_with_engine_stack(|| workbook.to_xlsx())
+}
+
+pub(crate) fn part_unsupported(name: &str, part: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
+    let name = name.to_ascii_lowercase();
+    let by_name = [
+        ("xl/charts/", Unsupported::Charts),
+        ("xl/media/", Unsupported::Images),
+        ("xl/drawings/", Unsupported::Images),
+        ("xl/pivottables/", Unsupported::PivotTables),
+        ("xl/vbaproject", Unsupported::Macros),
+        ("xl/comments", Unsupported::Comments),
+        ("xl/threadedcomments/", Unsupported::Comments),
+        ("xl/externallinks/", Unsupported::ExternalLinks),
+        ("xl/tables/", Unsupported::Tables),
+    ];
+    let mut found: Vec<Unsupported> = by_name
+        .into_iter()
+        .filter(|(prefix, _)| name.starts_with(prefix))
+        .map(|(_, kind)| kind)
+        .collect();
+    let features = preflight::check_part(part)?;
+    for (present, kind) in [
+        (features.hyperlinks, Unsupported::Hyperlinks),
+        (features.data_validation, Unsupported::DataValidation),
+        (features.auto_filter, Unsupported::AutoFilter),
+        (features.protection, Unsupported::SheetProtection),
+    ] {
+        if present {
+            found.push(kind);
+        }
+    }
+    Ok(found)
 }
 
 // Write to a sibling temp file, prove it reopens, then replace: the original is

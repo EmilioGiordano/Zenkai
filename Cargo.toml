@@ -5,6 +5,7 @@ members = [
     "crates/types",
     "crates/i18n",
     "crates/datagen",
+    "crates/xlsx-reader",
     "crates/engine",
     "crates/formats",
     "crates/grid",

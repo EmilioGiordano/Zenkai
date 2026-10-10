@@ -7,6 +7,7 @@ mod fixtures;
 mod ironcalc_run;
 mod logisheets_run;
 mod measure;
+mod reader;
 mod save_losses;
 
 use std::path::{Path, PathBuf};
@@ -19,7 +20,7 @@ use peak_alloc::PeakAlloc;
 use fixtures::Fixture;
 
 #[global_allocator]
-static PEAK: PeakAlloc = PeakAlloc;
+pub(crate) static PEAK: PeakAlloc = PeakAlloc;
 
 const ENGINES: [&str; 2] = ["ironcalc", "logisheets"];
 const BASELINE_ENGINE: &str = "ironcalc";
@@ -34,6 +35,10 @@ fn main() -> Result<()> {
         ["coverage"] => print_coverage(),
         ["compat-generate", dir] => compat::generate(Path::new(dir)),
         ["compat", dir, report] => compat::report(Path::new(dir), Path::new(report)),
+        ["reader-probe", reader, file] => reader::probe(reader, Path::new(file)),
+        ["reader-bench", file] => reader::bench(Path::new(file), 3),
+        ["reader-bench", file, runs] => reader::bench(Path::new(file), runs.parse()?),
+        ["reader-compare", paths @ ..] if !paths.is_empty() => reader::compare(paths),
         ["run", dir] => run_all(Path::new(dir), 5),
         ["run", dir, runs] => run_all(Path::new(dir), runs.parse()?),
         ["check", dir, baseline, current] => {
@@ -46,7 +51,7 @@ fn main() -> Result<()> {
             runs.parse()?,
         ),
         _ => bail!(
-            "usage: zenkai-bench generate <dir> | measure <engine> <fixture file> <dir> | coverage | run <dir> [runs] | check <dir> <baseline.csv> <current.csv> [runs] | compat-generate <dir> | compat <dir> <report.md>"
+            "usage: zenkai-bench generate <dir> | measure <engine> <fixture file> <dir> | coverage | run <dir> [runs] | check <dir> <baseline.csv> <current.csv> [runs] | compat-generate <dir> | compat <dir> <report.md> | reader-bench <file.xlsx> [runs] | reader-probe <ironcalc|fast> <file.xlsx> | reader-compare <file or dir>..."
         ),
     }
 }

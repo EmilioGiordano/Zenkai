@@ -13,6 +13,7 @@ use super::Workspace;
 use super::agent_calls::Change;
 use super::workbooks::failure_text;
 use crate::agent_folder::FoundFile;
+use crate::agent_settings;
 use crate::document::Document;
 use crate::entry::display_name;
 use crate::files::{self, FileLoad};
@@ -96,11 +97,12 @@ impl Workspace {
             call.respond(Ok(opened(id, Opening::AlreadyOpen, &path, sheets)));
             return;
         }
+        let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.path().to_path_buf();
             let loaded = cx
                 .background_executor()
-                .spawn(async move { files::load_workbook(&task_path) })
+                .spawn(async move { files::load_workbook(&task_path, reader) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 let file = match loaded {
@@ -136,6 +138,7 @@ impl Workspace {
             unsupported,
             read_only,
             origin,
+            ..
         } = file;
         let id = self.open_document(workbook, Some(path.to_path_buf()), unsupported, window, cx);
         if let Some(document) = self.documents.get_mut(id) {

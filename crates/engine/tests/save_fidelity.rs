@@ -7,7 +7,9 @@ use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
 use rust_xlsxwriter::Workbook as Source;
-use zenkai_engine::{Engine, Unsupported, open_xlsx, save_xlsx_atomic, xlsx_bytes};
+use zenkai_engine::{
+    Engine, Unsupported, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx_atomic, xlsx_bytes,
+};
 use zenkai_types::{ColIdx, RowIdx, SheetId};
 
 // CT_Worksheet's child order, as far as Zenkai writes it.
@@ -197,11 +199,21 @@ fn assert_schema_order(xml: &str) {
 
 #[test]
 fn open_and_save_keeps_layout_view_and_outline() {
+    keeps_layout_view_and_outline(XlsxReader::IronCalc);
+}
+
+#[test]
+fn fast_reader_open_and_save_keeps_layout_view_and_outline() {
+    keeps_layout_view_and_outline(XlsxReader::Fast);
+}
+
+fn keeps_layout_view_and_outline(reader: XlsxReader) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("layout.xlsx");
     layout_source(&path);
     let original = std::fs::read(&path).unwrap();
-    let opened = open_xlsx(&path).unwrap();
+    let opened = open_xlsx_with(&path, reader).unwrap();
+    assert_eq!(opened.fallback, None, "the reader under test was not used");
     assert!(opened.unsupported.is_empty(), "{:?}", opened.unsupported);
     let saved_path = dir.path().join("saved.xlsx");
     save_xlsx_atomic(&xlsx_bytes(&opened.workbook).unwrap(), &saved_path).unwrap();
@@ -234,7 +246,7 @@ fn open_and_save_keeps_layout_view_and_outline() {
     );
 
     let again_path = dir.path().join("again.xlsx");
-    let reopened = open_xlsx(&saved_path).unwrap();
+    let reopened = open_xlsx_with(&saved_path, reader).unwrap();
     save_xlsx_atomic(&xlsx_bytes(&reopened.workbook).unwrap(), &again_path).unwrap();
     let again = std::fs::read(&again_path).unwrap();
     for sheet in ["xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml"] {
