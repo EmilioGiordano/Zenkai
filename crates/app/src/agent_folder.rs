@@ -49,7 +49,11 @@ fn shared_parent(files: &[PathBuf]) -> Option<PathBuf> {
 }
 
 pub fn default_folder() -> Option<PathBuf> {
-    dirs::document_dir().map(|documents| documents.join(DEFAULT_FOLDER_NAME))
+    folder_in(dirs::document_dir())
+}
+
+fn folder_in(documents: Option<PathBuf>) -> Option<PathBuf> {
+    documents.map(|documents| documents.join(DEFAULT_FOLDER_NAME))
 }
 
 // Runs off the UI thread. The default folder is created when missing and, like every
@@ -171,13 +175,17 @@ mod tests {
     }
 
     #[test]
-    fn nothing_saved_means_no_choice_and_the_default_folder() {
+    fn nothing_saved_means_no_choice() {
         assert_eq!(choose(&hint(&[], None)), None);
         assert_eq!(choose(&hint(&["C:/A/x.xlsx", "C:/B/y.xlsx"], None)), None);
-        match dirs::document_dir() {
-            Some(_) => assert!(default_folder().unwrap().ends_with(DEFAULT_FOLDER_NAME)),
-            None => assert_eq!(default_folder(), None),
-        }
+    }
+
+    #[test]
+    fn the_default_folder_lives_in_documents_when_there_is_one() {
+        let documents = tempfile::tempdir().unwrap();
+        let folder = folder_in(Some(documents.path().to_path_buf())).unwrap();
+        assert_eq!(folder, documents.path().join(DEFAULT_FOLDER_NAME));
+        assert_eq!(folder_in(None), None);
     }
 
     #[test]
