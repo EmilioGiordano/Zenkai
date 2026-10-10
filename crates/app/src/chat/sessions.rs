@@ -14,8 +14,7 @@ use zenkai_i18n::t;
 
 use super::extras::now_seconds;
 use super::header::{agent_mark, session_mark};
-use super::menus::Group;
-use super::session_rows::{self, Row};
+use super::session_rows::{self, Group, Row};
 use super::{ChatPanel, View, closed, launch};
 use crate::actions::*;
 use crate::agent_settings::AgentConfig;
@@ -314,7 +313,7 @@ impl ChatPanel {
                                 t!("chat.sessions.back"),
                                 &ShowChatSessions,
                             ))
-                            .on_click(cx.listener(|this, window, _, cx| {
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_sessions(window, cx);
                             })),
                     )
