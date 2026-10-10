@@ -58,8 +58,10 @@ impl Client {
     }
 
     fn send(&mut self, message: Value) {
-        writeln!(self.stdin, "{message}").unwrap();
-        self.stdin.flush().unwrap();
+        let written = writeln!(self.stdin, "{message}").and_then(|()| self.stdin.flush());
+        if let Err(error) = written {
+            assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
+        }
     }
 
     fn request(&mut self, id: u64, method: &str, params: Value) -> Value {
