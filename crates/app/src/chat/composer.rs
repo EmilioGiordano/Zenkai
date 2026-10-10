@@ -160,9 +160,8 @@ impl ChatPanel {
             )
     }
 
-    // Drawn in the window's overlay layer so the composer border and the transcript cannot
-    // cover it. The backdrop takes the click that dismisses it, which also keeps the button
-    // from reopening the menu it just closed.
+    // Drawn in the overlay layer; the backdrop takes the dismissing click so the button
+    // cannot reopen the menu it just closed.
     fn picker_slot(
         &self,
         button: Button,
