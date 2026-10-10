@@ -13,7 +13,6 @@ use zenkai_i18n::t;
 
 use super::badge::{self, ReferencePlugin};
 use super::{ChatPanel, MONO};
-use crate::actions::LetAgentsEdit;
 
 fn user_bubble(text: &str, panel: &WeakEntity<ChatPanel>, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
@@ -258,9 +257,7 @@ impl ChatPanel {
                             .outline()
                             .small()
                             .label(t!("chat.tool.let_agents_edit"))
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(Box::new(LetAgentsEdit), cx)
-                            }),
+                            .on_click(cx.listener(|this, _, _, cx| this.let_agents_edit(cx))),
                         ),
                     )
                 },
