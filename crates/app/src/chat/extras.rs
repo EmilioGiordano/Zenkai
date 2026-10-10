@@ -104,6 +104,8 @@ impl ChatPanel {
             View::Sessions => View::Chat,
         };
         if self.view == View::Sessions {
+            self.menu_index = 0;
+            self.hidden_agents.clear();
             let search = self.sessions_query.clone();
             search.update(cx, |state, cx| state.focus(window, cx));
         } else {
@@ -120,6 +122,12 @@ impl ChatPanel {
     }
 
     pub(super) fn resume(&mut self, row: &Row, window: &mut Window, cx: &mut Context<Self>) {
+        let settings = cx.global::<AgentConfig>().state.current.clone();
+        let current = launch::chosen_agent(&settings).map(|(id, _)| id);
+        if current.as_ref() != Some(&row.agent) {
+            self.pick_agent(row.agent.clone(), cx);
+            return;
+        }
         let title = row.title.clone();
         match &row.source {
             Source::Agent { session } => {

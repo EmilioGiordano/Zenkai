@@ -131,6 +131,8 @@ pub struct ChatPanel {
     title: Option<String>,
     resume_backup: Option<Backup>,
     sessions_query: Entity<InputState>,
+    // Agents filtered out of the sessions list; every agent is on by default.
+    hidden_agents: BTreeSet<AgentId>,
     model_query: Entity<InputState>,
     model_scroll: ScrollHandle,
     slash_index: usize,
@@ -218,7 +220,17 @@ impl ChatPanel {
         });
         let sessions_query =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("chat.sessions.search")));
-        let searching = cx.subscribe(&sessions_query, |_, _, _: &InputEvent, cx| cx.notify());
+        let searching = cx.subscribe_in(
+            &sessions_query,
+            window,
+            |this, _, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
+                    this.menu_index = 0;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => cx.notify(),
+            },
+        );
         let model_query =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("chat.model.search")));
         let filtering = cx.subscribe_in(
@@ -269,6 +281,7 @@ impl ChatPanel {
             title: None,
             resume_backup: None,
             sessions_query,
+            hidden_agents: BTreeSet::new(),
             model_query,
             model_scroll: ScrollHandle::new(),
             slash_index: 0,

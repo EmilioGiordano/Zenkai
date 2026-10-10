@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -5,23 +7,127 @@ use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use zenkai_agent::chat::state::AgentState;
+use zenkai_agent::presets::PRESETS;
+use zenkai_agent::settings::{AgentId, AgentServer};
 use zenkai_i18n::t;
 
 use super::extras::now_seconds;
-use super::header::agent_mark;
-use super::session_rows::{self, Group, Row, Source};
-use super::{ChatPanel, launch};
+use super::header::{agent_mark, session_mark};
+use super::menus::Group;
+use super::session_rows::{self, Row};
+use super::{ChatPanel, View, launch};
+use crate::actions::*;
 use crate::agent_settings::AgentConfig;
+use crate::keymap;
+
+fn agent_name(servers: &BTreeMap<AgentId, AgentServer>, id: &AgentId) -> String {
+    if let Some(server) = servers.get(id) {
+        return server.name.clone();
+    }
+    if let Some(preset) = PRESETS.iter().find(|preset| preset.id == id.as_str()) {
+        return preset.name.to_string();
+    }
+    id.as_str().to_string()
+}
 
 impl ChatPanel {
-    fn session_row(&self, index: usize, row: &Row, cx: &mut Context<Self>) -> AnyElement {
+    fn all_rows(&self, cx: &App) -> Vec<Row> {
+        let settings = cx.global::<AgentConfig>().state.current.clone();
+        let now = now_seconds();
+        let current = launch::chosen_agent(&settings).map(|(id, _)| id);
+        let mut ids: BTreeSet<AgentId> = self
+            .history
+            .records()
+            .iter()
+            .map(|record| record.agent.clone())
+            .collect();
+        if let Some(id) = current.clone() {
+            ids.insert(id);
+        }
+        let mut all = Vec::new();
+        for id in ids {
+            let state = if current.as_ref() == Some(&id) {
+                &self.state
+            } else {
+                &AgentState::default()
+            };
+            all.extend(session_rows::rows(
+                &id,
+                &agent_name(&settings.agents.servers, &id),
+                state,
+                &self.history,
+                now,
+            ));
+        }
+        all
+    }
+
+    fn filtered_rows(&self, cx: &App) -> Vec<Row> {
+        let query = self.sessions_query.read(cx).value().to_string();
+        session_rows::filter(self.all_rows(cx), &query, &self.hidden_agents)
+    }
+
+    fn toggle_agent(&mut self, id: AgentId, cx: &mut Context<Self>) {
+        if self.hidden_agents.contains(&id) {
+            self.hidden_agents.remove(&id);
+        } else {
+            self.hidden_agents.insert(id);
+        }
+        cx.notify();
+    }
+
+    fn show_all_agents(&mut self, cx: &mut Context<Self>) {
+        self.hidden_agents.clear();
+        cx.notify();
+    }
+
+    pub(crate) fn sessions_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.view != View::Sessions {
+            return;
+        }
+        let count = self.filtered_rows(cx).len();
+        self.menu_index = super::model_search::step(self.menu_index, count, forward);
+        cx.notify();
+    }
+
+    pub(crate) fn sessions_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view != View::Sessions {
+            return;
+        }
+        let rows = self.filtered_rows(cx);
+        if rows.is_empty() {
+            return;
+        }
+        let picked = rows
+            .get(self.menu_index.min(rows.len() - 1))
+            .expect("nonempty rows")
+            .clone();
+        self.resume(&picked, window, cx);
+    }
+
+    pub(crate) fn sessions_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view != View::Sessions {
+            return;
+        }
+        if self.sessions_query.read(cx).value().is_empty() {
+            self.toggle_sessions(window, cx);
+        } else {
+            self.sessions_query.update(cx, |query, cx| {
+                query.set_value("", window, cx);
+            });
+        }
+    }
+
+    fn session_row(&self, row: &Row, highlighted: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
+        let muted = theme.muted_foreground;
         let picked = row.clone();
         let content = h_flex()
             .gap_2p5()
             .items_center()
             .w_full()
-            .child(agent_mark(&row.agent, &row.agent.to_string(), cx))
+            .child(session_mark(&row.agent, &row.agent_name, cx))
             .child(
                 v_flex()
                     .flex_1()
@@ -32,112 +138,131 @@ impl ChatPanel {
                         div()
                             .truncate()
                             .text_xs()
-                            .text_color(theme.muted_foreground)
+                            .text_color(muted)
                             .child(row.meta.clone()),
                     ),
             )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(row.age.clone()),
-            );
-        Button::new(SharedString::from(format!("session-{index}")))
-            .ghost()
-            .w_full()
-            .h_auto()
-            .child(content)
-            .on_click(cx.listener(move |this, _, window, cx| this.resume(&picked, window, cx)))
-            .into_any_element()
+            .child(div().text_xs().text_color(muted).child(row.age.clone()));
+        Button::new(SharedString::from(format!(
+            "session-{}-{}",
+            row.agent.as_str(),
+            row.title
+        )))
+        .ghost()
+        .w_full()
+        .h_auto()
+        .when(highlighted, |button| button.bg(theme.accent))
+        .child(content)
+        .on_click(cx.listener(move |this, _, window, cx| this.resume(&picked, window, cx)))
+        .into_any_element()
     }
 
     pub(super) fn render_sessions(&self, cx: &mut Context<Self>) -> AnyElement {
-        let settings = cx.global::<AgentConfig>().state.current.clone();
-        let chosen = launch::chosen_agent(&settings);
-        let query = self.sessions_query.read(cx).value().to_string();
-        let rows = chosen.map_or_else(Vec::new, |(id, server)| {
-            session_rows::rows(
-                &id,
-                &server.name,
-                &self.state,
-                &self.history,
-                now_seconds(),
-                &query,
-            )
-        });
-        let items: Vec<AnyElement> = rows
-            .iter()
-            .enumerate()
-            .map(|(index, row)| self.session_row(index, row, cx))
-            .collect();
         let theme = cx.theme();
-        let local_only = !self.state.abilities.list_sessions;
-        let mut list = v_flex().gap_0p5();
+        let muted = theme.muted_foreground;
+        let query = self.sessions_query.clone();
+        let rows = self.filtered_rows(cx);
+        let settings = cx.global::<AgentConfig>().state.current.clone();
+        let names: Vec<(AgentId, String)> = session_rows::agent_ids(&self.all_rows(cx))
+            .into_iter()
+            .map(|id| {
+                let name = agent_name(&settings.agents.servers, &id);
+                (id, name)
+            })
+            .collect();
+        let summary = session_rows::summary(rows.len(), None);
+        let mut list = v_flex().gap_1().px_2().pb_2();
         let mut group: Option<Group> = None;
-        for (row, item) in rows.iter().zip(items) {
+        for (index, row) in rows.iter().enumerate() {
             if group != Some(row.group) {
                 group = Some(row.group);
                 list = list.child(
                     div()
                         .px_2()
                         .pt_2()
-                        .pb_1()
                         .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.muted_foreground)
-                        .child(row.group.title()),
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(muted)
+                        .child(match row.group {
+                            Group::Today => t!("chat.sessions.today"),
+                            Group::ThisWeek => t!("chat.sessions.this_week"),
+                            Group::Earlier => t!("chat.sessions.earlier"),
+                        }),
                 );
             }
-            list = list.child(item);
+            list = list.child(self.session_row(row, index == self.menu_index, cx));
         }
-        let resumes_fresh = rows.iter().any(|row| row.source == Source::Local);
+        if rows.is_empty() {
+            list = list.child(div().px_2().py_4().text_sm().text_color(muted).child(
+                if self.hidden_agents.is_empty() && query.read(cx).value().is_empty() {
+                    t!("chat.sessions.empty")
+                } else {
+                    t!("chat.sessions.no_match")
+                },
+            ));
+        }
+        let mut chips = h_flex().gap_1().px_2().flex_wrap();
+        for (id, name) in &names {
+            let on = !self.hidden_agents.contains(id);
+            let id = id.clone();
+            chips = chips.child(
+                Button::new(SharedString::from(format!("session-chip-{}", id.as_str())))
+                    .ghost()
+                    .compact()
+                    .toggled(on)
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .items_center()
+                            .child(agent_mark(&id, name, cx))
+                            .child(name.clone())
+                            .when(on, |row| row.child(Icon::new(IconName::Check).size_3p5())),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_agent(id.clone(), cx))),
+            );
+        }
+        chips = chips.child(
+            Button::new("session-chips-all")
+                .ghost()
+                .compact()
+                .label(t!("chat.sessions.all"))
+                .on_click(cx.listener(|this, _, _, cx| this.show_all_agents(cx))),
+        );
         v_flex()
-            .id("chat-sessions-view")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
+            .key_context("ChatSessions")
             .gap_1()
-            .px_3()
-            .pt_1p5()
-            .pb_3()
+            .pt_1()
             .child(
                 h_flex()
-                    .gap_2()
                     .items_center()
-                    .px_2p5()
-                    .mb_2()
+                    .gap_1()
+                    .px_1()
                     .child(
-                        Icon::new(IconName::Search)
-                            .size_3p5()
-                            .text_color(theme.muted_foreground),
+                        Button::new("sessions-back")
+                            .ghost()
+                            .compact()
+                            .icon(IconName::ChevronLeft)
+                            .tooltip(keymap::labeled(
+                                cx,
+                                t!("chat.sessions.back"),
+                                &ShowChatSessions,
+                            ))
+                            .on_click(cx.listener(|this, window, _, cx| {
+                                this.toggle_sessions(window, cx);
+                            })),
                     )
-                    .child(
-                        div().flex_1().child(
-                            Input::new(&self.sessions_query)
-                                .appearance(false)
-                                .bordered(false),
-                        ),
-                    ),
+                    .child(div().flex_1())
+                    .child(div().text_xs().text_color(muted).child(summary)),
             )
+            .child(
+                div().px_2().child(
+                    Input::new(&query)
+                        .prefix(Icon::new(IconName::Search).size_4())
+                        .placeholder(t!("chat.sessions.search")),
+                ),
+            )
+            .child(chips)
             .child(list)
-            .when(rows.is_empty(), |view| {
-                view.child(
-                    div()
-                        .p_2()
-                        .text_sm()
-                        .text_color(theme.muted_foreground)
-                        .child(t!("chat.sessions.empty")),
-                )
-            })
-            .when(local_only && resumes_fresh, |view| {
-                view.child(
-                    div()
-                        .p_2()
-                        .text_xs()
-                        .text_color(theme.muted_foreground)
-                        .child(t!("chat.sessions.fresh_only")),
-                )
-            })
             .into_any_element()
     }
 }
