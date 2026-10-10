@@ -83,6 +83,38 @@ pub const OPENCODE: Preset = Preset {
     name: "opencode",
     package: "opencode-ai@1.18.32",
     extra_args: &["acp"],
+    entry: Entry::Native(&[
+        NativeBinary {
+            os: "windows",
+            arch: "x86_64",
+            path: "node_modules/opencode-windows-x64/bin/opencode.exe",
+        },
+        NativeBinary {
+            os: "windows",
+            arch: "aarch64",
+            path: "node_modules/opencode-windows-arm64/bin/opencode.exe",
+        },
+        NativeBinary {
+            os: "macos",
+            arch: "x86_64",
+            path: "node_modules/opencode-darwin-x64/bin/opencode",
+        },
+        NativeBinary {
+            os: "macos",
+            arch: "aarch64",
+            path: "node_modules/opencode-darwin-arm64/bin/opencode",
+        },
+        NativeBinary {
+            os: "linux",
+            arch: "x86_64",
+            path: "node_modules/opencode-linux-x64/bin/opencode",
+        },
+        NativeBinary {
+            os: "linux",
+            arch: "aarch64",
+            path: "node_modules/opencode-linux-arm64/bin/opencode",
+        },
+    ]),
     min_node_major: 20,
     login_command: "opencode auth login",
     provider: "opencode",
