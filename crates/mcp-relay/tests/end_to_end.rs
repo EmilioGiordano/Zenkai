@@ -126,7 +126,7 @@ fn host() -> LocalHost {
 fn an_mcp_client_reads_and_edits_the_open_workbook_through_the_relay() {
     let (endpoint, calls) = channel();
     let server = std::thread::spawn(move || host().serve(calls));
-    let bridge = Bridge::start(endpoint, None, None).unwrap();
+    let bridge = Bridge::start(endpoint, None, None, None).unwrap();
     let mut client = Client::start(&bridge, &bridge.address().token);
 
     let info = client.initialize();
@@ -206,7 +206,7 @@ fn the_chat_agent_creates_a_workbook_inside_its_folder_and_nowhere_else() {
     let folder = WorkingFolder::new(space.path()).unwrap();
     let (endpoint, calls) = channel();
     let server = std::thread::spawn(move || host().serve(calls));
-    let bridge = Bridge::start(endpoint, None, Some(folder)).unwrap();
+    let bridge = Bridge::start(endpoint, None, Some(folder), None).unwrap();
     let mut client = Client::start(&bridge, &bridge.address().token);
     client.initialize();
 
@@ -262,7 +262,7 @@ fn the_chat_agent_creates_a_workbook_inside_its_folder_and_nowhere_else() {
 fn an_external_agent_cannot_create_or_open_files() {
     let (endpoint, calls) = channel();
     let server = std::thread::spawn(move || host().serve(calls));
-    let bridge = Bridge::start(endpoint, None, None).unwrap();
+    let bridge = Bridge::start(endpoint, None, None, None).unwrap();
     let mut client = Client::start(&bridge, &bridge.address().token);
     client.initialize();
     let refused = client.call(2, "create_workbook", json!({ "path": "x.xlsx" }));
@@ -278,7 +278,7 @@ fn an_external_agent_cannot_create_or_open_files() {
 fn a_client_without_the_token_gets_nothing() {
     let (endpoint, calls) = channel();
     let server = std::thread::spawn(move || host().serve(calls));
-    let bridge = Bridge::start(endpoint, None, None).unwrap();
+    let bridge = Bridge::start(endpoint, None, None, None).unwrap();
     let mut client = Client::start(&bridge, "not-the-token");
     client.send(json!({
         "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -298,7 +298,7 @@ fn the_endpoint_file_exists_only_while_the_bridge_runs() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("Zenkai").join("mcp-endpoint.txt");
     let (endpoint, _calls) = channel();
-    let bridge = Bridge::start(endpoint, Some(&file), None).unwrap();
+    let bridge = Bridge::start(endpoint, Some(&file), None, None).unwrap();
     let text = std::fs::read_to_string(&file).unwrap();
     assert!(text.contains(&bridge.address().pipe));
     drop(bridge);
@@ -311,7 +311,7 @@ fn the_relay_finds_zenkai_through_the_endpoint_file() {
     let file = dir.path().join("Zenkai").join(ENDPOINT_FILE);
     let (endpoint, calls) = channel();
     let server = std::thread::spawn(move || host().serve(calls));
-    let bridge = Bridge::start(endpoint, Some(&file), None).unwrap();
+    let bridge = Bridge::start(endpoint, Some(&file), None, None).unwrap();
     let mut client = Client::from_endpoint_file(dir.path());
     let info = client.initialize();
     assert_eq!(info["result"]["serverInfo"]["name"], "zenkai");
@@ -325,7 +325,7 @@ fn the_relay_finds_zenkai_through_the_endpoint_file() {
 fn the_relay_stops_at_an_oversized_message() {
     let (endpoint, calls) = channel();
     let server = std::thread::spawn(move || host().serve(calls));
-    let bridge = Bridge::start(endpoint, None, None).unwrap();
+    let bridge = Bridge::start(endpoint, None, None, None).unwrap();
     let mut client = Client::start(&bridge, &bridge.address().token);
     let huge = vec![b'x'; MAX_LINE_BYTES + 1];
     let written = client.stdin.write_all(&huge);
@@ -339,7 +339,7 @@ fn the_relay_stops_at_an_oversized_message() {
 fn the_bridge_drops_a_client_sending_an_oversized_message() {
     let (endpoint, calls) = channel();
     let server = std::thread::spawn(move || host().serve(calls));
-    let bridge = Bridge::start(endpoint, None, None).unwrap();
+    let bridge = Bridge::start(endpoint, None, None, None).unwrap();
     let name = bridge
         .address()
         .pipe
@@ -361,7 +361,7 @@ fn the_bridge_drops_a_client_sending_an_oversized_message() {
 #[test]
 fn a_call_waiting_for_the_user_is_abandoned_when_the_client_disconnects() {
     let (endpoint, calls) = channel();
-    let bridge = Bridge::start(endpoint, None, None).unwrap();
+    let bridge = Bridge::start(endpoint, None, None, None).unwrap();
     let mut client = Client::start(&bridge, &bridge.address().token);
     client.initialize();
     client.send(json!({
