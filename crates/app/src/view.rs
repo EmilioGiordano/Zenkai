@@ -23,6 +23,7 @@ use zenkai_types::{
 
 mod agent_access;
 mod agent_calls;
+mod agent_chip;
 mod agent_files;
 mod agent_review;
 mod chat_dock;
@@ -31,7 +32,7 @@ mod space_panel;
 
 use agent_calls::{AgentLink, Decision};
 use chat_dock::ChatDock;
-use zenkai_agent::protected_view::{FileOrigin, file_origin};
+use zenkai_agent::protected_view::file_origin;
 use zenkai_agent::settings::{HeldChange, PermissionMode};
 
 use crate::actions::*;
@@ -2789,6 +2790,7 @@ impl Workspace {
     }
 
     fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let access_chip = self.render_access_chip(cx);
         let theme = cx.theme();
         let mut left = h_flex().gap_3().items_center();
         if let Some(busy) = &self.busy {
@@ -2826,12 +2828,7 @@ impl Workspace {
                         .child(t!("status.agents_automatic")),
                 )
             })
-            .when(
-                self.documents
-                    .active()
-                    .is_some_and(|document| document.origin == FileOrigin::Internet),
-                |this| this.child(t!("status.protected_view")),
-            );
+            .children(access_chip);
         match self.stats.filter(|_| self.documents.active().is_some()) {
             Some(stats) if stats.count > 1 => {
                 if let Some(avg) = stats.average() {
