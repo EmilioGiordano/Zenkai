@@ -68,7 +68,6 @@ impl ChatPanel {
         .detach();
     }
 
-    // Titles the conversation after its first message and keeps its metadata, never its text.
     pub(super) fn remember_conversation(&mut self, first_message: &str, cx: &mut Context<Self>) {
         if self.title.is_some() {
             return;
@@ -177,7 +176,6 @@ impl ChatPanel {
                 for ask in self.permissions.drain(..) {
                     ask.cancel();
                 }
-                // The old transcript comes back if the agent cannot load the session.
                 let old_title = self.title.replace(title);
                 self.resume_backup = Some(Backup {
                     thread: std::mem::take(&mut self.thread),
@@ -185,8 +183,6 @@ impl ChatPanel {
                     title: old_title,
                 });
                 self.problem = None;
-                // The resumed session has no local record; its usage reports are dropped
-                // rather than filed under another conversation.
                 self.live_session = Some(session.clone());
                 self.pending_record = None;
                 if let Some(live) = &self.live {

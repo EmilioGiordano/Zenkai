@@ -35,7 +35,6 @@ impl ChatPanel {
         cx.notify();
     }
 
-    // Streamed text is shown as it arrives; once complete, references in it become badges.
     pub(super) fn link_references(&mut self, cx: &mut Context<Self>) {
         for (id, state) in &self.texts {
             if self.linked_messages.contains(id) {
@@ -190,16 +189,12 @@ impl ChatPanel {
             None => {
                 let state = cx.new(|cx| TextViewState::markdown(&added, cx));
                 self.texts.insert(message, state);
-                // Messages the transcript trimmed no longer need their view state.
                 self.texts
                     .retain(|id, _| self.thread.message_text(*id).is_some());
             }
         }
     }
 
-    // Files the latest context usage under the live conversation and queues the same
-    // atomic history save the other writers use. A usage report without a live record
-    // is a resumed agent session; it is dropped, never misattributed.
     fn note_context(&mut self, usage: ContextUsage) {
         let Some(session) = self.live_session.clone() else {
             return;
@@ -213,8 +208,6 @@ impl ChatPanel {
         }
     }
 
-    // Recomputes one record's size after it changed; the whole map refreshes off the
-    // UI thread when the list loads.
     fn refresh_size(&mut self, session: &str) {
         if let Some(record) = self.history.record_for_session(session) {
             let key = record.identity();
@@ -223,7 +216,6 @@ impl ChatPanel {
         }
     }
 
-    // The tree is ended off the UI thread; the bridge closes when `live` is dropped.
     pub(super) fn end_session(&mut self, cx: &mut Context<Self>) {
         self.link = Link::Idle;
         self.live_session = None;
@@ -236,7 +228,6 @@ impl ChatPanel {
         }
     }
 
-    // The caller ends the tree off the UI thread.
     pub fn shutdown(&mut self) -> Option<std::sync::Arc<zenkai_agent::chat::process::ProcessTree>> {
         self.live.take().map(|live| live.handle.process_tree())
     }

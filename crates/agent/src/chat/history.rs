@@ -19,12 +19,8 @@ pub struct Record {
     pub title: String,
     pub started_unix_seconds: u64,
     pub workbook: String,
-    // The agent's session id for a conversation this chat started, so usage reports and
-    // the agent's own session list can find their record. Conversations resumed from the
-    // agent's list never had a record pushed, so they keep none.
     #[serde(default)]
     pub session: Option<String>,
-    // The latest context usage the live session reported. Old files predate the field.
     #[serde(default)]
     pub context: Option<ContextUsage>,
 }
@@ -57,7 +53,6 @@ pub enum HistoryError {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct History {
     records: Vec<Record>,
-    // Agent session ids this chat started, newest first.
     #[serde(default)]
     sessions: Vec<String>,
 }
@@ -72,7 +67,6 @@ impl History {
         &self.records
     }
 
-    // Newest first, for the agent that is active.
     pub fn for_agent<'a>(&'a self, agent: &'a AgentId) -> impl Iterator<Item = &'a Record> {
         self.records
             .iter()
@@ -99,15 +93,10 @@ impl History {
         true
     }
 
-    // Newest record of this agent, which is the live conversation when this chat pushed
-    // one for it.
     pub fn newest_for(&self, agent: &AgentId) -> Option<&Record> {
         self.records.iter().find(|record| &record.agent == agent)
     }
 
-    // Links the agent's session id to the exact record the pending send created. The
-    // caller carries that record's identity with the pending start; a record that
-    // already has an id never adopts another one.
     pub fn attach_session_to(&mut self, identity: &RecordId, session: &str) -> Option<Record> {
         let record = self
             .records
@@ -117,9 +106,6 @@ impl History {
         Some(record.clone())
     }
 
-    // Stores the latest context usage the live session reported. A session without a
-    // record is a conversation resumed from the agent's list; there is nothing to file
-    // it under, so it is dropped rather than attributed to another conversation.
     pub fn note_context(&mut self, session: &str, usage: ContextUsage) -> Option<Record> {
         let record = self
             .records
@@ -135,8 +121,6 @@ impl History {
             .find(|record| record.session.as_deref() == Some(session))
     }
 
-    // The bytes of the record's serialized entry, which is what the sessions list shows
-    // as the session's size: Zenkai keeps no per-session file.
     pub fn record_size(record: &Record) -> u64 {
         serde_json::to_vec(record)
             .map(|bytes| bytes.len() as u64)
@@ -177,11 +161,8 @@ impl History {
         }
     }
 
-    // Records loaded from disk join the ones made since the app started, newest first.
-    // A record that only gained its session id or context after the load keeps the newer
-    // annotations and fills the ones it still lacks; it is never listed twice. Two
-    // records with different session ids are different conversations sharing metadata,
-    // so both are kept.
+    // Two records with different session ids are different conversations sharing
+    // metadata, so both are kept.
     pub fn merge(&mut self, loaded: History) {
         for record in loaded.records {
             match self.records.iter_mut().find(|known| {
