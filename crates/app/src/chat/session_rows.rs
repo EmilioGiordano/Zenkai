@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn last_activity_reads_today_yesterday_and_month_day() {
-        use chrono::{Local, TimeZone};
+        use chrono::Local;
 
         let now = Local::now();
         let unix = now.timestamp() as u64;

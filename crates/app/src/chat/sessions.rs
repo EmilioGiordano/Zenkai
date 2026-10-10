@@ -337,11 +337,9 @@ impl ChatPanel {
                     .child(div().text_xs().text_color(muted).child(summary)),
             )
             .child(
-                div().px_2().child(
-                    Input::new(&query)
-                        .prefix(Icon::new(IconName::Search).size_4())
-                        .placeholder(t!("chat.sessions.search")),
-                ),
+                div()
+                    .px_2()
+                    .child(Input::new(&query).prefix(Icon::new(IconName::Search).size_4())),
             )
             .child(chips)
             .child(list)

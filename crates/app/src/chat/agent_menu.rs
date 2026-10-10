@@ -1,3 +1,4 @@
+use gpui_kit::base::h_flex;
 use gpui_kit::*;
 use zenkai_agent::presets::PRESETS;
 use zenkai_agent::settings::{AgentId, Settings};
