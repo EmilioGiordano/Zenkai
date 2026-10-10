@@ -558,6 +558,14 @@ mod tests {
         server: &AgentServer,
         installed: &[(&str, &str)],
     ) -> Result<LaunchPlan, LaunchError> {
+        plan_in(server, installed, PathBuf::from("C:\\agents"))
+    }
+
+    fn plan_in(
+        server: &AgentServer,
+        installed: &[(&str, &str)],
+        folder: PathBuf,
+    ) -> Result<LaunchPlan, LaunchError> {
         let installed: Vec<(String, PathBuf)> = installed
             .iter()
             .map(|(name, path)| (name.to_string(), PathBuf::from(path)))
@@ -572,9 +580,17 @@ mod tests {
             server,
             &LaunchEnvironment {
                 find: &find,
-                agents_folder: PathBuf::from("C:\\agents"),
+                agents_folder: folder,
             },
         )
+    }
+
+    fn absolute(name: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!("C:\\{name}"))
+        } else {
+            PathBuf::from(format!("/{name}"))
+        }
     }
 
     const NODE: (&str, &str) = ("node", "C:\\Program Files\\nodejs\\node.exe");
@@ -625,29 +641,34 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(
-        any(target_os = "windows", target_os = "macos", target_os = "linux"),
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ))]
     fn a_native_preset_plans_its_platform_binary() {
-        let plan = plan_with(&OPENCODE.server(), &[NODE]).unwrap();
-        let LaunchPlan::Native {
-            node,
-            program,
-            package,
-            args,
-            ..
-        } = plan
-        else {
-            panic!("expected a native plan");
-        };
-        assert_eq!(node, PathBuf::from(NODE.1));
-        assert_eq!(
-            program,
-            PathBuf::from("C:\\agents").join(OPENCODE.native_path().unwrap())
-        );
-        assert_eq!(package.spec(), "opencode-ai@1.18.32");
-        assert_eq!(args, ["acp"]);
+        let agents = absolute("agents");
+        let planned = plan_in(&OPENCODE.server(), &[NODE], agents.clone());
+        match OPENCODE.native_path() {
+            Some(native) => {
+                let plan = planned.unwrap();
+                let LaunchPlan::Native {
+                    node,
+                    program,
+                    package,
+                    folder,
+                    args,
+                    ..
+                } = plan
+                else {
+                    panic!("expected a native plan");
+                };
+                assert_eq!(node, PathBuf::from(NODE.1));
+                assert_eq!(folder, agents.join("opencode-ai@1.18.32"));
+                assert_eq!(program, folder.join(native));
+                assert_eq!(package.spec(), "opencode-ai@1.18.32");
+                assert_eq!(args, ["acp"]);
+            }
+            None => assert!(matches!(
+                planned,
+                Err(LaunchError::UnsupportedPlatform { .. })
+            )),
+        }
     }
 
     fn current_platform_binaries(path: &'static str) -> [NativeBinary; 1] {
