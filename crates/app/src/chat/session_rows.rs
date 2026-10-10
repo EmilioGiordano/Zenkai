@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Datelike, Local};
-use zenkai_agent::chat::history::{History, Record};
+use zenkai_agent::chat::history::{History, Record, RecordId};
 use zenkai_agent::chat::state::{AgentState, ContextUsage};
 use zenkai_agent::settings::AgentId;
 use zenkai_i18n::t;
@@ -26,7 +26,6 @@ impl Group {
     }
 }
 
-// Where a row came from decides what picking it does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
     Agent { session: String },
@@ -56,9 +55,7 @@ pub fn group_of(age_seconds: u64) -> Group {
     }
 }
 
-// The size of every record, keyed by what makes it a conversation. The panel computes
-// the whole map off the UI thread when the list loads; render only reads it.
-pub type SessionSizes = BTreeMap<(AgentId, String, u64, String), u64>;
+pub type SessionSizes = BTreeMap<RecordId, u64>;
 
 pub fn sizes_for(records: &[Record]) -> SessionSizes {
     records
@@ -73,6 +70,7 @@ fn row(
     started: Option<u64>,
     now: u64,
     agent: &AgentId,
+    agent_name: &str,
     size_bytes: Option<u64>,
     context: Option<ContextUsage>,
 ) -> Row {
@@ -123,11 +121,9 @@ fn order_key(row: &Row) -> (Group, std::cmp::Reverse<u64>) {
     )
 }
 
-// The agent's own list when it can list sessions, otherwise Zenkai's local metadata.
-// A row shows the context and size Zenkai stored for its conversation; sessions without
-// a stored value show neither.
 pub fn rows(
     agent: &AgentId,
+    agent_name: &str,
     state: &AgentState,
     history: &History,
     sizes: &SessionSizes,
@@ -152,6 +148,7 @@ pub fn rows(
                     started,
                     now,
                     agent,
+                    agent_name,
                     stored.and_then(|record| sizes.get(&record.identity()).copied()),
                     stored.and_then(|record| record.context),
                 )
@@ -167,6 +164,7 @@ pub fn rows(
                     Some(record.started_unix_seconds),
                     now,
                     agent,
+                    agent_name,
                     sizes.get(&record.identity()).copied(),
                     record.context,
                 )
@@ -177,7 +175,6 @@ pub fn rows(
     rows
 }
 
-// Every agent with a row, sorted for the filter chips.
 pub fn agent_ids(rows: &[Row]) -> Vec<AgentId> {
     rows.iter()
         .map(|row| &row.agent)
@@ -187,8 +184,6 @@ pub fn agent_ids(rows: &[Row]) -> Vec<AgentId> {
         .collect()
 }
 
-// The search and the agent filter combine: a row shows when its title holds the query
-// and its agent is on. The survivors come newest first inside their recency group.
 pub fn filter(mut rows: Vec<Row>, query: &str, hidden: &BTreeSet<AgentId>) -> Vec<Row> {
     let query = query.trim().to_lowercase();
     if !query.is_empty() {
@@ -335,7 +330,14 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-10-09T10:12:00Z")
             .unwrap()
             .timestamp() as u64;
-        let found = rows(&agent(), &state, &history, &SessionSizes::new(), now);
+        let found = rows(
+            &agent(),
+            "Claude",
+            &state,
+            &history,
+            &SessionSizes::new(),
+            now,
+        );
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].title, "Fix the dates");
         let started = DateTime::from_timestamp(now as i64 - 12 * 60, 0)
@@ -360,6 +362,7 @@ mod tests {
         history.push(AgentId::new("gemini"), "Other agent", "w", 1_000);
         let found = rows(
             &agent(),
+            "Claude",
             &AgentState::default(),
             &history,
             &SessionSizes::new(),
@@ -381,6 +384,7 @@ mod tests {
         let now = 10 * DAY + 60;
         let all = rows(
             &agent(),
+            "Claude",
             &AgentState::default(),
             &history,
             &SessionSizes::new(),
@@ -400,6 +404,7 @@ mod tests {
         let now = 10 * DAY;
         let all = rows(
             &agent(),
+            "Claude",
             &AgentState::default(),
             &history,
             &SessionSizes::new(),
@@ -417,6 +422,7 @@ mod tests {
         let now = 10 * DAY;
         let mut all = rows(
             &agent(),
+            "Claude",
             &AgentState::default(),
             &history,
             &SessionSizes::new(),
@@ -424,6 +430,7 @@ mod tests {
         );
         all.extend(rows(
             &AgentId::new("codex"),
+            "Codex",
             &AgentState::default(),
             &history,
             &SessionSizes::new(),
@@ -479,7 +486,14 @@ mod tests {
         history.note_context("s-old", usage);
         let sizes = sizes_for(history.records());
         let now = 10 * DAY + 60;
-        let all = rows(&agent(), &AgentState::default(), &history, &sizes, now);
+        let all = rows(
+            &agent(),
+            "Claude",
+            &AgentState::default(),
+            &history,
+            &sizes,
+            now,
+        );
         let old = all.iter().find(|row| row.title == "Old work").unwrap();
         assert_eq!(old.context, Some(usage));
         assert_eq!(
@@ -526,7 +540,7 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-10-09T10:12:00Z")
             .unwrap()
             .timestamp() as u64;
-        let found = rows(&agent(), &state, &history, &sizes, now);
+        let found = rows(&agent(), "Claude", &state, &history, &sizes, now);
         let linked = found.iter().find(|row| row.title == "Linked").unwrap();
         assert_eq!(linked.context, Some(usage));
         assert!(linked.size_bytes.is_some());

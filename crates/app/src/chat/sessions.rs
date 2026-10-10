@@ -53,6 +53,7 @@ impl ChatPanel {
             };
             all.extend(session_rows::rows(
                 &id,
+                &agent_name(&settings.agents.servers, &id),
                 state,
                 &self.history,
                 &self.session_sizes,
@@ -91,7 +92,6 @@ impl ChatPanel {
         search.update(cx, |state, cx| state.focus(window, cx));
     }
 
-    // Recomputes every record's size off the UI thread; render only reads the map.
     pub(super) fn refresh_session_sizes(&self, cx: &mut Context<Self>) {
         let history = self.history.clone();
         cx.spawn(async move |this, cx| {
