@@ -7,9 +7,10 @@ use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::*;
 use zenkai_i18n::t;
 
-use super::sidebar::WIDTH;
 use super::{Severity, Workspace};
 use crate::actions::{CloseSpacePanel, ResetSpaceAppearance};
+use crate::keymap;
+use crate::panel_width::Panel;
 use crate::space_appearance::{
     ApplyTo, Custom, Intensity, MAX_INTENSITY, Opacity, Resolved, Rgba, SpaceOverride, resolve,
 };
@@ -332,7 +333,7 @@ impl Workspace {
             t!("space.note_default", name = name)
         };
         let left = if self.sidebar.visible {
-            WIDTH + 16.0
+            self.panel_width(Panel::Sidebar, window) + 16.0
         } else {
             48.0
         };
@@ -401,7 +402,11 @@ impl Workspace {
                                 .items_center()
                                 .child(
                                     Button::new("space-reset")
-                                        .label(t!("space.back_to_default"))
+                                        .label(keymap::labeled(
+                                            cx,
+                                            t!("space.back_to_default"),
+                                            &ResetSpaceAppearance,
+                                        ))
                                         .disabled(!is_custom)
                                         .on_click(|_, window, cx| {
                                             window

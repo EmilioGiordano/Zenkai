@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use proptest::prelude::*;
-use zenkai_engine::{Engine, Workbook, open_xlsx, save_xlsx_atomic};
+use zenkai_engine::{Engine, Workbook, open_xlsx, save_xlsx_atomic, xlsx_bytes};
 use zenkai_types::{
     CellPos, ColIdx, HAlign, NumberFormat, Range, Rgb, RowIdx, SheetId, StyleChange,
 };
@@ -150,7 +150,7 @@ fn difference(expected: &[String], actual: &[String]) -> String {
 
 fn save_and_reopen(book: &Workbook, dir: &Path, name: &str) -> Workbook {
     let path = dir.join(name);
-    save_xlsx_atomic(book, &path).unwrap();
+    save_xlsx_atomic(&xlsx_bytes(book).unwrap(), &path).unwrap();
     open_xlsx(&path).unwrap().workbook
 }
 

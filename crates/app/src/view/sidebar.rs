@@ -11,8 +11,6 @@ use crate::sidebar_rows::{self, Move, Row, SpaceRows};
 use crate::space_settings;
 use crate::spaces::{Neighbour, SpaceColor, SpaceId, new_space_name};
 
-pub(super) const WIDTH: f32 = 248.0;
-
 mod render;
 
 // A button toggling the sidebar answers the primary button and the keyboard only.

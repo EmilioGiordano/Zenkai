@@ -62,6 +62,24 @@ impl GeneralSettings {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+pub enum XlsxReaderChoice {
+    #[default]
+    Standard,
+    Fast,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AdvancedSettings {
+    #[serde(default)]
+    #[schemars(
+        description = "How .xlsx files are read: \"standard\" is IronCalc's reader, \"fast\" the streaming one, which hands any file it does not fully support back to the standard reader."
+    )]
+    pub xlsx_reader: XlsxReaderChoice,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
 pub enum ColorMode {
     Light,
     Dark,

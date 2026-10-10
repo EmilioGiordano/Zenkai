@@ -47,3 +47,22 @@ fn open_log_file() -> io::Result<File> {
         .truncate(over_cap)
         .open(path)
 }
+
+// Release builds have no console, so a panic would otherwise vanish without a trace.
+pub fn log_panics() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info.location().map_or_else(
+            || "unknown location".to_string(),
+            |location| format!("{}:{}", location.file(), location.line()),
+        );
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|text| (*text).to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "non-text panic payload".to_string());
+        tracing::error!(%location, %message, "panic");
+        default_hook(info);
+    }));
+}

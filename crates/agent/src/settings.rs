@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use zenkai_i18n::t;
 use zenkai_types::Language;
 
-use crate::preferences::{AppearanceSettings, GeneralSettings};
+use crate::preferences::{AdvancedSettings, AppearanceSettings, GeneralSettings};
 
 pub const SCHEMA_FILE: &str = "settings.schema.json";
 const SCHEMA_REFERENCE: &str = "./settings.schema.json";
@@ -30,6 +30,14 @@ pub struct Settings {
     pub appearance: AppearanceSettings,
     #[serde(default)]
     pub agents: AgentSettings,
+    #[serde(default)]
+    pub advanced: AdvancedSettings,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[schemars(
+        with = "BTreeMap<String, Option<Vec<String>>>",
+        description = "Keyboard shortcuts that differ from the defaults. The key is the command name, such as \"zenkai::ToggleBold\"; the value lists its shortcuts, such as [\"ctrl-shift-b\"], or is null to leave the command without one. Commands not listed keep their default shortcuts."
+    )]
+    pub keymap: BTreeMap<String, serde_json::Value>,
 }
 
 fn schema_reference() -> String {
@@ -44,6 +52,8 @@ impl Default for Settings {
             general: GeneralSettings::default(),
             appearance: AppearanceSettings::default(),
             agents: AgentSettings::default(),
+            advanced: AdvancedSettings::default(),
+            keymap: BTreeMap::new(),
         }
     }
 }
@@ -522,6 +532,24 @@ mod tests {
         let bad_secret = r#"{ "agents": { "servers": { "a": { "name": "A", "command": "a",
             "env": { "K": { "secret": "has space" } } } } } }"#;
         assert!(Settings::parse(bad_secret).is_err());
+    }
+
+    #[test]
+    fn keymap_entries_keep_their_shape_for_the_app_to_validate() {
+        let text = r#"{ "keymap": { "zenkai::ToggleBold": ["ctrl-shift-b"], "zenkai::Open": null, "zenkai::Save": "ctrl-s" } }"#;
+        let settings = Settings::parse(text).unwrap();
+        assert_eq!(settings.keymap.len(), 3);
+        assert!(settings.keymap["zenkai::Open"].is_null());
+        assert!(settings.keymap["zenkai::Save"].is_string());
+        assert_eq!(
+            Settings::parse(&settings.to_json().unwrap()).unwrap(),
+            settings
+        );
+    }
+
+    #[test]
+    fn a_file_without_shortcuts_is_written_without_a_keymap() {
+        assert!(!Settings::default().to_json().unwrap().contains("keymap"));
     }
 
     #[test]

@@ -2,7 +2,9 @@ use gpui_kit::base::v_flex;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::*;
-use zenkai_agent::preferences::{ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS};
+use zenkai_agent::preferences::{
+    ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS, XlsxReaderChoice,
+};
 use zenkai_agent::settings::{PermissionMode, Settings};
 use zenkai_i18n::t;
 
@@ -25,15 +27,21 @@ impl SettingsWindow {
         let searching = !query.is_empty();
         let spanning = searching || self.modified_only;
         let rows = visible_rows(self.section, &query, self.modified_only, values);
-        let shortcut_matches = if (self.section == Section::Keyboard && !spanning)
-            || (searching && !self.modified_only)
-        {
-            keyboard::matching(&self.shortcuts, &query)
+        let listing_shortcuts = spanning || self.section == Section::Keyboard;
+        let shortcut_matches = if listing_shortcuts {
+            keyboard::matching(
+                &self.shortcuts,
+                &query,
+                self.keyboard.pressed.as_deref(),
+                self.modified_only,
+            )
         } else {
             Vec::new()
         };
         let results = rows.len() + shortcut_matches.len();
-        let shortcut_blocks = keyboard::render(&shortcut_matches, cx);
+        let shortcut_blocks = self.shortcut_blocks(&shortcut_matches, cx);
+        let shortcut_tools =
+            (self.section == Section::Keyboard && !spanning).then(|| self.shortcut_tools(cx));
         let (title, lead): (SharedString, SharedString) = if self.modified_only {
             (
                 t!("settings.modified.title").into(),
@@ -78,6 +86,7 @@ impl SettingsWindow {
             );
             start = end;
         }
+        blocks.extend(shortcut_tools);
         blocks.extend(shortcut_blocks);
         if results == 0 {
             blocks.push(
@@ -159,6 +168,22 @@ impl SettingsWindow {
                     |on, _, cx| {
                         agent_settings::change(cx, move |settings| {
                             settings.general.restore_session = on
+                        })
+                    },
+                ));
+            }
+            RowId::FastXlsxReader => {
+                parts.control = Some(controls::switch(
+                    ("row", id),
+                    info.title,
+                    settings.advanced.xlsx_reader == XlsxReaderChoice::Fast,
+                    |on, _, cx| {
+                        agent_settings::change(cx, move |settings| {
+                            settings.advanced.xlsx_reader = if on {
+                                XlsxReaderChoice::Fast
+                            } else {
+                                XlsxReaderChoice::Standard
+                            }
                         })
                     },
                 ));

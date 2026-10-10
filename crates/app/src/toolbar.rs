@@ -10,8 +10,10 @@ use zenkai_i18n::t;
 use zenkai_types::{CellStyle, HAlign};
 
 use crate::actions::*;
+use crate::keymap;
 
 fn tool(
+    cx: &App,
     id: &'static str,
     icon: IconName,
     tooltip: &'static str,
@@ -21,7 +23,7 @@ fn tool(
         .ghost()
         .compact()
         .icon(icon)
-        .tooltip(tooltip)
+        .tooltip(keymap::labeled(cx, tooltip, &action))
         .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
 }
 
@@ -45,20 +47,30 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         .border_b_1()
         .border_color(theme.border)
         .child(tool(
+            cx,
             "new",
             IconName::FilePlus,
             t!("toolbar.new"),
             NewWorkbook,
         ))
-        .child(tool("open", IconName::FolderOpen, t!("toolbar.open"), Open))
-        .child(tool("save", IconName::Save, t!("toolbar.save"), Save))
+        .child(tool(
+            cx,
+            "open",
+            IconName::FolderOpen,
+            t!("toolbar.open"),
+            Open,
+        ))
+        .child(tool(cx, "save", IconName::Save, t!("toolbar.save"), Save))
         .child(separator(cx))
-        .child(tool("undo", IconName::Undo2, t!("toolbar.undo"), Undo))
-        .child(tool("redo", IconName::Redo2, t!("toolbar.redo"), Redo))
+        .child(tool(cx, "undo", IconName::Undo2, t!("toolbar.undo"), Undo))
+        .child(tool(cx, "redo", IconName::Redo2, t!("toolbar.redo"), Redo))
         .child(separator(cx))
-        .child(tool("bold", IconName::Bold, t!("toolbar.bold"), ToggleBold).selected(style.bold))
+        .child(
+            tool(cx, "bold", IconName::Bold, t!("toolbar.bold"), ToggleBold).selected(style.bold),
+        )
         .child(
             tool(
+                cx,
                 "italic",
                 IconName::Italic,
                 t!("toolbar.italic"),
@@ -68,6 +80,7 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         )
         .child(
             tool(
+                cx,
                 "underline",
                 IconName::Underline,
                 t!("toolbar.underline"),
@@ -104,6 +117,7 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         .child(separator(cx))
         .child(
             tool(
+                cx,
                 "align-left",
                 IconName::TextAlignStart,
                 t!("toolbar.align_left"),
@@ -113,6 +127,7 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         )
         .child(
             tool(
+                cx,
                 "align-center",
                 IconName::TextAlignCenter,
                 t!("toolbar.align_center"),
@@ -122,6 +137,7 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         )
         .child(
             tool(
+                cx,
                 "align-right",
                 IconName::TextAlignEnd,
                 t!("toolbar.align_right"),
@@ -131,6 +147,7 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         )
         .child(
             tool(
+                cx,
                 "wrap",
                 IconName::TextWrap,
                 t!("toolbar.wrap_text"),
@@ -140,42 +157,49 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         )
         .child(separator(cx))
         .child(tool(
+            cx,
             "general",
             IconName::CaseSensitive,
             t!("toolbar.format_general"),
             FormatGeneral,
         ))
         .child(tool(
+            cx,
             "more-decimals",
             IconName::DecimalsArrowRight,
             t!("toolbar.increase_decimal"),
             IncreaseDecimal,
         ))
         .child(tool(
+            cx,
             "fewer-decimals",
             IconName::DecimalsArrowLeft,
             t!("toolbar.decrease_decimal"),
             DecreaseDecimal,
         ))
         .child(tool(
+            cx,
             "number",
             IconName::Hash,
             t!("toolbar.format_number"),
             FormatNumber,
         ))
         .child(tool(
+            cx,
             "currency",
             IconName::DollarSign,
             t!("toolbar.format_currency"),
             FormatCurrency,
         ))
         .child(tool(
+            cx,
             "percent",
             IconName::Percent,
             t!("toolbar.format_percent"),
             FormatPercent,
         ))
         .child(tool(
+            cx,
             "date",
             IconName::Calendar,
             t!("toolbar.format_date"),
@@ -183,6 +207,7 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         ))
         .child(separator(cx))
         .child(tool(
+            cx,
             "chart",
             IconName::ChartColumn,
             t!("toolbar.chart"),
@@ -190,12 +215,14 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         ))
         .child(separator(cx))
         .child(tool(
+            cx,
             "zoom-out",
             IconName::ZoomOut,
             t!("toolbar.zoom_out"),
             ZoomOut,
         ))
         .child(tool(
+            cx,
             "zoom-in",
             IconName::ZoomIn,
             t!("toolbar.zoom_in"),
@@ -203,6 +230,7 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         ))
         .child(div().flex_1())
         .child(tool(
+            cx,
             "theme",
             IconName::SunMoon,
             t!("toolbar.theme"),

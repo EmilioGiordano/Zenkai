@@ -16,4 +16,4 @@ pub use grid::{
     SheetView, ViewState, step, typed_preview,
 };
 pub use layout::Layout;
-pub use paint::HighContrast;
+pub use paint::{HighContrast, PENDING_COLOR};

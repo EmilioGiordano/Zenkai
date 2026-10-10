@@ -35,9 +35,27 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/test/test_criteria_ranges.rs`. Needs the incremental recalculation for
   `Model::circular_hits` and for turning the cache on around `evaluate_incremental`;
   without it, only the hooks in `Model::evaluate` remain.
+- SUMIF and SUMIFS round the exact sum once instead of adding in order
+  (`src/exact_sum.rs`), so the result does not depend on the order cells are added in;
+  it can differ from upstream in the last bit. Tests: `src/exact_sum.rs`,
+  `src/test/test_fn_sumifs.rs`.
+- SUMIF, SUMIFS, COUNTIF and COUNTIFS keep their totals between recalculations and
+  update them by what an edit changed instead of reading their ranges again
+  (`src/criteria_totals.rs`, `src/criteria_ranges.rs`, `src/incremental.rs`,
+  `Model::criteria_deltas`). Tests: `src/test/test_criteria_totals.rs`,
+  `src/criteria_ranges.rs`. Needs the incremental recalculation, the exact sum and the
+  per-evaluation criteria ranges above.
+- COUNTIF and COUNTIFS walk the sheet for its used area only when a range is a whole
+  row or column (`src/functions/statistical/if_ifs.rs`); the walk cost about 60 ms per
+  call on a 3M-cell sheet. Covered by `src/test/test_criteria_semantics.rs`.
 - COUNTIFS over a whole-sheet range like `A:XFD` counted its blank tail in i32, which
   overflowed (`src/functions/statistical/if_ifs.rs`). Tests:
   `src/test/test_criteria_semantics.rs`.
+- `UserModel::range_clear_contents_of_areas` clears several areas of a sheet as one undo
+  step, so a sparse selection clears only the cells it holds instead of every cell of its
+  box; an array formula may span areas as long as it lies inside the given bounds
+  (`src/user_model/common.rs`, `Model::arrays_inside` and `Model::clear_area_contents` in
+  `src/model.rs`). Tests: `src/test/user_model/test_clear_areas.rs`.
 
 Zenkai-only, not for upstream:
 

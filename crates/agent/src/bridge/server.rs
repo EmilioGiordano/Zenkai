@@ -8,7 +8,7 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 
 use crate::bridge::catalog;
-use crate::tools::{Nonce, ToolEndpoint, UNTRUSTED_NOTICE, client_label};
+use crate::tools::{Nonce, ToolEndpoint, UNTRUSTED_NOTICE, WorkingFolder, client_label};
 
 const CLIENT_CHECK: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -19,6 +19,8 @@ const INSTRUCTIONS: &str = "Zenkai is a spreadsheet. These tools read and change
 #[derive(Clone)]
 pub struct ZenkaiServer {
     pub endpoint: ToolEndpoint,
+    // Only the chat's own bridge has one; external agents cannot create or open files.
+    pub folder: Option<WorkingFolder>,
 }
 
 impl ServerHandler for ZenkaiServer {
@@ -42,7 +44,8 @@ impl ServerHandler for ZenkaiServer {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let failed = |message: String| CallToolResult::error(vec![ContentBlock::text(message)]);
-        let call = match catalog::parse_call(&request.name, request.arguments) {
+        let call = match catalog::parse_call(&request.name, request.arguments, self.folder.as_ref())
+        {
             Ok(call) => call,
             Err(error) => return Ok(failed(error.to_string()).into()),
         };

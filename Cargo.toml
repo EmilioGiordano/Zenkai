@@ -5,11 +5,13 @@ members = [
     "crates/types",
     "crates/i18n",
     "crates/datagen",
+    "crates/xlsx-reader",
     "crates/engine",
     "crates/formats",
     "crates/grid",
     "crates/agent",
     "crates/mcp-relay",
+    "crates/fake-acp-agent",
     "crates/app",
 ]
 # Third-party code patched for Zenkai: built as a dependency, outside our fmt and clippy gates.

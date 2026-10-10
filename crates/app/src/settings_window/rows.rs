@@ -70,6 +70,7 @@ pub enum RowId {
     WhatLeaves,
     RecoveryFolder,
     SettingsFile,
+    FastXlsxReader,
     LogsFolder,
     Version,
     License,
@@ -84,7 +85,7 @@ pub struct RowInfo {
 }
 
 impl RowId {
-    pub const ALL: [RowId; 21] = [
+    pub const ALL: [RowId; 22] = [
         RowId::RestoreSession,
         RowId::Language,
         RowId::Autosave,
@@ -103,6 +104,7 @@ impl RowId {
         RowId::WhatLeaves,
         RowId::RecoveryFolder,
         RowId::SettingsFile,
+        RowId::FastXlsxReader,
         RowId::LogsFolder,
         RowId::Version,
         RowId::License,
@@ -252,6 +254,13 @@ impl RowId {
                 t!("settings.row.settings_file.description"),
                 &["json", "config"],
             ),
+            RowId::FastXlsxReader => row(
+                Section::Files,
+                t!("settings.group.advanced"),
+                t!("settings.row.fast_xlsx_reader"),
+                t!("settings.row.fast_xlsx_reader.description"),
+                &["xlsx", "open", "speed", "reader", "advanced"],
+            ),
             RowId::LogsFolder => row(
                 Section::Privacy,
                 t!("settings.group.logs"),
@@ -309,6 +318,7 @@ impl RowId {
             RowId::ExternalAgents => {
                 settings.agents.external_agents != default.agents.external_agents
             }
+            RowId::FastXlsxReader => settings.advanced.xlsx_reader != default.advanced.xlsx_reader,
             RowId::Agents
             | RowId::ConnectionCommand
             | RowId::WhatLeaves
@@ -338,6 +348,7 @@ impl RowId {
             RowId::ExternalAgents => {
                 settings.agents.external_agents = default.agents.external_agents
             }
+            RowId::FastXlsxReader => settings.advanced.xlsx_reader = default.advanced.xlsx_reader,
             _ => {}
         }
     }
@@ -367,6 +378,7 @@ impl RowId {
 pub struct Values<'a> {
     pub settings: &'a Settings,
     pub spaces: &'a SpaceAppearance,
+    pub shortcuts: usize,
 }
 
 impl Values<'_> {
@@ -375,14 +387,19 @@ impl Values<'_> {
     }
 
     pub fn modified_in(&self, section: Section) -> usize {
-        RowId::ALL
+        let rows = RowId::ALL
             .iter()
             .filter(|row| row.info().section == section && self.modified(**row))
-            .count()
+            .count();
+        if section == Section::Keyboard {
+            rows + self.shortcuts
+        } else {
+            rows
+        }
     }
 
     pub fn modified_total(&self) -> usize {
-        RowId::ALL.iter().filter(|row| self.modified(**row)).count()
+        RowId::ALL.iter().filter(|row| self.modified(**row)).count() + self.shortcuts
     }
 }
 
@@ -427,7 +444,11 @@ mod tests {
     use crate::space_appearance::{Intensity, NewSpaceColor, SpaceStyle};
 
     fn values<'a>(settings: &'a Settings, spaces: &'a SpaceAppearance) -> Values<'a> {
-        Values { settings, spaces }
+        Values {
+            settings,
+            spaces,
+            shortcuts: 0,
+        }
     }
 
     fn rows(section: Section, query: &str, only: bool, v: Values) -> Vec<RowId> {
@@ -505,6 +526,18 @@ mod tests {
             [RowId::RestoreSession, RowId::Language, RowId::Autosave]
         );
         assert!(rows(Section::Keyboard, "", false, v).is_empty());
+    }
+
+    #[test]
+    fn changed_shortcuts_count_as_modified_in_the_keyboard_section() {
+        let (settings, spaces) = (Settings::default(), SpaceAppearance::default());
+        let v = Values {
+            shortcuts: 2,
+            ..values(&settings, &spaces)
+        };
+        assert_eq!(v.modified_in(Section::Keyboard), 2);
+        assert_eq!(v.modified_in(Section::General), 0);
+        assert_eq!(v.modified_total(), 2);
     }
 
     #[test]

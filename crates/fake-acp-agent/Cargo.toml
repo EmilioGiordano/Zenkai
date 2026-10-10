@@ -1,0 +1,26 @@
+[package]
+name = "zenkai-fake-acp-agent"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "zenkai-fake-acp-agent"
+path = "src/main.rs"
+
+# A scripted ACP agent for tests and for trying the chat without a model. It is never shipped.
+[dependencies]
+agent-client-protocol = { version = "=3.2.0", features = ["stdio"] }
+async-channel = "2"
+futures = { version = "0.3", features = ["executor"] }
+serde_json = "1"
+
+[dev-dependencies]
+async-channel = "2"
+futures = "0.3"
+tempfile = "3"
+zenkai-agent = { path = "../agent" }
+
+[lints]
+workspace = true
