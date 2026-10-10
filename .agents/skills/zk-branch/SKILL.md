@@ -20,7 +20,9 @@ Hard rules for the whole run:
 - Never commit `TASK-*.md` or `REPORT-*.md` files, nor anything outside the task.
 - Builds use the worktree's `.cargo/config.toml` target dir. Never create or change
   that file and never override `CARGO_TARGET_DIR`.
-- One `cargo` process at a time, at most `-j 8` in total.
+- One branch builds at a time: if another `zk-branch` or `zk-staging` run is
+  building, wait for it. Never run two `cargo` processes at once, at most `-j 8`
+  in total.
 
 ## 1. Implement
 
@@ -45,12 +47,21 @@ cargo test -p <crates>
 ```
 
 Never workspace-wide clippy or test, never `--release`, never the benchmark.
+No review starts until these checks are green. If they fail, the implementer
+fixes them first and reruns them.
+
+Tiny tasks (a one-line fix) skip the reviewers entirely; say so in the REPORT
+and continue at step 6.
 
 ## 3. Review
 
 Run `git diff main...HEAD` in the worktree. Spawn the reviewer subagents in
-parallel, each with fresh context and only the TASK spec, `AGENTS.md`, the
-worktree path, and that diff. Never pass the implementer's reasoning.
+parallel, each with fresh context. Reviewer independence is a hard rule:
+reviewers receive only the TASK spec, `AGENTS.md`, the worktree path, and that
+diff. Never the implementer's notes, reasons, commit body explanations, the
+REPORT, or previous rounds' findings. Each round uses new reviewer subagents.
+If a finding contradicts a decision written in the TASK, the lead session
+decides, not the reviewer.
 
 - Quality (`.claude/agents/quality-reviewer.md`): always.
 - Security (`.claude/agents/security-reviewer.md`): when the diff touches
@@ -63,8 +74,9 @@ defect, failure scenario.
 
 ## 4. Fix
 
-Hand the findings to the implementer. It verifies each one, fixes the real ones,
-rejects the wrong ones with a reason, and reruns the branch checks from step 2.
+Hand the findings to the same implementer subagent from step 1 across all fix
+rounds. It verifies each finding, fixes the real ones, rejects the wrong ones
+with a reason, and reruns the branch checks from step 2.
 
 ## 5. Rounds
 
