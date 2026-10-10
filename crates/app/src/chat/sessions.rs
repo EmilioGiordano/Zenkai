@@ -74,12 +74,22 @@ impl ChatPanel {
         } else {
             self.hidden_agents.insert(id);
         }
+        self.menu_index = 0;
         cx.notify();
     }
 
     fn show_all_agents(&mut self, cx: &mut Context<Self>) {
         self.hidden_agents.clear();
+        self.menu_index = 0;
         cx.notify();
+    }
+
+    // Clicking a chip moves the focus to it, which would drop the list bindings that
+    // only reach the search field; the focus returns so Up, Down, Enter and Esc keep
+    // working, including both Esc stages.
+    fn refocus_search(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let search = self.sessions_query.clone();
+        search.update(cx, |state, cx| state.focus(window, cx));
     }
 
     // Recomputes every record's size off the UI thread; render only reads the map.
@@ -112,13 +122,12 @@ impl ChatPanel {
             return;
         }
         let rows = self.filtered_rows(cx);
-        if rows.is_empty() {
+        let Some(picked) = rows
+            .get(self.menu_index.min(rows.len().saturating_sub(1)))
+            .cloned()
+        else {
             return;
-        }
-        let picked = rows
-            .get(self.menu_index.min(rows.len() - 1))
-            .expect("nonempty rows")
-            .clone();
+        };
         self.resume(&picked, window, cx);
     }
 
@@ -173,7 +182,7 @@ impl ChatPanel {
                         if let Some(size) = row.size_bytes {
                             meta = meta.child(session_rows::format_size(size));
                         }
-                        if let Some(usage) = row.context {
+                        if let Some(usage) = row.context.filter(|usage| usage.size > 0) {
                             let fraction = usage.fraction().unwrap_or(0.0).clamp(0.0, 1.0);
                             meta = meta
                                 .child(
@@ -199,11 +208,11 @@ impl ChatPanel {
                                                 ),
                                         ),
                                 )
-                                .child(format!(
+                                .child(div().font_family(super::MONO).child(format!(
                                     "{} / {}",
                                     session_rows::format_tokens(usage.used),
                                     session_rows::format_tokens(usage.size)
-                                ));
+                                )));
                         }
                         div().truncate().child(meta)
                     }),
@@ -284,7 +293,10 @@ impl ChatPanel {
                             .child(name.clone())
                             .when(on, |row| row.child(Icon::new(IconName::Check).size_3p5())),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_agent(id.clone(), cx))),
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_agent(id.clone(), cx);
+                        this.refocus_search(window, cx);
+                    })),
             );
         }
         chips = chips.child(
@@ -292,7 +304,10 @@ impl ChatPanel {
                 .ghost()
                 .compact()
                 .label(t!("chat.sessions.all"))
-                .on_click(cx.listener(|this, _, _, cx| this.show_all_agents(cx))),
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.show_all_agents(cx);
+                    this.refocus_search(window, cx);
+                })),
         );
         v_flex()
             .key_context("ChatSessions")
@@ -316,6 +331,12 @@ impl ChatPanel {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.toggle_sessions(window, cx);
                             })),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!("chat.sessions.title")),
                     )
                     .child(div().flex_1())
                     .child(div().text_xs().text_color(muted).child(summary)),
