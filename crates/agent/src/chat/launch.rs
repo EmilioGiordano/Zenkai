@@ -558,14 +558,6 @@ mod tests {
         server: &AgentServer,
         installed: &[(&str, &str)],
     ) -> Result<LaunchPlan, LaunchError> {
-        plan_in(server, installed, Path::new("C:\\agents"))
-    }
-
-    fn plan_in(
-        server: &AgentServer,
-        installed: &[(&str, &str)],
-        folder: &Path,
-    ) -> Result<LaunchPlan, LaunchError> {
         let installed: Vec<(String, PathBuf)> = installed
             .iter()
             .map(|(name, path)| (name.to_string(), PathBuf::from(path)))
@@ -580,7 +572,7 @@ mod tests {
             server,
             &LaunchEnvironment {
                 find: &find,
-                agents_folder: folder.to_path_buf(),
+                agents_folder: PathBuf::from("C:\\agents"),
             },
         )
     }
@@ -638,8 +630,7 @@ mod tests {
         any(target_arch = "x86_64", target_arch = "aarch64")
     ))]
     fn a_native_preset_plans_its_platform_binary() {
-        let folder = tempfile::tempdir().unwrap();
-        let plan = plan_in(&OPENCODE.server(), &[NODE], folder.path()).unwrap();
+        let plan = plan_with(&OPENCODE.server(), &[NODE]).unwrap();
         let LaunchPlan::Native {
             node,
             program,
@@ -651,7 +642,10 @@ mod tests {
             panic!("expected a native plan");
         };
         assert_eq!(node, PathBuf::from(NODE.1));
-        assert_eq!(program, folder.path().join(OPENCODE.native_path().unwrap()));
+        assert_eq!(
+            program,
+            PathBuf::from("C:\\agents").join(OPENCODE.native_path().unwrap())
+        );
         assert_eq!(package.spec(), "opencode-ai@1.18.32");
         assert_eq!(args, ["acp"]);
     }
