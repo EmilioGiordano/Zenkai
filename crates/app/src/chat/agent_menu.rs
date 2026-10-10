@@ -9,7 +9,7 @@ use super::{ChatPanel, Menu};
 use crate::agent_settings::{self, AgentConfig};
 
 const AGENT_MENU_WIDTH: f32 = 280.0;
-const ALWAYS_LISTED: [&str; 2] = ["claude", "codex"];
+const ALWAYS_LISTED: [&str; 3] = ["claude", "codex", "opencode"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AgentOption {
@@ -203,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_and_codex_are_always_listed_and_only_installed_ones_are_marked() {
+    fn claude_codex_and_opencode_are_always_listed_and_only_installed_ones_are_marked() {
         let options = agent_options(&settings(
             r#"{"agents": {"default": "claude", "servers": {
                 "claude": {"name": "Claude", "command": "npx"}}}}"#,
@@ -212,7 +212,14 @@ mod tests {
             .iter()
             .map(|o| (o.name.as_str(), o.installed, o.active))
             .collect();
-        assert_eq!(names, [("Claude", true, true), ("Codex", false, false)]);
+        assert_eq!(
+            names,
+            [
+                ("Claude", true, true),
+                ("Codex", false, false),
+                ("opencode", false, false)
+            ]
+        );
     }
 
     #[test]
