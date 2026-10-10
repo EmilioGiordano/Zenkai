@@ -507,13 +507,36 @@ fn program_of(plan: &LaunchPlan) -> &Path {
     }
 }
 
+fn trusted_program(preset: &Preset, plan: &LaunchPlan) -> bool {
+    match preset.entry {
+        Entry::Node => true,
+        // A native binary is trusted on the same terms: the pinned version only arrives
+        // through the committed lockfile, whose integrity hashes npm checks.
+        Entry::Native(_) => match plan {
+            LaunchPlan::Native {
+                program,
+                folder,
+                package,
+                ..
+            } => {
+                preset.package == package.spec()
+                    && preset
+                        .native_path()
+                        .is_some_and(|relative| folder.join(relative) == *program)
+            }
+            _ => false,
+        },
+    }
+}
+
 impl LaunchApprovals {
     // A changed command, argument, variable or resolved executable is a new launch.
     pub fn is_approved(&mut self, id: &AgentId, server: &AgentServer, plan: &LaunchPlan) -> bool {
         let spec = LaunchSpec::of(server);
-        if crate::presets::PRESETS.iter().any(|preset| {
-            matches!(preset.entry, Entry::Node) && LaunchSpec::of(&preset.server()) == spec
-        }) {
+        if crate::presets::PRESETS
+            .iter()
+            .any(|preset| LaunchSpec::of(&preset.server()) == spec && trusted_program(preset, plan))
+        {
             return true;
         }
         match self.approved.get_mut(id) {
@@ -770,6 +793,37 @@ mod tests {
             folder: PathBuf::from("C:\\agents"),
             args: vec!["acp".to_string()],
             relative: String::from("node_modules/test-native/bin/agent.exe"),
+        }
+    }
+
+    #[test]
+    fn a_native_preset_is_trusted_without_approval() {
+        let mut approvals = LaunchApprovals::default();
+        let id = AgentId::new("opencode");
+        let server = OPENCODE.server();
+        match OPENCODE.native_path() {
+            Some(native) => {
+                let folder = PathBuf::from("C:\\agents").join("opencode-ai@1.18.32");
+                let plan = LaunchPlan::Native {
+                    node: PathBuf::from(NODE.1),
+                    program: folder.join(native),
+                    package: PackageSpec::parse("opencode-ai@1.18.32").unwrap(),
+                    folder,
+                    args: vec!["acp".to_string()],
+                    relative: native.to_string(),
+                };
+                assert!(approvals.is_approved(&id, &server, &plan));
+                assert!(!approvals.is_approved(
+                    &id,
+                    &server,
+                    &native_plan("C:\\other\\opencode.exe")
+                ));
+            }
+            None => assert!(!approvals.is_approved(
+                &id,
+                &server,
+                &native_plan("C:\\agents\\opencode.exe")
+            )),
         }
     }
 
