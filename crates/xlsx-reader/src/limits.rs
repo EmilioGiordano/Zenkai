@@ -11,6 +11,9 @@ pub const MAX_ENTRIES: usize = 20_000;
 pub const MAX_FORMULA_CHARS: usize = 8_192;
 pub const MAX_FORMULA_DEPTH: usize = 256;
 pub const MAX_FORMULA_AREA: u64 = 1_000_000;
+// Together the array formulas of one sheet may claim this many cells: each claimed cell costs a
+// map entry (about 40 bytes), so 4 million is roughly 160 MB.
+pub const MAX_ARRAY_CELLS_PER_SHEET: u64 = 4_000_000;
 
 pub fn check_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result<(), ReadError> {
     if archive.len() > MAX_ENTRIES {

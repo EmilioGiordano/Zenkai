@@ -101,6 +101,7 @@ pub(crate) fn scan_rows<'a>(
         sheet_name,
         strings: HashMap::new(),
         array_cells: HashMap::new(),
+        array_cells_claimed: 0,
         cells: SheetCells::default(),
     };
     scanner.rows()?;
@@ -118,6 +119,7 @@ struct Scanner<'a, 's> {
     sheet_name: &'s str,
     strings: HashMap<String, usize>,
     array_cells: HashMap<(i32, i32), (i32, i32)>,
+    array_cells_claimed: u64,
     cells: SheetCells<'a>,
 }
 
@@ -304,6 +306,14 @@ impl<'a> Scanner<'a, '_> {
                     if area > limits::MAX_FORMULA_AREA as i64 {
                         return Err(unsupported("an array formula larger than the limit"));
                     }
+                    self.array_cells_claimed += area as u64;
+                    if self.array_cells_claimed > limits::MAX_ARRAY_CELLS_PER_SHEET {
+                        return Err(ReadError::Unsafe(format!(
+                            "the array formulas of sheet {} claim more than {} cells",
+                            self.sheet_name,
+                            limits::MAX_ARRAY_CELLS_PER_SHEET
+                        )));
+                    }
                     for r in row1..=row2 {
                         for c in column1..=column2 {
                             if r != row1 || c != column1 {
@@ -435,5 +445,32 @@ fn parse_range(range: &str) -> Option<(i32, i32, i32, i32)> {
             Some((left.row, left.column, right.row, right.column))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scan(rows: &str) -> Result<SheetCells<'_>, ReadError> {
+        scan_rows(rows, &[Vec::new()], "Sheet1")
+    }
+
+    fn array_row(row: u32, reference: &str) -> String {
+        format!(r#"<row r="{row}"><c r="A{row}"><f t="array" ref="{reference}">1</f></c></row>"#)
+    }
+
+    #[test]
+    fn many_array_formulas_together_are_refused() {
+        let rows: String = (1..=5)
+            .map(|n| array_row(n, &format!("A{n}:A{}", n + 900_000)))
+            .collect();
+        assert!(matches!(scan(&rows), Err(ReadError::Unsafe(_))));
+    }
+
+    #[test]
+    fn a_few_array_formulas_are_read() {
+        let rows: String = (1..=3).map(|n| array_row(n, &format!("A{n}:B{n}"))).collect();
+        assert!(scan(&rows).is_ok());
     }
 }
