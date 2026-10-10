@@ -26,7 +26,6 @@ use crate::chat::process::ProcessTree;
 use crate::chat::state::{ConfigId, ConfigSource, StateChange};
 use crate::chat::thread::{AgentUpdate, ToolCallId, ToolCard, ToolKind, ToolStatus, TurnEnd};
 use crate::chat::wire;
-use crate::presets::Preset;
 
 // The hidden first block of every prompt; replayed history must not show it as the user's words.
 pub const CONTEXT_MARKER: &str = "[Zenkai]";
