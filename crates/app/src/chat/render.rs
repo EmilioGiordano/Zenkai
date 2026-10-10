@@ -7,7 +7,7 @@ use zenkai_agent::settings::Settings;
 use zenkai_i18n::t;
 
 use super::launch::chosen_agent;
-use super::{ChatEvent, ChatPanel, View};
+use super::{ChatEvent, ChatPanel, Menu, View};
 use crate::actions::*;
 use crate::agent_settings::AgentConfig;
 
@@ -22,6 +22,9 @@ fn provider_name(settings: &Settings) -> String {
 
 impl Render for ChatPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.menu != Some(Menu::Model) && self.model_query.focus_handle(cx).is_focused(window) {
+            self.focus_composer(window, cx);
+        }
         let mut context = KeyContext::default();
         context.add("AgentChat");
         if self.busy() {
@@ -81,7 +84,9 @@ impl Render for ChatPanel {
             .on_action(cx.listener(|this, _: &SendChatMessage, window, cx| this.send(window, cx)))
             .on_action(cx.listener(|this, _: &StopAgentTurn, _, cx| this.stop(cx)))
             .on_action(cx.listener(|_, _: &LeaveAgentChat, _, cx| cx.emit(ChatEvent::Leave)))
-            .on_action(cx.listener(|this, _: &CycleChatAgent, _, cx| this.toggle_agent_menu(cx)))
+            .on_action(cx.listener(|this, _: &CycleChatAgent, window, cx| {
+                this.toggle_agent_menu(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.toggle_agent_editing(cx)))
             .on_action(cx.listener(|this, _: &CycleChatPermission, _, cx| this.cycle_access(cx)))
             .on_action(cx.listener(|this, _: &CopyLoginCommand, _, cx| this.copy_login_command(cx)))
@@ -94,10 +99,14 @@ impl Render for ChatPanel {
             .on_action(cx.listener(|this, _: &ShowChatSessions, window, cx| {
                 this.toggle_sessions(window, cx)
             }))
-            .on_action(cx.listener(|this, _: &PickChatModel, _, cx| this.toggle_model_menu(cx)))
             .on_action(
-                cx.listener(|this, _: &PickChatPermission, _, cx| this.toggle_access_menu(cx)),
+                cx.listener(|this, _: &PickChatModel, window, cx| {
+                    this.toggle_model_menu(window, cx)
+                }),
             )
+            .on_action(cx.listener(|this, _: &PickChatPermission, window, cx| {
+                this.toggle_access_menu(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &CloseChatMenu, _, cx| this.close_menu(cx)))
             .on_action(cx.listener(|this, _: &ChatMenuNext, _, cx| this.menu_step(true, cx)))
             .on_action(cx.listener(|this, _: &ChatMenuPrevious, _, cx| this.menu_step(false, cx)))
