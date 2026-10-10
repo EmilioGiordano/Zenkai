@@ -778,6 +778,19 @@ mod tests {
                 "{command}"
             );
         }
+        #[cfg(windows)]
+        for command in [
+            "C:/py/python.exe",
+            "C:/py/python3.12.exe",
+            "C:/x/deno.exe",
+            "C:/x/bun.exe",
+        ] {
+            let result = plan_with(&server(command, &[]), &[]);
+            assert!(
+                matches!(result, Err(LaunchError::Interpreter(_))),
+                "{command}"
+            );
+        }
     }
 
     #[test]
