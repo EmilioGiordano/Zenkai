@@ -61,7 +61,21 @@ pub const CODEX: Preset = Preset {
     ),
 };
 
-pub const PRESETS: [Preset; 3] = [CLAUDE, GEMINI, CODEX];
+pub const OPENCODE: Preset = Preset {
+    id: "opencode",
+    name: "opencode",
+    package: "opencode-ai@1.18.32",
+    extra_args: &["acp"],
+    min_node_major: 20,
+    login_command: "opencode auth login",
+    provider: "opencode",
+    lock: (
+        include_str!("../lockfiles/opencode/package.json"),
+        include_str!("../lockfiles/opencode/package-lock.json"),
+    ),
+};
+
+pub const PRESETS: [Preset; 4] = [CLAUDE, GEMINI, CODEX, OPENCODE];
 
 impl Preset {
     pub fn for_package(package: &str) -> Option<Preset> {
@@ -100,6 +114,9 @@ mod tests {
         let gemini = GEMINI.server();
         assert_eq!(gemini.command, "npx");
         assert_eq!(gemini.args, ["-y", "@google/gemini-cli@0.63.0", "--acp"]);
+        let opencode = OPENCODE.server();
+        assert_eq!(opencode.command, "npx");
+        assert_eq!(opencode.args, ["-y", "opencode-ai@1.18.32", "acp"]);
         for preset in PRESETS {
             assert!(
                 preset
