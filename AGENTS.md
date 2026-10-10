@@ -239,7 +239,9 @@ Never delegate to the built-in general-purpose agent for implementation; it runs
 session's model.
 - `.claude/skills/review-changes/SKILL.md`: runs the reviewers in parallel and combines
   the verdict. It never fixes anything.
+- `.agents/skills/zk-task/SKILL.md`: Muse workflow (`/zk-task`) turning a plain-words request into a TASK file on a fresh branch worktree, then stopping for approval.
 - `.agents/skills/zk-branch/SKILL.md`: Muse workflow (`/zk-branch`) running a TASK file end to end: implement, branch checks, parallel reviews, fixes, REPORT.
+- `.agents/skills/zk-staging/SKILL.md`: Muse workflow (`/zk-staging`) merging ready branches into `staging/<date>`, running the full gate and benchmark once, delivering the exe and report.
 
 Each reviewer has a "Known false positives" section. It starts empty and grows with every
 review that was wrong; that is how the system learns. Record them there, not in this file.
