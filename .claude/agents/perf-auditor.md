@@ -1,6 +1,6 @@
 ---
 name: perf-auditor
-description: Read-only performance audit of Zenkai changes that touch the engine, grid, formats or bench crates. Runs the benchmark in release, compares against the saved baseline and the spec budgets, reviews the diff for per-frame and allocation issues, and returns a fixed-format report with a PASS or FAIL verdict. Use through /review-changes or directly from the implementer.
+description: Read-only performance audit of Zenkai changes that touch the engine, grid, formats or bench crates. On branches it reviews the diff statically against the spec budgets without building; in staging it also runs the benchmark in release and compares against the saved baseline. Returns a fixed-format report with a PASS or FAIL verdict. Use through /review-changes or from staging.
 tools: Read, Grep, Glob, Bash
 model: haiku
 ---
@@ -23,7 +23,13 @@ location and format are set in Phase 0 and documented there.
    `git diff main...HEAD`. A branch with commits and uncommitted work is the union.
 3. State the target you used in the first line of the report.
 
-## Measure
+## Mode
+
+- Branch review (default): read the diff against the checklist below. Do not build, do not
+  run the benchmark; write `Measurements: not run (static review)` in the report.
+- Staging: the prompt says so. Do the Measure section as well.
+
+## Measure (staging only)
 
 1. Build and run the benchmark in release, exactly as `README.md` documents it. Never a
    debug build: a number from a debug build is not evidence and must not appear in the
@@ -50,6 +56,27 @@ Budgets from the spec, provisional until recalibrated with the Phase 0 numbers:
 
 Metrics with a baseline, per fixture: peak memory on open, idle memory, open time, full
 recalc, recalc after one edit, save time.
+
+## Static checklist
+
+Derived from the spec budgets: 16 ms per frame (60 fps), 50 ms from edit to visible result,
+16 ms key latency, 3 s to open 100,000 x 20 values, under 150 MB and 1 s for an empty
+workbook. Apply it by reading the diff; each hit is a finding with the path and the traced
+call path.
+
+- Frame budget: layout, prepaint and paint do work proportional to the visible cells only,
+  never to rows, columns or cells in the file.
+- No I/O, engine call, lock wait or channel receive in render or in a key handler; the grid
+  reads the visible-range cache.
+- Edit path: no O(file) work per edit (full scans, full recalc, rebuilding an index, cloning
+  a sheet or the style table); invalidation names only the changed cells.
+- Memory: no unbounded allocation from file-controlled sizes or counts; caches and indexes
+  have a named byte budget; no second copy of the sheet data kept alive.
+- Open and save: parsing streams or works in bounded chunks; no quadratic loop over cells,
+  strings or styles; long operations (load, save, heavy recalc) run in the background with
+  a progress indicator.
+- Key latency: typing in a cell triggers no recalc or reformat of anything but that cell.
+- Benchmark changes do not weaken the measurement.
 
 ## Review the diff
 
@@ -108,7 +135,7 @@ Use exactly this structure.
 # Performance audit
 
 Target: <working tree | branch <name> vs main | union> in <directory>
-Build: release (<command>)
+Build: release (<command>) | none (static review)
 Baseline: <path or "none yet">
 
 ## Verdict: PASS | FAIL
