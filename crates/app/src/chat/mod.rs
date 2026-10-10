@@ -120,7 +120,7 @@ pub struct ChatPanel {
     view: View,
     menu: Option<Menu>,
     menu_index: usize,
-    // The model and effort lists each agent reported earlier in this run.
+    // Shown right after a switch so the menu is not empty while the agent restarts.
     remembered_selects: BTreeMap<AgentId, Vec<Select>>,
     pending_agent: Option<agent_menu::PendingAgent>,
     access: Access,
