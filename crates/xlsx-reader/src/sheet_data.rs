@@ -301,6 +301,9 @@ impl<'a> Scanner<'a, '_> {
                     if row1 != r_index || column1 != column_index {
                         return Err(unreadable("an array formula outside its anchor"));
                     }
+                    if row2 < row1 || column2 < column1 {
+                        return Err(unreadable("an array formula range runs backwards"));
+                    }
                     let area = (i64::from(row2) - i64::from(row1) + 1)
                         .saturating_mul(i64::from(column2) - i64::from(column1) + 1);
                     if area > limits::MAX_FORMULA_AREA as i64 {
@@ -466,6 +469,14 @@ mod tests {
             .map(|n| array_row(n, &format!("A{n}:A{}", n + 900_000)))
             .collect();
         assert!(matches!(scan(&rows), Err(ReadError::Unsafe(_))));
+    }
+
+    #[test]
+    fn an_array_range_running_backwards_is_left_to_ironcalc() {
+        assert!(matches!(
+            scan(&array_row(5, "A5:A1")),
+            Err(ReadError::Unreadable(_))
+        ));
     }
 
     #[test]
