@@ -201,7 +201,6 @@ fn check_input(text: &str) -> Result<(), EngineError> {
     Ok(())
 }
 
-// TODAY() and NOW() must follow the user clock, as in Excel.
 pub(crate) fn read_book(
     bytes: &[u8],
     name: &str,
@@ -218,6 +217,7 @@ pub(crate) fn read_book_fast(
     zenkai_xlsx_reader::read_xlsx(bytes, name, LOCALE, timezone(), inspect)
 }
 
+// TODAY() and NOW() must follow the user clock, as in Excel.
 fn timezone() -> &'static str {
     static TIMEZONE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     TIMEZONE.get_or_init(|| {
