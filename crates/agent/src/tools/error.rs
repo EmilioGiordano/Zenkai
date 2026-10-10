@@ -132,7 +132,10 @@ mod tests {
     fn the_protected_view_refusal_tells_the_agent_how_the_user_unlocks_it() {
         let text = ToolError::ReadOnly(ReadOnlyReason::ProtectedView).to_string();
         assert!(text.contains("Ctrl+Shift+E"), "{text}");
-        assert!(text.contains("Let agents edit this file (leave Protected View)"), "{text}");
+        assert!(
+            text.contains("Let agents edit this file (leave Protected View)"),
+            "{text}"
+        );
         assert!(is_protected_view_refusal(&text));
         assert!(!is_protected_view_refusal("agents are read only"));
     }
