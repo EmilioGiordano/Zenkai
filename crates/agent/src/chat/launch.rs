@@ -64,7 +64,7 @@ pub enum LaunchError {
     PackageSpec(String),
     #[error("the installed package {package} has no usable program: {reason}")]
     Entry { package: String, reason: String },
-    #[error("\"{package}\" has no binary for {platform}")]
+    #[error("\"{package}\" has no binary for {platform}. Choose another agent in Settings.")]
     UnsupportedPlatform { package: String, platform: String },
 }
 
@@ -740,18 +740,25 @@ mod tests {
         let preset = native_preset(&FOREIGN_BINARIES);
         let package = PackageSpec::parse("opencode-ai@1.18.32").unwrap();
         let folder = tempfile::tempdir().unwrap();
+        let planned = plan_native(
+            &package,
+            preset,
+            vec![],
+            PathBuf::from(NODE.1),
+            folder.path().to_path_buf(),
+        );
         assert_eq!(
-            plan_native(
-                &package,
-                preset,
-                vec![],
-                PathBuf::from(NODE.1),
-                folder.path().to_path_buf(),
-            ),
+            planned,
             Err(LaunchError::UnsupportedPlatform {
                 package: "opencode-ai@1.18.32".to_string(),
                 platform: platform_name(),
             })
+        );
+        assert!(
+            planned
+                .unwrap_err()
+                .to_string()
+                .contains("Choose another agent")
         );
     }
 
