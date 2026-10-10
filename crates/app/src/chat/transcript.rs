@@ -257,7 +257,7 @@ impl ChatPanel {
                             .outline()
                             .small()
                             .label(t!("chat.tool.let_agents_edit"))
-                            .on_click(cx.listener(|this, _, _, cx| this.let_agents_edit(cx))),
+                            .on_click(cx.listener(|this, _, _, cx| this.allow_agent_editing(cx))),
                         ),
                     )
                 },
