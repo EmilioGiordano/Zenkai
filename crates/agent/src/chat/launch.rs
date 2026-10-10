@@ -443,6 +443,14 @@ mod tests {
     use crate::presets::{CLAUDE, GEMINI};
     use crate::settings::SecretName;
 
+    fn absolute(path: &str) -> String {
+        if cfg!(windows) {
+            format!("C:\\{}", path.replace('/', "\\"))
+        } else {
+            format!("/{path}")
+        }
+    }
+
     fn server(command: &str, args: &[&str]) -> AgentServer {
         AgentServer {
             name: "Test".to_string(),
@@ -549,13 +557,14 @@ mod tests {
     #[test]
     fn batch_and_script_shims_are_never_started() {
         for command in [
-            "C:\\tools\\x.cmd",
-            "C:\\tools\\x.BAT",
-            "C:\\tools\\x.cmd.",
-            "C:\\tools\\x.cmd ",
-            "C:\\tools\\x.ps1",
+            "tools/x.cmd",
+            "tools/x.BAT",
+            "tools/x.cmd.",
+            "tools/x.cmd ",
+            "tools/x.ps1",
         ] {
-            let result = plan_with(&server(command, &[]), &[]);
+            let command = absolute(command);
+            let result = plan_with(&server(&command, &[]), &[]);
             assert!(
                 matches!(result, Err(LaunchError::Shim(_))),
                 "{command}: {result:?}"
@@ -575,12 +584,13 @@ mod tests {
     #[test]
     fn shells_and_script_hosts_are_not_agents() {
         for command in [
-            "C:\\Windows\\System32\\cmd.exe",
-            "C:\\x\\PowerShell.exe",
-            "C:\\x\\pwsh.exe",
-            "C:\\x\\wscript.exe",
+            "Windows/System32/cmd.exe",
+            "x/PowerShell.exe",
+            "x/pwsh.exe",
+            "x/wscript.exe",
         ] {
-            let result = plan_with(&server(command, &["/c", "calc"]), &[]);
+            let command = absolute(command);
+            let result = plan_with(&server(&command, &["/c", "calc"]), &[]);
             assert!(
                 matches!(result, Err(LaunchError::Interpreter(_))),
                 "{command}"
@@ -622,12 +632,13 @@ mod tests {
     #[test]
     fn line_breaks_and_nul_in_the_command_or_arguments_are_refused() {
         for (command, arg) in [
-            ("C:\\a.exe\nx", "--ok"),
-            ("C:\\a.exe", "--x\r\ny"),
-            ("C:\\a.exe", "a\0b"),
+            ("a.exe\nx", "--ok"),
+            ("a.exe", "--x\r\ny"),
+            ("a.exe", "a\0b"),
         ] {
+            let command = absolute(command);
             assert_eq!(
-                plan_with(&server(command, &[arg]), &[]),
+                plan_with(&server(&command, &[arg]), &[]),
                 Err(LaunchError::ControlCharacter)
             );
         }
@@ -705,7 +716,7 @@ mod tests {
             package_entry(folder.path(), &package),
             Err(LaunchError::Entry { .. })
         ));
-        let (folder, package) = installed_package(r#"{"bin": "C:\\evil.js"}"#, &[]);
+        let (folder, package) = installed_package(&serde_json::json!({ "bin": absolute("evil.js") }).to_string(), &[]);
         assert!(package_entry(folder.path(), &package).is_err());
         let (folder, package) = installed_package(r#"{"bin": "gone.js"}"#, &[]);
         assert!(package_entry(folder.path(), &package).is_err());
@@ -752,12 +763,13 @@ mod tests {
             );
         }
         for command in [
-            "C:/py/python.exe",
-            "C:/py/python3.12.exe",
-            "C:/x/deno.exe",
-            "C:/x/bun.exe",
+            "py/python.exe",
+            "py/python3.12.exe",
+            "x/deno.exe",
+            "x/bun.exe",
         ] {
-            let result = plan_with(&server(command, &[]), &[]);
+            let command = absolute(command);
+            let result = plan_with(&server(&command, &[]), &[]);
             assert!(
                 matches!(result, Err(LaunchError::Interpreter(_))),
                 "{command}"
