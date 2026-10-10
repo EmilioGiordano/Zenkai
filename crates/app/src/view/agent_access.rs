@@ -7,7 +7,9 @@ use zenkai_agent::protected_view::FileOrigin;
 use zenkai_i18n::t;
 
 use super::Workspace;
+use crate::actions::LetAgentsEdit;
 use crate::assets::{LOCK_MARK, LOCK_OPEN_MARK};
+use crate::keymap;
 
 const TOAST_TIME: Duration = Duration::from_secs(3);
 const TOAST_TOP: f32 = 96.0;
@@ -84,17 +86,19 @@ impl Workspace {
     pub(super) fn render_toast(&self, cx: &App) -> Option<impl IntoElement> {
         let toast = self.toast.as_ref()?;
         let theme = cx.theme();
+        let keys = keymap::shortcut(cx, &LetAgentsEdit)
+            .unwrap_or_else(|| t!("palette.let_agents_edit").to_string());
         let (mark, title, hint) = if toast.editable {
             (
                 LOCK_OPEN_MARK,
                 t!("toast.agents_can_edit", file = toast.file),
-                t!("toast.agents_can_edit.hint"),
+                t!("toast.agents_can_edit.hint", keys = keys),
             )
         } else {
             (
                 LOCK_MARK,
                 t!("toast.agents_read_only", file = toast.file),
-                t!("toast.agents_read_only.hint"),
+                t!("toast.agents_read_only.hint", keys = keys),
             )
         };
         Some(
