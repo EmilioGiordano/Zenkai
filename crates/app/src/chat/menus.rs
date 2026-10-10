@@ -10,7 +10,7 @@ use zenkai_i18n::t;
 use super::access::Access;
 use super::{ChatPanel, Link, Menu};
 
-const MODEL_MENU_WIDTH: f32 = 280.0;
+const MODEL_MENU_WIDTH: f32 = 340.0;
 const ACCESS_MENU_WIDTH: f32 = 300.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,6 +145,9 @@ impl ChatPanel {
                     .unwrap_or_default();
                 if self.state.select(ConfigKind::Effort).is_some() {
                     rows.push(Row::Effort);
+                }
+                if rows.is_empty() && self.failed_to_start() {
+                    rows.push(Row::Manage);
                 }
                 rows
             }
@@ -367,15 +370,23 @@ impl ChatPanel {
         }
     }
 
-    fn absent_note(&self, kind: ConfigKind) -> &'static str {
-        if !matches!(self.link, Link::Ready(_)) {
-            return t!("chat.menu.pending");
+    fn failed_to_start(&self) -> bool {
+        self.problem.is_some() && !matches!(self.link, Link::Ready(_))
+    }
+
+    fn absent_note(&self, kind: ConfigKind, cx: &App) -> String {
+        if self.failed_to_start() {
+            return t!("chat.menu.not_running", agent = self.agent_name(cx));
         }
-        match kind {
+        if !matches!(self.link, Link::Ready(_)) {
+            return t!("chat.menu.pending").to_string();
+        }
+        let text = match kind {
             ConfigKind::Model => t!("chat.model.unreported"),
             ConfigKind::Effort => t!("chat.effort.unreported"),
             ConfigKind::Mode | ConfigKind::Other => t!("chat.access.no_modes"),
-        }
+        };
+        text.to_string()
     }
 
     fn model_row(
@@ -457,6 +468,9 @@ impl ChatPanel {
         let models = self.state.select(ConfigKind::Model).cloned();
         let effort = self.state.select(ConfigKind::Effort).cloned();
         let model_count = models.as_ref().map_or(0, |models| models.choices.len());
+        if models.is_none() && effort.is_none() && self.failed_to_start() {
+            return Some(self.not_running_menu(cx));
+        }
         let mut menu = popover(
             "chat-model-menu",
             t!("chat.model.heading"),
@@ -470,16 +484,41 @@ impl ChatPanel {
                     menu = menu.child(self.model_row(index, choice, &models.current, cx));
                 }
             }
-            None => menu = menu.child(note(self.absent_note(ConfigKind::Model), cx)),
+            None => menu = menu.child(note(self.absent_note(ConfigKind::Model, cx), cx)),
         }
         menu = menu.child(heading(t!("chat.effort.heading"), cx));
         menu = match &effort {
             Some(effort) => {
                 menu.child(self.effort_control(effort, self.menu_index == model_count, cx))
             }
-            None => menu.child(note(self.absent_note(ConfigKind::Effort), cx)),
+            None => menu.child(note(self.absent_note(ConfigKind::Effort, cx), cx)),
         };
         Some(menu.into_any_element())
+    }
+
+    fn not_running_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        popover(
+            "chat-model-menu",
+            t!("chat.model.heading"),
+            MODEL_MENU_WIDTH,
+            cx,
+        )
+        .child(note(self.absent_note(ConfigKind::Model, cx), cx))
+        .child(rule(cx))
+        .child(
+            item(
+                Item {
+                    id: "model-manage".into(),
+                    name: t!("chat.agent.manage").into(),
+                    note: None,
+                    checked: false,
+                    highlighted: self.menu_index == 0,
+                },
+                cx,
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.open_agent_settings(cx))),
+        )
+        .into_any_element()
     }
 
     pub(super) fn render_access_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -516,7 +555,7 @@ impl ChatPanel {
             .child(rule(cx))
             .child(note(t!("chat.access.footer"), cx));
         if self.state.select(ConfigKind::Mode).is_none() {
-            menu = menu.child(note(self.absent_note(ConfigKind::Mode), cx));
+            menu = menu.child(note(self.absent_note(ConfigKind::Mode, cx), cx));
         }
         Some(menu.into_any_element())
     }
