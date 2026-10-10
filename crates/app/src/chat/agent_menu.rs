@@ -83,8 +83,8 @@ impl ChatPanel {
         agent_options(&cx.global::<AgentConfig>().state.current)
     }
 
-    pub(crate) fn toggle_agent_menu(&mut self, cx: &mut Context<Self>) {
-        self.toggle_menu(Menu::Agent, cx);
+    pub(crate) fn toggle_agent_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_menu(Menu::Agent, window, cx);
     }
 
     // The default agent is written in the background, so the new conversation starts when

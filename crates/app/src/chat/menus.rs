@@ -1,5 +1,6 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
+use gpui_kit::component::input::Input;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -8,9 +9,11 @@ use zenkai_agent::settings::AgentId;
 use zenkai_i18n::t;
 
 use super::access::Access;
+use super::model_search;
 use super::{ChatPanel, Link, Menu};
 
-const MODEL_MENU_WIDTH: f32 = 340.0;
+const MODEL_MENU_WIDTH: f32 = 300.0;
+const MODEL_MENU_MAX_HEIGHT: f32 = 360.0;
 const ACCESS_MENU_WIDTH: f32 = 300.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,13 +135,13 @@ impl ChatPanel {
     fn rows(&self, cx: &App) -> Vec<Row> {
         match self.menu {
             Some(Menu::Model) => {
+                let query = self.model_query.read(cx).value();
                 let mut rows: Vec<Row> = self
                     .state
                     .select(ConfigKind::Model)
                     .map(|models| {
-                        models
-                            .choices
-                            .iter()
+                        model_search::matching(&models.choices, &query)
+                            .into_iter()
                             .map(|choice| Row::Model(choice.value.clone()))
                             .collect()
                     })
@@ -182,26 +185,35 @@ impl ChatPanel {
         }
     }
 
-    pub(super) fn toggle_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
+    pub(super) fn toggle_menu(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
         if self.menu == Some(menu) {
             self.menu = None;
         } else {
+            if menu == Menu::Model {
+                self.model_query
+                    .update(cx, |query, cx| query.set_value("", window, cx));
+            }
             self.menu = Some(menu);
             self.menu_index = self
                 .rows(cx)
                 .iter()
                 .position(|row| self.is_checked(row, cx))
                 .unwrap_or(0);
+            if menu == Menu::Model {
+                self.model_scroll.scroll_to_item(self.menu_index);
+                self.model_query
+                    .update(cx, |query, cx| query.focus(window, cx));
+            }
         }
         cx.notify();
     }
 
-    pub(crate) fn toggle_model_menu(&mut self, cx: &mut Context<Self>) {
-        self.toggle_menu(Menu::Model, cx);
+    pub(crate) fn toggle_model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_menu(Menu::Model, window, cx);
     }
 
-    pub(crate) fn toggle_access_menu(&mut self, cx: &mut Context<Self>) {
-        self.toggle_menu(Menu::Access, cx);
+    pub(crate) fn toggle_access_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_menu(Menu::Access, window, cx);
     }
 
     pub(crate) fn close_menu(&mut self, cx: &mut Context<Self>) {
@@ -214,11 +226,10 @@ impl ChatPanel {
         if count == 0 {
             return;
         }
-        self.menu_index = if forward {
-            (self.menu_index + 1) % count
-        } else {
-            (self.menu_index + count - 1) % count
-        };
+        self.menu_index = model_search::step(self.menu_index, count, forward);
+        if self.menu == Some(Menu::Model) {
+            self.model_scroll.scroll_to_item(self.menu_index);
+        }
         cx.notify();
     }
 
@@ -473,7 +484,11 @@ impl ChatPanel {
         }
         let models = self.state.select(ConfigKind::Model).cloned();
         let effort = self.state.select(ConfigKind::Effort).cloned();
-        let model_count = models.as_ref().map_or(0, |models| models.choices.len());
+        let query = self.model_query.read(cx).value();
+        let shown: Vec<&Choice> = models
+            .as_ref()
+            .map(|models| model_search::matching(&models.choices, &query))
+            .unwrap_or_default();
         if models.is_none() && effort.is_none() {
             return Some(self.unavailable_menu(cx));
         }
@@ -483,22 +498,63 @@ impl ChatPanel {
             MODEL_MENU_WIDTH,
             cx,
         )
+        .flex()
+        .flex_col()
+        .max_h(px(MODEL_MENU_MAX_HEIGHT))
         .child(heading(t!("chat.model.heading"), cx));
+        let muted = cx.theme().muted_foreground;
         match &models {
             Some(models) => {
-                for (index, choice) in models.choices.iter().enumerate() {
-                    menu = menu.child(self.model_row(index, choice, &models.current, cx));
-                }
+                let list =
+                    div()
+                        .id("chat-model-list")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .track_scroll(&self.model_scroll)
+                        .children(shown.iter().enumerate().map(|(index, choice)| {
+                            self.model_row(index, choice, &models.current, cx)
+                        }))
+                        .when(shown.is_empty(), |list| {
+                            list.child(
+                                div()
+                                    .px_2p5()
+                                    .py_1p5()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child(t!("chat.model.no_match")),
+                            )
+                        });
+                menu = menu
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .gap_2()
+                            .items_center()
+                            .px_2p5()
+                            .child(Icon::new(IconName::Search).size_3p5().text_color(muted))
+                            .child(
+                                div().flex_1().child(
+                                    Input::new(&self.model_query)
+                                        .appearance(false)
+                                        .bordered(false),
+                                ),
+                            ),
+                    )
+                    .child(list);
             }
             None => menu = menu.child(note(self.absent_note(ConfigKind::Model, cx), cx)),
         }
-        menu = menu.child(heading(t!("chat.effort.heading"), cx));
-        menu = match &effort {
+        let footer = v_flex()
+            .flex_shrink_0()
+            .child(rule(cx))
+            .child(heading(t!("chat.effort.heading"), cx));
+        menu = menu.child(match &effort {
             Some(effort) => {
-                menu.child(self.effort_control(effort, self.menu_index == model_count, cx))
+                footer.child(self.effort_control(effort, self.menu_index == shown.len(), cx))
             }
-            None => menu.child(note(self.absent_note(ConfigKind::Effort, cx), cx)),
-        };
+            None => footer.child(note(self.absent_note(ConfigKind::Effort, cx), cx)),
+        });
         Some(menu.into_any_element())
     }
 

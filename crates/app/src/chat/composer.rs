@@ -209,7 +209,7 @@ impl ChatPanel {
 
     fn open_picker(&mut self, menu: Menu, window: &mut Window, cx: &mut Context<Self>) {
         self.focus_composer(window, cx);
-        self.toggle_menu(menu, cx);
+        self.toggle_menu(menu, window, cx);
     }
 
     pub(super) fn render_composer(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
