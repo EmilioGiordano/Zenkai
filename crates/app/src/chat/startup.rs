@@ -151,6 +151,7 @@ impl ChatPanel {
     pub(super) fn fail_before_start(&mut self, text: String, cx: &mut Context<Self>) {
         self.link = Link::Idle;
         self.queued = None;
+        self.pending_resume = None;
         self.finish_turn(TurnEnd::Failed(text), cx);
     }
 
@@ -174,6 +175,7 @@ impl ChatPanel {
             return;
         }
         self.queued = None;
+        self.pending_resume = None;
         self.link = Link::Idle;
         self.finish_turn(TurnEnd::Failed(t!("chat.not_confirmed").to_string()), cx);
         self.focus_composer(window, cx);

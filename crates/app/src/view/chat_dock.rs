@@ -89,6 +89,11 @@ impl Workspace {
                     this.chat.open = true;
                     cx.notify();
                 }
+                ChatEvent::ResumeSession => {
+                    if let Some(panel) = this.chat.panel.clone() {
+                        panel.update(cx, |panel, cx| panel.continue_pending_resume(window, cx));
+                    }
+                }
             },
         ));
         self.chat.panel = Some(panel.clone());

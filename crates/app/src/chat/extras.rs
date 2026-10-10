@@ -137,11 +137,27 @@ impl ChatPanel {
         cx.notify();
     }
 
+    // Continues a cross-agent resume once the switch has completed. The session event
+    // that reports readiness carries no window, so the workspace delivers this instead.
+    pub(crate) fn continue_pending_resume(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.pending_resume.take() else {
+            return;
+        };
+        let settings = cx.global::<AgentConfig>().state.current.clone();
+        let current = launch::chosen_agent(&settings).map(|(id, _)| id);
+        if current.as_ref() != Some(&row.agent) {
+            return;
+        }
+        self.resume(&row, window, cx);
+    }
+
     pub(super) fn resume(&mut self, row: &Row, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_resume = None;
         let settings = cx.global::<AgentConfig>().state.current.clone();
         let current = launch::chosen_agent(&settings).map(|(id, _)| id);
         if current.as_ref() != Some(&row.agent) {
             self.pick_agent(row.agent.clone(), cx);
+            self.pending_resume = Some(row.clone());
             return;
         }
         let title = row.title.clone();

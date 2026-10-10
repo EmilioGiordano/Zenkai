@@ -49,6 +49,7 @@ const MONO: &str = "IBM Plex Mono";
 pub enum ChatEvent {
     Leave,
     NeedsAnswer,
+    ResumeSession,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,6 +124,8 @@ pub struct ChatPanel {
     // The identity of the record the live conversation pushed; the agent's session id
     // is linked to it once reported, so out-of-order starts cannot swap records.
     pending_record: Option<RecordId>,
+    // A session of another agent to resume once its switch has completed.
+    pending_resume: Option<session_rows::Row>,
     // What the sessions list shows per conversation, computed off the UI thread.
     session_sizes: session_rows::SessionSizes,
     view: View,
@@ -276,6 +279,7 @@ impl ChatPanel {
             history_saves,
             live_session: None,
             pending_record: None,
+            pending_resume: None,
             session_sizes: session_rows::SessionSizes::new(),
             view: View::Chat,
             menu: None,

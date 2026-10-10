@@ -67,6 +67,12 @@ impl ChatPanel {
             SessionEvent::Connection(Connection::Installing) => self.link = Link::Installing,
             SessionEvent::Connection(Connection::Starting) => self.link = Link::Starting,
             SessionEvent::Connection(Connection::Ready { agent }) => {
+                let resume_ready = self.pending_resume.as_ref().is_some_and(|row| {
+                    self.live
+                        .as_ref()
+                        .is_some_and(|live| live.agent == row.agent)
+                        && self.live_session.is_none()
+                });
                 self.link = Link::Ready(agent.into());
                 self.apply_choices(cx);
                 if let Some(live) = &mut self.live {
@@ -77,6 +83,9 @@ impl ChatPanel {
                     if let Some((text, context)) = self.queued.take() {
                         live.handle.prompt(text, context);
                     }
+                }
+                if resume_ready {
+                    cx.emit(ChatEvent::ResumeSession);
                 }
             }
             SessionEvent::Update(update) => {
@@ -111,10 +120,14 @@ impl ChatPanel {
                 if error == SessionError::AuthRequired {
                     self.require_sign_in(cx);
                 }
+                self.pending_resume = None;
                 self.end_session(cx);
                 self.finish_turn(TurnEnd::Failed(error.to_string()), cx);
             }
-            SessionEvent::Closed => self.end_session(cx),
+            SessionEvent::Closed => {
+                self.pending_resume = None;
+                self.end_session(cx);
+            }
             SessionEvent::State(change) => {
                 let before = self
                     .state
