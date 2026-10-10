@@ -4,6 +4,7 @@ use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::chat::state::{Choice, ConfigKind, Select};
+use zenkai_agent::settings::AgentId;
 use zenkai_i18n::t;
 
 use super::access::Access;
@@ -14,12 +15,14 @@ const ACCESS_MENU_WIDTH: f32 = 300.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Row {
+    Agent(AgentId),
+    Manage,
     Model(String),
     Effort,
     Access(Access),
 }
 
-fn heading(text: impl Into<SharedString>, cx: &App) -> Div {
+fn heading(text: impl AsRef<str>, cx: &App) -> Div {
     div()
         .px_2p5()
         .pt_1p5()
@@ -27,10 +30,14 @@ fn heading(text: impl Into<SharedString>, cx: &App) -> Div {
         .text_xs()
         .font_weight(FontWeight::MEDIUM)
         .text_color(cx.theme().muted_foreground)
-        .child(text.into())
+        .child(text.as_ref().to_uppercase())
 }
 
-fn note(text: impl Into<SharedString>, cx: &App) -> Div {
+pub(super) fn rule(cx: &App) -> Div {
+    div().h(px(1.0)).mx_1().my_1p5().bg(cx.theme().border)
+}
+
+pub(super) fn note(text: impl Into<SharedString>, cx: &App) -> Div {
     div()
         .px_2p5()
         .pb_1p5()
@@ -40,16 +47,18 @@ fn note(text: impl Into<SharedString>, cx: &App) -> Div {
         .child(text.into())
 }
 
-fn popover(id: &'static str, label: &'static str, width: f32, cx: &App) -> Stateful<Div> {
+pub(super) fn popover(
+    id: &'static str,
+    label: &'static str,
+    width: f32,
+    cx: &App,
+) -> Stateful<Div> {
     let theme = cx.theme();
     div()
         .id(id)
         .role(Role::Menu)
         .aria_label(label)
         .occlude()
-        .absolute()
-        .bottom(relative(1.0))
-        .mb_2()
         .w(px(width))
         .p_1p5()
         .rounded_lg()
@@ -59,15 +68,15 @@ fn popover(id: &'static str, label: &'static str, width: f32, cx: &App) -> State
         .shadow_lg()
 }
 
-struct Item {
-    id: SharedString,
-    name: SharedString,
-    note: Option<SharedString>,
-    checked: bool,
-    highlighted: bool,
+pub(super) struct Item {
+    pub id: SharedString,
+    pub name: SharedString,
+    pub note: Option<SharedString>,
+    pub checked: bool,
+    pub highlighted: bool,
 }
 
-fn item(item: Item, cx: &App) -> Stateful<Div> {
+pub(super) fn item(item: Item, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
     h_flex()
         .id(item.id)
@@ -120,7 +129,7 @@ impl ChatPanel {
         }
     }
 
-    fn rows(&self) -> Vec<Row> {
+    fn rows(&self, cx: &App) -> Vec<Row> {
         match self.menu {
             Some(Menu::Model) => {
                 let mut rows: Vec<Row> = self
@@ -139,6 +148,15 @@ impl ChatPanel {
                 }
                 rows
             }
+            Some(Menu::Agent) => {
+                let mut rows: Vec<Row> = self
+                    .agent_rows(cx)
+                    .into_iter()
+                    .map(|option| Row::Agent(option.id))
+                    .collect();
+                rows.push(Row::Manage);
+                rows
+            }
             Some(Menu::Access) => self
                 .available_access()
                 .into_iter()
@@ -148,8 +166,10 @@ impl ChatPanel {
         }
     }
 
-    fn is_checked(&self, row: &Row) -> bool {
+    fn is_checked(&self, row: &Row, cx: &App) -> bool {
         match row {
+            Row::Agent(id) => self.agent_rows(cx).iter().any(|o| o.active && o.id == *id),
+            Row::Manage => false,
             Row::Model(value) => self
                 .state
                 .select(ConfigKind::Model)
@@ -159,15 +179,15 @@ impl ChatPanel {
         }
     }
 
-    fn toggle_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
+    pub(super) fn toggle_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
         if self.menu == Some(menu) {
             self.menu = None;
         } else {
             self.menu = Some(menu);
             self.menu_index = self
-                .rows()
+                .rows(cx)
                 .iter()
-                .position(|row| self.is_checked(row))
+                .position(|row| self.is_checked(row, cx))
                 .unwrap_or(0);
         }
         cx.notify();
@@ -187,7 +207,7 @@ impl ChatPanel {
     }
 
     pub(crate) fn menu_step(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let count = self.rows().len();
+        let count = self.rows(cx).len();
         if count == 0 {
             return;
         }
@@ -200,11 +220,13 @@ impl ChatPanel {
     }
 
     pub(crate) fn menu_accept(&mut self, cx: &mut Context<Self>) {
-        let rows = self.rows();
+        let rows = self.rows(cx);
         let Some(row) = rows.get(self.menu_index.min(rows.len().saturating_sub(1))) else {
             return;
         };
         match row {
+            Row::Agent(id) => self.pick_agent(id.clone(), cx),
+            Row::Manage => self.open_agent_settings(cx),
             Row::Model(value) => self.pick(ConfigKind::Model, value, cx),
             Row::Effort => self.step_effort(cx),
             Row::Access(access) => {
@@ -441,7 +463,6 @@ impl ChatPanel {
             MODEL_MENU_WIDTH,
             cx,
         )
-        .left_0()
         .child(heading(t!("chat.model.heading"), cx));
         match &models {
             Some(models) => {
@@ -471,7 +492,6 @@ impl ChatPanel {
             ACCESS_MENU_WIDTH,
             cx,
         )
-        .right_0()
         .child(heading(t!("chat.access.heading"), cx));
         for (index, access) in self.available_access().into_iter().enumerate() {
             menu = menu.child(
@@ -492,9 +512,8 @@ impl ChatPanel {
                 })),
             );
         }
-        let border = cx.theme().border;
         menu = menu
-            .child(div().h(px(1.0)).mx_1().my_1p5().bg(border))
+            .child(rule(cx))
             .child(note(t!("chat.access.footer"), cx));
         if self.state.select(ConfigKind::Mode).is_none() {
             menu = menu.child(note(self.absent_note(ConfigKind::Mode), cx));

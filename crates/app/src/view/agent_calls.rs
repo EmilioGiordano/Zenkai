@@ -728,7 +728,9 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let started = cx
                 .background_executor()
-                .spawn(async move { Bridge::start(endpoint, endpoint_file().as_deref(), None) })
+                .spawn(
+                    async move { Bridge::start(endpoint, endpoint_file().as_deref(), None, None) },
+                )
                 .await;
             let update = this.update(cx, |this, cx| {
                 match started {

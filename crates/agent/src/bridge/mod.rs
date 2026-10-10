@@ -97,6 +97,7 @@ async fn serve_connection(
     token: String,
     endpoint: ToolEndpoint,
     folder: Option<WorkingFolder>,
+    chat_agent: Option<String>,
 ) {
     let (receive, send) = stream.split();
     let mut reader = BufReader::new(LineLimited::new(receive));
@@ -111,9 +112,13 @@ async fn serve_connection(
         tracing::warn!("refused an MCP client without the session token");
         return;
     }
-    match (ZenkaiServer { endpoint, folder })
-        .serve((reader, send))
-        .await
+    match (ZenkaiServer {
+        endpoint,
+        folder,
+        chat_agent,
+    })
+    .serve((reader, send))
+    .await
     {
         Ok(service) => {
             if let Err(error) = service.waiting().await {
@@ -137,6 +142,7 @@ impl Bridge {
         endpoint: ToolEndpoint,
         endpoint_file: Option<&Path>,
         folder: Option<WorkingFolder>,
+        chat_agent: Option<String>,
     ) -> Result<Bridge, BridgeError> {
         let address = BridgeAddress::random()?;
         let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -145,7 +151,7 @@ impl Bridge {
         let token = address.token.clone();
         std::thread::Builder::new()
             .name("mcp-bridge".to_string())
-            .spawn(move || run(pipe, token, endpoint, folder, stopped, ready))
+            .spawn(move || run(pipe, token, endpoint, folder, chat_agent, stopped, ready))
             .map_err(BridgeError::Start)?;
         started
             .recv()
@@ -173,6 +179,7 @@ fn run(
     token: String,
     endpoint: ToolEndpoint,
     folder: Option<WorkingFolder>,
+    chat_agent: Option<String>,
     mut stopped: tokio::sync::oneshot::Receiver<()>,
     ready: std::sync::mpsc::Sender<std::io::Result<()>>,
 ) {
@@ -211,6 +218,7 @@ fn run(
                             token.clone(),
                             endpoint.clone(),
                             folder.clone(),
+                            chat_agent.clone(),
                         ));
                     }
                     Err(error) => tracing::warn!(%error, "MCP bridge could not accept a client"),

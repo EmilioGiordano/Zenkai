@@ -109,7 +109,12 @@ pub(super) fn arm(prepared: &Prepared, endpoint: ToolEndpoint) -> Result<Armed, 
     let relay_program: PathBuf = relay_program()
         .filter(|path| path.is_file())
         .ok_or(PrepareError::RelayMissing)?;
-    let bridge = Bridge::start(endpoint, None, Some(prepared.folder.clone()))?;
+    let bridge = Bridge::start(
+        endpoint,
+        None,
+        Some(prepared.folder.clone()),
+        Some(prepared.server.name.clone()),
+    )?;
     let address = bridge.address().clone();
     Ok(Armed {
         config: SessionConfig {
