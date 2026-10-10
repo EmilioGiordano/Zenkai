@@ -82,6 +82,7 @@ impl Render for ChatPanel {
             .on_action(cx.listener(|this, _: &StopAgentTurn, _, cx| this.stop(cx)))
             .on_action(cx.listener(|_, _: &LeaveAgentChat, _, cx| cx.emit(ChatEvent::Leave)))
             .on_action(cx.listener(|this, _: &CycleChatAgent, _, cx| this.toggle_agent_menu(cx)))
+            .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.let_agents_edit(cx)))
             .on_action(cx.listener(|this, _: &CycleChatPermission, _, cx| this.cycle_access(cx)))
             .on_action(cx.listener(|this, _: &CopyLoginCommand, _, cx| this.copy_login_command(cx)))
             .on_action(cx.listener(|this, _: &ConfirmAgentLaunch, window, cx| {

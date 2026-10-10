@@ -91,10 +91,15 @@ impl ChatPanel {
     // the settings report it; starting it now would still launch the previous agent.
     pub(super) fn pick_agent(&mut self, id: AgentId, cx: &mut Context<Self>) {
         self.menu = None;
-        let option = self.agent_rows(cx).into_iter().find(|o| o.id == id);
+        let rows = self.agent_rows(cx);
+        let option = rows.iter().find(|o| o.id == id);
         match option {
             Some(option) if option.active => {}
             Some(option) if option.installed => {
+                if let Some(previous) = rows.iter().find(|o| o.active) {
+                    self.remembered_selects
+                        .insert(previous.id.clone(), self.state.selects.clone());
+                }
                 self.pending_agent = Some(PendingAgent {
                     id: id.clone(),
                     failure_before: cx.global::<AgentConfig>().failure.clone(),
@@ -125,10 +130,14 @@ impl ChatPanel {
             SwitchOutcome::Failed => self.pending_agent = None,
             SwitchOutcome::Reached => {
                 self.pending_agent = None;
-                self.state.selects.clear();
+                self.state.selects = self
+                    .remembered_selects
+                    .get(&pending.id)
+                    .cloned()
+                    .unwrap_or_default();
                 self.model_choice = None;
                 self.effort_choice = None;
-                self.new_conversation(window, cx);
+                self.switch_conversation(window, cx);
             }
         }
     }

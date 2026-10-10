@@ -27,8 +27,9 @@ use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use zenkai_agent::chat::history::History;
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
-use zenkai_agent::chat::state::AgentState;
+use zenkai_agent::chat::state::{AgentState, Select};
 use zenkai_agent::chat::thread::{MessageId, Thread, TurnEnd, TurnState};
+use zenkai_agent::settings::AgentId;
 use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
 
@@ -59,6 +60,7 @@ enum View {
 enum Start {
     Message,
     WarmUp,
+    Switch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +120,8 @@ pub struct ChatPanel {
     view: View,
     menu: Option<Menu>,
     menu_index: usize,
+    // The model and effort lists each agent reported earlier in this run.
+    remembered_selects: BTreeMap<AgentId, Vec<Select>>,
     pending_agent: Option<agent_menu::PendingAgent>,
     access: Access,
     model_choice: Option<String>,
@@ -236,6 +240,7 @@ impl ChatPanel {
             view: View::Chat,
             menu: None,
             menu_index: 0,
+            remembered_selects: BTreeMap::new(),
             pending_agent: None,
             access: Access::from_setting(
                 cx.global::<AgentConfig>().state.current.agents.permission,
@@ -389,6 +394,11 @@ impl ChatPanel {
     }
 
     pub(crate) fn new_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset_conversation(window, cx);
+        self.warm_up(window, cx);
+    }
+
+    fn reset_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.epoch += 1;
         self.end_session(cx);
         for ask in self.permissions.drain(..) {
@@ -412,8 +422,20 @@ impl ChatPanel {
         self.menu = None;
         self.title = None;
         self.focus_composer(window, cx);
-        self.warm_up(window, cx);
         cx.notify();
+    }
+
+    // The user chose this agent, so a launch that needs confirming asks right away.
+    pub(super) fn switch_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset_conversation(window, cx);
+        self.begin(Start::Switch, window, cx);
+    }
+
+    pub(super) fn let_agents_edit(&mut self, cx: &mut Context<Self>) {
+        closed(
+            self.workspace
+                .update(cx, |workspace, cx| workspace.let_agents_edit(cx)),
+        );
     }
 
     pub(super) fn copy_login_command(&self, cx: &mut Context<Self>) {

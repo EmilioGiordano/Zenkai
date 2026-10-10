@@ -686,13 +686,18 @@ impl Workspace {
     }
 
     // As Excel's Enable Editing: the user vouches for this file, for this session only.
-    pub(super) fn let_agents_edit(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn let_agents_edit(&mut self, cx: &mut Context<Self>) {
         let Some(document) = self.documents.active_mut() else {
             return;
         };
         if document.origin == FileOrigin::Internet {
             document.origin = FileOrigin::Local;
-            self.notify(Severity::Info, t!("notice.agents_may_edit"), cx);
+            let file = document.name();
+            self.notify(
+                Severity::Info,
+                t!("notice.agents_may_edit", file = file),
+                cx,
+            );
         }
     }
 
