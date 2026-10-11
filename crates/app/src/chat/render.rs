@@ -110,6 +110,20 @@ impl Render for ChatPanel {
             .on_action(cx.listener(|this, _: &CloseChatMenu, _, cx| this.close_menu(cx)))
             .on_action(cx.listener(|this, _: &ChatMenuNext, _, cx| this.menu_step(true, cx)))
             .on_action(cx.listener(|this, _: &ChatMenuPrevious, _, cx| this.menu_step(false, cx)))
+            .on_action(cx.listener(|this, _: &SessionsNext, _, cx| this.sessions_step(true, cx)))
+            .on_action(
+                cx.listener(|this, _: &SessionsPrevious, _, cx| this.sessions_step(false, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SessionsAccept, window, cx| {
+                    this.sessions_accept(window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &SessionsEscape, window, cx| {
+                    this.sessions_escape(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &SlashNext, _, cx| this.slash_step(true, cx)))
             .on_action(cx.listener(|this, _: &SlashPrevious, _, cx| this.slash_step(false, cx)))
             .on_action(

@@ -1,8 +1,10 @@
+use gpui_kit::base::h_flex;
 use gpui_kit::*;
 use zenkai_agent::presets::PRESETS;
 use zenkai_agent::settings::{AgentId, Settings};
 use zenkai_i18n::t;
 
+use super::header::agent_mark;
 use super::launch::chosen_agent;
 use super::menus::{Item, item, note, popover, rule};
 use super::{ChatPanel, Menu};
@@ -157,18 +159,27 @@ impl ChatPanel {
         for (index, option) in options.into_iter().enumerate() {
             let id = option.id.clone();
             menu = menu.child(
-                item(
-                    Item {
-                        id: SharedString::from(format!("agent-{}", option.id.as_str())),
-                        name: option.name.into(),
-                        note: (option.installed && !option.active)
-                            .then(|| SharedString::from(t!("chat.agent.installed"))),
-                        checked: option.active,
-                        highlighted: self.menu_index == index,
-                    },
-                    cx,
-                )
-                .on_click(cx.listener(move |this, _, _, cx| this.pick_agent(id.clone(), cx))),
+                h_flex()
+                    .gap_2()
+                    .items_center()
+                    .px_1()
+                    .child(agent_mark(&option.id, &option.name, cx))
+                    .child(
+                        item(
+                            Item {
+                                id: SharedString::from(format!("agent-{}", option.id.as_str())),
+                                name: option.name.into(),
+                                note: (option.installed && !option.active)
+                                    .then(|| SharedString::from(t!("chat.agent.installed"))),
+                                checked: option.active,
+                                highlighted: self.menu_index == index,
+                            },
+                            cx,
+                        )
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.pick_agent(id.clone(), cx)),
+                        ),
+                    ),
             );
         }
         menu = menu

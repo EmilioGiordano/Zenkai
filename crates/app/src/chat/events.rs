@@ -2,8 +2,9 @@ use std::borrow::Cow;
 
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
+use zenkai_agent::chat::history::History;
 use zenkai_agent::chat::session::{Connection, SessionError, SessionEvent};
-use zenkai_agent::chat::state::ConfigKind;
+use zenkai_agent::chat::state::{ConfigKind, ContextUsage, StateChange};
 use zenkai_agent::chat::thread::{Effect, MessageId, NoticeKind, TurnEnd};
 use zenkai_agent::presets::Preset;
 use zenkai_i18n::t;
@@ -34,7 +35,6 @@ impl ChatPanel {
         cx.notify();
     }
 
-    // Streamed text is shown as it arrives; once complete, references in it become badges.
     pub(super) fn link_references(&mut self, cx: &mut Context<Self>) {
         for (id, state) in &self.texts {
             if self.linked_messages.contains(id) {
@@ -66,6 +66,12 @@ impl ChatPanel {
             SessionEvent::Connection(Connection::Installing) => self.link = Link::Installing,
             SessionEvent::Connection(Connection::Starting) => self.link = Link::Starting,
             SessionEvent::Connection(Connection::Ready { agent }) => {
+                let resume_ready = self.pending_resume.as_ref().is_some_and(|row| {
+                    self.live
+                        .as_ref()
+                        .is_some_and(|live| live.agent == row.agent)
+                        && self.live_session.is_none()
+                });
                 self.link = Link::Ready(agent.into());
                 self.apply_choices(cx);
                 if let Some(live) = &mut self.live {
@@ -76,6 +82,9 @@ impl ChatPanel {
                     if let Some((text, context)) = self.queued.take() {
                         live.handle.prompt(text, context);
                     }
+                }
+                if resume_ready {
+                    cx.emit(ChatEvent::ResumeSession);
                 }
             }
             SessionEvent::Update(update) => {
@@ -110,15 +119,22 @@ impl ChatPanel {
                 if error == SessionError::AuthRequired {
                     self.require_sign_in(cx);
                 }
+                self.pending_resume = None;
                 self.end_session(cx);
                 self.finish_turn(TurnEnd::Failed(error.to_string()), cx);
             }
-            SessionEvent::Closed => self.end_session(cx),
+            SessionEvent::Closed => {
+                self.pending_resume = None;
+                self.end_session(cx);
+            }
             SessionEvent::State(change) => {
                 let before = self
                     .state
                     .select(ConfigKind::Mode)
                     .map(|m| m.current.clone());
+                if let StateChange::Usage(usage) = &change {
+                    self.note_context(*usage);
+                }
                 self.state.apply(change);
                 let after = self.state.select(ConfigKind::Mode).map(|m| &m.current);
                 if before.as_ref() != after {
@@ -134,7 +150,13 @@ impl ChatPanel {
                 self.thread.notice(NoticeKind::Error, &text);
             }
             SessionEvent::Started(id) => {
+                self.live_session = Some(id.clone());
                 self.history.remember_session(&id);
+                if let Some(identity) = self.pending_record.take() {
+                    if self.history.attach_session_to(&identity, &id).is_some() {
+                        self.refresh_size(&id);
+                    }
+                }
                 if self.history_saves.try_send(self.history.clone()).is_err() {
                     tracing::debug!("conversation history writer is not running");
                 }
@@ -167,16 +189,37 @@ impl ChatPanel {
             None => {
                 let state = cx.new(|cx| TextViewState::markdown(&added, cx));
                 self.texts.insert(message, state);
-                // Messages the transcript trimmed no longer need their view state.
                 self.texts
                     .retain(|id, _| self.thread.message_text(*id).is_some());
             }
         }
     }
 
-    // The tree is ended off the UI thread; the bridge closes when `live` is dropped.
+    fn note_context(&mut self, usage: ContextUsage) {
+        let Some(session) = self.live_session.clone() else {
+            return;
+        };
+        if self.history.note_context(&session, usage).is_none() {
+            return;
+        }
+        self.refresh_size(&session);
+        if self.history_saves.try_send(self.history.clone()).is_err() {
+            tracing::debug!("conversation history writer is not running");
+        }
+    }
+
+    fn refresh_size(&mut self, session: &str) {
+        if let Some(record) = self.history.record_for_session(session) {
+            let key = record.identity();
+            let size = History::record_size(record);
+            self.session_sizes.insert(key, size);
+        }
+    }
+
     pub(super) fn end_session(&mut self, cx: &mut Context<Self>) {
         self.link = Link::Idle;
+        self.live_session = None;
+        self.pending_record = None;
         if let Some(live) = self.live.take() {
             let tree = live.handle.process_tree();
             cx.background_executor()
@@ -185,7 +228,6 @@ impl ChatPanel {
         }
     }
 
-    // The caller ends the tree off the UI thread.
     pub fn shutdown(&mut self) -> Option<std::sync::Arc<zenkai_agent::chat::process::ProcessTree>> {
         self.live.take().map(|live| live.handle.process_tree())
     }

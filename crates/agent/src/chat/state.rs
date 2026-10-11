@@ -2,6 +2,8 @@
 // reasoning effort, slash commands, context usage and past sessions. Everything here is
 // optional because each agent advertises a different subset.
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ConfigId(String);
 
@@ -67,7 +69,7 @@ pub struct SlashCommand {
     pub input_hint: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextUsage {
     pub used: u64,
     pub size: u64,
