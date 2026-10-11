@@ -24,7 +24,7 @@ function OnMain($dir) {
 $stages = $command -split '\r?\n|&&|\|\||;|(?<!&)&(?!&)|(?<!\|)\|(?!\|)'
 $workDir = $cwd
 foreach ($stage in $stages) {
-  $tokens = @($stage -split '\s+' | ForEach-Object { $_.Trim('"', "'", '`') } | Where-Object { $_ -ne '' })
+  $tokens = @([regex]::Matches($stage, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value.Trim('"', "'", '`') } | Where-Object { $_ -ne '' })
   if ($tokens.Count -eq 0) { continue }
   $lower = @($tokens | ForEach-Object { $_.ToLowerInvariant() })
   $idx = -1
