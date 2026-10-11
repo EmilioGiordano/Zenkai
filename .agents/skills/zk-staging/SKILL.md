@@ -27,14 +27,18 @@ Hard rules for the whole run:
 
 ## Procedure
 
-1. Create the worktree from the repo root: `git worktree add -b staging/<date>
-   .claude/worktrees/staging main`. Add the untracked `.cargo/config.toml` with
-   `target-dir = "D:/More-Code-Projects/Zenkai-compiled/staging"` (plus
-   `rustc-wrapper = "sccache"`), and never change it afterwards.
-2. Merge the branches one at a time, in the order given, with
+1. One branch: run the full gate (step 4) directly in that branch's worktree
+   and copy the exe (step 5). No staging branch, no staging worktree.
+2. Several branches: create the worktree from the repo root:
+   `git worktree add -b staging/<date> .claude/worktrees/staging main`
+   (adding `-n` when the name is taken). Add the untracked `.cargo/config.toml`
+   with `target-dir = "D:/More-Code-Projects/Zenkai-compiled/staging"` (plus
+   `rustc-wrapper = "sccache"`), and never change it afterwards. Merge the
+   final tip of each branch once, in the order given, with
    `git merge --no-ff <branch>`. After each merge run
    `cargo check --workspace --all-targets` to attribute breakage to the branch
-   just merged.
+   just merged. If a branch changes after a failure, start over with a new
+   staging branch from `main`; never re-merge into the old one.
 3. Resolve a conflict only when the resolution is mechanical and keeps both
    intents. If it needs a design choice, abort with `git merge --abort`, skip
    the branch and report it.
@@ -46,12 +50,17 @@ Hard rules for the whole run:
 5. Copy the release exe to `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`,
    overwriting. If the file is locked, report it and stop; never kill the
    process.
+6. After the manual test, on the user's approval: merge the branches (never
+   staging) into `main` one at a time, in the same order, with `--no-ff`;
+   then `git diff staging/<date> main` must be empty. Done by the user or by
+   Claude with the user's explicit approval; the user pushes.
 
 ## Failures
 
 A failure caused by one branch goes back to that branch: report the branch, the
 command and the failing output, without fixing it on staging. A failure caused
-only by the combination is fixed on the staging branch in its own commit.
+only by the combination is fixed in its own `fix/<topic>` branch, never on
+staging.
 
 ## Report
 

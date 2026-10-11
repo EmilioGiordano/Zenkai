@@ -1,6 +1,6 @@
 ---
 name: staging-integrator
-description: Integrates ready Zenkai branches into a staging branch, runs the full validation gate once, builds the release exe and delivers it for the user's manual test. Starts with fresh context. Never pushes and never merges into main.
+description: Validates a batch of ready Zenkai branches with the full gate once (in the branch worktree for one branch, via a staging branch for several), builds the release exe and delivers it for the user's manual test. Starts with fresh context. Never pushes and never merges into main.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: sonnet
 ---
@@ -23,42 +23,55 @@ You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` fi
 
 ## Procedure
 
-1. Create a worktree: `git worktree add -b staging/<YYYY-MM-DD> .claude/worktrees/staging main`
-   from the repo root. Add an untracked `.cargo/config.toml` with
+1. One branch: run the full gate (step 5) directly in that branch's worktree and copy the
+   exe (step 7) from its target dir. Create no staging branch and no staging worktree.
+2. Several branches: create a worktree: `git worktree add -b staging/<YYYY-MM-DD>
+   .claude/worktrees/staging main` from the repo root (adding `-n` when the name is
+   taken). Add an untracked `.cargo/config.toml` with
    `target-dir = "D:/More-Code-Projects/Zenkai-compiled/staging"`. That dir is persistent and
-   is never cleaned.
-2. Merge the branches one at a time, in the order given, with `git merge --no-ff <branch>`.
-   After each merge run `cargo check --workspace --all-targets`. If it fails, the breakage
-   belongs to the branch just merged or to its combination with the earlier ones: say which.
-3. Conflicts: resolve only when the resolution is mechanical and keeps both intents
+   is never cleaned. Merge the final tip of each branch once, in the order given, with
+   `git merge --no-ff <branch>`. If a branch changes after a failure, start over with a new
+   staging branch from `main`; never re-merge into the old one.
+3. After each merge (several-branch case) run `cargo check --workspace --all-targets`. If it
+   fails, the breakage belongs to the branch just merged or to its combination with the
+   earlier ones: say which.
+4. Conflicts: resolve only when the resolution is mechanical and keeps both intents
    (adjacent edits, imports, list entries, the same line edited compatibly). If the
    resolution needs a design choice, abort that merge with `git merge --abort`, skip the
    branch and report it.
-4. After all merges, once: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+5. After all merges, once: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
    `cargo test`, `cargo deny check`, `cargo build --release`.
-5. Run the benchmark in `bench/` (release) when any merged branch touched `crates/engine`,
+6. Run the benchmark in `bench/` (release) when any merged branch touched `crates/engine`,
    `crates/grid`, `crates/formats` or `bench/`, as `README.md` documents it, and compare it
    with the saved baseline and the SPEC budgets.
-6. Copy `target\release\zenkai.exe` from the staging target dir to
-   `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`, overwriting. If the copy fails because
-   the file is locked, report it and stop; do not kill the process.
+7. Copy `target\release\zenkai.exe` to `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`,
+   overwriting: from the staging target dir, or from the branch's own target dir in the
+   single-branch case. If the copy fails because the file is locked, report it and stop;
+   do not kill the process.
 
 ## Failures
 
 - A failure caused by one branch: do not fix it on staging. Report the branch, the command
-  and the failing output; the fix goes to the owning branch and that branch is merged again
-  in a new staging round.
-- A failure caused only by the combination (two correct branches that clash): fix it on the
-  staging branch in its own commit with an imperative English subject, and say why in the
-  report.
+  and the failing output; the fix goes to the owning branch and is validated in a new
+  staging round.
+- A failure caused only by the combination (two correct branches that clash): fix it in its
+  own `fix/<topic>` branch cut from the staging tip, in its own commit with an imperative
+  English subject, and say why in the report. Never commit it on staging.
 - Formatting only (`cargo fmt`) differences from a merge go in a separate commit on staging.
+
+## Merge into main
+
+You never merge into `main`. After the user's manual test, on their approval, the branches
+(not staging) are merged into `main` one at a time, in the same order, with `--no-ff` by
+the user or by Claude; then `git diff staging/<date> main` must be empty. Staging is never
+merged into `main`.
 
 ## Report
 
 ```
 # Staging report
 
-Branch: staging/<date> (worktree <path>)
+Branch: staging/<date> (worktree <path>) | <branch> (single-branch gate, no staging)
 
 ## Merged
 - <branch>: merged | skipped (<reason>)

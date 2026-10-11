@@ -162,9 +162,9 @@ Good subjects: `Add atomic save with temp file swap`, `Fix range selection past 
 
 ## Validation
 
-Builds are expensive, so they are batched: branches get cheap checks, one staging branch gets
-the full gate once per batch. Never run workspace-wide clippy or test, a release build or the
-benchmark on a feature branch.
+Builds are expensive, so they are batched: branches get cheap checks, the full gate runs
+once per batch. Never run workspace-wide clippy or test, a release build or the
+benchmark on a feature branch except for the single-branch case below.
 
 Per branch, in its own worktree, for the crates it touches (`<crates>`):
 
@@ -176,7 +176,15 @@ cargo test -p <crates>
 
 Debug builds only. Parallel `cargo` invocations use at most `-j 8` in total.
 
-Staging, once per batch, in this order:
+A batch with a single branch runs the full gate directly in that branch's worktree and
+copies the release exe from there; no staging branch is created.
+
+A batch with several branches gets a fresh `staging/<date>` from `main` (adding `-n`
+when the name is taken); the final tip of each branch is merged once with `--no-ff`. If
+a branch changes after a failure, a new staging branch is created from `main` instead of
+re-merging into the old one.
+
+Full gate, once per batch, in this order:
 
 ```
 cargo fmt --check
@@ -203,19 +211,24 @@ in a staging branch.
    `docs/SPEC.md` performance budgets. Fixes go on the branch as new commits. The reviewers
    do not inherit the implementer's justifications: they get the spec and the diff, plus the
    decisions taken with their reason.
-4. **Staging.** `staging-integrator` (one agent, fresh context) creates `staging/<date>` from
-   `main` and merges the ready branches one at a time with `--no-ff`. After each merge it
-   runs `cargo check --workspace --all-targets` to attribute breakage to a branch. Then,
-   once, it runs the staging gate above. It copies the release exe to
+4. **Staging.** `staging-integrator` (one agent, fresh context) validates the batch per
+   Validation above: one branch is gated in its own worktree, several branches are merged
+   one at a time with `--no-ff` into a fresh staging branch. After each merge it runs
+   `cargo check --workspace --all-targets` to attribute breakage to a branch. Then, once,
+   it runs the full gate. It copies the release exe to
    `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`, overwriting; if the file is locked it
    reports it and never kills the process. Staging uses the persistent target dir
    `D:/More-Code-Projects/Zenkai-compiled/staging`, which is never cleaned.
-5. **Failures.** A fix for one branch goes back to the owning branch and the branch is
-   merged again. A fix caused only by the combination is committed on the staging branch.
-6. **Manual test.** The user tests the staging exe by hand. Agents never drive the GUI or
+5. **Failures.** A fix for one branch goes back to the owning branch and is validated in
+   a new staging round. A fix caused only by the combination goes in its own `fix/<topic>`
+   branch, never on staging.
+6. **Manual test.** The user tests the exe by hand. Agents never drive the GUI or
    send input to the desktop.
-7. **Merge.** On the user's approval staging is merged into `main` and the user pushes.
-   Never merge to `main` before the manual test.
+7. **Merge.** On the user's approval the branches are merged into `main` one at a time,
+   in the same order, with `--no-ff`; then `git diff staging/<date> main` must be empty.
+   Staging is never merged into `main`. Merging into `main` is done by the user or by
+   Claude with the user's explicit approval, and the user pushes. Never merge to `main`
+   before the manual test.
 
 Long commands run in the background and the agent waits for them; it never hands back early.
 After two failed review rounds on a branch, stop and ask the user instead of iterating.
