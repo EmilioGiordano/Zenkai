@@ -34,7 +34,7 @@ foreach ($stage in $stages) {
   $leadEnd = $lower.Count
   if ($idx -gt 0) { $leadEnd = $idx }
   for ($k = 0; $k -lt $leadEnd; $k++) {
-    if ($lower[$k] -in @('cd', 'set-location', 'push-location')) {
+    if ($lower[$k] -in @('cd', 'chdir', 'sl', 'set-location', 'pushd', 'push-location')) {
       $target = ''
       for ($j = $k + 1; $j -lt $leadEnd; $j++) {
         if ($lower[$j].StartsWith('-')) { continue }

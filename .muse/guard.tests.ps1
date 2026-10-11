@@ -51,6 +51,9 @@ $merge = 'git merge --no-ff fix/guard-worktree-dir'
 Check 'merge-in-staging-after-cd-allowed' "cd `"$stagingDir`" && $merge" $root $false
 Check 'merge-in-staging-after-set-location-allowed' "Set-Location `"$stagingDir`"; $merge" $root $false
 Check 'merge-in-staging-after-push-location-allowed' "Push-Location `"$stagingDir`" && $merge" $root $false
+Check 'merge-in-staging-after-pushd-allowed' "pushd `"$stagingDir`" && $merge" $root $false
+Check 'merge-in-staging-after-sl-allowed' "sl `"$stagingDir`" && $merge" $root $false
+Check 'merge-in-staging-after-chdir-allowed' "chdir `"$stagingDir`" && $merge" $root $false
 Check 'merge-in-staging-with-git-C-allowed' "git -C `"$stagingDir`" $merge" $root $false
 Check 'merge-on-main-denied' $merge $root $true
 Check 'merge-after-cd-back-to-main-denied' "cd `"$root`" && $merge" $stagingDir $true
