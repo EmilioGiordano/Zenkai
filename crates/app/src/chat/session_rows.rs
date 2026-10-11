@@ -64,15 +64,27 @@ pub fn sizes_for(records: &[Record]) -> SessionSizes {
         .collect()
 }
 
-fn row(
+struct RowInput<'a> {
     source: Source,
-    title: &str,
+    title: &'a str,
     started: Option<u64>,
-    now: u64,
-    agent: &AgentId,
-    agent_name: &str,
+    agent: &'a AgentId,
+    agent_name: &'a str,
     size_bytes: Option<u64>,
     context: Option<ContextUsage>,
+}
+
+fn row(
+    RowInput {
+        source,
+        title,
+        started,
+        agent,
+        agent_name,
+        size_bytes,
+        context,
+    }: RowInput<'_>,
+    now: u64,
 ) -> Row {
     let age = started.map_or(u64::MAX, |started| now.saturating_sub(started));
     Row {
@@ -141,16 +153,19 @@ pub fn rows(
                     .and_then(|time| u64::try_from(time.timestamp()).ok());
                 let stored = history.record_for_session(&past.id);
                 row(
-                    Source::Agent {
-                        session: past.id.clone(),
+                    RowInput {
+                        source: Source::Agent {
+                            session: past.id.clone(),
+                        },
+                        title: past.title.as_deref().unwrap_or(""),
+                        started,
+                        agent,
+                        agent_name,
+                        size_bytes: stored
+                            .and_then(|record| sizes.get(&record.identity()).copied()),
+                        context: stored.and_then(|record| record.context),
                     },
-                    past.title.as_deref().unwrap_or(""),
-                    started,
                     now,
-                    agent,
-                    agent_name,
-                    stored.and_then(|record| sizes.get(&record.identity()).copied()),
-                    stored.and_then(|record| record.context),
                 )
             })
             .collect()
@@ -159,14 +174,16 @@ pub fn rows(
             .for_agent(agent)
             .map(|record| {
                 row(
-                    Source::Local,
-                    &record.title,
-                    Some(record.started_unix_seconds),
+                    RowInput {
+                        source: Source::Local,
+                        title: &record.title,
+                        started: Some(record.started_unix_seconds),
+                        agent,
+                        agent_name,
+                        size_bytes: sizes.get(&record.identity()).copied(),
+                        context: record.context,
+                    },
                     now,
-                    agent,
-                    agent_name,
-                    sizes.get(&record.identity()).copied(),
-                    record.context,
                 )
             })
             .collect()
