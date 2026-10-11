@@ -152,10 +152,10 @@ impl ChatPanel {
             SessionEvent::Started(id) => {
                 self.live_session = Some(id.clone());
                 self.history.remember_session(&id);
-                if let Some(identity) = self.pending_record.take() {
-                    if self.history.attach_session_to(&identity, &id).is_some() {
-                        self.refresh_size(&id);
-                    }
+                if let Some(identity) = self.pending_record.take()
+                    && self.history.attach_session_to(&identity, &id).is_some()
+                {
+                    self.refresh_size(&id);
                 }
                 if self.history_saves.try_send(self.history.clone()).is_err() {
                     tracing::debug!("conversation history writer is not running");
