@@ -20,14 +20,29 @@ function OnMain($dir) {
 }
 
 # Split compound commands; each stage is judged alone.
+# One workDir across stages: an earlier cd moves the directory later git runs in.
 $stages = $command -split '\r?\n|&&|\|\||;|(?<!&)&(?!&)|(?<!\|)\|(?!\|)'
+$workDir = $cwd
 foreach ($stage in $stages) {
-  $tokens = @($stage -split '\s+' | ForEach-Object { $_.Trim('"', "'", '`') } | Where-Object { $_ -ne '' })
+  $tokens = @([regex]::Matches($stage, '"[^"]*"|''[^'']*''|\S+') | ForEach-Object { $_.Value.Trim('"', "'", '`') } | Where-Object { $_ -ne '' })
   if ($tokens.Count -eq 0) { continue }
   $lower = @($tokens | ForEach-Object { $_.ToLowerInvariant() })
   $idx = -1
   for ($k = 0; $k -lt $lower.Count; $k++) {
     if ($lower[$k] -match '^(git|gh|cargo|rm)(\.exe)?$') { $idx = $k; break }
+  }
+  if ($lower[0] -in @('cd', 'chdir', 'sl', 'set-location', 'pushd', 'push-location')) {
+    $target = ''
+    for ($j = 1; $j -lt $lower.Count; $j++) {
+      if ($lower[$j].StartsWith('-')) { continue }
+      $target = $lower[$j]; break
+    }
+    if ($target -ne '' -and $target -notmatch '^(git|gh|cargo|rm)(\.exe)?$') {
+      if (-not [System.IO.Path]::IsPathRooted($target)) { $target = Join-Path $workDir $target }
+      $workDir = $target
+    }
+  } elseif ($lower[0] -in @('pop-location', 'popd')) {
+    $workDir = $cwd
   }
   if ($idx -lt 0) { continue }
   $tool = $lower[$idx] -replace '\.exe$', ''
@@ -48,7 +63,7 @@ foreach ($stage in $stages) {
   }
 
   $flags = @(); $words = @()
-  $skipNext = $false; $dir = $cwd
+  $skipNext = $false; $dir = $workDir
   for ($k = 0; $k -lt $rest.Count; $k++) {
     if ($skipNext) { $skipNext = $false; continue }
     $t = $rest[$k]
