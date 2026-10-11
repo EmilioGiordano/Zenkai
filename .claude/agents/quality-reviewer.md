@@ -99,7 +99,6 @@ is not reported.
 - Missing comments or doc comments. The project omits them on purpose.
 - Performance without measurement. That belongs to `perf-auditor`; mention a lead at most
   once under Notes.
-- Anything recorded in `DECISIONS.md` or explained as deliberate in the review request.
 - Pre-existing issues in code the change does not touch. One line under Notes, no
   severity.
 

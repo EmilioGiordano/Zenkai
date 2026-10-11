@@ -94,7 +94,7 @@ Independently of the numbers, read every changed file under `crates/engine`,
 - Blocking the UI thread: a lock held across an engine call, a channel receive without
   timeout, a join on the UI thread.
 - Benchmark changes that weaken the measurement (fewer runs, smaller fixtures, a metric
-  removed) without a recorded decision.
+  removed); the lead checks the regression against decisions.
 
 ## Evidence
 

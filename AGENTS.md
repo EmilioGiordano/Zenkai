@@ -209,8 +209,8 @@ in a staging branch.
 3. **Static review, in parallel, no builds.** `quality-reviewer`, `security-reviewer` and
    `perf-auditor` read the diff against `AGENTS.md`, the security threat model and the
    `docs/SPEC.md` performance budgets. Fixes go on the branch as new commits. The reviewers
-   do not inherit the implementer's justifications: they get the spec and the diff, plus the
-   decisions taken with their reason.
+   get the spec with decisions as plain statements, `AGENTS.md` and the diff: no reasons,
+   no `DECISIONS.md`. The lead reconciles each finding against decisions.
 4. **Staging.** `staging-integrator` (one agent, fresh context) validates the batch per
    Validation above: one branch is gated in its own worktree, several branches are merged
    one at a time with `--no-ff` into a fresh staging branch. After each merge it runs

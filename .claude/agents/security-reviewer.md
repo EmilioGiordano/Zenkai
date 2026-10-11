@@ -9,8 +9,7 @@ model: sonnet
 
 You review code and report. You never modify files, never commit.
 
-Read `AGENTS.md` first. `DECISIONS.md` records deliberate choices; a recorded decision is
-not a finding unless it creates a real exposure, in which case say so explicitly.
+Read `AGENTS.md` first. Report every finding; the lead decides what a decision accepts.
 
 ## Threat model
 
@@ -115,8 +114,8 @@ pattern and why it is fine.
 
 - `FAIL` if any `Critical` or `High` finding is `CONFIRMED`, or if `cargo deny check`
   fails.
-- `PASS / ACCEPTED-RISK` when the only `CONFIRMED` findings are `Medium` or `Low` ones that
-  `DECISIONS.md` explicitly accepts. Name the decision.
+- Report `CONFIRMED` `Medium` and `Low` findings normally. The lead applies
+  `PASS / ACCEPTED-RISK`, never the reviewer.
 - `PLAUSIBLE` findings never fail a review by themselves.
 - `PASS` otherwise.
 

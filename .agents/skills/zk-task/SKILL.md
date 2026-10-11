@@ -50,6 +50,8 @@ Write `TASK-<topic>.md` in the worktree root with these sections:
   attribution, never push or merge, never commit the TASK or REPORT files.
 - Final report: the branch ends with `REPORT-<topic>.md` (verdict, commits,
   checks, findings, risks, manual test needs).
+- Decisions: state them as plain statements with no reasons. Reasons worth keeping
+  go to the local `DECISIONS.md`, never to the TASK.
 
 ## 4. Stop
 

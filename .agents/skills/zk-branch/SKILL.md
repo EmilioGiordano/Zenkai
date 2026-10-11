@@ -59,9 +59,9 @@ Run `git diff main...HEAD` in the worktree. Spawn the reviewer subagents in
 parallel, each with fresh context. Reviewer independence is a hard rule:
 reviewers receive only the TASK spec, `AGENTS.md`, the worktree path, and that
 diff. Never the implementer's notes, reasons, commit body explanations, the
-REPORT, or previous rounds' findings. Each round uses new reviewer subagents.
-If a finding contradicts a decision written in the TASK, the lead session
-decides, not the reviewer.
+REPORT, previous rounds' findings, or `DECISIONS.md`. Each round uses new reviewer
+subagents. If a finding contradicts a TASK decision or `DECISIONS.md`, the lead
+session marks it "conflicts with decision: <which>" and decides, not the reviewer.
 
 - Quality (`.claude/agents/quality-reviewer.md`): always.
 - Security (`.claude/agents/security-reviewer.md`): when the diff touches

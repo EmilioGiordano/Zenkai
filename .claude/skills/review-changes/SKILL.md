@@ -33,7 +33,9 @@ argument, they review the current directory.
    target. If any changed path is under `crates/engine`, `crates/grid`, `crates/formats`
    or `bench/`, include `perf-auditor`.
 
-3. Launch the agents in a single message so they run in parallel:
+3. Launch the agents in a single message so they run in parallel. The agents receive
+   only the target directory, the spec and `AGENTS.md`: the prompt carries no
+   implementer justification.
    - `Agent({ subagent_type: 'quality-reviewer', description: 'Quality review', prompt: 'Review <target directory> per your instructions and return the required report.' })`
    - `Agent({ subagent_type: 'security-reviewer', description: 'Security review', prompt: 'Review <target directory> per your instructions and return the required report.' })`
    - Only if step 2 applies: `Agent({ subagent_type: 'perf-auditor', description: 'Performance audit', prompt: 'Audit <target directory> per your instructions and return the required report.' })`
@@ -48,9 +50,9 @@ argument, they review the current directory.
    - Keep each finding's `CONFIRMED` / `PLAUSIBLE` mark visible. A `PLAUSIBLE` finding is
      a lead to check, not a defect to fix on sight.
 
-6. Sanity-check the findings before relaying them. The agents run without the
-   implementer's context, so they can flag a deliberate decision as a defect. If a
-   finding contradicts a decision stated in the implementer's message or recorded in
-   `DECISIONS.md`, say so next to it instead of dropping it silently.
+6. Sanity-check the findings before relaying them. The agents run without reasons or
+   recorded decisions, so they can flag a deliberate decision as a defect. If a
+   finding contradicts a TASK decision or `DECISIONS.md`, mark it "conflicts with
+   decision: <which>" and decide it, instead of dropping it silently.
 
 7. Do not commit, push, merge or open anything as part of this skill.
