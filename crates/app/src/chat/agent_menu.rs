@@ -164,6 +164,10 @@ impl ChatPanel {
             let highlighted = self.menu_index == index;
             menu = menu.child(
                 h_flex()
+                    .id(SharedString::from(format!(
+                        "agent-row-{}",
+                        option.id.as_str()
+                    )))
                     .gap_2()
                     .items_center()
                     .w_full()
@@ -175,24 +179,20 @@ impl ChatPanel {
                     .when(highlighted, |row| {
                         row.bg(theme.accent).text_color(theme.accent_foreground)
                     })
+                    .on_click(cx.listener(move |this, _, _, cx| this.pick_agent(id.clone(), cx)))
                     .child(agent_mark(&option.id, &option.name, HEADER_MARK_SIZE, cx))
                     .child(
-                        div().flex_1().min_w_0().child(
-                            item(
-                                Item {
-                                    id: SharedString::from(format!("agent-{}", option.id.as_str())),
-                                    name: option.name.into(),
-                                    note: (option.installed && !option.active)
-                                        .then(|| SharedString::from(t!("chat.agent.installed"))),
-                                    checked: option.active,
-                                    highlighted,
-                                },
-                                cx,
-                            )
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.pick_agent(id.clone(), cx)),
-                            ),
-                        ),
+                        div().flex_1().min_w_0().child(item(
+                            Item {
+                                id: SharedString::from(format!("agent-{}", option.id.as_str())),
+                                name: option.name.into(),
+                                note: (option.installed && !option.active)
+                                    .then(|| SharedString::from(t!("chat.agent.installed"))),
+                                checked: option.active,
+                                highlighted,
+                            },
+                            cx,
+                        )),
                     ),
             );
         }
