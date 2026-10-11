@@ -240,6 +240,10 @@ pub fn format_size(bytes: u64) -> String {
     }
 }
 
+pub fn has_local_rows(rows: &[Row]) -> bool {
+    rows.iter().any(|row| row.source == Source::Local)
+}
+
 pub fn summary(count: usize, total: Option<u64>) -> String {
     match total {
         Some(size) => t!(
@@ -391,6 +395,44 @@ mod tests {
             .expect("valid started")
             .with_timezone(&Local);
         assert_eq!(found[0].active, started.format("%H:%M").to_string());
+    }
+
+    #[test]
+    fn local_rows_call_for_the_fresh_only_note() {
+        let mut history = History::default();
+        history.push(agent(), "Chart of sales", "ventas.xlsx", 1_000);
+        let local = rows(
+            &agent(),
+            "Claude",
+            &AgentState::default(),
+            &history,
+            &SessionSizes::new(),
+            1_600,
+        );
+        assert!(has_local_rows(&local));
+        assert!(!has_local_rows(&[]));
+        let mut state = AgentState::default();
+        state.apply(StateChange::Abilities(Abilities {
+            list_sessions: true,
+            load_session: true,
+        }));
+        state.apply(StateChange::PastSessions(vec![PastSession {
+            id: "s1".to_string(),
+            title: Some("Fix the dates".to_string()),
+            updated_at: Some("2026-10-09T10:00:00Z".to_string()),
+        }]));
+        let now = DateTime::parse_from_rfc3339("2026-10-09T10:12:00Z")
+            .unwrap()
+            .timestamp() as u64;
+        let resumable = rows(
+            &agent(),
+            "Claude",
+            &state,
+            &history,
+            &SessionSizes::new(),
+            now,
+        );
+        assert!(!has_local_rows(&resumable));
     }
 
     #[test]
