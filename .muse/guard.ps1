@@ -31,22 +31,18 @@ foreach ($stage in $stages) {
   for ($k = 0; $k -lt $lower.Count; $k++) {
     if ($lower[$k] -match '^(git|gh|cargo|rm)(\.exe)?$') { $idx = $k; break }
   }
-  $leadEnd = $lower.Count
-  if ($idx -gt 0) { $leadEnd = $idx }
-  for ($k = 0; $k -lt $leadEnd; $k++) {
-    if ($lower[$k] -in @('cd', 'chdir', 'sl', 'set-location', 'pushd', 'push-location')) {
-      $target = ''
-      for ($j = $k + 1; $j -lt $leadEnd; $j++) {
-        if ($lower[$j].StartsWith('-')) { continue }
-        $target = $lower[$j]; break
-      }
-      if ($target -ne '' -and $target -notmatch '^(git|gh|cargo|rm)(\.exe)?$') {
-        if (-not [System.IO.Path]::IsPathRooted($target)) { $target = Join-Path $workDir $target }
-        $workDir = $target
-      }
-    } elseif ($lower[$k] -in @('pop-location', 'popd')) {
-      $workDir = $cwd
+  if ($lower[0] -in @('cd', 'chdir', 'sl', 'set-location', 'pushd', 'push-location')) {
+    $target = ''
+    for ($j = 1; $j -lt $lower.Count; $j++) {
+      if ($lower[$j].StartsWith('-')) { continue }
+      $target = $lower[$j]; break
     }
+    if ($target -ne '' -and $target -notmatch '^(git|gh|cargo|rm)(\.exe)?$') {
+      if (-not [System.IO.Path]::IsPathRooted($target)) { $target = Join-Path $workDir $target }
+      $workDir = $target
+    }
+  } elseif ($lower[0] -in @('pop-location', 'popd')) {
+    $workDir = $cwd
   }
   if ($idx -lt 0) { continue }
   $tool = $lower[$idx] -replace '\.exe$', ''

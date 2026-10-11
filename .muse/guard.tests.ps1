@@ -49,6 +49,7 @@ Write-Output "staging fixture=$stagingDir"
 
 $merge = 'git merge --no-ff fix/guard-worktree-dir'
 Check 'merge-in-staging-after-cd-allowed' "cd `"$stagingDir`" && $merge" $root $false
+Check 'merge-after-spoofed-sl-denied' "echo sl `"$stagingDir`" && $merge" $root $true
 Check 'merge-in-staging-after-set-location-allowed' "Set-Location `"$stagingDir`"; $merge" $root $false
 Check 'merge-in-staging-after-push-location-allowed' "Push-Location `"$stagingDir`" && $merge" $root $false
 Check 'merge-in-staging-after-pushd-allowed' "pushd `"$stagingDir`" && $merge" $root $false
