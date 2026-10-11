@@ -55,7 +55,7 @@ You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` fi
   and the failing output; the fix goes to the owning branch and is validated in a new
   staging round.
 - A failure caused only by the combination (two correct branches that clash): fix it in its
-  own `fix/<topic>` branch cut from the staging tip, in its own commit with an imperative
+  own `fix/<topic>` branch cut from `main`, in its own commit with an imperative
   English subject, and say why in the report. Never commit it on staging.
 - Formatting only (`cargo fmt`) differences from a merge go in a separate commit on staging.
 
