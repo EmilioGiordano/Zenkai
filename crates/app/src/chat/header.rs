@@ -6,57 +6,12 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use zenkai_agent::settings::AgentId;
 use zenkai_i18n::t;
 
 use super::{ChatPanel, View};
 use crate::actions::*;
-use crate::assets::{CLAUDE_AGENT_MARK, CODEX_AGENT_MARK, OPENCODE_MARK};
+use crate::agent_mark::{HEADER_MARK_SIZE, agent_mark};
 use crate::keymap;
-
-pub(super) fn agent_mark(agent: &AgentId, name: &str, cx: &App) -> impl IntoElement {
-    mark_sized(agent, name, 20.0, 12.0, cx)
-}
-
-pub(super) fn session_mark(agent: &AgentId, name: &str, cx: &App) -> impl IntoElement {
-    mark_sized(agent, name, 28.0, 16.0, cx)
-}
-
-fn mark_sized(agent: &AgentId, name: &str, tile: f32, glyph: f32, cx: &App) -> impl IntoElement {
-    let theme = cx.theme();
-    let tile = div()
-        .flex_shrink_0()
-        .size(px(tile))
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(theme.secondary);
-    // The registry marks paint with the surrounding text colour, so they sit on the
-    // tile exactly like the monochrome opencode mark.
-    let mark = match agent.as_str() {
-        "claude" => Some(CLAUDE_AGENT_MARK),
-        "codex" => Some(CODEX_AGENT_MARK),
-        "opencode" => Some(OPENCODE_MARK),
-        _ => None,
-    };
-    match mark {
-        Some(path) => tile
-            .child(
-                svg()
-                    .path(path)
-                    .size(px(glyph))
-                    .text_color(theme.muted_foreground),
-            )
-            .into_any_element(),
-        None => tile
-            .text_xs()
-            .font_weight(FontWeight::SEMIBOLD)
-            .text_color(theme.secondary_foreground)
-            .child(name.chars().next().map(String::from).unwrap_or_default())
-            .into_any_element(),
-    }
-}
 
 fn token_count(tokens: u64) -> String {
     if tokens >= 1_000 {
@@ -98,7 +53,7 @@ impl ChatPanel {
                     .gap_2()
                     .items_center()
                     .when_some(agent.as_ref(), |row, (id, server)| {
-                        row.child(agent_mark(id, &server.name, cx))
+                        row.child(agent_mark(id, &server.name, HEADER_MARK_SIZE, cx))
                     })
                     .child(
                         div()

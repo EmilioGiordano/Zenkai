@@ -4,10 +4,10 @@ use zenkai_agent::presets::PRESETS;
 use zenkai_agent::settings::{AgentId, Settings};
 use zenkai_i18n::t;
 
-use super::header::agent_mark;
 use super::launch::chosen_agent;
 use super::menus::{Item, item, note, popover, rule};
 use super::{ChatPanel, Menu};
+use crate::agent_mark::{HEADER_MARK_SIZE, agent_mark};
 use crate::agent_settings::{self, AgentConfig};
 
 const AGENT_MENU_WIDTH: f32 = 280.0;
@@ -163,7 +163,7 @@ impl ChatPanel {
                     .gap_2()
                     .items_center()
                     .px_1()
-                    .child(agent_mark(&option.id, &option.name, cx))
+                    .child(agent_mark(&option.id, &option.name, HEADER_MARK_SIZE, cx))
                     .child(
                         item(
                             Item {
