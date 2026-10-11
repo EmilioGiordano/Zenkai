@@ -12,8 +12,9 @@ use zenkai_agent::secrets::SecretStatus;
 use zenkai_agent::settings::{AgentId, AgentServer, SecretName, Settings};
 use zenkai_i18n::t;
 
-use super::{SettingsWindow, agents, brand, info, update};
+use super::{SettingsWindow, agents, info, update};
 use crate::actions::DetectAgents;
+use crate::agent_mark::{self, SETTINGS_MARK_SIZE};
 use crate::agent_settings::{self, AgentConfig, SecretState};
 
 enum Status {
@@ -26,7 +27,7 @@ enum Status {
 struct AgentRow {
     id: AgentId,
     name: String,
-    mark: brand::Mark,
+    mark: agent_mark::AgentMark,
     detail: String,
     status: Status,
     configured: bool,
@@ -61,7 +62,7 @@ fn rows(settings: &Settings, detection: Option<&Detection>) -> Vec<AgentRow> {
         };
         AgentRow {
             name: preset.name.to_string(),
-            mark: brand::Mark::of_preset(preset.id, preset.name),
+            mark: agent_mark::of_agent(&preset.agent_id(), preset.name),
             detail: account_of(preset).to_string(),
             is_default: agents.default.as_ref() == Some(&id),
             id,
@@ -78,7 +79,7 @@ fn rows(settings: &Settings, detection: Option<&Detection>) -> Vec<AgentRow> {
         .map(|(id, server)| AgentRow {
             id: id.clone(),
             name: server.name.clone(),
-            mark: brand::Mark::of_preset(id.as_str(), &server.name),
+            mark: agent_mark::of_agent(id, &server.name),
             detail: std::iter::once(server.command.as_str())
                 .chain(server.args.iter().map(String::as_str))
                 .collect::<Vec<_>>()
@@ -229,7 +230,7 @@ impl SettingsWindow {
                     .items_center()
                     .border_t_1()
                     .border_color(theme.background)
-                    .child(brand::mark(&agent.mark, cx))
+                    .child(agent_mark::mark(&agent.mark, SETTINGS_MARK_SIZE, cx))
                     .child(
                         v_flex()
                             .flex_1()

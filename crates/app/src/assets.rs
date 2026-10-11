@@ -7,21 +7,16 @@ pub const CLAUDE_MARK: &str = "brands/claude.svg";
 pub const GEMINI_MARK: &str = "brands/gemini.svg";
 pub const LOCK_MARK: &str = "marks/lock.svg";
 pub const LOCK_OPEN_MARK: &str = "marks/lock-open.svg";
-pub const CLAUDE_AGENT_MARK: &str = "marks/agents/claude.svg";
 pub const CODEX_AGENT_MARK: &str = "marks/agents/codex.svg";
 pub const OPENCODE_MARK: &str = "marks/agents/opencode.svg";
 
-const BRAND_MARKS: [(&str, &[u8]); 7] = [
+const BRAND_MARKS: [(&str, &[u8]); 6] = [
     (CLAUDE_MARK, include_bytes!("../assets/brands/claude.svg")),
     (GEMINI_MARK, include_bytes!("../assets/brands/gemini.svg")),
     (LOCK_MARK, include_bytes!("../assets/marks/lock.svg")),
     (
         LOCK_OPEN_MARK,
         include_bytes!("../assets/marks/lock-open.svg"),
-    ),
-    (
-        CLAUDE_AGENT_MARK,
-        include_bytes!("../assets/marks/agents/claude.svg"),
     ),
     (
         CODEX_AGENT_MARK,
@@ -33,7 +28,7 @@ const BRAND_MARKS: [(&str, &[u8]); 7] = [
     ),
 ];
 
-// The component icons plus the few brand marks the AI settings show.
+// The component icons plus the brand and agent marks the AI settings and chat show.
 pub struct ZenkaiAssets;
 
 impl AssetSource for ZenkaiAssets {

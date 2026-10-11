@@ -1,13 +1,15 @@
 use gpui_kit::base::h_flex;
+use gpui_kit::component::ActiveTheme;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::presets::PRESETS;
 use zenkai_agent::settings::{AgentId, Settings};
 use zenkai_i18n::t;
 
-use super::header::agent_mark;
 use super::launch::chosen_agent;
 use super::menus::{Item, item, note, popover, rule};
 use super::{ChatPanel, Menu};
+use crate::agent_mark::{HEADER_MARK_SIZE, agent_mark};
 use crate::agent_settings::{self, AgentConfig};
 
 const AGENT_MENU_WIDTH: f32 = 280.0;
@@ -154,31 +156,43 @@ impl ChatPanel {
             AGENT_MENU_WIDTH,
             cx,
         );
+        let theme = cx.theme();
         let options = self.agent_rows(cx);
         let count = options.len();
         for (index, option) in options.into_iter().enumerate() {
             let id = option.id.clone();
+            let highlighted = self.menu_index == index;
             menu = menu.child(
                 h_flex()
+                    .id(SharedString::from(format!(
+                        "agent-row-{}",
+                        option.id.as_str()
+                    )))
                     .gap_2()
                     .items_center()
+                    .w_full()
                     .px_1()
-                    .child(agent_mark(&option.id, &option.name, cx))
+                    .rounded_md()
+                    .text_sm()
+                    .cursor_pointer()
+                    .hover(|row| row.bg(theme.accent))
+                    .when(highlighted, |row| {
+                        row.bg(theme.accent).text_color(theme.accent_foreground)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| this.pick_agent(id.clone(), cx)))
+                    .child(agent_mark(&option.id, &option.name, HEADER_MARK_SIZE, cx))
                     .child(
-                        item(
+                        div().flex_1().min_w_0().child(item(
                             Item {
                                 id: SharedString::from(format!("agent-{}", option.id.as_str())),
                                 name: option.name.into(),
                                 note: (option.installed && !option.active)
                                     .then(|| SharedString::from(t!("chat.agent.installed"))),
                                 checked: option.active,
-                                highlighted: self.menu_index == index,
+                                highlighted,
                             },
                             cx,
-                        )
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.pick_agent(id.clone(), cx)),
-                        ),
+                        )),
                     ),
             );
         }

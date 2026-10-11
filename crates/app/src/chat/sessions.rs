@@ -13,10 +13,10 @@ use zenkai_agent::settings::{AgentId, AgentServer};
 use zenkai_i18n::t;
 
 use super::extras::now_seconds;
-use super::header::{agent_mark, session_mark};
 use super::session_rows::{self, Group, Row};
 use super::{ChatPanel, View, closed, launch};
 use crate::actions::*;
+use crate::agent_mark::{HEADER_MARK_SIZE, SESSION_MARK_SIZE, agent_mark};
 use crate::agent_settings::AgentConfig;
 use crate::keymap;
 
@@ -151,7 +151,12 @@ impl ChatPanel {
             .gap_2p5()
             .items_center()
             .w_full()
-            .child(session_mark(&row.agent, &row.agent_name, cx))
+            .child(agent_mark(
+                &row.agent,
+                &row.agent_name,
+                SESSION_MARK_SIZE,
+                cx,
+            ))
             .child(
                 v_flex()
                     .flex_1()
@@ -284,7 +289,7 @@ impl ChatPanel {
                         h_flex()
                             .gap_1p5()
                             .items_center()
-                            .child(agent_mark(&id, name, cx))
+                            .child(agent_mark(&id, name, HEADER_MARK_SIZE, cx))
                             .child(name.clone())
                             .when(on, |row| row.child(Icon::new(IconName::Check).size_3p5())),
                     )
