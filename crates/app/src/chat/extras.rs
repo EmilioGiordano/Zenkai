@@ -48,6 +48,7 @@ impl ChatPanel {
             let on_disk = loaded.clone();
             closed(this.update(cx, |this, cx| {
                 this.history.merge(loaded);
+                this.refresh_session_sizes(cx);
                 cx.notify();
             }));
             cx.background_executor()
@@ -67,7 +68,6 @@ impl ChatPanel {
         .detach();
     }
 
-    // Titles the conversation after its first message and keeps its metadata, never its text.
     pub(super) fn remember_conversation(&mut self, first_message: &str, cx: &mut Context<Self>) {
         if self.title.is_some() {
             return;
@@ -90,8 +90,22 @@ impl ChatPanel {
             .active_workbook(cx)
             .map(|(_, name)| name)
             .unwrap_or_default();
-        self.history
-            .push(agent, first_message, &workbook, now_seconds());
+        if self
+            .history
+            .push(agent.clone(), first_message, &workbook, now_seconds())
+        {
+            self.pending_record = self
+                .history
+                .newest_for(&agent)
+                .map(|record| record.identity());
+        } else {
+            self.pending_record = None;
+        }
+        if let Some(record) = self.history.newest_for(&agent) {
+            let key = record.identity();
+            let size = History::record_size(record);
+            self.session_sizes.insert(key, size);
+        }
         if self.history_saves.try_send(self.history.clone()).is_err() {
             tracing::debug!("conversation history writer is not running");
         }
@@ -104,6 +118,9 @@ impl ChatPanel {
             View::Sessions => View::Chat,
         };
         if self.view == View::Sessions {
+            self.menu_index = 0;
+            self.hidden_agents.clear();
+            self.refresh_session_sizes(cx);
             let search = self.sessions_query.clone();
             search.update(cx, |state, cx| state.focus(window, cx));
         } else {
@@ -119,7 +136,29 @@ impl ChatPanel {
         cx.notify();
     }
 
+    // Continues a cross-agent resume once the switch has completed. The session event
+    // that reports readiness carries no window, so the workspace delivers this instead.
+    pub(crate) fn continue_pending_resume(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(row) = self.pending_resume.take() else {
+            return;
+        };
+        let settings = cx.global::<AgentConfig>().state.current.clone();
+        let current = launch::chosen_agent(&settings).map(|(id, _)| id);
+        if current.as_ref() != Some(&row.agent) {
+            return;
+        }
+        self.resume(&row, window, cx);
+    }
+
     pub(super) fn resume(&mut self, row: &Row, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_resume = None;
+        let settings = cx.global::<AgentConfig>().state.current.clone();
+        let current = launch::chosen_agent(&settings).map(|(id, _)| id);
+        if current.as_ref() != Some(&row.agent) {
+            self.pick_agent(row.agent.clone(), cx);
+            self.pending_resume = Some(row.clone());
+            return;
+        }
         let title = row.title.clone();
         match &row.source {
             Source::Agent { session } => {
@@ -137,7 +176,6 @@ impl ChatPanel {
                 for ask in self.permissions.drain(..) {
                     ask.cancel();
                 }
-                // The old transcript comes back if the agent cannot load the session.
                 let old_title = self.title.replace(title);
                 self.resume_backup = Some(Backup {
                     thread: std::mem::take(&mut self.thread),
@@ -145,6 +183,8 @@ impl ChatPanel {
                     title: old_title,
                 });
                 self.problem = None;
+                self.live_session = Some(session.clone());
+                self.pending_record = None;
                 if let Some(live) = &self.live {
                     live.handle.resume(session.clone());
                 }

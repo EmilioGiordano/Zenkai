@@ -1,11 +1,12 @@
-use chrono::DateTime;
-use zenkai_agent::chat::history::History;
-use zenkai_agent::chat::state::AgentState;
+use std::collections::{BTreeMap, BTreeSet};
+
+use chrono::{DateTime, Datelike, Local};
+use zenkai_agent::chat::history::{History, Record, RecordId};
+use zenkai_agent::chat::state::{AgentState, ContextUsage};
 use zenkai_agent::settings::AgentId;
 use zenkai_i18n::t;
 
-const MINUTE: u64 = 60;
-const HOUR: u64 = 60 * MINUTE;
+const HOUR: u64 = 3_600;
 const DAY: u64 = 24 * HOUR;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -25,7 +26,6 @@ impl Group {
     }
 }
 
-// Where a row came from decides what picking it does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
     Agent { session: String },
@@ -36,10 +36,13 @@ pub enum Source {
 pub struct Row {
     pub source: Source,
     pub title: String,
-    pub meta: String,
-    pub age: String,
+    pub active: String,
     pub group: Group,
     pub agent: AgentId,
+    pub agent_name: String,
+    pub started: Option<u64>,
+    pub size_bytes: Option<u64>,
+    pub context: Option<ContextUsage>,
 }
 
 pub fn group_of(age_seconds: u64) -> Group {
@@ -52,22 +55,36 @@ pub fn group_of(age_seconds: u64) -> Group {
     }
 }
 
-pub fn age_label(age_seconds: u64) -> String {
-    match age_seconds {
-        s if s < MINUTE => t!("chat.age.now").to_string(),
-        s if s < HOUR => format!("{}m", s / MINUTE),
-        s if s < DAY => format!("{}h", s / HOUR),
-        s => format!("{}d", s / DAY),
-    }
+pub type SessionSizes = BTreeMap<RecordId, u64>;
+
+pub fn sizes_for(records: &[Record]) -> SessionSizes {
+    records
+        .iter()
+        .map(|record| (record.identity(), History::record_size(record)))
+        .collect()
+}
+
+struct RowInput<'a> {
+    source: Source,
+    title: &'a str,
+    started: Option<u64>,
+    agent: &'a AgentId,
+    agent_name: &'a str,
+    size_bytes: Option<u64>,
+    context: Option<ContextUsage>,
 }
 
 fn row(
-    source: Source,
-    title: &str,
-    meta: String,
-    started: Option<u64>,
+    RowInput {
+        source,
+        title,
+        started,
+        agent,
+        agent_name,
+        size_bytes,
+        context,
+    }: RowInput<'_>,
     now: u64,
-    agent: &AgentId,
 ) -> Row {
     let age = started.map_or(u64::MAX, |started| now.saturating_sub(started));
     Row {
@@ -78,25 +95,51 @@ fn row(
             title
         }
         .to_string(),
-        meta,
-        age: if started.is_some() {
-            age_label(age)
-        } else {
-            String::new()
-        },
+        active: last_active(now, started),
         group: group_of(age),
         agent: agent.clone(),
+        agent_name: agent_name.to_string(),
+        started,
+        size_bytes,
+        context,
     }
 }
 
-// The agent's own list when it can list sessions, otherwise Zenkai's local metadata.
+pub fn last_active(now: u64, started: Option<u64>) -> String {
+    let Some(started) = started else {
+        return String::new();
+    };
+    let local =
+        |unix: u64| DateTime::from_timestamp(unix as i64, 0).map(|utc| utc.with_timezone(&Local));
+    let (Some(now), Some(when)) = (local(now), local(started)) else {
+        return String::new();
+    };
+    if when.date_naive() == now.date_naive() {
+        return when.format("%H:%M").to_string();
+    }
+    if when.date_naive() == now.date_naive().pred_opt().unwrap_or_default() {
+        return t!("chat.sessions.yesterday").to_string();
+    }
+    if when.year() == now.year() {
+        return when.format("%b %-d").to_string();
+    }
+    when.format("%b %-d %Y").to_string()
+}
+
+fn order_key(row: &Row) -> (Group, std::cmp::Reverse<u64>) {
+    (
+        row.group,
+        std::cmp::Reverse(row.started.unwrap_or(u64::MIN)),
+    )
+}
+
 pub fn rows(
     agent: &AgentId,
     agent_name: &str,
     state: &AgentState,
     history: &History,
+    sizes: &SessionSizes,
     now: u64,
-    query: &str,
 ) -> Vec<Row> {
     let mut rows: Vec<Row> = if state.abilities.list_sessions {
         state
@@ -108,15 +151,21 @@ pub fn rows(
                     .as_deref()
                     .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
                     .and_then(|time| u64::try_from(time.timestamp()).ok());
+                let stored = history.record_for_session(&past.id);
                 row(
-                    Source::Agent {
-                        session: past.id.clone(),
+                    RowInput {
+                        source: Source::Agent {
+                            session: past.id.clone(),
+                        },
+                        title: past.title.as_deref().unwrap_or(""),
+                        started,
+                        agent,
+                        agent_name,
+                        size_bytes: stored
+                            .and_then(|record| sizes.get(&record.identity()).copied()),
+                        context: stored.and_then(|record| record.context),
                     },
-                    past.title.as_deref().unwrap_or(""),
-                    agent_name.to_string(),
-                    started,
                     now,
-                    agent,
                 )
             })
             .collect()
@@ -125,24 +174,86 @@ pub fn rows(
             .for_agent(agent)
             .map(|record| {
                 row(
-                    Source::Local,
-                    &record.title,
-                    format!("{agent_name}, {}", record.workbook),
-                    Some(record.started_unix_seconds),
+                    RowInput {
+                        source: Source::Local,
+                        title: &record.title,
+                        started: Some(record.started_unix_seconds),
+                        agent,
+                        agent_name,
+                        size_bytes: sizes.get(&record.identity()).copied(),
+                        context: record.context,
+                    },
                     now,
-                    agent,
                 )
             })
             .collect()
     };
+    rows.sort_by_key(order_key);
+    rows
+}
+
+pub fn agent_ids(rows: &[Row]) -> Vec<AgentId> {
+    rows.iter()
+        .map(|row| &row.agent)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .cloned()
+        .collect()
+}
+
+pub fn filter(mut rows: Vec<Row>, query: &str, hidden: &BTreeSet<AgentId>) -> Vec<Row> {
     let query = query.trim().to_lowercase();
     if !query.is_empty() {
-        rows.retain(|row| {
-            row.title.to_lowercase().contains(&query) || row.meta.to_lowercase().contains(&query)
-        });
+        rows.retain(|row| row.title.to_lowercase().contains(&query));
     }
-    rows.sort_by_key(|row| row.group);
+    if !hidden.is_empty() {
+        rows.retain(|row| !hidden.contains(&row.agent));
+    }
+    rows.sort_by_key(order_key);
     rows
+}
+
+pub fn format_tokens(tokens: u64) -> String {
+    if tokens >= 1000 {
+        format!("{}k", tokens / 1000)
+    } else {
+        tokens.to_string()
+    }
+}
+
+pub fn context_over_threshold(usage: &ContextUsage) -> bool {
+    usage.fraction().is_some_and(|fraction| fraction > 0.75)
+}
+
+pub fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{} {}", size as u64, UNITS[unit])
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
+}
+
+pub fn has_local_rows(rows: &[Row]) -> bool {
+    rows.iter().any(|row| row.source == Source::Local)
+}
+
+pub fn summary(count: usize, total: Option<u64>) -> String {
+    match total {
+        Some(size) => t!(
+            "chat.sessions.summary",
+            count = count,
+            size = format_size(size)
+        )
+        .to_string(),
+        None => t!("chat.sessions.summary_count", count = count).to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -156,14 +267,64 @@ mod tests {
     }
 
     #[test]
-    fn ages_read_short_and_group_by_recency() {
-        assert_eq!(age_label(30), "now");
-        assert_eq!(age_label(12 * MINUTE), "12m");
-        assert_eq!(age_label(5 * HOUR), "5h");
-        assert_eq!(age_label(3 * DAY), "3d");
+    fn ages_group_by_recency() {
         assert_eq!(group_of(5 * HOUR), Group::Today);
         assert_eq!(group_of(3 * DAY), Group::ThisWeek);
         assert_eq!(group_of(30 * DAY), Group::Earlier);
+    }
+
+    #[test]
+    fn last_activity_reads_today_yesterday_and_month_day() {
+        use chrono::Local;
+
+        let now = Local::now();
+        let unix = now.timestamp() as u64;
+        assert_eq!(last_active(unix, None), "");
+        let time = last_active(unix, Some(unix));
+        assert_eq!(time.len(), 5);
+        assert_eq!(&time[2..3], ":");
+        let noon = |days_ago: i64| {
+            (now.date_naive() - chrono::Duration::days(days_ago))
+                .and_hms_opt(12, 0, 0)
+                .expect("valid noon")
+                .and_local_timezone(Local)
+                .unwrap()
+                .timestamp() as u64
+        };
+        assert_eq!(
+            last_active(unix, Some(noon(1))),
+            t!("chat.sessions.yesterday").to_string()
+        );
+        let old = noon(40);
+        let expected = DateTime::from_timestamp(old as i64, 0)
+            .expect("valid old date")
+            .with_timezone(&Local);
+        let same_year = expected.date_naive().year() == now.date_naive().year();
+        let text = last_active(unix, Some(old));
+        assert_eq!(
+            text,
+            if same_year {
+                expected.format("%b %-d").to_string()
+            } else {
+                expected.format("%b %-d %Y").to_string()
+            }
+        );
+        assert_ne!(text, t!("chat.sessions.yesterday").to_string());
+    }
+
+    #[test]
+    fn tokens_format_in_thousands_and_the_bar_warns_past_three_quarters() {
+        assert_eq!(format_tokens(38_000), "38k");
+        assert_eq!(format_tokens(200_000), "200k");
+        assert_eq!(format_tokens(999), "999");
+        assert!(!context_over_threshold(&ContextUsage {
+            used: 75_000,
+            size: 100_000
+        }));
+        assert!(context_over_threshold(&ContextUsage {
+            used: 75_001,
+            size: 100_000
+        }));
     }
 
     #[test]
@@ -190,10 +351,20 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-10-09T10:12:00Z")
             .unwrap()
             .timestamp() as u64;
-        let found = rows(&agent(), "Claude", &state, &history, now, "");
+        let found = rows(
+            &agent(),
+            "Claude",
+            &state,
+            &history,
+            &SessionSizes::new(),
+            now,
+        );
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].title, "Fix the dates");
-        assert_eq!(found[0].age, "12m");
+        let started = DateTime::from_timestamp(now as i64 - 12 * 60, 0)
+            .expect("valid started")
+            .with_timezone(&Local);
+        assert_eq!(found[0].active, started.format("%H:%M").to_string());
         assert_eq!(found[0].group, Group::Today);
         assert_eq!(
             found[0].source,
@@ -215,17 +386,57 @@ mod tests {
             "Claude",
             &AgentState::default(),
             &history,
+            &SessionSizes::new(),
             1_600,
-            "",
         );
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].source, Source::Local);
-        assert_eq!(found[0].meta, "Claude, ventas.xlsx");
-        assert_eq!(found[0].age, "10m");
+        let started = DateTime::from_timestamp(1_000, 0)
+            .expect("valid started")
+            .with_timezone(&Local);
+        assert_eq!(found[0].active, started.format("%H:%M").to_string());
     }
 
     #[test]
-    fn the_search_matches_title_or_workbook_and_groups_come_newest_first() {
+    fn local_rows_call_for_the_fresh_only_note() {
+        let mut history = History::default();
+        history.push(agent(), "Chart of sales", "ventas.xlsx", 1_000);
+        let local = rows(
+            &agent(),
+            "Claude",
+            &AgentState::default(),
+            &history,
+            &SessionSizes::new(),
+            1_600,
+        );
+        assert!(has_local_rows(&local));
+        assert!(!has_local_rows(&[]));
+        let mut state = AgentState::default();
+        state.apply(StateChange::Abilities(Abilities {
+            list_sessions: true,
+            load_session: true,
+        }));
+        state.apply(StateChange::PastSessions(vec![PastSession {
+            id: "s1".to_string(),
+            title: Some("Fix the dates".to_string()),
+            updated_at: Some("2026-10-09T10:00:00Z".to_string()),
+        }]));
+        let now = DateTime::parse_from_rfc3339("2026-10-09T10:12:00Z")
+            .unwrap()
+            .timestamp() as u64;
+        let resumable = rows(
+            &agent(),
+            "Claude",
+            &state,
+            &history,
+            &SessionSizes::new(),
+            now,
+        );
+        assert!(!has_local_rows(&resumable));
+    }
+
+    #[test]
+    fn the_search_matches_the_title_only() {
         let mut history = History::default();
         history.push(agent(), "Old work", "ventas.xlsx", 0);
         history.push(agent(), "Fresh work", "gastos.xlsx", 10 * DAY);
@@ -235,19 +446,165 @@ mod tests {
             "Claude",
             &AgentState::default(),
             &history,
+            &SessionSizes::new(),
             now,
-            "",
         );
-        assert_eq!(all[0].title, "Fresh work");
-        let by_workbook = rows(
+        let found = filter(all.clone(), "fresh", &BTreeSet::new());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].title, "Fresh work");
+        assert!(filter(all, "ventas", &BTreeSet::new()).is_empty());
+    }
+
+    #[test]
+    fn survivors_come_newest_first_inside_their_group() {
+        let mut history = History::default();
+        history.push(agent(), "Older", "a.xlsx", 0);
+        history.push(agent(), "Newer", "b.xlsx", DAY);
+        let now = 10 * DAY;
+        let all = rows(
             &agent(),
             "Claude",
             &AgentState::default(),
             &history,
+            &SessionSizes::new(),
             now,
-            "VENTAS",
         );
-        assert_eq!(by_workbook.len(), 1);
-        assert_eq!(by_workbook[0].title, "Old work");
+        let shown = filter(all, "", &BTreeSet::new());
+        let titles: Vec<_> = shown.iter().map(|row| row.title.as_str()).collect();
+        assert_eq!(titles, ["Newer", "Older"]);
+    }
+
+    fn two_agent_rows() -> Vec<Row> {
+        let mut history = History::default();
+        history.push(agent(), "Claude work", "a.xlsx", HOUR);
+        history.push(AgentId::new("codex"), "Codex work", "b.xlsx", 2 * HOUR);
+        let now = 10 * DAY;
+        let mut all = rows(
+            &agent(),
+            "Claude",
+            &AgentState::default(),
+            &history,
+            &SessionSizes::new(),
+            now,
+        );
+        all.extend(rows(
+            &AgentId::new("codex"),
+            "Codex",
+            &AgentState::default(),
+            &history,
+            &SessionSizes::new(),
+            now,
+        ));
+        all
+    }
+
+    #[test]
+    fn chips_list_every_agent_with_sessions() {
+        let ids = agent_ids(&two_agent_rows());
+        assert_eq!(ids, [agent(), AgentId::new("codex")]);
+    }
+
+    #[test]
+    fn the_search_and_the_agent_filter_combine() {
+        let all = two_agent_rows();
+        let hidden: BTreeSet<AgentId> = [AgentId::new("codex")].into_iter().collect();
+        let shown = filter(all.clone(), "", &hidden);
+        assert!(shown.iter().all(|row| row.agent == agent()));
+        let found = filter(all, "codex", &BTreeSet::new());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].agent, AgentId::new("codex"));
+    }
+
+    #[test]
+    fn sizes_format_with_one_decimal_above_bytes() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(512), "512 B");
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(2_514_944), "2.4 MB");
+        assert_eq!(format_size(19_081_625), "18.2 MB");
+    }
+
+    #[test]
+    fn the_summary_shows_the_count_and_the_total_when_known() {
+        assert_eq!(summary(0, None), "0 sessions");
+        assert_eq!(summary(14, None), "14 sessions");
+        assert_eq!(summary(14, Some(19_081_625)), "14 sessions, 18.2 MB");
+    }
+
+    #[test]
+    fn local_rows_show_the_stored_context_and_size() {
+        let mut history = History::default();
+        history.push(agent(), "Fresh work", "gastos.xlsx", 10 * DAY);
+        history.push(agent(), "Old work", "ventas.xlsx", 0);
+        let old = history.records()[0].identity();
+        history.attach_session_to(&old, "s-old").unwrap();
+        let usage = ContextUsage {
+            used: 40_000,
+            size: 100_000,
+        };
+        history.note_context("s-old", usage);
+        let sizes = sizes_for(history.records());
+        let now = 10 * DAY + 60;
+        let all = rows(
+            &agent(),
+            "Claude",
+            &AgentState::default(),
+            &history,
+            &sizes,
+            now,
+        );
+        let old = all.iter().find(|row| row.title == "Old work").unwrap();
+        assert_eq!(old.context, Some(usage));
+        assert_eq!(
+            old.size_bytes,
+            Some(History::record_size(&history.records()[0]))
+        );
+        let fresh = all.iter().find(|row| row.title == "Fresh work").unwrap();
+        assert_eq!(fresh.context, None);
+        assert_eq!(
+            fresh.size_bytes,
+            Some(History::record_size(&history.records()[1]))
+        );
+    }
+
+    #[test]
+    fn agent_rows_show_stored_values_only_for_their_linked_session() {
+        let mut state = AgentState::default();
+        state.apply(StateChange::Abilities(Abilities {
+            list_sessions: true,
+            load_session: true,
+        }));
+        state.apply(StateChange::PastSessions(vec![
+            PastSession {
+                id: "s1".to_string(),
+                title: Some("Linked".to_string()),
+                updated_at: Some("2026-10-09T10:00:00Z".to_string()),
+            },
+            PastSession {
+                id: "s9".to_string(),
+                title: Some("Resumed".to_string()),
+                updated_at: Some("2026-10-09T10:00:00Z".to_string()),
+            },
+        ]));
+        let mut history = History::default();
+        history.push(agent(), "Linked", "w", 1);
+        let linked = history.records()[0].identity();
+        history.attach_session_to(&linked, "s1").unwrap();
+        let usage = ContextUsage {
+            used: 80_000,
+            size: 100_000,
+        };
+        history.note_context("s1", usage);
+        let sizes = sizes_for(history.records());
+        let now = DateTime::parse_from_rfc3339("2026-10-09T10:12:00Z")
+            .unwrap()
+            .timestamp() as u64;
+        let found = rows(&agent(), "Claude", &state, &history, &sizes, now);
+        let linked = found.iter().find(|row| row.title == "Linked").unwrap();
+        assert_eq!(linked.context, Some(usage));
+        assert!(linked.size_bytes.is_some());
+        let resumed = found.iter().find(|row| row.title == "Resumed").unwrap();
+        assert_eq!(resumed.context, None);
+        assert_eq!(resumed.size_bytes, None);
     }
 }

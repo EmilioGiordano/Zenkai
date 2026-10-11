@@ -26,7 +26,7 @@ use std::time::{Instant, SystemTime};
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
-use zenkai_agent::chat::history::History;
+use zenkai_agent::chat::history::{History, RecordId};
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
 use zenkai_agent::chat::state::{AgentState, Select};
 use zenkai_agent::chat::thread::{MessageId, Thread, TurnEnd, TurnState};
@@ -49,6 +49,7 @@ const MONO: &str = "IBM Plex Mono";
 pub enum ChatEvent {
     Leave,
     NeedsAnswer,
+    ResumeSession,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +119,15 @@ pub struct ChatPanel {
     state: AgentState,
     history: History,
     history_saves: async_channel::Sender<History>,
+    // The agent's id for the live conversation; usage reports are filed under it.
+    live_session: Option<String>,
+    // The identity of the record the live conversation pushed; the agent's session id
+    // is linked to it once reported, so out-of-order starts cannot swap records.
+    pending_record: Option<RecordId>,
+    // A session of another agent to resume once its switch has completed.
+    pending_resume: Option<session_rows::Row>,
+    // What the sessions list shows per conversation, computed off the UI thread.
+    session_sizes: session_rows::SessionSizes,
     view: View,
     menu: Option<Menu>,
     menu_index: usize,
@@ -131,6 +141,8 @@ pub struct ChatPanel {
     title: Option<String>,
     resume_backup: Option<Backup>,
     sessions_query: Entity<InputState>,
+    // Agents filtered out of the sessions list; every agent is on by default.
+    hidden_agents: BTreeSet<AgentId>,
     model_query: Entity<InputState>,
     model_scroll: ScrollHandle,
     slash_index: usize,
@@ -218,7 +230,17 @@ impl ChatPanel {
         });
         let sessions_query =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("chat.sessions.search")));
-        let searching = cx.subscribe(&sessions_query, |_, _, _: &InputEvent, cx| cx.notify());
+        let searching = cx.subscribe_in(
+            &sessions_query,
+            window,
+            |this, _, event: &InputEvent, _, cx| match event {
+                InputEvent::Change => {
+                    this.menu_index = 0;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } | InputEvent::Focus | InputEvent::Blur => cx.notify(),
+            },
+        );
         let model_query =
             cx.new(|cx| InputState::new(window, cx).placeholder(t!("chat.model.search")));
         let filtering = cx.subscribe_in(
@@ -255,6 +277,10 @@ impl ChatPanel {
             state: AgentState::default(),
             history: History::default(),
             history_saves,
+            live_session: None,
+            pending_record: None,
+            pending_resume: None,
+            session_sizes: session_rows::SessionSizes::new(),
             view: View::Chat,
             menu: None,
             menu_index: 0,
@@ -269,6 +295,7 @@ impl ChatPanel {
             title: None,
             resume_backup: None,
             sessions_query,
+            hidden_agents: BTreeSet::new(),
             model_query,
             model_scroll: ScrollHandle::new(),
             slash_index: 0,

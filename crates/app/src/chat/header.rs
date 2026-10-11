@@ -6,46 +6,12 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use zenkai_agent::settings::AgentId;
 use zenkai_i18n::t;
 
 use super::{ChatPanel, View};
 use crate::actions::*;
+use crate::agent_mark::{HEADER_MARK_SIZE, agent_mark};
 use crate::keymap;
-
-// The brand colours of the agent marks in the design; other agents get a neutral mark.
-fn mark_color(agent: &AgentId, fallback: Hsla) -> Hsla {
-    match agent.as_str() {
-        "claude" => rgb(0xd97757).into(),
-        "gemini" => rgb(0x1e2a44).into(),
-        "codex" => rgb(0xf2f2f4).into(),
-        "opencode" => rgb(0x2b2d31).into(),
-        _ => fallback,
-    }
-}
-
-pub(super) fn agent_mark(agent: &AgentId, name: &str, cx: &App) -> impl IntoElement {
-    let theme = cx.theme();
-    let known = matches!(agent.as_str(), "claude" | "gemini" | "codex" | "opencode");
-    let background = mark_color(agent, theme.secondary);
-    let light = background.l > 0.6;
-    div()
-        .flex_shrink_0()
-        .size(px(20.0))
-        .rounded_md()
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(background)
-        .text_xs()
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(match (known, light) {
-            (false, _) => theme.secondary_foreground,
-            (true, true) => rgb(0x1c1d1f).into(),
-            (true, false) => rgb(0xffffff).into(),
-        })
-        .child(name.chars().next().map(String::from).unwrap_or_default())
-}
 
 fn token_count(tokens: u64) -> String {
     if tokens >= 1_000 {
@@ -87,7 +53,7 @@ impl ChatPanel {
                     .gap_2()
                     .items_center()
                     .when_some(agent.as_ref(), |row, (id, server)| {
-                        row.child(agent_mark(id, &server.name, cx))
+                        row.child(agent_mark(id, &server.name, HEADER_MARK_SIZE, cx))
                     })
                     .child(
                         div()
