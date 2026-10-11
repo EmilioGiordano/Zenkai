@@ -53,7 +53,9 @@ Hard rules for the whole run:
 6. After the manual test, on the user's approval: merge the branches (never
    staging) into `main` one at a time, in the same order, with `--no-ff`;
    then `git diff staging/<date> main` must be empty. Done by the user or by
-   Claude with the user's explicit approval; the user pushes.
+   Claude with the user's explicit approval; the user pushes `main` and the merged work
+   branches (`feat/*`, `fix/*`, `chore/*`, `perf/*`, `test/*`), so every branch is kept on
+   GitHub. Muse never pushes; never push `staging/*`, `night/*` or `worktree-agent-*`.
 
 ## Failures
 

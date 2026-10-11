@@ -227,8 +227,10 @@ in a staging branch.
 7. **Merge.** On the user's approval the branches are merged into `main` one at a time,
    in the same order, with `--no-ff`; then `git diff staging/<date> main` must be empty.
    Staging is never merged into `main`. Merging into `main` is done by the user or by
-   Claude with the user's explicit approval, and the user pushes. Never merge to `main`
-   before the manual test.
+   Claude with the user's explicit approval, and the user pushes `main` and the merged work
+   branches (`feat/*`, `fix/*`, `chore/*`, `perf/*`, `test/*`), so every branch is kept on
+   GitHub. Muse never pushes; never push `staging/*`, `night/*` or `worktree-agent-*`.
+   Never merge to `main` before the manual test.
 
 Long commands run in the background and the agent waits for them; it never hands back early.
 After two failed review rounds on a branch, stop and ask the user instead of iterating.
