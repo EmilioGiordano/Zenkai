@@ -343,6 +343,15 @@ impl ChatPanel {
             )
             .child(chips)
             .child(list)
+            .when(session_rows::has_local_rows(&rows), |view| {
+                view.child(
+                    div()
+                        .p_2()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(t!("chat.sessions.fresh_only")),
+                )
+            })
             .into_any_element()
     }
 }
