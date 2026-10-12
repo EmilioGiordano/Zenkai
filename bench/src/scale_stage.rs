@@ -47,7 +47,9 @@ fn open_stage(path: &Path) -> Result<()> {
 }
 
 fn steady_stage(path: &Path) -> Result<()> {
-    let (_, open_ms) = open_workbook(path)?;
+    // The workbook stays alive while the rest reading is taken; measuring
+    // after the drop would report allocator residue instead of rest memory.
+    let (_workbook, open_ms) = open_workbook(path)?;
     emit("open_ms", open_ms);
     emit("steady_commit_mb", mem::to_mb(mem::current_commit_bytes()?));
     emit("peak_commit_mb", mem::to_mb(mem::peak_commit_bytes()?));
