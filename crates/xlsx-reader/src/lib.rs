@@ -6,21 +6,25 @@ mod formulas;
 pub mod limits;
 mod package;
 mod sheet_data;
-mod sheet_xml;
+mod sheet_stream;
+mod stream;
 mod text;
 
-use std::io::Cursor;
+use std::fs::File;
+use std::io::{BufReader, Cursor, Read, Seek};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
 
 use ironcalc::base::types::Workbook;
 
 pub use diff::workbook_differences;
+pub use limits::CellBudget;
 
 use crate::formulas::Names;
-use crate::package::{ByteBudget, read_entry, read_package, stub_archive};
-use crate::sheet_xml::{ScannedSheet, scan_worksheet};
+use crate::package::{read_entry, read_package, stub_archive};
+use crate::sheet_data::SheetCells;
+use crate::sheet_stream::{stream_config, stream_worksheet};
+use crate::stream::Budgets;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
@@ -34,101 +38,214 @@ pub enum ReadError {
 
 pub type Inspect<'a> = dyn Fn(&str, &[u8]) -> Result<(), String> + Sync + 'a;
 
-// Builds the same workbook as IronCalc's `load_from_xlsx_bytes`. Every archive entry is
-// passed to `inspect` once, worksheets without their cells, which this reader checks
-// itself while streaming them. Any error means the file is left to IronCalc's reader,
-// except `Unsafe`, which refuses it.
+pub struct OpenedBook {
+    pub book: Workbook,
+    pub sheet_configs: Vec<String>,
+}
+
+// Parts the model never uses and IronCalc's importer never parses are never
+// decompressed; the caller still learns about them through `inspect`.
+pub fn skipped_part(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    [
+        "xl/pivotcache/",
+        "xl/pivottables/",
+        "xl/drawings/",
+        "xl/charts/",
+        "xl/media/",
+    ]
+    .iter()
+    .any(|prefix| name.starts_with(prefix))
+}
+
+// Builds the same workbook as IronCalc's `load_from_xlsx_bytes`. The zip is read
+// from the file without copying it whole into memory, each worksheet streams its
+// rows into the model as its XML is read, and every decompressed byte is counted
+// against the budgets. Every archive entry is passed to `inspect` once, worksheets
+// without their cells, which this reader checks itself while streaming them. Any
+// error means the file is left to IronCalc's reader, except `Unsafe`, which refuses
+// it. The sheet configurations come back alongside for the caller's settings.
+pub fn read_xlsx_file(
+    path: &Path,
+    name: &str,
+    locale: &str,
+    timezone: &str,
+    inspect: &Inspect<'_>,
+) -> Result<OpenedBook, ReadError> {
+    let file = File::open(path).map_err(|e| ReadError::Unreadable(e.to_string()))?;
+    let archive = zip::ZipArchive::new(BufReader::new(file))
+        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+    read_from(archive, name, locale, timezone, inspect)
+}
+
 pub fn read_xlsx(
     bytes: &[u8],
     name: &str,
     locale: &str,
     timezone: &str,
     inspect: &Inspect<'_>,
-) -> Result<Workbook, ReadError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+) -> Result<OpenedBook, ReadError> {
+    let archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    limits::check_archive(&mut archive)?;
-    let budget = ByteBudget::new(limits::MAX_TOTAL_BYTES);
-    let package = read_package(&mut archive, &budget)?;
+    read_from(archive, name, locale, timezone, inspect)
+}
 
-    let mut worksheet_entries = vec![None; package.worksheets.len()];
+fn read_from<R: Read + Seek>(
+    mut archive: zip::ZipArchive<R>,
+    name: &str,
+    locale: &str,
+    timezone: &str,
+    inspect: &Inspect<'_>,
+) -> Result<OpenedBook, ReadError> {
+    limits::check_archive(&mut archive)?;
+    let budgets = Budgets::production();
+    let package = read_package(&mut archive, &budgets)?;
+
+    let positions: std::collections::HashMap<&str, usize> = package
+        .worksheets
+        .iter()
+        .enumerate()
+        .map(|(position, part)| (part.path.as_str(), position))
+        .collect();
+    let mut sheets: Vec<Option<(Vec<u8>, Vec<u8>, SheetCells)>> =
+        (0..package.worksheets.len()).map(|_| None).collect();
     for index in 0..archive.len() {
         let entry = archive
             .by_index(index)
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
         let entry_name = entry.name().to_string();
-        if let Some(position) = package.worksheets.iter().position(|w| w.path == entry_name) {
-            worksheet_entries[position] = Some(index);
+        if let Some(&position) = positions.get(entry_name.as_str()) {
+            let compressed = entry.compressed_size();
+            let sheet_name = package.worksheets[position].name.clone();
+            let streamed = stream_worksheet(entry, compressed, &entry_name, &sheet_name, &budgets)?;
+            // The rows were checked while streaming; the configuration carries the
+            // same feature flags and validation limits as a whole part would.
+            inspect(&entry_name, &streamed.stub).map_err(ReadError::Unsafe)?;
+            sheets[position] = Some((streamed.stub, streamed.settings, streamed.cells));
             continue;
         }
-        let part = read_entry(entry, &budget)?;
+        if skipped_part(&entry_name) {
+            inspect(&entry_name, &[]).map_err(ReadError::Unsafe)?;
+            continue;
+        }
+        let part = read_entry(entry, &budgets)?;
         inspect(&entry_name, &part).map_err(ReadError::Unsafe)?;
     }
-    let worksheet_entries = worksheet_entries
-        .into_iter()
-        .collect::<Option<Vec<usize>>>()
-        .ok_or_else(|| ReadError::Unreadable("a worksheet part is missing".to_string()))?;
-
-    let texts = in_parallel(worksheet_entries.len(), |position| {
-        let mut archive = archive.clone();
-        let entry = archive
-            .by_index(worksheet_entries[position])
-            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-        String::from_utf8(read_entry(entry, &budget)?)
-            .map_err(|e| ReadError::Unreadable(e.to_string()))
-    })?;
-    let scanned: Vec<ScannedSheet<'_>> = in_parallel(texts.len(), |position| {
-        let worksheet = &package.worksheets[position];
-        let scanned = scan_worksheet(&texts[position], &worksheet.name)?;
-        let checked = scanned
-            .stub
-            .as_deref()
-            .unwrap_or(texts[position].as_bytes());
-        inspect(&worksheet.path, checked).map_err(ReadError::Unsafe)?;
-        Ok(scanned)
-    })?;
 
     let mut replaced = std::collections::HashMap::new();
-    let mut sheets = Vec::with_capacity(scanned.len());
-    for (worksheet, scanned) in package.worksheets.iter().zip(scanned) {
-        if let Some(stub) = scanned.stub {
-            replaced.insert(worksheet.path.clone(), stub);
-        }
-        sheets.push(scanned.cells);
+    let mut cells = Vec::with_capacity(sheets.len());
+    let mut configs = Vec::with_capacity(sheets.len());
+    for (part, sheet) in package.worksheets.iter().zip(sheets) {
+        let Some((stub, settings, sheet_cells)) = sheet else {
+            return Err(ReadError::Unreadable(
+                "a worksheet part is missing".to_string(),
+            ));
+        };
+        configs
+            .push(String::from_utf8(settings).map_err(|e| ReadError::Unreadable(e.to_string()))?);
+        replaced.insert(part.path.clone(), stub);
+        cells.push(sheet_cells);
     }
     let stub = stub_archive(&mut archive, &replaced)?;
     drop(replaced);
 
-    guarded(|| {
-        let mut workbook = ironcalc::import::load_from_xlsx_bytes(&stub, name, locale, timezone)
-            .map_err(|e| ReadError::Unreadable(format!("{e:?}")))?;
-        let same_sheets = workbook.worksheets.len() == package.worksheets.len()
-            && workbook
-                .worksheets
-                .iter()
-                .zip(&package.worksheets)
-                .all(|(built, part)| built.name == part.name);
-        if !same_sheets {
-            return Err(ReadError::Unsupported(
-                "IronCalc read a different list of sheets".to_string(),
-            ));
-        }
-        let names = Names {
-            sheets: &package.sheet_names,
-            defined_names: &package.defined_names,
-            tables: &workbook.tables,
-        };
-        let jobs: Vec<(&str, &[sheet_data::FormulaJob<'_>])> = package
+    let mut workbook = guarded(|| {
+        ironcalc::import::load_from_xlsx_bytes(&stub, name, locale, timezone)
+            .map_err(|e| ReadError::Unreadable(format!("{e:?}")))
+    })?;
+    let same_sheets = workbook.worksheets.len() == package.worksheets.len()
+        && workbook
             .worksheets
             .iter()
-            .zip(&sheets)
-            .map(|(part, cells)| (part.name.as_str(), cells.jobs.as_slice()))
-            .collect();
-        let converted = formulas::convert(&jobs, &names)?;
-        drop(jobs);
-        assemble::fill(&mut workbook, sheets, converted)?;
+            .zip(&package.worksheets)
+            .all(|(built, part)| built.name == part.name);
+    if !same_sheets {
+        return Err(ReadError::Unsupported(
+            "IronCalc read a different list of sheets".to_string(),
+        ));
+    }
+    let names = Names {
+        sheets: &package.sheet_names,
+        defined_names: &package.defined_names,
+        tables: &workbook.tables,
+    };
+    let jobs: Vec<(&str, &[crate::sheet_data::FormulaJob])> = package
+        .worksheets
+        .iter()
+        .zip(&cells)
+        .map(|(part, cells)| (part.name.as_str(), cells.jobs.as_slice()))
+        .collect();
+    let converted = formulas::convert(&jobs, &names)?;
+    drop(jobs);
+    guarded(|| {
+        assemble::fill(&mut workbook, cells, converted)?;
         Ok(workbook)
     })
+    .map(|book| OpenedBook {
+        book,
+        sheet_configs: configs,
+    })
+}
+
+// Every part of the archive, streamed once with the budgets enforced and handed to
+// `inspect`; parts the model never uses arrive without their bytes. Worksheets are
+// read whole here, so this is for readers that parse the rows themselves.
+pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+    limits::check_archive(&mut archive)?;
+    let budgets = Budgets::production();
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+        let entry_name = entry.name().to_string();
+        if skipped_part(&entry_name) {
+            inspect(&entry_name, &[]).map_err(ReadError::Unsafe)?;
+            continue;
+        }
+        let part = read_entry(entry, &budgets)?;
+        inspect(&entry_name, &part).map_err(ReadError::Unsafe)?;
+    }
+    Ok(())
+}
+
+// The worksheet configurations for a reader that parses the rows itself, without
+// decompressing any sheetData into memory. A part that fails to stream keeps the
+// default settings; only an unsafe part refuses the file.
+pub fn sheet_configs_from_bytes(bytes: &[u8]) -> Result<Vec<String>, ReadError> {
+    let archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+    sheet_configs_from(archive)
+}
+
+pub fn sheet_configs_from_file(path: &Path) -> Result<Vec<String>, ReadError> {
+    let file = File::open(path).map_err(|e| ReadError::Unreadable(e.to_string()))?;
+    let archive = zip::ZipArchive::new(BufReader::new(file))
+        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+    sheet_configs_from(archive)
+}
+
+fn sheet_configs_from<R: Read + Seek>(
+    mut archive: zip::ZipArchive<R>,
+) -> Result<Vec<String>, ReadError> {
+    limits::check_archive(&mut archive)?;
+    let budgets = Budgets::production();
+    let package = read_package(&mut archive, &budgets)?;
+    let mut configs = Vec::with_capacity(package.worksheets.len());
+    for part in &package.worksheets {
+        let entry = archive
+            .by_name(&part.path)
+            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+        let compressed = entry.compressed_size();
+        match stream_config(entry, compressed, &part.path, &budgets) {
+            Ok(config) => configs
+                .push(String::from_utf8(config).map_err(|e| ReadError::Unreadable(e.to_string()))?),
+            Err(ReadError::Unsafe(reason)) => return Err(ReadError::Unsafe(reason)),
+            Err(_) => configs.push(String::new()),
+        }
+    }
+    Ok(configs)
 }
 
 // IronCalc's importer and parser can panic on malformed input; here that only means the
@@ -139,45 +256,4 @@ fn guarded<T>(job: impl FnOnce() -> Result<T, ReadError>) -> Result<T, ReadError
             "IronCalc stopped on part of this file".to_string(),
         ))
     })
-}
-
-fn in_parallel<T: Send>(
-    count: usize,
-    job: impl Fn(usize) -> Result<T, ReadError> + Sync,
-) -> Result<Vec<T>, ReadError> {
-    let workers = std::thread::available_parallelism()
-        .map_or(1, usize::from)
-        .min(count)
-        .max(1);
-    let next = AtomicUsize::new(0);
-    let results: Mutex<Vec<Option<Result<T, ReadError>>>> =
-        Mutex::new((0..count).map(|_| None).collect());
-    std::thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
-                loop {
-                    let position = next.fetch_add(1, Ordering::Relaxed);
-                    if position >= count {
-                        break;
-                    }
-                    let result = guarded(|| job(position));
-                    if let Ok(mut results) = results.lock() {
-                        results[position] = Some(result);
-                    }
-                }
-            });
-        }
-    });
-    results
-        .into_inner()
-        .map_err(|_| ReadError::Unsupported("a reader thread stopped".to_string()))?
-        .into_iter()
-        .map(|result| {
-            result.unwrap_or_else(|| {
-                Err(ReadError::Unsupported(
-                    "a reader thread stopped".to_string(),
-                ))
-            })
-        })
-        .collect()
 }

@@ -33,16 +33,16 @@ const DEFAULT_ROW_HEIGHT: f64 = 14.5;
 
 // Cells in document order. Cells listed in `string_cells` hold a sheet-local string index
 // and every formula cell holds an index into `events`; both are resolved once all sheets
-// are read, because IronCalc numbers strings and formulas in document order.
+// are read, because IronCalc numbers strings and formulas in document order. Formula
+// texts are owned so row pieces can be dropped as the worksheet streams in.
 #[derive(Default)]
-pub(crate) struct SheetCells<'a> {
+pub(crate) struct SheetCells {
     pub(crate) rows: Vec<Row>,
     pub(crate) data: Vec<(i32, Vec<(i32, Cell)>)>,
     pub(crate) strings: Vec<String>,
     pub(crate) string_cells: Vec<Slot>,
     pub(crate) events: Vec<FormulaEvent>,
-    pub(crate) jobs: Vec<FormulaJob<'a>>,
-    pub(crate) has_arrays: bool,
+    pub(crate) jobs: Vec<FormulaJob>,
 }
 
 #[derive(Clone, Copy)]
@@ -91,8 +91,8 @@ impl FormulaEvent {
     }
 }
 
-pub(crate) struct FormulaJob<'a> {
-    pub(crate) text: Cow<'a, str>,
+pub(crate) struct FormulaJob {
+    pub(crate) text: String,
     pub(crate) row: i32,
     pub(crate) column: i32,
     pub(crate) array: bool,
@@ -107,11 +107,11 @@ fn unsupported(what: &str) -> ReadError {
 }
 
 // Reads a run of whole <row> elements, the content of <sheetData> or a piece of it.
-pub(crate) fn scan_rows<'a>(
-    rows: &'a str,
+pub(crate) fn scan_rows(
+    rows: &str,
     prefixes: &[Vec<u8>],
     sheet_name: &str,
-) -> Result<SheetCells<'a>, ReadError> {
+) -> Result<SheetCells, ReadError> {
     let mut reader = Reader::from_str(rows);
     let config = reader.config_mut();
     config.check_end_names = true;
@@ -130,7 +130,6 @@ pub(crate) fn scan_rows<'a>(
     let mut strings: Vec<(String, usize)> = scanner.strings.into_iter().collect();
     strings.sort_unstable_by_key(|(_, index)| *index);
     cells.strings = strings.into_iter().map(|(text, _)| text).collect();
-    cells.has_arrays = !scanner.array_cells.is_empty();
     Ok(cells)
 }
 
@@ -141,7 +140,7 @@ struct Scanner<'a, 's> {
     strings: HashMap<String, usize>,
     array_cells: HashMap<(i32, i32), (i32, i32)>,
     array_cells_claimed: u64,
-    cells: SheetCells<'a>,
+    cells: SheetCells,
 }
 
 struct CellXml<'a> {
@@ -404,10 +403,14 @@ impl<'a> Scanner<'a, '_> {
         Ok(())
     }
 
-    fn job(&mut self, text: Cow<'a, str>, cell_ref: &str, array: bool) -> Result<usize, ReadError> {
+    fn job(&mut self, text: Cow<'_, str>, cell_ref: &str, array: bool) -> Result<usize, ReadError> {
+        // The preflight checker used to refuse hostile formulas before the rows were
+        // read; with the rows streaming, each formula is checked as it arrives, with
+        // the same refusal instead of a fallback.
+        limits::check_formula_text(&text).map_err(ReadError::Unsafe)?;
         let (row, column) = formula_context(cell_ref)?;
         self.cells.jobs.push(FormulaJob {
-            text,
+            text: text.into_owned(),
             row,
             column,
             array,
@@ -476,7 +479,7 @@ fn parse_range(range: &str) -> Option<(i32, i32, i32, i32)> {
 mod tests {
     use super::*;
 
-    fn scan(rows: &str) -> Result<SheetCells<'_>, ReadError> {
+    fn scan(rows: &str) -> Result<SheetCells, ReadError> {
         scan_rows(rows, &[Vec::new()], "Sheet1")
     }
 

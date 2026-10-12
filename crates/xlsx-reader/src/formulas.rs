@@ -46,7 +46,7 @@ struct WorkerOutput {
 }
 
 pub(crate) fn convert(
-    sheets: &[(&str, &[FormulaJob<'_>])],
+    sheets: &[(&str, &[FormulaJob])],
     names: &Names<'_>,
 ) -> Result<Converted, ReadError> {
     let mut chunks = Vec::new();
@@ -126,7 +126,7 @@ pub(crate) fn convert(
 }
 
 fn work(
-    sheets: &[(&str, &[FormulaJob<'_>])],
+    sheets: &[(&str, &[FormulaJob])],
     chunks: &[Chunk],
     next: &AtomicUsize,
     names: &Names<'_>,
@@ -181,7 +181,7 @@ impl<'n> Converter<'n> {
         }
     }
 
-    pub(crate) fn convert(&mut self, sheet: usize, sheet_name: &str, job: &FormulaJob<'_>) -> u32 {
+    pub(crate) fn convert(&mut self, sheet: usize, sheet_name: &str, job: &FormulaJob) -> u32 {
         let cacheable = self.cache_key(sheet, job).unwrap_or(false);
         if cacheable && let Some(id) = self.cache.get(&self.key) {
             return *id;
@@ -206,7 +206,7 @@ impl<'n> Converter<'n> {
 
     // IronCalc's own conversion. The result is reusable for another cell with the same
     // key unless a parse error kept the raw formula text in it.
-    pub(crate) fn parse(&mut self, sheet_name: &str, job: &FormulaJob<'_>) -> (String, bool) {
+    pub(crate) fn parse(&mut self, sheet_name: &str, job: &FormulaJob) -> (String, bool) {
         let context = CellReferenceRC {
             sheet: sheet_name.to_string(),
             column: job.column,
@@ -223,7 +223,7 @@ impl<'n> Converter<'n> {
     // The formula's tokens from IronCalc's own lexer, with every relative reference written
     // as its offset from the cell: two formulas with the same key parse to the same R1C1
     // text. Structured references read the cell's row, so they are never cached.
-    fn cache_key(&mut self, sheet: usize, job: &FormulaJob<'_>) -> Result<bool, std::fmt::Error> {
+    fn cache_key(&mut self, sheet: usize, job: &FormulaJob) -> Result<bool, std::fmt::Error> {
         self.key.clear();
         write!(self.key, "{sheet}|{}|", job.array)?;
         self.lexer.set_formula(&job.text);

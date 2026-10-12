@@ -9,6 +9,7 @@ publish.workspace = true
 ironcalc = "=0.8.3"
 quick-xml = "=0.41.0"
 roxmltree = "0.19"
+sysinfo = { version = "0.31", default-features = false, features = ["system"] }
 thiserror = "2"
 tracing = "0.1"
 zenkai-types = { path = "../types" }

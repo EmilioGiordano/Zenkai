@@ -219,6 +219,15 @@ pub(crate) fn read_book_fast(
     inspect: &zenkai_xlsx_reader::Inspect<'_>,
 ) -> Result<ironcalc::base::types::Workbook, zenkai_xlsx_reader::ReadError> {
     zenkai_xlsx_reader::read_xlsx(bytes, name, LOCALE, timezone(), inspect)
+        .map(|opened| opened.book)
+}
+
+pub(crate) fn read_book_streaming(
+    path: &std::path::Path,
+    name: &str,
+    inspect: &zenkai_xlsx_reader::Inspect<'_>,
+) -> Result<zenkai_xlsx_reader::OpenedBook, zenkai_xlsx_reader::ReadError> {
+    zenkai_xlsx_reader::read_xlsx_file(path, name, LOCALE, timezone(), inspect)
 }
 
 // TODAY() and NOW() must follow the user clock, as in Excel.

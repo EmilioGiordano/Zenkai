@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Mutex;
 
 use ironcalc::base::types::Workbook as Book;
@@ -6,14 +7,15 @@ use zenkai_xlsx_reader::{ReadError, workbook_differences};
 use crate::error::EngineError;
 use crate::file::{Unsupported, part_unsupported, scan_unsupported};
 use crate::preflight::run_with_engine_stack;
-use crate::workbook::{read_book, read_book_fast};
+use crate::sheet_settings::{self, SheetSettings};
+use crate::workbook::{read_book, read_book_fast, read_book_streaming};
 
 const SHADOW_REPORT_LINES: usize = 50;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum XlsxReader {
-    #[default]
     IronCalc,
+    #[default]
     Fast,
     // Development aid: reads with both, logs every difference and keeps IronCalc's result.
     Shadow,
@@ -32,6 +34,11 @@ impl ReadBook {
     }
 }
 
+pub(crate) struct FileRead {
+    pub(crate) read: ReadBook,
+    pub(crate) settings: Vec<SheetSettings>,
+}
+
 type Outcome<E> = Result<(Book, Vec<Unsupported>), E>;
 
 pub fn read_xlsx_bytes(
@@ -48,8 +55,7 @@ pub fn read_xlsx_bytes(
             Ok((book, unsupported)) => (book, unsupported, None),
             Err(ReadError::Unsafe(reason)) => return Err(EngineError::Unsafe(reason)),
             Err(error) => {
-                tracing::warn!(%error, "the fast xlsx reader left this file to IronCalc's");
-                let (book, unsupported) = read_with_ironcalc(bytes, name)?;
+                let (book, unsupported) = fallback_to_ironcalc(bytes, name, &error)?;
                 (book, unsupported, Some(error.to_string()))
             }
         },
@@ -71,10 +77,133 @@ pub fn read_xlsx_bytes(
     })
 }
 
+pub(crate) fn read_xlsx_file(
+    path: &Path,
+    name: &str,
+    reader: XlsxReader,
+) -> Result<FileRead, EngineError> {
+    let read_error = |source| EngineError::Read {
+        path: path.to_path_buf(),
+        source,
+    };
+    let finish = |read: ReadBook, settings| FileRead { read, settings };
+    match reader {
+        XlsxReader::IronCalc => {
+            let bytes = std::fs::read(path).map_err(read_error)?;
+            let read = read_xlsx_bytes(&bytes, name, XlsxReader::IronCalc)?;
+            let settings = read_settings(&bytes)?;
+            Ok(finish(read, settings))
+        }
+        XlsxReader::Fast => match read_streaming(path, name) {
+            Ok((book, unsupported, settings)) => Ok(finish(
+                ReadBook {
+                    book,
+                    unsupported,
+                    fallback: None,
+                },
+                settings,
+            )),
+            Err(ReadError::Unsafe(reason)) => Err(EngineError::Unsafe(reason)),
+            Err(error) => {
+                let bytes = std::fs::read(path).map_err(read_error)?;
+                let (book, unsupported) = fallback_to_ironcalc(&bytes, name, &error)?;
+                let settings = read_settings(&bytes)?;
+                Ok(finish(
+                    ReadBook {
+                        book,
+                        unsupported,
+                        fallback: Some(error.to_string()),
+                    },
+                    settings,
+                ))
+            }
+        },
+        XlsxReader::Shadow => {
+            let bytes = std::fs::read(path).map_err(read_error)?;
+            let read = read_xlsx_bytes(&bytes, name, XlsxReader::Shadow)?;
+            let settings = read_settings(&bytes)?;
+            Ok(finish(read, settings))
+        }
+    }
+}
+
+// The IronCalc fallback is never a way past the limits: it runs only when every part
+// fits the old per-part cap, otherwise the file is refused with a clear message.
+fn fallback_to_ironcalc(bytes: &[u8], name: &str, declined: &ReadError) -> Outcome<EngineError> {
+    if let Err(limited) = zenkai_xlsx_reader::limits::check_fallback_caps_bytes(bytes) {
+        return Err(EngineError::Unsafe(format!(
+            "the streaming reader does not support this file ({declined}), and it cannot fall back to IronCalc's reader ({limited})"
+        )));
+    }
+    tracing::warn!(%declined, "the fast xlsx reader left this file to IronCalc's");
+    read_with_ironcalc(bytes, name)
+}
+
+fn read_settings(bytes: &[u8]) -> Result<Vec<SheetSettings>, EngineError> {
+    zenkai_xlsx_reader::sheet_configs_from_bytes(bytes)
+        .map(|configs| {
+            configs
+                .iter()
+                .map(|config| {
+                    if config.is_empty() {
+                        SheetSettings::default()
+                    } else {
+                        sheet_settings::read(config)
+                    }
+                })
+                .collect()
+        })
+        .map_err(|error| match error {
+            ReadError::Unsafe(reason) => EngineError::Unsafe(reason),
+            other => EngineError::InvalidFile(other.to_string()),
+        })
+}
+
 fn read_with_ironcalc(bytes: &[u8], name: &str) -> Outcome<EngineError> {
+    zenkai_xlsx_reader::limits::check_fallback_caps_bytes(bytes).map_err(|error| match error {
+        ReadError::Unsafe(reason) => EngineError::Unsafe(reason),
+        other => EngineError::InvalidFile(other.to_string()),
+    })?;
     let unsupported = scan_unsupported(bytes)?;
     let book = run_with_engine_stack(|| read_book(bytes, name))?;
     Ok((book, unsupported))
+}
+
+fn read_streaming(
+    path: &Path,
+    name: &str,
+) -> Result<(Book, Vec<Unsupported>, Vec<SheetSettings>), ReadError> {
+    let found = Mutex::new(Vec::new());
+    let inspect = |part: &str, data: &[u8]| -> Result<(), String> {
+        let kinds = part_unsupported(part, data).map_err(|error| match error {
+            EngineError::Unsafe(reason) => reason,
+            other => other.to_string(),
+        })?;
+        found
+            .lock()
+            .map_err(|_| "a part check stopped".to_string())?
+            .extend(kinds);
+        Ok(())
+    };
+    let opened = run_with_engine_stack(|| Ok(read_book_streaming(path, name, &inspect)))
+        .map_err(|error| ReadError::Unsupported(error.to_string()))??;
+    let mut unsupported = found
+        .into_inner()
+        .map_err(|_| ReadError::Unsupported("a part check stopped".to_string()))?;
+    unsupported.sort();
+    unsupported.dedup();
+    let settings = opened
+        .sheet_configs
+        .iter()
+        .map(|config| {
+            if config.is_empty() {
+                SheetSettings::default()
+            } else {
+                sheet_settings::read(config)
+            }
+        })
+        .collect();
+    Ok((opened.book, unsupported, settings))
 }
 
 fn read_fast(bytes: &[u8], name: &str) -> Outcome<ReadError> {

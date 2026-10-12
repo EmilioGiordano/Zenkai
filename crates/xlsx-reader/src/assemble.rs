@@ -18,7 +18,7 @@ fn index(value: usize) -> Result<i32, ReadError> {
 // formulas in document order, sheet after sheet, exactly as its importer does.
 pub(crate) fn fill(
     workbook: &mut Workbook,
-    sheets: Vec<SheetCells<'_>>,
+    sheets: Vec<SheetCells>,
     converted: Converted,
 ) -> Result<(), ReadError> {
     let mut string_index: HashMap<String, i32> =
