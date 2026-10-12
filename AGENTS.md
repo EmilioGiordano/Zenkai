@@ -1,9 +1,10 @@
 # Zenkai
 
 Native, lightweight, open-source desktop spreadsheet in Rust + GPUI that opens, edits,
-recalculates and saves `.xlsx` as close to Excel as possible. The calculation engine is an
-existing Rust library (IronCalc or logisheets-rs, chosen in Phase 0); it is never written
-from scratch.
+recalculates and saves `.xlsx` as close to Excel as possible. The calculation engine is
+IronCalc, chosen in Phase 0 and vendored in `vendor/`; its calculation is never rewritten
+from scratch. Phase 7 in `docs/SPEC.md` patches its cell storage and Zenkai's file I/O
+for large files.
 
 This file is the single source of truth for every agent and session working on this repo.
 `CLAUDE.md` only points here. Rules, not prose.

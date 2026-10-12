@@ -303,6 +303,56 @@ La amenaza principal es la misma que en el resto de Zenkai, un archivo malicioso
 | `feat/agent-chat` y siguientes | Pasos 5 a 7: chat ACP, menciones y capa de revisión; se aprueban por separado |
 | Generar datos | Paso 8: núcleo del generador en un crate de Rust puro; el diálogo llega después de las pestañas |
 
+## Fase 7: escala
+
+Abrir, editar, guardar y mantener abiertos archivos grandes con memoria y tiempos comparables
+o mejores que una planilla comercial. El cálculo de IronCalc no se reescribe; cambian su
+almacenamiento de celdas y la lectura y escritura de archivos de Zenkai.
+
+### Corpus y medida
+
+- Archivo mediano: 200.000 filas × 15 columnas, 1.000.000 de fórmulas (`zenkai-pesado.xlsx`).
+- Archivo grande de referencia: zip de 216 MB, unos 38 millones de celdas en dos hojas
+  (`sheet2.xml` de 826 MB descomprimido), con tablas dinámicas de unos 280 MB.
+- Los archivos reales son privados y nunca entran al repositorio. El benchmark los lee de
+  la carpeta que indica la variable de entorno `ZENKAI_CORPUS_DIR` y los omite si no está.
+  Para CI hay equivalentes sintéticos generados con `crates/datagen`: muchas filas, fórmulas
+  repetidas por columna y miles de estilos distintos.
+- La memoria se mide como memoria comprometida del proceso (`PrivateMemorySize64` en
+  Windows), nunca como working set. Cada etapa se mide en un proceso nuevo.
+- Las corridas pesadas se cortan solas al pasar el 60 % de la RAM física, medida como
+  memoria comprometida.
+
+### Metas
+
+| Medida | Meta |
+| --- | --- |
+| Archivo grande, memoria en reposo tras abrir | ≤ 2 GB |
+| Archivo grande, pico al abrir | ≤ 1,3 × la memoria en reposo |
+| Archivo grande, apertura | ≤ 30 s, con progreso y sin bloquear la UI |
+| Guardar tras editar una celda del archivo grande | Proporcional a las hojas modificadas, no al archivo |
+| Guardar, pico de memoria | Sin copia completa del xlsx en memoria |
+| Rellenar 200.000 filas con una fórmula | Memoria proporcional a una fórmula compartida más los valores |
+| Scroll, salto al final y selección en el archivo grande | < 16 ms por frame |
+
+### Plan de ramas
+
+Ramas apiladas: cada una nace de la punta de la anterior cuando su informe da PASS. Un
+arreglo en una rama inferior se hace en esa rama y se mergea hacia arriba; nunca se reescribe
+la historia. Las ramas 0 y 1 pueden empezar en paralelo desde `main`. Solo un benchmark
+pesado corre a la vez en la máquina.
+
+| # | Rama | Contenido |
+| --- | --- | --- |
+| 0 | `perf/memory-baseline` | La app mide memoria comprometida (panel de diagnóstico y descarga de libros inactivos). Suite `scale` en `bench/` con el corpus, una etapa por proceso, y línea base guardada. Reutiliza el binario de `perf/heavy-file-measure`. |
+| 1 | `perf/streaming-open` | El zip se lee desde el archivo, sin copiarlo entero a memoria. La configuración de hoja se lee sin descomprimir `sheetData` en texto. Las filas pasan al modelo a medida que se lee el XML. El tope de 512 MB por parte se reemplaza por un límite de tasa de compresión por parte, un presupuesto de bytes descomprimidos contado sobre los bytes reales y el máximo de entradas. Pruebas de bombas zip: tasa extrema, tamaños declarados falsos, muchas entradas. |
+| 2 | `perf/streaming-save` | El xlsx se escribe a disco a medida que se genera. Las partes sin cambios se copian comprimidas tal cual. Las partes que el motor no entiende, como las tablas dinámicas, se conservan sin cargarlas en memoria y salen de la lista de contenido no soportado solo cuando la ida y vuelta lo verifica. El guardado sigue siendo atómico. |
+| 3a | `perf/cell-store-api` | El acceso a `sheet_data` en `vendor/ironcalc_base` pasa por una interfaz propia. Refactor puro: mismo comportamiento, mismas pruebas, benchmark sin regresión. |
+| 3b | `perf/compact-cells` | Almacén de celdas compacto por bloques detrás de esa interfaz. Meta: archivo grande ≤ 2 GB en reposo. |
+| 3c | `perf/shared-formulas` | Una fórmula repetida en un rango se guarda una vez en memoria, como la fórmula compartida del xlsx. |
+| 4 | `feat/workbook-hibernation` | Dos niveles de reposo para libros inactivos: descargado (guardado, se recarga del archivo) e hibernado (con cambios sin guardar, se vuelca a disco en binario con su historial de deshacer y vuelve sin releer el xlsx). Los volcados se borran al guardar o cerrar. |
+| 5 | `perf/grid-scale` | El grid con el archivo grande: alto de filas, barra de scroll, saltos y selección de columnas enteras cumplen el presupuesto de frame. |
+
 ## Proceso de trabajo para el agente
 
 El trabajo avanza por fases. Al cerrar cada una, el agente se detiene, entrega un resumen con lo hecho, lo pendiente y los riesgos, y espera aprobación antes de seguir.
@@ -313,6 +363,7 @@ El trabajo avanza por fases. Al cerrar cada una, el agente se detiene, entrega u
 4. **Fase 3, edición:** barra de fórmulas, edición de celdas, recálculo, copiar y pegar, deshacer, guardado y recuperación.
 5. **Fase 4, terminaciones de la v0.1:** formato básico, buscar, zoom, temas, paleta de comandos, accesibilidad y empaquetado para Windows (instalador y ZIP portable).
 6. **Fase 6, agentes dentro de Zenkai:** configuración, herramientas sobre el documento abierto y puente MCP, según su sección. Fuera de la v0.1.
+7. **Fase 7, escala:** archivos grandes según su sección, rama por rama.
 
 Reglas durante todo el proyecto:
 
