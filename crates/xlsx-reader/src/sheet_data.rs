@@ -175,6 +175,9 @@ impl<'a> Scanner<'a, '_> {
                 Event::Empty(start) if start.local_name().as_ref() == b"row" => {
                     self.row(&start, true)?;
                 }
+                // Blank text between rows, including carriage returns from
+                // Windows line endings, is not a cell.
+                Event::Text(text) if Self::is_blank(&text) => {}
                 Event::Eof => return Ok(()),
                 _ => return Err(unsupported("something other than a row in sheetData")),
             }
@@ -524,6 +527,13 @@ mod tests {
     fn a_shared_formula_covering_a_whole_column_is_read() {
         let rows = r#"<row r="1"><c r="A1"><f t="shared" ref="A1:A1048576" si="0">B1*2</f><v>0</v></c></row>"#;
         assert!(scan(rows).is_ok());
+    }
+
+    #[test]
+    fn blank_text_between_rows_is_ignored() {
+        let rows = "<row r=\"1\"><c r=\"A1\"><v>1</v></c></row>\n  \r\n <row r=\"2\"><c r=\"A2\"><v>2</v></c></row>\r\n";
+        let cells = scan(rows).unwrap();
+        assert_eq!(cells.data.len(), 2);
     }
 
     #[test]

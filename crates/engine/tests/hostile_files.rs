@@ -4,7 +4,7 @@
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 
-use zenkai_engine::{XlsxReader, open_xlsx, open_xlsx_with};
+use zenkai_engine::{Engine, XlsxReader, open_xlsx, open_xlsx_with};
 
 fn workbook_with_sheet(sheet_xml: &str) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -326,6 +326,53 @@ fn lied_bomb_after_a_declined_sheet_still_refuses() {
     assert!(error.contains("harm"), "{error}");
     assert!(error.contains("150"), "{error}");
     assert!(started.elapsed() < Duration::from_secs(60));
+}
+
+#[test]
+fn whitespace_and_crlf_between_rows_stay_on_the_streaming_reader() {
+    for gap in ["\n  ", "\r\n", "\r\n  \r\n"] {
+        let mut source = rust_xlsxwriter::Workbook::new();
+        let sheet = source.add_worksheet();
+        sheet.write_number(0, 0, 7.0).unwrap();
+        sheet
+            .write_formula(1, 0, rust_xlsxwriter::Formula::new("=A1*6"))
+            .unwrap();
+        let original = source.save_to_buffer().unwrap();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original)).unwrap();
+        let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::FileOptions::default();
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).unwrap();
+            let name = entry.name().to_string();
+            let mut body = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut body).unwrap();
+            if name == "xl/worksheets/sheet1.xml" {
+                body = body
+                    .replace("<row ", &format!("{gap}<row "))
+                    .replace("</row>", &format!("</row>{gap}"));
+                assert!(body.contains(gap), "no rows to separate");
+            }
+            out.start_file(name, options).unwrap();
+            out.write_all(body.as_bytes()).unwrap();
+        }
+        let bytes = out.finish().unwrap().into_inner();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gaps.xlsx");
+        std::fs::write(&path, bytes).unwrap();
+        let opened = open_xlsx(&path).unwrap();
+        assert!(opened.fallback.is_none(), "gap {gap:?}");
+        let cell = |a1: &str| {
+            opened
+                .workbook
+                .cell(
+                    zenkai_types::SheetId(0),
+                    zenkai_types::CellPos::parse_a1(a1).unwrap(),
+                )
+                .text
+        };
+        assert_eq!(cell("A1"), "7", "gap {gap:?}");
+        assert_eq!(cell("A2"), "42", "gap {gap:?}");
+    }
 }
 
 #[test]

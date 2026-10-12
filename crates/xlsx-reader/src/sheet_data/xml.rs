@@ -81,6 +81,11 @@ impl<'a> Scanner<'a, '_> {
         Ok(())
     }
 
+    pub(super) fn is_blank(text: &[u8]) -> bool {
+        text.iter()
+            .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+    }
+
     pub(super) fn cell_content(&mut self) -> Result<CellXml<'a>, ReadError> {
         let mut content = CellXml {
             values: 0,

@@ -76,10 +76,8 @@ pub(crate) fn stream_worksheet<R: Read>(
             return Err(unsupported("something other than a row in sheetData"));
         }
         (Next::Row, end) => {
-            let span = &pump.head[pump.pos..pump.pos + end];
-            if span.contains(&b'\r') {
-                return Err(unsupported("a carriage return inside sheetData"));
-            }
+            let body = &pump.head[pump.pos..pump.pos + end];
+            let span = &body[blank_prefix_len(body)..];
             let Some(pattern) = row_cut_pattern(span) else {
                 return Err(unsupported("something other than a row in sheetData"));
             };
@@ -273,9 +271,6 @@ fn parse_unit(
 ) -> Result<(), ReadError> {
     if unit.is_empty() {
         return Ok(());
-    }
-    if unit.contains(&b'\r') {
-        return Err(unsupported("a carriage return inside sheetData"));
     }
     rowtags_from_unit(rowtags, cut, unit);
     let text = std::str::from_utf8(unit).map_err(unreadable)?;
@@ -514,7 +509,8 @@ pub(crate) fn stream_config<R: Read>(
             return Ok(config);
         }
         if matches!(next, Next::Row) {
-            append_settings_tag(&mut rowtags, &window[pos..pos + end]);
+            let row = &window[pos..pos + end];
+            append_settings_tag(&mut rowtags, &row[blank_prefix_len(row)..]);
         }
         pos += end;
         if pos > PIECE_BYTES {
@@ -690,10 +686,7 @@ enum Next {
 // one event is ever read, so a refill re-parses at most one tag; row content is left
 // to the resumable scan below.
 fn classify(window: &[u8]) -> Result<Option<(Next, usize)>, ReadError> {
-    let skipped = window
-        .iter()
-        .take_while(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
-        .count();
+    let skipped = blank_prefix_len(window);
     let window = &window[skipped..];
     if window.is_empty() {
         return Ok(None);
@@ -1025,6 +1018,13 @@ fn scan_row_end(scan: &mut ForwardScan, buf: &[u8]) -> Result<Option<usize>, Rea
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+// Blank XML text at the slice start, such as line breaks between rows.
+fn blank_prefix_len(buf: &[u8]) -> usize {
+    buf.iter()
+        .take_while(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+        .count()
 }
 
 // Whether the truncated slice could still grow into a comment, CDATA or doctype
