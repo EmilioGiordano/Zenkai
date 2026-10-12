@@ -183,9 +183,9 @@ fn collect() -> Result<(PathBuf, Vec<Measurement>)> {
     let workdir = workdir()?;
     let (cases, full) = scale_cases::discover(&workdir)?;
     if full {
-        eprintln!("scale: full sizes and the private corpus from ${CORPUS_ENV}");
+        eprintln!("scale: full sizes and the private corpus from {CORPUS_ENV}");
     } else {
-        eprintln!("scale: ${CORPUS_ENV} is not set; skipping full sizes and the private corpus");
+        eprintln!("scale: {CORPUS_ENV} is not set; skipping full sizes and the private corpus");
     }
     let exe = std::env::current_exe()?;
     let mut measurements = Vec::new();
