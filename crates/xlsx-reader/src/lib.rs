@@ -256,8 +256,9 @@ pub fn scan_with_caps(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadErr
 }
 
 // The worksheet configurations for a reader that parses the rows itself, without
-// decompressing any sheetData into memory. A part that fails to stream keeps the
-// default settings; only an unsafe part refuses the file.
+// decompressing any sheetData into memory. A part that fails to stream is reported
+// as unsupported content instead of silently keeping the default settings, whose
+// layout and view would then be lost on save; only an unsafe part refuses the file.
 pub fn sheet_configs_from_bytes(bytes: &[u8]) -> Result<Vec<String>, ReadError> {
     let meter = CompressedMeter::new();
     let archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes)))
@@ -281,7 +282,11 @@ fn sheet_configs_from<R: Read + Seek>(
             Ok(config) => configs
                 .push(String::from_utf8(config).map_err(|e| ReadError::Unreadable(e.to_string()))?),
             Err(ReadError::Unsafe(reason)) => return Err(ReadError::Unsafe(reason)),
-            Err(_) => configs.push(String::new()),
+            Err(error) => {
+                return Err(ReadError::Unsupported(format!(
+                    "a worksheet configuration could not be read ({error})"
+                )));
+            }
         }
     }
     Ok(configs)
@@ -324,6 +329,26 @@ mod tests {
         let error = scan_with_caps(&bytes, &|_, _| Ok(())).unwrap_err();
         assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
         assert!(error.to_string().contains("150"), "{error}");
+    }
+
+    #[test]
+    fn an_unreadable_sheet_config_is_unsupported_not_empty_settings() {
+        const WORKBOOK: &[u8] = b"<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Good\" sheetId=\"1\" r:id=\"rId1\"/><sheet name=\"Broken\" sheetId=\"2\" r:id=\"rId2\"/></sheets></workbook>";
+        const RELS: &[u8] = b"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/></Relationships>";
+        const GOOD: &[u8] = b"<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData></worksheet>";
+        const BROKEN: &[u8] = b"<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row>";
+        let bytes = zipped(
+            &[
+                ("xl/workbook.xml", WORKBOOK),
+                ("xl/_rels/workbook.xml.rels", RELS),
+                ("xl/worksheets/sheet1.xml", GOOD),
+                ("xl/worksheets/sheet2.xml", BROKEN),
+            ],
+            false,
+        );
+        let error = sheet_configs_from_bytes(&bytes).unwrap_err();
+        assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
+        assert!(error.to_string().contains("configuration"), "{error}");
     }
 
     #[test]
