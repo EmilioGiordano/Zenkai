@@ -750,7 +750,7 @@ enum ScanMode {
     Markup,
     Comment,
     CData,
-    Tag { quote: u8 },
+    Tag { quote: u8, closing: bool },
     Doctype { brackets: u32, quote: u8 },
     Pi,
 }
@@ -813,17 +813,20 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                     }
                     return Err(unreadable("a worksheet part is malformed"));
                 } else if rest.starts_with(b"</") {
+                    scan.tag_start = at;
                     match tag_content(rest) {
                         TagContent::Complete { end } => {
-                            if matches!(goal, ScanGoal::Row) && scan.depth == 1 {
-                                return Ok(ScanEvent::RowDone(at + end));
+                            if let Some(event) = close_end_tag(scan, at, end, &goal) {
+                                return Ok(event);
                             }
-                            scan.depth = scan.depth.saturating_sub(1);
-                            scan.offset = at + end;
                         }
                         TagContent::BrokenAt(rel) => scan.offset = at + rel,
-                        TagContent::Incomplete { .. } => {
-                            scan.offset = at;
+                        TagContent::Incomplete { quote } => {
+                            scan.mode = ScanMode::Tag {
+                                quote,
+                                closing: true,
+                            };
+                            scan.offset = buf.len();
                             return Ok(ScanEvent::NeedMore);
                         }
                     }
@@ -838,7 +841,10 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                         }
                         TagContent::BrokenAt(rel) => scan.offset = at + rel,
                         TagContent::Incomplete { quote } => {
-                            scan.mode = ScanMode::Tag { quote };
+                            scan.mode = ScanMode::Tag {
+                                quote,
+                                closing: false,
+                            };
                             scan.offset = buf.len();
                             return Ok(ScanEvent::NeedMore);
                         }
@@ -863,7 +869,7 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                 scan.mode = ScanMode::Markup;
                 scan.offset = from + rel + 3;
             }
-            ScanMode::Tag { quote } => {
+            ScanMode::Tag { quote, closing } => {
                 let mut quote = quote;
                 let mut index = scan.offset;
                 let mut broken = None;
@@ -886,12 +892,18 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                     continue;
                 }
                 if index >= buf.len() {
-                    scan.mode = ScanMode::Tag { quote };
+                    scan.mode = ScanMode::Tag { quote, closing };
                     scan.offset = buf.len();
                     return Ok(ScanEvent::NeedMore);
                 }
                 scan.mode = ScanMode::Markup;
                 let at = scan.tag_start;
+                if closing {
+                    if let Some(event) = close_end_tag(scan, at, index + 1 - at, &goal) {
+                        return Ok(event);
+                    }
+                    continue;
+                }
                 if let Some(event) = goal_event(scan, buf, at, index + 1 - at, &goal)? {
                     return Ok(event);
                 }
@@ -971,6 +983,20 @@ fn close_tag(scan: &mut ForwardScan, buf: &[u8], at: usize, end: usize) {
     if buf[at + end - 2] != b'/' {
         scan.depth += 1;
     }
+}
+
+fn close_end_tag(
+    scan: &mut ForwardScan,
+    at: usize,
+    end: usize,
+    goal: &ScanGoal,
+) -> Option<ScanEvent> {
+    if matches!(goal, ScanGoal::Row) && scan.depth == 1 {
+        return Some(ScanEvent::RowDone(at + end));
+    }
+    scan.depth = scan.depth.saturating_sub(1);
+    scan.offset = at + end;
+    None
 }
 
 fn goal_event(
@@ -1181,6 +1207,44 @@ mod tests {
             "Sheet1",
             budgets,
         )
+    }
+
+    #[test]
+    fn an_unfinished_end_tag_resumes_instead_of_restarting() {
+        let mut scan = ForwardScan::new();
+        let first = [b"</".as_slice(), &[b'a'; 1024]].concat();
+        assert!(matches!(
+            advance(&mut scan, &first, ScanGoal::Row),
+            Ok(ScanEvent::NeedMore)
+        ));
+        assert_eq!(scan.offset, first.len());
+        let mut grown = first.clone();
+        grown.extend_from_slice(&[b'a'; 1024]);
+        assert!(matches!(
+            advance(&mut scan, &grown, ScanGoal::Row),
+            Ok(ScanEvent::NeedMore)
+        ));
+        assert_eq!(scan.offset, grown.len());
+    }
+
+    #[test]
+    fn a_huge_unfinished_end_tag_does_not_hang_the_scan() {
+        let mut scan = ForwardScan::new();
+        let mut buf = b"</".to_vec();
+        let started = std::time::Instant::now();
+        for _ in 0..1024 {
+            buf.extend_from_slice(&[b'a'; 65536]);
+            assert!(matches!(
+                advance(&mut scan, &buf, ScanGoal::Row),
+                Ok(ScanEvent::NeedMore)
+            ));
+        }
+        assert_eq!(scan.offset, buf.len());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(120),
+            "took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
