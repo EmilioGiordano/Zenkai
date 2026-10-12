@@ -159,6 +159,66 @@ fn patch_declared_size(bytes: &mut Vec<u8>, name: &str, size: u32) {
     assert_eq!(archive.by_name(name).unwrap().size(), u64::from(size));
 }
 
+// Rewrites the declared COMPRESSED size of one entry, in its local and central
+// headers, leaving the compressed data untouched.
+fn patch_compressed_size(bytes: &mut Vec<u8>, name: &str, size: u32) {
+    let needle = name.as_bytes();
+    let (mut local, mut central) = (None, None);
+    let mut from = 0;
+    while from + needle.len() <= bytes.len() {
+        let Some(offset) = bytes[from..]
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .map(|at| from + at)
+        else {
+            break;
+        };
+        if offset >= 30 && &bytes[offset - 30..offset - 26] == b"PK\x03\x04" {
+            assert_eq!(
+                &bytes[offset - 4..offset - 2],
+                &(needle.len() as u16).to_le_bytes()
+            );
+            assert_eq!(&bytes[offset - 2..offset], &[0, 0]);
+            local = Some(offset - 30);
+        }
+        if offset >= 46 && &bytes[offset - 46..offset - 42] == b"PK\x01\x02" {
+            central = Some(offset - 46);
+        }
+        from = offset + 1;
+    }
+    let (local, central) = (local.unwrap(), central.unwrap());
+    bytes[local + 18..local + 22].copy_from_slice(&size.to_le_bytes());
+    bytes[central + 20..central + 24].copy_from_slice(&size.to_le_bytes());
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    assert_eq!(
+        archive.by_name(name).unwrap().compressed_size(),
+        u64::from(size)
+    );
+}
+
+#[test]
+fn forged_large_compressed_size_still_refuses_the_ratio_bomb() {
+    let cell = r#"<c r="A1" t="s"><v>0</v></c>"#;
+    let mut bytes = workbook_with_strings(&sheet(cell), &shared_strings(7_000, 10_000));
+    patch_compressed_size(&mut bytes, "xl/sharedStrings.xml", 600_000_000);
+    let started = Instant::now();
+    let error = open_fast(bytes).unwrap_err();
+    assert!(error.contains("150"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
+#[test]
+fn forged_small_compressed_size_is_an_invalid_file() {
+    let cell = r#"<c r="A1" t="s"><v>0</v></c>"#;
+    let mut bytes = workbook_with_strings(&sheet(cell), &shared_strings(1_000, 1_000));
+    patch_compressed_size(&mut bytes, "xl/sharedStrings.xml", 1_000);
+    let started = Instant::now();
+    let error = open_fast(bytes).unwrap_err();
+    assert!(error.contains("not a valid xlsx workbook"), "{error}");
+    assert!(!error.contains("harm"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
 #[test]
 fn deeply_nested_formula_is_rejected_not_a_stack_overflow() {
     let cell = format!(

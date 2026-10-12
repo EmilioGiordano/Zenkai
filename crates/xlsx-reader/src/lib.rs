@@ -23,7 +23,7 @@ pub use limits::CellBudget;
 use crate::formulas::Names;
 use crate::package::{read_entry, read_package, stub_archive};
 use crate::sheet_stream::{StreamedSheet, stream_config, stream_worksheet};
-use crate::stream::{Budgets, check_fallback_caps};
+use crate::stream::{Budgets, CompressedMeter, Counted, check_fallback_caps};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
@@ -72,9 +72,10 @@ pub fn read_xlsx_file(
     inspect: &Inspect<'_>,
 ) -> Result<OpenedBook, ReadError> {
     let file = File::open(path).map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    let archive = zip::ZipArchive::new(BufReader::new(file))
+    let meter = CompressedMeter::new();
+    let archive = zip::ZipArchive::new(meter.wrap(BufReader::new(file)))
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    read_from(archive, name, locale, timezone, inspect)
+    read_from(archive, &meter, name, locale, timezone, inspect)
 }
 
 pub fn read_xlsx(
@@ -84,13 +85,15 @@ pub fn read_xlsx(
     timezone: &str,
     inspect: &Inspect<'_>,
 ) -> Result<OpenedBook, ReadError> {
-    let archive = zip::ZipArchive::new(Cursor::new(bytes))
+    let meter = CompressedMeter::new();
+    let archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes)))
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    read_from(archive, name, locale, timezone, inspect)
+    read_from(archive, &meter, name, locale, timezone, inspect)
 }
 
 fn read_from<R: Read + Seek>(
-    mut archive: zip::ZipArchive<R>,
+    mut archive: zip::ZipArchive<Counted<R>>,
+    meter: &CompressedMeter,
     name: &str,
     locale: &str,
     timezone: &str,
@@ -98,7 +101,7 @@ fn read_from<R: Read + Seek>(
 ) -> Result<OpenedBook, ReadError> {
     limits::check_archive(&mut archive)?;
     let budgets = Budgets::production();
-    let package = read_package(&mut archive, &budgets)?;
+    let package = read_package(&mut archive, meter, &budgets)?;
 
     let positions: std::collections::HashMap<&str, usize> = package
         .worksheets
@@ -114,9 +117,8 @@ fn read_from<R: Read + Seek>(
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
         let entry_name = entry.name().to_string();
         if let Some(&position) = positions.get(entry_name.as_str()) {
-            let compressed = entry.compressed_size();
             let sheet_name = package.worksheets[position].name.clone();
-            let streamed = stream_worksheet(entry, compressed, &entry_name, &sheet_name, &budgets)?;
+            let streamed = stream_worksheet(entry, meter, &entry_name, &sheet_name, &budgets)?;
             // The rows were checked while streaming; the configuration carries the
             // same feature flags and validation limits as a whole part would.
             inspect(&entry_name, &streamed.stub)?;
@@ -127,7 +129,7 @@ fn read_from<R: Read + Seek>(
             inspect(&entry_name, &[])?;
             continue;
         }
-        let part = read_entry(entry, &budgets)?;
+        let part = read_entry(entry, meter, &budgets)?;
         inspect(&entry_name, &part)?;
     }
 
@@ -192,7 +194,8 @@ fn read_from<R: Read + Seek>(
 // `inspect`; parts the model never uses arrive without their bytes. Worksheets are
 // read whole here, so this is for readers that parse the rows themselves.
 pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+    let meter = CompressedMeter::new();
+    let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes)))
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
     limits::check_archive(&mut archive)?;
     let budgets = Budgets::production();
@@ -205,7 +208,7 @@ pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> 
             inspect(&entry_name, &[])?;
             continue;
         }
-        let part = read_entry(entry, &budgets)?;
+        let part = read_entry(entry, &meter, &budgets)?;
         inspect(&entry_name, &part)?;
     }
     Ok(())
@@ -214,33 +217,35 @@ pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> 
 // What IronCalc's reader still requires, on the bytes really decompressed: the
 // streaming reader never enforces this when opening.
 pub fn check_fallback_caps_bytes(bytes: &[u8]) -> Result<(), ReadError> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+    let meter = CompressedMeter::new();
+    let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes)))
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    check_fallback_caps(&mut archive)
+    check_fallback_caps(&mut archive, &meter)
 }
 
 // The worksheet configurations for a reader that parses the rows itself, without
 // decompressing any sheetData into memory. A part that fails to stream keeps the
 // default settings; only an unsafe part refuses the file.
 pub fn sheet_configs_from_bytes(bytes: &[u8]) -> Result<Vec<String>, ReadError> {
-    let archive = zip::ZipArchive::new(Cursor::new(bytes))
+    let meter = CompressedMeter::new();
+    let archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes)))
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    sheet_configs_from(archive)
+    sheet_configs_from(archive, &meter)
 }
 
 fn sheet_configs_from<R: Read + Seek>(
-    mut archive: zip::ZipArchive<R>,
+    mut archive: zip::ZipArchive<Counted<R>>,
+    meter: &CompressedMeter,
 ) -> Result<Vec<String>, ReadError> {
     limits::check_archive(&mut archive)?;
     let budgets = Budgets::production();
-    let package = read_package(&mut archive, &budgets)?;
+    let package = read_package(&mut archive, meter, &budgets)?;
     let mut configs = Vec::with_capacity(package.worksheets.len());
     for part in &package.worksheets {
         let entry = archive
             .by_name(&part.path)
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-        let compressed = entry.compressed_size();
-        match stream_config(entry, compressed, &part.path, &budgets) {
+        match stream_config(entry, meter, &part.path, &budgets) {
             Ok(config) => configs
                 .push(String::from_utf8(config).map_err(|e| ReadError::Unreadable(e.to_string()))?),
             Err(ReadError::Unsafe(reason)) => return Err(ReadError::Unsafe(reason)),

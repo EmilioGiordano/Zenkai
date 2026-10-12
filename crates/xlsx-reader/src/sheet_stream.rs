@@ -7,7 +7,7 @@ use quick_xml::events::{BytesStart, Event};
 use crate::ReadError;
 use crate::limits::Usage;
 use crate::sheet_data::{SheetCells, Slot, remap_strings, scan_rows};
-use crate::stream::{Budgets, CharacterCheck, Guard};
+use crate::stream::{Budgets, CharacterCheck, CompressedMeter, Guard};
 
 // Rows are parsed in pieces of about this size, the same size the buffered reader
 // used; a piece is dropped once its cells are merged.
@@ -41,12 +41,12 @@ fn unsupported(what: &str) -> ReadError {
 // the model cells, strings and formula texts stay in memory.
 pub(crate) fn stream_worksheet<R: Read>(
     entry: R,
-    compressed: u64,
+    meter: &CompressedMeter,
     part: &str,
     sheet_name: &str,
     budgets: &Budgets,
 ) -> Result<StreamedSheet, ReadError> {
-    let mut pump = Pump::new(entry, compressed, part, budgets);
+    let mut pump = Pump::new(entry, meter, part, budgets);
     let Some((tag, content)) = pump.sheet_content()? else {
         let whole = pump.rest()?;
         return Ok(StreamedSheet {
@@ -141,9 +141,9 @@ struct Pump<'b, R: Read> {
 }
 
 impl<'b, R: Read> Pump<'b, R> {
-    fn new(entry: R, compressed: u64, part: &str, budgets: &'b Budgets) -> Self {
+    fn new(entry: R, meter: &CompressedMeter, part: &str, budgets: &'b Budgets) -> Self {
         Pump {
-            guard: budgets.stream(entry, compressed, part),
+            guard: budgets.stream(entry, meter, part),
             check: CharacterCheck::new(),
             chunk: [0u8; CHUNK_BYTES],
             head: Vec::new(),
@@ -234,7 +234,7 @@ fn assembled(
     prefix: Vec<u8>,
     qname: Vec<u8>,
     rowtags: Vec<u8>,
-    tail: Vec<u8>,
+    mut tail: Vec<u8>,
     driver: Driver,
 ) -> StreamedSheet {
     let mut stub = Vec::with_capacity(prefix.len() + qname.len() + 3 + tail.len());
@@ -243,20 +243,21 @@ fn assembled(
     stub.extend_from_slice(&qname);
     stub.extend_from_slice(b"/>");
     stub.extend_from_slice(&tail);
-    let mut settings =
-        Vec::with_capacity(prefix.len() + rowtags.len() + tail.len() + qname.len() * 2 + 8);
-    settings.extend_from_slice(&prefix);
-    settings.extend_from_slice(b"<");
-    settings.extend_from_slice(&qname);
-    settings.extend_from_slice(b">");
-    settings.extend_from_slice(&rowtags);
-    settings.extend_from_slice(b"</");
-    settings.extend_from_slice(&qname);
-    settings.extend_from_slice(b">");
-    settings.extend_from_slice(&tail);
+    let mut head = Vec::with_capacity(prefix.len() + rowtags.len() + qname.len() * 2 + 8);
+    head.extend_from_slice(&prefix);
+    head.extend_from_slice(b"<");
+    head.extend_from_slice(&qname);
+    head.extend_from_slice(b">");
+    head.extend_from_slice(&rowtags);
+    head.extend_from_slice(b"</");
+    head.extend_from_slice(&qname);
+    head.extend_from_slice(b">");
+    // The tail buffer is reused for the settings instead of copying the tail a
+    // third time; the stub above holds the only other copy.
+    tail.splice(0..0, head);
     StreamedSheet {
         stub,
-        settings,
+        settings: tail,
         cells: driver.merged,
     }
 }
@@ -406,11 +407,11 @@ fn find_end_tag(buf: &[u8]) -> Option<(usize, usize)> {
 // dropped through a sliding window, so memory stays flat whatever the sheet holds.
 pub(crate) fn stream_config<R: Read>(
     entry: R,
-    compressed: u64,
+    meter: &CompressedMeter,
     part: &str,
     budgets: &Budgets,
 ) -> Result<Vec<u8>, ReadError> {
-    let mut guard = budgets.stream(entry, compressed, part);
+    let mut guard = budgets.stream(entry, meter, part);
     let mut check = CharacterCheck::new();
     let mut head: Vec<u8> = Vec::new();
     let mut head_scan = ForwardScan::new();
@@ -1147,14 +1148,18 @@ mod tests {
     }
 
     fn stream(xml: &str) -> StreamedSheet {
+        stream_with(xml, &budgets()).unwrap()
+    }
+
+    fn stream_with(xml: &str, budgets: &Budgets) -> Result<StreamedSheet, ReadError> {
+        let meter = CompressedMeter::new();
         stream_worksheet(
-            xml.as_bytes(),
-            0,
+            meter.wrap(xml.as_bytes()),
+            &meter,
             "xl/worksheets/sheet1.xml",
             "Sheet1",
-            &budgets(),
+            budgets,
         )
-        .unwrap()
     }
 
     #[test]
@@ -1216,15 +1221,9 @@ mod tests {
             format!(r#"{HEAD}<row r="1"><c r="A1"><v>1</v></c>"#),
         ] {
             let started = std::time::Instant::now();
-            let error = stream_worksheet(
-                xml.as_bytes(),
-                0,
-                "xl/worksheets/sheet1.xml",
-                "Sheet1",
-                &budgets(),
-            )
-            .err()
-            .expect("an unclosed row must fail");
+            let error = stream_with(&xml, &budgets())
+                .err()
+                .expect("an unclosed row must fail");
             assert!(
                 started.elapsed() < std::time::Duration::from_secs(30),
                 "took {started:?}"
@@ -1240,15 +1239,9 @@ mod tests {
             "7".repeat(17 * 1024 * 1024)
         );
         let started = std::time::Instant::now();
-        let error = stream_worksheet(
-            xml.as_bytes(),
-            0,
-            "xl/worksheets/sheet1.xml",
-            "Sheet1",
-            &budgets(),
-        )
-        .err()
-        .expect("a row past the cap must go to IronCalc");
+        let error = stream_with(&xml, &budgets())
+            .err()
+            .expect("a row past the cap must go to IronCalc");
         assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(60),
@@ -1263,15 +1256,9 @@ mod tests {
             r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">{pad}<sheetData></sheetData></worksheet>"#
         );
         let started = std::time::Instant::now();
-        let error = stream_worksheet(
-            xml.as_bytes(),
-            0,
-            "xl/worksheets/sheet1.xml",
-            "Sheet1",
-            &budgets(),
-        )
-        .err()
-        .expect("a 64 MB configuration must fail");
+        let error = stream_with(&xml, &budgets())
+            .err()
+            .expect("a 64 MB configuration must fail");
         assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(60),
@@ -1286,15 +1273,9 @@ mod tests {
             " ".repeat(30 * 1024 * 1024)
         );
         let started = std::time::Instant::now();
-        let error = stream_worksheet(
-            xml.as_bytes(),
-            0,
-            "xl/worksheets/sheet1.xml",
-            "Sheet1",
-            &budgets(),
-        )
-        .err()
-        .expect("an unclosed comment must fail");
+        let error = stream_with(&xml, &budgets())
+            .err()
+            .expect("an unclosed comment must fail");
         assert!(matches!(error, ReadError::Unreadable(_)), "{error}");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(120),
@@ -1354,15 +1335,9 @@ mod tests {
         }
         let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
         let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1000));
-        let error = stream_worksheet(
-            xml.as_bytes(),
-            0,
-            "xl/worksheets/sheet1.xml",
-            "Sheet1",
-            &budgets,
-        )
-        .err()
-        .expect("ten cells with huge strings must trip the budget");
+        let error = stream_with(&xml, &budgets)
+            .err()
+            .expect("ten cells with huge strings must trip the budget");
         assert!(error.to_string().contains("needs at least"), "{error}");
     }
 
@@ -1371,15 +1346,9 @@ mod tests {
         let xml = format!(
             r#"{HEAD}<row r="2147483647"><c r="A1"><f t="array" ref="A1:A2">1</f></c></row>{TAIL}"#
         );
-        let error = stream_worksheet(
-            xml.as_bytes(),
-            0,
-            "xl/worksheets/sheet1.xml",
-            "Sheet1",
-            &budgets(),
-        )
-        .err()
-        .expect("an out-of-range row must not reach the model");
+        let error = stream_with(&xml, &budgets())
+            .err()
+            .expect("an out-of-range row must not reach the model");
         assert!(matches!(error, ReadError::Unreadable(_)), "{error}");
     }
 
@@ -1391,15 +1360,9 @@ mod tests {
         }
         let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
         let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1000));
-        let error = stream_worksheet(
-            xml.as_bytes(),
-            0,
-            "xl/worksheets/sheet1.xml",
-            "Sheet1",
-            &budgets,
-        )
-        .err()
-        .expect("a growing sheet must stop");
+        let error = stream_with(&xml, &budgets)
+            .err()
+            .expect("a growing sheet must stop");
         let message = error.to_string();
         assert!(message.contains("needs at least"), "{message}");
     }

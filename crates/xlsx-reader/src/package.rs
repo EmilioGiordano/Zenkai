@@ -4,7 +4,7 @@ use std::io::{Cursor, Read, Seek, Write};
 use ironcalc::base::expressions::parser::DefinedNameS;
 
 use crate::ReadError;
-use crate::stream::{Budgets, read_part};
+use crate::stream::{Budgets, CompressedMeter, read_part};
 
 pub(crate) struct WorksheetPart {
     pub(crate) name: String,
@@ -32,27 +32,29 @@ fn unreadable(error: impl ToString) -> ReadError {
 
 pub(crate) fn read_entry(
     entry: zip::read::ZipFile<'_>,
+    meter: &CompressedMeter,
     budgets: &Budgets,
 ) -> Result<Vec<u8>, ReadError> {
     let name = entry.name().to_string();
-    let compressed = entry.compressed_size();
-    read_part(entry, compressed, &name, budgets)
+    read_part(entry, meter, &name, budgets)
 }
 
 fn read_text<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     name: &str,
+    meter: &CompressedMeter,
     budgets: &Budgets,
 ) -> Result<String, ReadError> {
     let entry = archive.by_name(name).map_err(unreadable)?;
-    String::from_utf8(read_entry(entry, budgets)?).map_err(unreadable)
+    String::from_utf8(read_entry(entry, meter, budgets)?).map_err(unreadable)
 }
 
 pub(crate) fn read_package<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
+    meter: &CompressedMeter,
     budgets: &Budgets,
 ) -> Result<Package, ReadError> {
-    let workbook = read_text(archive, "xl/workbook.xml", budgets)?;
+    let workbook = read_text(archive, "xl/workbook.xml", meter, budgets)?;
     let workbook = roxmltree::Document::parse(&workbook).map_err(unreadable)?;
     let mut sheets = Vec::new();
     for node in workbook.descendants().filter(|n| n.has_tag_name("sheet")) {
@@ -102,7 +104,7 @@ pub(crate) fn read_package<R: Read + Seek>(
         ));
     }
 
-    let rels = read_text(archive, "xl/_rels/workbook.xml.rels", budgets)?;
+    let rels = read_text(archive, "xl/_rels/workbook.xml.rels", meter, budgets)?;
     let rels = roxmltree::Document::parse(&rels).map_err(unreadable)?;
     let mut targets = HashMap::new();
     for node in rels
