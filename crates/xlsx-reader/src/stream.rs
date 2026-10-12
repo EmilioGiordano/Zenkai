@@ -79,14 +79,16 @@ impl Prefilter {
     }
 }
 
-// Counts worksheet cells and rows while their bytes stream past, so the IronCalc
-// fallback can charge them to the memory budget without inflating the part. A tag
-// counts when its local name after the last `:` is `c` or `row`, the elements the
-// readers match by local name; text and attribute values cannot hold a raw `<`,
-// so only comments and character data could fake a tag, and both are skipped.
-// Anything else that looks like a tag over-counts, which fails closed.
+// Counts worksheet cells, formulas and rows while their bytes stream past, so
+// the IronCalc fallback can charge them to the memory budget without inflating
+// the part. A tag counts when its local name after the last `:` is `c`, `f` or
+// `row`, the elements the readers match by local name; text and attribute values
+// cannot hold a raw `<`, so only comments and character data could fake a tag,
+// and both are skipped. Anything else that looks like a tag over-counts, which
+// fails closed.
 pub(crate) struct CellCounter {
     cells: u64,
+    formulas: u64,
     rows: u64,
     comment: bool,
     cdata: bool,
@@ -106,6 +108,7 @@ struct TagName {
 
 enum TagEnd {
     Cell,
+    Formula,
     Row,
     Other,
 }
@@ -121,6 +124,8 @@ impl TagName {
                 TagEnd::Other
             } else if self.len == 1 && self.local[0] == b'c' {
                 TagEnd::Cell
+            } else if self.len == 1 && self.local[0] == b'f' {
+                TagEnd::Formula
             } else if self.len == 3 && self.local == *b"row" {
                 TagEnd::Row
             } else {
@@ -153,6 +158,7 @@ impl CellCounter {
     pub(crate) fn new() -> CellCounter {
         CellCounter {
             cells: 0,
+            formulas: 0,
             rows: 0,
             comment: false,
             cdata: false,
@@ -175,7 +181,7 @@ impl CellCounter {
     pub(crate) fn usage(&self) -> Usage {
         Usage {
             cells: self.cells,
-            formulas: 0,
+            formulas: self.formulas,
             bytes: 0,
             rows: self.rows,
         }
@@ -225,6 +231,10 @@ impl CellCounter {
                         None => {}
                         Some(TagEnd::Cell) => {
                             self.cells += 1;
+                            self.tag = None;
+                        }
+                        Some(TagEnd::Formula) => {
+                            self.formulas += 1;
                             self.tag = None;
                         }
                         Some(TagEnd::Row) => {
@@ -730,6 +740,16 @@ mod tests {
         counter.finish();
         let usage = counter.usage();
         assert_eq!((usage.cells, usage.rows), (2, 3));
+    }
+
+    #[test]
+    fn the_cell_counter_counts_plain_and_prefixed_formulas() {
+        let mut counter = CellCounter::new();
+        counter
+            .push(b"<sheetData><row r=\"1\"><c r=\"A1\"><f>A1*2</f></c><x:c xmlns:x=\"urn:x\"><x:");
+        counter.push(b"f>SUM(A1:A2)</x:f></x:c></row></sheetData><fonts><font/><formula1>x</formula1></fonts>");
+        counter.finish();
+        assert_eq!(counter.usage().formulas, 2);
     }
 
     #[test]
