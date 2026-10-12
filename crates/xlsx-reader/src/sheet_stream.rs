@@ -137,6 +137,7 @@ struct Pump<'b, R: Read> {
     check: CharacterCheck,
     chunk: [u8; CHUNK_BYTES],
     head: Vec<u8>,
+    head_scan: ForwardScan,
     pos: usize,
     eof: bool,
 }
@@ -148,6 +149,7 @@ impl<'b, R: Read> Pump<'b, R> {
             check: CharacterCheck::new(),
             chunk: [0u8; CHUNK_BYTES],
             head: Vec::new(),
+            head_scan: ForwardScan::new(),
             pos: 0,
             eof: false,
         }
@@ -172,7 +174,7 @@ impl<'b, R: Read> Pump<'b, R> {
     // configuration holds no rows.
     fn sheet_content(&mut self) -> Result<Option<(usize, usize)>, ReadError> {
         loop {
-            match scan_head(&self.head)? {
+            match scan_head(&mut self.head_scan, &self.head)? {
                 Head::Incomplete => {
                     if self.head.len() >= HEAD_LIMIT_BYTES {
                         return Err(unsupported(
@@ -191,11 +193,21 @@ impl<'b, R: Read> Pump<'b, R> {
     }
 
     // The next row, end tag or other event with its end offset from the read
-    // position; a tag truncated by the window reads more bytes and tries again,
-    // and the budgets bound how far a malformed file gets this way.
+    // position. A row longer than the cap goes to IronCalc instead of growing the
+    // window without bound, and the row scan resumes where the last fill stopped
+    // instead of re-parsing from the read position.
     fn peek(&mut self) -> Result<(Next, usize), ReadError> {
+        let mut row_scan = ForwardScan::new();
         loop {
-            match peek_event(self.window()) {
+            if self.window().len() > ROW_CAP_BYTES {
+                return Err(unsupported("a row larger than supported"));
+            }
+            match classify(self.window()) {
+                Ok(Some((Next::Row, _))) => match scan_row_end(&mut row_scan, self.window())? {
+                    Some(end) => return Ok((Next::Row, end)),
+                    None if !self.eof => self.fill()?,
+                    None => return Err(unreadable("sheetData is not closed")),
+                },
                 Ok(Some(found)) => return Ok(found),
                 Ok(None) | Err(_) if !self.eof => self.fill()?,
                 Ok(None) => return Err(unreadable("sheetData is not closed")),
@@ -406,9 +418,10 @@ pub(crate) fn stream_config<R: Read>(
     let mut guard = budgets.stream(entry, compressed, part);
     let mut check = CharacterCheck::new();
     let mut head: Vec<u8> = Vec::new();
+    let mut head_scan = ForwardScan::new();
     let mut chunk = [0u8; CHUNK_BYTES];
     let (tag, content) = loop {
-        match scan_head(&head)? {
+        match scan_head(&mut head_scan, &head)? {
             Head::Incomplete => {
                 if head.len() >= HEAD_LIMIT_BYTES {
                     return Err(unsupported(
@@ -436,6 +449,10 @@ pub(crate) fn stream_config<R: Read>(
     let mut rowtags: Vec<u8> = Vec::new();
     let mut pos = 0;
     let mut eof = false;
+    // The scan of the row at `pending_at`, kept across refills so a huge row is
+    // read once, not re-parsed from its start on every fill.
+    let mut pending_at = usize::MAX;
+    let mut pending_scan = ForwardScan::new();
     loop {
         while pos == window.len() && !eof {
             match guard.read_chunk(&mut chunk)? {
@@ -449,8 +466,28 @@ pub(crate) fn stream_config<R: Read>(
         if pos == window.len() {
             return Err(unreadable("sheetData is not closed"));
         }
+        if window[pos..].len() > ROW_CAP_BYTES {
+            return Err(unsupported("a row larger than supported"));
+        }
         let (next, end) = loop {
-            match peek_event(&window[pos..]) {
+            match classify(&window[pos..]) {
+                Ok(Some((Next::Row, _))) => {
+                    if pending_at != pos {
+                        pending_at = pos;
+                        pending_scan = ForwardScan::new();
+                    }
+                    match scan_row_end(&mut pending_scan, &window[pos..])? {
+                        Some(end) => break (Next::Row, end),
+                        None if !eof => match guard.read_chunk(&mut chunk)? {
+                            0 => eof = true,
+                            read => {
+                                check.push(&chunk[..read])?;
+                                window.extend_from_slice(&chunk[..read]);
+                            }
+                        },
+                        None => return Err(unreadable("sheetData is not closed")),
+                    }
+                }
                 Ok(Some(found)) => break found,
                 Ok(None) | Err(_) if !eof => match guard.read_chunk(&mut chunk)? {
                     0 => eof = true,
@@ -646,20 +683,30 @@ enum Next {
     Other,
 }
 
-// The next event starting at the window, with its end offset from the window start;
-// None when the window ends mid-event and more bytes may complete it. A leading end
-// tag is read by hand: a fresh reader with end-name checking rejects it for having
-// no open tag, and the strict parse later still sees every byte.
-fn peek_event(window: &[u8]) -> Result<Option<(Next, usize)>, ReadError> {
+// The first event starting at the window with its end offset, skipping blank text
+// between rows; None when the window ends mid-event and more bytes may complete it.
+// A leading end tag is read by hand: a fresh reader with end-name checking rejects
+// it for having no open tag, and the strict parse later still sees every byte. Only
+// one event is ever read, so a refill re-parses at most one tag; row content is left
+// to the resumable scan below.
+fn classify(window: &[u8]) -> Result<Option<(Next, usize)>, ReadError> {
+    let skipped = window
+        .iter()
+        .take_while(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+        .count();
+    let window = &window[skipped..];
+    if window.is_empty() {
+        return Ok(None);
+    }
     if window.starts_with(b"</") {
         let Some((name, end)) = end_tag(window) else {
             return Ok(None);
         };
         let local = name.rsplit(|b| *b == b':').next().unwrap_or(&name);
         if local == b"sheetData" {
-            return Ok(Some((Next::SheetDataEnd, end)));
+            return Ok(Some((Next::SheetDataEnd, skipped + end)));
         }
-        return Ok(Some((Next::Other, end)));
+        return Ok(Some((Next::Other, skipped + end)));
     }
     let mut reader = Reader::from_reader(window);
     let config = reader.config_mut();
@@ -667,35 +714,16 @@ fn peek_event(window: &[u8]) -> Result<Option<(Next, usize)>, ReadError> {
     config.check_comments = true;
     match reader.read_event().map_err(unreadable)? {
         Event::Start(start) if start.local_name().as_ref() == b"row" => {
-            Ok(row_end(window)?.map(|end| (Next::Row, end)))
+            Ok(tag_end(window).map(|end| (Next::Row, skipped + end)))
         }
         Event::Empty(start) if start.local_name().as_ref() == b"row" => {
-            Ok(Some((Next::Row, position(&reader))))
+            Ok(Some((Next::Row, skipped + position(&reader))))
         }
         Event::End(end) if end.local_name().as_ref() == b"sheetData" => {
-            Ok(Some((Next::SheetDataEnd, position(&reader))))
+            Ok(Some((Next::SheetDataEnd, skipped + position(&reader))))
         }
         Event::Eof => Ok(None),
-        _ => Ok(Some((Next::Other, position(&reader)))),
-    }
-}
-
-// The end of the <row> starting the window; None when more bytes may complete it.
-fn row_end(window: &[u8]) -> Result<Option<usize>, ReadError> {
-    let mut reader = Reader::from_reader(window);
-    let config = reader.config_mut();
-    config.check_end_names = true;
-    config.check_comments = true;
-    let mut depth = 0usize;
-    loop {
-        match reader.read_event().map_err(unreadable)? {
-            Event::Start(_) => depth += 1,
-            Event::Empty(_) if depth == 0 => return Ok(Some(position(&reader))),
-            Event::End(_) if depth == 1 => return Ok(Some(position(&reader))),
-            Event::End(_) => depth = depth.saturating_sub(1),
-            Event::Eof => return Ok(None),
-            _ => {}
-        }
+        _ => Ok(Some((Next::Other, skipped + position(&reader)))),
     }
 }
 
@@ -707,99 +735,309 @@ enum Head {
     Found(usize, usize),
 }
 
-// The byte offset where <sheetData> content starts, found without parsing: outside
-// comments, CDATA, processing instructions and quoted attribute values a literal
-// `<` always starts markup, so depth counting stays exact on well-formed input.
-// Anything else fails later in the strict parse and leaves the file to IronCalc.
-fn scan_head(head: &[u8]) -> Result<Head, ReadError> {
-    let mut index = 0;
-    let mut depth = 0usize;
-    while index < head.len() {
-        if head[index] != b'<' {
-            index += 1;
-            continue;
+// A forward-only scan over bytes arriving in chunks. The scan remembers how far is
+// settled, so a refill continues from there instead of re-parsing from byte zero.
+// Cuts the scan finds are always re-checked by the strict parse later, so on
+// malformed input it may cut anywhere; it must only never hang nor grow.
+struct ForwardScan {
+    depth: usize,
+    offset: usize,
+    mode: ScanMode,
+    tag_start: usize,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScanMode {
+    Markup,
+    Comment,
+    CData,
+    Tag { quote: u8 },
+    Doctype { brackets: u32, quote: u8 },
+    Pi,
+}
+
+impl ForwardScan {
+    fn new() -> ForwardScan {
+        ForwardScan {
+            depth: 0,
+            offset: 0,
+            mode: ScanMode::Markup,
+            tag_start: 0,
         }
-        let rest = &head[index..];
-        if rest.starts_with(b"<!--") {
-            let Some(end) = find_bytes(&head[index + 4..], b"-->") else {
-                return Ok(Head::Incomplete);
-            };
-            index += 4 + end + 3;
-        } else if rest.starts_with(b"<![CDATA[") {
-            let Some(end) = find_bytes(&head[index + 9..], b"]]>") else {
-                return Ok(Head::Incomplete);
-            };
-            index += 9 + end + 3;
-        } else if rest.starts_with(b"<!DOCTYPE") || rest.starts_with(b"<!doctype") {
-            let Some(end) = doctype_end(&head[index..]) else {
-                return Ok(Head::Incomplete);
-            };
-            index += end;
-        } else if rest.starts_with(b"<?") {
-            let Some(end) = find_bytes(&head[index + 2..], b"?>") else {
-                return Ok(Head::Incomplete);
-            };
-            index += 2 + end + 2;
-        } else if rest.starts_with(b"<!") {
-            return Err(unreadable("a worksheet part is malformed"));
-        } else if rest.starts_with(b"</") {
-            let Some(tag) = tag_end(&head[index..]) else {
-                return Ok(Head::Incomplete);
-            };
-            depth = depth.saturating_sub(1);
-            index += tag;
-        } else {
-            let Some(tag) = tag_end(&head[index..]) else {
-                return Ok(Head::Incomplete);
-            };
-            let empty = head[index + tag - 2] == b'/';
-            let name = tag_name(&head[index + 1..index + tag]);
-            match name {
-                Some(name) if depth == 1 && local_is(name, b"sheetData") => {
-                    if empty {
-                        return Ok(Head::Empty);
+    }
+}
+
+#[derive(Debug)]
+enum ScanGoal {
+    Head,
+    Row,
+}
+
+enum ScanEvent {
+    NeedMore,
+    Head(Head),
+    RowDone(usize),
+}
+
+// One step over the buffer from the settled offset. Outside comments, CDATA,
+// processing instructions and quoted attribute values a literal `<` always starts
+// markup, so depth counting stays exact on well-formed input.
+fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEvent, ReadError> {
+    loop {
+        match scan.mode {
+            ScanMode::Markup => {
+                let Some(rel) = buf[scan.offset..].iter().position(|byte| *byte == b'<') else {
+                    scan.offset = buf.len();
+                    return Ok(ScanEvent::NeedMore);
+                };
+                let at = scan.offset + rel;
+                let rest = &buf[at..];
+                if rest.starts_with(b"<!--") {
+                    scan.mode = ScanMode::Comment;
+                    scan.offset = at + 4;
+                } else if rest.starts_with(b"<![CDATA[") {
+                    scan.mode = ScanMode::CData;
+                    scan.offset = at + 9;
+                } else if rest.starts_with(b"<!DOCTYPE") || rest.starts_with(b"<!doctype") {
+                    scan.mode = ScanMode::Doctype {
+                        brackets: 0,
+                        quote: 0,
+                    };
+                    scan.offset = at + 1;
+                } else if rest.starts_with(b"<?") {
+                    scan.mode = ScanMode::Pi;
+                    scan.offset = at + 2;
+                } else if rest.starts_with(b"<!") {
+                    if rest.len() < 9 && is_opener_prefix(rest) {
+                        scan.offset = at;
+                        return Ok(ScanEvent::NeedMore);
                     }
-                    return Ok(Head::Found(index, index + tag));
-                }
-                _ => {
-                    if !empty {
-                        depth += 1;
+                    return Err(unreadable("a worksheet part is malformed"));
+                } else if rest.starts_with(b"</") {
+                    match tag_content(rest) {
+                        TagContent::Complete { end } => {
+                            if matches!(goal, ScanGoal::Row) && scan.depth == 1 {
+                                return Ok(ScanEvent::RowDone(at + end));
+                            }
+                            scan.depth = scan.depth.saturating_sub(1);
+                            scan.offset = at + end;
+                        }
+                        TagContent::BrokenAt(rel) => scan.offset = at + rel,
+                        TagContent::Incomplete { .. } => {
+                            scan.offset = at;
+                            return Ok(ScanEvent::NeedMore);
+                        }
                     }
-                    index += tag;
+                } else {
+                    scan.tag_start = at;
+                    match tag_content(rest) {
+                        TagContent::Complete { end } => {
+                            if let Some(event) = goal_event(scan, buf, at, end, &goal)? {
+                                return Ok(event);
+                            }
+                            close_tag(scan, buf, at, end);
+                        }
+                        TagContent::BrokenAt(rel) => scan.offset = at + rel,
+                        TagContent::Incomplete { quote } => {
+                            scan.mode = ScanMode::Tag { quote };
+                            scan.offset = buf.len();
+                            return Ok(ScanEvent::NeedMore);
+                        }
+                    }
                 }
+            }
+            ScanMode::Comment => {
+                let from = scan.offset.saturating_sub(2);
+                let Some(rel) = find_bytes(&buf[from..], b"-->") else {
+                    scan.offset = buf.len().saturating_sub(2).max(scan.offset);
+                    return Ok(ScanEvent::NeedMore);
+                };
+                scan.mode = ScanMode::Markup;
+                scan.offset = from + rel + 3;
+            }
+            ScanMode::CData => {
+                let from = scan.offset.saturating_sub(2);
+                let Some(rel) = find_bytes(&buf[from..], b"]]>") else {
+                    scan.offset = buf.len().saturating_sub(2).max(scan.offset);
+                    return Ok(ScanEvent::NeedMore);
+                };
+                scan.mode = ScanMode::Markup;
+                scan.offset = from + rel + 3;
+            }
+            ScanMode::Tag { quote } => {
+                let mut quote = quote;
+                let mut index = scan.offset;
+                let mut broken = None;
+                while index < buf.len() {
+                    match buf[index] {
+                        b'<' if quote == 0 => {
+                            broken = Some(index);
+                            break;
+                        }
+                        b'>' if quote == 0 => break,
+                        q @ (b'"' | b'\'') if quote == 0 => quote = q,
+                        q if q == quote => quote = 0,
+                        _ => {}
+                    }
+                    index += 1;
+                }
+                if let Some(at) = broken {
+                    scan.mode = ScanMode::Markup;
+                    scan.offset = at;
+                    continue;
+                }
+                if index >= buf.len() {
+                    scan.mode = ScanMode::Tag { quote };
+                    scan.offset = buf.len();
+                    return Ok(ScanEvent::NeedMore);
+                }
+                scan.mode = ScanMode::Markup;
+                let at = scan.tag_start;
+                if let Some(event) = goal_event(scan, buf, at, index + 1 - at, &goal)? {
+                    return Ok(event);
+                }
+                close_tag(scan, buf, at, index + 1 - at);
+                scan.offset = index + 1;
+            }
+            ScanMode::Doctype {
+                mut brackets,
+                mut quote,
+            } => {
+                let mut index = scan.offset;
+                let mut done = None;
+                while index < buf.len() {
+                    let byte = buf[index];
+                    if quote != 0 {
+                        if byte == quote {
+                            quote = 0;
+                        }
+                    } else if matches!(byte, b'"' | b'\'') {
+                        quote = byte;
+                    } else if byte == b'[' {
+                        brackets += 1;
+                    } else if byte == b']' {
+                        brackets = brackets.saturating_sub(1);
+                    } else if byte == b'>' && brackets == 0 {
+                        done = Some(index + 1);
+                        break;
+                    }
+                    index += 1;
+                }
+                let Some(end) = done else {
+                    scan.mode = ScanMode::Doctype { brackets, quote };
+                    scan.offset = buf.len();
+                    return Ok(ScanEvent::NeedMore);
+                };
+                scan.mode = ScanMode::Markup;
+                scan.offset = end;
+            }
+            ScanMode::Pi => {
+                let from = scan.offset.saturating_sub(1);
+                let Some(rel) = find_bytes(&buf[from..], b"?>") else {
+                    scan.offset = buf.len().saturating_sub(1).max(scan.offset);
+                    return Ok(ScanEvent::NeedMore);
+                };
+                scan.mode = ScanMode::Markup;
+                scan.offset = from + rel + 2;
             }
         }
     }
-    Ok(Head::Incomplete)
+}
+
+enum TagContent {
+    Complete { end: usize },
+    BrokenAt(usize),
+    Incomplete { quote: u8 },
+}
+
+// The start tag at the slice start: its length when an unquoted `>` closes it, the
+// offset of a bare `<` inside it, or the quote left open when the slice runs out.
+fn tag_content(tag: &[u8]) -> TagContent {
+    let mut quote = 0u8;
+    let mut index = 1;
+    while index < tag.len() {
+        match tag[index] {
+            b'<' if quote == 0 => return TagContent::BrokenAt(index),
+            b'>' if quote == 0 => return TagContent::Complete { end: index + 1 },
+            q @ (b'"' | b'\'') if quote == 0 => quote = q,
+            q if q == quote => quote = 0,
+            _ => {}
+        }
+        index += 1;
+    }
+    TagContent::Incomplete { quote }
+}
+
+fn close_tag(scan: &mut ForwardScan, buf: &[u8], at: usize, end: usize) {
+    if buf[at + end - 2] != b'/' {
+        scan.depth += 1;
+    }
+}
+
+fn goal_event(
+    scan: &mut ForwardScan,
+    buf: &[u8],
+    at: usize,
+    end: usize,
+    goal: &ScanGoal,
+) -> Result<Option<ScanEvent>, ReadError> {
+    let empty = buf[at + end - 2] == b'/';
+    match goal {
+        ScanGoal::Head => {
+            let name = tag_name(&buf[at + 1..at + end]);
+            if scan.depth == 1
+                && let Some(name) = name
+                && local_is(name, b"sheetData")
+            {
+                if empty {
+                    return Ok(Some(ScanEvent::Head(Head::Empty)));
+                }
+                return Ok(Some(ScanEvent::Head(Head::Found(at, at + end))));
+            }
+        }
+        ScanGoal::Row => {
+            if empty && scan.depth == 0 {
+                return Ok(Some(ScanEvent::RowDone(at + end)));
+            }
+        }
+    }
+    scan.offset = at + end;
+    Ok(None)
+}
+
+// The byte offset where <sheetData> content starts, found without parsing.
+fn scan_head(scan: &mut ForwardScan, head: &[u8]) -> Result<Head, ReadError> {
+    match advance(scan, head, ScanGoal::Head)? {
+        ScanEvent::Head(found) => Ok(found),
+        ScanEvent::NeedMore => Ok(Head::Incomplete),
+        ScanEvent::RowDone(_) => Err(unreadable("a worksheet part is malformed")),
+    }
+}
+
+// The end of the <row> starting the buffer; None when more bytes may complete it.
+fn scan_row_end(scan: &mut ForwardScan, buf: &[u8]) -> Result<Option<usize>, ReadError> {
+    match advance(scan, buf, ScanGoal::Row)? {
+        ScanEvent::RowDone(end) => Ok(Some(end)),
+        ScanEvent::NeedMore => Ok(None),
+        ScanEvent::Head(_) => Err(unreadable("a worksheet part is malformed")),
+    }
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-// Past a DOCTYPE, whose internal subset may hold `>` inside brackets.
-fn doctype_end(head: &[u8]) -> Option<usize> {
-    let mut brackets = 0u32;
-    let mut quote = 0u8;
-    let mut index = 0;
-    while index < head.len() {
-        let byte = head[index];
-        if quote != 0 {
-            if byte == quote {
-                quote = 0;
-            }
-        } else if matches!(byte, b'"' | b'\'') {
-            quote = byte;
-        } else if byte == b'[' {
-            brackets += 1;
-        } else if byte == b']' {
-            brackets = brackets.saturating_sub(1);
-        } else if byte == b'>' && brackets == 0 {
-            return Some(index + 1);
-        }
-        index += 1;
-    }
-    None
+// Whether the truncated slice could still grow into a comment, CDATA or doctype
+// opener once the next chunk arrives.
+fn is_opener_prefix(rest: &[u8]) -> bool {
+    [
+        b"<!--".as_slice(),
+        b"<![CDATA[".as_slice(),
+        b"<!DOCTYPE".as_slice(),
+        b"<!doctype".as_slice(),
+    ]
+    .iter()
+    .any(|opener| opener.starts_with(rest))
 }
 
 // Past a start or end tag starting at the slice, through its unquoted `>`; a `<`
@@ -922,18 +1160,155 @@ mod tests {
     #[test]
     fn a_leading_end_tag_is_read_without_a_parser_stack() {
         assert!(matches!(
-            peek_event(b"</sheetData>").unwrap(),
+            classify(b"</sheetData>").unwrap(),
             Some((Next::SheetDataEnd, 12))
         ));
         assert!(matches!(
-            peek_event(b"</x:sheetData >").unwrap(),
+            classify(b"</x:sheetData >").unwrap(),
             Some((Next::SheetDataEnd, 15))
         ));
         assert!(matches!(
-            peek_event(b"</other>").unwrap(),
+            classify(b"</other>").unwrap(),
             Some((Next::Other, 8))
         ));
-        assert!(peek_event(b"</sheetData").unwrap().is_none());
+        assert!(classify(b"</sheetData").unwrap().is_none());
+        assert!(matches!(
+            classify(b"  \r\n <row r=\"1\"/>").unwrap(),
+            Some((Next::Row, 17))
+        ));
+    }
+
+    #[test]
+    fn the_head_scan_resumes_instead_of_restarting() {
+        let part = format!(r#"{HEAD}<row r="1"><c r="A1"><v>1</v></c></row>{TAIL}"#);
+        let bytes = part.as_bytes();
+        let mut scan = ForwardScan::new();
+        let cut = HEAD.len() / 2;
+        assert!(matches!(
+            scan_head(&mut scan, &bytes[..cut]),
+            Ok(Head::Incomplete)
+        ));
+        assert!(scan.offset > 0);
+        assert!(matches!(scan_head(&mut scan, bytes), Ok(Head::Found(_, _))));
+    }
+
+    #[test]
+    fn the_row_scan_resumes_instead_of_restarting() {
+        let row = format!(
+            r#"<row r="1"><c r="A1"><v>{}</v></c></row>"#,
+            "7".repeat(1000)
+        );
+        let bytes = row.as_bytes();
+        let mut scan = ForwardScan::new();
+        let cut = bytes.len() / 2;
+        assert!(matches!(scan_row_end(&mut scan, &bytes[..cut]), Ok(None)));
+        assert!(scan.offset > 0);
+        assert!(matches!(
+            scan_row_end(&mut scan, bytes),
+            Ok(Some(end)) if end == bytes.len()
+        ));
+    }
+
+    #[test]
+    fn an_unclosed_first_row_is_an_error_not_a_hang() {
+        for xml in [
+            format!(r#"{HEAD}<row r="1"><c r="A1"><v>1</v></c>{TAIL}"#),
+            format!(r#"{HEAD}<row r="1"><c r="A1"><v>1</v></c>"#),
+        ] {
+            let started = std::time::Instant::now();
+            let error = stream_worksheet(
+                xml.as_bytes(),
+                0,
+                "xl/worksheets/sheet1.xml",
+                "Sheet1",
+                &budgets(),
+            )
+            .err()
+            .expect("an unclosed row must fail");
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(30),
+                "took {started:?}"
+            );
+            let _ = error;
+        }
+    }
+
+    #[test]
+    fn a_first_row_past_the_cap_goes_to_ironcalc() {
+        let xml = format!(
+            r#"{HEAD}<row r="1"><c r="A1"><v>{}</v>"#,
+            "7".repeat(17 * 1024 * 1024)
+        );
+        let started = std::time::Instant::now();
+        let error = stream_worksheet(
+            xml.as_bytes(),
+            0,
+            "xl/worksheets/sheet1.xml",
+            "Sheet1",
+            &budgets(),
+        )
+        .err()
+        .expect("a row past the cap must go to IronCalc");
+        assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "took {started:?}"
+        );
+    }
+
+    #[test]
+    fn a_huge_configuration_is_refused_without_rescanning() {
+        let pad = " ".repeat(64 * 1024 * 1024);
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">{pad}<sheetData></sheetData></worksheet>"#
+        );
+        let started = std::time::Instant::now();
+        let error = stream_worksheet(
+            xml.as_bytes(),
+            0,
+            "xl/worksheets/sheet1.xml",
+            "Sheet1",
+            &budgets(),
+        )
+        .err()
+        .expect("a 64 MB configuration must fail");
+        assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "took {started:?}"
+        );
+    }
+
+    #[test]
+    fn an_unclosed_comment_is_an_error_not_a_hang() {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><!--{}"#,
+            " ".repeat(30 * 1024 * 1024)
+        );
+        let started = std::time::Instant::now();
+        let error = stream_worksheet(
+            xml.as_bytes(),
+            0,
+            "xl/worksheets/sheet1.xml",
+            "Sheet1",
+            &budgets(),
+        )
+        .err()
+        .expect("an unclosed comment must fail");
+        assert!(matches!(error, ReadError::Unreadable(_)), "{error}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(120),
+            "took {started:?}"
+        );
+    }
+
+    #[test]
+    fn a_comment_before_sheet_data_still_opens() {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><!-- note --><sheetData><row r="1"><c r="A1"><v>7</v></c></row>{TAIL}"#
+        );
+        let streamed = stream(&xml);
+        assert_eq!(streamed.cells.data.len(), 1);
     }
 
     #[test]
