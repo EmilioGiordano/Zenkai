@@ -5,6 +5,7 @@ use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
 use crate::ReadError;
+use crate::limits::Usage;
 use crate::sheet_data::{SheetCells, Slot, remap_strings, scan_rows};
 use crate::stream::{Budgets, CharacterCheck, Guard};
 
@@ -272,9 +273,24 @@ fn parse_unit(
     if spill_past_piece(&scanned) {
         return Err(unsupported("an array formula spilling past one piece"));
     }
-    let cells = scanned.data.iter().map(|(_, row)| row.len() as u64).sum();
+    let usage = Usage {
+        cells: scanned.data.iter().map(|(_, row)| row.len() as u64).sum(),
+        bytes: scanned
+            .strings
+            .iter()
+            .map(|text| text.len() as u64)
+            .sum::<u64>()
+            .saturating_add(
+                scanned
+                    .jobs
+                    .iter()
+                    .map(|job| job.text.len() as u64)
+                    .sum::<u64>(),
+            ),
+        rows: scanned.data.len() as u64,
+    };
+    driver.budgets.check_usage(usage)?;
     merge(&mut driver.merged, &mut driver.strings, scanned)?;
-    driver.budgets.check_cells(cells)?;
     Ok(())
 }
 
@@ -559,7 +575,8 @@ fn first_cell_tag(after: &[u8]) -> Option<&[u8]> {
 
 // Whether an array formula in the piece claims rows past its last row: a later piece
 // would read those cells without knowing their anchor, so only IronCalc's
-// whole-sheet read stays correct there.
+// whole-sheet read stays correct there. Rows and array ranges are validated against
+// the sheet limits when read, so the addition below cannot overflow.
 fn spill_past_piece(piece: &SheetCells) -> bool {
     let Some((last, _)) = piece.data.last() else {
         return false;
@@ -952,6 +969,46 @@ mod tests {
     }
 
     #[test]
+    fn string_bytes_count_against_the_budget_while_cells_fit() {
+        let filler = "x".repeat(20_000);
+        let mut rows = String::new();
+        for n in 1..=10 {
+            rows.push_str(&format!(
+                r#"<row r="{n}"><c r="A{n}" t="inlineStr"><is><t>{n}{filler}</t></is></c></row>"#
+            ));
+        }
+        let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1000));
+        let error = stream_worksheet(
+            xml.as_bytes(),
+            0,
+            "xl/worksheets/sheet1.xml",
+            "Sheet1",
+            &budgets,
+        )
+        .err()
+        .expect("ten cells with huge strings must trip the budget");
+        assert!(error.to_string().contains("needs at least"), "{error}");
+    }
+
+    #[test]
+    fn a_row_past_the_sheet_end_is_an_error_not_an_overflow() {
+        let xml = format!(
+            r#"{HEAD}<row r="2147483647"><c r="A1"><f t="array" ref="A1:A2">1</f></c></row>{TAIL}"#
+        );
+        let error = stream_worksheet(
+            xml.as_bytes(),
+            0,
+            "xl/worksheets/sheet1.xml",
+            "Sheet1",
+            &budgets(),
+        )
+        .err()
+        .expect("an out-of-range row must not reach the model");
+        assert!(matches!(error, ReadError::Unreadable(_)), "{error}");
+    }
+
+    #[test]
     fn the_cell_budget_stops_a_growing_sheet() {
         let mut rows = String::new();
         for n in 1..=2000 {
@@ -969,6 +1026,6 @@ mod tests {
         .err()
         .expect("a growing sheet must stop");
         let message = error.to_string();
-        assert!(message.contains("needs about"), "{message}");
+        assert!(message.contains("needs at least"), "{message}");
     }
 }

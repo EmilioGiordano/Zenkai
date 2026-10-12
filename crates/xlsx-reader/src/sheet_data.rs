@@ -197,6 +197,11 @@ impl<'a> Scanner<'a, '_> {
             Some(r) => Some(r.parse::<i32>().map_err(unreadable)?),
             None => None,
         };
+        if let Some(r) = row_index
+            && !is_valid_row(r)
+        {
+            return Err(unreadable("a row index outside the sheet"));
+        }
         let (has_height, height) = match ht {
             Some(ht) => (true, ht.parse::<f64>().unwrap_or(DEFAULT_ROW_HEIGHT)),
             None => (false, DEFAULT_ROW_HEIGHT),
@@ -446,6 +451,8 @@ fn formula_context(cell_ref: &str) -> Result<(i32, i32), ReadError> {
 }
 
 // IronCalc's `parse_reference_a1`, without its allocations for the plain "B12" form.
+// Both spellings are checked against the sheet limits, so no out-of-range row or
+// column ever reaches the model.
 fn cell_position(cell_ref: &str) -> Option<(i32, i32)> {
     let bytes = cell_ref.as_bytes();
     let letters = bytes.iter().take_while(|b| b.is_ascii_uppercase()).count();
@@ -460,7 +467,9 @@ fn cell_position(cell_ref: &str) -> Option<(i32, i32)> {
         }
         return None;
     }
-    parse_reference_a1(cell_ref).map(|r| (r.row, r.column))
+    parse_reference_a1(cell_ref)
+        .filter(|r| is_valid_row(r.row) && is_valid_column_number(r.column))
+        .map(|r| (r.row, r.column))
 }
 
 fn parse_range(range: &str) -> Option<(i32, i32, i32, i32)> {
@@ -515,5 +524,33 @@ mod tests {
     fn a_shared_formula_covering_a_whole_column_is_read() {
         let rows = r#"<row r="1"><c r="A1"><f t="shared" ref="A1:A1048576" si="0">B1*2</f><v>0</v></c></row>"#;
         assert!(scan(rows).is_ok());
+    }
+
+    #[test]
+    fn row_indexes_outside_the_sheet_are_left_to_ironcalc() {
+        for rows in [
+            r#"<row r="0"><c r="A1"><v>1</v></c></row>"#,
+            r#"<row r="1048577"><c r="A1"><v>1</v></c></row>"#,
+            r#"<row r="2147483647"><c r="A1"><v>1</v></c></row>"#,
+        ] {
+            assert!(
+                matches!(scan(rows), Err(ReadError::Unreadable(_))),
+                "{rows}"
+            );
+        }
+    }
+
+    #[test]
+    fn cell_references_outside_the_sheet_are_left_to_ironcalc() {
+        for rows in [
+            r#"<row r="1"><c r="A1048577"><v>1</v></c></row>"#,
+            r#"<row r="1"><c r="XFE1"><v>1</v></c></row>"#,
+            r#"<row r="1"><c r="A1"><f t="array" ref="A1:B1048577">1</f></c></row>"#,
+        ] {
+            assert!(
+                matches!(scan(rows), Err(ReadError::Unreadable(_))),
+                "{rows}"
+            );
+        }
     }
 }

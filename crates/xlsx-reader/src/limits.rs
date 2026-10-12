@@ -28,6 +28,9 @@ pub const RAM_SHARE_PERCENT: u64 = 60;
 // Used only when the machine's memory cannot be read, mirroring the app's budget.
 pub const FALLBACK_BUDGET_MB: u64 = 4096;
 pub const BUDGET_VARIABLE: &str = "ZENKAI_MEMORY_BUDGET_MB";
+// An IronCalc row entry costs about as much as one stored cell: a map node holding
+// the row number plus the row map itself.
+pub const ROW_BYTES: u64 = 128;
 // Excel's own limit; it also bounds how deep any formula's syntax tree can get.
 pub const MAX_FORMULA_CHARS: usize = 8_192;
 pub const MAX_FORMULA_DEPTH: usize = 256;
@@ -95,16 +98,34 @@ impl CellBudget {
         self.max_cells
     }
 
-    pub fn check(self, cells: u64) -> Result<(), ReadError> {
-        if cells <= self.max_cells {
+    pub fn check(self, usage: Usage) -> Result<(), ReadError> {
+        let needed = usage.needed_bytes();
+        let supported = self.max_cells.saturating_mul(BYTES_PER_CELL);
+        if needed <= supported {
             return Ok(());
         }
         Err(ReadError::Unsafe(format!(
             "this file needs at least {} to open ({} cells), more than the {} supported; close other workbooks, or use a machine with more memory",
-            describe_bytes(cells.saturating_mul(BYTES_PER_CELL)),
-            cells,
-            describe_bytes(self.max_cells.saturating_mul(BYTES_PER_CELL)),
+            describe_bytes(needed),
+            usage.cells,
+            describe_bytes(supported),
         )))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Usage {
+    pub cells: u64,
+    pub bytes: u64,
+    pub rows: u64,
+}
+
+impl Usage {
+    pub fn needed_bytes(self) -> u64 {
+        self.cells
+            .saturating_mul(BYTES_PER_CELL)
+            .saturating_add(self.bytes)
+            .saturating_add(self.rows.saturating_mul(ROW_BYTES))
     }
 }
 
@@ -207,13 +228,69 @@ mod tests {
     #[test]
     fn the_cell_budget_names_the_memory_the_file_needs() {
         let budget = CellBudget::max_cells_for_test(10_000);
-        assert!(budget.check(10_000).is_ok());
-        let error = budget.check(10_001).unwrap_err();
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 10_000,
+                    bytes: 0,
+                    rows: 0
+                })
+                .is_ok()
+        );
+        let error = budget
+            .check(Usage {
+                cells: 10_001,
+                bytes: 0,
+                rows: 0,
+            })
+            .unwrap_err();
         assert!(matches!(error, ReadError::Unsafe(_)));
         let message = error.to_string();
         assert!(message.contains("needs at least"), "{message}");
         assert!(message.contains("10001 cells"), "{message}");
         assert!(message.contains("close other workbooks"), "{message}");
+    }
+
+    #[test]
+    fn string_formula_and_row_bytes_count_against_the_budget() {
+        let budget = CellBudget::max_cells_for_test(100);
+        let supported = 100 * BYTES_PER_CELL;
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 99,
+                    bytes: supported - 99 * BYTES_PER_CELL,
+                    rows: 0,
+                })
+                .is_ok()
+        );
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 99,
+                    bytes: supported - 99 * BYTES_PER_CELL + 1,
+                    rows: 0,
+                })
+                .is_err()
+        );
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 0,
+                    bytes: 0,
+                    rows: supported / ROW_BYTES,
+                })
+                .is_ok()
+        );
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 0,
+                    bytes: 0,
+                    rows: supported / ROW_BYTES + 1,
+                })
+                .is_err()
+        );
     }
 
     #[test]

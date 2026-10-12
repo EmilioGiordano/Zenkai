@@ -2,7 +2,7 @@ use std::io::{Read, Seek};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ReadError;
-use crate::limits::{self, CellBudget, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES};
+use crate::limits::{self, CellBudget, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES, Usage};
 
 const CHUNK_BYTES: usize = 64 * 1024;
 
@@ -10,6 +10,8 @@ pub(crate) struct Budgets {
     total: AtomicU64,
     cells: CellBudget,
     used_cells: AtomicU64,
+    used_bytes: AtomicU64,
+    used_rows: AtomicU64,
 }
 
 impl Budgets {
@@ -22,15 +24,25 @@ impl Budgets {
             total: AtomicU64::new(MAX_TOTAL_BYTES),
             cells,
             used_cells: AtomicU64::new(0),
+            used_bytes: AtomicU64::new(0),
+            used_rows: AtomicU64::new(0),
         }
     }
 
-    pub(crate) fn check_cells(&self, additional: u64) -> Result<(), ReadError> {
+    pub(crate) fn check_usage(&self, additional: Usage) -> Result<(), ReadError> {
         let cells = self
             .used_cells
-            .fetch_add(additional, Ordering::Relaxed)
-            .saturating_add(additional);
-        self.cells.check(cells)
+            .fetch_add(additional.cells, Ordering::Relaxed)
+            .saturating_add(additional.cells);
+        let bytes = self
+            .used_bytes
+            .fetch_add(additional.bytes, Ordering::Relaxed)
+            .saturating_add(additional.bytes);
+        let rows = self
+            .used_rows
+            .fetch_add(additional.rows, Ordering::Relaxed)
+            .saturating_add(additional.rows);
+        self.cells.check(Usage { cells, bytes, rows })
     }
 
     fn charge(&self, bytes: u64) -> Result<(), ReadError> {
