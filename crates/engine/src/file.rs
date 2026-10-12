@@ -91,21 +91,8 @@ fn load_guarded(bytes: &[u8], name: &str) -> Result<Workbook, EngineError> {
 
 pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
     let found = std::sync::Mutex::new(Vec::new());
-    zenkai_xlsx_reader::scan_parts(bytes, &|name, part| {
-        let kinds = part_unsupported(name, part).map_err(|error| match error {
-            EngineError::Unsafe(reason) => reason,
-            other => other.to_string(),
-        })?;
-        found
-            .lock()
-            .map_err(|_| "a part check stopped".to_string())?
-            .extend(kinds);
-        Ok(())
-    })
-    .map_err(|error| match error {
-        zenkai_xlsx_reader::ReadError::Unsafe(reason) => EngineError::Unsafe(reason),
-        other => EngineError::InvalidFile(other.to_string()),
-    })?;
+    zenkai_xlsx_reader::scan_parts(bytes, &|name, part| inspect_part(&found, name, part))
+        .map_err(crate::xlsx_read::engine_error)?;
     let mut found = found
         .into_inner()
         .map_err(|_| EngineError::InvalidFile("a part check stopped".to_string()))?;
@@ -116,6 +103,23 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
 
 pub fn xlsx_bytes(workbook: &Workbook) -> Result<Vec<u8>, EngineError> {
     preflight::run_with_engine_stack(|| workbook.to_xlsx())
+}
+
+pub(crate) fn inspect_part(
+    found: &std::sync::Mutex<Vec<Unsupported>>,
+    name: &str,
+    part: &[u8],
+) -> Result<(), zenkai_xlsx_reader::ReadError> {
+    use zenkai_xlsx_reader::ReadError;
+    let kinds = part_unsupported(name, part).map_err(|error| match error {
+        EngineError::Unsafe(reason) => ReadError::Unsafe(reason),
+        other => ReadError::Unsupported(other.to_string()),
+    })?;
+    found
+        .lock()
+        .map_err(|_| ReadError::Unsupported("a part check stopped".to_string()))?
+        .extend(kinds);
+    Ok(())
 }
 
 pub(crate) fn part_unsupported(name: &str, part: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
@@ -281,7 +285,15 @@ mod tests {
         ] {
             let path = dir.path().join(name);
             fs::write(&path, bytes).unwrap();
-            assert!(open_xlsx(&path).is_err(), "{name}");
+            let error = open_xlsx(&path)
+                .err()
+                .expect("{name} must fail")
+                .to_string();
+            assert!(
+                error.contains("not a valid xlsx workbook"),
+                "{name}: {error}"
+            );
+            assert!(!error.contains("harm"), "{name}: {error}");
         }
     }
 

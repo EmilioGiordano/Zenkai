@@ -35,7 +35,7 @@ pub enum ReadError {
     Unsupported(String),
 }
 
-pub type Inspect<'a> = dyn Fn(&str, &[u8]) -> Result<(), String> + Sync + 'a;
+pub type Inspect<'a> = dyn Fn(&str, &[u8]) -> Result<(), ReadError> + Sync + 'a;
 
 pub struct OpenedBook {
     pub book: Workbook,
@@ -119,16 +119,16 @@ fn read_from<R: Read + Seek>(
             let streamed = stream_worksheet(entry, compressed, &entry_name, &sheet_name, &budgets)?;
             // The rows were checked while streaming; the configuration carries the
             // same feature flags and validation limits as a whole part would.
-            inspect(&entry_name, &streamed.stub).map_err(ReadError::Unsafe)?;
+            inspect(&entry_name, &streamed.stub)?;
             sheets[position] = Some(streamed);
             continue;
         }
         if skipped_part(&entry_name) {
-            inspect(&entry_name, &[]).map_err(ReadError::Unsafe)?;
+            inspect(&entry_name, &[])?;
             continue;
         }
         let part = read_entry(entry, &budgets)?;
-        inspect(&entry_name, &part).map_err(ReadError::Unsafe)?;
+        inspect(&entry_name, &part)?;
     }
 
     let mut replaced = std::collections::HashMap::new();
@@ -202,11 +202,11 @@ pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> 
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
         let entry_name = entry.name().to_string();
         if skipped_part(&entry_name) {
-            inspect(&entry_name, &[]).map_err(ReadError::Unsafe)?;
+            inspect(&entry_name, &[])?;
             continue;
         }
         let part = read_entry(entry, &budgets)?;
-        inspect(&entry_name, &part).map_err(ReadError::Unsafe)?;
+        inspect(&entry_name, &part)?;
     }
     Ok(())
 }

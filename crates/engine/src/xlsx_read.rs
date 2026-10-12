@@ -5,7 +5,17 @@ use ironcalc::base::types::Workbook as Book;
 use zenkai_xlsx_reader::{ReadError, workbook_differences};
 
 use crate::error::EngineError;
-use crate::file::{Unsupported, part_unsupported, scan_unsupported};
+use crate::file::{Unsupported, inspect_part, scan_unsupported};
+
+// Only a refused file reports harm; a corrupt or non-zip file is not a valid workbook.
+pub(crate) fn engine_error(error: ReadError) -> EngineError {
+    match error {
+        ReadError::Unsafe(reason) => EngineError::Unsafe(reason),
+        ReadError::Unreadable(reason) | ReadError::Unsupported(reason) => {
+            EngineError::InvalidFile(reason)
+        }
+    }
+}
 use crate::preflight::run_with_engine_stack;
 use crate::sheet_settings::{self, SheetSettings};
 use crate::workbook::{read_book, read_book_fast, read_book_streaming};
@@ -128,9 +138,11 @@ pub(crate) fn read_xlsx_file(
 }
 
 // The IronCalc fallback is never a way past the limits: it runs only when every part
-// fits the old per-part cap, otherwise the file is refused with a clear message.
+// fits the old per-part cap, otherwise the file is refused with a clear message. Only
+// an unsafe file is refused as harmful; a file the caps pass cannot even read stays
+// on the regular path and fails as an invalid workbook.
 fn fallback_to_ironcalc(bytes: &[u8], name: &str, declined: &ReadError) -> Outcome<EngineError> {
-    if let Err(limited) = zenkai_xlsx_reader::check_fallback_caps_bytes(bytes) {
+    if let Err(ReadError::Unsafe(limited)) = zenkai_xlsx_reader::check_fallback_caps_bytes(bytes) {
         return Err(EngineError::Unsafe(format!(
             "the streaming reader does not support this file ({declined}), and it cannot fall back to IronCalc's reader ({limited})"
         )));
@@ -153,17 +165,11 @@ fn read_settings(bytes: &[u8]) -> Result<Vec<SheetSettings>, EngineError> {
                 })
                 .collect()
         })
-        .map_err(|error| match error {
-            ReadError::Unsafe(reason) => EngineError::Unsafe(reason),
-            other => EngineError::InvalidFile(other.to_string()),
-        })
+        .map_err(engine_error)
 }
 
 fn read_with_ironcalc(bytes: &[u8], name: &str) -> Outcome<EngineError> {
-    zenkai_xlsx_reader::check_fallback_caps_bytes(bytes).map_err(|error| match error {
-        ReadError::Unsafe(reason) => EngineError::Unsafe(reason),
-        other => EngineError::InvalidFile(other.to_string()),
-    })?;
+    zenkai_xlsx_reader::check_fallback_caps_bytes(bytes).map_err(engine_error)?;
     let unsupported = scan_unsupported(bytes)?;
     let book = run_with_engine_stack(|| read_book(bytes, name))?;
     Ok((book, unsupported))
@@ -174,17 +180,7 @@ fn read_streaming(
     name: &str,
 ) -> Result<(Book, Vec<Unsupported>, Vec<SheetSettings>), ReadError> {
     let found = Mutex::new(Vec::new());
-    let inspect = |part: &str, data: &[u8]| -> Result<(), String> {
-        let kinds = part_unsupported(part, data).map_err(|error| match error {
-            EngineError::Unsafe(reason) => reason,
-            other => other.to_string(),
-        })?;
-        found
-            .lock()
-            .map_err(|_| "a part check stopped".to_string())?
-            .extend(kinds);
-        Ok(())
-    };
+    let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
     let opened = run_with_engine_stack(|| Ok(read_book_streaming(path, name, &inspect)))
         .map_err(|error| ReadError::Unsupported(error.to_string()))??;
     let mut unsupported = found
@@ -208,17 +204,7 @@ fn read_streaming(
 
 fn read_fast(bytes: &[u8], name: &str) -> Outcome<ReadError> {
     let found = Mutex::new(Vec::new());
-    let inspect = |part: &str, data: &[u8]| -> Result<(), String> {
-        let kinds = part_unsupported(part, data).map_err(|error| match error {
-            EngineError::Unsafe(reason) => reason,
-            other => other.to_string(),
-        })?;
-        found
-            .lock()
-            .map_err(|_| "a part check stopped".to_string())?
-            .extend(kinds);
-        Ok(())
-    };
+    let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
     let book = run_with_engine_stack(|| Ok(read_book_fast(bytes, name, &inspect)))
         .map_err(|error| ReadError::Unsupported(error.to_string()))??;
     let mut unsupported = found
