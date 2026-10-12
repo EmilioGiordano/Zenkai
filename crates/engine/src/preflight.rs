@@ -87,6 +87,7 @@ fn check_formula(node: &roxmltree::Node<'_, '_>) -> Result<(), EngineError> {
     zenkai_xlsx_reader::limits::check_formula(
         node.text().unwrap_or_default(),
         node.attribute("ref"),
+        node.attribute("t") == Some("shared"),
     )
     .map_err(reject)
 }
@@ -151,6 +152,9 @@ mod tests {
         assert!(check_part(huge.as_bytes()).is_err());
         let small = sheet(r#"<c r="A1"><f t="shared" ref="A1:A100" si="0">B1*2</f></c>"#);
         assert!(check_part(small.as_bytes()).is_ok());
+        let whole_column =
+            sheet(r#"<c r="A1"><f t="shared" ref="A1:A1048576" si="0">B1*2</f></c>"#);
+        assert!(check_part(whole_column.as_bytes()).is_ok());
     }
 
     #[test]

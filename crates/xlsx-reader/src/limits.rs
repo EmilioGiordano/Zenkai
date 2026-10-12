@@ -1,5 +1,8 @@
 use std::io::{Read, Seek};
 
+use ironcalc::base::expressions::utils::{
+    is_valid_column_number, is_valid_row, parse_reference_a1,
+};
 use zenkai_types::Range;
 
 use crate::ReadError;
@@ -116,16 +119,37 @@ pub fn check_ratio(part: &str, compressed: u64, expanded: u64) -> Result<(), Rea
     Ok(())
 }
 
-pub fn check_formula(formula: &str, area: Option<&str>) -> Result<(), String> {
-    if let Some(range) = area.and_then(Range::parse_a1)
-        && range.cell_count() > MAX_FORMULA_AREA
-    {
-        return Err(format!(
-            "a formula covers {} cells, more than the {MAX_FORMULA_AREA} supported",
-            range.cell_count()
-        ));
+pub fn check_formula(formula: &str, area: Option<&str>, shared: bool) -> Result<(), String> {
+    if let Some(range) = area {
+        // A shared formula ref may cover a whole column, so it is only checked to
+        // stay inside the sheet; every other formula keeps the area limit.
+        if shared {
+            check_range_bounds(range)?;
+        } else if let Some(parsed) = Range::parse_a1(range)
+            && parsed.cell_count() > MAX_FORMULA_AREA
+        {
+            return Err(format!(
+                "a formula covers {} cells, more than the {MAX_FORMULA_AREA} supported",
+                parsed.cell_count()
+            ));
+        }
     }
     check_formula_text(formula)
+}
+
+fn check_range_bounds(range: &str) -> Result<(), String> {
+    let invalid = || format!("invalid range {range}");
+    let (left, right) = match range.split_once(':') {
+        Some(pair) => pair,
+        None => (range, range),
+    };
+    for end in [left.trim(), right.trim()] {
+        let cell = parse_reference_a1(end).ok_or_else(invalid)?;
+        if !is_valid_row(cell.row) || !is_valid_column_number(cell.column) {
+            return Err(invalid());
+        }
+    }
+    Ok(())
 }
 
 pub fn check_formula_text(formula: &str) -> Result<(), String> {
@@ -195,5 +219,13 @@ mod tests {
     #[test]
     fn sixty_percent_of_a_16gb_machine_covers_the_big_file() {
         assert!(CellBudget::from_budget_mb(9_752).max_cells() > 40_000_000);
+    }
+
+    #[test]
+    fn a_shared_formula_may_cover_a_whole_column() {
+        assert!(check_formula("B1*2", Some("A1:A1048576"), true).is_ok());
+        assert!(check_formula("B1*2", Some("A1:A1048577"), true).is_err());
+        assert!(check_formula("B1*2", Some("A1:XFE1048576"), true).is_err());
+        assert!(check_formula("1", Some("A1:A1048576"), false).is_err());
     }
 }

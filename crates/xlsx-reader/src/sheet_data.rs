@@ -510,4 +510,10 @@ mod tests {
             .collect();
         assert!(scan(&rows).is_ok());
     }
+
+    #[test]
+    fn a_shared_formula_covering_a_whole_column_is_read() {
+        let rows = r#"<row r="1"><c r="A1"><f t="shared" ref="A1:A1048576" si="0">B1*2</f><v>0</v></c></row>"#;
+        assert!(scan(rows).is_ok());
+    }
 }
