@@ -1589,9 +1589,7 @@ mod tests {
         }
         let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
         let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1000));
-        let error = config_with(&xml, &budgets)
-            .err()
-            .expect("outline tags with kilobytes of attributes must trip the budget");
+        let error = config_with(&xml, &budgets).expect_err("outline tags must trip the budget");
         assert!(error.to_string().contains("needs at least"), "{error}");
     }
 
