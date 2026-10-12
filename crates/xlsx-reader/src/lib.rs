@@ -228,13 +228,6 @@ pub fn sheet_configs_from_bytes(bytes: &[u8]) -> Result<Vec<String>, ReadError> 
     sheet_configs_from(archive)
 }
 
-pub fn sheet_configs_from_file(path: &Path) -> Result<Vec<String>, ReadError> {
-    let file = File::open(path).map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    let archive = zip::ZipArchive::new(BufReader::new(file))
-        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    sheet_configs_from(archive)
-}
-
 fn sheet_configs_from<R: Read + Seek>(
     mut archive: zip::ZipArchive<R>,
 ) -> Result<Vec<String>, ReadError> {

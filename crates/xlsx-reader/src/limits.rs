@@ -83,6 +83,7 @@ impl CellBudget {
         }
     }
 
+    #[cfg(test)]
     pub fn max_cells_for_test(max_cells: u64) -> CellBudget {
         CellBudget { max_cells }
     }
@@ -96,7 +97,7 @@ impl CellBudget {
             return Ok(());
         }
         Err(ReadError::Unsafe(format!(
-            "this file needs about {} to open ({} cells), more than the {} supported",
+            "this file needs at least {} to open ({} cells), more than the {} supported; close other workbooks, or use a machine with more memory",
             describe_bytes(cells.saturating_mul(BYTES_PER_CELL)),
             cells,
             describe_bytes(self.max_cells.saturating_mul(BYTES_PER_CELL)),
@@ -186,8 +187,9 @@ mod tests {
         let error = budget.check(10_001).unwrap_err();
         assert!(matches!(error, ReadError::Unsafe(_)));
         let message = error.to_string();
-        assert!(message.contains("needs about"), "{message}");
+        assert!(message.contains("needs at least"), "{message}");
         assert!(message.contains("10001 cells"), "{message}");
+        assert!(message.contains("close other workbooks"), "{message}");
     }
 
     #[test]
