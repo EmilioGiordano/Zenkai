@@ -97,6 +97,10 @@ version = "0.4"
 
 [dependencies.ironcalc_base]
 version = "0.8"
+# Same sibling layout as the upstream checkout; ignored when built as a
+# dependency, where the workspace [patch] picks the base. Standalone test
+# runs resolve the patched sibling instead of the registry release.
+path = "../ironcalc_base"
 
 [dependencies.itertools]
 version = "0.12"
@@ -123,3 +127,6 @@ features = [
     "serde",
     "v4",
 ]
+
+# Built on its own when running its tests, outside the enclosing Zenkai workspace.
+[workspace]

@@ -88,6 +88,32 @@ fn reparse_formula_hack(formula: &str, worksheets: &[String]) -> Result<String, 
     Ok(to_english_string(&t, &cell_reference))
 }
 
+// A part bigger than the budget can never finish parsing: a worksheet DOM
+// holds about sixteen times its bytes, so refuse before inflating anything.
+// Declared sizes can lie, so this only backstops the raw importer; the
+// streaming reader measures the bytes really read.
+fn oversized_part<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    path: &str,
+    factor: u64,
+    budget_bytes: u64,
+) -> Result<(), XlsxError> {
+    use ironcalc_base::open_budget;
+    let size = match archive.by_name(path) {
+        Ok(entry) => entry.size(),
+        Err(_) => return Ok(()),
+    };
+    if size.saturating_mul(factor) > budget_bytes {
+        return Err(XlsxError::Workbook(open_budget::refusal_for_part(
+            path,
+            size,
+            factor,
+            budget_bytes,
+        )));
+    }
+    Ok(())
+}
+
 fn load_xlsx_from_reader<R: Read + std::io::Seek>(
     name: String,
     reader: R,
@@ -96,6 +122,13 @@ fn load_xlsx_from_reader<R: Read + std::io::Seek>(
 ) -> Result<Workbook, XlsxError> {
     let mut archive = zip::ZipArchive::new(reader)?;
 
+    let budget = ironcalc_base::open_budget::production_budget_bytes();
+    oversized_part(
+        &mut archive,
+        "xl/sharedStrings.xml",
+        ironcalc_base::open_budget::SST_BYTES_PER_XML_BYTE,
+        budget,
+    )?;
     let mut shared_strings = read_shared_strings(&mut archive)?;
     let mut workbook = load_workbook(&mut archive)?;
     let rels = load_relationships(&mut archive)?;
@@ -106,6 +139,23 @@ fn load_xlsx_from_reader<R: Read + std::io::Seek>(
     // stored in x14 `extLst` extensions carry inline `<x14:dxf>` formats that we
     // append to `styles.dxfs`, referencing them back by index from the rule.
     let mut styles = load_styles(&mut archive, &theme)?;
+    for sheet in &workbook.worksheets {
+        let rel = &rels[&sheet.id];
+        if !rel.rel_type.ends_with("worksheet") {
+            continue;
+        }
+        // Same resolution as load_sheets below.
+        let path = match rel.target.strip_prefix('/') {
+            Some(path) => path.to_string(),
+            None => format!("xl/{}", rel.target),
+        };
+        oversized_part(
+            &mut archive,
+            &path,
+            ironcalc_base::open_budget::DOM_BYTES_PER_XML_BYTE,
+            budget,
+        )?;
+    }
     let (worksheets, selected_sheet) = load_sheets(
         &mut archive,
         &rels,
@@ -198,6 +248,48 @@ pub fn load_from_xlsx<'a>(
 ) -> Result<Model<'a>, XlsxError> {
     let workbook = load_from_excel(file_name, locale, tz)?;
     Model::from_workbook(workbook, language).map_err(XlsxError::Workbook)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn zipped(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, body) in entries {
+            writer
+                .start_file(*name, zip::write::FileOptions::default())
+                .unwrap();
+            writer.write_all(body).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn archived(bytes: &[u8]) -> zip::ZipArchive<Cursor<&[u8]>> {
+        zip::ZipArchive::new(Cursor::new(bytes)).unwrap()
+    }
+
+    #[test]
+    fn a_part_sixteen_times_past_the_budget_is_refused() {
+        let bytes = zipped(&[("xl/worksheets/sheet1.xml", &[0u8; 1000])]);
+        let error = oversized_part(
+            &mut archived(&bytes),
+            "xl/worksheets/sheet1.xml",
+            16,
+            16 * 999,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("needs at least"), "{error}");
+        oversized_part(
+            &mut archived(&bytes),
+            "xl/worksheets/sheet1.xml",
+            16,
+            16 * 1000,
+        )
+        .unwrap();
+        oversized_part(&mut archived(&bytes), "xl/missing.xml", 16, 0).unwrap();
+    }
 }
 
 /// Loads a [Model] from an `ic` file (a file in the IronCalc internal representation)

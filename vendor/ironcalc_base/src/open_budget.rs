@@ -14,6 +14,11 @@ pub const BYTES_PER_FORMULA: u64 = 200;
 // An IronCalc row entry costs about as much as one stored cell: a map node
 // holding the row number plus the row map itself.
 pub const BYTES_PER_ROW: u64 = 128;
+// IronCalc's importer parses each worksheet into a DOM holding about sixteen
+// times its bytes: an 827 MB sheet peaks past 14 GB committed while parsing.
+pub const DOM_BYTES_PER_XML_BYTE: u64 = 16;
+// The shared string table inflates about twice: its text plus the string list.
+pub const SST_BYTES_PER_XML_BYTE: u64 = 2;
 
 pub const RAM_SHARE_PERCENT: u64 = 60;
 pub const FALLBACK_BUDGET_MB: u64 = 4096;
@@ -72,6 +77,15 @@ pub fn refusal(cost: OpenCost, budget_bytes: u64) -> String {
         describe_bytes(needed_bytes(cost)),
         cost.cells,
         cost.formulas,
+        describe_bytes(budget_bytes),
+    )
+}
+
+pub fn refusal_for_part(part: &str, size: u64, factor: u64, budget_bytes: u64) -> String {
+    format!(
+        "{BUDGET_REFUSAL_PREFIX}{} to open (part {part} is {}, about {factor}x in memory), more than the {} supported; close other workbooks, or use a machine with more memory",
+        describe_bytes(size.saturating_mul(factor)),
+        describe_bytes(size),
         describe_bytes(budget_bytes),
     )
 }
@@ -138,6 +152,14 @@ mod tests {
         });
         assert!(formulas > values);
         assert_eq!(formulas - values, 1000 * BYTES_PER_FORMULA);
+    }
+
+    #[test]
+    fn the_part_refusal_names_the_part() {
+        let error = refusal_for_part("xl/worksheets/sheet2.xml", 827 << 20, 16, 9752 << 20);
+        assert!(error.starts_with(BUDGET_REFUSAL_PREFIX));
+        assert!(error.contains("xl/worksheets/sheet2.xml"), "{error}");
+        assert!(error.contains("close other workbooks"), "{error}");
     }
 
     #[test]

@@ -1,5 +1,29 @@
 # Vendored crates
 
+## ironcalc 0.8.3
+
+The crates.io release of [IronCalc](https://github.com/ironcalc/IronCalc)'s import,
+export and comparison shell (same 0.8.3 release as the engine below), with
+Zenkai's changes on top. The first commit that adds it is the published crate
+unchanged, so `git log -p -- vendor/ironcalc` shows only our changes. Zenkai
+builds it in place of the crates.io release through `[patch.crates-io]` in the
+root `Cargo.toml`. Run its tests with:
+
+```powershell
+cargo test --manifest-path vendor\ironcalc\Cargo.toml --target-dir target\vendor-ironcalc
+```
+
+Meant for upstream, each with tests. Unless noted, each stands on its own:
+
+- The xlsx import refuses a worksheet or shared string part past the open
+  budget before inflating it: a worksheet DOM holds about sixteen times its
+  bytes (`src/import/mod.rs`, constants in `ironcalc_base::open_budget`).
+
+Zenkai-only, not for upstream:
+
+- The empty `[workspace]` table in `Cargo.toml`, so the crate builds on its own
+  while living inside Zenkai's workspace directory.
+
 ## ironcalc_base 0.8.3
 
 The crates.io release of [IronCalc](https://github.com/ironcalc/IronCalc)'s engine
