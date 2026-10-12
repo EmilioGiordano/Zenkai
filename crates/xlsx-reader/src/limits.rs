@@ -30,7 +30,7 @@ pub const RATIO_GATE_BYTES: u64 = 64 * 1024 * 1024;
 // release instrument and shared with Model::from_workbook's guard, so the
 // read refuses files the model build could not hold.
 pub use ironcalc::base::open_budget::BYTES_PER_ROW as ROW_BYTES;
-pub use ironcalc::base::open_budget::{BYTES_PER_CELL, BYTES_PER_FORMULA};
+pub use ironcalc::base::open_budget::{BYTES_PER_CELL, BYTES_PER_FORMULA, DOM_BYTES_PER_XML_BYTE};
 // Excel's own limit; it also bounds how deep any formula's syntax tree can get.
 pub const MAX_FORMULA_CHARS: usize = 8_192;
 pub const MAX_FORMULA_DEPTH: usize = 256;
@@ -89,6 +89,25 @@ impl CellBudget {
             usage.cost(),
             supported,
         )))
+    }
+}
+
+impl CellBudget {
+    // IronCalc's importer holds a worksheet as a DOM about sixteen times its bytes,
+    // so the bytes really inflated, not the declared size, decide whether it fits.
+    pub fn check_dom_part(self, part: &str, inflated: u64) -> Result<(), ReadError> {
+        let supported = self.max_cells.saturating_mul(BYTES_PER_CELL);
+        if inflated.saturating_mul(DOM_BYTES_PER_XML_BYTE) <= supported {
+            return Ok(());
+        }
+        Err(ReadError::Unsafe(
+            ironcalc::base::open_budget::refusal_for_part(
+                part,
+                inflated,
+                DOM_BYTES_PER_XML_BYTE,
+                supported,
+            ),
+        ))
     }
 }
 

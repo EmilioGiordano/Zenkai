@@ -572,10 +572,12 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
         let mut filter = Prefilter::new();
         let mut counter = CellCounter::new();
         let mut chunk = [0u8; CHUNK_BYTES];
+        let mut inflated = 0u64;
         loop {
             match guard.read_chunk(&mut chunk)? {
                 0 => break,
                 read => {
+                    inflated += read as u64;
                     filter.push(&chunk[..read]);
                     if count_cells {
                         counter.push(&chunk[..read]);
@@ -584,6 +586,9 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
             }
         }
         counter.finish();
+        if count_cells {
+            budgets.cells.check_dom_part(&name, inflated)?;
+        }
         let usage = counter.usage();
         if !filter.hit() {
             return Ok((name, Vec::new(), usage));
