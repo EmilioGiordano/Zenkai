@@ -59,6 +59,7 @@ mod functions;
 mod implicit_intersection;
 mod incremental;
 mod model;
+pub mod open_budget;
 mod styles;
 mod tz;
 mod units;

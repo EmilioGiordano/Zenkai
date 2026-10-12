@@ -3811,6 +3811,7 @@ dependencies = [
  "ryu",
  "serde",
  "statrs 0.18.0",
+ "sysinfo",
  "wasm-bindgen",
 ]
 

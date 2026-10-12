@@ -1692,6 +1692,9 @@ impl<'a> Model<'a> {
     /// # }
     /// ```
     pub fn from_workbook(workbook: Workbook, language_id: &str) -> Result<Model<'_>, String> {
+        // Parsing every formula past this point can hang the machine on a file
+        // bigger than its budget; the estimate above refuses first.
+        crate::open_budget::check_open_budget(&workbook)?;
         let parsed_formulas = Vec::new();
         let worksheets = &workbook.worksheets;
 

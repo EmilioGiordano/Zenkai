@@ -59,6 +59,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 
 Zenkai-only, not for upstream:
 
+- `src/open_budget.rs` estimates the peak memory of opening a workbook (600 B per
+  stored cell, 200 B extra per formula cell, measured with the `measure_open`
+  instrument) and `Model::from_workbook` refuses with a needs-at-least message
+  past sixty percent of RAM instead of hanging the machine. Tests in the module.
 - `build.rs` reports the crate version instead of asking `git describe`, which here
   would describe Zenkai's repository.
 - The empty `[workspace]` table in `Cargo.toml`, so the crate builds on its own while
