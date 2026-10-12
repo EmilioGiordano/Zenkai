@@ -235,6 +235,24 @@ in a staging branch.
 Long commands run in the background and the agent waits for them; it never hands back early.
 After two failed review rounds on a branch, stop and ask the user instead of iterating.
 
+### Evidence that does not depend on a model's judgment
+
+Agent review catches mechanical problems; it is not proof. Prefer objective checks, and
+grow them with every bug found:
+
+- Property tests and invariants for anything that can lose or corrupt data: undo/redo,
+  open/edit/save/reopen, session close and restore, incremental versus full recalculation.
+- Fuzz targets for every parser of untrusted input: xlsx, csv, session.json,
+  settings.json, MCP messages.
+- Mutation testing (`cargo mutants`) on changed modules, to check the tests would notice a
+  broken implementation.
+- Values computed by Excel and cached in the corpus files, compared with the engine.
+- For changes to the engine, file I/O or the agent security boundary, a second review by a
+  model of a family other than the implementer's, given only the spec, this file and the
+  diff.
+- Design judgment (UX, scope, trade-offs) stays with the user: manual testing of a build
+  and the approved mockups in `docs/design/`.
+
 ## Agents and skills
 
 - `.claude/agents/quality-reviewer.md`: blocking quality review, read-only.
