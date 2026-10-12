@@ -80,17 +80,69 @@ impl Prefilter {
 }
 
 // Counts worksheet cells and rows while their bytes stream past, so the IronCalc
-// fallback can charge them to the memory budget without inflating the part. Only
-// the lowercase `<c` and `<row` openers count, the tags the parsers read; text and
-// attribute values cannot hold a raw `<`, so only comments and character data
-// could fake a tag, and both are skipped. Anything else that looks like a tag
-// over-counts, which fails closed.
+// fallback can charge them to the memory budget without inflating the part. A tag
+// counts when its local name after the last `:` is `c` or `row`, the elements the
+// readers match by local name; text and attribute values cannot hold a raw `<`,
+// so only comments and character data could fake a tag, and both are skipped.
+// Anything else that looks like a tag over-counts, which fails closed.
 pub(crate) struct CellCounter {
     cells: u64,
     rows: u64,
     comment: bool,
     cdata: bool,
+    tag: Option<TagName>,
     held: Vec<u8>,
+}
+
+// The local name of the open tag being scanned. A prefix of any length only
+// resets the few bytes compared, so a tag split across chunks still counts
+// without holding the whole tag.
+#[derive(Default)]
+struct TagName {
+    local: [u8; 3],
+    len: u8,
+    oversized: bool,
+}
+
+enum TagEnd {
+    Cell,
+    Row,
+    Other,
+}
+
+impl TagName {
+    fn push(&mut self, byte: u8) -> Option<TagEnd> {
+        if byte == b':' {
+            self.len = 0;
+            self.oversized = false;
+            None
+        } else if is_delimiter(byte) {
+            Some(if self.oversized {
+                TagEnd::Other
+            } else if self.len == 1 && self.local[0] == b'c' {
+                TagEnd::Cell
+            } else if self.len == 3 && self.local == *b"row" {
+                TagEnd::Row
+            } else {
+                TagEnd::Other
+            })
+        } else if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'_' | b'-' | b'.')
+            || !byte.is_ascii()
+        {
+            if !self.oversized {
+                if self.len < 3 {
+                    self.local[usize::from(self.len)] = byte;
+                    self.len += 1;
+                } else {
+                    self.oversized = true;
+                }
+            }
+            None
+        } else {
+            Some(TagEnd::Other)
+        }
+    }
 }
 
 // The longest opener this distinguishes (`<![CDATA[`); a shorter tail is held
@@ -104,6 +156,7 @@ impl CellCounter {
             rows: 0,
             comment: false,
             cdata: false,
+            tag: None,
             held: Vec::new(),
         }
     }
@@ -115,6 +168,7 @@ impl CellCounter {
 
     pub(crate) fn finish(&mut self) {
         self.process(true);
+        self.tag = None;
         self.held.clear();
     }
 
@@ -159,6 +213,29 @@ impl CellCounter {
                 }
                 continue;
             }
+            if self.tag.is_some() {
+                let byte = self.held[i];
+                if byte == b'<' {
+                    self.tag = None;
+                    continue;
+                }
+                if let Some(tag) = self.tag.as_mut() {
+                    match tag.push(byte) {
+                        None => {}
+                        Some(TagEnd::Cell) => {
+                            self.cells += 1;
+                            self.tag = None;
+                        }
+                        Some(TagEnd::Row) => {
+                            self.rows += 1;
+                            self.tag = None;
+                        }
+                        Some(TagEnd::Other) => self.tag = None,
+                    }
+                }
+                i += 1;
+                continue;
+            }
             if self.held[i] != b'<' {
                 i += 1;
                 continue;
@@ -175,13 +252,8 @@ impl CellCounter {
                 i += 9;
             } else if rest.starts_with(b"</") {
                 i += 2;
-            } else if rest.starts_with(b"<c") && is_delimiter(rest, 2) {
-                self.cells += 1;
-                i += 2;
-            } else if rest.starts_with(b"<row") && is_delimiter(rest, 4) {
-                self.rows += 1;
-                i += 4;
             } else {
+                self.tag = Some(TagName::default());
                 i += 1;
             }
         }
@@ -195,8 +267,8 @@ fn find_terminator(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-fn is_delimiter(rest: &[u8], at: usize) -> bool {
-    rest.len() > at && matches!(rest[at], b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>')
+fn is_delimiter(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>')
 }
 
 // Counts the bytes really pulled from the archive underneath the zip reader, so the
@@ -553,6 +625,16 @@ mod tests {
         counter.finish();
         let usage = counter.usage();
         assert_eq!((usage.cells, usage.rows), (2, 2));
+    }
+
+    #[test]
+    fn the_cell_counter_counts_prefixed_rows_and_cells() {
+        let mut counter = CellCounter::new();
+        counter.push(b"<sheetData xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><x:row r=\"1\"><x:c r=\"A1\"/><x:r");
+        counter.push(b"ow r=\"2\"/><x:cols><x:col min=\"1\"/></x:cols><c:v>not a cell</c:v></x:row><row r=\"3\"><c r=\"A3\"/></row></sheetData>");
+        counter.finish();
+        let usage = counter.usage();
+        assert_eq!((usage.cells, usage.rows), (2, 3));
     }
 
     #[test]

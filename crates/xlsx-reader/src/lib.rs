@@ -412,6 +412,30 @@ mod tests {
     }
 
     #[test]
+    fn the_fallback_walk_charges_prefixed_worksheet_cells_to_the_budget() {
+        let mut rows = String::new();
+        for row in 1..=300 {
+            rows.push_str(&format!(
+                "<x:row r=\"{row}\"><x:c r=\"A{row}\"><v>1</v></x:c></x:row>"
+            ));
+        }
+        let sheet = format!(
+            "<worksheet xmlns:x=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>{rows}</sheetData></worksheet>"
+        );
+        let bytes = zipped(&[("xl/worksheets/sheet1.xml", sheet.as_bytes())], false);
+        let tiny = Budgets::with_cells(CellBudget::max_cells_for_test(100));
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
+        let error = scan_archive(&mut archive, &meter, &tiny, &|_, _| Ok(())).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        assert!(error.to_string().contains("needs at least"), "{error}");
+        let roomy = Budgets::with_cells(CellBudget::max_cells_for_test(10_000));
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
+        scan_archive(&mut archive, &meter, &roomy, &|_, _| Ok(())).unwrap();
+    }
+
+    #[test]
     fn the_fallback_walk_counts_sheets_outside_the_usual_folder() {
         const WORKBOOK: &[u8] = b"<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Odd\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>";
         const RELS: &[u8] = b"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"/data/worksheets/s1.xml\"/></Relationships>";
