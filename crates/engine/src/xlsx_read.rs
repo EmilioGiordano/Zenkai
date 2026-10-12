@@ -139,16 +139,22 @@ pub(crate) fn read_xlsx_file(
 
 // The IronCalc fallback is never a way past the limits: one walk streams every
 // part through the caps and gathers what the file uses, otherwise the file is
-// refused with a clear message. Only an unsafe file is refused as harmful; a file
-// the caps pass cannot even read stays on the regular path and fails as an
-// invalid workbook.
+// refused without ever reaching IronCalc's uncapped reader. An unsafe walk
+// refuses the file as harmful; any other walk failure fails it as an invalid
+// workbook, the same mapping as the direct IronCalc read.
 fn fallback_to_ironcalc(bytes: &[u8], name: &str, declined: &ReadError) -> Outcome<EngineError> {
     let found = Mutex::new(Vec::new());
     let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
-    if let Err(ReadError::Unsafe(limited)) = zenkai_xlsx_reader::scan_with_caps(bytes, &inspect) {
-        return Err(EngineError::Unsafe(format!(
+    if let Err(limited) = zenkai_xlsx_reader::scan_with_caps(bytes, &inspect) {
+        let message = format!(
             "the streaming reader does not support this file ({declined}), and it cannot fall back to IronCalc's reader ({limited})"
-        )));
+        );
+        return Err(match limited {
+            ReadError::Unsafe(_) => EngineError::Unsafe(message),
+            ReadError::Unreadable(_) | ReadError::Unsupported(_) => {
+                EngineError::InvalidFile(message)
+            }
+        });
     }
     tracing::warn!(%declined, "the fast xlsx reader left this file to IronCalc's");
     let book = run_with_engine_stack(|| read_book(bytes, name))?;

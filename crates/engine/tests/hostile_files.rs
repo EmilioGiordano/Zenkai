@@ -125,9 +125,8 @@ fn with_extra_part(bytes: Vec<u8>, name: &str, body: &str) -> Vec<u8> {
     out.finish().unwrap().into_inner()
 }
 
-// Rewrites the declared uncompressed size of one entry, in its local and central
-// headers, leaving the compressed data untouched.
-fn patch_declared_size(bytes: &mut Vec<u8>, name: &str, size: u32) {
+// The local and central header starts of one entry, found by its name.
+fn header_offsets(bytes: &[u8], name: &str) -> (usize, usize) {
     let needle = name.as_bytes();
     let (mut local, mut central) = (None, None);
     let mut from = 0;
@@ -152,7 +151,13 @@ fn patch_declared_size(bytes: &mut Vec<u8>, name: &str, size: u32) {
         }
         from = offset + 1;
     }
-    let (local, central) = (local.unwrap(), central.unwrap());
+    (local.unwrap(), central.unwrap())
+}
+
+// Rewrites the declared uncompressed size of one entry, in its local and central
+// headers, leaving the compressed data untouched.
+fn patch_declared_size(bytes: &mut Vec<u8>, name: &str, size: u32) {
+    let (local, central) = header_offsets(bytes, name);
     bytes[local + 22..local + 26].copy_from_slice(&size.to_le_bytes());
     bytes[central + 24..central + 28].copy_from_slice(&size.to_le_bytes());
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
@@ -162,31 +167,7 @@ fn patch_declared_size(bytes: &mut Vec<u8>, name: &str, size: u32) {
 // Rewrites the declared COMPRESSED size of one entry, in its local and central
 // headers, leaving the compressed data untouched.
 fn patch_compressed_size(bytes: &mut Vec<u8>, name: &str, size: u32) {
-    let needle = name.as_bytes();
-    let (mut local, mut central) = (None, None);
-    let mut from = 0;
-    while from + needle.len() <= bytes.len() {
-        let Some(offset) = bytes[from..]
-            .windows(needle.len())
-            .position(|w| w == needle)
-            .map(|at| from + at)
-        else {
-            break;
-        };
-        if offset >= 30 && &bytes[offset - 30..offset - 26] == b"PK\x03\x04" {
-            assert_eq!(
-                &bytes[offset - 4..offset - 2],
-                &(needle.len() as u16).to_le_bytes()
-            );
-            assert_eq!(&bytes[offset - 2..offset], &[0, 0]);
-            local = Some(offset - 30);
-        }
-        if offset >= 46 && &bytes[offset - 46..offset - 42] == b"PK\x01\x02" {
-            central = Some(offset - 46);
-        }
-        from = offset + 1;
-    }
-    let (local, central) = (local.unwrap(), central.unwrap());
+    let (local, central) = header_offsets(bytes, name);
     bytes[local + 18..local + 22].copy_from_slice(&size.to_le_bytes());
     bytes[central + 20..central + 24].copy_from_slice(&size.to_le_bytes());
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
@@ -194,6 +175,14 @@ fn patch_compressed_size(bytes: &mut Vec<u8>, name: &str, size: u32) {
         archive.by_name(name).unwrap().compressed_size(),
         u64::from(size)
     );
+}
+
+// Rewrites the compression method of one entry, in its local and central
+// headers, leaving the data untouched; the entry can no longer be read.
+fn patch_compression_method(bytes: &mut Vec<u8>, name: &str, method: u16) {
+    let (local, central) = header_offsets(bytes, name);
+    bytes[local + 8..local + 10].copy_from_slice(&method.to_le_bytes());
+    bytes[central + 10..central + 12].copy_from_slice(&method.to_le_bytes());
 }
 
 #[test]
@@ -216,6 +205,17 @@ fn forged_small_compressed_size_is_an_invalid_file() {
     let error = open_fast(bytes).unwrap_err();
     assert!(error.contains("not a valid xlsx workbook"), "{error}");
     assert!(!error.contains("harm"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
+#[test]
+fn unreadable_first_entry_still_refuses_the_bomb_behind_it() {
+    let cell = r#"<c r="A1" t="s"><v>0</v></c>"#;
+    let mut bytes = workbook_with_strings(&sheet(cell), &shared_strings(7_000, 10_000));
+    patch_compression_method(&mut bytes, "[Content_Types].xml", 12);
+    let started = Instant::now();
+    let error = open_fast(bytes).unwrap_err();
+    assert!(error.contains("fall back"), "{error}");
     assert!(started.elapsed() < Duration::from_secs(60));
 }
 
