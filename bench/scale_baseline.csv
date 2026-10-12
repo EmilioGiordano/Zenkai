@@ -1,0 +1,10 @@
+file,metric,value
+scale-small.xlsx,open_ms,0.0
+scale-small.xlsx,open_peak_mb,0.0
+scale-small.xlsx,steady_mb,0.0
+scale-small.xlsx,fill_ms,0.0
+scale-small.xlsx,fill_peak_mb,0.0
+scale-small.xlsx,edit_save_ms,0.0
+scale-small.xlsx,edit_save_peak_mb,0.0
+scale-small.xlsx,save_ms,0.0
+scale-small.xlsx,save_peak_mb,0.0

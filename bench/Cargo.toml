@@ -15,6 +15,7 @@ anyhow = "1"
 peak_alloc = "0.3"
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 calamine = "=0.36.1"
+zenkai-datagen = { path = "../crates/datagen" }
 zenkai-engine = { path = "../crates/engine" }
 zenkai-formats = { path = "../crates/formats" }
 zenkai-types = { path = "../crates/types" }
