@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ironcalc::base::types::{Cell, Workbook};
 
 use crate::ReadError;
 use crate::formulas::Converted;
-use crate::sheet_data::{FormulaEvent, SheetCells, remap_strings};
+use crate::sheet_data::{FormulaEvent, SheetCells, remap_strings, unreadable};
 
 fn unsupported(what: &str) -> ReadError {
     ReadError::Unsupported(what.to_string())
@@ -21,11 +22,15 @@ pub(crate) fn fill(
     sheets: Vec<SheetCells>,
     converted: Converted,
 ) -> Result<(), ReadError> {
-    let mut string_index: HashMap<String, i32> =
-        HashMap::with_capacity(workbook.shared_strings.len());
+    // The workbook's own strings are only borrowed, never cloned: fresh strings are
+    // collected per sheet and appended once, after every lookup is done.
+    let base = index(workbook.shared_strings.len())?;
+    let mut existing: HashMap<&str, i32> = HashMap::with_capacity(workbook.shared_strings.len());
     for (position, text) in workbook.shared_strings.iter().enumerate() {
-        string_index.entry(text.clone()).or_insert(index(position)?);
+        existing.entry(text.as_str()).or_insert(index(position)?);
     }
+    let mut fresh: HashMap<Arc<str>, i32> = HashMap::new();
+    let mut fresh_order: Vec<Arc<str>> = Vec::new();
     for ((worksheet, cells), ids) in workbook
         .worksheets
         .iter_mut()
@@ -39,15 +44,22 @@ pub(crate) fn fill(
             return Err(unsupported("cells outside sheetData"));
         }
         let mut local = Vec::with_capacity(cells.strings.len());
-        for text in cells.strings {
-            let next = index(workbook.shared_strings.len())?;
-            let global = match string_index.get(&text) {
+        for text in &cells.strings {
+            let found: &str = text;
+            let global = match existing.get(found) {
                 Some(global) => *global,
-                None => {
-                    workbook.shared_strings.push(text.clone());
-                    string_index.insert(text, next);
-                    next
-                }
+                None => match fresh.get(found) {
+                    Some(global) => *global,
+                    None => {
+                        let global = base
+                            .checked_add(index(fresh_order.len())?)
+                            .ok_or_else(|| unreadable("too many strings"))?;
+                        let shared: Arc<str> = Arc::from(found);
+                        fresh_order.push(shared.clone());
+                        fresh.insert(shared, global);
+                        global
+                    }
+                },
             };
             local.push(global);
         }
@@ -73,6 +85,9 @@ pub(crate) fn fill(
         worksheet.rows = cells.rows;
         worksheet.shared_formulas = shared_formulas;
     }
+    workbook
+        .shared_strings
+        .extend(fresh_order.into_iter().map(|text| text.to_string()));
     Ok(())
 }
 
@@ -82,7 +97,7 @@ pub(crate) fn fill(
 fn resolve_formulas(
     events: &[FormulaEvent],
     ids: &[u32],
-    distinct: &[String],
+    distinct: &[Arc<str>],
 ) -> Result<(Vec<String>, Vec<i32>), ReadError> {
     let mut formulas: Vec<String> = Vec::new();
     let mut first: HashMap<&str, i32> = HashMap::new();
@@ -91,7 +106,7 @@ fn resolve_formulas(
     let text_of = |job: usize| -> Result<&str, ReadError> {
         ids.get(job)
             .and_then(|id| distinct.get(*id as usize))
-            .map(String::as_str)
+            .map(|text| &text[..])
             .ok_or_else(|| unsupported("a lost formula"))
     };
     for event in events {

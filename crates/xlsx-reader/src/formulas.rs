@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ironcalc::base::expressions::lexer::{Lexer, LexerMode};
 use ironcalc::base::expressions::parser::static_analysis::add_implicit_intersection;
@@ -30,7 +30,7 @@ pub(crate) struct Names<'n> {
 // The R1C1 text of every job, as one table of distinct formulas and, per sheet, the index
 // of each job's formula in it.
 pub(crate) struct Converted {
-    pub(crate) distinct: Vec<String>,
+    pub(crate) distinct: Vec<Arc<str>>,
     pub(crate) per_sheet: Vec<Vec<u32>>,
 }
 
@@ -41,7 +41,7 @@ struct Chunk {
 }
 
 struct WorkerOutput {
-    distinct: Vec<String>,
+    distinct: Vec<Arc<str>>,
     chunks: Vec<(usize, Vec<u32>)>,
 }
 
@@ -92,7 +92,7 @@ pub(crate) fn convert(
         .map_err(|_| ReadError::Unsupported("a formula worker stopped".to_string()))?;
 
     let mut distinct = Vec::new();
-    let mut index_of: HashMap<String, u32> = HashMap::new();
+    let mut index_of: HashMap<Arc<str>, u32> = HashMap::new();
     let mut per_sheet: Vec<Vec<u32>> = sheets.iter().map(|(_, jobs)| vec![0; jobs.len()]).collect();
     let mut done = 0;
     for output in outputs {
@@ -156,8 +156,8 @@ pub(crate) struct Converter<'n> {
     lexer: Lexer<'n>,
     key: String,
     cache: HashMap<String, u32>,
-    index_of: HashMap<String, u32>,
-    distinct: Vec<String>,
+    index_of: HashMap<Arc<str>, u32>,
+    distinct: Vec<Arc<str>>,
 }
 
 impl<'n> Converter<'n> {
@@ -196,11 +196,12 @@ impl<'n> Converter<'n> {
 
     fn intern(&mut self, text: String) -> u32 {
         let next = u32::try_from(self.distinct.len()).unwrap_or(u32::MAX);
-        if let Some(id) = self.index_of.get(&text) {
+        if let Some(id) = self.index_of.get(text.as_str()) {
             return *id;
         }
-        self.index_of.insert(text.clone(), next);
-        self.distinct.push(text);
+        let shared: Arc<str> = Arc::from(text);
+        self.index_of.insert(shared.clone(), next);
+        self.distinct.push(shared);
         next
     }
 
@@ -292,6 +293,27 @@ mod tests {
 
     use super::*;
     use ironcalc::base::expressions::utils::number_to_column;
+
+    #[test]
+    fn worker_indexes_share_each_formula_text() {
+        let sheets = vec!["Sheet1".to_string()];
+        let defined_names = Vec::new();
+        let tables = HashMap::new();
+        let names = Names {
+            sheets: &sheets,
+            defined_names: &defined_names,
+            tables: &tables,
+        };
+        let mut converter = Converter::new(&names);
+        let first = converter.intern("A1*2".to_string());
+        let second = converter.intern("A1*2".to_string());
+        assert_eq!((first, second), (0, 0));
+        assert_eq!(converter.distinct.len(), 1);
+        assert!(Arc::ptr_eq(
+            &converter.distinct[0],
+            converter.index_of.keys().next().unwrap()
+        ));
+    }
 
     #[derive(Clone, Debug)]
     enum Atom {
@@ -417,7 +439,7 @@ mod tests {
                     (cached.convert(0, "Sheet1", &job), fresh.parse("Sheet1", &job).0)
                 }));
                 let Ok((id, expected)) = converted else { continue };
-                prop_assert_eq!(&cached.distinct[id as usize], &expected, "{} at {:?}", text, (row, column));
+            prop_assert_eq!(&cached.distinct[id as usize][..], &expected, "{} at {:?}", text, (row, column));
             }
         }
     }

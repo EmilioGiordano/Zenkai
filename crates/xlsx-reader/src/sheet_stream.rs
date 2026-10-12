@@ -4,6 +4,8 @@ use ironcalc::base::types::Cell;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
+use std::sync::Arc;
+
 use crate::ReadError;
 use crate::limits::Usage;
 use crate::sheet_data::{SheetCells, Slot, remap_strings, scan_rows};
@@ -543,7 +545,7 @@ struct Driver<'d> {
     prefixes: &'d [Vec<u8>],
     budgets: &'d Budgets,
     merged: SheetCells,
-    strings: std::collections::HashMap<String, i32>,
+    strings: std::collections::HashMap<Arc<str>, i32>,
 }
 
 // The row start tags the settings reader needs: rows with an outline level travel
@@ -626,7 +628,7 @@ fn spill_past_piece(piece: &SheetCells) -> bool {
 // formula events and jobs renumbered after the pieces before them.
 fn merge(
     merged: &mut SheetCells,
-    strings: &mut std::collections::HashMap<String, i32>,
+    strings: &mut std::collections::HashMap<Arc<str>, i32>,
     piece: SheetCells,
 ) -> Result<(), ReadError> {
     if let (Some((last, _)), Some((first, _))) = (merged.data.last(), piece.data.first())
@@ -639,12 +641,15 @@ fn merge(
     let job_offset = merged.jobs.len();
     let mut table = Vec::with_capacity(piece.strings.len());
     for text in piece.strings {
+        let found: &str = &text;
+        if let Some(&index) = strings.get(found) {
+            table.push(index);
+            continue;
+        }
         let next = i32::try_from(merged.strings.len()).map_err(unreadable)?;
-        let index = *strings.entry(text.clone()).or_insert_with(|| {
-            merged.strings.push(text);
-            next
-        });
-        table.push(index);
+        strings.insert(text.clone(), next);
+        merged.strings.push(text);
+        table.push(next);
     }
     let mut data = piece.data;
     remap_strings(&mut data, &piece.string_cells, &table)?;
@@ -1149,6 +1154,22 @@ mod tests {
 
     fn stream(xml: &str) -> StreamedSheet {
         stream_with(xml, &budgets()).unwrap()
+    }
+
+    #[test]
+    fn merged_strings_share_one_copy_with_the_index() {
+        use std::collections::HashMap;
+        let piece = |row| SheetCells {
+            data: vec![(row, Vec::new())],
+            strings: vec![Arc::from("same")],
+            ..SheetCells::default()
+        };
+        let mut merged = SheetCells::default();
+        let mut strings = HashMap::new();
+        merge(&mut merged, &mut strings, piece(1)).unwrap();
+        merge(&mut merged, &mut strings, piece(2)).unwrap();
+        assert_eq!(merged.strings.len(), 1);
+        assert_eq!(Arc::strong_count(&merged.strings[0]), 2);
     }
 
     fn stream_with(xml: &str, budgets: &Budgets) -> Result<StreamedSheet, ReadError> {

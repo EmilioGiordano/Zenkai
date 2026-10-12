@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ironcalc::base::expressions::utils::{
     column_to_number, is_valid_column_number, is_valid_row, parse_reference_a1,
@@ -39,7 +40,7 @@ const DEFAULT_ROW_HEIGHT: f64 = 14.5;
 pub(crate) struct SheetCells {
     pub(crate) rows: Vec<Row>,
     pub(crate) data: Vec<(i32, Vec<(i32, Cell)>)>,
-    pub(crate) strings: Vec<String>,
+    pub(crate) strings: Vec<Arc<str>>,
     pub(crate) string_cells: Vec<Slot>,
     pub(crate) events: Vec<FormulaEvent>,
     pub(crate) jobs: Vec<FormulaJob>,
@@ -98,7 +99,7 @@ pub(crate) struct FormulaJob {
     pub(crate) array: bool,
 }
 
-fn unreadable(error: impl ToString) -> ReadError {
+pub(crate) fn unreadable(error: impl ToString) -> ReadError {
     ReadError::Unreadable(error.to_string())
 }
 
@@ -127,7 +128,7 @@ pub(crate) fn scan_rows(
     };
     scanner.rows()?;
     let mut cells = scanner.cells;
-    let mut strings: Vec<(String, usize)> = scanner.strings.into_iter().collect();
+    let mut strings: Vec<(Arc<str>, usize)> = scanner.strings.into_iter().collect();
     strings.sort_unstable_by_key(|(_, index)| *index);
     cells.strings = strings.into_iter().map(|(text, _)| text).collect();
     Ok(cells)
@@ -137,7 +138,7 @@ struct Scanner<'a, 's> {
     reader: Reader<&'a [u8]>,
     prefixes: &'s [Vec<u8>],
     sheet_name: &'s str,
-    strings: HashMap<String, usize>,
+    strings: HashMap<Arc<str>, usize>,
     array_cells: HashMap<(i32, i32), (i32, i32)>,
     array_cells_claimed: u64,
     cells: SheetCells,
@@ -428,7 +429,7 @@ impl<'a> Scanner<'a, '_> {
 
     fn intern(&mut self, text: String) -> i32 {
         let next = self.strings.len();
-        let index = *self.strings.entry(text).or_insert(next);
+        let index = *self.strings.entry(Arc::from(text)).or_insert(next);
         i32::try_from(index).unwrap_or(i32::MAX)
     }
 
