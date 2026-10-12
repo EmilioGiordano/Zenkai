@@ -1454,9 +1454,8 @@ mod tests {
     fn a_huge_unterminated_comment_after_sheet_data_is_capped() {
         let xml = format!(r#"{HEAD}<!--{}"#, " ".repeat(20 * 1024 * 1024));
         let started = std::time::Instant::now();
-        let error = config_with(&xml, &budgets())
-            .err()
-            .expect("a 20 MB unterminated comment must fail");
+        let error =
+            config_with(&xml, &budgets()).expect_err("a 20 MB unterminated comment must fail");
         assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
         assert!(
             started.elapsed() < std::time::Duration::from_secs(60),
