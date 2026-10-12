@@ -22,8 +22,7 @@ pub use limits::CellBudget;
 
 use crate::formulas::Names;
 use crate::package::{read_entry, read_package, stub_archive};
-use crate::sheet_data::SheetCells;
-use crate::sheet_stream::{stream_config, stream_worksheet};
+use crate::sheet_stream::{StreamedSheet, stream_config, stream_worksheet};
 use crate::stream::Budgets;
 
 #[derive(Debug, thiserror::Error)]
@@ -107,7 +106,7 @@ fn read_from<R: Read + Seek>(
         .enumerate()
         .map(|(position, part)| (part.path.as_str(), position))
         .collect();
-    let mut sheets: Vec<Option<(Vec<u8>, Vec<u8>, SheetCells)>> =
+    let mut sheets: Vec<Option<StreamedSheet>> =
         (0..package.worksheets.len()).map(|_| None).collect();
     for index in 0..archive.len() {
         let entry = archive
@@ -121,7 +120,7 @@ fn read_from<R: Read + Seek>(
             // The rows were checked while streaming; the configuration carries the
             // same feature flags and validation limits as a whole part would.
             inspect(&entry_name, &streamed.stub).map_err(ReadError::Unsafe)?;
-            sheets[position] = Some((streamed.stub, streamed.settings, streamed.cells));
+            sheets[position] = Some(streamed);
             continue;
         }
         if skipped_part(&entry_name) {
@@ -136,15 +135,17 @@ fn read_from<R: Read + Seek>(
     let mut cells = Vec::with_capacity(sheets.len());
     let mut configs = Vec::with_capacity(sheets.len());
     for (part, sheet) in package.worksheets.iter().zip(sheets) {
-        let Some((stub, settings, sheet_cells)) = sheet else {
+        let Some(streamed) = sheet else {
             return Err(ReadError::Unreadable(
                 "a worksheet part is missing".to_string(),
             ));
         };
-        configs
-            .push(String::from_utf8(settings).map_err(|e| ReadError::Unreadable(e.to_string()))?);
-        replaced.insert(part.path.clone(), stub);
-        cells.push(sheet_cells);
+        configs.push(
+            String::from_utf8(streamed.settings)
+                .map_err(|e| ReadError::Unreadable(e.to_string()))?,
+        );
+        replaced.insert(part.path.clone(), streamed.stub);
+        cells.push(streamed.cells);
     }
     let stub = stub_archive(&mut archive, &replaced)?;
     drop(replaced);

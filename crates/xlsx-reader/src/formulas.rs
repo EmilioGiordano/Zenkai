@@ -411,7 +411,7 @@ mod tests {
             let mut fresh = Converter::new(&names);
             for (row, column, array) in places {
                 let Some(text) = formula(&atoms, row, column) else { continue };
-                let job = FormulaJob { text: text.clone().into(), row, column, array };
+                let job = FormulaJob { text: text.clone(), row, column, array };
                 // IronCalc's lexer overflows on very long column names in debug builds.
                 let converted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     (cached.convert(0, "Sheet1", &job), fresh.parse("Sheet1", &job).0)

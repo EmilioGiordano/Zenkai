@@ -177,6 +177,22 @@ pub fn check_formula_text(formula: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn max_depth(formula: &str) -> usize {
+    let mut depth = 0usize;
+    let mut deepest = 0usize;
+    for c in formula.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                deepest = deepest.max(depth);
+            }
+            ')' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    deepest
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,20 +228,4 @@ mod tests {
     fn sixty_percent_of_a_16gb_machine_covers_the_big_file() {
         assert!(CellBudget::from_budget_mb(9_752).max_cells() > 40_000_000);
     }
-}
-
-fn max_depth(formula: &str) -> usize {
-    let mut depth = 0usize;
-    let mut deepest = 0usize;
-    for c in formula.chars() {
-        match c {
-            '(' => {
-                depth += 1;
-                deepest = deepest.max(depth);
-            }
-            ')' => depth = depth.saturating_sub(1),
-            _ => {}
-        }
-    }
-    deepest
 }
