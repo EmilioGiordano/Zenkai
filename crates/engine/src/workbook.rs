@@ -209,8 +209,18 @@ pub(crate) fn read_book(
     bytes: &[u8],
     name: &str,
 ) -> Result<ironcalc::base::types::Workbook, EngineError> {
-    load_from_xlsx_bytes(bytes, name, LOCALE, timezone())
-        .map_err(|e| EngineError::InvalidFile(format!("{e:?}")))
+    load_from_xlsx_bytes(bytes, name, LOCALE, timezone()).map_err(read_error)
+}
+
+fn read_error(error: ironcalc::error::XlsxError) -> EngineError {
+    match error {
+        ironcalc::error::XlsxError::Workbook(message)
+            if message.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) =>
+        {
+            EngineError::Unsafe(message)
+        }
+        other => EngineError::InvalidFile(format!("{other:?}")),
+    }
 }
 
 pub(crate) fn read_book_fast(
@@ -1544,5 +1554,25 @@ pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
     match formatted.error {
         Some(error) => Err(rejected(error)),
         None => Ok(formatted.text),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX;
+    use ironcalc::error::XlsxError;
+
+    #[test]
+    fn a_budget_refusal_reaches_the_user_as_plain_text() {
+        let message = format!("{BUDGET_REFUSAL_PREFIX}12.3 GB to open");
+        let error = read_error(XlsxError::Workbook(message.clone()));
+        assert!(matches!(&error, EngineError::Unsafe(text) if *text == message));
+    }
+
+    #[test]
+    fn any_other_import_error_stays_an_invalid_file() {
+        let error = read_error(XlsxError::Workbook("bad sheet".to_string()));
+        assert!(matches!(error, EngineError::InvalidFile(_)));
     }
 }
