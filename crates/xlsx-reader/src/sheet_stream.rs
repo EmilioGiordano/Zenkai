@@ -447,19 +447,31 @@ pub(crate) fn stream_config<R: Read>(
     let mut rowtags: Vec<u8> = Vec::new();
     let mut pos = 0;
     let mut eof = false;
-    // The scan of the row at `pending_at`, kept across refills so a huge row is
-    // read once, not re-parsed from its start on every fill.
+    // One chunk from the entry, refusing a row past the cap on the same pass so
+    // the window never grows without bound while an event stays incomplete.
+    let mut fill = |window: &mut Vec<u8>, eof: &mut bool, from: usize| -> Result<(), ReadError> {
+        match guard.read_chunk(&mut chunk)? {
+            0 => *eof = true,
+            read => {
+                check.push(&chunk[..read])?;
+                window.extend_from_slice(&chunk[..read]);
+            }
+        }
+        if window[from..].len() > ROW_CAP_BYTES {
+            return Err(unsupported("a row larger than supported"));
+        }
+        Ok(())
+    };
+    // The scans of the first event at `event_at` and of the row at `pending_at`,
+    // kept across refills so a huge row is read once, not re-parsed from its
+    // start on every fill.
+    let mut event_at = usize::MAX;
+    let mut event_scan = ForwardScan::new();
     let mut pending_at = usize::MAX;
     let mut pending_scan = ForwardScan::new();
     loop {
         while pos == window.len() && !eof {
-            match guard.read_chunk(&mut chunk)? {
-                0 => eof = true,
-                read => {
-                    check.push(&chunk[..read])?;
-                    window.extend_from_slice(&chunk[..read]);
-                }
-            }
+            fill(&mut window, &mut eof, pos)?;
         }
         if pos == window.len() {
             return Err(unreadable("sheetData is not closed"));
@@ -468,7 +480,11 @@ pub(crate) fn stream_config<R: Read>(
             return Err(unsupported("a row larger than supported"));
         }
         let (next, end) = loop {
-            match classify(&window[pos..]) {
+            if event_at != pos {
+                event_at = pos;
+                event_scan = ForwardScan::new();
+            }
+            match scan_event(&mut event_scan, &window[pos..]) {
                 Ok(Some((Next::Row, _))) => {
                     if pending_at != pos {
                         pending_at = pos;
@@ -476,24 +492,12 @@ pub(crate) fn stream_config<R: Read>(
                     }
                     match scan_row_end(&mut pending_scan, &window[pos..])? {
                         Some(end) => break (Next::Row, end),
-                        None if !eof => match guard.read_chunk(&mut chunk)? {
-                            0 => eof = true,
-                            read => {
-                                check.push(&chunk[..read])?;
-                                window.extend_from_slice(&chunk[..read]);
-                            }
-                        },
+                        None if !eof => fill(&mut window, &mut eof, pos)?,
                         None => return Err(unreadable("sheetData is not closed")),
                     }
                 }
                 Ok(Some(found)) => break found,
-                Ok(None) | Err(_) if !eof => match guard.read_chunk(&mut chunk)? {
-                    0 => eof = true,
-                    read => {
-                        check.push(&chunk[..read])?;
-                        window.extend_from_slice(&chunk[..read]);
-                    }
-                },
+                Ok(None) | Err(_) if !eof => fill(&mut window, &mut eof, pos)?,
                 Ok(None) => return Err(unreadable("sheetData is not closed")),
                 Err(error) => return Err(error),
             }
@@ -770,12 +774,14 @@ impl ForwardScan {
 enum ScanGoal {
     Head,
     Row,
+    Event,
 }
 
 enum ScanEvent {
     NeedMore,
     Head(Head),
     RowDone(usize),
+    Event(Next, usize),
 }
 
 // One step over the buffer from the settled offset. Outside comments, CDATA,
@@ -816,7 +822,7 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                     scan.tag_start = at;
                     match tag_content(rest) {
                         TagContent::Complete { end } => {
-                            if let Some(event) = close_end_tag(scan, at, end, &goal) {
+                            if let Some(event) = close_end_tag(scan, buf, at, end, &goal)? {
                                 return Ok(event);
                             }
                         }
@@ -859,6 +865,9 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                 };
                 scan.mode = ScanMode::Markup;
                 scan.offset = from + rel + 3;
+                if matches!(goal, ScanGoal::Event) {
+                    return Ok(ScanEvent::Event(Next::Other, scan.offset));
+                }
             }
             ScanMode::CData => {
                 let from = scan.offset.saturating_sub(2);
@@ -868,6 +877,9 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                 };
                 scan.mode = ScanMode::Markup;
                 scan.offset = from + rel + 3;
+                if matches!(goal, ScanGoal::Event) {
+                    return Ok(ScanEvent::Event(Next::Other, scan.offset));
+                }
             }
             ScanMode::Tag { quote, closing } => {
                 let mut quote = quote;
@@ -899,7 +911,7 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                 scan.mode = ScanMode::Markup;
                 let at = scan.tag_start;
                 if closing {
-                    if let Some(event) = close_end_tag(scan, at, index + 1 - at, &goal) {
+                    if let Some(event) = close_end_tag(scan, buf, at, index + 1 - at, &goal)? {
                         return Ok(event);
                     }
                     continue;
@@ -941,6 +953,9 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                 };
                 scan.mode = ScanMode::Markup;
                 scan.offset = end;
+                if matches!(goal, ScanGoal::Event) {
+                    return Ok(ScanEvent::Event(Next::Other, scan.offset));
+                }
             }
             ScanMode::Pi => {
                 let from = scan.offset.saturating_sub(1);
@@ -950,6 +965,9 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                 };
                 scan.mode = ScanMode::Markup;
                 scan.offset = from + rel + 2;
+                if matches!(goal, ScanGoal::Event) {
+                    return Ok(ScanEvent::Event(Next::Other, scan.offset));
+                }
             }
         }
     }
@@ -987,16 +1005,29 @@ fn close_tag(scan: &mut ForwardScan, buf: &[u8], at: usize, end: usize) {
 
 fn close_end_tag(
     scan: &mut ForwardScan,
+    buf: &[u8],
     at: usize,
     end: usize,
     goal: &ScanGoal,
-) -> Option<ScanEvent> {
+) -> Result<Option<ScanEvent>, ReadError> {
+    // An end tag is read with the same leniency as the single-event parse: the
+    // name runs to the first whitespace or `>`, anything else up to the `>`.
+    if matches!(goal, ScanGoal::Event) {
+        let Some((name, end)) = end_tag(&buf[at..]) else {
+            return Err(unreadable("a worksheet part is malformed"));
+        };
+        let local = name.rsplit(|b| *b == b':').next().unwrap_or(&name);
+        if local == b"sheetData" {
+            return Ok(Some(ScanEvent::Event(Next::SheetDataEnd, at + end)));
+        }
+        return Ok(Some(ScanEvent::Event(Next::Other, at + end)));
+    }
     if matches!(goal, ScanGoal::Row) && scan.depth == 1 {
-        return Some(ScanEvent::RowDone(at + end));
+        return Ok(Some(ScanEvent::RowDone(at + end)));
     }
     scan.depth = scan.depth.saturating_sub(1);
     scan.offset = at + end;
-    None
+    Ok(None)
 }
 
 fn goal_event(
@@ -1008,6 +1039,18 @@ fn goal_event(
 ) -> Result<Option<ScanEvent>, ReadError> {
     let empty = buf[at + end - 2] == b'/';
     match goal {
+        // One event, the way the single-event parse reads it: a row start is a
+        // row, anything else complete is skipped over as another event.
+        ScanGoal::Event => {
+            let Some(name) = tag_name(&buf[at + 1..at + end]) else {
+                return Err(unreadable("a worksheet part is malformed"));
+            };
+            let local = name.rsplit(|b| *b == b':').next().unwrap_or(name);
+            if local == b"row" {
+                return Ok(Some(ScanEvent::Event(Next::Row, at + end)));
+            }
+            return Ok(Some(ScanEvent::Event(Next::Other, at + end)));
+        }
         ScanGoal::Head => {
             let name = tag_name(&buf[at + 1..at + end]);
             if scan.depth == 1
@@ -1035,7 +1078,9 @@ fn scan_head(scan: &mut ForwardScan, head: &[u8]) -> Result<Head, ReadError> {
     match advance(scan, head, ScanGoal::Head)? {
         ScanEvent::Head(found) => Ok(found),
         ScanEvent::NeedMore => Ok(Head::Incomplete),
-        ScanEvent::RowDone(_) => Err(unreadable("a worksheet part is malformed")),
+        ScanEvent::RowDone(_) | ScanEvent::Event(..) => {
+            Err(unreadable("a worksheet part is malformed"))
+        }
     }
 }
 
@@ -1044,7 +1089,25 @@ fn scan_row_end(scan: &mut ForwardScan, buf: &[u8]) -> Result<Option<usize>, Rea
     match advance(scan, buf, ScanGoal::Row)? {
         ScanEvent::RowDone(end) => Ok(Some(end)),
         ScanEvent::NeedMore => Ok(None),
-        ScanEvent::Head(_) => Err(unreadable("a worksheet part is malformed")),
+        ScanEvent::Head(_) | ScanEvent::Event(..) => {
+            Err(unreadable("a worksheet part is malformed"))
+        }
+    }
+}
+
+// The first event starting at the buffer with its end offset; None when more
+// bytes may complete it. The scan resumes where the last fill stopped instead
+// of re-parsing from the buffer start.
+fn scan_event(
+    scan: &mut ForwardScan,
+    buf: &[u8],
+) -> Result<Option<(Next, usize)>, ReadError> {
+    match advance(scan, buf, ScanGoal::Event)? {
+        ScanEvent::Event(next, end) => Ok(Some((next, end))),
+        ScanEvent::NeedMore => Ok(None),
+        ScanEvent::Head(_) | ScanEvent::RowDone(_) => {
+            Err(unreadable("a worksheet part is malformed"))
+        }
     }
 }
 
@@ -1365,6 +1428,31 @@ mod tests {
         assert!(
             started.elapsed() < std::time::Duration::from_secs(120),
             "took {started:?}"
+        );
+    }
+
+    fn config_with(xml: &str, budgets: &Budgets) -> Result<Vec<u8>, ReadError> {
+        let meter = CompressedMeter::new();
+        stream_config(
+            meter.wrap(xml.as_bytes()),
+            &meter,
+            "xl/worksheets/sheet1.xml",
+            budgets,
+        )
+    }
+
+    #[test]
+    fn a_huge_unterminated_comment_after_sheet_data_is_capped() {
+        let xml = format!(r#"{HEAD}<!--{}"#, " ".repeat(20 * 1024 * 1024));
+        let started = std::time::Instant::now();
+        let error = config_with(&xml, &budgets())
+            .err()
+            .expect("a 20 MB unterminated comment must fail");
+        assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(60),
+            "took {:?}",
+            started.elapsed()
         );
     }
 
