@@ -42,15 +42,17 @@ fn total_ram_bytes() -> Result<u64> {
     powershell_number("(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory")
 }
 
-fn peak_working_set_bytes() -> Result<u64> {
+// PeakPagedMemorySize64 is the Win32 PeakPagefileUsage: peak committed private bytes.
+// Working set is not used because Windows pages a process out under pressure.
+fn peak_committed_bytes() -> Result<u64> {
     powershell_number(&format!(
-        "(Get-Process -Id {}).PeakWorkingSet64",
+        "(Get-Process -Id {}).PeakPagedMemorySize64",
         std::process::id()
     ))
 }
 
-fn peak_ws_mb() -> f64 {
-    peak_working_set_bytes().map_or(-1.0, |b| b as f64 / 1024.0 / 1024.0)
+fn peak_commit_mb() -> f64 {
+    peak_committed_bytes().map_or(-1.0, |b| b as f64 / 1024.0 / 1024.0)
 }
 
 fn begin(stage: &str) {
@@ -59,8 +61,8 @@ fn begin(stage: &str) {
 
 fn done(stage: &str, elapsed_ms: f64, extra: &str) {
     println!(
-        "stage={stage} ms={elapsed_ms:.0} peak_ws_mb={:.0} {extra}",
-        peak_ws_mb()
+        "stage={stage} ms={elapsed_ms:.0} peak_commit_mb={:.0} {extra}",
+        peak_commit_mb()
     );
 }
 

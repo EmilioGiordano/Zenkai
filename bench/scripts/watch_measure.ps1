@@ -18,9 +18,10 @@ while ($true) {
         Write-Output "watchdog: pid $TargetPid is now '$($target.ProcessName)', not '$Name'; leaving it alone"
         break
     }
-    if ($target.WorkingSet64 -gt $LimitBytes) {
+    # Committed bytes, not working set: under memory pressure the working set stays low.
+    if ($target.PrivateMemorySize64 -gt $LimitBytes) {
         Stop-Process -Id $TargetPid -Force
-        Write-Output "watchdog: killed $Name pid $TargetPid at working set $($target.WorkingSet64) bytes (limit $LimitBytes)"
+        Write-Output "watchdog: killed $Name pid $TargetPid at committed $($target.PrivateMemorySize64) bytes (limit $LimitBytes)"
         break
     }
     Start-Sleep -Milliseconds $PollMs
