@@ -447,7 +447,10 @@ mod tests {
         let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
         let error = scan_archive(&mut archive, &meter, &tiny, &|_, _| Ok(())).unwrap_err();
         assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
-        assert!(error.to_string().contains("xl/worksheets/sheet1.xml"), "{error}");
+        assert!(
+            error.to_string().contains("xl/worksheets/sheet1.xml"),
+            "{error}"
+        );
         let roomy = Budgets::with_cells(CellBudget::max_cells_for_test(10_000));
         let meter = CompressedMeter::new();
         let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
