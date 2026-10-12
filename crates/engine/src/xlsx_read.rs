@@ -130,7 +130,7 @@ pub(crate) fn read_xlsx_file(
 // The IronCalc fallback is never a way past the limits: it runs only when every part
 // fits the old per-part cap, otherwise the file is refused with a clear message.
 fn fallback_to_ironcalc(bytes: &[u8], name: &str, declined: &ReadError) -> Outcome<EngineError> {
-    if let Err(limited) = zenkai_xlsx_reader::limits::check_fallback_caps_bytes(bytes) {
+    if let Err(limited) = zenkai_xlsx_reader::check_fallback_caps_bytes(bytes) {
         return Err(EngineError::Unsafe(format!(
             "the streaming reader does not support this file ({declined}), and it cannot fall back to IronCalc's reader ({limited})"
         )));
@@ -160,7 +160,7 @@ fn read_settings(bytes: &[u8]) -> Result<Vec<SheetSettings>, EngineError> {
 }
 
 fn read_with_ironcalc(bytes: &[u8], name: &str) -> Outcome<EngineError> {
-    zenkai_xlsx_reader::limits::check_fallback_caps_bytes(bytes).map_err(|error| match error {
+    zenkai_xlsx_reader::check_fallback_caps_bytes(bytes).map_err(|error| match error {
         ReadError::Unsafe(reason) => EngineError::Unsafe(reason),
         other => EngineError::InvalidFile(other.to_string()),
     })?;

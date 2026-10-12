@@ -1,7 +1,7 @@
 // Test helpers outside #[test] functions; clippy only exempts the functions themselves.
 #![allow(clippy::unwrap_used)]
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 
 use zenkai_engine::{XlsxReader, open_xlsx, open_xlsx_with};
@@ -105,6 +105,24 @@ fn shared_strings(count: usize, filler_len: usize) -> String {
     }
     xml.push_str("</sst>");
     xml
+}
+
+// Copies a workbook and appends one more entry, leaving the rest untouched.
+fn with_extra_part(bytes: Vec<u8>, name: &str, body: &str) -> Vec<u8> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::FileOptions::default();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let entry_name = entry.name().to_string();
+        let mut kept = Vec::new();
+        entry.read_to_end(&mut kept).unwrap();
+        out.start_file(entry_name, options).unwrap();
+        out.write_all(&kept).unwrap();
+    }
+    out.start_file(name, options).unwrap();
+    out.write_all(body.as_bytes()).unwrap();
+    out.finish().unwrap().into_inner()
 }
 
 // Rewrites the declared uncompressed size of one entry, in its local and central
@@ -292,6 +310,20 @@ fn deflated_declared_size_still_refuses() {
     patch_declared_size(&mut bytes, "xl/sharedStrings.xml", 1_000);
     let started = Instant::now();
     let error = open_fast(bytes).unwrap_err();
+    assert!(error.contains("150"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
+#[test]
+fn lied_bomb_after_a_declined_sheet_still_refuses() {
+    let cell = r#"<c r="A1" t="s"><v>0</v></c>"#;
+    let declined = sheet(cell).replace("<sheetData>", "<sheetData><!-- not streamed -->");
+    let bytes = workbook_with_strings(&declined, &shared_strings(1, 1));
+    let mut bytes = with_extra_part(bytes, "xl/drawings/drawing1.xml", &"A".repeat(70_000_000));
+    patch_declared_size(&mut bytes, "xl/drawings/drawing1.xml", 1_000);
+    let started = Instant::now();
+    let error = open_fast(bytes).unwrap_err();
+    assert!(error.contains("harm"), "{error}");
     assert!(error.contains("150"), "{error}");
     assert!(started.elapsed() < Duration::from_secs(60));
 }

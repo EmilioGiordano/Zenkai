@@ -1,8 +1,8 @@
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ReadError;
-use crate::limits::{self, CellBudget, MAX_TOTAL_BYTES};
+use crate::limits::{self, CellBudget, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES};
 
 const CHUNK_BYTES: usize = 64 * 1024;
 
@@ -97,6 +97,39 @@ pub(crate) fn read_part<R: Read>(
             read => bytes.extend_from_slice(&chunk[..read]),
         }
     }
+}
+
+// The IronCalc fallback is never a way past the limits: every entry streams once
+// through the budgets, so a lied declared size cannot smuggle a part past the caps.
+pub(crate) fn check_fallback_caps<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> Result<(), ReadError> {
+    let budgets = Budgets::production();
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+        let name = entry.name().to_string();
+        let compressed = entry.compressed_size();
+        let mut guard = budgets.stream(entry, compressed, &name);
+        let mut expanded = 0u64;
+        let mut chunk = [0u8; CHUNK_BYTES];
+        loop {
+            match guard.read_chunk(&mut chunk)? {
+                0 => break,
+                read => {
+                    expanded = expanded.saturating_add(read as u64);
+                    if expanded > MAX_ENTRY_BYTES {
+                        return Err(ReadError::Unsafe(format!(
+                            "part {name} expands to {} MB",
+                            limits::megabytes(expanded)
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 // XML forbids control characters and noncharacters anywhere, so they are checked on

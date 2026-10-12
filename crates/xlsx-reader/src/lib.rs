@@ -23,7 +23,7 @@ pub use limits::CellBudget;
 use crate::formulas::Names;
 use crate::package::{read_entry, read_package, stub_archive};
 use crate::sheet_stream::{StreamedSheet, stream_config, stream_worksheet};
-use crate::stream::Budgets;
+use crate::stream::{Budgets, check_fallback_caps};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
@@ -209,6 +209,14 @@ pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> 
         inspect(&entry_name, &part).map_err(ReadError::Unsafe)?;
     }
     Ok(())
+}
+
+// What IronCalc's reader still requires, on the bytes really decompressed: the
+// streaming reader never enforces this when opening.
+pub fn check_fallback_caps_bytes(bytes: &[u8]) -> Result<(), ReadError> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+    check_fallback_caps(&mut archive)
 }
 
 // The worksheet configurations for a reader that parses the rows itself, without

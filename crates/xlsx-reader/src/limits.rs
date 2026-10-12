@@ -104,40 +104,6 @@ impl CellBudget {
     }
 }
 
-// What IronCalc's reader and its fallback still require, on the sizes the archive
-// declares: the streaming reader never enforces this when opening.
-pub fn check_fallback_caps_bytes(bytes: &[u8]) -> Result<(), ReadError> {
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    check_fallback_caps(&mut archive)
-}
-
-pub fn check_fallback_caps<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-) -> Result<(), ReadError> {
-    let mut total = 0u64;
-    for index in 0..archive.len() {
-        let entry = archive
-            .by_index(index)
-            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-        if entry.size() > MAX_ENTRY_BYTES {
-            return Err(ReadError::Unsafe(format!(
-                "part {} expands to {} MB",
-                entry.name(),
-                megabytes(entry.size())
-            )));
-        }
-        total = total.saturating_add(entry.size());
-    }
-    if total > MAX_TOTAL_BYTES {
-        return Err(ReadError::Unsafe(format!(
-            "the workbook expands to {} MB",
-            megabytes(total)
-        )));
-    }
-    Ok(())
-}
-
 pub fn check_ratio(part: &str, compressed: u64, expanded: u64) -> Result<(), ReadError> {
     if expanded > RATIO_GATE_BYTES && expanded > compressed.saturating_mul(MAX_RATIO) {
         return Err(ReadError::Unsafe(format!(
