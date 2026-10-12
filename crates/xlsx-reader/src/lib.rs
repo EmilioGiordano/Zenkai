@@ -21,9 +21,11 @@ pub use diff::workbook_differences;
 pub use limits::CellBudget;
 
 use crate::formulas::Names;
-use crate::package::{read_entry, read_package, stub_archive};
+use crate::package::{read_package, stub_archive};
 use crate::sheet_stream::{StreamedSheet, stream_config, stream_worksheet};
-use crate::stream::{Budgets, CompressedMeter, Counted, check_fallback_caps};
+use crate::stream::{Budgets, CompressedMeter, Counted, check_fallback_caps, read_part_if_checked};
+
+pub use stream::has_checked_element;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
@@ -112,11 +114,16 @@ fn read_from<R: Read + Seek>(
     let mut sheets: Vec<Option<StreamedSheet>> =
         (0..package.worksheets.len()).map(|_| None).collect();
     for index in 0..archive.len() {
-        let entry = archive
-            .by_index(index)
-            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-        let entry_name = entry.name().to_string();
+        let entry_name = {
+            let entry = archive
+                .by_index(index)
+                .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+            entry.name().to_string()
+        };
         if let Some(&position) = positions.get(entry_name.as_str()) {
+            let entry = archive
+                .by_index(index)
+                .map_err(|e| ReadError::Unreadable(e.to_string()))?;
             let sheet_name = package.worksheets[position].name.clone();
             let streamed = stream_worksheet(entry, meter, &entry_name, &sheet_name, &budgets)?;
             // The rows were checked while streaming; the configuration carries the
@@ -129,7 +136,7 @@ fn read_from<R: Read + Seek>(
             inspect(&entry_name, &[])?;
             continue;
         }
-        let part = read_entry(entry, meter, &budgets)?;
+        let (_, part) = read_part_if_checked(&mut archive, index, meter, &budgets)?;
         inspect(&entry_name, &part)?;
     }
 
@@ -200,15 +207,17 @@ pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> 
     limits::check_archive(&mut archive)?;
     let budgets = Budgets::production();
     for index in 0..archive.len() {
-        let entry = archive
-            .by_index(index)
-            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-        let entry_name = entry.name().to_string();
+        let entry_name = {
+            let entry = archive
+                .by_index(index)
+                .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+            entry.name().to_string()
+        };
         if skipped_part(&entry_name) {
             inspect(&entry_name, &[])?;
             continue;
         }
-        let part = read_entry(entry, &meter, &budgets)?;
+        let (_, part) = read_part_if_checked(&mut archive, index, &meter, &budgets)?;
         inspect(&entry_name, &part)?;
     }
     Ok(())

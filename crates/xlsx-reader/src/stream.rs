@@ -6,7 +6,78 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::ReadError;
 use crate::limits::{self, CellBudget, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES, Usage};
 
-const CHUNK_BYTES: usize = 64 * 1024;
+pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
+
+const CHECKED_ELEMENTS: [&[u8]; 9] = [
+    b"f",
+    b"formula",
+    b"formula1",
+    b"formula2",
+    b"definedName",
+    b"hyperlinks",
+    b"dataValidations",
+    b"autoFilter",
+    b"sheetProtection",
+];
+
+// XML forbids entities or whitespace between '<' and an element name, so a part with
+// no '<name' or '<prefix:name' start tag for these names cannot contain them; the
+// full parse is skipped for it. Text that only looks like a tag merely costs a parse.
+pub fn has_checked_element(bytes: &[u8]) -> bool {
+    let mut rest = bytes;
+    while let Some(at) = rest.iter().position(|b| *b == b'<') {
+        rest = &rest[at + 1..];
+        let name_end = rest
+            .iter()
+            .position(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/' | b'<'))
+            .unwrap_or(rest.len());
+        let name = &rest[..name_end];
+        let local = name.rsplit(|b| *b == b':').next().unwrap_or(name);
+        if CHECKED_ELEMENTS.contains(&local) {
+            return true;
+        }
+    }
+    false
+}
+
+// Watches streamed bytes for the elements above, so parts without any are never
+// inflated whole. A tag start split across chunks is still seen: every push also
+// scans the tail of the previous one. Only a tag whose name alone is longer than
+// the overlap escapes, and such a prefix cannot name a checked element in practice.
+pub(crate) struct Prefilter {
+    overlap: Vec<u8>,
+    hit: bool,
+}
+
+const PREFILTER_OVERLAP: usize = 64;
+
+impl Prefilter {
+    pub(crate) fn new() -> Prefilter {
+        Prefilter {
+            overlap: Vec::new(),
+            hit: false,
+        }
+    }
+
+    pub(crate) fn push(&mut self, chunk: &[u8]) {
+        if self.hit || chunk.is_empty() {
+            return;
+        }
+        let mut window = Vec::with_capacity(self.overlap.len() + chunk.len());
+        window.extend_from_slice(&self.overlap);
+        window.extend_from_slice(chunk);
+        if has_checked_element(&window) {
+            self.hit = true;
+            return;
+        }
+        let keep = window.len().min(PREFILTER_OVERLAP);
+        self.overlap = window[window.len() - keep..].to_vec();
+    }
+
+    pub(crate) fn hit(&self) -> bool {
+        self.hit
+    }
+}
 
 // Counts the bytes really pulled from the archive underneath the zip reader, so the
 // compression ratio is measured, never taken from the forgeable headers. Read-ahead
@@ -132,6 +203,24 @@ impl Budgets {
             budgets: self,
             meter: meter.clone(),
             start: meter.snapshot(),
+            charge_total: true,
+            expanded: 0,
+            part: part.to_string(),
+        }
+    }
+
+    pub(crate) fn stream_reread<R: Read>(
+        &self,
+        inner: R,
+        meter: &CompressedMeter,
+        part: &str,
+    ) -> Guard<'_, R> {
+        Guard {
+            inner,
+            budgets: self,
+            meter: meter.clone(),
+            start: meter.snapshot(),
+            charge_total: false,
             expanded: 0,
             part: part.to_string(),
         }
@@ -143,6 +232,7 @@ pub(crate) struct Guard<'b, R> {
     budgets: &'b Budgets,
     meter: CompressedMeter,
     start: u64,
+    charge_total: bool,
     expanded: u64,
     part: String,
 }
@@ -161,7 +251,9 @@ impl<R: Read> Guard<'_, R> {
             return Ok(0);
         }
         let read = read as u64;
-        self.budgets.charge(read)?;
+        if self.charge_total {
+            self.budgets.charge(read)?;
+        }
         self.expanded = self.expanded.saturating_add(read);
         if self.expanded > self.budgets.entry_cap {
             return Err(ReadError::Unsafe(format!(
@@ -181,7 +273,10 @@ pub(crate) fn read_part<R: Read>(
     part: &str,
     budgets: &Budgets,
 ) -> Result<Vec<u8>, ReadError> {
-    let mut guard = budgets.stream(entry, meter, part);
+    read_part_with(budgets.stream(entry, meter, part), part)
+}
+
+fn read_part_with<R: Read>(mut guard: Guard<'_, R>, part: &str) -> Result<Vec<u8>, ReadError> {
     let mut bytes = Vec::with_capacity(CHUNK_BYTES);
     let mut chunk = [0u8; CHUNK_BYTES];
     loop {
@@ -193,6 +288,43 @@ pub(crate) fn read_part<R: Read>(
             read => bytes.extend_from_slice(&chunk[..read]),
         }
     }
+}
+
+// Streams one part through the budgets and inflates it whole only when it may hold
+// something the preflight checks; anything else is decided by entry name and needs
+// no bytes. A re-read part is measured again but not charged twice to the total.
+pub(crate) fn read_part_if_checked<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    index: usize,
+    meter: &CompressedMeter,
+    budgets: &Budgets,
+) -> Result<(String, Vec<u8>), ReadError> {
+    let name = {
+        let entry = archive
+            .by_index(index)
+            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+        let name = entry.name().to_string();
+        let mut guard = budgets.stream(entry, meter, &name);
+        let mut filter = Prefilter::new();
+        let mut chunk = [0u8; CHUNK_BYTES];
+        loop {
+            match guard.read_chunk(&mut chunk)? {
+                0 => break,
+                read => filter.push(&chunk[..read]),
+            }
+        }
+        if !filter.hit() {
+            return Ok((name, Vec::new()));
+        }
+        name
+    };
+    let entry = archive
+        .by_name(&name)
+        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+    Ok((
+        name.clone(),
+        read_part_with(budgets.stream_reread(entry, meter, &name), &name)?,
+    ))
 }
 
 // The IronCalc fallback is never a way past the limits: every entry streams once
@@ -291,6 +423,52 @@ mod tests {
             read(&data, "xl/sharedStrings.xml", &roomy).unwrap().len(),
             2048
         );
+    }
+
+    #[test]
+    fn the_prefilter_sees_tags_split_across_chunks() {
+        let mut filter = Prefilter::new();
+        filter.push(b"<worksheet><sheetData><row><c><");
+        assert!(!filter.hit());
+        filter.push(b"f>A1*2</f></c></row>");
+        assert!(filter.hit());
+    }
+
+    #[test]
+    fn the_prefilter_ignores_lookalikes_and_clean_parts() {
+        let mut filter = Prefilter::new();
+        filter.push(b"<fonts><font><sz val=\"11\"/></font></fonts>");
+        assert!(!filter.hit());
+        let mut split = Prefilter::new();
+        split.push(b"<defined");
+        assert!(!split.hit());
+        split.push(b"Name name=\"x\">1</definedName>");
+        assert!(split.hit());
+    }
+
+    #[test]
+    fn parts_without_checked_elements_are_not_inflated() {
+        use std::io::{Cursor, Write};
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::FileOptions::default();
+        writer.start_file("xl/styles.xml", options).unwrap();
+        writer
+            .write_all(b"<styleSheet><fonts count=\"1\"/></styleSheet>")
+            .unwrap();
+        writer.start_file("xl/workbook.xml", options).unwrap();
+        writer
+            .write_all(b"<workbook><definedNames><definedName name=\"x\">1</definedName></definedNames></workbook>")
+            .unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
+        let budgets = budgets();
+        let (name, clean) = read_part_if_checked(&mut archive, 0, &meter, &budgets).unwrap();
+        assert_eq!(name, "xl/styles.xml");
+        assert!(clean.is_empty(), "a clean part needs no bytes");
+        let (name, checked) = read_part_if_checked(&mut archive, 1, &meter, &budgets).unwrap();
+        assert_eq!(name, "xl/workbook.xml");
+        assert!(!checked.is_empty(), "a checked part is inflated");
     }
 
     #[test]
