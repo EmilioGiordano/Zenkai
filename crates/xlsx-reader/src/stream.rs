@@ -175,6 +175,7 @@ impl CellCounter {
     pub(crate) fn usage(&self) -> Usage {
         Usage {
             cells: self.cells,
+            formulas: 0,
             bytes: 0,
             rows: self.rows,
         }
@@ -322,6 +323,7 @@ pub(crate) struct Budgets {
     total: AtomicU64,
     cells: CellBudget,
     used_cells: AtomicU64,
+    used_formulas: AtomicU64,
     used_bytes: AtomicU64,
     used_rows: AtomicU64,
     entry_cap: u64,
@@ -337,6 +339,7 @@ impl Budgets {
             total: AtomicU64::new(MAX_TOTAL_BYTES),
             cells,
             used_cells: AtomicU64::new(0),
+            used_formulas: AtomicU64::new(0),
             used_bytes: AtomicU64::new(0),
             used_rows: AtomicU64::new(0),
             entry_cap: MAX_ENTRY_BYTES,
@@ -349,6 +352,7 @@ impl Budgets {
             total: AtomicU64::new(MAX_TOTAL_BYTES),
             cells,
             used_cells: AtomicU64::new(0),
+            used_formulas: AtomicU64::new(0),
             used_bytes: AtomicU64::new(0),
             used_rows: AtomicU64::new(0),
             entry_cap,
@@ -360,6 +364,10 @@ impl Budgets {
             .used_cells
             .fetch_add(additional.cells, Ordering::Relaxed)
             .saturating_add(additional.cells);
+        let formulas = self
+            .used_formulas
+            .fetch_add(additional.formulas, Ordering::Relaxed)
+            .saturating_add(additional.formulas);
         let bytes = self
             .used_bytes
             .fetch_add(additional.bytes, Ordering::Relaxed)
@@ -368,7 +376,12 @@ impl Budgets {
             .used_rows
             .fetch_add(additional.rows, Ordering::Relaxed)
             .saturating_add(additional.rows);
-        self.cells.check(Usage { cells, bytes, rows })
+        self.cells.check(Usage {
+            cells,
+            formulas,
+            bytes,
+            rows,
+        })
     }
 
     fn charge(&self, bytes: u64) -> Result<(), ReadError> {
@@ -465,6 +478,7 @@ impl<R: Read> Guard<'_, R> {
         self.whole_fits(bytes)?;
         self.budgets.check_usage(Usage {
             cells: 0,
+            formulas: 0,
             bytes,
             rows: 0,
         })?;

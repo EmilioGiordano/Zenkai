@@ -26,17 +26,13 @@ pub const MAX_RATIO: u64 = 150;
 // Below this many decompressed bytes a part passes on the cell and total budgets
 // alone; the ratio check only runs past it.
 pub const RATIO_GATE_BYTES: u64 = 64 * 1024 * 1024;
-// Steady model growth per stored cell, measured by opening the MID corpus file:
-// 339 MB for 2,928,620 cells. Opening stops when the cells read so far times this
-// would pass 60 % of physical RAM committed.
-pub const BYTES_PER_CELL: u64 = 122;
-pub const RAM_SHARE_PERCENT: u64 = 60;
-// Used only when the machine's memory cannot be read, mirroring the app's budget.
-pub const FALLBACK_BUDGET_MB: u64 = 4096;
-pub const BUDGET_VARIABLE: &str = "ZENKAI_MEMORY_BUDGET_MB";
-// An IronCalc row entry costs about as much as one stored cell: a map node holding
-// the row number plus the row map itself.
-pub const ROW_BYTES: u64 = 128;
+// The peak open costs live in ironcalc_base::open_budget, measured with the
+// release instrument and shared with Model::from_workbook's guard, so the
+// read refuses files the model build could not hold.
+pub use ironcalc::base::open_budget::BYTES_PER_ROW as ROW_BYTES;
+pub use ironcalc::base::open_budget::{
+    BUDGET_VARIABLE, BYTES_PER_CELL, BYTES_PER_FORMULA, FALLBACK_BUDGET_MB, RAM_SHARE_PERCENT,
+};
 // Excel's own limit; it also bounds how deep any formula's syntax tree can get.
 pub const MAX_FORMULA_CHARS: usize = 8_192;
 pub const MAX_FORMULA_DEPTH: usize = 256;
@@ -57,17 +53,7 @@ pub fn check_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result
     Ok(())
 }
 
-pub fn megabytes(bytes: u64) -> u64 {
-    bytes / 1024 / 1024
-}
-
-pub fn describe_bytes(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 * 1024 {
-        format!("{:.1} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
-    } else {
-        format!("{} MB", megabytes(bytes))
-    }
-}
+pub use ironcalc::base::open_budget::describe_bytes;
 
 #[derive(Clone, Copy, Debug)]
 pub struct CellBudget {
@@ -110,11 +96,9 @@ impl CellBudget {
         if needed <= supported {
             return Ok(());
         }
-        Err(ReadError::Unsafe(format!(
-            "this file needs at least {} to open ({} cells), more than the {} supported; close other workbooks, or use a machine with more memory",
-            describe_bytes(needed),
-            usage.cells,
-            describe_bytes(supported),
+        Err(ReadError::Unsafe(ironcalc::base::open_budget::refusal(
+            usage.cost(),
+            supported,
         )))
     }
 }
@@ -122,16 +106,23 @@ impl CellBudget {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Usage {
     pub cells: u64,
+    pub formulas: u64,
     pub bytes: u64,
     pub rows: u64,
 }
 
 impl Usage {
     pub fn needed_bytes(self) -> u64 {
-        self.cells
-            .saturating_mul(BYTES_PER_CELL)
-            .saturating_add(self.bytes)
-            .saturating_add(self.rows.saturating_mul(ROW_BYTES))
+        ironcalc::base::open_budget::needed_bytes(self.cost())
+    }
+
+    fn cost(self) -> ironcalc::base::open_budget::OpenCost {
+        ironcalc::base::open_budget::OpenCost {
+            cells: self.cells,
+            formulas: self.formulas,
+            rows: self.rows,
+            bytes: self.bytes,
+        }
     }
 }
 
@@ -238,6 +229,7 @@ mod tests {
             budget
                 .check(Usage {
                     cells: 10_000,
+                    formulas: 0,
                     bytes: 0,
                     rows: 0
                 })
@@ -246,6 +238,7 @@ mod tests {
         let error = budget
             .check(Usage {
                 cells: 10_001,
+                formulas: 0,
                 bytes: 0,
                 rows: 0,
             })
@@ -258,6 +251,31 @@ mod tests {
     }
 
     #[test]
+    fn formula_cells_trip_the_budget_before_value_cells() {
+        let budget = CellBudget::max_cells_for_test(1000);
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 1000,
+                    formulas: 0,
+                    bytes: 0,
+                    rows: 0,
+                })
+                .is_ok()
+        );
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 1000,
+                    formulas: 1000,
+                    bytes: 0,
+                    rows: 0,
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
     fn string_formula_and_row_bytes_count_against_the_budget() {
         let budget = CellBudget::max_cells_for_test(100);
         let supported = 100 * BYTES_PER_CELL;
@@ -265,6 +283,7 @@ mod tests {
             budget
                 .check(Usage {
                     cells: 99,
+                    formulas: 0,
                     bytes: supported - 99 * BYTES_PER_CELL,
                     rows: 0,
                 })
@@ -274,6 +293,7 @@ mod tests {
             budget
                 .check(Usage {
                     cells: 99,
+                    formulas: 0,
                     bytes: supported - 99 * BYTES_PER_CELL + 1,
                     rows: 0,
                 })
@@ -283,6 +303,7 @@ mod tests {
             budget
                 .check(Usage {
                     cells: 0,
+                    formulas: 0,
                     bytes: 0,
                     rows: supported / ROW_BYTES,
                 })
@@ -292,6 +313,7 @@ mod tests {
             budget
                 .check(Usage {
                     cells: 0,
+                    formulas: 0,
                     bytes: 0,
                     rows: supported / ROW_BYTES + 1,
                 })
@@ -300,8 +322,8 @@ mod tests {
     }
 
     #[test]
-    fn sixty_percent_of_a_16gb_machine_covers_the_big_file() {
-        assert!(CellBudget::from_budget_mb(9_752).max_cells() > 40_000_000);
+    fn sixty_percent_of_a_16gb_machine_covers_seventeen_million_cells() {
+        assert!(CellBudget::from_budget_mb(9_752).max_cells() > 17_000_000);
     }
 
     #[test]

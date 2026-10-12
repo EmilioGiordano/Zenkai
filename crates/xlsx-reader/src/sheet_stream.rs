@@ -293,6 +293,9 @@ fn parse_unit(
     }
     let usage = Usage {
         cells: scanned.data.iter().map(|(_, row)| row.len() as u64).sum(),
+        // One event per formula cell: plain and array formulas convert, shared
+        // anchors convert once, shared children point at their anchor.
+        formulas: scanned.events.len() as u64,
         bytes: scanned
             .strings
             .iter()
@@ -532,6 +535,7 @@ pub(crate) fn stream_config<R: Read>(
             if added > 0 {
                 budgets.check_usage(Usage {
                     cells: 0,
+                    formulas: 0,
                     bytes: added,
                     rows: 0,
                 })?;
@@ -1528,7 +1532,7 @@ mod tests {
             ));
         }
         let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
-        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1000));
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(100));
         let error = stream_with(&xml, &budgets)
             .err()
             .expect("ten cells with huge strings must trip the budget");
@@ -1571,7 +1575,7 @@ mod tests {
             ));
         }
         let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
-        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1000));
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(500));
         let error = stream_with(&xml, &budgets)
             .err()
             .expect("outline tags with kilobytes of attributes must trip the budget");
@@ -1588,7 +1592,7 @@ mod tests {
             ));
         }
         let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
-        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1000));
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(500));
         let error = config_with(&xml, &budgets).expect_err("outline tags must trip the budget");
         assert!(error.to_string().contains("needs at least"), "{error}");
     }
