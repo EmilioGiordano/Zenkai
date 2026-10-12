@@ -79,6 +79,126 @@ impl Prefilter {
     }
 }
 
+// Counts worksheet cells and rows while their bytes stream past, so the IronCalc
+// fallback can charge them to the memory budget without inflating the part. Only
+// the lowercase `<c` and `<row` openers count, the tags the parsers read; text and
+// attribute values cannot hold a raw `<`, so only comments and character data
+// could fake a tag, and both are skipped. Anything else that looks like a tag
+// over-counts, which fails closed.
+pub(crate) struct CellCounter {
+    cells: u64,
+    rows: u64,
+    comment: bool,
+    cdata: bool,
+    held: Vec<u8>,
+}
+
+// The longest opener this distinguishes (`<![CDATA[`); a shorter tail is held
+// for the next chunk instead of judged half-seen.
+const COUNTER_LOOKAHEAD: usize = 9;
+
+impl CellCounter {
+    pub(crate) fn new() -> CellCounter {
+        CellCounter {
+            cells: 0,
+            rows: 0,
+            comment: false,
+            cdata: false,
+            held: Vec::new(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, chunk: &[u8]) {
+        self.held.extend_from_slice(chunk);
+        self.process(false);
+    }
+
+    pub(crate) fn finish(&mut self) {
+        self.process(true);
+        self.held.clear();
+    }
+
+    pub(crate) fn usage(&self) -> Usage {
+        Usage {
+            cells: self.cells,
+            bytes: 0,
+            rows: self.rows,
+        }
+    }
+
+    fn process(&mut self, last: bool) {
+        let mut i = 0;
+        while i < self.held.len() {
+            if self.comment {
+                match find_terminator(&self.held[i..], b"-->") {
+                    Some(end) => {
+                        self.comment = false;
+                        i += end + 3;
+                    }
+                    None if last => i = self.held.len(),
+                    None => {
+                        let keep = (self.held.len() - i).min(2);
+                        i = self.held.len() - keep;
+                        break;
+                    }
+                }
+                continue;
+            }
+            if self.cdata {
+                match find_terminator(&self.held[i..], b"]]>") {
+                    Some(end) => {
+                        self.cdata = false;
+                        i += end + 3;
+                    }
+                    None if last => i = self.held.len(),
+                    None => {
+                        let keep = (self.held.len() - i).min(2);
+                        i = self.held.len() - keep;
+                        break;
+                    }
+                }
+                continue;
+            }
+            if self.held[i] != b'<' {
+                i += 1;
+                continue;
+            }
+            let rest = &self.held[i..];
+            if !last && rest.len() < COUNTER_LOOKAHEAD {
+                break;
+            }
+            if rest.starts_with(b"<!--") {
+                self.comment = true;
+                i += 4;
+            } else if rest.starts_with(b"<![CDATA[") {
+                self.cdata = true;
+                i += 9;
+            } else if rest.starts_with(b"</") {
+                i += 2;
+            } else if rest.starts_with(b"<c") && is_delimiter(rest, 2) {
+                self.cells += 1;
+                i += 2;
+            } else if rest.starts_with(b"<row") && is_delimiter(rest, 4) {
+                self.rows += 1;
+                i += 4;
+            } else {
+                i += 1;
+            }
+        }
+        self.held.drain(..i);
+    }
+}
+
+fn find_terminator(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn is_delimiter(rest: &[u8], at: usize) -> bool {
+    rest.len() > at && matches!(rest[at], b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>')
+}
+
 // Counts the bytes really pulled from the archive underneath the zip reader, so the
 // compression ratio is measured, never taken from the forgeable headers. Read-ahead
 // inside the decoder can attribute a few kilobytes to the wrong entry; against the
@@ -293,30 +413,41 @@ fn read_part_with<R: Read>(mut guard: Guard<'_, R>, part: &str) -> Result<Vec<u8
 // Streams one part through the budgets and inflates it whole only when it may hold
 // something the preflight checks; anything else is decided by entry name and needs
 // no bytes. A re-read part is measured again but not charged twice to the total.
+// With cell counting the cells and rows stream past a counter on the same pass,
+// so the caller can charge them without reading the part again.
 pub(crate) fn read_part_if_checked<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     index: usize,
     meter: &CompressedMeter,
     budgets: &Budgets,
-) -> Result<(String, Vec<u8>), ReadError> {
-    let name = {
+    count_cells: bool,
+) -> Result<(String, Vec<u8>, Usage), ReadError> {
+    let (name, usage) = {
         let entry = archive
             .by_index(index)
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
         let name = entry.name().to_string();
         let mut guard = budgets.stream(entry, meter, &name);
         let mut filter = Prefilter::new();
+        let mut counter = CellCounter::new();
         let mut chunk = [0u8; CHUNK_BYTES];
         loop {
             match guard.read_chunk(&mut chunk)? {
                 0 => break,
-                read => filter.push(&chunk[..read]),
+                read => {
+                    filter.push(&chunk[..read]);
+                    if count_cells {
+                        counter.push(&chunk[..read]);
+                    }
+                }
             }
         }
+        counter.finish();
+        let usage = counter.usage();
         if !filter.hit() {
-            return Ok((name, Vec::new()));
+            return Ok((name, Vec::new(), usage));
         }
-        name
+        (name, usage)
     };
     let entry = archive
         .by_name(&name)
@@ -324,6 +455,7 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
     Ok((
         name.clone(),
         read_part_with(budgets.stream_reread(entry, meter, &name), &name)?,
+        usage,
     ))
 }
 
@@ -414,6 +546,26 @@ mod tests {
     }
 
     #[test]
+    fn the_cell_counter_sees_tags_split_across_chunks() {
+        let mut counter = CellCounter::new();
+        counter.push(b"<worksheet><sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row><ro");
+        counter.push(b"w r=\"2\"/><c/></sheetData>");
+        counter.finish();
+        let usage = counter.usage();
+        assert_eq!((usage.cells, usage.rows), (2, 2));
+    }
+
+    #[test]
+    fn the_cell_counter_skips_comments_cdata_and_lookalikes() {
+        let mut counter = CellCounter::new();
+        counter.push(b"<worksheet><!-- <c r=\"A1\"><row r=\"1\"> --><cols><col min=\"1\"/><conditionalFormatting><cfRule/></conditionalFormatting></cols>");
+        counter.push(b"<sheetData><row r=\"1\"><c r=\"A1\"><f><![CDATA[<c><row]]></f></c></row></sheetData></worksheet>");
+        counter.finish();
+        let usage = counter.usage();
+        assert_eq!((usage.cells, usage.rows), (1, 1));
+    }
+
+    #[test]
     fn parts_without_checked_elements_are_not_inflated() {
         use std::io::{Cursor, Write};
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -430,10 +582,12 @@ mod tests {
         let meter = CompressedMeter::new();
         let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
         let budgets = budgets();
-        let (name, clean) = read_part_if_checked(&mut archive, 0, &meter, &budgets).unwrap();
+        let (name, clean, _) =
+            read_part_if_checked(&mut archive, 0, &meter, &budgets, false).unwrap();
         assert_eq!(name, "xl/styles.xml");
         assert!(clean.is_empty(), "a clean part needs no bytes");
-        let (name, checked) = read_part_if_checked(&mut archive, 1, &meter, &budgets).unwrap();
+        let (name, checked, _) =
+            read_part_if_checked(&mut archive, 1, &meter, &budgets, false).unwrap();
         assert_eq!(name, "xl/workbook.xml");
         assert!(!checked.is_empty(), "a checked part is inflated");
     }

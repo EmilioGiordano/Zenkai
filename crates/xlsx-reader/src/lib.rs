@@ -136,7 +136,7 @@ fn read_from<R: Read + Seek>(
             inspect(&entry_name, &[])?;
             continue;
         }
-        let (_, part) = read_part_if_checked(&mut archive, index, meter, &budgets)?;
+        let (_, part, _) = read_part_if_checked(&mut archive, index, meter, &budgets, false)?;
         inspect(&entry_name, &part)?;
     }
 
@@ -217,7 +217,7 @@ pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> 
             inspect(&entry_name, &[])?;
             continue;
         }
-        let (_, part) = read_part_if_checked(&mut archive, index, &meter, &budgets)?;
+        let (_, part, _) = read_part_if_checked(&mut archive, index, &meter, &budgets, false)?;
         inspect(&entry_name, &part)?;
     }
     Ok(())
@@ -231,7 +231,29 @@ pub fn scan_with_caps(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadErr
     let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes)))
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
     limits::check_archive(&mut archive)?;
-    let budgets = Budgets::production();
+    scan_archive(&mut archive, &meter, &Budgets::production(), inspect)
+}
+
+fn scan_archive<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    meter: &CompressedMeter,
+    budgets: &Budgets,
+    inspect: &Inspect<'_>,
+) -> Result<(), ReadError> {
+    // Worksheet paths come from the package relationships, so sheets outside the
+    // usual folder are still counted. When the package itself cannot be read the
+    // usual folder is the fallback; every part still streams through the caps
+    // below, and IronCalc still decides the file.
+    let sheets = read_package(archive, meter, budgets)
+        .ok()
+        .map(|package| {
+            package
+                .worksheets
+                .into_iter()
+                .map(|sheet| sheet.path)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     for index in 0..archive.len() {
         let entry_name = {
             let entry = archive
@@ -243,13 +265,23 @@ pub fn scan_with_caps(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadErr
             let entry = archive
                 .by_index(index)
                 .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-            let mut guard = budgets.stream(entry, &meter, &entry_name);
+            let mut guard = budgets.stream(entry, meter, &entry_name);
             let mut chunk = [0u8; CHUNK_BYTES];
             while guard.read_chunk(&mut chunk)? != 0 {}
             inspect(&entry_name, &[])?;
             continue;
         }
-        let (_, part) = read_part_if_checked(&mut archive, index, &meter, &budgets)?;
+        // Worksheet cells reach IronCalc's reader past this walk, so they are
+        // counted on the same pass and charged to the memory budget cells share
+        // with the streaming reader; anything over refuses the file.
+        let count_cells = sheets.iter().any(|path| path == &entry_name)
+            || entry_name
+                .to_ascii_lowercase()
+                .starts_with("xl/worksheets/");
+        let (_, part, usage) = read_part_if_checked(archive, index, meter, budgets, count_cells)?;
+        if count_cells {
+            budgets.check_usage(usage)?;
+        }
         inspect(&entry_name, &part)?;
     }
     Ok(())
@@ -349,6 +381,55 @@ mod tests {
         let error = sheet_configs_from_bytes(&bytes).unwrap_err();
         assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
         assert!(error.to_string().contains("configuration"), "{error}");
+    }
+
+    fn sheet_with_cells(cells: u32) -> String {
+        let mut rows = String::new();
+        for row in 1..=cells {
+            rows.push_str(&format!(
+                "<row r=\"{row}\"><c r=\"A{row}\"><v>1</v></c></row>"
+            ));
+        }
+        format!(
+            "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>{rows}</sheetData></worksheet>"
+        )
+    }
+
+    #[test]
+    fn the_fallback_walk_charges_worksheet_cells_to_the_budget() {
+        let sheet = sheet_with_cells(300);
+        let bytes = zipped(&[("xl/worksheets/sheet1.xml", sheet.as_bytes())], false);
+        let tiny = Budgets::with_cells(CellBudget::max_cells_for_test(100));
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
+        let error = scan_archive(&mut archive, &meter, &tiny, &|_, _| Ok(())).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        assert!(error.to_string().contains("needs at least"), "{error}");
+        let roomy = Budgets::with_cells(CellBudget::max_cells_for_test(10_000));
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
+        scan_archive(&mut archive, &meter, &roomy, &|_, _| Ok(())).unwrap();
+    }
+
+    #[test]
+    fn the_fallback_walk_counts_sheets_outside_the_usual_folder() {
+        const WORKBOOK: &[u8] = b"<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"Odd\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>";
+        const RELS: &[u8] = b"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"/data/worksheets/s1.xml\"/></Relationships>";
+        let sheet = sheet_with_cells(300);
+        let bytes = zipped(
+            &[
+                ("xl/workbook.xml", WORKBOOK),
+                ("xl/_rels/workbook.xml.rels", RELS),
+                ("data/worksheets/s1.xml", sheet.as_bytes()),
+            ],
+            false,
+        );
+        let tiny = Budgets::with_cells(CellBudget::max_cells_for_test(100));
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
+        let error = scan_archive(&mut archive, &meter, &tiny, &|_, _| Ok(())).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        assert!(error.to_string().contains("needs at least"), "{error}");
     }
 
     #[test]
