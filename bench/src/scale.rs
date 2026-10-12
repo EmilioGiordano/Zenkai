@@ -118,6 +118,10 @@ pub fn compare(baseline: &[Measurement], current: &[Measurement]) -> Vec<Problem
                     file: base.file.clone(),
                     metric: base.metric.clone(),
                 }),
+                // A 0.0 baseline means staging has not recorded this metric yet:
+                // keep the number, flag nothing. A metric missing from the run
+                // still fails above.
+                Some(_) if base.value == 0.0 => None,
                 Some(now) if now.value - base.value > base.value * ALLOWED_REGRESSION => {
                     Some(Problem::Regressed {
                         file: base.file.clone(),
@@ -379,6 +383,19 @@ mod tests {
         );
         assert_eq!(
             compare(&baseline, &[row("a.xlsx", "open_ms", 10.0)]),
+            vec![Problem::Missing {
+                file: "a.xlsx".to_string(),
+                metric: "steady_mb".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn zero_baseline_is_record_only_but_missing_still_fails() {
+        let baseline = [row("a.xlsx", "steady_mb", 0.0)];
+        assert!(compare(&baseline, &[row("a.xlsx", "steady_mb", 500.0)]).is_empty());
+        assert_eq!(
+            compare(&baseline, &[row("a.xlsx", "open_ms", 1.0)]),
             vec![Problem::Missing {
                 file: "a.xlsx".to_string(),
                 metric: "steady_mb".to_string(),
