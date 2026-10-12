@@ -39,6 +39,13 @@ argument, they review the current directory.
    - `Agent({ subagent_type: 'quality-reviewer', description: 'Quality review', prompt: 'Review <target directory> per your instructions and return the required report.' })`
    - `Agent({ subagent_type: 'security-reviewer', description: 'Security review', prompt: 'Review <target directory> per your instructions and return the required report.' })`
    - Only if step 2 applies: `Agent({ subagent_type: 'perf-auditor', description: 'Performance audit', prompt: 'Audit <target directory> per your instructions and return the required report.' })`
+   - Only if the change touches `crates/engine`, `vendor/`, file reading or writing, or the
+     agent security boundary (`crates/agent`, `crates/mcp-relay`, settings): a second
+     opinion from a model family other than the implementer's, run read-only from the
+     target directory, for example `gemini -p "<prompt>"` or `codex exec "<prompt>"`. The
+     prompt asks for a review of `git diff main...HEAD` against `AGENTS.md` and the spec,
+     reporting concrete defects with file and line, and contains nothing else. It sends the
+     diff to that provider, so run it only where the user has agreed to that.
 
 4. Wait for all of them. Do not summarize or act on one while another is still running,
    and never predict what a pending agent will say.
