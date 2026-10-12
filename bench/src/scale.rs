@@ -205,13 +205,13 @@ fn run_case(exe: &PathBuf, workdir: &Path, case: &scale_cases::Case) -> Result<V
         &case.name,
         &open,
         &[("open_ms", "open_ms"), ("peak_commit_mb", "open_peak_mb")],
-    ));
+    )?);
     let steady = stage_subprocess(exe, &["steady".to_string(), file.clone()])?;
     measurements.extend(pick(
         &case.name,
         &steady,
         &[("steady_commit_mb", "steady_mb")],
-    ));
+    )?);
     if case.fill_rows > 0 {
         let fill = stage_subprocess(
             exe,
@@ -225,7 +225,7 @@ fn run_case(exe: &PathBuf, workdir: &Path, case: &scale_cases::Case) -> Result<V
             &case.name,
             &fill,
             &[("fill_ms", "fill_ms"), ("peak_commit_mb", "fill_peak_mb")],
-        ));
+        )?);
     }
     for (stage, keys) in [
         (
@@ -247,23 +247,31 @@ fn run_case(exe: &PathBuf, workdir: &Path, case: &scale_cases::Case) -> Result<V
             exe,
             &[stage.to_string(), file.clone(), "--out".to_string(), out],
         )?;
-        measurements.extend(pick(&case.name, &values, keys));
+        measurements.extend(pick(&case.name, &values, keys)?);
     }
     Ok(measurements)
 }
 
-fn pick(file: &str, values: &[(String, String)], keys: &[(&str, &str)]) -> Vec<Measurement> {
+fn pick(
+    file: &str,
+    values: &[(String, String)],
+    keys: &[(&str, &str)],
+) -> Result<Vec<Measurement>> {
     keys.iter()
-        .filter_map(|(from, to)| {
-            values
+        .map(|(from, to)| {
+            let raw = values
                 .iter()
                 .find(|(key, _)| key == from)
-                .and_then(|(_, v)| v.parse::<f64>().ok())
-                .map(|value| Measurement {
-                    file: file.to_string(),
-                    metric: to.to_string(),
-                    value,
-                })
+                .map(|(_, value)| value.as_str())
+                .with_context(|| format!("stage for {file} printed no {from}"))?;
+            let value: f64 = raw
+                .parse()
+                .with_context(|| format!("stage for {file} printed bad {from} `{raw}`"))?;
+            Ok(Measurement {
+                file: file.to_string(),
+                metric: to.to_string(),
+                value,
+            })
         })
         .collect()
 }
@@ -401,6 +409,15 @@ mod tests {
                 metric: "steady_mb".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn pick_fails_loudly_on_a_missing_or_bad_metric() {
+        let values = vec![("open_ms".to_string(), "12".to_string())];
+        assert!(pick("a.xlsx", &values, &[("open_ms", "open_ms")]).is_ok());
+        assert!(pick("a.xlsx", &values, &[("nope", "nope")]).is_err());
+        let bad = vec![("open_ms".to_string(), "twelve".to_string())];
+        assert!(pick("a.xlsx", &bad, &[("open_ms", "open_ms")]).is_err());
     }
 
     #[test]
