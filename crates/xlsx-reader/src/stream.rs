@@ -429,7 +429,31 @@ pub(crate) struct Guard<'b, R> {
     part: String,
 }
 
+fn whole_too_big(part: &str) -> ReadError {
+    ReadError::Unsafe(format!(
+        "part {part} is larger than the {} kept whole",
+        limits::describe_bytes(limits::MAX_WHOLE_PART_BYTES),
+    ))
+}
+
 impl<R: Read> Guard<'_, R> {
+    pub(crate) fn whole_fits(&self, bytes: u64) -> Result<(), ReadError> {
+        if bytes > limits::MAX_WHOLE_PART_BYTES {
+            return Err(whole_too_big(&self.part));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_whole(&self, bytes: u64) -> Result<(), ReadError> {
+        self.whole_fits(bytes)?;
+        self.budgets.check_usage(Usage {
+            cells: 0,
+            bytes,
+            rows: 0,
+        })?;
+        Ok(())
+    }
+
     fn compressed_used(&self) -> u64 {
         self.meter.used_since(self.start)
     }
@@ -475,9 +499,13 @@ fn read_part_with<R: Read>(mut guard: Guard<'_, R>, part: &str) -> Result<Vec<u8
         match guard.read_chunk(&mut chunk)? {
             0 => {
                 limits::check_ratio(part, guard.compressed_used(), guard.expanded)?;
+                guard.check_whole(bytes.len() as u64)?;
                 return Ok(bytes);
             }
-            read => bytes.extend_from_slice(&chunk[..read]),
+            read => {
+                bytes.extend_from_slice(&chunk[..read]);
+                guard.whole_fits(bytes.len() as u64)?;
+            }
         }
     }
 }
@@ -580,6 +608,23 @@ mod tests {
     fn read(bytes: &[u8], part: &str, budgets: &Budgets) -> Result<Vec<u8>, ReadError> {
         let meter = CompressedMeter::new();
         read_part(meter.wrap(bytes), &meter, part, budgets)
+    }
+
+    #[test]
+    fn whole_parts_past_the_smaller_cap_are_refused() {
+        let budgets = budgets();
+        let data = vec![7u8; 65 * 1024 * 1024];
+        let error = read(&data, "xl/workbook.xml", &budgets).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        assert!(error.to_string().contains("kept whole"), "{error}");
+    }
+
+    #[test]
+    fn whole_part_bytes_count_against_the_memory_budget() {
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(0));
+        let error = read(b"<workbook/>", "xl/workbook.xml", &budgets).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        assert!(error.to_string().contains("needs at least"), "{error}");
     }
 
     #[test]

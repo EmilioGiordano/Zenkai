@@ -216,16 +216,24 @@ impl<'b, R: Read> Pump<'b, R> {
         }
     }
 
+    // The bytes from the read position on, kept whole for the stub and the
+    // settings; capped far below streamed parts and charged to the memory
+    // budget, like every other whole copy.
     fn rest(&mut self) -> Result<Vec<u8>, ReadError> {
         let mut rest = self.head[self.pos..].to_vec();
+        self.guard.whole_fits(rest.len() as u64)?;
         self.head.clear();
         self.pos = 0;
         loop {
             match self.guard.read_chunk(&mut self.chunk)? {
-                0 => return Ok(rest),
+                0 => {
+                    self.guard.check_whole(rest.len() as u64)?;
+                    return Ok(rest);
+                }
                 read => {
                     self.check.push(&self.chunk[..read])?;
                     rest.extend_from_slice(&self.chunk[..read]);
+                    self.guard.whole_fits(rest.len() as u64)?;
                 }
             }
         }
@@ -535,10 +543,14 @@ fn stream_rest<R: Read>(
     let mut rest = Vec::new();
     loop {
         match guard.read_chunk(chunk)? {
-            0 => return Ok(rest),
+            0 => {
+                guard.check_whole(rest.len() as u64)?;
+                return Ok(rest);
+            }
             read => {
                 check.push(&chunk[..read])?;
                 rest.extend_from_slice(&chunk[..read]);
+                guard.whole_fits(rest.len() as u64)?;
             }
         }
     }
@@ -1098,10 +1110,7 @@ fn scan_row_end(scan: &mut ForwardScan, buf: &[u8]) -> Result<Option<usize>, Rea
 // The first event starting at the buffer with its end offset; None when more
 // bytes may complete it. The scan resumes where the last fill stopped instead
 // of re-parsing from the buffer start.
-fn scan_event(
-    scan: &mut ForwardScan,
-    buf: &[u8],
-) -> Result<Option<(Next, usize)>, ReadError> {
+fn scan_event(scan: &mut ForwardScan, buf: &[u8]) -> Result<Option<(Next, usize)>, ReadError> {
     match advance(scan, buf, ScanGoal::Event)? {
         ScanEvent::Event(next, end) => Ok(Some((next, end))),
         ScanEvent::NeedMore => Ok(None),

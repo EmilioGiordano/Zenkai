@@ -107,6 +107,24 @@ fn shared_strings(count: usize, filler_len: usize) -> String {
     xml
 }
 
+// Copies a workbook and replaces one entry's body, leaving the rest untouched.
+fn with_replaced_part(bytes: Vec<u8>, name: &str, body: &[u8]) -> Vec<u8> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::FileOptions::default();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let entry_name = entry.name().to_string();
+        out.start_file(&entry_name, options).unwrap();
+        if entry_name == name {
+            out.write_all(body).unwrap();
+        } else {
+            std::io::copy(&mut entry, &mut out).unwrap();
+        }
+    }
+    out.finish().unwrap().into_inner()
+}
+
 // Copies a workbook and appends one more entry, leaving the rest untouched.
 fn with_extra_part(bytes: Vec<u8>, name: &str, body: &str) -> Vec<u8> {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
@@ -216,6 +234,50 @@ fn unreadable_first_entry_still_refuses_the_bomb_behind_it() {
     let started = Instant::now();
     let error = open_fast(bytes).unwrap_err();
     assert!(error.contains("fall back"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
+// Deterministic bytes with no XML control characters and no runs for the
+// compressor: the ratio gate passes, so only the whole-part cap can fire.
+fn incompressible(len: usize) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(len);
+    let mut state: u64 = 0x9E3779B9_7F4A7C15;
+    while bytes.len() < len {
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        for byte in state.to_le_bytes() {
+            bytes.push(b' ' + byte % 95);
+            if bytes.len() == len {
+                break;
+            }
+        }
+    }
+    bytes
+}
+
+#[test]
+fn dom_part_past_the_whole_cap_is_refused() {
+    let cell = r#"<c r="A1"><v>1</v></c>"#;
+    let bytes = workbook_with_sheet(&sheet(cell));
+    let bytes = with_replaced_part(bytes, "xl/workbook.xml", &incompressible(70_000_000));
+    let started = Instant::now();
+    let error = open_fast(bytes).unwrap_err();
+    assert!(error.contains("kept whole"), "{error}");
+    assert!(error.contains("harm"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
+#[test]
+fn worksheet_tail_past_the_whole_cap_is_refused() {
+    let tail = String::from_utf8(incompressible(70_000_000)).unwrap();
+    let sheet_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>{tail}</worksheet>"#
+    );
+    let started = Instant::now();
+    let error = open_fast(workbook_with_sheet(&sheet_xml)).unwrap_err();
+    assert!(error.contains("kept whole"), "{error}");
+    assert!(error.contains("harm"), "{error}");
     assert!(started.elapsed() < Duration::from_secs(60));
 }
 

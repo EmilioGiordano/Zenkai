@@ -12,6 +12,10 @@ use crate::ReadError;
 // fit here, so a huge file never reaches the reader without limits.
 pub const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 pub const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+// Parts inflated whole for a DOM parse or copied whole expand several times over
+// in memory, so they are capped far below streamed parts and charged to the
+// memory budget cells share.
+pub const MAX_WHOLE_PART_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 20_000;
 // A part expanding past this ratio is a zip bomb. Repetitive Excel files stay far
 // below it, so the ratio never needs tuning; a legitimate file that trips the gate
