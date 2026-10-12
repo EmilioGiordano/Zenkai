@@ -30,9 +30,7 @@ pub const RATIO_GATE_BYTES: u64 = 64 * 1024 * 1024;
 // release instrument and shared with Model::from_workbook's guard, so the
 // read refuses files the model build could not hold.
 pub use ironcalc::base::open_budget::BYTES_PER_ROW as ROW_BYTES;
-pub use ironcalc::base::open_budget::{
-    BUDGET_VARIABLE, BYTES_PER_CELL, BYTES_PER_FORMULA, FALLBACK_BUDGET_MB, RAM_SHARE_PERCENT,
-};
+pub use ironcalc::base::open_budget::{BYTES_PER_CELL, BYTES_PER_FORMULA};
 // Excel's own limit; it also bounds how deep any formula's syntax tree can get.
 pub const MAX_FORMULA_CHARS: usize = 8_192;
 pub const MAX_FORMULA_DEPTH: usize = 256;
@@ -62,17 +60,8 @@ pub struct CellBudget {
 
 impl CellBudget {
     pub fn production() -> CellBudget {
-        let override_mb = std::env::var(BUDGET_VARIABLE)
-            .ok()
-            .and_then(|text| text.trim().parse::<u64>().ok())
-            .filter(|megabytes| *megabytes > 0);
-        let budget_mb = override_mb.or_else(|| {
-            let mut system = sysinfo::System::new();
-            system.refresh_memory();
-            let total_mb = system.total_memory() / 1024 / 1024;
-            (total_mb > 0).then(|| total_mb * RAM_SHARE_PERCENT / 100)
-        });
-        CellBudget::from_budget_mb(budget_mb.unwrap_or(FALLBACK_BUDGET_MB))
+        let budget_mb = ironcalc::base::open_budget::production_budget_bytes() / 1024 / 1024;
+        CellBudget::from_budget_mb(budget_mb)
     }
 
     pub fn from_budget_mb(megabytes: u64) -> CellBudget {
