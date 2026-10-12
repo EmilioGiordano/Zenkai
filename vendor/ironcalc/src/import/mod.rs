@@ -101,6 +101,7 @@ fn oversized_part<R: Read + std::io::Seek>(
     use ironcalc_base::open_budget;
     let size = match archive.by_name(path) {
         Ok(entry) => entry.size(),
+        // A part the archive lacks is reported by the loader that needs it.
         Err(_) => return Ok(()),
     };
     if size.saturating_mul(factor) > budget_bytes {
@@ -140,7 +141,9 @@ fn load_xlsx_from_reader<R: Read + std::io::Seek>(
     // append to `styles.dxfs`, referencing them back by index from the rule.
     let mut styles = load_styles(&mut archive, &theme)?;
     for sheet in &workbook.worksheets {
-        let rel = &rels[&sheet.id];
+        let rel = rels.get(&sheet.id).ok_or_else(|| {
+            XlsxError::Workbook(format!("sheet {} has no relationship", sheet.name))
+        })?;
         if !rel.rel_type.ends_with("worksheet") {
             continue;
         }
@@ -250,6 +253,15 @@ pub fn load_from_xlsx<'a>(
     Model::from_workbook(workbook, language).map_err(XlsxError::Workbook)
 }
 
+/// Loads a [Model] from an `ic` file (a file in the IronCalc internal representation)
+pub fn load_from_icalc<'a>(file_name: &str, language_id: &'a str) -> Result<Model<'a>, XlsxError> {
+    let contents = fs::read(file_name)
+        .map_err(|e| XlsxError::IO(format!("Could not extract workbook name: {e}")))?;
+    let workbook: Workbook = bitcode::decode(&contents)
+        .map_err(|e| XlsxError::IO(format!("Failed to decode file: {e}")))?;
+    Model::from_workbook(workbook, language_id).map_err(XlsxError::Workbook)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -290,13 +302,4 @@ mod tests {
         .unwrap();
         oversized_part(&mut archived(&bytes), "xl/missing.xml", 16, 0).unwrap();
     }
-}
-
-/// Loads a [Model] from an `ic` file (a file in the IronCalc internal representation)
-pub fn load_from_icalc<'a>(file_name: &str, language_id: &'a str) -> Result<Model<'a>, XlsxError> {
-    let contents = fs::read(file_name)
-        .map_err(|e| XlsxError::IO(format!("Could not extract workbook name: {e}")))?;
-    let workbook: Workbook = bitcode::decode(&contents)
-        .map_err(|e| XlsxError::IO(format!("Failed to decode file: {e}")))?;
-    Model::from_workbook(workbook, language_id).map_err(XlsxError::Workbook)
 }
