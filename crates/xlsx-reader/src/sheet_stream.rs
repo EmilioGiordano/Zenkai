@@ -283,7 +283,7 @@ fn parse_unit(
     if unit.is_empty() {
         return Ok(());
     }
-    rowtags_from_unit(rowtags, cut, unit);
+    let rowtags_bytes = rowtags_from_unit(rowtags, cut, unit);
     let text = std::str::from_utf8(unit).map_err(unreadable)?;
     let scanned = scan_rows(text, driver.prefixes, driver.sheet_name)?;
     // An array formula spills into later rows; when its range runs past the rows
@@ -304,7 +304,8 @@ fn parse_unit(
                     .iter()
                     .map(|job| job.text.len() as u64)
                     .sum::<u64>(),
-            ),
+            )
+            .saturating_add(rowtags_bytes),
         rows: scanned.data.len() as u64,
     };
     driver.budgets.check_usage(usage)?;
@@ -314,8 +315,9 @@ fn parse_unit(
 
 // The outline row tags of one unit, found by the same pattern the pieces cut by;
 // the strict parse later still sees every byte.
-fn rowtags_from_unit(rowtags: &mut Vec<u8>, cut: &[u8], unit: &[u8]) {
+fn rowtags_from_unit(rowtags: &mut Vec<u8>, cut: &[u8], unit: &[u8]) -> u64 {
     let mut from = 0;
+    let mut added = 0u64;
     while from < unit.len() {
         let mut next = unit.len();
         let mut at = from + 1;
@@ -333,9 +335,10 @@ fn rowtags_from_unit(rowtags: &mut Vec<u8>, cut: &[u8], unit: &[u8]) {
             }
             at += 1;
         }
-        append_settings_tag(rowtags, &unit[from..next]);
+        added = added.saturating_add(append_settings_tag(rowtags, &unit[from..next]));
         from = next;
     }
+    added
 }
 
 // The bytes every row start begins with, read off the first row: the tag name may
@@ -525,7 +528,14 @@ pub(crate) fn stream_config<R: Read>(
         }
         if matches!(next, Next::Row) {
             let row = &window[pos..pos + end];
-            append_settings_tag(&mut rowtags, &row[blank_prefix_len(row)..]);
+            let added = append_settings_tag(&mut rowtags, &row[blank_prefix_len(row)..]);
+            if added > 0 {
+                budgets.check_usage(Usage {
+                    cells: 0,
+                    bytes: added,
+                    rows: 0,
+                })?;
+            }
         }
         pos += end;
         if pos > PIECE_BYTES {
@@ -567,24 +577,27 @@ struct Driver<'d> {
 // The row start tags the settings reader needs: rows with an outline level travel
 // along, and the first cell tag follows a row without a number so the outline keeps
 // it. Anything else from the rows never reaches the settings.
-fn append_settings_tag(rowtags: &mut Vec<u8>, row: &[u8]) {
+fn append_settings_tag(rowtags: &mut Vec<u8>, row: &[u8]) -> u64 {
     let tag = if row.ends_with(b"/>") {
         row
     } else {
         let Some(len) = tag_end(row) else {
-            return;
+            return 0;
         };
         &row[..len]
     };
     if !has_outline_marker(tag) {
-        return;
+        return 0;
     }
     rowtags.extend_from_slice(tag);
+    let mut added = tag.len() as u64;
     if !row_numbered(tag)
         && let Some(cell) = first_cell_tag(&row[tag.len()..])
     {
         rowtags.extend_from_slice(cell);
+        added += cell.len() as u64;
     }
+    added
 }
 
 fn has_outline_marker(tag: &[u8]) -> bool {
@@ -1546,6 +1559,40 @@ mod tests {
             .expect("a growing sheet must stop");
         let message = error.to_string();
         assert!(message.contains("needs at least"), "{message}");
+    }
+
+    #[test]
+    fn outline_row_tags_count_against_the_budget() {
+        let junk = "x".repeat(2048);
+        let mut rows = String::new();
+        for n in 1..=200 {
+            rows.push_str(&format!(
+                r#"<row r="{n}" outlineLevel="1" junk="{junk}"><c r="A{n}"><v>1</v></c></row>"#
+            ));
+        }
+        let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1000));
+        let error = stream_with(&xml, &budgets)
+            .err()
+            .expect("outline tags with kilobytes of attributes must trip the budget");
+        assert!(error.to_string().contains("needs at least"), "{error}");
+    }
+
+    #[test]
+    fn outline_row_tags_in_the_config_count_against_the_budget() {
+        let junk = "x".repeat(2048);
+        let mut rows = String::new();
+        for n in 1..=200 {
+            rows.push_str(&format!(
+                r#"<row r="{n}" outlineLevel="1" junk="{junk}"><c r="A{n}"><v>1</v></c></row>"#
+            ));
+        }
+        let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1000));
+        let error = config_with(&xml, &budgets)
+            .err()
+            .expect("outline tags with kilobytes of attributes must trip the budget");
+        assert!(error.to_string().contains("needs at least"), "{error}");
     }
 
     #[test]
