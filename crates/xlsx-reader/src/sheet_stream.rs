@@ -6,11 +6,17 @@ use quick_xml::events::{BytesStart, Event};
 
 use crate::ReadError;
 use crate::sheet_data::{SheetCells, Slot, remap_strings, scan_rows};
-use crate::stream::{Budgets, CharacterCheck};
+use crate::stream::{Budgets, CharacterCheck, Guard};
 
 // Rows are parsed in pieces of about this size, the same size the buffered reader
 // used; a piece is dropped once its cells are merged.
 const PIECE_BYTES: usize = 4 * 1024 * 1024;
+// Past a piece the reader keeps this many bytes back so the last row start still
+// has its boundary character in the window.
+const CUT_MARGIN: usize = 256 * 1024;
+// Past this many bytes without a row start the row is larger than any sheet holds,
+// so the file goes to IronCalc instead of growing the window without bound.
+const ROW_CAP_BYTES: usize = 16 * 1024 * 1024;
 // The configuration before <sheetData> is small; past this the file goes to IronCalc.
 const HEAD_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 const CHUNK_BYTES: usize = 64 * 1024;
@@ -30,8 +36,8 @@ fn unsupported(what: &str) -> ReadError {
 }
 
 // One pass over the worksheet: the configuration flows into the stub byte for byte,
-// complete rows are parsed as they arrive and dropped after merging, and only the
-// model cells, strings and formula texts stay in memory.
+// rows are parsed in pieces cut before row starts and dropped after merging, and only
+// the model cells, strings and formula texts stay in memory.
 pub(crate) fn stream_worksheet<R: Read>(
     entry: R,
     compressed: u64,
@@ -39,112 +45,196 @@ pub(crate) fn stream_worksheet<R: Read>(
     sheet_name: &str,
     budgets: &Budgets,
 ) -> Result<StreamedSheet, ReadError> {
-    let mut guard = budgets.stream(entry, compressed, part);
-    let mut check = CharacterCheck::new();
-    let mut head: Vec<u8> = Vec::new();
-    let mut chunk = [0u8; CHUNK_BYTES];
-    let (tag, content) = loop {
-        match scan_head(&head)? {
-            Head::Incomplete => {
-                if head.len() >= HEAD_LIMIT_BYTES {
-                    return Err(unsupported(
-                        "a worksheet with configuration larger than supported",
-                    ));
-                }
-                match guard.read_chunk(&mut chunk)? {
-                    0 => return Err(unreadable("a worksheet has no sheetData")),
-                    read => {
-                        check.push(&chunk[..read])?;
-                        head.extend_from_slice(&chunk[..read]);
-                    }
-                }
-            }
-            Head::Empty => {
-                let rest = stream_rest(&mut guard, &mut check, &mut chunk)?;
-                head.extend(rest);
-                return Ok(StreamedSheet {
-                    settings: head.clone(),
-                    stub: head,
-                    cells: SheetCells::default(),
-                });
-            }
-            Head::Found(tag, content) => break (tag, content),
-        }
+    let mut pump = Pump::new(entry, compressed, part, budgets);
+    let Some((tag, content)) = pump.sheet_content()? else {
+        let whole = pump.rest()?;
+        return Ok(StreamedSheet {
+            settings: whole.clone(),
+            stub: whole,
+            cells: SheetCells::default(),
+        });
     };
-    let (qname, prefixes) = sheet_tags(&head[..content])?;
+    let (qname, prefixes) = sheet_tags(&pump.head[..content])?;
+    let prefix = pump.head[..tag].to_vec();
+    pump.head.drain(..content);
+    pump.pos = 0;
     let mut driver = Driver {
         sheet_name,
         prefixes: &prefixes,
         budgets,
-        piece: Vec::new(),
         merged: SheetCells::default(),
         strings: std::collections::HashMap::new(),
     };
     let mut rowtags: Vec<u8> = Vec::new();
-    let mut pos = content;
-    let mut eof = false;
-    let tail = loop {
-        while pos == head.len() && !eof {
-            match guard.read_chunk(&mut chunk)? {
-                0 => eof = true,
-                read => {
-                    check.push(&chunk[..read])?;
-                    head.extend_from_slice(&chunk[..read]);
-                }
-            }
+    let cut = match pump.peek()? {
+        (Next::SheetDataEnd, end) => {
+            pump.pos += end;
+            return Ok(assembled(prefix, qname, rowtags, pump.rest()?, driver));
         }
-        if pos == head.len() {
+        (Next::Other, _) => {
+            return Err(unsupported("something other than a row in sheetData"));
+        }
+        (Next::Row, end) => {
+            let span = &pump.head[pump.pos..pump.pos + end];
+            if span.contains(&b'\r') {
+                return Err(unsupported("a carriage return inside sheetData"));
+            }
+            let Some(pattern) = row_cut_pattern(span) else {
+                return Err(unsupported("something other than a row in sheetData"));
+            };
+            pattern
+        }
+    };
+    loop {
+        while !pump.eof && pump.window().len() < PIECE_BYTES + CUT_MARGIN {
+            pump.fill()?;
+        }
+        if pump.window().is_empty() {
             return Err(unreadable("sheetData is not closed"));
         }
-        // A tag truncated by the window errors instead of reporting Eof, so any
-        // failure before the stream ends reads more bytes and tries again; the
-        // budgets bound how far a malformed file gets this way.
-        let (next, end) = loop {
-            match peek_event(&head[pos..]) {
-                Ok(Some(found)) => break found,
-                Ok(None) | Err(_) if !eof => match guard.read_chunk(&mut chunk)? {
-                    0 => eof = true,
-                    read => {
-                        check.push(&chunk[..read])?;
-                        head.extend_from_slice(&chunk[..read]);
+        if let Some((rel, end)) = find_end_tag(pump.window()) {
+            let start = pump.pos;
+            parse_unit(
+                &mut driver,
+                &mut rowtags,
+                &cut,
+                &pump.head[start..start + rel],
+            )?;
+            pump.pos = start + end;
+            let tail = pump.rest()?;
+            return Ok(assembled(prefix, qname, rowtags, tail, driver));
+        }
+        match find_cut(pump.window(), &cut) {
+            Some(at) if at > 0 => {
+                let start = pump.pos;
+                parse_unit(
+                    &mut driver,
+                    &mut rowtags,
+                    &cut,
+                    &pump.head[start..start + at],
+                )?;
+                pump.pos = start + at;
+                if pump.pos > PIECE_BYTES {
+                    let pos = pump.pos;
+                    pump.head.drain(..pos);
+                    pump.pos = 0;
+                }
+            }
+            _ if pump.eof => return Err(unreadable("sheetData is not closed")),
+            _ if pump.window().len() >= ROW_CAP_BYTES => {
+                return Err(unsupported("a row larger than supported"));
+            }
+            _ => pump.fill()?,
+        }
+    }
+}
+
+// The decompressed bytes read so far with the read position, refilled through the
+// budgets; parsed bytes drain once a piece is merged so the window stays flat.
+struct Pump<'b, R: Read> {
+    guard: Guard<'b, R>,
+    check: CharacterCheck,
+    chunk: [u8; CHUNK_BYTES],
+    head: Vec<u8>,
+    pos: usize,
+    eof: bool,
+}
+
+impl<'b, R: Read> Pump<'b, R> {
+    fn new(entry: R, compressed: u64, part: &str, budgets: &'b Budgets) -> Self {
+        Pump {
+            guard: budgets.stream(entry, compressed, part),
+            check: CharacterCheck::new(),
+            chunk: [0u8; CHUNK_BYTES],
+            head: Vec::new(),
+            pos: 0,
+            eof: false,
+        }
+    }
+
+    fn window(&self) -> &[u8] {
+        &self.head[self.pos..]
+    }
+
+    fn fill(&mut self) -> Result<(), ReadError> {
+        match self.guard.read_chunk(&mut self.chunk)? {
+            0 => self.eof = true,
+            read => {
+                self.check.push(&self.chunk[..read])?;
+                self.head.extend_from_slice(&self.chunk[..read]);
+            }
+        }
+        Ok(())
+    }
+
+    // The start of the <sheetData> tag and the start of its content; None when the
+    // configuration holds no rows.
+    fn sheet_content(&mut self) -> Result<Option<(usize, usize)>, ReadError> {
+        loop {
+            match scan_head(&self.head)? {
+                Head::Incomplete => {
+                    if self.head.len() >= HEAD_LIMIT_BYTES {
+                        return Err(unsupported(
+                            "a worksheet with configuration larger than supported",
+                        ));
                     }
-                },
+                    self.fill()?;
+                    if self.eof {
+                        return Err(unreadable("a worksheet has no sheetData"));
+                    }
+                }
+                Head::Empty => return Ok(None),
+                Head::Found(tag, content) => return Ok(Some((tag, content))),
+            }
+        }
+    }
+
+    // The next row, end tag or other event with its end offset from the read
+    // position; a tag truncated by the window reads more bytes and tries again,
+    // and the budgets bound how far a malformed file gets this way.
+    fn peek(&mut self) -> Result<(Next, usize), ReadError> {
+        loop {
+            match peek_event(self.window()) {
+                Ok(Some(found)) => return Ok(found),
+                Ok(None) | Err(_) if !self.eof => self.fill()?,
                 Ok(None) => return Err(unreadable("sheetData is not closed")),
                 Err(error) => return Err(error),
             }
-        };
-        if head[pos..pos + end].contains(&b'\r') {
-            return Err(unsupported("a carriage return inside sheetData"));
         }
-        match next {
-            Next::Row => {
-                append_settings_tag(&mut rowtags, &head[pos..pos + end]);
-                driver.piece.extend_from_slice(&head[pos..pos + end]);
-                pos += end;
-                if driver.piece.len() >= PIECE_BYTES {
-                    driver.flush()?;
+    }
+
+    fn rest(&mut self) -> Result<Vec<u8>, ReadError> {
+        let mut rest = self.head[self.pos..].to_vec();
+        self.head.clear();
+        self.pos = 0;
+        loop {
+            match self.guard.read_chunk(&mut self.chunk)? {
+                0 => return Ok(rest),
+                read => {
+                    self.check.push(&self.chunk[..read])?;
+                    rest.extend_from_slice(&self.chunk[..read]);
                 }
             }
-            Next::SheetDataEnd => {
-                pos += end;
-                break pos;
-            }
-            Next::Other => {
-                return Err(unsupported("something other than a row in sheetData"));
-            }
         }
-    };
-    driver.finish()?;
-    let rest = stream_rest(&mut guard, &mut check, &mut chunk)?;
-    let mut stub = Vec::with_capacity(tag + qname.len() + 3 + rest.len());
-    stub.extend_from_slice(&head[..tag]);
+    }
+}
+
+fn assembled(
+    prefix: Vec<u8>,
+    qname: Vec<u8>,
+    rowtags: Vec<u8>,
+    tail: Vec<u8>,
+    driver: Driver,
+) -> StreamedSheet {
+    let mut stub = Vec::with_capacity(prefix.len() + qname.len() + 3 + tail.len());
+    stub.extend_from_slice(&prefix);
     stub.extend_from_slice(b"<");
     stub.extend_from_slice(&qname);
     stub.extend_from_slice(b"/>");
-    stub.extend_from_slice(&head[tail..]);
-    stub.extend_from_slice(&rest);
-    let mut settings = Vec::with_capacity(tag + rowtags.len() + rest.len() + qname.len() * 2 + 8);
-    settings.extend_from_slice(&head[..tag]);
+    stub.extend_from_slice(&tail);
+    let mut settings =
+        Vec::with_capacity(prefix.len() + rowtags.len() + tail.len() + qname.len() * 2 + 8);
+    settings.extend_from_slice(&prefix);
     settings.extend_from_slice(b"<");
     settings.extend_from_slice(&qname);
     settings.extend_from_slice(b">");
@@ -152,13 +242,140 @@ pub(crate) fn stream_worksheet<R: Read>(
     settings.extend_from_slice(b"</");
     settings.extend_from_slice(&qname);
     settings.extend_from_slice(b">");
-    settings.extend_from_slice(&head[tail..]);
-    settings.extend_from_slice(&rest);
-    Ok(StreamedSheet {
+    settings.extend_from_slice(&tail);
+    StreamedSheet {
         stub,
         settings,
         cells: driver.merged,
-    })
+    }
+}
+
+// One unit holds complete rows: outline tags travel to the settings, and the
+// strict parse reads every byte.
+fn parse_unit(
+    driver: &mut Driver,
+    rowtags: &mut Vec<u8>,
+    cut: &[u8],
+    unit: &[u8],
+) -> Result<(), ReadError> {
+    if unit.is_empty() {
+        return Ok(());
+    }
+    if unit.contains(&b'\r') {
+        return Err(unsupported("a carriage return inside sheetData"));
+    }
+    rowtags_from_unit(rowtags, cut, unit);
+    let text = std::str::from_utf8(unit).map_err(unreadable)?;
+    let scanned = scan_rows(text, driver.prefixes, driver.sheet_name)?;
+    // An array formula spills into later rows; when its range runs past the rows
+    // read so far a later piece would miss the cover, so the file goes to IronCalc.
+    if spill_past_piece(&scanned) {
+        return Err(unsupported("an array formula spilling past one piece"));
+    }
+    let cells = scanned.data.iter().map(|(_, row)| row.len() as u64).sum();
+    merge(&mut driver.merged, &mut driver.strings, scanned)?;
+    driver.budgets.check_cells(cells)?;
+    Ok(())
+}
+
+// The outline row tags of one unit, found by the same pattern the pieces cut by;
+// the strict parse later still sees every byte.
+fn rowtags_from_unit(rowtags: &mut Vec<u8>, cut: &[u8], unit: &[u8]) {
+    let mut from = 0;
+    while from < unit.len() {
+        let mut next = unit.len();
+        let mut at = from + 1;
+        while at + cut.len() <= unit.len() {
+            let Some(rel) = unit[at..].windows(cut.len()).position(|w| w == cut) else {
+                break;
+            };
+            at += rel;
+            if matches!(
+                unit.get(at + cut.len()),
+                Some(b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>')
+            ) {
+                next = at;
+                break;
+            }
+            at += 1;
+        }
+        append_settings_tag(rowtags, &unit[from..next]);
+        from = next;
+    }
+}
+
+// The bytes every row start begins with, read off the first row: the tag name may
+// carry a namespace prefix, which the strict parse validates later.
+fn row_cut_pattern(row: &[u8]) -> Option<Vec<u8>> {
+    let tag = if row.ends_with(b"/>") {
+        row
+    } else {
+        &row[..tag_end(row)?]
+    };
+    let name = tag_name(&tag[1..])?;
+    let mut pattern = Vec::with_capacity(name.len() + 1);
+    pattern.push(b'<');
+    pattern.extend_from_slice(name);
+    Some(pattern)
+}
+
+// The last row start in the buffer, so the piece before it holds complete rows;
+// a start cut off by the buffer end is left for the next fill.
+fn find_cut(buf: &[u8], pattern: &[u8]) -> Option<usize> {
+    let mut end = buf.len();
+    while let Some(at) = buf[..end].iter().rposition(|byte| *byte == b'<') {
+        if buf[at..].starts_with(pattern)
+            && matches!(
+                buf.get(at + pattern.len()),
+                Some(b' ' | b'\t' | b'\n' | b'\r' | b'/' | b'>')
+            )
+        {
+            return Some(at);
+        }
+        if at == 0 {
+            break;
+        }
+        end = at;
+    }
+    None
+}
+
+// The first worksheet-data end tag with the end of it; None when no complete end
+// tag is in sight yet. Anything unusual is left for the strict parse.
+fn find_end_tag(buf: &[u8]) -> Option<(usize, usize)> {
+    let mut from = 0;
+    while let Some(rel) = buf[from..].iter().position(|byte| *byte == b'<') {
+        let at = from + rel;
+        if buf[at..].starts_with(b"</") {
+            let mut index = at + 2;
+            while index < buf.len() && !buf[index].is_ascii_whitespace() && buf[index] != b'>' {
+                index += 1;
+            }
+            let name = buf.get(at + 2..index)?;
+            if local_is(name, b"sheetData") {
+                let mut quote = 0u8;
+                let mut end = index;
+                while end < buf.len() {
+                    let byte = buf[end];
+                    if quote != 0 {
+                        if byte == quote {
+                            quote = 0;
+                        }
+                    } else if byte == b'"' || byte == b'\'' {
+                        quote = byte;
+                    } else if byte == b'<' {
+                        break;
+                    } else if byte == b'>' {
+                        return Some((at, end + 1));
+                    }
+                    end += 1;
+                }
+                return None;
+            }
+        }
+        from = at + 1;
+    }
+    None
 }
 
 // The configuration of one worksheet without its rows, for a reader that parses the
@@ -275,44 +492,8 @@ struct Driver<'d> {
     sheet_name: &'d str,
     prefixes: &'d [Vec<u8>],
     budgets: &'d Budgets,
-    piece: Vec<u8>,
     merged: SheetCells,
     strings: std::collections::HashMap<String, i32>,
-}
-
-impl Driver<'_> {
-    fn flush(&mut self) -> Result<(), ReadError> {
-        if self.piece.is_empty() {
-            return Ok(());
-        }
-        let text = std::str::from_utf8(&self.piece).map_err(unreadable)?;
-        let scanned = scan_rows(text, self.prefixes, self.sheet_name)?;
-        // An array formula spills into later rows; when its range runs past the rows
-        // read so far a later piece would miss the cover, so the file goes to IronCalc.
-        if spill_past_piece(&scanned) {
-            return Err(unsupported("an array formula spilling past one piece"));
-        }
-        let cells = scanned.data.iter().map(|(_, row)| row.len() as u64).sum();
-        merge(&mut self.merged, &mut self.strings, scanned)?;
-        self.budgets.check_cells(cells)?;
-        self.piece.clear();
-        Ok(())
-    }
-
-    fn finish(&mut self) -> Result<(), ReadError> {
-        if self.merged.data.is_empty() && self.piece.is_empty() {
-            return Ok(());
-        }
-        let text = std::str::from_utf8(&self.piece).map_err(unreadable)?;
-        let scanned = scan_rows(text, self.prefixes, self.sheet_name)?;
-        if spill_past_piece(&scanned) {
-            return Err(unsupported("an array formula spilling past one piece"));
-        }
-        let cells = scanned.data.iter().map(|(_, row)| row.len() as u64).sum();
-        merge(&mut self.merged, &mut self.strings, scanned)?;
-        self.budgets.check_cells(cells)?;
-        Ok(())
-    }
 }
 
 // The row start tags the settings reader needs: rows with an outline level travel
