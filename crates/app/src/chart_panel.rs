@@ -5,6 +5,7 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::chart::{BarChart, LineChart, PieChart};
 use gpui_kit::*;
 use zenkai_engine::{Engine, Workbook};
+use zenkai_i18n::t;
 use zenkai_types::{CellPos, CellView, ColIdx, Range, RowIdx, SheetId};
 
 use crate::actions::{
@@ -104,7 +105,7 @@ pub fn render(panel: &ChartPanel, cx: &App) -> impl IntoElement {
             .p_4()
             .text_sm()
             .text_color(theme.muted_foreground)
-            .child("Select a range with numbers to chart it.")
+            .child(t!("chart.empty"))
             .into_any_element()
     } else {
         match panel.kind {
@@ -147,7 +148,7 @@ pub fn render(panel: &ChartPanel, cx: &App) -> impl IntoElement {
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
                         .overflow_hidden()
-                        .child(format!("{}  ·  {}", panel.data.title, panel.source)),
+                        .child(format!("{}, {}", panel.data.title, panel.source)),
                 )
                 .child(kind_button(
                     "chart-column",
@@ -170,19 +171,19 @@ pub fn render(panel: &ChartPanel, cx: &App) -> impl IntoElement {
                 .child(button(
                     "chart-svg",
                     IconName::Download,
-                    "Export as SVG image",
+                    t!("chart.export_svg"),
                     ExportChartSvg,
                 ))
                 .child(button(
                     "chart-mermaid",
                     IconName::Copy,
-                    "Copy as Mermaid",
+                    t!("chart.copy_mermaid"),
                     CopyChartMermaid,
                 ))
                 .child(button(
                     "chart-close",
                     IconName::X,
-                    "Close chart",
+                    t!("chart.close"),
                     CloseChart,
                 )),
         )
@@ -193,6 +194,6 @@ pub fn render(panel: &ChartPanel, cx: &App) -> impl IntoElement {
                 .pb_2()
                 .text_xs()
                 .text_color(theme.muted_foreground)
-                .child("Live: the chart follows edits to its range."),
+                .child(t!("chart.live_note")),
         )
 }

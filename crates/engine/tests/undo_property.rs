@@ -131,3 +131,83 @@ proptest! {
         prop_assert_eq!(snapshot(&book), end);
     }
 }
+
+fn every_cell(book: &Workbook) -> Vec<(CellPos, String)> {
+    let mut cells: Vec<(CellPos, String)> = book
+        .filled_cells(SHEET)
+        .into_iter()
+        .map(|at| {
+            let view = format!("{}|{:?}", book.input(SHEET, at), book.cell(SHEET, at));
+            (at, view)
+        })
+        .collect();
+    cells.sort_by_key(|(at, _)| (at.row, at.col));
+    cells
+}
+
+fn far_value() -> impl Strategy<Value = String> {
+    prop_oneof![
+        (-50i32..50).prop_map(|n| n.to_string()),
+        "[a-z]{1,4}",
+        Just("=A1+1".to_string()),
+        Just("=SUM(A:A)".to_string()),
+        Just("=SEQUENCE(2,2)".to_string()),
+    ]
+}
+
+// Cells spread over the whole sheet, so the box around them is far past a million cells,
+// next to a dense block.
+fn scattered() -> impl Strategy<Value = Vec<(u32, u16, String)>> {
+    prop::collection::vec((0u32..1_048_576, 0u16..40, far_value()), 1..25)
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
+
+    #[test]
+    fn one_undo_restores_every_cleared_cell(
+        far in scattered(),
+        block_rows in 1u32..60,
+        (top, left, bottom, right) in (0u32..1_048_576, 0u16..40, 0u32..1_048_576, 0u16..40),
+        whole_sheet in any::<bool>(),
+    ) {
+        let mut book = seeded();
+        let block: Vec<Vec<String>> = (0..block_rows)
+            .map(|row| (0..6).map(|col| format!("{}", row * 6 + col)).collect())
+            .collect();
+        book.set_inputs(SHEET, pos(10, 0), &block).unwrap();
+        for (row, col, text) in &far {
+            let at = CellPos::new(RowIdx::new(*row).unwrap(), ColIdx::new(*col).unwrap());
+            book.set_input(SHEET, at, text).unwrap();
+        }
+        let target = if whole_sheet {
+            Range::new(CellPos::default(), CellPos::new(RowIdx::LAST, ColIdx::LAST))
+        } else {
+            Range::new(
+                CellPos::new(RowIdx::new(top).unwrap(), ColIdx::new(left).unwrap()),
+                CellPos::new(RowIdx::new(bottom).unwrap(), ColIdx::new(right).unwrap()),
+            )
+        };
+        let before = every_cell(&book);
+        if !before.iter().any(|(at, _)| target.contains(*at)) {
+            // Nothing to clear records no undo step, as in Excel.
+            book.clear(SHEET, target).unwrap();
+            prop_assert_eq!(every_cell(&book), before);
+            return Ok(());
+        }
+        if book.clear(SHEET, target).is_err() {
+            // Only an array formula reaching out of the selection refuses, changing nothing.
+            prop_assert_eq!(every_cell(&book), before);
+            return Ok(());
+        }
+        let cleared = every_cell(&book);
+        // Values spilled by a formula outside the selection are recomputed and stay as they were.
+        prop_assert!(cleared
+            .iter()
+            .all(|entry| !target.contains(entry.0) || before.contains(entry)));
+        book.undo().unwrap();
+        prop_assert_eq!(every_cell(&book), before.clone());
+        book.redo().unwrap();
+        prop_assert_eq!(every_cell(&book), cleared);
+    }
+}

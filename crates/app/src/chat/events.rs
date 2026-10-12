@@ -1,0 +1,234 @@
+use std::borrow::Cow;
+
+use gpui_kit::component::text::TextViewState;
+use gpui_kit::*;
+use zenkai_agent::chat::history::History;
+use zenkai_agent::chat::session::{Connection, SessionError, SessionEvent};
+use zenkai_agent::chat::state::{ConfigKind, ContextUsage, StateChange};
+use zenkai_agent::chat::thread::{Effect, MessageId, NoticeKind, TurnEnd};
+use zenkai_agent::presets::Preset;
+use zenkai_i18n::t;
+
+use super::{ChatEvent, ChatPanel, Link, MAX_PENDING_ASKS, Problem, View};
+use super::{launch, reference_scan};
+use crate::agent_settings::AgentConfig;
+
+impl ChatPanel {
+    pub(super) fn elapsed_seconds(&mut self) -> u64 {
+        self.turn_started
+            .take()
+            .map_or(0, |started| started.elapsed().as_secs())
+    }
+
+    pub(super) fn finish_turn(&mut self, end: TurnEnd, cx: &mut Context<Self>) {
+        for ask in self.permissions.drain(..) {
+            ask.cancel();
+        }
+        let seconds = self.elapsed_seconds();
+        if self.busy() {
+            self.thread.end_turn(end, seconds);
+        } else if let TurnEnd::Failed(text) = end {
+            self.thread.notice(NoticeKind::Error, &text);
+        }
+        self.link_references(cx);
+        self.scroll_to_end();
+        cx.notify();
+    }
+
+    pub(super) fn link_references(&mut self, cx: &mut Context<Self>) {
+        for (id, state) in &self.texts {
+            if self.linked_messages.contains(id) {
+                continue;
+            }
+            let Some(raw) = self.thread.message_text(*id) else {
+                continue;
+            };
+            if let Cow::Owned(linked) = reference_scan::link_references(raw) {
+                state.update(cx, |state, cx| state.set_text(&linked, cx));
+            }
+            self.linked_messages.insert(*id);
+        }
+    }
+
+    pub(super) fn login_command(&self, cx: &App) -> Option<&'static str> {
+        let agent = match &self.live {
+            Some(live) => live.agent.clone(),
+            None => launch::chosen_agent(&cx.global::<AgentConfig>().state.current)?.0,
+        };
+        Preset::for_agent(&agent).map(|preset| preset.login_command)
+    }
+
+    pub(super) fn on_event(&mut self, epoch: u64, event: SessionEvent, cx: &mut Context<Self>) {
+        if epoch != self.epoch {
+            return;
+        }
+        match event {
+            SessionEvent::Connection(Connection::Installing) => self.link = Link::Installing,
+            SessionEvent::Connection(Connection::Starting) => self.link = Link::Starting,
+            SessionEvent::Connection(Connection::Ready { agent }) => {
+                let resume_ready = self.pending_resume.as_ref().is_some_and(|row| {
+                    self.live
+                        .as_ref()
+                        .is_some_and(|live| live.agent == row.agent)
+                        && self.live_session.is_none()
+                });
+                self.link = Link::Ready(agent.into());
+                self.apply_choices(cx);
+                if let Some(live) = &mut self.live {
+                    live.ready = true;
+                    if self.state.abilities.list_sessions {
+                        live.handle.list_sessions(self.history.started_sessions());
+                    }
+                    if let Some((text, context)) = self.queued.take() {
+                        live.handle.prompt(text, context);
+                    }
+                }
+                if resume_ready {
+                    cx.emit(ChatEvent::ResumeSession);
+                }
+            }
+            SessionEvent::Update(update) => {
+                let follow = self.at_bottom();
+                if let Effect::Appended { message, added } = self.thread.apply(update) {
+                    self.grow_message(message, added, cx);
+                }
+                if follow {
+                    self.scroll_to_end();
+                }
+            }
+            SessionEvent::Permission(ask) if self.permissions.len() >= MAX_PENDING_ASKS => {
+                ask.cancel();
+                self.thread
+                    .notice(NoticeKind::Error, t!("chat.too_many_questions"));
+            }
+            SessionEvent::Permission(ask) => {
+                self.thread.waiting_for_permission(&ask.tool, &ask.title);
+                self.permissions.push(ask);
+                self.view = View::Chat;
+                cx.emit(ChatEvent::NeedsAnswer);
+                self.scroll_to_end();
+            }
+            SessionEvent::TurnEnded(end) => {
+                if let Some(since) = self.turn_began.take() {
+                    self.list_files_written(since, cx);
+                }
+                self.finish_turn(end, cx);
+            }
+            SessionEvent::AuthRequired => self.require_sign_in(cx),
+            SessionEvent::Failed(error) => {
+                if error == SessionError::AuthRequired {
+                    self.require_sign_in(cx);
+                }
+                self.pending_resume = None;
+                self.end_session(cx);
+                self.finish_turn(TurnEnd::Failed(error.to_string()), cx);
+            }
+            SessionEvent::Closed => {
+                self.pending_resume = None;
+                self.end_session(cx);
+            }
+            SessionEvent::State(change) => {
+                let before = self
+                    .state
+                    .select(ConfigKind::Mode)
+                    .map(|m| m.current.clone());
+                if let StateChange::Usage(usage) = &change {
+                    self.note_context(*usage);
+                }
+                self.state.apply(change);
+                let after = self.state.select(ConfigKind::Mode).map(|m| &m.current);
+                if before.as_ref() != after {
+                    self.follow_agent_mode(cx);
+                }
+            }
+            SessionEvent::Problem(text) => {
+                if let Some(backup) = self.resume_backup.take() {
+                    self.thread = backup.thread;
+                    self.texts = backup.texts;
+                    self.title = backup.title;
+                }
+                self.thread.notice(NoticeKind::Error, &text);
+            }
+            SessionEvent::Started(id) => {
+                self.live_session = Some(id.clone());
+                self.history.remember_session(&id);
+                if let Some(identity) = self.pending_record.take()
+                    && self.history.attach_session_to(&identity, &id).is_some()
+                {
+                    self.refresh_size(&id);
+                }
+                if self.history_saves.try_send(self.history.clone()).is_err() {
+                    tracing::debug!("conversation history writer is not running");
+                }
+            }
+            SessionEvent::Resumed => {
+                self.resume_backup = None;
+                self.link_references(cx);
+                self.scroll_to_end();
+            }
+        }
+        cx.notify();
+    }
+
+    pub(super) fn require_sign_in(&mut self, cx: &App) {
+        let login = self.login_command(cx);
+        self.problem = Some(Problem {
+            text: t!("chat.sign_in").into(),
+            login,
+        });
+    }
+
+    pub(super) fn grow_message(
+        &mut self,
+        message: MessageId,
+        added: String,
+        cx: &mut Context<Self>,
+    ) {
+        match self.texts.get(&message) {
+            Some(state) => state.update(cx, |state, cx| state.push_str(&added, cx)),
+            None => {
+                let state = cx.new(|cx| TextViewState::markdown(&added, cx));
+                self.texts.insert(message, state);
+                self.texts
+                    .retain(|id, _| self.thread.message_text(*id).is_some());
+            }
+        }
+    }
+
+    fn note_context(&mut self, usage: ContextUsage) {
+        let Some(session) = self.live_session.clone() else {
+            return;
+        };
+        if self.history.note_context(&session, usage).is_none() {
+            return;
+        }
+        self.refresh_size(&session);
+        if self.history_saves.try_send(self.history.clone()).is_err() {
+            tracing::debug!("conversation history writer is not running");
+        }
+    }
+
+    fn refresh_size(&mut self, session: &str) {
+        if let Some(record) = self.history.record_for_session(session) {
+            let key = record.identity();
+            let size = History::record_size(record);
+            self.session_sizes.insert(key, size);
+        }
+    }
+
+    pub(super) fn end_session(&mut self, cx: &mut Context<Self>) {
+        self.link = Link::Idle;
+        self.live_session = None;
+        self.pending_record = None;
+        if let Some(live) = self.live.take() {
+            let tree = live.handle.process_tree();
+            cx.background_executor()
+                .spawn(async move { tree.close() })
+                .detach();
+        }
+    }
+
+    pub fn shutdown(&mut self) -> Option<std::sync::Arc<zenkai_agent::chat::process::ProcessTree>> {
+        self.live.take().map(|live| live.handle.process_tree())
+    }
+}

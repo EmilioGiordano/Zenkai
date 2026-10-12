@@ -41,6 +41,7 @@ Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx and .csv f
 
 [Files]
 Source: "{#ExeDir}\zenkai.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeDir}\zenkai-mcp.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 

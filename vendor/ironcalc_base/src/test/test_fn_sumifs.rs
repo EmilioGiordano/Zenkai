@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use crate::cell::CellValue;
 use crate::model::Model;
 use crate::test::util::new_empty_model;
 
@@ -126,4 +127,26 @@ fn test_apply_ifs_date_criterion_respects_locale() {
     assert_eq!(model._get_text("A2"), *"4");
     assert_eq!(model._get_text("A3"), *"7");
     assert_eq!(model._get_text("A4"), *"1");
+}
+
+// Summed in order, ten 0.1 make 0.9999999999999999; rounded once, 1.
+#[test]
+fn sumif_and_sumifs_round_the_exact_sum_once() {
+    let mut model = new_empty_model();
+    for row in 1..=10 {
+        model._set(&format!("A{row}"), "0.1");
+        model._set(&format!("B{row}"), "x");
+    }
+    model._set("C1", "=SUMIF(B1:B10,\"x\",A1:A10)");
+    model._set("C2", "=SUMIFS(A1:A10,B1:B10,\"x\")");
+    model._set("C3", "=SUMIF(B1:B10,{\"x\"},A1:A10)");
+    model.evaluate();
+
+    for row in 1..=3 {
+        assert_eq!(
+            model.get_cell_value_by_index(0, row, 3),
+            Ok(CellValue::Number(1.0)),
+            "C{row}"
+        );
+    }
 }

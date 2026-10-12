@@ -1,7 +1,14 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::time::Instant;
 
-use zenkai_engine::{Engine, EngineError, Workbook, run_with_engine_stack, write_atomic};
+use zenkai_agent::preferences::XlsxReaderChoice;
+use zenkai_agent::protected_view::{FileOrigin, file_origin};
+use zenkai_engine::{
+    Engine, EngineError, Unsupported, Workbook, XlsxReader, open_xlsx_with, run_with_engine_stack,
+    write_atomic,
+};
 use zenkai_formats::{Delimiter, ParsedCsv, parse_csv, read_values, write_csv};
+use zenkai_i18n::t;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
 const REPLACED_EXTENSIONS: [&str; 4] = ["xlsm", "xls", "xlsb", "ods"];
@@ -28,6 +35,53 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+pub fn is_remote_or_device(path: &Path) -> bool {
+    matches!(
+        path.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(
+            prefix.kind(),
+            std::path::Prefix::UNC(..)
+                | std::path::Prefix::VerbatimUNC(..)
+                | std::path::Prefix::DeviceNS(_)
+                | std::path::Prefix::Verbatim(_)
+        )
+    )
+}
+
+// Case, separators, `.` and `..` do not make two spellings different files. Purely lexical:
+// it never reads the disk, so it is safe on the UI thread.
+pub fn same_path(a: &Path, b: &Path) -> bool {
+    normalized(a) == normalized(b)
+}
+
+fn normalized(path: &Path) -> Vec<(bool, String)> {
+    let fold = |text: &std::ffi::OsStr| {
+        let text = text.to_string_lossy();
+        if cfg!(windows) {
+            text.to_lowercase()
+        } else {
+            text.into_owned()
+        }
+    };
+    let mut parts: Vec<(bool, String)> = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => parts.push((false, fold(prefix.as_os_str()))),
+            Component::RootDir => parts.push((false, "/".to_string())),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if parts.last().is_some_and(|(is_name, _)| *is_name) {
+                    parts.pop();
+                } else {
+                    parts.push((false, "..".to_string()));
+                }
+            }
+            Component::Normal(name) => parts.push((true, fold(name))),
+        }
+    }
+    parts
+}
+
 fn extension(path: &Path) -> Option<String> {
     path.extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -38,8 +92,8 @@ pub fn is_delimited_text(path: &Path) -> bool {
 }
 
 pub fn read_csv(path: &Path) -> Result<(Vec<u8>, ParsedCsv), String> {
-    let bytes =
-        std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+    let bytes = std::fs::read(path)
+        .map_err(|e| t!("file.read_failed", path = path.display(), error = e))?;
     let hint = (extension(path).as_deref() == Some("tsv")).then_some(Delimiter::Tab);
     let parsed = parse_csv(&bytes, hint).map_err(|e| e.to_string())?;
     Ok((bytes, parsed))
@@ -55,16 +109,93 @@ pub fn workbook_from_rows(rows: Vec<Vec<String>>) -> Result<Workbook, String> {
     .map_err(|e| e.to_string())
 }
 
+pub struct FileLoad {
+    pub workbook: Workbook,
+    pub unsupported: Vec<Unsupported>,
+    pub read_only: bool,
+    pub origin: FileOrigin,
+    pub reader_fallback: Option<String>,
+}
+
+// ZENKAI_XLSX_READER=fast, shadow or standard overrides the setting, for testing.
+pub fn xlsx_reader(choice: XlsxReaderChoice) -> XlsxReader {
+    match std::env::var("ZENKAI_XLSX_READER").as_deref() {
+        Ok("fast") => XlsxReader::Fast,
+        Ok("shadow") => XlsxReader::Shadow,
+        Ok("standard") => XlsxReader::IronCalc,
+        _ => match choice {
+            XlsxReaderChoice::Standard => XlsxReader::IronCalc,
+            XlsxReaderChoice::Fast => XlsxReader::Fast,
+        },
+    }
+}
+
+pub enum LoadFailure {
+    Missing,
+    Engine(EngineError),
+    Unreadable { reason: String, fallback: String },
+}
+
+pub fn load_workbook(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFailure> {
+    let started = Instant::now();
+    let loaded = load_any(path, reader);
+    let elapsed_ms = started.elapsed().as_millis();
+    match &loaded {
+        Ok(load) => tracing::info!(
+            ?path,
+            elapsed_ms,
+            read_only = load.read_only,
+            "workbook opened"
+        ),
+        Err(LoadFailure::Missing) => {
+            tracing::warn!(?path, elapsed_ms, "workbook to open is missing")
+        }
+        Err(LoadFailure::Engine(error)) => {
+            tracing::warn!(?path, elapsed_ms, %error, "workbook could not be opened")
+        }
+        Err(LoadFailure::Unreadable { reason, fallback }) => {
+            tracing::warn!(?path, elapsed_ms, %reason, %fallback, "workbook is unreadable")
+        }
+    }
+    loaded
+}
+
+fn load_any(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFailure> {
+    match open_xlsx_with(path, reader) {
+        Ok(opened) => Ok(FileLoad {
+            workbook: opened.workbook,
+            unsupported: opened.unsupported,
+            read_only: false,
+            origin: file_origin(path),
+            reader_fallback: opened.fallback,
+        }),
+        Err(EngineError::InvalidFile(reason)) => match open_values(path) {
+            Ok(workbook) => Ok(FileLoad {
+                workbook,
+                unsupported: Vec::new(),
+                read_only: true,
+                origin: file_origin(path),
+                reader_fallback: None,
+            }),
+            Err(fallback) => Err(LoadFailure::Unreadable { reason, fallback }),
+        },
+        Err(EngineError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
+            Err(LoadFailure::Missing)
+        }
+        Err(error) => Err(LoadFailure::Engine(error)),
+    }
+}
+
 const MAX_VALUES_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 // Plan B when the engine cannot open a file (or it is .xls/.ods): only the values,
 // read by calamine, in a workbook that is never saved over the original.
 pub fn open_values(path: &Path) -> Result<Workbook, String> {
     let size = std::fs::metadata(path)
-        .map_err(|e| format!("Could not read {}: {e}", path.display()))?
+        .map_err(|e| t!("file.read_failed", path = path.display(), error = e))?
         .len();
     if size > MAX_VALUES_FILE_BYTES {
-        return Err(format!("{} is larger than 512 MB", path.display()));
+        return Err(t!("file.too_large", path = path.display()));
     }
     let path = path.to_path_buf();
     run_with_engine_stack(move || {
@@ -120,7 +251,7 @@ pub fn write_csv_file(path: &Path, rows: &[Vec<String>]) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| EngineError::VerifyFailed(e.to_string()))
     })
-    .map_err(|e| format!("Could not write {}: {e}", path.display()))
+    .map_err(|e| t!("file.write_failed", path = path.display(), error = e))
 }
 
 #[cfg(test)]
@@ -190,6 +321,36 @@ mod tests {
         // 8 October 2026 and 25 October 2026 as Excel serials.
         assert_eq!(serial(0), Some(46303.0));
         assert_eq!(serial(1), Some(46320.0));
+    }
+
+    #[test]
+    fn local_paths_are_probed() {
+        assert!(!is_remote_or_device(Path::new("/data/a.xlsx")));
+        assert!(!is_remote_or_device(Path::new("relative/a.xlsx")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn network_and_device_paths_are_not_probed() {
+        assert!(is_remote_or_device(Path::new(r"\\host\share\a.xlsx")));
+        assert!(is_remote_or_device(Path::new(r"\\.\pipe\x")));
+        assert!(!is_remote_or_device(Path::new(r"C:\data\a.xlsx")));
+    }
+
+    #[test]
+    fn same_path_ignores_separators_dots_and_on_windows_case() {
+        assert!(same_path(
+            Path::new("a/b/../c.xlsx"),
+            Path::new("./a/c.xlsx")
+        ));
+        assert!(!same_path(Path::new("a/c.xlsx"), Path::new("a/d.xlsx")));
+        assert!(!same_path(Path::new("../c.xlsx"), Path::new("c.xlsx")));
+        if cfg!(windows) {
+            assert!(same_path(
+                Path::new("C:/Data/Sales.xlsx"),
+                Path::new(r"c:\data\sales.XLSX")
+            ));
+        }
     }
 
     #[test]

@@ -197,3 +197,44 @@ fn a_small_spec_cannot_ask_for_gigabytes() {
         Err(DatagenError::OutputTooLarge { .. })
     ));
 }
+
+fn boolean_columns(count: usize) -> Vec<ColumnSpec> {
+    (0..count)
+        .map(|index| column(&format!("C{index}"), ColumnKind::Boolean {}))
+        .collect()
+}
+
+#[test]
+fn a_table_with_exactly_the_most_columns_is_accepted_and_one_more_is_refused() {
+    let spec = |count| GenerationSpec {
+        rows: 1,
+        locale: Locale::EnglishUnitedStates,
+        seed: 1,
+        columns: boolean_columns(count),
+    };
+    assert_eq!(validate(&spec(16_384)), Ok(()));
+    assert!(matches!(
+        validate(&spec(16_385)),
+        Err(DatagenError::TooManyColumns { .. })
+    ));
+}
+
+// Four pattern columns of 225 characters estimate 1024 bytes a row on a 64-bit target, so
+// 524288 rows are exactly the 512 MiB output limit.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn an_output_exactly_at_the_byte_limit_is_accepted_and_one_row_more_is_refused() {
+    let spec = |rows| GenerationSpec {
+        rows,
+        locale: Locale::EnglishUnitedStates,
+        seed: 1,
+        columns: (0..4)
+            .map(|index| column(&format!("C{index}"), pattern("A".repeat(225))))
+            .collect(),
+    };
+    assert_eq!(validate(&spec(524_288)), Ok(()));
+    assert!(matches!(
+        validate(&spec(524_289)),
+        Err(DatagenError::OutputTooLarge { .. })
+    ));
+}

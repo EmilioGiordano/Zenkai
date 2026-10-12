@@ -2,10 +2,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
+use std::time::Instant;
+use zenkai_i18n::t;
 
-use zenkai_engine::{Engine, EngineError, Unsupported, Workbook};
-use zenkai_grid::GridCell;
-use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo};
+use zenkai_agent::protected_view::FileOrigin;
+use zenkai_engine::{Engine, EngineError, Unsupported, Workbook, xlsx_bytes};
+use zenkai_grid::{GridCell, ViewState};
+use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
+
+use crate::agent_review::Review;
+use crate::entry::display_name;
+use crate::find::FindBar;
+use crate::spaces::SpaceId;
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -22,6 +30,9 @@ pub enum FileJob {
 }
 
 pub struct Document {
+    pub id: WorkbookId,
+    pub space: SpaceId,
+    untitled: u32,
     workbook: SharedWorkbook,
     batch_running: bool,
     file_job: FileJob,
@@ -31,18 +42,52 @@ pub struct Document {
     pub sheets: Vec<SheetInfo>,
     pub unsupported: Vec<Unsupported>,
     pub read_only: bool,
+    // Where the file came from; a download keeps agents read-only, as Excel's Protected View.
+    pub origin: FileOrigin,
     pending: Vec<Edit>,
     generation: u64,
+    edit_count: u64,
+    // The edit count the recovery copy on disk was written at.
+    autosaved_at: Option<u64>,
+    pub pending_sheet: Option<SheetId>,
+    pub view: ViewState,
+    pub find: Option<FindBar>,
+    pub review: Review,
+    pub last_used: Instant,
+}
+
+fn unsupported_label(unsupported: Unsupported) -> &'static str {
+    match unsupported {
+        Unsupported::Charts => t!("unsupported.charts"),
+        Unsupported::Images => t!("unsupported.images"),
+        Unsupported::PivotTables => t!("unsupported.pivot_tables"),
+        Unsupported::Macros => t!("unsupported.macros"),
+        Unsupported::Comments => t!("unsupported.comments"),
+        Unsupported::Tables => t!("unsupported.tables"),
+        Unsupported::Hyperlinks => t!("unsupported.hyperlinks"),
+        Unsupported::DataValidation => t!("unsupported.data_validation"),
+        Unsupported::ExternalLinks => t!("unsupported.external_links"),
+        Unsupported::AutoFilter => t!("unsupported.auto_filter"),
+        Unsupported::SheetProtection => t!("unsupported.sheet_protection"),
+        Unsupported::Outline => t!("unsupported.outline"),
+        Unsupported::PageBreaks => t!("unsupported.page_breaks"),
+    }
 }
 
 impl Document {
     pub fn new(
+        id: WorkbookId,
+        space: SpaceId,
+        untitled: u32,
         workbook: Workbook,
         path: Option<PathBuf>,
         unsupported: Vec<Unsupported>,
     ) -> Document {
         let sheets = workbook.sheets();
         Document {
+            id,
+            space,
+            untitled,
             workbook: Arc::new(RwLock::new(workbook)),
             batch_running: false,
             file_job: FileJob::Idle,
@@ -52,19 +97,30 @@ impl Document {
             sheets,
             unsupported,
             read_only: false,
+            origin: FileOrigin::Local,
             pending: Vec::new(),
             generation: GENERATION.fetch_add(1, Ordering::Relaxed),
+            edit_count: 0,
+            autosaved_at: None,
+            pending_sheet: None,
+            view: ViewState::default(),
+            find: None,
+            review: Review::default(),
+            last_used: Instant::now(),
         }
     }
 
+    pub fn name(&self) -> String {
+        display_name(self.path.as_deref(), self.untitled)
+    }
+
+    pub fn untitled(&self) -> u32 {
+        self.untitled
+    }
+
     pub fn name_with_marker(&self) -> String {
-        let name = self
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map_or_else(|| "Book1".to_string(), |n| n.to_string_lossy().into_owned());
         let marker = if self.dirty { "• " } else { "" };
-        format!("{marker}{name}")
+        format!("{marker}{}", self.name())
     }
 
     pub fn title(&self) -> String {
@@ -83,7 +139,20 @@ impl Document {
         }
     }
 
+    // Called when a batch of edits ends; a busy workbook is checked after the next one.
+    pub fn revalidate_review(&mut self) {
+        if self.review.is_empty() {
+            return;
+        }
+        let Ok(workbook) = self.workbook.try_read() else {
+            return;
+        };
+        self.review
+            .retain_unchanged(|cell| workbook.input(cell.sheet, cell.pos));
+    }
+
     pub fn queue(&mut self, edit: Edit) {
+        self.edit_count += 1;
         self.pending.push(edit);
     }
 
@@ -138,12 +207,32 @@ impl Document {
         self.generation
     }
 
+    pub fn edit_count(&self) -> u64 {
+        self.edit_count
+    }
+
+    pub fn recovery_is_current(&self) -> bool {
+        self.autosaved_at == Some(self.edit_count)
+    }
+
+    pub fn set_autosaved_at(&mut self, edits: Option<u64>) {
+        self.autosaved_at = edits;
+    }
+
+    pub fn is_pristine(&self) -> bool {
+        self.path.is_none() && !self.dirty && self.edit_count == 0
+    }
+
     pub fn has_pending(&self) -> bool {
         self.batch_running || !self.pending.is_empty()
     }
 
     pub fn unsupported_labels(&self) -> String {
-        let labels: Vec<&str> = self.unsupported.iter().map(|u| u.label()).collect();
+        let labels: Vec<&str> = self
+            .unsupported
+            .iter()
+            .map(|u| unsupported_label(*u))
+            .collect();
         labels.join(", ")
     }
 
@@ -165,8 +254,17 @@ impl Document {
             return false;
         }
         self.batch_running = false;
-        if let Some(sheets) = self.workbook().map(|workbook| workbook.sheets()) {
+        if let Some((sheets, dropped)) = self
+            .workbook()
+            .map(|workbook| (workbook.sheets(), workbook.dropped_on_save()))
+        {
             self.sheets = sheets;
+            for lost in dropped {
+                if !self.unsupported.contains(&lost) {
+                    self.unsupported.push(lost);
+                }
+            }
+            self.unsupported.sort();
         }
         let last = u32::try_from(self.sheets.len().saturating_sub(1)).unwrap_or(0);
         if self.sheet.0 > last {
@@ -233,9 +331,36 @@ pub fn read_shared(shared: &RwLock<Workbook>) -> RwLockReadGuard<'_, Workbook> {
     shared.read().unwrap_or_else(PoisonError::into_inner)
 }
 
+// The read lock is held only while the bytes are made: writing and verifying them takes
+// far longer, and an edit waiting for the write lock blocks every reader meanwhile.
+pub fn write_snapshot(
+    shared: &RwLock<Workbook>,
+    job: FileJob,
+    write: impl FnOnce(&[u8]) -> Result<(), EngineError>,
+) -> Result<(), EngineError> {
+    let started = Instant::now();
+    let bytes = {
+        let workbook = read_shared(shared);
+        xlsx_bytes(&workbook)
+    };
+    let locked_ms = started.elapsed().as_millis();
+    let written = bytes.and_then(|bytes| write(&bytes));
+    let total_ms = started.elapsed().as_millis();
+    match &written {
+        Ok(()) => tracing::info!(?job, locked_ms, total_ms, "workbook written"),
+        Err(error) => {
+            tracing::warn!(?job, %error, locked_ms, total_ms, "writing the workbook failed")
+        }
+    }
+    written
+}
+
 pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError> {
+    let waited = Instant::now();
     let mut guard = shared.write().unwrap_or_else(PoisonError::into_inner);
+    let started = Instant::now();
     let workbook: &mut Workbook = &mut guard;
+    let count = edits.len();
     let run = zenkai_engine::run_with_engine_stack(|| {
         let errors = edits
             .into_iter()
@@ -244,7 +369,18 @@ pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError
         workbook.warm_used_areas();
         Ok(errors)
     });
-    run.unwrap_or_else(|error| vec![error])
+    let errors = run.unwrap_or_else(|error| vec![error]);
+    let (waited_ms, ran_ms) = (
+        started.duration_since(waited).as_millis(),
+        started.elapsed().as_millis(),
+    );
+    match errors.first() {
+        None => tracing::info!(count, waited_ms, ran_ms, "edit batch done"),
+        Some(error) => {
+            tracing::warn!(count, waited_ms, ran_ms, failed = errors.len(), %error, "edit batch had errors")
+        }
+    }
+    errors
 }
 
 #[cfg(test)]
@@ -259,7 +395,7 @@ mod tests {
         workbook
             .set_inputs(SheetId(0), CellPos::default(), &rows)
             .unwrap();
-        let document = Document::new(workbook, None, Vec::new());
+        let document = Document::new(WorkbookId(0), SpaceId(0), 1, workbook, None, Vec::new());
         let range = Range::parse_a1("A1:B1").unwrap();
         let b1 = CellPos::parse_a1("B1").unwrap();
         assert_eq!(
@@ -272,7 +408,14 @@ mod tests {
     }
 
     fn document() -> Document {
-        Document::new(Workbook::new_empty().unwrap(), None, Vec::new())
+        Document::new(
+            WorkbookId(0),
+            SpaceId(0),
+            1,
+            Workbook::new_empty().unwrap(),
+            None,
+            Vec::new(),
+        )
     }
 
     fn noop() -> Edit {
@@ -346,6 +489,43 @@ mod tests {
         assert!(current.begin_file_job(FileJob::Saving).is_some());
         current.end_file_job(stale);
         assert_eq!(current.file_job(), FileJob::Saving);
+    }
+
+    #[test]
+    fn a_snapshot_is_written_without_the_lock() {
+        let document = document();
+        let shared = document.begin_read().unwrap();
+        let mut written = Vec::new();
+        write_snapshot(&shared, FileJob::Autosaving, |bytes| {
+            assert!(shared.try_write().is_ok(), "the read lock is still held");
+            written = bytes.to_vec();
+            Ok(())
+        })
+        .unwrap();
+        assert!(written.starts_with(b"PK"));
+    }
+
+    #[test]
+    fn a_failed_snapshot_write_is_reported() {
+        let document = document();
+        let shared = document.begin_read().unwrap();
+        let failed = write_snapshot(&shared, FileJob::Saving, |_| {
+            Err(EngineError::VerifyFailed("disk full".to_string()))
+        });
+        assert!(matches!(failed, Err(EngineError::VerifyFailed(_))));
+    }
+
+    #[test]
+    fn the_recovery_copy_is_current_until_the_next_edit() {
+        let mut document = document();
+        assert!(!document.recovery_is_current());
+        document.set_autosaved_at(Some(document.edit_count()));
+        assert!(document.recovery_is_current());
+        document.queue(noop());
+        assert!(!document.recovery_is_current());
+        document.set_autosaved_at(Some(document.edit_count()));
+        document.set_autosaved_at(None);
+        assert!(!document.recovery_is_current());
     }
 
     #[test]

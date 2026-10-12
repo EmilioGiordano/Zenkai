@@ -92,6 +92,7 @@ mod test_cell_info_n_sheets;
 mod test_combin_combina;
 mod test_criteria_ranges;
 mod test_criteria_semantics;
+mod test_criteria_totals;
 mod test_cycle_reference;
 mod test_datetime_format;
 mod test_empty_formula_result;

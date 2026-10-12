@@ -6,11 +6,14 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
 use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::*;
+use zenkai_i18n::t;
 use zenkai_types::{CellStyle, HAlign};
 
 use crate::actions::*;
+use crate::keymap;
 
 fn tool(
+    cx: &App,
     id: &'static str,
     icon: IconName,
     tooltip: &'static str,
@@ -20,7 +23,7 @@ fn tool(
         .ghost()
         .compact()
         .icon(icon)
-        .tooltip(tooltip)
+        .tooltip(keymap::labeled(cx, tooltip, &action))
         .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
 }
 
@@ -43,23 +46,44 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         .bg(theme.title_bar)
         .border_b_1()
         .border_color(theme.border)
-        .child(tool("new", IconName::FilePlus, "New (Ctrl+N)", NewWorkbook))
-        .child(tool("open", IconName::FolderOpen, "Open (Ctrl+O)", Open))
-        .child(tool("save", IconName::Save, "Save (Ctrl+S)", Save))
+        .child(tool(
+            cx,
+            "new",
+            IconName::FilePlus,
+            t!("toolbar.new"),
+            NewWorkbook,
+        ))
+        .child(tool(
+            cx,
+            "open",
+            IconName::FolderOpen,
+            t!("toolbar.open"),
+            Open,
+        ))
+        .child(tool(cx, "save", IconName::Save, t!("toolbar.save"), Save))
         .child(separator(cx))
-        .child(tool("undo", IconName::Undo2, "Undo (Ctrl+Z)", Undo))
-        .child(tool("redo", IconName::Redo2, "Redo (Ctrl+Y)", Redo))
+        .child(tool(cx, "undo", IconName::Undo2, t!("toolbar.undo"), Undo))
+        .child(tool(cx, "redo", IconName::Redo2, t!("toolbar.redo"), Redo))
         .child(separator(cx))
-        .child(tool("bold", IconName::Bold, "Bold (Ctrl+B)", ToggleBold).selected(style.bold))
         .child(
-            tool("italic", IconName::Italic, "Italic (Ctrl+I)", ToggleItalic)
-                .selected(style.italic),
+            tool(cx, "bold", IconName::Bold, t!("toolbar.bold"), ToggleBold).selected(style.bold),
         )
         .child(
             tool(
+                cx,
+                "italic",
+                IconName::Italic,
+                t!("toolbar.italic"),
+                ToggleItalic,
+            )
+            .selected(style.italic),
+        )
+        .child(
+            tool(
+                cx,
                 "underline",
                 IconName::Underline,
-                "Underline (Ctrl+U)",
+                t!("toolbar.underline"),
                 ToggleUnderline,
             )
             .selected(style.underline),
@@ -68,13 +92,13 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
         .child(
             ColorPicker::new(&colors.font)
                 .icon(IconName::Baseline)
-                .accessibility_label("Font colour")
+                .accessibility_label(t!("toolbar.font_color"))
                 .small(),
         )
         .child(
             ColorPicker::new(&colors.fill)
                 .icon(IconName::PaintBucket)
-                .accessibility_label("Fill colour")
+                .accessibility_label(t!("toolbar.fill_color"))
                 .small(),
         )
         .child(
@@ -82,111 +106,134 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
                 .ghost()
                 .compact()
                 .icon(IconName::Grid2x2)
-                .tooltip("Borders")
+                .tooltip(t!("toolbar.borders"))
                 .dropdown_menu(|menu, _, _| {
-                    menu.menu("Bottom border", Box::new(BorderBottom))
-                        .menu("All borders", Box::new(BordersAll))
-                        .menu("Outside borders", Box::new(BordersOutside))
-                        .menu("No border", Box::new(BordersNone))
+                    menu.menu(t!("toolbar.border_bottom"), Box::new(BorderBottom))
+                        .menu(t!("toolbar.borders_all"), Box::new(BordersAll))
+                        .menu(t!("toolbar.borders_outside"), Box::new(BordersOutside))
+                        .menu(t!("toolbar.borders_none"), Box::new(BordersNone))
                 }),
         )
         .child(separator(cx))
         .child(
             tool(
+                cx,
                 "align-left",
                 IconName::TextAlignStart,
-                "Align left",
+                t!("toolbar.align_left"),
                 AlignLeft,
             )
             .selected(style.align == HAlign::Left),
         )
         .child(
             tool(
+                cx,
                 "align-center",
                 IconName::TextAlignCenter,
-                "Center",
+                t!("toolbar.align_center"),
                 AlignCenter,
             )
             .selected(style.align == HAlign::Center),
         )
         .child(
             tool(
+                cx,
                 "align-right",
                 IconName::TextAlignEnd,
-                "Align right",
+                t!("toolbar.align_right"),
                 AlignRight,
             )
             .selected(style.align == HAlign::Right),
         )
-        .child(tool("wrap", IconName::TextWrap, "Wrap text", ToggleWrapText).selected(style.wrap))
+        .child(
+            tool(
+                cx,
+                "wrap",
+                IconName::TextWrap,
+                t!("toolbar.wrap_text"),
+                ToggleWrapText,
+            )
+            .selected(style.wrap),
+        )
         .child(separator(cx))
         .child(tool(
+            cx,
             "general",
             IconName::CaseSensitive,
-            "General (Ctrl+Shift+~)",
+            t!("toolbar.format_general"),
             FormatGeneral,
         ))
         .child(tool(
+            cx,
             "more-decimals",
             IconName::DecimalsArrowRight,
-            "Increase decimal",
+            t!("toolbar.increase_decimal"),
             IncreaseDecimal,
         ))
         .child(tool(
+            cx,
             "fewer-decimals",
             IconName::DecimalsArrowLeft,
-            "Decrease decimal",
+            t!("toolbar.decrease_decimal"),
             DecreaseDecimal,
         ))
         .child(tool(
+            cx,
             "number",
             IconName::Hash,
-            "Number (Ctrl+Shift+!)",
+            t!("toolbar.format_number"),
             FormatNumber,
         ))
         .child(tool(
+            cx,
             "currency",
             IconName::DollarSign,
-            "Currency (Ctrl+Shift+$)",
+            t!("toolbar.format_currency"),
             FormatCurrency,
         ))
         .child(tool(
+            cx,
             "percent",
             IconName::Percent,
-            "Percent (Ctrl+Shift+%)",
+            t!("toolbar.format_percent"),
             FormatPercent,
         ))
         .child(tool(
+            cx,
             "date",
             IconName::Calendar,
-            "Date (Ctrl+Shift+#)",
+            t!("toolbar.format_date"),
             FormatDate,
         ))
         .child(separator(cx))
         .child(tool(
+            cx,
             "chart",
             IconName::ChartColumn,
-            "Chart of the selection (Alt+F1)",
+            t!("toolbar.chart"),
             InsertChart,
         ))
         .child(separator(cx))
         .child(tool(
+            cx,
             "zoom-out",
             IconName::ZoomOut,
-            "Zoom out (Ctrl+-)",
+            t!("toolbar.zoom_out"),
             ZoomOut,
         ))
         .child(tool(
+            cx,
             "zoom-in",
             IconName::ZoomIn,
-            "Zoom in (Ctrl+=)",
+            t!("toolbar.zoom_in"),
             ZoomIn,
         ))
         .child(div().flex_1())
         .child(tool(
+            cx,
             "theme",
             IconName::SunMoon,
-            "Theme: light, dark, high contrast",
+            t!("toolbar.theme"),
             ToggleTheme,
         ))
 }

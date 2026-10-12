@@ -25,7 +25,7 @@ const _: () = assert!(MAX_PATTERN_CHARS < CELL_CHAR_LIMIT);
 const _: () = assert!(MAX_OPTION_CHARS < CELL_CHAR_LIMIT);
 const _: () = assert!(lorem::MAX_WORDS as usize * (lorem::LONGEST_WORD + 1) <= CELL_CHAR_LIMIT);
 
-pub(crate) fn estimated_output_bytes(spec: &GenerationSpec) -> u64 {
+pub fn estimated_output_bytes(spec: &GenerationSpec) -> u64 {
     let locale = crate::locale::data(spec.locale);
     let row_bytes: u64 = spec
         .columns
@@ -210,5 +210,29 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn number_estimates_hold_the_longest_i64() {
+        let longest = i64::MIN.to_string().len();
+        let locale = crate::locale::data(Locale::EnglishUnitedStates);
+        for kind in [
+            ColumnKind::Integer {
+                min: i64::MIN,
+                max: i64::MIN + 1,
+            },
+            ColumnKind::SequentialId {
+                start: i64::MIN,
+                step: 1,
+            },
+        ] {
+            assert!(max_cell_bytes(&kind, locale) >= longest);
+        }
+    }
+
+    #[test]
+    fn the_email_suffix_estimate_holds_the_largest_row_number() {
+        let digits = (crate::plan::MAX_DATA_ROWS).to_string().len();
+        assert!(EMAIL_SUFFIX_BYTES >= digits);
     }
 }

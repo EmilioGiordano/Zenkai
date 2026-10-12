@@ -1,6 +1,7 @@
 use gpui_kit::component::input::InputState;
 use gpui_kit::*;
 use zenkai_engine::{Engine, Workbook};
+use zenkai_i18n::t;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
 pub const MAX_MATCHES: usize = 100_000;
@@ -21,10 +22,14 @@ pub struct FindResults {
 impl FindResults {
     pub fn status(&self) -> String {
         match (self.query.is_empty(), self.matches.len()) {
-            (true, _) => "Type and press Enter".to_string(),
-            (false, 0) => "No matches".to_string(),
-            (false, n) if n >= MAX_MATCHES => format!("{} of {MAX_MATCHES}+", self.current + 1),
-            (false, n) => format!("{} of {n}", self.current + 1),
+            (true, _) => t!("find.status_empty").to_string(),
+            (false, 0) => t!("find.status_none").to_string(),
+            (false, n) if n >= MAX_MATCHES => t!(
+                "find.status_of",
+                current = self.current + 1,
+                total = format!("{MAX_MATCHES}+")
+            ),
+            (false, n) => t!("find.status_of", current = self.current + 1, total = n),
         }
     }
 

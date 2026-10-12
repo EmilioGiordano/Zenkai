@@ -10,6 +10,7 @@ use zenkai_engine::{Engine, open_xlsx};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
 use crate::coverage::{CASES, SETUP, Want};
+use crate::save_losses;
 
 // A 1x1 transparent PNG, so the image fixture needs no file on disk.
 const PIXEL_PNG: [u8; 67] = [
@@ -169,6 +170,32 @@ pub fn generate(dir: &Path) -> Result<()> {
     sheet.protect();
     save(&mut book, dir, "layout-print-protection.xlsx")?;
 
+    let mut book = Workbook::new();
+    let sheet = book.add_worksheet().set_name("Report")?;
+    for row in 0..12u32 {
+        sheet.write_number(row, 0, f64::from(row))?;
+        sheet.write_number(row, 3, f64::from(row * 2))?;
+    }
+    sheet.group_rows(1, 4)?;
+    sheet.group_rows_collapsed(6, 9)?;
+    sheet.group_columns(1, 2)?;
+    sheet.group_symbols_above(true);
+    sheet.set_tab_color("#00B050");
+    sheet.set_zoom(80);
+    sheet.set_view_page_layout();
+    sheet.set_default_row_height(18);
+    sheet.set_paper_size(9);
+    sheet.set_portrait();
+    sheet.set_margins(0.5, 0.5, 0.8, 0.8, 0.3, 0.3);
+    sheet.set_print_fit_to_pages(1, 0);
+    sheet.set_print_center_horizontally(true);
+    sheet.set_print_gridlines(true);
+    sheet.set_header("&L&\"Arial,Bold\"Q3 && Q4 <draft>&RPage &P of &N");
+    sheet.set_footer("&C&F");
+    sheet.set_page_breaks(&[6])?;
+    sheet.set_vertical_page_breaks(&[3])?;
+    save(&mut book, dir, "page-layout-outline.xlsx")?;
+
     Ok(())
 }
 
@@ -180,6 +207,7 @@ struct Row {
     dropped: String,
     cached: String,
     round_trip: String,
+    silently_dropped: Vec<String>,
 }
 
 fn same_value(cached: &Data, text: &str, number: Option<f64>) -> bool {
@@ -261,79 +289,6 @@ fn compare_round_trip(book: &zenkai_engine::Workbook) -> (String, Vec<u8>) {
     (format!("{same}/{total}"), bytes)
 }
 
-fn parts(bytes: &[u8]) -> Result<Vec<(String, String)>, String> {
-    let mut archive =
-        zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| e.to_string())?;
-    (0..archive.len())
-        .map(|i| {
-            let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
-            let name = entry.name().to_ascii_lowercase();
-            let mut text = String::new();
-            if name.ends_with(".xml") {
-                std::io::Read::read_to_string(&mut entry, &mut text).map_err(|e| e.to_string())?;
-            }
-            Ok((name, text))
-        })
-        .collect()
-}
-
-// What is present in the original and absent after Zenkai saves it, by part name or
-// by element inside the workbook and worksheet parts.
-fn dropped_parts(original: &[u8], saved: &[u8]) -> String {
-    let by_name = [
-        ("xl/charts/", "charts"),
-        ("xl/drawings/", "drawings"),
-        ("xl/media/", "images"),
-        ("xl/comments", "comments"),
-        ("xl/tables/", "tables"),
-        ("xl/pivottables/", "pivot tables"),
-        ("xl/vbaproject", "macros"),
-        ("xl/externallinks/", "external links"),
-    ];
-    let by_element = [
-        ("<conditionalFormatting", "conditional formatting"),
-        ("<dataValidations", "data validation"),
-        ("<hyperlinks", "hyperlinks"),
-        ("<definedName ", "defined names"),
-        ("<mergeCell ", "merged cells"),
-        ("<pane ", "frozen panes"),
-        ("<autoFilter", "autofilter"),
-        ("<sheetProtection", "sheet protection"),
-        ("<pageMargins", "page margins"),
-        ("<pageSetup", "page setup"),
-        ("<headerFooter", "header/footer"),
-        ("<tabColor", "tab colour"),
-        ("zoomScale=", "zoom"),
-        ("showGridLines=\"0\"", "hidden gridlines"),
-        ("customHeight=\"1\"", "row heights"),
-        ("hidden=\"1\"", "hidden rows/columns"),
-    ];
-    let (before, after) = match (parts(original), parts(saved)) {
-        (Ok(before), Ok(after)) => (before, after),
-        (Err(e), _) | (_, Err(e)) => return format!("error: {e}"),
-    };
-    let has_name =
-        |set: &[(String, String)], prefix: &str| set.iter().any(|(n, _)| n.starts_with(prefix));
-    let has_element =
-        |set: &[(String, String)], tag: &str| set.iter().any(|(_, t)| t.contains(tag));
-    let mut lost: Vec<&str> = by_name
-        .iter()
-        .filter(|(prefix, _)| has_name(&before, prefix) && !has_name(&after, prefix))
-        .map(|(_, label)| *label)
-        .collect();
-    lost.extend(
-        by_element
-            .iter()
-            .filter(|(tag, _)| has_element(&before, tag) && !has_element(&after, tag))
-            .map(|(_, label)| *label),
-    );
-    if lost.is_empty() {
-        "-".to_string()
-    } else {
-        lost.join(", ")
-    }
-}
-
 fn check(path: &Path) -> Row {
     let file = path
         .file_name()
@@ -342,10 +297,28 @@ fn check(path: &Path) -> Row {
     match open_xlsx(path) {
         Ok(opened) => {
             let (round_trip, saved) = compare_round_trip(&opened.workbook);
-            let dropped = match std::fs::read(path) {
-                Ok(original) if !saved.is_empty() => dropped_parts(&original, &saved),
-                Ok(_) => "error: nothing was saved".to_string(),
-                Err(e) => format!("error: {e}"),
+            let losses = match std::fs::read(path) {
+                Ok(original) if !saved.is_empty() => {
+                    save_losses::dropped(&original, &saved).map_err(|e| format!("error: {e}"))
+                }
+                Ok(_) => Err("error: nothing was saved".to_string()),
+                Err(e) => Err(format!("error: {e}")),
+            };
+            let (dropped, silently_dropped) = match losses {
+                Ok(losses) if losses.is_empty() => ("-".to_string(), Vec::new()),
+                Ok(losses) => (
+                    losses
+                        .iter()
+                        .map(|loss| loss.label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    losses
+                        .iter()
+                        .filter(|loss| !loss.is_warned(&opened.unsupported))
+                        .map(|loss| loss.label.clone())
+                        .collect(),
+                ),
+                Err(error) => (error, Vec::new()),
             };
             Row {
                 file,
@@ -363,6 +336,7 @@ fn check(path: &Path) -> Row {
                 dropped,
                 cached: compare_cached(path, &opened.workbook),
                 round_trip,
+                silently_dropped,
             }
         }
         Err(error) => {
@@ -377,6 +351,7 @@ fn check(path: &Path) -> Row {
                 dropped: "-".to_string(),
                 cached: "-".to_string(),
                 round_trip: "-".to_string(),
+                silently_dropped: Vec::new(),
             }
         }
     }
@@ -400,18 +375,30 @@ pub fn report(dir: &Path, out: &Path) -> Result<()> {
         "Every file in `fixtures/compat/` is opened with the app's own open path.\n\n",
         "- **Warned on open**: what Zenkai detects and warns about before saving.\n",
         "- **Dropped by save**: what actually disappears from the file Zenkai writes ",
-        "(by part name or element).\n",
+        "(by part name, top-level element or key attribute).\n",
+        "- **Dropped without warning**: what of that has no warning; the corpus test fails ",
+        "unless it is empty.\n",
         "- **Cached = recalculated**: each value saved in the file (read with calamine) ",
         "against the value Zenkai shows after recalculating.\n",
         "- **Round trip**: save, reopen and compare every filled cell.\n\n",
-        "| File | Opens | Warned on open | Dropped by save | Cached = recalculated | Round trip |\n",
-        "| --- | --- | --- | --- | --- | --- |\n",
+        "| File | Opens | Warned on open | Dropped by save | Dropped without warning | Cached = recalculated | Round trip |\n",
+        "| --- | --- | --- | --- | --- | --- | --- |\n",
     ));
     for path in &files {
         let row = check(path);
         text.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} |\n",
-            row.file, row.opens, row.unsupported, row.dropped, row.cached, row.round_trip
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            row.file,
+            row.opens,
+            row.unsupported,
+            row.dropped,
+            if row.silently_dropped.is_empty() {
+                "-".to_string()
+            } else {
+                row.silently_dropped.join(", ")
+            },
+            row.cached,
+            row.round_trip
         ));
     }
     std::fs::write(out, text).with_context(|| format!("writing {}", out.display()))?;
@@ -443,6 +430,12 @@ mod tests {
                 "{}: {}",
                 row.file,
                 row.dropped
+            );
+            assert!(
+                row.silently_dropped.is_empty(),
+                "{} loses without a warning: {:?}",
+                row.file,
+                row.silently_dropped
             );
             checked += 1;
         }

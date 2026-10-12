@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Zenkai, Ajustes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7fb894}a:hover{color:#a6d3b5}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 100%; height: 900px; display: flex; flex-wrap: wrap; overflow: hidden; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; background: #18191b; color: #e4e4e6">
+
+<nav aria-label="Secciones de ajustes" style="flex: 1 1 220px; max-width: 248px; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; background: #1f2023; padding: 0 10px 12px">
+  <div style="height: 44px; display: flex; align-items: center; gap: 10px; padding: 0 8px; color: #a3a5ab">
+    <a href="Main.dc.html" aria-label="Volver a la planilla" style="display: flex; color: #a3a5ab">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M13 8H3M7 4L3 8l4 4"></path></svg>
+    </a>
+    <span style="color: #e4e4e6; font-weight: 500">Ajustes</span>
+  </div>
+  <label style="display: flex; align-items: center; gap: 8px; height: 32px; margin: 4px 0 10px; padding: 0 10px; border-radius: 7px; background: #18191b; color: #767880">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
+    <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Buscar ajuste</span>
+    <input placeholder="Buscar ajuste…" style="flex-grow: 1; border: 0; background: transparent; color: #e4e4e6; font: inherit">
+  </label>
+  <sc-for list="{{nav}}" as="item" hint-placeholder-count="8">
+    <button style="display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 10px; border-radius: 7px; text-align: left; background: {{item.bg}}; color: {{item.color}}">
+      <span style="flex-grow: 1">{{item.label}}</span>
+      <span style="font-size: 11px; color: #767880">{{item.badge}}</span>
+    </button>
+  </sc-for>
+  <span style="flex-grow: 1"></span>
+  <button style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 7px; color: #a3a5ab">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M5 2.5L2 8l3 5.5M11 2.5L14 8l-3 5.5"></path></svg>
+    Abrir settings.json
+  </button>
+</nav>
+
+<main style="flex: 999 1 600px; min-width: 0; height: 100%; display: flex; flex-direction: column">
+  <header style="height: 44px; flex-shrink: 0; display: flex; align-items: center; padding-left: 32px; color: #a3a5ab">
+    <span style="flex-grow: 1"></span>
+    <div style="display: flex; height: 44px">
+      <button aria-label="Minimizar" style="width: 46px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 5h10"></path></svg></button>
+      <button aria-label="Maximizar" style="width: 46px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"></rect></svg></button>
+      <button aria-label="Cerrar" style="width: 46px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 0l10 10M10 0L0 10"></path></svg></button>
+    </div>
+  </header>
+
+  <div style="flex-grow: 1; min-height: 0; overflow: hidden; padding: 8px 48px 32px; display: flex; flex-direction: column; gap: 22px; max-width: 860px; box-sizing: border-box">
+
+    <sc-if value="{{isKeys}}" hint-placeholder-val="{{ true }}">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <h1 style="margin: 0; font-size: 20px; font-weight: 600">Atajos de teclado</h1>
+        <p style="margin: 0; color: #a3a5ab; line-height: 1.5">Por defecto son los de Excel para Windows. Hacé clic en un atajo y presioná la nueva combinación.</p>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+        <label style="flex: 1 1 280px; display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border-radius: 8px; background: #222326; color: #767880">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>
+          <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Buscar acción o atajo</span>
+          <input placeholder="Buscar acción o atajo…" style="flex-grow: 1; border: 0; background: transparent; color: #e4e4e6; font: inherit">
+        </label>
+        <button style="height: 34px; padding: 0 12px; border-radius: 8px; background: #222326; color: #a3a5ab">Perfil: Excel</button>
+        <button style="height: 34px; padding: 0 12px; border-radius: 8px; color: #a3a5ab">Restaurar todo</button>
+      </div>
+      <div role="table" aria-label="Atajos" style="display: flex; flex-direction: column">
+        <div role="row" style="display: grid; grid-template-columns: minmax(0, 1fr) 120px 200px; height: 30px; align-items: center; padding: 0 12px; font-size: 11.5px; color: #767880">
+          <span role="columnheader">Acción</span><span role="columnheader">Contexto</span><span role="columnheader">Atajo</span>
+        </div>
+        <sc-for list="{{keys}}" as="k" hint-placeholder-count="10">
+          <div role="row" style="display: grid; grid-template-columns: minmax(0, 1fr) 120px 200px; min-height: 40px; align-items: center; padding: 0 12px; border-radius: 8px; background: {{k.bg}}">
+            <span role="cell" style="display: flex; flex-direction: column; gap: 2px">
+              <span>{{k.action}}</span>
+              <sc-if value="{{k.note}}" hint-placeholder-val="{{ false }}">
+                <span style="font-size: 11.5px; color: {{k.noteColor}}">{{k.note}}</span>
+              </sc-if>
+            </span>
+            <span role="cell" style="color: #767880; font-size: 12px">{{k.context}}</span>
+            <span role="cell" style="display: flex; align-items: center; gap: 6px">
+              <sc-for list="{{k.parts}}" as="part" hint-placeholder-count="2">
+                <span style="min-width: 22px; height: 22px; box-sizing: border-box; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; background: #2a2b2f; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: {{k.keyColor}}">{{part}}</span>
+              </sc-for>
+              <span style="font-size: 11px; color: #767880; margin-left: 4px">{{k.source}}</span>
+            </span>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{isAgents}}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <h1 style="margin: 0; font-size: 20px; font-weight: 600">Agentes</h1>
+        <p style="margin: 0; color: #a3a5ab; line-height: 1.5">Zenkai usa el agente con tu propio login. No guarda contraseñas: las claves van al Administrador de credenciales de Windows.</p>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 8px">
+        <sc-for list="{{agents}}" as="a" hint-placeholder-count="4">
+          <div style="display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 10px; background: #1f2023">
+            <span style="width: 34px; height: 34px; border-radius: 8px; background: #2a2b2f; display: flex; align-items: center; justify-content: center; font-weight: 600; color: #a3a5ab">{{a.initial}}</span>
+            <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px">
+              <span style="display: flex; align-items: center; gap: 8px"><span style="font-weight: 500">{{a.name}}</span>
+                <sc-if value="{{a.isDefault}}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #2b3a31; color: #9fd3b4">Predeterminado</span></sc-if>
+              </span>
+              <span style="font-size: 12px; color: {{a.statusColor}}">{{a.status}}</span>
+            </span>
+            <button style="height: 30px; padding: 0 12px; border-radius: 7px; background: {{a.btnBg}}; color: {{a.btnColor}}">{{a.action}}</button>
+          </div>
+        </sc-for>
+        <button style="align-self: flex-start; height: 30px; padding: 0 12px; border-radius: 7px; color: #a3a5ab">+ Agregar agente ACP personalizado</button>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 6px; margin-top: 4px">
+        <h2 style="margin: 0; font-size: 14px; font-weight: 600">Permisos</h2>
+        <sc-for list="{{modes}}" as="m" hint-placeholder-count="3">
+          <label style="display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border-radius: 8px; background: {{m.bg}}">
+            <input type="radio" name="mode" checked="{{m.checked}}" style="margin-top: 3px; accent-color: #4caf7a">
+            <span style="display: flex; flex-direction: column; gap: 2px"><span>{{m.label}}</span><span style="font-size: 12px; color: #767880">{{m.detail}}</span></span>
+          </label>
+        </sc-for>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 10px; background: #1f2023">
+        <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px">
+          <span style="font-weight: 500">Permitir agentes externos</span>
+          <span style="font-size: 12px; color: #767880">Claude Code u otro cliente MCP puede leer y editar el libro abierto, con las mismas aprobaciones.</span>
+          <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #d9a679; margin-top: 4px">claude mcp add zenkai -- zenkai-mcp</span>
+        </span>
+        <label style="display: flex; align-items: center; gap: 8px">
+          <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Permitir agentes externos</span>
+          <input type="checkbox" style="width: 18px; height: 18px; accent-color: #4caf7a">
+        </label>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{isLook}}" hint-placeholder-val="{{ false }}">
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <h1 style="margin: 0; font-size: 20px; font-weight: 600">Apariencia</h1>
+        <p style="margin: 0; color: #a3a5ab; line-height: 1.5">Los temas son archivos JSON. Podés importar temas de Zed o crear el tuyo.</p>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+        <sc-for list="{{themes}}" as="t" hint-placeholder-count="6">
+          <button style="display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: 10px; text-align: left; background: #1f2023; box-shadow: {{t.ring}}">
+            <span style="height: 70px; border-radius: 6px; background: {{t.bg}}; display: flex; overflow: hidden">
+              <span style="width: 26%; background: {{t.side}}"></span>
+              <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 6px; padding: 10px">
+                <span style="height: 6px; width: 70%; border-radius: 3px; background: {{t.fg}}; opacity: 0.6"></span>
+                <span style="height: 6px; width: 45%; border-radius: 3px; background: {{t.fg}}; opacity: 0.35"></span>
+                <span style="height: 12px; width: 30%; border-radius: 3px; box-shadow: inset 0 0 0 2px {{t.acc}}"></span>
+              </span>
+            </span>
+            <span style="display: flex; justify-content: space-between"><span>{{t.name}}</span><span style="font-size: 11.5px; color: #767880">{{t.origin}}</span></span>
+          </button>
+        </sc-for>
+      </div>
+      <div style="display: flex; flex-wrap: wrap; gap: 10px">
+        <button style="height: 32px; padding: 0 12px; border-radius: 8px; background: #222326; color: #a3a5ab">Importar tema de Zed…</button>
+        <button style="height: 32px; padding: 0 12px; border-radius: 8px; color: #a3a5ab">Abrir carpeta de temas</button>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+        <sc-for list="{{lookRows}}" as="r" hint-placeholder-count="4">
+          <div style="display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 10px; background: #1f2023">
+            <span>{{r.label}}</span><span style="color: #a3a5ab">{{r.value}}</span>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+  </div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"section":{"editor":"enum","options":["keys","agents","look"],"default":"keys"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const section = this.props.section ?? 'keys';
+    const labels = [
+      ['general', 'General', ''], ['look', 'Apariencia', ''], ['keys', 'Atajos de teclado', ''],
+      ['agents', 'Agentes', '2 listos'], ['files', 'Archivos y recuperación', ''], ['spaces', 'Espacios y sesión', ''],
+      ['privacy', 'Privacidad', ''], ['advanced', 'Avanzado', '']
+    ];
+    const nav = labels.map(([id, label, badge]) => ({
+      label, badge, bg: id === section ? '#2a2b2f' : 'transparent', color: id === section ? '#e4e4e6' : '#a3a5ab'
+    }));
+    const keys = [
+      { action: 'Paleta de comandos', context: 'Global', keys: 'Ctrl+Shift+P', source: 'Zenkai' },
+      { action: 'Buscar archivo', context: 'Global', keys: 'Ctrl+E', source: 'Personalizado', note: 'Reemplaza Relleno rápido de Excel (Ctrl+E)', noteColor: '#d9a679', selected: true },
+      { action: 'Mostrar u ocultar barra lateral', context: 'Global', keys: 'Ctrl+Alt+B', source: 'Zenkai', note: 'No Ctrl+B: en Excel es Negrita', noteColor: '#767880' },
+      { action: 'Agente: agregar selección al chat', context: 'Grilla', keys: 'Ctrl+L', source: 'Zenkai', note: 'Excel usa Ctrl+L para Crear tabla', noteColor: '#d9a679' },
+      { action: 'Agente: editar en línea', context: 'Grilla', keys: 'Ctrl+K', source: 'Zenkai', note: 'Excel usa Ctrl+K para Insertar hipervínculo', noteColor: '#d9a679' },
+      { action: 'Negrita', context: 'Grilla', keys: 'Ctrl+B', source: 'Excel' },
+      { action: 'Formato de celdas', context: 'Grilla', keys: 'Ctrl+1', source: 'Excel' },
+      { action: 'Ir a', context: 'Grilla', keys: 'Ctrl+G', source: 'Excel' },
+      { action: 'Siguiente archivo', context: 'Global', keys: 'Ctrl+Tab', source: 'Zenkai' },
+      { action: 'Reabrir archivo cerrado', context: 'Global', keys: 'Ctrl+Shift+T', source: 'Zenkai' }
+    ].map((k) => ({
+      note: '', noteColor: '#767880', ...k,
+      parts: k.keys.split('+'),
+      bg: k.selected ? '#1f2023' : 'transparent',
+      keyColor: k.selected ? '#9fd3b4' : '#e4e4e6'
+    }));
+    const agents = [
+      { initial: 'C', name: 'Claude Code', status: 'Listo, usa tu login de Claude', isDefault: true, action: 'Configurar', ok: true },
+      { initial: 'G', name: 'Gemini CLI', status: 'Listo, usa tu cuenta de Google', action: 'Configurar', ok: true },
+      { initial: 'X', name: 'Codex', status: 'No instalado, requiere Node 22 o superior', action: 'Instalar', ok: false },
+      { initial: 'O', name: 'Ollama (local)', status: 'No detectado, los datos no salen de tu PC', action: 'Cómo instalar', ok: false }
+    ].map((a) => ({
+      isDefault: false, ...a,
+      statusColor: a.ok ? '#8fc9a6' : '#767880',
+      btnBg: a.ok ? '#2a2b2f' : 'transparent',
+      btnColor: a.ok ? '#e4e4e6' : '#a3a5ab'
+    }));
+    const modes = [
+      { label: 'Solo lectura', detail: 'El agente lee y responde; no puede cambiar celdas.' },
+      { label: 'Preguntar antes de escribir', detail: 'Cada cambio se muestra resaltado y espera tu aprobación.', checked: true },
+      { label: 'Automático', detail: 'Aplica cambios sin preguntar. Siempre se deshacen con Ctrl+Z.' }
+    ].map((m) => ({ checked: false, ...m, bg: m.checked ? '#1f2023' : 'transparent' }));
+    const themes = [
+      { name: 'Zenkai Oscuro', origin: 'Incluido', bg: '#18191b', side: '#1f2023', fg: '#e4e4e6', acc: '#4caf7a', active: true },
+      { name: 'Zenkai Claro', origin: 'Incluido', bg: '#ffffff', side: '#f4f4f5', fg: '#1c1d1f', acc: '#1f7a4a' },
+      { name: 'Alto contraste', origin: 'Incluido', bg: '#000000', side: '#0d0d0d', fg: '#ffffff', acc: '#ffd400' },
+      { name: 'One Dark', origin: 'Importado de Zed', bg: '#282c34', side: '#21252b', fg: '#abb2bf', acc: '#61afef' },
+      { name: 'Catppuccin Mocha', origin: 'Importado de Zed', bg: '#1e1e2e', side: '#181825', fg: '#cdd6f4', acc: '#a6e3a1' },
+      { name: 'Gruvbox Light', origin: 'Importado de Zed', bg: '#fbf1c7', side: '#ebdbb2', fg: '#3c3836', acc: '#79740e' }
+    ].map((t) => ({ ...t, ring: t.active ? 'inset 0 0 0 2px #4caf7a' : 'none' }));
+    const lookRows = [
+      { label: 'Seguir el tema del sistema', value: 'Activado' },
+      { label: 'Tamaño de interfaz', value: '100 %' },
+      { label: 'Fuente de la grilla', value: 'IBM Plex Sans 13' },
+      { label: 'Reducir movimiento', value: 'Según Windows' }
+    ];
+    return {
+      nav, keys, agents, modes, themes, lookRows,
+      isKeys: section === 'keys', isAgents: section === 'agents', isLook: section === 'look'
+    };
+  }
+}
+</script>
+</body>
+</html>

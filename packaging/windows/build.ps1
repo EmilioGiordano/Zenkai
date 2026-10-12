@@ -11,7 +11,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed' }
     $version = ($metadata.packages | Where-Object { $_.name -eq 'zenkai' }).version
 
-    cargo build --profile dist -p zenkai -j 6
+    cargo build --profile dist -p zenkai -p zenkai-mcp -j 6
     if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
     $exeDir = Join-Path $root 'target\dist'
 
@@ -19,7 +19,7 @@ try {
     $staging = Join-Path $dist $name
     if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
     New-Item -ItemType Directory -Force $staging | Out-Null
-    Copy-Item (Join-Path $exeDir 'zenkai.exe'), (Join-Path $root 'LICENSE'), (Join-Path $root 'README.md') $staging
+    Copy-Item (Join-Path $exeDir 'zenkai.exe'), (Join-Path $exeDir 'zenkai-mcp.exe'), (Join-Path $root 'LICENSE'), (Join-Path $root 'README.md') $staging
     $zip = Join-Path $dist "$name.zip"
     Compress-Archive -Path $staging -DestinationPath $zip -Force
     Remove-Item -Recurse -Force $staging

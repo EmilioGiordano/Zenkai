@@ -211,6 +211,98 @@ Requisitos de accesibilidad:
 - Respetar la preferencia de reducir movimiento del sistema.
 - Lector de pantalla: investigar el soporte de accesibilidad disponible en el ecosistema GPUI (por ejemplo AccessKit, que menciona gpui-kit) y exponer al menos la celda activa (dirección, valor, fórmula), la barra de fórmulas y las pestañas. Si no es viable en la v0.1, documentar la brecha y dejar la arquitectura preparada.
 
+## Fase 6: agentes dentro de Zenkai
+
+Los agentes de IA (Claude Code, Gemini CLI, Codex y cualquier cliente MCP) trabajan sobre el **documento abierto**, nunca sobre el archivo en disco: no se recarga nada, no se pierde trabajo sin guardar, y cada cambio pasa por el mismo camino de edición que el del usuario (recálculo, grilla en vivo, deshacer). Zenkai no incluye ningún modelo ni agente: lanza o atiende los que el usuario ya tiene instalados.
+
+### Alcance
+
+Esta fase avanza en este orden, cada paso útil por sí solo:
+
+1. **Archivo de configuración** con esquema, recarga en caliente, secretos en el Administrador de credenciales de Windows y una página de Configuración que detecta los agentes instalados.
+2. **Capa de herramientas** en Rust puro sobre el documento abierto, sin LLM y probada de forma determinista.
+3. **Puente MCP**: Zenkai como servidor MCP local, para que un Claude Code externo (o cualquier cliente MCP) lea y edite el libro abierto en vivo.
+
+4. **Pestañas, espacios y sesión** (diseño visual a definir con el usuario):
+   - Un espacio es un grupo con nombre de archivos; cada archivo es un ítem o pestaña.
+   - Barra lateral opcional (Ctrl+B en la propuesta del usuario; en Excel Ctrl+B es negrita, así que el atajo se decide con el diseño), con un estilo sobrio a la Waku.
+   - Carga diferida: las pestañas restauradas son enlaces hasta que se activan.
+   - Las pestañas inactivas y sin cambios se descargan cuando falta memoria.
+   - `session.json` restaura espacios, pestañas, hoja activa, selección y scroll; los cambios sin guardar vuelven por la recuperación.
+   - Atajos de navegador: Ctrl+Tab, Ctrl+W, Ctrl+Shift+T y Ctrl+P (en Excel, Ctrl+P es imprimir, que está fuera del alcance).
+   - Más adelante, vista dividida para dos archivos lado a lado.
+5. **Chat de agentes** sobre ACP (Agent Client Protocol).
+6. **Menciones de contexto** (`[Ventas!A1:N200]`).
+7. **Capa de revisión**: resaltar cambios del agente, aceptar o rechazar, paso de deshacer con nombre.
+8. **Generar datos** (diseño aprobado: los artboards Generate* de `spaces-mock/project/` y el artifact claude.ai/artifact/XYUMggmNUzgnraYvWceNNh):
+   - Entradas: clic derecho sobre una selección, la paleta de comandos y Ctrl+Alt+G (configurable).
+   - La selección define las columnas: solo encabezados, se agregan N filas debajo; encabezados y filas, se llenan las filas seleccionadas; una sola celda, se detecta la región alrededor; columnas vacías, el usuario las nombra. El rango es editable en el diálogo.
+   - Por columna: encabezado editable (vacío o no) y tipo detectado del texto del encabezado. Las opciones de cada tipo se abren en un popover (por ejemplo, email: formato, columnas de origen, dominios y quitar acentos). Cada columna tiene además un % de vacíos y una marca de únicos.
+   - Ajustes globales: cantidad de filas, ubicación, configuración regional de los datos (por ejemplo es-AR) y una semilla para reproducir el resultado.
+   - Vista previa en vivo.
+   - Nada se escribe hasta confirmar: Generar aplica los encabezados renombrados y las filas en un solo paso de deshacer; "Guardar solo encabezados" aparece cuando cambió un encabezado; Cancelar deja la hoja intacta; una columna renombrada muestra "Encabezado sin guardar" con la acción Descartar.
+   - Solo local: sin IA y sin red.
+   - Gancho para IA a futuro: la configuración de generación es un tipo serializable con JSON Schema. Una herramienta de agente puede producir la configuración, no los datos, lo que ahorra tokens al usuario, y el generador local produce las filas. Cuando conviene, el agente puede generar los datos él mismo.
+
+Los pasos 4 a 8 se aprueban por separado. Las herramientas identifican el libro con un `WorkbookId` tipado desde el primer día, para que su forma no cambie cuando lleguen las pestañas. El resto de las ideas (Ctrl+K, auditoría, carpeta como espacio de trabajo) sigue en `docs/IDEAS.md`.
+
+### Arquitectura
+
+- `crates/agent` (`zenkai-agent`, biblioteca): configuración, capa de herramientas y puente MCP. Depende de `engine` y `types`, nunca de GPUI, para poder probarse sin ventana. Errores con `thiserror`.
+- `crates/mcp-relay` (binario `zenkai-mcp`): relé mínimo, con `std` y solo el cliente de pipes de `interprocess` (un handle síncrono de `std` serializa lectura y escritura simultáneas), que copia stdin al pipe y el pipe a stdout. No tiene lógica MCP. Lo lanzan los agentes como servidor MCP por stdio, el único transporte que todos soportan.
+- `crates/app`: une la capa de herramientas con `Document` y `Workspace::edit`, y dibuja la página de Configuración y la aprobación de escrituras.
+- El servidor MCP usa `rmcp`, que necesita tokio: corre en un único hilo dedicado con un runtime `current_thread`. El hilo de UI nunca espera a tokio.
+- Flujo de una llamada: el agente → `zenkai-mcp` → named pipe → `rmcp` en el hilo de tokio → solicitud tipada por un canal → bucle de `Workspace` en el hilo de UI → lectura en segundo plano o escritura por `Workspace::edit` → respuesta tipada por el mismo canal.
+- Cada llamada lleva la generación del documento; si el usuario abrió o creó otro libro mientras tanto, la llamada se rechaza.
+- Dependencias nuevas fijadas: `rmcp`, `interprocess`, `keyring-core` y `windows-native-keyring-store`. `tokio`, `notify`, `which` y `schemars` ya estaban en el árbol por GPUI.
+
+### Configuración
+
+- Archivo: `%APPDATA%\Zenkai\settings.json` (configuración del usuario, que viaja con el perfil). Cachés y estado siguen en `%LOCALAPPDATA%\Zenkai`. Fuera de Windows: `$XDG_CONFIG_HOME/zenkai` o `~/.config/zenkai`.
+- Junto al archivo, Zenkai escribe `settings.schema.json`, generado con `schemars` desde los mismos tipos de Rust, para que un agente externo pueda editarlo sin equivocarse. El archivo lo referencia con `"$schema"`.
+- Contenido: agente por defecto, agentes configurados (comando, argumentos, variables de entorno), modo de permisos (`read_only`, `ask_before_write` por defecto, `automatic`) y "Permitir agentes externos" (apagado por defecto).
+- Recarga en caliente: se vigila la carpeta (los editores y agentes escriben por renombre), con espera de unos 200 ms; si el archivo nuevo no se puede leer, se mantiene la última configuración válida y se muestra un aviso no bloqueante con línea y columna. También se relee al volver el foco a la ventana.
+- Secretos: nunca en el JSON. El JSON solo guarda una referencia `{ "secret": "<nombre>" }`; el valor vive en el Administrador de credenciales de Windows y el usuario lo carga desde la interfaz. Nunca se escribe en el log.
+- Página de Configuración (acción con atajo y en la paleta de comandos): detección de `node`, `npx`, `claude` y `gemini` en el PATH, versión de Node, presets de Claude, Gemini y Codex con los comandos del registro de ACP, agente por defecto, modo de permisos y el interruptor de agentes externos. Los agentes por `npx` necesitan Node; si falta, Zenkai lo dice y explica cómo instalarlo.
+
+### Herramientas
+
+`list_workbooks`, `list_sheets`, `get_selection`, `read_range`, `find`, `write_cells`, `set_formula` y `format_range`. Ninguna guarda, ninguna expone la ruta del archivo ni el sistema de archivos.
+
+- `list_workbooks` devuelve un `WorkbookId` por libro abierto, y cada herramienta de lectura o escritura recibe uno. Hoy hay un solo documento abierto; un id desconocido o de un libro ya reemplazado es un error tipado.
+
+- `read_range` está paginada y limitada en celdas por llamada.
+- `write_cells` y `set_formula` escriben **bloques rectangulares** con un tope de celdas por llamada, a través de `Workspace::edit`: recalculan, se ven en la grilla al instante y se deshacen con Ctrl+Z en un solo paso. Las escrituras dispersas quedan fuera hasta que el motor tenga deshacer por lotes.
+- `format_range` respeta los mismos topes de formato que la interfaz.
+- Una escritura se rechaza con un error claro si el libro es de solo lectura, si la sesión del agente es de solo lectura, si el usuario está editando una celda, o si la generación del documento cambió.
+
+### Modelo de seguridad
+
+La amenaza principal es la misma que en el resto de Zenkai, un archivo malicioso, ahora como **inyección de instrucciones**: celdas con texto escrito para que un agente lo obedezca. Las defensas:
+
+- **Mínimo privilegio.** El agente solo ve las herramientas de arriba, limitadas al libro abierto: sin sistema de archivos, sin terminal, sin red, sin guardar. Los agentes que Zenkai lanza corren en una carpeta temporal vacía, sin capacidades `fs` ni `terminal` anunciadas.
+- **Datos no confiables marcados.** Todo resultado que devuelve contenido de celdas lo encierra en bloques delimitados y etiquetados como "datos de planilla no confiables", con un marcador aleatorio por llamada que una celda no puede falsificar, y el texto de las celdas codificado como JSON. La descripción de cada herramienta dice que ese contenido es dato, nunca instrucciones.
+- **Humano en el bucle.** Por defecto cada escritura pide aprobación (Permitir o Denegar, con teclado). Las escrituras tienen tope de celdas, nada se guarda solo y todo se deshace.
+- **Vista protegida como Excel.** Si el archivo trae la Marca de la Web (el flujo alternativo `Zone.Identifier` con `ZoneId` 3 o 4), la sesión del agente empieza en solo lectura y la interfaz explica por qué. Se lee con `std::fs` sobre `ruta:Zone.Identifier`, en segundo plano al abrir.
+- **Contenido oculto a la vista.** Cuando una herramienta lee de hojas, filas o columnas ocultas, o celdas de texto muy largo, el resultado lo dice, para que el usuario pueda verlo.
+- **Canal local cerrado.** El pipe tiene un nombre aleatorio por sesión, rechaza clientes remotos, solo admite al usuario actual y exige un token aleatorio de 256 bits como primera línea, comparado en tiempo constante. Solo existe mientras "Permitir agentes externos" está encendido o hay una sesión del chat abierta.
+- **Procesos.** Al cerrar una sesión se termina todo el árbol de procesos del agente con `taskkill /T`, sin código `unsafe`.
+- **Configuración como interruptor.** Cualquier programa del usuario puede escribir `settings.json`. Un cambio que da más poder a los agentes (escribir sin preguntar, permitir agentes externos) no se aplica hasta que el usuario lo confirma en Zenkai, también al iniciar; quitar poder se aplica en el acto.
+- **Comandos de agentes desde el archivo.** Antes de que el chat lance un agente, todo cambio en `agents.servers.*.command` o `args` que llegue desde el archivo (no desde la página de Configuración) se muestra y requiere confirmación. Zenkai nunca lanza agentes a través de shims `.cmd` o `.bat`: ejecuta `node` y el punto de entrada del paquete directamente, o valida cada argumento.
+- **Riesgo residual.** Zenkai no puede apagar las herramientas propias de un agente (por ejemplo la terminal de Claude Code). La interfaz lo dice.
+
+### Plan de ramas
+
+| Rama | Contenido |
+| --- | --- |
+| `chore/phase-6-spec` | Esta sección y las decisiones |
+| `feat/settings-file` | Tipos de configuración, esquema, recarga en caliente, secretos, página de Configuración con detección de agentes |
+| `feat/workbook-tools` | Capa de herramientas tipada sobre el documento abierto, canal hacia el hilo de UI, aprobación de escrituras, Vista protegida y avisos de contenido oculto, pruebas deterministas |
+| `feat/mcp-bridge` | `rmcp` en un hilo de tokio, named pipe restringido, relé `zenkai-mcp`, comando `claude mcp add` en Configuración, prueba de punta a punta |
+| Pestañas, espacios y sesión | Paso 4; diseño visual a definir |
+| `feat/agent-chat` y siguientes | Pasos 5 a 7: chat ACP, menciones y capa de revisión; se aprueban por separado |
+| Generar datos | Paso 8: núcleo del generador en un crate de Rust puro; el diálogo llega después de las pestañas |
+
 ## Proceso de trabajo para el agente
 
 El trabajo avanza por fases. Al cerrar cada una, el agente se detiene, entrega un resumen con lo hecho, lo pendiente y los riesgos, y espera aprobación antes de seguir.
@@ -220,6 +312,7 @@ El trabajo avanza por fases. Al cerrar cada una, el agente se detiene, entrega u
 3. **Fase 2, grilla de solo lectura:** abrir un xlsx y mostrarlo con formato, scroll fluido, selección y navegación por teclado, pestañas de hojas. Cumplir el presupuesto de frame con el archivo 1.
 4. **Fase 3, edición:** barra de fórmulas, edición de celdas, recálculo, copiar y pegar, deshacer, guardado y recuperación.
 5. **Fase 4, terminaciones de la v0.1:** formato básico, buscar, zoom, temas, paleta de comandos, accesibilidad y empaquetado para Windows (instalador y ZIP portable).
+6. **Fase 6, agentes dentro de Zenkai:** configuración, herramientas sobre el documento abierto y puente MCP, según su sección. Fuera de la v0.1.
 
 Reglas durante todo el proyecto:
 

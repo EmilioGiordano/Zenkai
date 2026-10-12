@@ -18,6 +18,7 @@ mod spec;
 mod text;
 mod value_set;
 
+pub use budget::estimated_output_bytes;
 pub use date::{Date, InvalidDate};
 pub use detect::{detect_kind, detect_kinds};
 pub use error::{ColumnProblem, DatagenError, TextField};

@@ -1,0 +1,21 @@
+[package]
+name = "zenkai-xlsx-reader"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ironcalc = "=0.8.3"
+quick-xml = "=0.41.0"
+roxmltree = "0.19"
+thiserror = "2"
+tracing = "0.1"
+zenkai-types = { path = "../types" }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[lints]
+workspace = true

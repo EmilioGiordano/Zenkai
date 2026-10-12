@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Zenkai, Generar datos</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7fb894}a:hover{color:#a6d3b5}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 100%; height: 900px; overflow: hidden; display: flex; flex-direction: column; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; background: #18191b; color: #e4e4e6">
+
+  <header style="height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding-left: 16px; color: #a3a5ab">
+    <span style="color: #e4e4e6; font-weight: 500">personas.xlsx</span>
+    <span style="font-size: 12px; color: #767880">{{subtitle}}</span>
+    <span style="flex-grow: 1"></span>
+    <div style="display: flex; height: 44px">
+      <button aria-label="Minimizar" style="width: 46px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 5h10"></path></svg></button>
+      <button aria-label="Maximizar" style="width: 46px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"></rect></svg></button>
+      <button aria-label="Cerrar" style="width: 46px; display: flex; align-items: center; justify-content: center"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 0l10 10M10 0L0 10"></path></svg></button>
+    </div>
+  </header>
+
+  <div style="height: 34px; flex-shrink: 0; display: flex; align-items: center; gap: 10px; padding: 0 12px">
+    <label style="display: flex">
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Cuadro de nombres</span>
+      <input value="{{nameBox}}" style="width: 96px; height: 26px; box-sizing: border-box; padding: 0 8px; border-radius: 6px; border: 0; background: #222326; color: #e4e4e6; font-family: 'IBM Plex Mono', monospace; font-size: 12px">
+    </label>
+    <span style="font-style: italic; color: #767880">fx</span>
+    <label style="flex-grow: 1; display: flex">
+      <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Barra de fórmulas</span>
+      <input value="{{formula}}" style="flex-grow: 1; height: 26px; box-sizing: border-box; padding: 0 10px; border-radius: 6px; border: 0; background: #222326; color: #e4e4e6; font-family: 'IBM Plex Mono', monospace; font-size: 12px">
+    </label>
+  </div>
+
+  <div role="grid" aria-label="Hoja Personas" style="flex-grow: 1; min-height: 0; overflow: hidden; margin-top: 6px">
+    <div style="display: grid; grid-template-columns: {{cols}}; height: 24px; background: #1d1e21; font-size: 11.5px">
+      <span></span>
+      <sc-for list="{{letters}}" as="l" hint-placeholder-count="8">
+        <span style="display: flex; align-items: center; justify-content: center; color: {{l.color}}; background: {{l.bg}}">{{l.text}}</span>
+      </sc-for>
+    </div>
+    <sc-for list="{{rows}}" as="row" hint-placeholder-count="26">
+      <div style="display: grid; grid-template-columns: {{cols}}; height: 25px; box-sizing: border-box; border-bottom: 1px solid #232427">
+        <span style="display: flex; align-items: center; justify-content: center; font-size: 11.5px; color: {{row.numColor}}; background: {{row.numBg}}">{{row.num}}</span>
+        <sc-for list="{{row.cells}}" as="cell" hint-placeholder-count="8">
+          <span style="{{cell.style}}">{{cell.text}}</span>
+        </sc-for>
+      </div>
+    </sc-for>
+  </div>
+
+  <footer style="height: 32px; flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 0 10px; color: #a3a5ab; font-size: 12px">
+    <button style="height: 24px; padding: 0 12px; border-radius: 6px; background: #2a2b2f; color: #e4e4e6">Personas</button>
+    <button aria-label="Nueva hoja" style="width: 24px; height: 24px; border-radius: 6px">+</button>
+    <span style="flex-grow: 1"></span>
+    <span style="color: {{statusColor}}">{{status}}</span>
+  </footer>
+
+  <sc-if value="{{isSelect}}" hint-placeholder-val="{{ true }}">
+    <div role="menu" aria-label="Menú de celda" style="position: absolute; left: 520px; top: 150px; width: 280px; padding: 6px; border-radius: 10px; background: #1f2023; box-shadow: 0 18px 48px rgba(0,0,0,0.45); display: flex; flex-direction: column">
+      <sc-for list="{{menu}}" as="m" hint-placeholder-count="9">
+        <sc-if value="{{m.sep}}" hint-placeholder-val="{{ false }}">
+          <div style="height: 1px; margin: 5px 6px; background: #2e2f33"></div>
+        </sc-if>
+        <sc-if value="{{m.label}}" hint-placeholder-val="{{ true }}">
+          <button role="menuitem" style="display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px; border-radius: 6px; text-align: left; background: {{m.bg}}; color: {{m.color}}">
+            <span style="flex-grow: 1">{{m.label}}</span>
+            <span style="font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: #767880">{{m.keys}}</span>
+          </button>
+        </sc-if>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{isDialog}}" hint-placeholder-val="{{ false }}">
+  <div style="position: absolute; inset: 0; display: flex; justify-content: center; align-items: flex-start; padding-top: 48px; background: rgba(0,0,0,0.45)">
+    <div role="dialog" aria-label="Generar datos" style="width: 880px; max-width: calc(100% - 32px); border-radius: 14px; background: #1f2023; box-shadow: 0 24px 64px rgba(0,0,0,0.45); display: flex; flex-direction: column; overflow: hidden">
+
+      <div style="display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 12px">
+        <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 8px">
+          <h2 style="margin: 0; font-size: 16px; font-weight: 600">Generar datos</h2>
+          <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; color: #a3a5ab">
+            <label style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px 0 10px; border-radius: 7px; background: #18191b">
+              <span style="font-size: 11.5px; color: #767880">Rango</span>
+              <input value="{{range}}" style="width: 120px; border: 0; background: transparent; color: #9fd3b4; font-family: 'IBM Plex Mono', monospace; font-size: 12px">
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" style="color: #767880"><path d="M11 2.5l2.5 2.5L6 12.5H3.5V10z"></path></svg>
+            </label>
+            <span>{{detected}}</span>
+          </div>
+        </div>
+        <button aria-label="Cerrar" style="width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: #a3a5ab">
+          <svg width="12" height="12" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M1 1l8 8M9 1L1 9"></path></svg>
+        </button>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 12px; padding: 0 20px 14px">
+        <sc-for list="{{settings}}" as="s" hint-placeholder-count="4">
+          <label style="flex: 1 1 160px; display: flex; flex-direction: column; gap: 5px">
+            <span style="font-size: 11.5px; color: #767880">{{s.label}}</span>
+            <span style="display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 10px; border-radius: 7px; background: #18191b">
+              <input value="{{s.value}}" style="flex-grow: 1; min-width: 0; border: 0; background: transparent; color: #e4e4e6; font: inherit; font-family: {{s.font}}">
+              <span style="font-size: 11.5px; color: #767880">{{s.suffix}}</span>
+            </span>
+          </label>
+        </sc-for>
+      </div>
+
+      <div role="table" aria-label="Columnas" style="display: flex; flex-direction: column; padding: 0 12px">
+        <div role="row" style="display: grid; grid-template-columns: 170px 190px minmax(0, 1fr) 110px 70px; gap: 12px; height: 28px; align-items: center; padding: 0 8px; font-size: 11.5px; color: #767880">
+          <span role="columnheader">Columna</span><span role="columnheader">Tipo</span><span role="columnheader">Opciones</span><span role="columnheader">Vacíos</span><span role="columnheader">Únicos</span>
+        </div>
+        <sc-for list="{{columns}}" as="c" hint-placeholder-count="5">
+          <div style="position: relative; z-index: {{c.z}}; display: flex; flex-direction: column; border-radius: 8px; background: {{c.bg}}">
+          <div role="row" style="display: grid; grid-template-columns: 170px 190px minmax(0, 1fr) 110px 70px; gap: 12px; height: 44px; align-items: center; padding: 0 8px">
+            <span role="cell" style="display: flex; align-items: center; gap: 8px">
+              <span style="width: 10px; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: #767880">{{c.letter}}</span>
+              <label style="flex-grow: 1; min-width: 0; display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 8px; border-radius: 7px; background: #18191b; box-shadow: {{c.ring}}">
+                <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Encabezado de la columna {{c.letter}}</span>
+                <input value="{{c.name}}" style="flex-grow: 1; min-width: 0; border: 0; background: transparent; color: #e4e4e6; font: inherit; font-weight: 500">
+              </label>
+            </span>
+            <span role="cell">
+              <button style="width: 100%; height: 30px; padding: 0 10px; border-radius: 7px; background: #18191b; display: flex; align-items: center; gap: 6px; text-align: left">
+                <span style="flex-grow: 1">{{c.kind}}</span>
+                <sc-if value="{{c.auto}}" hint-placeholder-val="{{ false }}"><span style="font-size: 10.5px; padding: 1px 5px; border-radius: 4px; background: #2b3a31; color: #9fd3b4">auto</span></sc-if>
+                <svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="color: #767880"><path d="M4 6l4 4 4-4"></path></svg>
+              </button>
+            </span>
+            <span role="cell" style="position: relative; min-width: 0">
+              <button aria-label="Opciones de {{c.name}}" style="width: 100%; height: 30px; padding: 0 10px; border-radius: 7px; background: #18191b; display: flex; align-items: center; gap: 8px; text-align: left; box-shadow: {{c.optRing}}">
+                <span style="flex-grow: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: #c9cace">{{c.options}}</span>
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" style="flex-shrink: 0; color: #767880"><path d="M2 4h7M12 4h2M2 12h2M7 12h7"></path><circle cx="10.5" cy="4" r="1.5"></circle><circle cx="5.5" cy="12" r="1.5"></circle></svg>
+              </button>
+              <sc-if value="{{c.open}}" hint-placeholder-val="{{ false }}">
+                <div role="dialog" aria-label="Opciones de Email" style="position: absolute; z-index: 2; top: 36px; left: 0; width: 340px; padding: 14px; border-radius: 10px; background: #26272a; box-shadow: 0 16px 40px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 12px">
+                  <label style="display: flex; flex-direction: column; gap: 5px">
+                    <span style="font-size: 11.5px; color: #767880">Formato</span>
+                    <button style="height: 30px; padding: 0 10px; border-radius: 7px; background: #18191b; display: flex; align-items: center; text-align: left"><span style="flex-grow: 1">nombre.apellido@dominio</span><svg width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" style="color: #767880"><path d="M4 6l4 4 4-4"></path></svg></button>
+                  </label>
+                  <div style="display: flex; flex-direction: column; gap: 5px">
+                    <span style="font-size: 11.5px; color: #767880">Se arma con las columnas</span>
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                      <span style="padding: 3px 8px; border-radius: 6px; background: #2b3a31; color: #9fd3b4; font-size: 12px">A Nombre</span>
+                      <span style="padding: 3px 8px; border-radius: 6px; background: #2b3a31; color: #9fd3b4; font-size: 12px">B Apellido</span>
+                    </div>
+                  </div>
+                  <div style="display: flex; flex-direction: column; gap: 5px">
+                    <span style="font-size: 11.5px; color: #767880">Dominios</span>
+                    <div style="display: flex; flex-wrap: wrap; gap: 6px">
+                      <span style="padding: 3px 8px; border-radius: 6px; background: #18191b; font-size: 12px">gmail.com</span>
+                      <span style="padding: 3px 8px; border-radius: 6px; background: #18191b; font-size: 12px">hotmail.com</span>
+                      <span style="padding: 3px 8px; border-radius: 6px; background: #18191b; font-size: 12px">outlook.com</span>
+                      <button style="padding: 3px 8px; border-radius: 6px; color: #a3a5ab; font-size: 12px">+ Agregar</button>
+                    </div>
+                  </div>
+                  <label style="display: flex; align-items: center; gap: 8px; font-size: 12.5px">
+                    <input type="checkbox" checked="{{yes}}" style="width: 15px; height: 15px; accent-color: #4caf7a">
+                    Quitar acentos y espacios
+                  </label>
+                </div>
+              </sc-if>
+            </span>
+            <span role="cell" style="display: flex; align-items: center; gap: 8px">
+              <span style="flex-grow: 1; height: 4px; border-radius: 2px; background: #2a2b2f; overflow: hidden"><span style="display: block; height: 4px; width: {{c.nulls}}; background: #6f7a74"></span></span>
+              <span style="width: 34px; text-align: right; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px">{{c.nulls}}</span>
+            </span>
+            <span role="cell">
+              <label style="display: flex">
+                <span style="position: absolute; width: 1px; height: 1px; overflow: hidden">Valores únicos en la columna {{c.letter}}</span>
+                <input type="checkbox" checked="{{c.unique}}" style="width: 16px; height: 16px; accent-color: #4caf7a">
+              </label>
+            </span>
+          </div>
+          <sc-if value="{{c.changed}}" hint-placeholder-val="{{ false }}">
+            <div style="display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px 8px 26px; font-size: 11.5px; line-height: 16px">
+              <svg width="8" height="16" viewBox="0 0 8 16" style="flex-shrink: 0; display: block"><circle cx="4" cy="8" r="3" fill="#d9a679"></circle></svg>
+              <span style="color: #d9a679">Encabezado sin guardar</span>
+              <span style="flex-grow: 1"></span>
+              <button style="height: 22px; padding: 0 8px; border-radius: 5px; color: #a3a5ab; font-size: 11.5px; line-height: 22px">{{c.restoreLabel}}</button>
+            </div>
+          </sc-if>
+          </div>
+        </sc-for>
+        <button style="align-self: flex-start; height: 30px; margin: 4px 0 0 8px; padding: 0 10px; border-radius: 7px; color: #a3a5ab">+ Agregar columna</button>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px; padding: 14px 20px 0">
+        <span style="font-size: 11.5px; color: #767880">{{previewLabel}}</span>
+        <div role="table" aria-label="Vista previa" style="border-radius: 8px; background: #18191b; overflow: hidden; font-size: 12px">
+          <sc-for list="{{preview}}" as="r" hint-placeholder-count="5">
+            <div role="row" style="display: grid; grid-template-columns: {{previewCols}}; gap: 12px; height: 28px; align-items: center; padding: 0 12px; border-bottom: 1px solid #222326; color: {{r.color}}; font-weight: {{r.weight}}">
+              <sc-for list="{{r.cells}}" as="cell" hint-placeholder-count="5">
+                <span role="cell" style="overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-style: {{cell.style}}; color: {{cell.color}}">{{cell.text}}</span>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 16px 20px 18px">
+        <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px">
+          <span style="font-size: 12.5px; color: #e4e4e6">{{summary}}</span>
+          <span style="font-size: 11.5px; color: #767880">Nada cambia en la hoja hasta confirmar. Todo se genera en tu PC, sin IA, y un solo Ctrl+Z lo deshace.</span>
+        </span>
+        <button style="height: 32px; padding: 0 14px; border-radius: 8px; color: #a3a5ab">Cancelar</button>
+        <sc-if value="{{anyChanged}}" hint-placeholder-val="{{ true }}">
+          <button style="height: 32px; padding: 0 14px; border-radius: 8px; background: #2a2b2f; color: #e4e4e6">Solo guardar encabezados</button>
+        </sc-if>
+        <button style="height: 32px; padding: 0 16px; border-radius: 8px; background: #e4e4e6; color: #18191b; font-weight: 500">{{cta}}</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"step":{"editor":"enum","options":["select","dialog","result","empty"],"default":"dialog"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const step = this.props.step ?? 'dialog';
+    const empty = step === 'empty';
+    const filled = step === 'result';
+    const accent = '#4caf7a';
+    const heads = empty ? ['', '', '', '', ''] : filled ? ['Nombre', 'Apellido', 'Email', 'Teléfono', 'Alta'] : ['Nombre', 'Apellido', 'Mail', '', 'Alta'];
+    const widths = [120, 130, 230, 150, 100, 90, 90];
+    const cols = '44px ' + widths.map((w) => w + 'px').join(' ') + ' 1fr';
+    const people = [
+      ['Lucía', 'Fernández', 'lucia.fernandez@gmail.com', '+54 9 11 4821-3307', '14/03/2022'],
+      ['Martín', 'Gómez Ruiz', 'mgomezruiz@hotmail.com', '', '02/11/2023'],
+      ['Valentina', 'Sosa', 'valen.sosa@outlook.com', '+54 9 11 5590-1184', '27/06/2021'],
+      ['Joaquín', 'Pereyra', '', '+54 9 11 3012-7745', '09/01/2024'],
+      ['Camila', 'Benítez', 'camila.benitez@gmail.com', '+54 9 11 6623-0918', '30/08/2022'],
+      ['Tomás', 'Acosta', 'tacosta@yahoo.com.ar', '+54 9 11 4470-2251', '11/05/2020'],
+      ['Sofía', 'Medina Paz', 'sofi.medinapaz@gmail.com', '', '19/12/2023'],
+      ['Nicolás', 'Herrera', 'nico.herrera@outlook.com', '+54 9 11 3398-6604', '05/02/2021']
+    ];
+    const selCols = empty ? 3 : 5;
+    const rows = [];
+    for (let r = 1; r <= 26; r++) {
+      let values = new Array(7).fill('');
+      if (r === 1) values = heads.concat(['', '']);
+      else if (filled) values = people[(r - 2) % people.length].concat(['', '']);
+      const headerSel = !filled && r === 1;
+      const bodySel = filled && r >= 2;
+      const cells = values.map((v, c) => {
+        let style = 'display: flex; align-items: center; padding: 0 8px; box-sizing: border-box; overflow: hidden; white-space: nowrap; border-right: 1px solid #232427;';
+        if (r === 1) style += ' font-weight: 600;';
+        const inSel = c < selCols && (headerSel || bodySel);
+        if (inSel) style += ' background: rgba(76,175,122,0.13);';
+        if (inSel && headerSel) {
+          const edges = ['inset 0 2px 0 ' + accent, 'inset 0 -2px 0 ' + accent];
+          if (c === 0) edges.push('inset 2px 0 0 ' + accent);
+          if (c === selCols - 1) edges.push('inset -2px 0 0 ' + accent);
+          style += ' box-shadow: ' + edges.join(', ') + ';';
+        }
+        return { text: v, style };
+      });
+      cells.push({ text: '', style: 'border-right: 0' });
+      const marked = headerSel || bodySel;
+      rows.push({ num: String(r), cells, numColor: marked ? accent : '#767880', numBg: marked ? '#26302a' : '#1d1e21' });
+    }
+    const letters = 'ABCDEFG'.split('').map((l, i) => ({
+      text: l, color: i < selCols ? accent : '#767880', bg: i < selCols ? '#26302a' : 'transparent'
+    }));
+    const menu = [
+      { label: 'Cortar', keys: 'Ctrl+X' }, { label: 'Copiar', keys: 'Ctrl+C' }, { label: 'Pegar', keys: 'Ctrl+V' },
+      { sep: true },
+      { label: 'Insertar filas', keys: '' }, { label: 'Borrar contenido', keys: 'Supr' },
+      { sep: true },
+      { label: 'Generar datos…', keys: 'Ctrl+Alt+G', active: true },
+      { label: 'Agente: agregar al chat', keys: 'Ctrl+L' },
+      { sep: true },
+      { label: 'Formato de celdas…', keys: 'Ctrl+1' }
+    ].map((m) => ({ sep: false, label: '', keys: '', ...m, bg: m.active ? '#2a2b2f' : 'transparent', color: m.active ? '#e4e4e6' : '#c9cace' }));
+    const settings = [
+      { label: 'Filas a generar', value: '1000', suffix: 'filas', font: 'inherit' },
+      { label: 'Dónde', value: empty ? 'Encabezados en la fila 1, datos debajo' : 'Debajo de los encabezados', suffix: '', font: 'inherit' },
+      { label: 'Idioma de los datos', value: 'Español (Argentina)', suffix: '', font: 'inherit' },
+      { label: 'Semilla', value: '48213', suffix: 'reproducible', font: "'IBM Plex Mono', monospace" }
+    ];
+    const detectedColumns = [
+      { letter: 'A', name: 'Nombre', kind: 'Nombre de pila', auto: true, options: 'Femenino y masculino', nulls: '0%', unique: false },
+      { letter: 'B', name: 'Apellido', kind: 'Apellido', auto: true, options: 'Uno o dos', nulls: '0%', unique: false },
+      { letter: 'C', name: 'Email', before: 'Mail', kind: 'Email', auto: true, options: 'nombre.apellido, 3 dominios', nulls: '5%', unique: true, selected: true },
+      { letter: 'D', name: 'Teléfono', before: 'celda vacía', beforePlain: true, kind: 'Teléfono', auto: true, options: '+54 9 11 ####-####', nulls: '20%', unique: false },
+      { letter: 'E', name: 'Alta', kind: 'Fecha', auto: false, options: '2020 a hoy, dd/mm/aaaa', nulls: '0%', unique: false }
+    ];
+    const userColumns = [
+      { letter: 'A', name: 'Producto', kind: 'Lista de valores', auto: false, options: 'Teclado, Mouse, Monitor, Notebook', nulls: '0%', unique: false, selected: true },
+      { letter: 'B', name: 'Precio', kind: 'Número decimal', auto: false, options: '20 a 1.800, 2 decimales', nulls: '0%', unique: false },
+      { letter: 'C', name: 'SKU', kind: 'Patrón', auto: false, options: 'AAA-####', nulls: '0%', unique: true }
+    ];
+    const columns = (empty ? userColumns.map((c) => ({ ...c, before: 'celda vacía', beforePlain: true })) : detectedColumns).map((c) => ({
+      ...c,
+      changed: Boolean(c.before),
+      restoreLabel: 'Descartar',
+      open: !empty && c.letter === 'C',
+      optRing: !empty && c.letter === 'C' ? 'inset 0 0 0 1px #4caf7a' : 'none',
+      z: !empty && c.letter === 'C' ? 2 : 1,
+      ring: c.before ? 'inset 0 0 0 1px rgba(217,166,121,0.55)' : 'none',
+      bg: c.selected ? '#26272a' : 'transparent'
+    }));
+    const changedCount = columns.filter((c) => c.changed).length;
+    const summary = changedCount
+      ? 'Se escriben ' + changedCount + ' encabezados y se generan 1.000 filas'
+      : 'Se generan 1.000 filas';
+    const previewRows = empty
+      ? [['Producto', 'Precio', 'SKU'], ['Monitor', '1.249,90', 'KQT-4821'], ['Mouse', '38,50', 'BWA-0937'], ['Notebook', '1.712,00', 'PLM-5590'], ['Teclado', '64,25', 'XRD-3012']]
+      : [['Nombre', 'Apellido', 'Email', 'Teléfono', 'Alta']].concat(people.slice(0, 4));
+    const preview = previewRows.map((r, i) => ({
+      color: i === 0 ? '#a3a5ab' : '#e4e4e6', weight: i === 0 ? 500 : 400,
+      cells: r.map((t) => ({
+        text: t === '' && i > 0 ? 'vacío' : t,
+        style: t === '' && i > 0 ? 'italic' : 'normal',
+        color: t === '' && i > 0 ? '#5d5f66' : 'inherit'
+      }))
+    }));
+    const byStep = {
+      select: { subtitle: 'Paso 1: Seleccioná los encabezados y clic derecho', nameBox: 'A1:E1', formula: 'Nombre', status: 'Recuento 5', statusColor: '#a3a5ab' },
+      dialog: { subtitle: 'Paso 2: Ajustá columnas y cantidad', nameBox: 'A1:E1', formula: 'Nombre', status: 'Recuento 5', statusColor: '#a3a5ab' },
+      result: { subtitle: 'Paso 3: Listo', nameBox: 'A2:E1001', formula: 'Lucía', status: '1.000 filas generadas, Ctrl+Z para deshacer', statusColor: '#9fd3b4' },
+      empty: { subtitle: 'Hoja vacía, nombrá tus columnas', nameBox: 'A1:C1', formula: '', status: 'Listo', statusColor: '#a3a5ab' }
+    }[step] ?? {};
+    return {
+      ...byStep, yes: true, cols, rows, letters, menu, settings, columns, preview,
+      range: empty ? 'Personas!A1:C1' : 'Personas!A1:E1',
+      detected: empty ? 'Columnas vacías: escribí un nombre y elegí el tipo de cada una' : '5 columnas detectadas por sus encabezados',
+      previewLabel: 'Vista previa, 4 de 1.000 filas',
+      previewCols: empty ? 'repeat(3, minmax(0, 1fr))' : '110px 120px minmax(0, 1fr) 140px 110px',
+      cta: 'Generar 1.000 filas', summary, anyChanged: changedCount > 0,
+      isSelect: step === 'select', isDialog: step === 'dialog' || empty
+    };
+  }
+}
+</script>
+</body>
+</html>

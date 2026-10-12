@@ -1,6 +1,19 @@
 [workspace]
 resolver = "3"
-members = ["bench", "crates/types", "crates/datagen", "crates/engine", "crates/formats", "crates/grid", "crates/app"]
+members = [
+    "bench",
+    "crates/types",
+    "crates/i18n",
+    "crates/datagen",
+    "crates/xlsx-reader",
+    "crates/engine",
+    "crates/formats",
+    "crates/grid",
+    "crates/agent",
+    "crates/mcp-relay",
+    "crates/fake-acp-agent",
+    "crates/app",
+]
 # Third-party code patched for Zenkai: built as a dependency, outside our fmt and clippy gates.
 exclude = ["vendor"]
 
@@ -15,6 +28,9 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 unwrap_used = "warn"
 expect_used = "warn"
+
+[profile.dev]
+debug = "line-tables-only"
 
 [profile.release]
 debug = "line-tables-only"

@@ -612,12 +612,7 @@ impl<'a> Model<'a> {
 
     /// SUMIFS(sum_range, criteria_range1, criteria1, [criteria_range2, criteria2], ...)
     pub(crate) fn fn_sumifs(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
-        let mut total = 0.0;
-        let sum = |value| total += value;
-        if let Err(e) = self.apply_ifs(args, cell, sum) {
-            return e;
-        }
-        CalcResult::Number(total)
+        self.sum_ifs(args, cell)
     }
 
     pub(crate) fn fn_round(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
