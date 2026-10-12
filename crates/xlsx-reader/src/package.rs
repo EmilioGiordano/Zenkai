@@ -4,6 +4,7 @@ use std::io::{Cursor, Read, Seek, Write};
 use ironcalc::base::expressions::parser::DefinedNameS;
 
 use crate::ReadError;
+use crate::skipped_part;
 use crate::stream::{Budgets, CompressedMeter, read_part};
 
 pub(crate) struct WorksheetPart {
@@ -149,7 +150,8 @@ pub(crate) fn read_package<R: Read + Seek>(
 }
 
 // The archive IronCalc's own importer reads for everything but the cells: every entry is
-// copied untouched except the worksheets, whose <sheetData> is emptied.
+// copied untouched except the worksheets, whose <sheetData> is emptied, and the parts
+// the model never uses, which stay out.
 pub(crate) fn stub_archive<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     replaced: &HashMap<String, Vec<u8>>,
@@ -170,8 +172,56 @@ pub(crate) fn stub_archive<R: Read + Seek>(
                 writer.start_file(name, stored).map_err(unreadable)?;
                 writer.write_all(bytes).map_err(unreadable)?;
             }
+            // Parts the model never uses stay out of the stub: IronCalc's import
+            // never reads them, so copying them only costs memory.
+            None if skipped_part(&name) => {}
             None => writer.raw_copy_file(entry).map_err(unreadable)?,
         }
     }
     Ok(writer.finish().map_err(unreadable)?.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zipped(names: &[&str]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::FileOptions::default();
+        for name in names {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(b"placeholder").unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn listed(bytes: &[u8]) -> Vec<String> {
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        (0..archive.len())
+            .map(|index| archive.by_index(index).unwrap().name().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn skipped_parts_stay_out_of_the_stub() {
+        let bytes = zipped(&[
+            "xl/workbook.xml",
+            "xl/drawings/drawing1.xml",
+            "xl/worksheets/sheet1.xml",
+        ]);
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut replaced = HashMap::new();
+        replaced.insert(
+            "xl/worksheets/sheet1.xml".to_string(),
+            b"<worksheet/>".to_vec(),
+        );
+        let stub = stub_archive(&mut archive, &replaced).unwrap();
+        let names = listed(&stub);
+        assert!(names.contains(&"xl/workbook.xml".to_string()));
+        assert!(names.contains(&"xl/worksheets/sheet1.xml".to_string()));
+        assert!(
+            !names.iter().any(|name| name.contains("drawing")),
+            "{names:?}"
+        );
+    }
 }

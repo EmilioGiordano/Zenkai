@@ -4,7 +4,7 @@
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 
-use zenkai_engine::{Engine, XlsxReader, open_xlsx, open_xlsx_with};
+use zenkai_engine::{Engine, Unsupported, XlsxReader, open_xlsx, open_xlsx_with};
 
 fn workbook_with_sheet(sheet_xml: &str) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -433,6 +433,47 @@ fn whitespace_and_crlf_between_rows_stay_on_the_streaming_reader() {
         assert_eq!(cell("A1"), "7", "gap {gap:?}");
         assert_eq!(cell("A2"), "42", "gap {gap:?}");
     }
+}
+
+#[test]
+fn a_drawing_part_stays_out_of_the_stub() {
+    let mut source = rust_xlsxwriter::Workbook::new();
+    source.add_worksheet().write_number(0, 0, 7.0).unwrap();
+    let original = source.save_to_buffer().unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original)).unwrap();
+    let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let options = zip::write::FileOptions::default();
+    let drawing = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"><xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to></xdr:twoCellAnchor></xdr:wsDr>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().to_string();
+        let mut body = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut body).unwrap();
+        if name == "[Content_Types].xml" {
+            body = body.replace(
+                "</Types>",
+                "<Override PartName=\"/xl/drawings/drawing1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.drawing+xml\"/></Types>",
+            );
+        }
+        if name == "xl/worksheets/sheet1.xml" {
+            body = body.replace("</worksheet>", "<drawing r:id=\"rId1\"/></worksheet>");
+        }
+        out.start_file(name, options).unwrap();
+        out.write_all(body.as_bytes()).unwrap();
+    }
+    out.start_file("xl/drawings/drawing1.xml", options).unwrap();
+    out.write_all(drawing.as_bytes()).unwrap();
+    out.start_file("xl/worksheets/_rels/sheet1.xml.rels", options)
+        .unwrap();
+    out.write_all(rels.as_bytes()).unwrap();
+    let bytes = out.finish().unwrap().into_inner();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("drawing.xlsx");
+    std::fs::write(&path, bytes).unwrap();
+    let opened = open_xlsx(&path).unwrap();
+    assert!(opened.fallback.is_none(), "{:?}", opened.fallback);
+    assert!(opened.unsupported.contains(&Unsupported::Images));
 }
 
 #[test]
