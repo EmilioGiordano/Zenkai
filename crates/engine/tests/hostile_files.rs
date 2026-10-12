@@ -197,7 +197,7 @@ fn patch_compressed_size(bytes: &mut Vec<u8>, name: &str, size: u32) {
 
 // Rewrites the compression method of one entry, in its local and central
 // headers, leaving the data untouched; the entry can no longer be read.
-fn patch_compression_method(bytes: &mut Vec<u8>, name: &str, method: u16) {
+fn patch_compression_method(bytes: &mut [u8], name: &str, method: u16) {
     let (local, central) = header_offsets(bytes, name);
     bytes[local + 8..local + 10].copy_from_slice(&method.to_le_bytes());
     bytes[central + 10..central + 12].copy_from_slice(&method.to_le_bytes());
