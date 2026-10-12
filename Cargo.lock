@@ -3782,8 +3782,6 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 [[package]]
 name = "ironcalc"
 version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "384c2a5b1e78741cedfaa4fd3209fdb115c1a52453bc10137dfe970ed92872be"
 dependencies = [
  "bitcode",
  "chrono",
