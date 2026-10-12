@@ -435,8 +435,18 @@ impl Workbook {
     pub(crate) fn from_book(
         book: ironcalc::base::types::Workbook,
     ) -> Result<Workbook, EngineError> {
-        let model = ironcalc::base::Model::from_workbook(book, LANGUAGE)
-            .map_err(EngineError::InvalidFile)?;
+        // The fallback walk never sees formula cells, so the read may have
+        // undercharged; recount from the book before parsing its formulas.
+        if let Err(reason) = ironcalc::base::open_budget::check_open_budget(&book) {
+            return Err(EngineError::Unsafe(reason));
+        }
+        let model = ironcalc::base::Model::from_workbook(book, LANGUAGE).map_err(|error| {
+            if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
+                EngineError::Unsafe(error)
+            } else {
+                EngineError::InvalidFile(error)
+            }
+        })?;
         let mut model = UserModel::from_model(model);
         model.evaluate();
         let workbook = Workbook {
