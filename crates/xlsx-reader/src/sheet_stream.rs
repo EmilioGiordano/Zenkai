@@ -145,7 +145,7 @@ struct Pump<'b, R: Read> {
 impl<'b, R: Read> Pump<'b, R> {
     fn new(entry: R, meter: &CompressedMeter, part: &str, budgets: &'b Budgets) -> Self {
         Pump {
-            guard: budgets.stream(entry, meter, part),
+            guard: budgets.stream_worksheet(entry, meter, part),
             check: CharacterCheck::new(),
             chunk: [0u8; CHUNK_BYTES],
             head: Vec::new(),
@@ -421,7 +421,7 @@ pub(crate) fn stream_config<R: Read>(
     part: &str,
     budgets: &Budgets,
 ) -> Result<Vec<u8>, ReadError> {
-    let mut guard = budgets.stream(entry, meter, part);
+    let mut guard = budgets.stream_worksheet(entry, meter, part);
     let mut check = CharacterCheck::new();
     let mut head: Vec<u8> = Vec::new();
     let mut head_scan = ForwardScan::new();
@@ -1544,6 +1544,22 @@ mod tests {
         let error = stream_with(&xml, &budgets)
             .err()
             .expect("a growing sheet must stop");
+        let message = error.to_string();
+        assert!(message.contains("needs at least"), "{message}");
+    }
+
+    #[test]
+    fn a_streamed_sheet_past_the_per_part_cap_hits_the_cell_budget() {
+        let mut rows = String::new();
+        for n in 1..=2000 {
+            rows.push_str(&format!(r#"<row r="{n}"><c r="A{n}"><v>1</v></c></row>"#));
+        }
+        let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
+        assert!(xml.len() as u64 > 1024);
+        let budgets = Budgets::with_entry_cap(CellBudget::max_cells_for_test(1000), 1024);
+        let error = stream_with(&xml, &budgets)
+            .err()
+            .expect("a sheet over budget must stop");
         let message = error.to_string();
         assert!(message.contains("needs at least"), "{message}");
     }

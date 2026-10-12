@@ -7,11 +7,13 @@ use zenkai_types::Range;
 
 use crate::ReadError;
 
-// No longer enforced when opening: declared sizes are hints, and the real bytes are
-// counted as they are read. Only the IronCalc fallback still requires every part to
-// fit here, so a huge file never reaches the reader without limits.
+// Worksheets the streaming reader streams skip this cap: their cells charge the
+// memory budget as they are read. Every other part, and every part the IronCalc
+// fallback walks, still has to fit, so a huge file never reaches that reader.
 pub const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
-pub const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+// A real 216 MB workbook holds parts totalling about 1.6 GB, so the total stays
+// far above any single part while still bounding a flood of mid-size parts.
+pub const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 // Parts inflated whole for a DOM parse or copied whole expand several times over
 // in memory, so they are capped far below streamed parts and charged to the
 // memory budget cells share.

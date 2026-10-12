@@ -390,15 +390,7 @@ impl Budgets {
         meter: &CompressedMeter,
         part: &str,
     ) -> Guard<'_, R> {
-        Guard {
-            inner,
-            budgets: self,
-            meter: meter.clone(),
-            start: meter.snapshot(),
-            charge_total: true,
-            expanded: 0,
-            part: part.to_string(),
-        }
+        self.guard(inner, meter, part, true, true)
     }
 
     pub(crate) fn stream_reread<R: Read>(
@@ -407,12 +399,36 @@ impl Budgets {
         meter: &CompressedMeter,
         part: &str,
     ) -> Guard<'_, R> {
+        self.guard(inner, meter, part, false, true)
+    }
+
+    // Worksheets read row by row skip the per-part cap: their cells charge the
+    // memory budget as they stream past, while the ratio and the total still
+    // bound them. Every other part streams through `stream` instead.
+    pub(crate) fn stream_worksheet<R: Read>(
+        &self,
+        inner: R,
+        meter: &CompressedMeter,
+        part: &str,
+    ) -> Guard<'_, R> {
+        self.guard(inner, meter, part, true, false)
+    }
+
+    fn guard<R: Read>(
+        &self,
+        inner: R,
+        meter: &CompressedMeter,
+        part: &str,
+        charge_total: bool,
+        cap_entry: bool,
+    ) -> Guard<'_, R> {
         Guard {
             inner,
             budgets: self,
             meter: meter.clone(),
             start: meter.snapshot(),
-            charge_total: false,
+            charge_total,
+            cap_entry,
             expanded: 0,
             part: part.to_string(),
         }
@@ -425,6 +441,7 @@ pub(crate) struct Guard<'b, R> {
     meter: CompressedMeter,
     start: u64,
     charge_total: bool,
+    cap_entry: bool,
     expanded: u64,
     part: String,
 }
@@ -471,7 +488,7 @@ impl<R: Read> Guard<'_, R> {
             self.budgets.charge(read)?;
         }
         self.expanded = self.expanded.saturating_add(read);
-        if self.expanded > self.budgets.entry_cap {
+        if self.cap_entry && self.expanded > self.budgets.entry_cap {
             return Err(ReadError::Unsafe(format!(
                 "part {} expands past the {} per-part limit",
                 self.part,
@@ -639,6 +656,25 @@ mod tests {
             read(&data, "xl/sharedStrings.xml", &roomy).unwrap().len(),
             2048
         );
+    }
+
+    #[test]
+    fn streamed_worksheets_skip_the_per_part_cap_but_keep_the_ratio() {
+        let budgets = Budgets::with_entry_cap(CellBudget::max_cells_for_test(u64::MAX), 1024);
+        let meter = CompressedMeter::new();
+        let mut guard =
+            budgets.stream_worksheet(std::io::repeat(7u8), &meter, "xl/worksheets/sheet1.xml");
+        let mut chunk = [0u8; CHUNK_BYTES];
+        let error = loop {
+            match guard.read_chunk(&mut chunk) {
+                Ok(_) => {}
+                Err(error) => break error,
+            }
+        };
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        let message = error.to_string();
+        assert!(!message.contains("per-part"), "{message}");
+        assert!(message.contains("150"), "{message}");
     }
 
     #[test]
