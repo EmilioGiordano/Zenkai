@@ -5,7 +5,7 @@ use ironcalc::base::types::Workbook as Book;
 use zenkai_xlsx_reader::{ReadError, workbook_differences};
 
 use crate::error::EngineError;
-use crate::file::{Unsupported, inspect_part, scan_unsupported};
+use crate::file::{Unsupported, inspect_part};
 
 // Only a refused file reports harm; a corrupt or non-zip file is not a valid workbook.
 pub(crate) fn engine_error(error: ReadError) -> EngineError {
@@ -137,18 +137,22 @@ pub(crate) fn read_xlsx_file(
     }
 }
 
-// The IronCalc fallback is never a way past the limits: it runs only when every part
-// fits the old per-part cap, otherwise the file is refused with a clear message. Only
-// an unsafe file is refused as harmful; a file the caps pass cannot even read stays
-// on the regular path and fails as an invalid workbook.
+// The IronCalc fallback is never a way past the limits: one walk streams every
+// part through the caps and gathers what the file uses, otherwise the file is
+// refused with a clear message. Only an unsafe file is refused as harmful; a file
+// the caps pass cannot even read stays on the regular path and fails as an
+// invalid workbook.
 fn fallback_to_ironcalc(bytes: &[u8], name: &str, declined: &ReadError) -> Outcome<EngineError> {
-    if let Err(ReadError::Unsafe(limited)) = zenkai_xlsx_reader::check_fallback_caps_bytes(bytes) {
+    let found = Mutex::new(Vec::new());
+    let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
+    if let Err(ReadError::Unsafe(limited)) = zenkai_xlsx_reader::scan_with_caps(bytes, &inspect) {
         return Err(EngineError::Unsafe(format!(
             "the streaming reader does not support this file ({declined}), and it cannot fall back to IronCalc's reader ({limited})"
         )));
     }
     tracing::warn!(%declined, "the fast xlsx reader left this file to IronCalc's");
-    read_with_ironcalc(bytes, name)
+    let book = run_with_engine_stack(|| read_book(bytes, name))?;
+    Ok((book, take_unsupported(found)?))
 }
 
 fn read_settings(bytes: &[u8]) -> Result<Vec<SheetSettings>, EngineError> {
@@ -169,10 +173,20 @@ fn read_settings(bytes: &[u8]) -> Result<Vec<SheetSettings>, EngineError> {
 }
 
 fn read_with_ironcalc(bytes: &[u8], name: &str) -> Outcome<EngineError> {
-    zenkai_xlsx_reader::check_fallback_caps_bytes(bytes).map_err(engine_error)?;
-    let unsupported = scan_unsupported(bytes)?;
+    let found = Mutex::new(Vec::new());
+    let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
+    zenkai_xlsx_reader::scan_with_caps(bytes, &inspect).map_err(engine_error)?;
     let book = run_with_engine_stack(|| read_book(bytes, name))?;
-    Ok((book, unsupported))
+    Ok((book, take_unsupported(found)?))
+}
+
+fn take_unsupported(found: Mutex<Vec<Unsupported>>) -> Result<Vec<Unsupported>, EngineError> {
+    let mut unsupported = found
+        .into_inner()
+        .map_err(|_| EngineError::InvalidFile("a part check stopped".to_string()))?;
+    unsupported.sort();
+    unsupported.dedup();
+    Ok(unsupported)
 }
 
 fn read_streaming(

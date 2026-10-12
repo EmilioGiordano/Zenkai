@@ -327,39 +327,6 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
     ))
 }
 
-// The IronCalc fallback is never a way past the limits: every entry streams once
-// through the budgets, so a lied declared size cannot smuggle a part past the caps.
-pub(crate) fn check_fallback_caps<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    meter: &CompressedMeter,
-) -> Result<(), ReadError> {
-    let budgets = Budgets::production();
-    for index in 0..archive.len() {
-        let entry = archive
-            .by_index(index)
-            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-        let name = entry.name().to_string();
-        let mut guard = budgets.stream(entry, meter, &name);
-        let mut expanded = 0u64;
-        let mut chunk = [0u8; CHUNK_BYTES];
-        loop {
-            match guard.read_chunk(&mut chunk)? {
-                0 => break,
-                read => {
-                    expanded = expanded.saturating_add(read as u64);
-                    if expanded > MAX_ENTRY_BYTES {
-                        return Err(ReadError::Unsafe(format!(
-                            "part {name} expands to {} MB",
-                            limits::megabytes(expanded)
-                        )));
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 // XML forbids control characters and noncharacters anywhere, so they are checked on
 // every chunk as it streams; a trailing EF or EF BF is held back because the
 // three-byte noncharacter may span two chunks.

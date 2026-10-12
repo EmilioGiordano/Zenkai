@@ -23,7 +23,7 @@ pub use limits::CellBudget;
 use crate::formulas::Names;
 use crate::package::{read_package, stub_archive};
 use crate::sheet_stream::{StreamedSheet, stream_config, stream_worksheet};
-use crate::stream::{Budgets, CompressedMeter, Counted, check_fallback_caps, read_part_if_checked};
+use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, read_part_if_checked};
 
 pub use stream::has_checked_element;
 
@@ -223,13 +223,36 @@ pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> 
     Ok(())
 }
 
-// What IronCalc's reader still requires, on the bytes really decompressed: the
-// streaming reader never enforces this when opening.
-pub fn check_fallback_caps_bytes(bytes: &[u8]) -> Result<(), ReadError> {
+// The single walk for readers that inflate every part themselves: each entry
+// streams once through the budgets, so even a part this scan never parses cannot
+// smuggle past the caps, and parts the preflight checks are still handed over.
+pub fn scan_with_caps(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> {
     let meter = CompressedMeter::new();
     let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes)))
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    check_fallback_caps(&mut archive, &meter)
+    limits::check_archive(&mut archive)?;
+    let budgets = Budgets::production();
+    for index in 0..archive.len() {
+        let entry_name = {
+            let entry = archive
+                .by_index(index)
+                .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+            entry.name().to_string()
+        };
+        if skipped_part(&entry_name) {
+            let entry = archive
+                .by_index(index)
+                .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+            let mut guard = budgets.stream(entry, &meter, &entry_name);
+            let mut chunk = [0u8; CHUNK_BYTES];
+            while guard.read_chunk(&mut chunk)? != 0 {}
+            inspect(&entry_name, &[])?;
+            continue;
+        }
+        let (_, part) = read_part_if_checked(&mut archive, index, &meter, &budgets)?;
+        inspect(&entry_name, &part)?;
+    }
+    Ok(())
 }
 
 // The worksheet configurations for a reader that parses the rows itself, without
@@ -272,4 +295,70 @@ fn guarded<T>(job: impl FnOnce() -> Result<T, ReadError>) -> Result<T, ReadError
             "IronCalc stopped on part of this file".to_string(),
         ))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::sync::Mutex;
+
+    use super::*;
+
+    fn zipped(entries: &[(&str, &[u8])], deflated: bool) -> Vec<u8> {
+        let mut options = zip::write::FileOptions::default();
+        if deflated {
+            options = options.compression_method(zip::CompressionMethod::Deflated);
+        }
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, body) in entries {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(body).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn the_single_scan_walk_refuses_a_bomb_it_never_parses() {
+        let bomb = vec![0u8; 70 * 1024 * 1024];
+        let bytes = zipped(&[("xl/media/blob.bin", &bomb)], true);
+        let error = scan_with_caps(&bytes, &|_, _| Ok(())).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        assert!(error.to_string().contains("150"), "{error}");
+    }
+
+    #[test]
+    fn the_single_scan_walk_hands_checked_parts_over() {
+        const WORKBOOK: &[u8] = b"<workbook><definedNames><definedName name=\"x\">1</definedName></definedNames></workbook>";
+        let bytes = zipped(
+            &[
+                (
+                    "xl/styles.xml",
+                    b"<styleSheet><fonts count=\"1\"/></styleSheet>",
+                ),
+                ("xl/workbook.xml", WORKBOOK),
+                ("xl/media/note.bin", b"plain"),
+            ],
+            false,
+        );
+        let seen = Mutex::new(Vec::new());
+        scan_with_caps(&bytes, &|name, part| {
+            seen.lock().unwrap().push((name.to_string(), part.len()));
+            Ok(())
+        })
+        .unwrap();
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(
+            seen.iter()
+                .find(|(name, _)| name == "xl/workbook.xml")
+                .map(|(_, len)| *len),
+            Some(WORKBOOK.len()),
+            "{seen:?}"
+        );
+        for (name, len) in &seen {
+            if name == "xl/workbook.xml" {
+                continue;
+            }
+            assert_eq!(*len, 0, "{name} needs no bytes");
+        }
+    }
 }
