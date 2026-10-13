@@ -14,7 +14,7 @@ use ironcalc::base::types::{
 };
 
 use crate::error::EngineError;
-use crate::row_split::{Rows, over_rows};
+use crate::row_split::{Formulas, Rows, over_formulas, over_rows};
 use crate::sheet_settings::SheetSettings;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -174,6 +174,25 @@ fn cells_and_formulas(
     Ok((cells, dynamic_arrays, formulas))
 }
 
+// Each formula is hashed with its index, which cells point at, and the hashes are summed,
+// so the sum does not depend on how the formulas are split.
+fn formulas_print(formulas: &Formulas) -> Result<u64, EngineError> {
+    let shares = over_formulas(formulas, |first, share| {
+        share
+            .iter()
+            .enumerate()
+            .try_fold(0u64, |sum, (offset, formula)| {
+                let mut hasher = DefaultHasher::new();
+                (first + offset).hash(&mut hasher);
+                hash_debug(&mut hasher, formula)?;
+                Ok(sum.wrapping_add(hasher.finish()))
+            })
+    })?;
+    shares
+        .into_iter()
+        .try_fold(0u64, |sum, share| Ok(sum.wrapping_add(share?)))
+}
+
 // `formulas` are the sheet's parsed formulas, which cells point into by index: a
 // formula rewritten by an edit elsewhere, such as a row inserted on the sheet it reads,
 // changes there and not in the cell.
@@ -202,13 +221,8 @@ pub(crate) fn sheet_print(
         show_grid_lines,
         conditional_formatting,
     } = sheet;
-    let (cells, dynamic_arrays, formulas) = cells_and_formulas(sheet_data, || {
-        let mut hasher = DefaultHasher::new();
-        for formula in formulas {
-            hash_debug(&mut hasher, formula)?;
-        }
-        Ok(hasher.finish())
-    })?;
+    let (cells, dynamic_arrays, formulas) =
+        cells_and_formulas(sheet_data, || formulas_print(formulas))?;
     let mut hasher = DefaultHasher::new();
     (cells, formulas).hash(&mut hasher);
     hash_layout(&mut hasher, cols, rows, comments);
@@ -315,6 +329,24 @@ mod tests {
         let before = print(&model, 0);
         model.set_user_input(0, rows, 3, "x".to_string()).unwrap();
         assert_ne!(before, print(&model, 0));
+    }
+
+    #[test]
+    fn formulas_split_over_threads_still_count_by_index() {
+        let mut model = model();
+        let count = i32::try_from(crate::row_split::MIN_FORMULAS_PER_THREAD * 2).unwrap();
+        for row in 1..=count {
+            model
+                .set_user_input(0, row, 4, format!("=A1+{row}"))
+                .unwrap();
+        }
+        let before = print(&model, 0);
+        let formulas = &mut model.parsed_formulas[0];
+        let last = formulas.len() - 1;
+        formulas.swap(1, last);
+        assert_ne!(before, print(&model, 0));
+        model.parsed_formulas[0].swap(1, last);
+        assert_eq!(before, print(&model, 0));
     }
 
     #[test]

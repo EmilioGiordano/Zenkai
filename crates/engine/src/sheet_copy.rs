@@ -3,16 +3,14 @@ use ironcalc::base::expressions::parser::static_analysis::StaticResult;
 use ironcalc::base::types::{SheetData, Worksheet};
 
 use crate::error::EngineError;
-use crate::row_split::{Rows, over_rows};
+use crate::row_split::{Formulas, Rows, over_formulas, over_rows};
 
-type Formulas = Vec<(Node, StaticResult)>;
-
-// The copy is taken under the workbook's read lock, so a large sheet's rows are copied on
-// several threads while the calling thread, the engine's deep stack, copies the formulas.
+// The copy is taken under the workbook's read lock, so a large sheet's rows and formulas
+// are copied on several threads.
 pub(crate) fn copied_sheet(
     sheet: &Worksheet,
-    formulas: &[(Node, StaticResult)],
-) -> Result<(Worksheet, Formulas), EngineError> {
+    formulas: &Formulas,
+) -> Result<(Worksheet, Vec<(Node, StaticResult)>), EngineError> {
     let Worksheet {
         dimension,
         cols,
@@ -36,7 +34,10 @@ pub(crate) fn copied_sheet(
             .map(|&(row, cells)| (*row, cells.clone()))
             .collect::<Vec<_>>()
     };
-    let (shares, formulas) = over_rows(sheet_data, copy_rows, || Ok(formulas.to_vec()))?;
+    let (shares, formulas) = over_rows(sheet_data, copy_rows, || {
+        let shares = over_formulas(formulas, |_, share| share.to_vec())?;
+        Ok(shares.into_iter().flatten().collect())
+    })?;
     let mut copied_data = SheetData::with_capacity(sheet_data.len());
     for share in shares {
         copied_data.extend(share);
@@ -67,7 +68,7 @@ mod tests {
     use ironcalc::base::Model;
 
     use super::copied_sheet;
-    use crate::row_split::MIN_ROWS_PER_THREAD;
+    use crate::row_split::{MIN_FORMULAS_PER_THREAD, MIN_ROWS_PER_THREAD};
 
     #[test]
     fn a_sheet_copied_on_several_threads_equals_its_clone() {
@@ -75,8 +76,11 @@ mod tests {
         let rows = i32::try_from(MIN_ROWS_PER_THREAD * 3).unwrap();
         for row in 1..=rows {
             model.set_user_input(0, row, 1, row.to_string()).unwrap();
+            model
+                .set_user_input(0, row, 2, format!("=A{row}+{row}"))
+                .unwrap();
         }
-        model.set_user_input(0, 1, 2, "=A1*2".to_string()).unwrap();
+        assert!(model.parsed_formulas[0].len() > MIN_FORMULAS_PER_THREAD * 2);
         model.workbook.worksheets[0].frozen_rows = 2;
         let (sheet, formulas) =
             copied_sheet(&model.workbook.worksheets[0], &model.parsed_formulas[0]).unwrap();
