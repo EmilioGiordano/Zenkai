@@ -89,6 +89,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   box; an array formula may span areas as long as it lies inside the given bounds
   (`src/user_model/common.rs`, `Model::arrays_inside` and `Model::clear_area_contents` in
   `src/model.rs`). Tests: `src/test/user_model/test_clear_areas.rs`.
+- `StaticResult` derives `Clone`, `Debug` and `PartialEq`, so a caller can copy a
+  sheet's parsed formulas, for instance to save them away from the model
+  (`src/expressions/parser/static_analysis.rs`).
 
 Zenkai-only, not for upstream:
 
