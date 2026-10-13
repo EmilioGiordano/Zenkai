@@ -2,17 +2,19 @@
 
 use crate::types::{Cell, Workbook};
 
-// Peak committed memory per stored cell while opening, measured with the
-// release instrument (committed MB): 2M plain cells peak 583 B/cell, styled
-// and shared-string cells 639, short formulas (distinct and shared) 788-814,
-// zenkai-pesado (2.93M cells, a third formulas) 665. Rounded down, so the
-// estimate stays a lower bound on what the file needs.
-pub const BYTES_PER_CELL: u64 = 600;
+// Peak committed memory per stored cell while opening. Measured with the release
+// instrument before the compact cell store (committed MB): 2M plain cells peak 583 B/cell,
+// styled and shared-string cells 639, short formulas 788-814, zenkai-pesado (2.93M cells,
+// a third formulas) 665. The compact store cut a stored cell from 122-147 B to 40-42 B
+// (a row of cells is two vectors, Cell is 32 bytes), so 600 became 520: the 80 B saved,
+// rounded down so the estimate stays a lower bound on what the file needs. The importer's
+// DOM peak is charged separately and did not change.
+pub const BYTES_PER_CELL: u64 = 520;
 // Extra per formula cell over a value cell: the formula synthetics peak
 // 205-231 B/cell above the value ones.
 pub const BYTES_PER_FORMULA: u64 = 200;
-// An IronCalc row entry costs about as much as one stored cell: a map node
-// holding the row number plus the row map itself.
+// A row costs a hash map entry plus two vector headers, about 90 B measured on rows of
+// two cells; kept at the earlier 128 B.
 pub const BYTES_PER_ROW: u64 = 128;
 // IronCalc's importer parses each worksheet into a DOM holding about sixteen
 // times its bytes: an 827 MB sheet peaks past 14 GB committed while parsing.

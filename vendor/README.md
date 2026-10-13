@@ -84,6 +84,15 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `HashMap`s, so the cell layout can change without touching the callers; the importer
   and exporter of `ironcalc` use it too. No behaviour change, same bitcode encoding.
   Tests in the module.
+- `CellStore` keeps each row as two sorted vectors (columns and cells) instead of a hash
+  map per row, and `Cell` is 32 bytes instead of 80: the error detail of a formula value
+  (`FormulaValue::error`) and the payloads of `Cell::ArrayFormula` and `Cell::SpillCell`
+  (`Cell::new_array_formula`, `Cell::new_spill_cell`, `Cell::dynamic_range`,
+  `Cell::spill_anchor`, `Cell::formula_value`) are boxed. A stored cell costs about 40 B
+  instead of 147. The bitcode encoding of a `Cell` is unchanged (tests compare it with the
+  inline fields); the encoding of a `CellStore` changed, so `.ic` files written by earlier
+  builds do not load. Tests: `src/cell_store.rs` (random operations against the nested
+  maps, size, encoding).
 
 Zenkai-only, not for upstream:
 
