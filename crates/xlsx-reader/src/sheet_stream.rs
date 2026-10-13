@@ -826,6 +826,12 @@ fn advance(scan: &mut ForwardScan, buf: &[u8], goal: ScanGoal) -> Result<ScanEve
                 };
                 let at = scan.offset + rel;
                 let rest = &buf[at..];
+                // A `<` that ends the buffer may still become an end tag, which must
+                // not be counted as a start tag once the next chunk arrives.
+                if rest.len() == 1 {
+                    scan.offset = at;
+                    return Ok(ScanEvent::NeedMore);
+                }
                 if rest.starts_with(b"<!--") {
                     scan.mode = ScanMode::Comment;
                     scan.offset = at + 4;
@@ -1472,6 +1478,63 @@ mod tests {
         assert!(row_numbered(br#"<row r="2" spans="1:4">"#));
         assert!(row_numbered(br#"<row r="2"/>"#));
         assert!(!row_numbered(br#"<row spans="1:4" outlineLevel="1">"#));
+    }
+
+    // rust_xlsxwriter writes every row on one line, so tags fall across chunk ends.
+    fn one_line_row_tag(n: u32, extra: &str) -> String {
+        format!(r#"<row r="{n}" spans="1:4"{extra}>"#)
+    }
+
+    fn one_line_rows(rows: u32, extra: &str) -> String {
+        (2..rows + 2)
+            .map(|n| {
+                format!(
+                    r#"{}<c r="A{n}"><v>{n}</v></c><c r="B{n}" t="s"><v>{}</v></c><c r="C{n}"><f>A{n}*2</f><v>{}</v></c><c r="D{n}"><v>0.25</v></c></row>"#,
+                    one_line_row_tag(n, extra),
+                    n % 200,
+                    n * 2
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_config_is_read_wherever_the_chunks_cut_one_line_rows() {
+        const ROWS: u32 = 1_500;
+        let tail = r#"</sheetData><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>"#;
+        for extra in ["", r#" outlineLevel="1""#] {
+            let rows = one_line_rows(ROWS, extra);
+            let kept: String = match extra {
+                "" => String::new(),
+                _ => (2..ROWS + 2).map(|n| one_line_row_tag(n, extra)).collect(),
+            };
+            let row_len = rows.find("</row>").unwrap() + "</row>".len();
+            assert!(rows.len() > 3 * CHUNK_BYTES);
+            for pad in 0..row_len {
+                let head = format!(
+                    r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews{}><sheetView workbookViewId="0"/></sheetViews><sheetData>"#,
+                    " ".repeat(pad)
+                );
+                let config = config_with(&format!("{head}{rows}{tail}"), &budgets())
+                    .unwrap_or_else(|error| panic!("padding {pad}: {error}"));
+                assert!(
+                    String::from_utf8(config).unwrap() == format!("{head}{kept}{tail}"),
+                    "padding {pad}, extra {extra:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_lone_angle_bracket_at_the_buffer_end_waits_for_the_next_chunk() {
+        let row = br#"<row r="1"><c r="A1"><v>1</v></c></row>"#;
+        let mut scan = ForwardScan::new();
+        let cut = row.iter().rposition(|b| *b == b'<').unwrap() + 1;
+        assert!(matches!(scan_row_end(&mut scan, &row[..cut]), Ok(None)));
+        assert!(matches!(
+            scan_row_end(&mut scan, row),
+            Ok(Some(end)) if end == row.len()
+        ));
     }
 
     #[test]
