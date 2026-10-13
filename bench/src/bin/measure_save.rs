@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
@@ -56,12 +56,40 @@ fn flip_number(current: &str) -> String {
     }
 }
 
+fn edit_and_save(
+    workbook: &mut Workbook,
+    sheet: SheetId,
+    pos: CellPos,
+    target: &Path,
+) -> Result<()> {
+    begin("edit");
+    let start = Instant::now();
+    let before = workbook.input(sheet, pos);
+    workbook.set_input(sheet, pos, &flip_number(&before))?;
+    done("edit", start, "");
+
+    begin("snapshot");
+    let start = Instant::now();
+    let snapshot = workbook.save_snapshot(target, SaveTarget::Document)?;
+    done("snapshot", start, "");
+
+    begin("save");
+    let start = Instant::now();
+    save_xlsx(snapshot)?;
+    let zip_mb = std::fs::metadata(target)?.len() as f64 / 1024.0 / 1024.0;
+    done("save", start, &format!("zip_mb={zip_mb:.1}"));
+    Ok(())
+}
+
+// The second save copies from the file the first one wrote, as saving a document again does.
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (source, target, cell) = match args.as_slice() {
-        [source, target] => (source, target, "A1"),
-        [source, target, cell] => (source, target, cell.as_str()),
-        _ => bail!("usage: measure_save <file.xlsx> <saved.xlsx> [edited cell, A1 by default]"),
+    let usage = "usage: measure_save <file.xlsx> <saved.xlsx> [edited cell, A1] [sheet index, 0]";
+    let (source, target, cell, sheet) = match args.as_slice() {
+        [source, target] => (source, target, "A1", "0"),
+        [source, target, cell] => (source, target, cell.as_str(), "0"),
+        [source, target, cell, sheet] => (source, target, cell.as_str(), sheet.as_str()),
+        _ => bail!(usage),
     };
     let source = PathBuf::from(source);
     let target = PathBuf::from(target);
@@ -69,7 +97,11 @@ fn main() -> Result<()> {
         bail!("{} exists; pick a new path", target.display());
     }
     let pos = CellPos::parse_a1(cell).ok_or_else(|| anyhow!("{cell} is not a cell"))?;
-    let sheet = SheetId(0);
+    let sheet = SheetId(
+        sheet
+            .parse()
+            .with_context(|| format!("{sheet} is not a sheet index"))?,
+    );
 
     begin("open");
     let start = Instant::now();
@@ -78,21 +110,9 @@ fn main() -> Result<()> {
         .workbook;
     done("open", start, "");
 
-    begin("edit");
-    let start = Instant::now();
-    let before = workbook.input(sheet, pos);
-    workbook.set_input(sheet, pos, &flip_number(&before))?;
-    done("edit", start, &format!("cell={cell}"));
-
-    begin("snapshot");
-    let start = Instant::now();
-    let snapshot = workbook.save_snapshot(&target, SaveTarget::Document)?;
-    done("snapshot", start, "");
-
-    begin("save");
-    let start = Instant::now();
-    save_xlsx(snapshot)?;
-    let zip_mb = std::fs::metadata(&target)?.len() as f64 / 1024.0 / 1024.0;
-    done("save", start, &format!("zip_mb={zip_mb:.1}"));
+    println!("save=first sheet={} cell={cell}", sheet.0);
+    edit_and_save(&mut workbook, sheet, pos, &target)?;
+    println!("save=again sheet={} cell={cell}", sheet.0);
+    edit_and_save(&mut workbook, sheet, pos, &target)?;
     Ok(())
 }
