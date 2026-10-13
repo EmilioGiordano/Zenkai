@@ -22,7 +22,7 @@ pub(crate) struct Package {
     pub(crate) shared_strings: Option<String>,
 }
 
-fn part_path(target: &str) -> String {
+pub(crate) fn part_path(target: &str) -> String {
     match target.strip_prefix('/') {
         Some(absolute) => absolute.to_string(),
         None => format!("xl/{target}"),

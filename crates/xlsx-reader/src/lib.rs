@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod assemble;
+mod base;
 mod diff;
 mod formulas;
 mod layout;
@@ -20,6 +21,7 @@ use std::path::Path;
 
 use ironcalc::base::types::Workbook;
 
+pub use base::{BasePackage, CalcChain};
 pub use diff::workbook_differences;
 pub use layout::{PackageLayout, SharedStrings, StyleCounts};
 pub use limits::CellBudget;
