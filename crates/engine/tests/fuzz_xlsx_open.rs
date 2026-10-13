@@ -1,7 +1,7 @@
 // Structured fuzzing of the xlsx open path, preflight included: the parts of real files are
 // damaged the way a corrupt or hostile file would be. Opening must end in a workbook or a
-// clear error, within a bounded time, and a workbook that opens must save and reopen. The
-// fast reader is held to the same.
+// clear error, within a bounded time, and a workbook that opens must save and reopen, also
+// after an edit that rewrites a sheet and copies the rest. The fast reader is held to the same.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::mpsc;
@@ -16,10 +16,17 @@ use zenkai_engine::{
 mod xlsx_damage;
 
 use xlsx_damage::{apply, corpus, damage, parts_of, zip_of};
+use zenkai_types::{CellPos, SheetId};
 
 const HANG_AFTER: Duration = Duration::from_secs(60);
 
-fn open_with_watchdog(bytes: Vec<u8>) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Save {
+    MustWork,
+    MayFail,
+}
+
+fn open_with_watchdog(bytes: Vec<u8>, save: Save) {
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || {
         let outcome = std::panic::catch_unwind(|| {
@@ -28,8 +35,13 @@ fn open_with_watchdog(bytes: Vec<u8>) {
             std::fs::write(&path, &bytes).unwrap();
             let _ = scan_unsupported(&bytes);
             let _ = open_xlsx_with(&path, XlsxReader::Fast);
-            if let Ok(opened) = open_xlsx(&path) {
+            if let Ok(mut opened) = open_xlsx(&path) {
                 opened.workbook.sheets();
+                // A new string on the first sheet sends the save through the copying path:
+                // the damaged file's shared strings and calcChain are parsed again there.
+                let _ = opened
+                    .workbook
+                    .set_input(SheetId(0), CellPos::default(), "fuzzed text");
                 let saved = folder.path().join("saved.xlsx");
                 match opened
                     .workbook
@@ -40,6 +52,10 @@ fn open_with_watchdog(bytes: Vec<u8>) {
                         open_xlsx(&saved).expect("a file Zenkai just wrote must reopen");
                     }
                     Err(error) => {
+                        assert!(
+                            save == Save::MayFail,
+                            "an undamaged file did not save: {error}"
+                        );
                         assert!(!error.to_string().is_empty());
                         assert!(!saved.exists(), "a failed save left a file behind");
                     }
@@ -58,7 +74,7 @@ fn open_with_watchdog(bytes: Vec<u8>) {
 #[test]
 fn the_undamaged_corpus_opens_saves_and_reopens() {
     for path in corpus() {
-        open_with_watchdog(std::fs::read(&path).unwrap());
+        open_with_watchdog(std::fs::read(&path).unwrap(), Save::MustWork);
     }
     assert!(corpus().len() >= 10);
 }
@@ -79,7 +95,7 @@ proptest! {
             }
             apply(&mut parts, damage);
         }
-        open_with_watchdog(zip_of(&parts));
+        open_with_watchdog(zip_of(&parts), Save::MayFail);
     }
 
     #[test]
@@ -97,11 +113,11 @@ proptest! {
         if let Some(cut) = cut {
             bytes.truncate(cut.index(bytes.len()));
         }
-        open_with_watchdog(bytes);
+        open_with_watchdog(bytes, Save::MayFail);
     }
 
     #[test]
     fn arbitrary_bytes_are_not_a_workbook(bytes in prop::collection::vec(any::<u8>(), 0..400)) {
-        open_with_watchdog(bytes);
+        open_with_watchdog(bytes, Save::MayFail);
     }
 }

@@ -10,7 +10,9 @@ use proptest::prelude::*;
 use rust_xlsxwriter::{
     ConditionalFormatCell, ConditionalFormatCellRule, Format, Formula, Workbook as Source,
 };
-use zenkai_engine::{Engine, SaveTarget, Workbook, open_xlsx, save_xlsx};
+use zenkai_engine::{
+    Engine, SaveTarget, Workbook, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
+};
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId, StyleChange};
 
 const SIDE: i64 = 7;
@@ -235,8 +237,11 @@ proptest! {
         let expected = cells(&whole);
         let expected_values = stored_values(&whole_file);
         for file in [&copy, &document] {
-            let reopened = cells(&open_xlsx(file).unwrap().workbook);
-            prop_assert!(reopened == expected, "{}", first_difference(&expected, &reopened));
+            // Recovery copies are restored with IronCalc's own reader.
+            for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
+                let reopened = cells(&open_xlsx_with(file, reader).unwrap().workbook);
+                prop_assert!(reopened == expected, "{}", first_difference(&expected, &reopened));
+            }
             let values = stored_values(file);
             prop_assert!(values == expected_values, "{}", first_difference(&expected_values, &values));
         }
