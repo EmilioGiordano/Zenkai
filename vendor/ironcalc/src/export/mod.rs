@@ -24,6 +24,7 @@ use ironcalc_base::expressions::utils::number_to_column;
 use ironcalc_base::types::Workbook;
 use ironcalc_base::{get_milliseconds_since_epoch, Model};
 
+pub use self::worksheets::write_worksheet_xml;
 use self::xml_constants::XML_DECLARATION;
 
 use crate::error::XlsxError;
@@ -73,50 +74,78 @@ pub fn save_to_xlsx(model: &Model, file_name: &str) -> Result<(), XlsxError> {
     Ok(())
 }
 
-pub fn save_xlsx_to_writer<W: Write + Seek>(model: &Model, writer: W) -> Result<W, XlsxError> {
-    let workbook = &model.workbook;
-    let selected_sheet = match workbook.views.get(&0) {
+fn get_selected_sheet(workbook: &Workbook) -> u32 {
+    match workbook.views.get(&0) {
         Some(view) => view.sheet,
         _ => 0,
-    };
+    }
+}
+
+/// Every part of the xlsx package but the worksheets, as (path in the zip, content), in
+/// the order `save_xlsx_to_writer` writes them. The worksheets come from
+/// `write_worksheet_xml`.
+pub fn get_package_parts(model: &Model) -> Result<Vec<(String, String)>, XlsxError> {
+    let workbook = &model.workbook;
+    let milliseconds = get_milliseconds_since_epoch();
+    Ok(vec![
+        (
+            "[Content_Types].xml".to_string(),
+            get_content_types_xml(workbook),
+        ),
+        (
+            "docProps/app.xml".to_string(),
+            doc_props::get_app_xml(workbook),
+        ),
+        (
+            "docProps/core.xml".to_string(),
+            doc_props::get_core_xml(workbook, milliseconds)?,
+        ),
+        ("_rels/.rels".to_string(), _rels::get_dot_rels(workbook)),
+        (
+            "xl/sharedStrings.xml".to_string(),
+            shared_strings::get_shared_strings_xml(workbook),
+        ),
+        (
+            "xl/styles.xml".to_string(),
+            styles::get_styles_xml(workbook),
+        ),
+        (
+            "xl/workbook.xml".to_string(),
+            workbook::get_workbook_xml(workbook, get_selected_sheet(workbook)),
+        ),
+        (
+            "xl/metadata.xml".to_string(),
+            include_str!("metadata.xml").to_string(),
+        ),
+        (
+            "xl/theme/theme1.xml".to_string(),
+            theme::get_theme_xml(&workbook.theme),
+        ),
+        (
+            "xl/_rels/workbook.xml.rels".to_string(),
+            workbook_xml_rels::get_workbook_xml_rels(workbook),
+        ),
+    ])
+}
+
+pub fn save_xlsx_to_writer<W: Write + Seek>(model: &Model, writer: W) -> Result<W, XlsxError> {
+    let workbook = &model.workbook;
+    let selected_sheet = get_selected_sheet(workbook);
     let mut zip = zip::ZipWriter::new(writer);
 
     let options = zip::write::FileOptions::default();
 
-    // root folder
-    zip.start_file("[Content_Types].xml", options)?;
-    zip.write_all(get_content_types_xml(workbook).as_bytes())?;
-
-    zip.add_directory("docProps", options)?;
-    zip.start_file("docProps/app.xml", options)?;
-    zip.write_all(doc_props::get_app_xml(workbook).as_bytes())?;
-    zip.start_file("docProps/core.xml", options)?;
-    let milliseconds = get_milliseconds_since_epoch();
-    zip.write_all(doc_props::get_core_xml(workbook, milliseconds)?.as_bytes())?;
-
-    // Package-relationship item
-    zip.add_directory("_rels", options)?;
-    zip.start_file("_rels/.rels", options)?;
-    zip.write_all(_rels::get_dot_rels(workbook).as_bytes())?;
-
-    zip.add_directory("xl", options)?;
-    zip.start_file("xl/sharedStrings.xml", options)?;
-    zip.write_all(shared_strings::get_shared_strings_xml(workbook).as_bytes())?;
-    zip.start_file("xl/styles.xml", options)?;
-    zip.write_all(styles::get_styles_xml(workbook).as_bytes())?;
-    zip.start_file("xl/workbook.xml", options)?;
-    zip.write_all(workbook::get_workbook_xml(workbook, selected_sheet).as_bytes())?;
-    zip.start_file("xl/metadata.xml", options)?;
-    let metadata_xml = include_str!("metadata.xml");
-    zip.write_all(metadata_xml.as_bytes())?;
-
-    zip.add_directory("xl/theme", options)?;
-    zip.start_file("xl/theme/theme1.xml", options)?;
-    zip.write_all(theme::get_theme_xml(&workbook.theme).as_bytes())?;
-
-    zip.add_directory("xl/_rels", options)?;
-    zip.start_file("xl/_rels/workbook.xml.rels", options)?;
-    zip.write_all(workbook_xml_rels::get_workbook_xml_rels(workbook).as_bytes())?;
+    let mut directories: Vec<String> = vec![];
+    for (name, content) in get_package_parts(model)? {
+        if let Some((directory, _)) = name.rsplit_once('/') {
+            if !directories.iter().any(|d| d == directory) {
+                zip.add_directory(directory, options)?;
+                directories.push(directory.to_string());
+            }
+        }
+        zip.start_file(name, options)?;
+        zip.write_all(content.as_bytes())?;
+    }
 
     zip.add_directory("xl/worksheets", options)?;
     for (sheet_index, worksheet) in workbook.worksheets.iter().enumerate() {
@@ -133,15 +162,17 @@ pub fn save_xlsx_to_writer<W: Write + Seek>(model: &Model, writer: W) -> Result<
         let max_row = dimension.max_row;
         let sheet_dimension_str = &format!("{column_min_str}{min_row}:{column_max_str}{max_row}");
         let is_sheet_selected = selected_sheet as usize == sheet_index;
-        zip.write_all(
-            worksheets::get_worksheet_xml(
-                worksheet,
-                &model.parsed_formulas[sheet_index],
-                sheet_dimension_str,
-                is_sheet_selected,
-            )
-            .as_bytes(),
+        // The rows are written in many small pieces; the deflate stream takes them in
+        // larger chunks.
+        let mut buffered = BufWriter::new(&mut zip);
+        worksheets::write_worksheet_xml(
+            &mut buffered,
+            worksheet,
+            &model.parsed_formulas[sheet_index],
+            sheet_dimension_str,
+            is_sheet_selected,
         )?;
+        buffered.flush()?;
     }
 
     let writer = zip.finish()?;

@@ -18,6 +18,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - The xlsx import refuses a worksheet or shared string part past the open
   budget before inflating it: a worksheet DOM holds about sixteen times its
   bytes (`src/import/mod.rs`, constants in `ironcalc_base::open_budget`).
+- The xlsx export writes each worksheet row by row to the zip through
+  `write_worksheet_xml` instead of building the whole part as one string, and
+  exposes the other parts through `get_package_parts`, so a caller can write
+  the package itself. An unevaluated formula now returns an error instead of
+  panicking (`src/export/mod.rs`, `src/export/worksheets.rs`). Tests:
+  `src/export/test/test_export.rs`.
 
 Zenkai-only, not for upstream:
 
