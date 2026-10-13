@@ -133,7 +133,7 @@ pub fn remove(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zenkai_engine::{Engine, Workbook};
+    use zenkai_engine::{Engine, SaveTarget, Workbook};
     use zenkai_types::{CellPos, SheetId, WorkbookId};
 
     #[test]
@@ -144,9 +144,9 @@ mod tests {
             .unwrap();
         let own = document_file(dir.path(), WorkbookId(0));
         let sibling = document_file(dir.path(), WorkbookId(1));
-        write(book.save_snapshot(&own).unwrap()).unwrap();
-        write(book.save_snapshot(&own).unwrap()).unwrap();
-        write(book.save_snapshot(&sibling).unwrap()).unwrap();
+        write(book.save_snapshot(&own, SaveTarget::Copy).unwrap()).unwrap();
+        write(book.save_snapshot(&own, SaveTarget::Copy).unwrap()).unwrap();
+        write(book.save_snapshot(&sibling, SaveTarget::Copy).unwrap()).unwrap();
         let other = dir.path().join("autosave-1-1-0.xlsx");
         std::fs::copy(&own, &other).unwrap();
         std::fs::write(dir.path().join("notes.txt"), "x").unwrap();

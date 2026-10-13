@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::ErrorKind;
 
-use zenkai_engine::{Engine, EngineError, Workbook, run_with_engine_stack, save_xlsx};
+use zenkai_engine::{Engine, EngineError, SaveTarget, Workbook, run_with_engine_stack, save_xlsx};
 use zenkai_types::SheetId;
 
 use crate::tools::error::ToolError;
@@ -81,7 +81,10 @@ pub fn create_workbook_file(new: &NewWorkbook) -> Result<Workbook, ToolError> {
             ErrorKind::AlreadyExists => ToolError::AlreadyExists(relative_text(&new.path)),
             _ => ToolError::File(error.to_string()),
         })?;
-    if let Err(error) = workbook.save_snapshot(target).and_then(save_xlsx) {
+    if let Err(error) = workbook
+        .save_snapshot(target, SaveTarget::Copy)
+        .and_then(save_xlsx)
+    {
         if let Err(cleanup) = std::fs::remove_file(target) {
             tracing::warn!(%cleanup, path = %target.display(), "could not remove a reserved workbook name");
         }

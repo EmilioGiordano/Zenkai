@@ -6,7 +6,7 @@ use std::time::Instant;
 use zenkai_i18n::t;
 
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Engine, EngineError, SaveSnapshot, Unsupported, Workbook};
+use zenkai_engine::{Engine, EngineError, SaveSnapshot, SaveTarget, Unsupported, Workbook};
 use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
@@ -337,10 +337,11 @@ pub fn write_snapshot(
     shared: &RwLock<Workbook>,
     job: FileJob,
     target: &Path,
+    kind: SaveTarget,
     write: impl FnOnce(SaveSnapshot) -> Result<(), EngineError>,
 ) -> Result<(), EngineError> {
     let started = Instant::now();
-    let snapshot = read_shared(shared).save_snapshot(target);
+    let snapshot = read_shared(shared).save_snapshot(target, kind);
     let locked_ms = started.elapsed().as_millis();
     let written = snapshot.and_then(write);
     let total_ms = started.elapsed().as_millis();
@@ -495,10 +496,16 @@ mod tests {
         let shared = document.begin_read().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("book.xlsx");
-        write_snapshot(&shared, FileJob::Autosaving, &target, |snapshot| {
-            assert!(shared.try_write().is_ok(), "the read lock is still held");
-            zenkai_engine::save_xlsx(snapshot)
-        })
+        write_snapshot(
+            &shared,
+            FileJob::Autosaving,
+            &target,
+            SaveTarget::Copy,
+            |snapshot| {
+                assert!(shared.try_write().is_ok(), "the read lock is still held");
+                zenkai_engine::save_xlsx(snapshot)
+            },
+        )
         .unwrap();
         assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
     }
@@ -508,7 +515,7 @@ mod tests {
         let document = document();
         let shared = document.begin_read().unwrap();
         let target = Path::new("unused.xlsx");
-        let failed = write_snapshot(&shared, FileJob::Saving, target, |_| {
+        let failed = write_snapshot(&shared, FileJob::Saving, target, SaveTarget::Copy, |_| {
             Err(EngineError::VerifyFailed("disk full".to_string()))
         });
         assert!(matches!(failed, Err(EngineError::VerifyFailed(_))));

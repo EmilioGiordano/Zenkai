@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::EngineError;
 use crate::preflight;
+use crate::saved::{FileOnDisk, Stamp};
 use crate::workbook::Workbook;
 use crate::xlsx_read::{self, XlsxReader};
 
@@ -73,9 +74,25 @@ pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineE
         .unwrap_or_else(|| "Book".to_string());
     // The streaming reader parses the file straight from disk and brings the sheet
     // settings back from the same pass; the other readers read the file whole first.
-    let xlsx_read::FileRead { read, settings } = xlsx_read::read_xlsx_file(path, &name, reader)?;
-    let mut workbook = preflight::run_with_engine_stack(|| Workbook::from_book(read.book))?;
-    workbook.carry(settings);
+    let before = Stamp::of(path);
+    let xlsx_read::FileRead {
+        read,
+        settings,
+        layout,
+    } = xlsx_read::read_xlsx_file(path, &name, reader)?;
+    // A file that changed while it was read is never copied from.
+    let file = match (layout, before) {
+        (Some(layout), Ok(stamp)) if Stamp::of(path).is_ok_and(|after| after == stamp) => {
+            Some(FileOnDisk {
+                path,
+                stamp,
+                layout,
+            })
+        }
+        _ => None,
+    };
+    let workbook =
+        preflight::run_with_engine_stack(|| Workbook::from_file(read.book, settings, file))?;
     Ok(Opened {
         workbook,
         unsupported: read.unsupported,
@@ -246,7 +263,13 @@ mod tests {
             .workbook
             .set_input(SheetId(0), CellPos::parse_a1("A1").unwrap(), "3")
             .unwrap();
-        crate::save_xlsx(opened.workbook.save_snapshot(&path).unwrap()).unwrap();
+        crate::save_xlsx(
+            opened
+                .workbook
+                .save_snapshot(&path, crate::SaveTarget::Document)
+                .unwrap(),
+        )
+        .unwrap();
 
         let reopened = open_xlsx(&path).unwrap();
         assert_eq!(reopened.workbook.cell(SheetId(0), a2).text, "63");

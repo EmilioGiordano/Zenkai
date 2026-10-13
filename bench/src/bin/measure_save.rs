@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use peak_alloc::PeakAlloc;
-use zenkai_engine::{Engine, Workbook, open_xlsx, save_xlsx};
+use zenkai_engine::{Engine, SaveTarget, Workbook, open_xlsx, save_xlsx};
 use zenkai_types::{CellPos, SheetId};
 
 #[global_allocator]
@@ -86,7 +86,7 @@ fn main() -> Result<()> {
 
     begin("snapshot");
     let start = Instant::now();
-    let snapshot = workbook.save_snapshot(&target)?;
+    let snapshot = workbook.save_snapshot(&target, SaveTarget::Document)?;
     done("snapshot", start, "");
 
     begin("save");

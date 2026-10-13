@@ -13,13 +13,26 @@ use zip::write::FileOptions;
 
 use crate::error::EngineError;
 use crate::file::{remove_temp, temp_path};
+use crate::fingerprint::{SheetPrint, book_print};
 use crate::preflight::run_with_engine_stack;
+use crate::save_patch::{PatchPlan, Patched, patch_plan, write_patch};
 use crate::save_sheet::{SheetWriter, prepare};
+use crate::saved::{
+    Contents, Metadata, SavedFile, SavedSlot, Stamp, Strings, selected_sheet, sheet_prints,
+};
 use crate::sheet_settings::{Carried, SheetSettings};
 
 // IronCalc's rows are written in many small pieces; the settings writer and the deflate
 // stream take them in chunks this large.
 const SHEET_BUFFER_BYTES: usize = 256 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveTarget {
+    // The workbook's own file: later saves copy the parts they do not change from it.
+    Document,
+    // A copy elsewhere, such as a recovery file, that leaves the workbook's file as it is.
+    Copy,
+}
 
 pub(crate) struct SheetJob {
     pub(crate) part: String,
@@ -29,16 +42,25 @@ pub(crate) struct SheetJob {
     pub(crate) selected: bool,
 }
 
-// Everything a save writes, copied out of the model so the file is written without
+// Everything a full save writes, copied out of the model so the file is written without
 // holding the workbook.
 pub(crate) struct FullPlan {
     parts: Vec<(String, String)>,
     sheets: Vec<SheetJob>,
 }
 
+enum Plan {
+    Full(FullPlan),
+    Patch(PatchPlan),
+}
+
 pub struct SaveSnapshot {
     path: PathBuf,
-    plan: FullPlan,
+    plan: Plan,
+    slot: SavedSlot,
+    // For a save to the workbook's own file, what the file will hold, so the next save
+    // compares against what was written and never against edits made after the snapshot.
+    adoption: Option<Contents>,
 }
 
 impl SaveSnapshot {
@@ -47,70 +69,142 @@ impl SaveSnapshot {
     }
 }
 
-fn rejected(error: impl ToString) -> EngineError {
+pub(crate) fn rejected(error: impl ToString) -> EngineError {
     EngineError::Rejected(format!("saving the workbook: {}", error.to_string()))
 }
 
-fn settings_of(carried: &Carried, sheet: &Worksheet) -> Option<SheetSettings> {
-    carried
-        .get(sheet.sheet_id)
-        .filter(|settings| !settings.is_empty())
-        .cloned()
+// The parts of the model a save copies. They are plain data, so the copy can run on the
+// engine's stack: formulas nest deeply, and cloning or hashing them recurses.
+#[derive(Clone, Copy)]
+pub(crate) struct ModelData<'m> {
+    pub(crate) book: &'m ironcalc::base::types::Workbook,
+    pub(crate) formulas: &'m [Vec<(Node, StaticResult)>],
+}
+
+impl<'m> ModelData<'m> {
+    pub(crate) fn of(model: &'m Model<'_>) -> ModelData<'m> {
+        ModelData {
+            book: &model.workbook,
+            formulas: &model.parsed_formulas,
+        }
+    }
 }
 
 pub(crate) fn sheet_job(
-    model: &Model<'_>,
+    data: ModelData<'_>,
     carried: &Carried,
     index: usize,
     part: String,
     selected: bool,
 ) -> Result<SheetJob, EngineError> {
-    let sheet = model
-        .workbook
+    let sheet = data
+        .book
         .worksheets
         .get(index)
         .ok_or_else(|| rejected("a sheet is missing"))?;
-    let formulas = model
-        .parsed_formulas
+    let formulas = data
+        .formulas
         .get(index)
         .ok_or_else(|| rejected("a sheet has no formulas"))?;
     Ok(SheetJob {
         part,
         sheet: sheet.clone(),
         formulas: formulas.clone(),
-        settings: settings_of(carried, sheet),
+        settings: carried.written(sheet).cloned(),
         selected,
     })
 }
 
-pub(crate) fn selected_sheet(model: &Model<'_>) -> usize {
-    model
-        .workbook
-        .views
-        .get(&0)
-        .map_or(0, |view| view.sheet as usize)
+fn full_part(index: usize) -> String {
+    format!("xl/worksheets/sheet{}.xml", index + 1)
+}
+
+fn full_sheets(data: ModelData<'_>, carried: &Carried) -> Result<Vec<SheetJob>, EngineError> {
+    let selected = selected_sheet(data.book);
+    (0..data.book.worksheets.len())
+        .map(|index| sheet_job(data, carried, index, full_part(index), index == selected))
+        .collect()
+}
+
+fn package_parts(model: &Model<'_>) -> Result<Vec<(String, String)>, EngineError> {
+    get_package_parts(model).map_err(|e| rejected(format!("{e:?}")))
 }
 
 pub(crate) fn full_plan(model: &Model<'_>, carried: &Carried) -> Result<FullPlan, EngineError> {
-    let parts = get_package_parts(model).map_err(|e| rejected(format!("{e:?}")))?;
-    let selected = selected_sheet(model);
-    let sheets = (0..model.workbook.worksheets.len())
-        .map(|index| {
-            let part = format!("xl/worksheets/sheet{}.xml", index + 1);
-            sheet_job(model, carried, index, part, index == selected)
-        })
-        .collect::<Result<_, _>>()?;
-    Ok(FullPlan { parts, sheets })
+    let data = ModelData::of(model);
+    let sheets = run_with_engine_stack(|| full_sheets(data, carried))?;
+    Ok(FullPlan {
+        parts: package_parts(model)?,
+        sheets,
+    })
 }
 
+fn full_contents(data: ModelData<'_>, book: u64, sheets: Vec<SheetPrint>) -> Contents {
+    Contents {
+        worksheets: (0..sheets.len()).map(full_part).collect(),
+        strings: Strings::Aligned(data.book.shared_strings.len()),
+        book,
+        sheets,
+        selected: selected_sheet(data.book),
+        metadata: Metadata::Written,
+    }
+}
+
+enum Chosen {
+    Full(Vec<SheetJob>),
+    Patch(PatchPlan),
+}
+
+fn choose(
+    path: &Path,
+    target: SaveTarget,
+    data: ModelData<'_>,
+    carried: &Carried,
+    slot: &SavedSlot,
+) -> Result<(Chosen, Option<Contents>), EngineError> {
+    let base = slot.current().filter(|base| base.fits(path));
+    if base.is_none() && target == SaveTarget::Copy {
+        return Ok((Chosen::Full(full_sheets(data, carried)?), None));
+    }
+    let book = book_print(data.book);
+    let prints = sheet_prints(data, carried);
+    let patched = match base {
+        Some(base) => patch_plan(base, book, &prints, data, carried)?,
+        None => None,
+    };
+    let (chosen, contents) = match patched {
+        Some(Patched { plan, contents }) => (Chosen::Patch(plan), contents),
+        None => (
+            Chosen::Full(full_sheets(data, carried)?),
+            full_contents(data, book, prints),
+        ),
+    };
+    Ok((chosen, (target == SaveTarget::Document).then_some(contents)))
+}
+
+// Runs under the workbook's read lock; everything here is proportional to the
+// workbook in memory, never to the file on disk.
 pub(crate) fn snapshot(
     path: &Path,
+    target: SaveTarget,
     model: &Model<'_>,
     carried: &Carried,
+    slot: &SavedSlot,
 ) -> Result<SaveSnapshot, EngineError> {
+    let data = ModelData::of(model);
+    let (chosen, adoption) = run_with_engine_stack(|| choose(path, target, data, carried, slot))?;
+    let plan = match chosen {
+        Chosen::Patch(plan) => Plan::Patch(plan),
+        Chosen::Full(sheets) => Plan::Full(FullPlan {
+            parts: package_parts(model)?,
+            sheets,
+        }),
+    };
     Ok(SaveSnapshot {
         path: path.to_path_buf(),
-        plan: full_plan(model, carried)?,
+        plan,
+        slot: slot.clone(),
+        adoption,
     })
 }
 
@@ -169,11 +263,14 @@ fn write_error(path: &Path) -> impl Fn(io::Error) -> EngineError + '_ {
 }
 
 fn write_temp(
-    plan: FullPlan,
+    plan: Plan,
     file: BufWriter<File>,
     temp: &Path,
 ) -> Result<Vec<(String, Written)>, EngineError> {
-    let (file, written) = write_full(plan, file)?;
+    let (file, written) = match plan {
+        Plan::Full(plan) => write_full(plan, file)?,
+        Plan::Patch(plan) => write_patch(plan, file)?,
+    };
     let file = file
         .into_inner()
         .map_err(|error| write_error(temp)(error.into_error()))?;
@@ -181,10 +278,48 @@ fn write_temp(
     Ok(written)
 }
 
+fn unchanged(base: Option<&SavedFile>) -> Result<(), EngineError> {
+    match base {
+        Some(base) if Stamp::of(&base.path).ok() != Some(base.stamp) => {
+            Err(EngineError::ChangedOnDisk(base.path.clone()))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn verify(
+    temp: &Path,
+    base: Option<&SavedFile>,
+    written: &[(String, Written)],
+) -> Result<(), EngineError> {
+    zenkai_xlsx_reader::check_written(temp, base.map(|base| base.path.as_path()), written)
+        .map_err(|e| EngineError::VerifyFailed(e.to_string()))
+}
+
+fn adopt(slot: &SavedSlot, path: &Path, contents: Contents) {
+    match Stamp::of(path) {
+        Ok(stamp) => slot.set(Some(SavedFile {
+            path: path.to_path_buf(),
+            stamp,
+            contents,
+        })),
+        Err(error) => {
+            tracing::warn!(?path, %error, "the next save writes the whole file");
+            slot.set(None);
+        }
+    }
+}
+
 // Written to a sibling temp file, read back, then renamed over the target: the original
-// is never truncated and survives any failure before the rename.
+// is never truncated and survives any failure before the rename. A file a save copies
+// from must not change from the snapshot until the rename.
 pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
-    let path = snapshot.path;
+    let SaveSnapshot {
+        path,
+        plan,
+        slot,
+        adoption,
+    } = snapshot;
     let temp = temp_path(&path);
     let created = fs::OpenOptions::new()
         .write(true)
@@ -201,18 +336,30 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
             return Err(write_error(&temp)(source));
         }
     };
-    let checked =
-        run_with_engine_stack(|| write_temp(snapshot.plan, file, &temp)).and_then(|written| {
-            zenkai_xlsx_reader::check_written(&temp, None, &written)
-                .map_err(|e| EngineError::VerifyFailed(e.to_string()))
-        });
+    let base = match &plan {
+        Plan::Patch(plan) => Some(plan.base.clone()),
+        Plan::Full(_) => None,
+    };
+    let base = base.as_deref();
+    let checked = unchanged(base)
+        .and_then(|()| run_with_engine_stack(|| write_temp(plan, file, &temp)))
+        .and_then(|written| verify(&temp, base, &written))
+        .and_then(|()| unchanged(base));
     if let Err(error) = checked {
         remove_temp(&temp);
+        // A file that cannot be copied from must not keep every later save from working.
+        if base.is_some() {
+            tracing::warn!(%error, "copying from the saved file failed; the next save writes it whole");
+            slot.set(None);
+        }
         return Err(error);
     }
     if let Err(source) = fs::rename(&temp, &path) {
         remove_temp(&temp);
         return Err(EngineError::Write { path, source });
+    }
+    if let Some(contents) = adoption {
+        adopt(&slot, &path, contents);
     }
     Ok(())
 }
@@ -240,7 +387,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("book.xlsx");
         std::fs::write(&path, b"old contents").unwrap();
-        super::save_xlsx(book().save_snapshot(&path).unwrap()).unwrap();
+        super::save_xlsx(
+            book()
+                .save_snapshot(&path, super::SaveTarget::Document)
+                .unwrap(),
+        )
+        .unwrap();
         let reopened = crate::file::open_xlsx(&path).unwrap().workbook;
         let b1 = CellPos::parse_a1("B1").unwrap();
         assert_eq!(reopened.cell(SheetId(0), b1).text, "6");
@@ -253,7 +405,14 @@ mod tests {
     fn a_failed_save_leaves_no_file_behind() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("missing").join("book.xlsx");
-        assert!(super::save_xlsx(book().save_snapshot(&path).unwrap()).is_err());
+        assert!(
+            super::save_xlsx(
+                book()
+                    .save_snapshot(&path, super::SaveTarget::Document)
+                    .unwrap()
+            )
+            .is_err()
+        );
         assert!(!dir.path().join("missing").exists());
     }
 
@@ -262,7 +421,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("book.xlsx");
         let mut book = book();
-        let snapshot = book.save_snapshot(&path).unwrap();
+        let snapshot = book
+            .save_snapshot(&path, super::SaveTarget::Document)
+            .unwrap();
         book.set_input(SheetId(0), CellPos::default(), "5").unwrap();
         super::save_xlsx(snapshot).unwrap();
         let reopened = crate::file::open_xlsx(&path).unwrap().workbook;

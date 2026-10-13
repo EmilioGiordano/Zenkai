@@ -8,7 +8,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use zenkai_engine::{Engine, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx, scan_unsupported};
+use zenkai_engine::{
+    Engine, SaveTarget, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx, scan_unsupported,
+};
 
 #[path = "../../../test-support/xlsx_damage.rs"]
 mod xlsx_damage;
@@ -29,7 +31,11 @@ fn open_with_watchdog(bytes: Vec<u8>) {
             if let Ok(opened) = open_xlsx(&path) {
                 opened.workbook.sheets();
                 let saved = folder.path().join("saved.xlsx");
-                match opened.workbook.save_snapshot(&saved).and_then(save_xlsx) {
+                match opened
+                    .workbook
+                    .save_snapshot(&saved, SaveTarget::Document)
+                    .and_then(save_xlsx)
+                {
                     Ok(()) => {
                         open_xlsx(&saved).expect("a file Zenkai just wrote must reopen");
                     }

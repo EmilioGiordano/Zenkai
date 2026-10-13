@@ -7,7 +7,9 @@ use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
 use rust_xlsxwriter::Workbook as Source;
-use zenkai_engine::{Engine, Unsupported, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx};
+use zenkai_engine::{
+    Engine, SaveTarget, Unsupported, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
+};
 use zenkai_types::{ColIdx, RowIdx, SheetId};
 
 // CT_Worksheet's child order, as far as Zenkai writes it.
@@ -214,7 +216,13 @@ fn keeps_layout_view_and_outline(reader: XlsxReader) {
     assert_eq!(opened.fallback, None, "the reader under test was not used");
     assert!(opened.unsupported.is_empty(), "{:?}", opened.unsupported);
     let saved_path = dir.path().join("saved.xlsx");
-    save_xlsx(opened.workbook.save_snapshot(&saved_path).unwrap()).unwrap();
+    save_xlsx(
+        opened
+            .workbook
+            .save_snapshot(&saved_path, SaveTarget::Document)
+            .unwrap(),
+    )
+    .unwrap();
     let saved = std::fs::read(&saved_path).unwrap();
 
     let before = settings(&part(&original, "xl/worksheets/sheet2.xml"));
@@ -245,7 +253,13 @@ fn keeps_layout_view_and_outline(reader: XlsxReader) {
 
     let again_path = dir.path().join("again.xlsx");
     let reopened = open_xlsx_with(&saved_path, reader).unwrap();
-    save_xlsx(reopened.workbook.save_snapshot(&again_path).unwrap()).unwrap();
+    save_xlsx(
+        reopened
+            .workbook
+            .save_snapshot(&again_path, SaveTarget::Document)
+            .unwrap(),
+    )
+    .unwrap();
     let again = std::fs::read(&again_path).unwrap();
     for sheet in ["xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml"] {
         assert_eq!(
@@ -368,7 +382,13 @@ fn saved_values_are_recalculated_not_the_zeros_cached_in_the_source() {
 
     let opened = open_xlsx(&path).unwrap();
     let saved_path = dir.path().join("saved.xlsx");
-    save_xlsx(opened.workbook.save_snapshot(&saved_path).unwrap()).unwrap();
+    save_xlsx(
+        opened
+            .workbook
+            .save_snapshot(&saved_path, SaveTarget::Document)
+            .unwrap(),
+    )
+    .unwrap();
     let saved = part(
         &std::fs::read(&saved_path).unwrap(),
         "xl/worksheets/sheet1.xml",
