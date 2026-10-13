@@ -476,13 +476,6 @@ pub(crate) fn stream_config<R: Read>(
         }
         Ok(())
     };
-    // The scans of the first event at `event_at` and of the row at `pending_at`,
-    // kept across refills so a huge row is read once, not re-parsed from its
-    // start on every fill.
-    let mut event_at = usize::MAX;
-    let mut event_scan = ForwardScan::new();
-    let mut pending_at = usize::MAX;
-    let mut pending_scan = ForwardScan::new();
     loop {
         while pos == window.len() && !eof {
             fill(&mut window, &mut eof, pos)?;
@@ -493,28 +486,30 @@ pub(crate) fn stream_config<R: Read>(
         if window[pos..].len() > ROW_CAP_BYTES {
             return Err(unsupported("a row larger than supported"));
         }
-        let (next, end) = loop {
-            if event_at != pos {
-                event_at = pos;
-                event_scan = ForwardScan::new();
-            }
+        // Each scan resumes across refills, so a huge row is read once. A scan that
+        // has found its event must not be asked again: its offset may already lie
+        // past the tag it found, and a second call would report a later tag.
+        let mut event_scan = ForwardScan::new();
+        let found = loop {
             match scan_event(&mut event_scan, &window[pos..]) {
-                Ok(Some((Next::Row, _))) => {
-                    if pending_at != pos {
-                        pending_at = pos;
-                        pending_scan = ForwardScan::new();
-                    }
-                    match scan_row_end(&mut pending_scan, &window[pos..])? {
-                        Some(end) => break (Next::Row, end),
-                        None if !eof => fill(&mut window, &mut eof, pos)?,
-                        None => return Err(unreadable("sheetData is not closed")),
-                    }
-                }
                 Ok(Some(found)) => break found,
                 Ok(None) | Err(_) if !eof => fill(&mut window, &mut eof, pos)?,
                 Ok(None) => return Err(unreadable("sheetData is not closed")),
                 Err(error) => return Err(error),
             }
+        };
+        let (next, end) = match found {
+            (Next::Row, _) => {
+                let mut row_scan = ForwardScan::new();
+                loop {
+                    match scan_row_end(&mut row_scan, &window[pos..])? {
+                        Some(end) => break (Next::Row, end),
+                        None if !eof => fill(&mut window, &mut eof, pos)?,
+                        None => return Err(unreadable("sheetData is not closed")),
+                    }
+                }
+            }
+            found => found,
         };
         if matches!(next, Next::SheetDataEnd) {
             let mut config = head;
@@ -1523,6 +1518,36 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_row_tag_cut_by_a_chunk_in_a_row_longer_than_a_chunk_keeps_its_outline() {
+        let tag = |n: u32| format!(r#"<row r="{n}" outlineLevel="1">"#);
+        let text = "x".repeat(100_000);
+        let row = |n: u32| {
+            format!(
+                r#"{}<c r="A{n}" t="inlineStr"><is><t>{text}</t></is></c></row>"#,
+                tag(n)
+            )
+        };
+        let head = |pad: usize| {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews{}><sheetView workbookViewId="0"/></sheetViews><sheetData>"#,
+                " ".repeat(pad)
+            )
+        };
+        let second_tag_at = 2 * CHUNK_BYTES - 10;
+        let pad = second_tag_at - head(0).len() - row(1).len();
+        let rows: String = (1..=3).map(row).collect();
+        let xml = format!("{}{rows}{TAIL}", head(pad));
+        assert_eq!(xml.find(&tag(2)), Some(second_tag_at));
+        let config = String::from_utf8(config_with(&xml, &budgets()).unwrap()).unwrap();
+        let kept: String = (1..=3).map(tag).collect();
+        assert!(
+            config == format!("{}{kept}{TAIL}", head(pad)),
+            "{}",
+            &config[pad..]
+        );
     }
 
     #[test]
