@@ -58,16 +58,16 @@ fn missing_rows(sheet: &Worksheet) -> (String, bool) {
     // last entry for a row wins, as in IronCalc's own export.
     let mut by_row = std::collections::BTreeMap::new();
     for row in &sheet.rows {
-        let valid = (1..=MAX_ROW).contains(&row.r) && !sheet.sheet_data.contains_key(&row.r);
+        let valid = (1..=MAX_ROW).contains(&row.r) && !sheet.sheet_data.has_row(row.r);
         if valid {
             by_row.insert(row.r, row);
         }
     }
     // IronCalc exports rows it imported even when they are outside the grid or too
     // tall; those sheets are rewritten too, and merge_rows drops or clamps them.
-    let odd = sheet.sheet_data.keys().any(|r| !(1..=MAX_ROW).contains(r))
+    let odd = sheet.sheet_data.rows().any(|r| !(1..=MAX_ROW).contains(&r))
         || sheet.rows.iter().any(|row| {
-            sheet.sheet_data.contains_key(&row.r) && !(0.0..=MAX_HEIGHT).contains(&row.height)
+            sheet.sheet_data.has_row(row.r) && !(0.0..=MAX_HEIGHT).contains(&row.height)
         });
     let mut xml = String::new();
     for row in by_row.into_values() {

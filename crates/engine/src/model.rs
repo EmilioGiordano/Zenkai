@@ -3,7 +3,8 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use ironcalc::base::UserModel;
-use ironcalc::base::types::{ArrayKind, Cell, SheetData};
+use ironcalc::base::cell_store::CellStore;
+use ironcalc::base::types::{ArrayKind, Cell};
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
 
 use crate::workbook::{col_i32, row_i32};
@@ -45,49 +46,48 @@ fn position(row: i32, col: i32) -> CellPos {
 
 // Matches IronCalc's `Worksheet::dimension`: rows without cells still count, but a sheet
 // without any cell ends at A1.
-fn extent_of(sheet_data: &SheetData) -> Extent {
+fn extent_of(sheet_data: &CellStore) -> Extent {
     let mut last_row = None;
     let mut last_col = None;
     let mut spills = false;
-    for (row, columns) in sheet_data {
-        last_row = last_row.max(Some(*row));
-        for (col, cell) in columns {
-            last_col = last_col.max(Some(*col));
-            spills |= is_dynamic(cell);
-        }
+    for row in sheet_data.rows() {
+        last_row = last_row.max(Some(row));
+    }
+    for (_, col, cell) in sheet_data.iter() {
+        last_col = last_col.max(Some(col));
+        spills |= is_dynamic(cell);
     }
     let last = last_row.zip(last_col).map(|(row, col)| position(row, col));
     Extent { last, spills }
 }
 
 // Visits the cells of `sheet_data` inside `area`, walking whichever side is smaller.
-fn for_each_within(sheet_data: &SheetData, area: Range, mut visit: impl FnMut(i32, i32, &Cell)) {
+fn for_each_within(sheet_data: &CellStore, area: Range, mut visit: impl FnMut(i32, i32, &Cell)) {
     let rows = row_i32(area.start.row)..=row_i32(area.end.row);
     let cols = col_i32(area.start.col)..=col_i32(area.end.col);
-    let mut in_row = |row: i32, columns: &HashMap<i32, Cell>| {
-        if usize::from(area.cols()) < columns.len() {
+    let mut in_row = |row: i32| {
+        if usize::from(area.cols()) < sheet_data.row_len(row) {
             for col in cols.clone() {
-                if let Some(cell) = columns.get(&col) {
+                if let Some(cell) = sheet_data.get(row, col) {
                     visit(row, col, cell);
                 }
             }
         } else {
-            for (col, cell) in columns.iter().filter(|(col, _)| cols.contains(*col)) {
-                visit(row, *col, cell);
+            for (col, cell) in sheet_data
+                .row_cells(row)
+                .filter(|(col, _)| cols.contains(col))
+            {
+                visit(row, col, cell);
             }
         }
     };
-    if usize::try_from(area.rows()).is_ok_and(|rows| rows < sheet_data.len()) {
+    if usize::try_from(area.rows()).is_ok_and(|rows| rows < sheet_data.row_count()) {
         for row in rows {
-            if let Some(columns) = sheet_data.get(&row) {
-                in_row(row, columns);
-            }
+            in_row(row);
         }
     } else {
-        for (row, columns) in sheet_data {
-            if rows.contains(row) {
-                in_row(*row, columns);
-            }
+        for row in sheet_data.rows().filter(|row| rows.contains(row)) {
+            in_row(row);
         }
     }
 }
