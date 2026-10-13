@@ -353,7 +353,8 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
     if let Err(error) = checked {
         remove_temp(&temp);
         // A file that cannot be copied from must not keep every later save from working;
-        // a failure to write the temp file says nothing about it.
+        // a temp file that cannot be created or finished says nothing about it. A failed
+        // part copy reads and writes at once, so it counts as the file's.
         let base_failed = matches!(
             error,
             EngineError::ChangedOnDisk(_)
