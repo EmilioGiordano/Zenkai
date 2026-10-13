@@ -22,7 +22,6 @@
 //! Formula in F6 would then be 'A6+C6'
 use std::collections::HashMap;
 
-
 use ironcalc_base::{
     expressions::{
         parser::{static_analysis::StaticResult, stringify::to_excel_string, Node},

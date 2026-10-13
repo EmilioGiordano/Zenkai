@@ -25,7 +25,6 @@ impl CellStore {
         self.rows.get_mut(&row)?.get_mut(&column)
     }
 
-    /// Stores the cell, creating its row if needed, and returns the cell it replaces.
     pub fn insert(&mut self, row: i32, column: i32, cell: Cell) -> Option<Cell> {
         self.rows.entry(row).or_default().insert(column, cell)
     }
