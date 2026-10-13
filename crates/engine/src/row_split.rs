@@ -33,11 +33,14 @@ pub(crate) fn over_rows<T: Send, U>(
     let per_thread = rows.len().div_ceil(threads()).max(MIN_ROWS_PER_THREAD);
     let share = &share;
     std::thread::scope(|scope| {
-        let workers: Vec<_> = rows
+        let workers = rows
             .chunks(per_thread)
             .skip(1)
-            .map(|rows| scope.spawn(move || share(sheet_data, rows)))
-            .collect();
+            .map(|rows| {
+                std::thread::Builder::new().spawn_scoped(scope, move || share(sheet_data, rows))
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| EngineError::Rejected(format!("could not start a thread: {e}")))?;
         let first = rows
             .chunks(per_thread)
             .next()
