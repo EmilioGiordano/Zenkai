@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
 use ironcalc::base::types::Workbook;
-use zenkai_xlsx_reader::{PackageLayout, SharedStrings};
+use zenkai_xlsx_reader::{PackageLayout, PartNames, SharedStrings, StyleCounts};
 
 use crate::error::EngineError;
 use crate::fingerprint::{SheetPrint, book_print, sheet_print};
@@ -47,6 +47,7 @@ pub(crate) enum Metadata {
 pub(crate) struct Contents {
     pub(crate) worksheets: Vec<String>,
     pub(crate) strings: Strings,
+    pub(crate) styles: StyleCounts,
     pub(crate) book: u64,
     pub(crate) sheets: Vec<SheetPrint>,
     // The sheet the file opens on. A save that copies the workbook part keeps it.
@@ -104,6 +105,13 @@ pub(crate) fn sheet_prints(
         .collect()
 }
 
+pub(crate) fn style_counts(book: &Workbook) -> StyleCounts {
+    StyleCounts {
+        cell_xfs: book.styles.cell_xfs.len(),
+        dxfs: book.styles.dxfs.len(),
+    }
+}
+
 pub(crate) fn selected_sheet(book: &Workbook) -> usize {
     book.views.get(&0).map_or(0, |view| view.sheet as usize)
 }
@@ -116,8 +124,9 @@ pub(crate) struct FileOnDisk<'a> {
 }
 
 // When a save could copy from the file: its strings and styles line up with the model's,
-// so a rewritten sheet's indexes mean the same there. `data` must still hold the values the
-// file stores, before any recalculation.
+// so a rewritten sheet's indexes mean the same there, and each part name is there once, so
+// the part a save rewrites is the one a reader reads. `data` must still hold the values
+// the file stores, before any recalculation.
 pub(crate) fn opened(
     FileOnDisk {
         path,
@@ -127,15 +136,14 @@ pub(crate) fn opened(
     data: ModelData<'_>,
     carried: &Carried,
 ) -> Option<SavedFile> {
-    let styles = &data.book.styles;
     let strings = match layout.shared_strings {
         SharedStrings::Absent => Strings::Absent,
         SharedStrings::Aligned(count) => Strings::Aligned(count),
         SharedStrings::Unaligned => return None,
     };
-    let aligned = layout.styles.cell_xfs == styles.cell_xfs.len()
-        && layout.styles.dxfs == styles.dxfs.len()
-        && layout.worksheets.len() == data.book.worksheets.len();
+    let aligned = layout.styles == style_counts(data.book)
+        && layout.worksheets.len() == data.book.worksheets.len()
+        && layout.part_names == PartNames::Unique;
     if !aligned {
         return None;
     }
@@ -147,6 +155,7 @@ pub(crate) fn opened(
             contents: Contents {
                 worksheets: layout.worksheets,
                 strings,
+                styles: layout.styles,
                 book,
                 sheets,
                 selected: selected_sheet(data.book),

@@ -22,6 +22,8 @@ pub enum EngineError {
     VerifyFailed(String),
     #[error("{} changed on disk while it was being saved; save again", .0.display())]
     ChangedOnDisk(PathBuf),
+    #[error("{} could not be copied from ({reason}); save again to write it whole", .path.display())]
+    BaseUnusable { path: PathBuf, reason: String },
     #[error("sheet {} does not exist", .0.0)]
     UnknownSheet(SheetId),
     #[error("{0}")]

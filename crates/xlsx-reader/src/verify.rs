@@ -7,6 +7,7 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 
 use crate::ReadError;
+use crate::layout::{PartNames, names_in_order, part_names_of};
 use crate::limits;
 use crate::package::read_package;
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, Guard};
@@ -43,15 +44,9 @@ pub fn check_written(
     let meter = CompressedMeter::new();
     let mut archive = open(written, &meter)?;
     limits::check_archive(&mut archive)?;
-    let mut names = Vec::with_capacity(archive.len());
-    for index in 0..archive.len() {
-        names.push(
-            archive
-                .by_index_raw(index)
-                .map_err(unreadable)?
-                .name()
-                .to_string(),
-        );
+    let names = names_in_order(&mut archive)?;
+    if part_names_of(&names) == PartNames::Duplicated {
+        return Err(unreadable("the written file holds a part twice"));
     }
     if !names.iter().eq(parts.iter().map(|(name, _)| name)) {
         return Err(unreadable(
@@ -283,6 +278,25 @@ mod tests {
         bytes[at + 3] = b'2';
         std::fs::write(&path, &bytes).unwrap();
         assert!(check_written(&path, None, &generated()).is_err());
+    }
+
+    #[test]
+    fn a_part_written_twice_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("twice.xlsx");
+        write_zip(
+            &path,
+            &[
+                ("xl/workbook.xml", WORKBOOK),
+                ("xl/_rels/workbook.xml.rels", RELS),
+                ("xl/worksheets/sheet1.xml", SHEET),
+                ("xl/worksheets/sheet1.xml", SHEET),
+            ],
+        );
+        let mut kinds = generated();
+        kinds.push(("xl/worksheets/sheet1.xml".to_string(), Written::Generated));
+        let error = check_written(&path, None, &kinds).unwrap_err();
+        assert!(error.to_string().contains("twice"), "{error}");
     }
 
     #[test]

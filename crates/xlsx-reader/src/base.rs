@@ -4,10 +4,13 @@ use std::ops::Range;
 use std::path::Path;
 
 use crate::ReadError;
+use crate::layout::{
+    PartNames, StringScan, StyleCounts, names_in_order, part_names_of, style_counts,
+};
 use crate::limits;
-use crate::package::{part_path, read_entry};
+use crate::package::{part_path, read_entry, read_package};
 use crate::shared_strings::{SHARED_STRINGS_PART, copy_appended};
-use crate::stream::{Budgets, CompressedMeter, Counted};
+use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted};
 
 const CONTENT_TYPES_PART: &str = "[Content_Types].xml";
 const WORKBOOK_RELS_PART: &str = "xl/_rels/workbook.xml.rels";
@@ -18,6 +21,11 @@ pub struct BasePackage {
     archive: zip::ZipArchive<Counted<BufReader<File>>>,
     meter: CompressedMeter,
     budgets: Budgets,
+}
+
+pub struct BaseFacts {
+    pub worksheets: Vec<String>,
+    pub styles: StyleCounts,
 }
 
 // The calculation chain lists formula cells and goes stale once a sheet is rewritten;
@@ -51,6 +59,9 @@ impl BasePackage {
         let mut archive =
             zip::ZipArchive::new(meter.wrap(BufReader::new(file))).map_err(unreadable)?;
         limits::check_archive(&mut archive)?;
+        if part_names_of(&names_in_order(&mut archive)?) == PartNames::Duplicated {
+            return Err(unreadable("the file holds a part twice"));
+        }
         Ok(BasePackage {
             archive,
             meter,
@@ -60,14 +71,7 @@ impl BasePackage {
 
     // In archive order, which a save keeps.
     pub fn part_names(&mut self) -> Result<Vec<String>, ReadError> {
-        (0..self.archive.len())
-            .map(|index| {
-                self.archive
-                    .by_index_raw(index)
-                    .map(|entry| entry.name().to_string())
-                    .map_err(unreadable)
-            })
-            .collect()
+        names_in_order(&mut self.archive)
     }
 
     pub fn copy_raw<W: Write + Seek>(
@@ -132,13 +136,50 @@ impl BasePackage {
 
     // The shared strings part with `appended`, whole <si> elements, before </sst>. The
     // open checked the part can take them (`SharedStrings::Aligned`).
-    pub fn copy_shared_strings(&mut self, appended: &[u8], out: &mut impl Write) -> io::Result<()> {
+    pub fn copy_shared_strings(
+        &mut self,
+        expected: usize,
+        appended: &[u8],
+        out: &mut impl Write,
+    ) -> io::Result<()> {
         let entry = self
             .archive
             .by_name(SHARED_STRINGS_PART)
             .map_err(io::Error::other)?;
         let mut guard = self.budgets.stream(entry, &self.meter, SHARED_STRINGS_PART);
-        copy_appended(&mut guard, appended, out)
+        copy_appended(&mut guard, expected, appended, out)
+    }
+
+    // What a save relies on when it writes sheets into this file, read again because a
+    // file can change on disk and keep its length and modification time.
+    pub fn facts(&mut self) -> Result<BaseFacts, ReadError> {
+        let package = read_package(&mut self.archive, &self.meter, &self.budgets)?;
+        Ok(BaseFacts {
+            worksheets: package
+                .worksheets
+                .into_iter()
+                .map(|part| part.path)
+                .collect(),
+            styles: style_counts(&mut self.archive, &self.meter, &self.budgets)?,
+        })
+    }
+
+    // The items of the shared strings part, when a save could append to it.
+    pub fn shared_string_count(&mut self) -> Result<Option<usize>, ReadError> {
+        let entry = self
+            .archive
+            .by_name(SHARED_STRINGS_PART)
+            .map_err(unreadable)?;
+        let mut guard = self.budgets.stream(entry, &self.meter, SHARED_STRINGS_PART);
+        let mut scan = StringScan::default();
+        let mut chunk = vec![0u8; CHUNK_BYTES];
+        loop {
+            match guard.read_chunk(&mut chunk)? {
+                0 => break,
+                read => scan.push(&chunk[..read]),
+            }
+        }
+        Ok(scan.appendable_items())
     }
 }
 
@@ -204,8 +245,10 @@ mod tests {
         let sst = br#"<?xml version="1.0"?><sst xmlns="m" count="1" uniqueCount="1"><si><t>a</t></si></sst>"#;
         let mut base = package(dir.path(), &[(SHARED_STRINGS_PART, sst), ("x.bin", b"raw")]);
         let mut out = Vec::new();
-        base.copy_shared_strings(b"<si><t>b</t></si>", &mut out)
+        base.copy_shared_strings(1, b"<si><t>b</t></si>", &mut out)
             .unwrap();
+        assert_eq!(base.shared_string_count().unwrap(), Some(1));
+        assert!(base.copy_shared_strings(2, b"", &mut Vec::new()).is_err());
         assert_eq!(
             String::from_utf8(out).unwrap(),
             r#"<?xml version="1.0"?><sst xmlns="m"><si><t>a</t></si><si><t>b</t></si></sst>"#

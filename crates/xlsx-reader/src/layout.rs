@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{Read, Seek};
 
 use crate::ReadError;
@@ -15,6 +16,40 @@ pub struct PackageLayout {
     pub worksheets: Vec<String>,
     pub shared_strings: SharedStrings,
     pub styles: StyleCounts,
+    pub part_names: PartNames,
+}
+
+// A zip may hold two entries of one name. Readers look a name up and get one of them, so
+// a save that rewrites the other would leave the read one stale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartNames {
+    Unique,
+    Duplicated,
+}
+
+// Part names are compared without case, as the package format does.
+pub(crate) fn part_names_of(names: &[String]) -> PartNames {
+    let mut seen = HashSet::with_capacity(names.len());
+    match names
+        .iter()
+        .all(|name| seen.insert(name.to_ascii_lowercase()))
+    {
+        true => PartNames::Unique,
+        false => PartNames::Duplicated,
+    }
+}
+
+pub(crate) fn names_in_order<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> Result<Vec<String>, ReadError> {
+    (0..archive.len())
+        .map(|index| {
+            archive
+                .by_index_raw(index)
+                .map(|entry| entry.name().to_string())
+                .map_err(|e| ReadError::Unreadable(e.to_string()))
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,15 +121,8 @@ pub(crate) fn shared_strings_layout<R: Read + Seek>(
             read => scan.push(&chunk[..read]),
         }
     }
-    scan.finish();
-    let closed = sst_root(&scan.head).is_some() && scan.ending == b"</sst>";
-    Ok(match scan {
-        StringScan {
-            unprefixed_root: true,
-            character_data: false,
-            items,
-            ..
-        } if items == imported && closed => SharedStrings::Aligned(items),
+    Ok(match scan.appendable_items() {
+        Some(items) if items == imported => SharedStrings::Aligned(items),
         _ => SharedStrings::Unaligned,
     })
 }
@@ -104,7 +132,7 @@ pub(crate) fn shared_strings_layout<R: Read + Seek>(
 // and the last characters other than white space are kept to check the part can be
 // appended to the way a save does it.
 #[derive(Default)]
-struct StringScan {
+pub(crate) struct StringScan {
     carry: Vec<u8>,
     items: usize,
     unprefixed_root: bool,
@@ -117,7 +145,15 @@ const LONGEST_PATTERN: usize = 9;
 const ENDING: &[u8] = b"</sst>";
 
 impl StringScan {
-    fn push(&mut self, chunk: &[u8]) {
+    // The number of items, when a save can append to the part: an unprefixed open root
+    // near the start, no character data and </sst> last.
+    pub(crate) fn appendable_items(mut self) -> Option<usize> {
+        self.finish();
+        let closed = sst_root(&self.head).is_some() && self.ending == ENDING;
+        (self.unprefixed_root && !self.character_data && closed).then_some(self.items)
+    }
+
+    pub(crate) fn push(&mut self, chunk: &[u8]) {
         let wanted = SST_HEAD_BYTES
             .saturating_sub(self.head.len())
             .min(chunk.len());
@@ -170,7 +206,20 @@ impl StringScan {
 
 #[cfg(test)]
 mod tests {
-    use super::StringScan;
+    use super::{PartNames, StringScan, part_names_of};
+
+    #[test]
+    fn a_name_twice_is_seen_whatever_its_case() {
+        let names = |list: &[&str]| list.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            part_names_of(&names(&["a.xml", "b.xml"])),
+            PartNames::Unique
+        );
+        assert_eq!(
+            part_names_of(&names(&["xl/a.xml", "b.xml", "XL/A.xml"])),
+            PartNames::Duplicated
+        );
+    }
 
     fn scanned(xml: &str, chunk: usize) -> StringScan {
         let mut scan = StringScan::default();

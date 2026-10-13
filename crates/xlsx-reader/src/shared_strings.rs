@@ -2,6 +2,7 @@ use std::io::{self, Read, Write};
 
 use quick_xml::events::BytesStart;
 
+use crate::layout::StringScan;
 use crate::stream::{CHUNK_BYTES, Guard};
 
 // IronCalc's importer reads the shared strings from this path whatever the
@@ -100,18 +101,21 @@ impl<R: Read> Read for GuardRead<'_, '_, R> {
     }
 }
 
-// Copies the part with `appended` (whole <si> elements) inserted before </sst>. The
-// part was checked on open to have an open unprefixed root and end in </sst>.
+// Copies the part with `appended` (whole <si> elements) inserted before </sst> when the
+// part still holds exactly `expected` items, the count the open checked.
 pub(crate) fn copy_appended<R: Read>(
     guard: &mut Guard<'_, R>,
+    expected: usize,
     appended: &[u8],
     out: &mut impl Write,
 ) -> io::Result<()> {
     let mut reader = GuardRead(guard);
+    let mut scan = StringScan::default();
     let mut head = Vec::with_capacity(SST_HEAD_BYTES);
     (&mut reader)
         .take(SST_HEAD_BYTES as u64)
         .read_to_end(&mut head)?;
+    scan.push(&head);
     let (start, end) =
         sst_root(&head).ok_or_else(|| invalid("the shared strings part has no <sst> root"))?;
     out.write_all(&head[..start])?;
@@ -122,8 +126,16 @@ pub(crate) fn copy_appended<R: Read>(
     loop {
         match reader.read(&mut chunk)? {
             0 => break,
-            read => closing.push(&chunk[..read], out)?,
+            read => {
+                scan.push(&chunk[..read]);
+                closing.push(&chunk[..read], out)?;
+            }
         }
+    }
+    if scan.appendable_items() != Some(expected) {
+        return Err(invalid(
+            "the shared strings part is not the one the file was read with",
+        ));
     }
     closing.finish(appended, out)
 }

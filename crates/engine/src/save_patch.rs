@@ -18,8 +18,10 @@ use crate::sheet_settings::Carried;
 pub(crate) struct PatchPlan {
     pub(crate) base: Arc<SavedFile>,
     sheets: Vec<SheetJob>,
-    // Whole <si> elements for the strings the model added since the file was written.
+    // Whole <si> elements for the strings the model added since the file was written,
+    // which held `strings_in_file`.
     strings: Vec<u8>,
+    strings_in_file: usize,
 }
 
 // What the written file will hold, for the next save to copy from.
@@ -51,6 +53,10 @@ pub(crate) fn patch_plan(
         return Ok(None);
     }
     let all_strings = &data.book.shared_strings;
+    let strings_in_file = match saved.strings {
+        Strings::Aligned(count) => count,
+        Strings::Absent => 0,
+    };
     let (strings, written_strings) = match saved.strings {
         _ if changed.is_empty() => (Vec::new(), saved.strings),
         Strings::Aligned(count) => match all_strings.get(count..) {
@@ -77,6 +83,7 @@ pub(crate) fn patch_plan(
     let contents = Contents {
         worksheets: saved.worksheets.clone(),
         strings: written_strings,
+        styles: saved.styles,
         book,
         sheets: prints.to_vec(),
         selected: saved.selected,
@@ -87,6 +94,7 @@ pub(crate) fn patch_plan(
             base,
             sheets,
             strings,
+            strings_in_file,
         },
         contents,
     }))
@@ -100,8 +108,46 @@ fn sheet_rels(part: &str) -> String {
     }
 }
 
-fn read_failed(error: impl ToString) -> EngineError {
-    rejected(format!("reading the saved file: {}", error.to_string()))
+fn base_unusable(base: &SavedFile) -> impl Fn(&dyn std::fmt::Display) -> EngineError + '_ {
+    |reason| EngineError::BaseUnusable {
+        path: base.path.clone(),
+        reason: reason.to_string(),
+    }
+}
+
+// A file can change on disk and keep its length and modification time; what the rewritten
+// sheets point into is read again before anything is copied.
+fn check_facts(base: &SavedFile, package: &mut BasePackage) -> Result<(), EngineError> {
+    let unusable = base_unusable(base);
+    let facts = package.facts().map_err(|e| unusable(&e))?;
+    let saved = &base.contents;
+    if facts.worksheets != saved.worksheets || facts.styles != saved.styles {
+        return Err(unusable(
+            &"its sheets or styles are not the ones it was read with",
+        ));
+    }
+    Ok(())
+}
+
+fn check_strings(
+    base: &SavedFile,
+    package: &mut BasePackage,
+    names: &[String],
+) -> Result<(), EngineError> {
+    let unusable = base_unusable(base);
+    let present = names.iter().any(|name| name == SHARED_STRINGS_PART);
+    let same = match base.contents.strings {
+        Strings::Absent => !present,
+        Strings::Aligned(count) => {
+            present && package.shared_string_count().map_err(|e| unusable(&e))? == Some(count)
+        }
+    };
+    if !same {
+        return Err(unusable(
+            &"its shared strings are not the ones it was read with",
+        ));
+    }
+    Ok(())
 }
 
 // Returns what was written, part by part, for the verification.
@@ -109,8 +155,19 @@ pub(crate) fn write_patch<W: Write + Seek>(
     plan: PatchPlan,
     writer: W,
 ) -> Result<(W, Vec<(String, Written)>), EngineError> {
-    let mut base = BasePackage::open(&plan.base.path).map_err(read_failed)?;
+    let saved = plan.base.as_ref();
+    let read_failed = base_unusable(saved);
+    let read_failed = |error: zenkai_xlsx_reader::ReadError| read_failed(&error);
+    let copy_failed = base_unusable(saved);
+    let copy_failed = |error: std::io::Error| copy_failed(&error);
+    let strings_in_file = plan.strings_in_file;
+    let mut base = BasePackage::open(&saved.path).map_err(read_failed)?;
     let names = base.part_names().map_err(read_failed)?;
+    check_facts(saved, &mut base)?;
+    // Appending checks the count as it copies.
+    if !plan.sheets.is_empty() && plan.strings.is_empty() {
+        check_strings(saved, &mut base, &names)?;
+    }
     let rels: HashSet<String> = plan
         .sheets
         .iter()
@@ -146,18 +203,22 @@ pub(crate) fn write_patch<W: Write + Seek>(
             zip.start_file(name.as_str(), deflated())
                 .map_err(rejected)?;
             let mut buffered = BufWriter::new(&mut zip);
-            base.copy_shared_strings(&std::mem::take(&mut strings_left), &mut buffered)
-                .map_err(read_failed)?;
+            base.copy_shared_strings(
+                strings_in_file,
+                &std::mem::take(&mut strings_left),
+                &mut buffered,
+            )
+            .map_err(copy_failed)?;
             buffered.flush().map_err(rejected)?;
         } else {
-            base.copy_raw(index, &mut zip).map_err(read_failed)?;
+            base.copy_raw(index, &mut zip).map_err(copy_failed)?;
             written.push((name, Written::Copied));
             continue;
         }
         written.push((name, Written::Generated));
     }
     if !sheets.is_empty() || !strings_left.is_empty() {
-        return Err(read_failed("a part is missing from the saved file"));
+        return Err(base_unusable(saved)(&"a part is missing from it"));
     }
     Ok((zip.finish().map_err(rejected)?, written))
 }

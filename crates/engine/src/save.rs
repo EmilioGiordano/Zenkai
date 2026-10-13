@@ -19,6 +19,7 @@ use crate::save_patch::{PatchPlan, Patched, patch_plan, write_patch};
 use crate::save_sheet::{SheetWriter, prepare};
 use crate::saved::{
     Contents, Metadata, SavedFile, SavedSlot, Stamp, Strings, selected_sheet, sheet_prints,
+    style_counts,
 };
 use crate::sheet_settings::{Carried, SheetSettings};
 
@@ -143,6 +144,7 @@ fn full_contents(data: ModelData<'_>, book: u64, sheets: Vec<SheetPrint>) -> Con
     Contents {
         worksheets: (0..sheets.len()).map(full_part).collect(),
         strings: Strings::Aligned(data.book.shared_strings.len()),
+        styles: style_counts(data.book),
         book,
         sheets,
         selected: selected_sheet(data.book),

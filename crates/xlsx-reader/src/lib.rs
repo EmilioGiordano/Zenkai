@@ -21,9 +21,9 @@ use std::path::Path;
 
 use ironcalc::base::types::Workbook;
 
-pub use base::{BasePackage, CalcChain};
+pub use base::{BaseFacts, BasePackage, CalcChain};
 pub use diff::workbook_differences;
-pub use layout::{PackageLayout, SharedStrings, StyleCounts};
+pub use layout::{PackageLayout, PartNames, SharedStrings, StyleCounts};
 pub use limits::CellBudget;
 pub use shared_strings::SHARED_STRINGS_PART;
 pub use verify::{Written, check_written};
@@ -197,6 +197,7 @@ fn read_from<R: Read + Seek>(
             workbook.shared_strings.len(),
         )?,
         styles: layout::style_counts(&mut archive, meter, &budgets)?,
+        part_names: layout::part_names_of(&layout::names_in_order(&mut archive)?),
     };
     let names = Names {
         sheets: &package.sheet_names,
