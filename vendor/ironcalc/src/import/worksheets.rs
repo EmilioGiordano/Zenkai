@@ -6,6 +6,7 @@ use ironcalc_base::expressions::parser::{
 use std::{collections::HashMap, io::Read, num::ParseIntError};
 
 use ironcalc_base::{
+    cell_store::CellStore,
     expressions::{
         parser::{stringify::to_rc_format, DefinedNameS},
         token::{get_error_by_english_name, Error},
@@ -13,8 +14,8 @@ use ironcalc_base::{
         utils::{column_to_number, parse_reference_a1},
     },
     types::{
-        ArrayKind, Cell, Col, Color, Comment, DefinedName, Dxf, FormulaValue, Row, SheetData,
-        SheetState, SpillValue, Table, Theme, Worksheet, WorksheetView,
+        ArrayKind, Cell, Col, Color, Comment, DefinedName, Dxf, FormulaValue, Row, SheetState,
+        SpillValue, Table, Theme, Worksheet, WorksheetView,
     },
 };
 use roxmltree::Node;
@@ -786,7 +787,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
 
     // holds the row heights
     let mut rows = Vec::new();
-    let mut sheet_data = SheetData::new();
+    let mut sheet_data = CellStore::new();
     let sheet_data_nodes = ws
         .children()
         .filter(|n| n.has_tag_name("sheetData"))
@@ -848,7 +849,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
         // Unused attributes:
         // * thickBot, thickTop, ph, collapsed, outlineLevel
 
-        let mut data_row = HashMap::new();
+        let mut data_row = Vec::new();
 
         // 18.3.1.4 c (Cell)
         // Child Elements:
@@ -1147,10 +1148,10 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
                 anchor_cell,
                 array_kind,
             );
-            data_row.insert(column_index, cell);
+            data_row.push((column_index, cell));
         }
         if let Some(row_index) = row_index {
-            sheet_data.insert(row_index, data_row);
+            sheet_data.insert_row(row_index, data_row);
         } else {
             return Err(XlsxError::Xml(
                 "Row without a row index (r attribute)".to_string(),

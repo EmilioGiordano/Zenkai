@@ -43,10 +43,13 @@ impl PendingRecalculation {
             *self = PendingRecalculation::Workbook;
             return;
         };
-        if let (PendingRecalculation::Cells(cells), Some(row_cells)) =
-            (&mut *self, worksheet.sheet_data.get(&row))
-        {
-            cells.extend(row_cells.keys().map(|column| (sheet, row, *column)));
+        if let PendingRecalculation::Cells(cells) = self {
+            cells.extend(
+                worksheet
+                    .sheet_data
+                    .row_columns(row)
+                    .map(|column| (sheet, row, column)),
+            );
         }
     }
 

@@ -382,9 +382,8 @@ impl<'a> Model<'a> {
         descending: bool,
     ) -> Result<Vec<i32>, String> {
         let worksheet = self.workbook.worksheet(sheet)?;
-        if let Some(row_data) = worksheet.sheet_data.get(&row) {
-            let mut columns: Vec<i32> = row_data.keys().copied().collect();
-            columns.sort_unstable();
+        if worksheet.sheet_data.has_row(row) {
+            let mut columns: Vec<i32> = worksheet.sheet_data.row_columns_sorted(row);
             if descending {
                 columns.reverse();
             }
@@ -528,7 +527,7 @@ impl<'a> Model<'a> {
         }
         self.reset_dynamic_array_spills(sheet)?;
         let worksheet = self.workbook.worksheet(sheet)?;
-        let all_rows: Vec<i32> = worksheet.sheet_data.keys().copied().collect();
+        let all_rows: Vec<i32> = worksheet.sheet_data.rows().collect();
         for row in all_rows {
             let sorted_columns = self.get_columns_for_row(sheet, row, true)?;
             for col in sorted_columns {
@@ -616,7 +615,7 @@ impl<'a> Model<'a> {
 
         // Move cells
         let worksheet = &self.workbook.worksheet(sheet)?;
-        let mut all_rows: Vec<i32> = worksheet.sheet_data.keys().copied().collect();
+        let mut all_rows: Vec<i32> = worksheet.sheet_data.rows().collect();
         // We do not need to do that, but it is safer to eliminate sources of randomness in the algorithm
         all_rows.sort_unstable();
 
@@ -712,7 +711,7 @@ impl<'a> Model<'a> {
             worksheet
                 .sheet_data
                 .iter()
-                .flat_map(|(r, row_data)| row_data.keys().map(move |c| (*r, *c)))
+                .map(|(r, c, _)| (r, c))
                 .collect()
         };
         for (r, c) in cell_coords {
@@ -742,7 +741,7 @@ impl<'a> Model<'a> {
             worksheet
                 .sheet_data
                 .iter()
-                .flat_map(|(r, row_data)| row_data.keys().map(move |c| (*r, *c)))
+                .map(|(r, c, _)| (r, c))
                 .collect()
         };
         for (r, c) in cell_coords {
@@ -767,7 +766,7 @@ impl<'a> Model<'a> {
             worksheet
                 .sheet_data
                 .iter()
-                .flat_map(|(r, row_data)| row_data.keys().map(move |c| (*r, *c)))
+                .map(|(r, c, _)| (r, c))
                 .collect()
         };
         for (r, c) in cell_coords {
@@ -799,7 +798,7 @@ impl<'a> Model<'a> {
             worksheet
                 .sheet_data
                 .iter()
-                .flat_map(|(r, row_data)| row_data.keys().map(move |c| (*r, *c)))
+                .map(|(r, c, _)| (r, c))
                 .collect()
         };
         for (r, c) in cell_coords {
@@ -844,7 +843,7 @@ impl<'a> Model<'a> {
         self.reset_dynamic_array_spills(sheet)?;
         // Move cells
         let worksheet = &self.workbook.worksheet(sheet)?;
-        let mut all_rows: Vec<i32> = worksheet.sheet_data.keys().copied().collect();
+        let mut all_rows: Vec<i32> = worksheet.sheet_data.rows().collect();
         all_rows.sort_unstable();
         all_rows.reverse();
         for r in all_rows {
@@ -911,7 +910,7 @@ impl<'a> Model<'a> {
         self.reset_dynamic_array_spills(sheet)?;
         // Move cells
         let worksheet = &self.workbook.worksheet(sheet)?;
-        let mut all_rows: Vec<i32> = worksheet.sheet_data.keys().copied().collect();
+        let mut all_rows: Vec<i32> = worksheet.sheet_data.rows().collect();
         all_rows.sort_unstable();
 
         for r in all_rows {
@@ -925,7 +924,7 @@ impl<'a> Model<'a> {
                     }
                 } else {
                     // remove all cells in row
-                    self.workbook.worksheet_mut(sheet)?.sheet_data.remove(&r);
+                    self.workbook.worksheet_mut(sheet)?.sheet_data.remove_row(r);
                 }
             }
         }
@@ -1237,7 +1236,7 @@ impl<'a> Model<'a> {
             worksheet
                 .sheet_data
                 .iter()
-                .flat_map(|(r, row_data)| row_data.keys().map(move |c| (*r, *c)))
+                .map(|(r, c, _)| (r, c))
                 .collect()
         };
 
@@ -1316,7 +1315,7 @@ impl<'a> Model<'a> {
             worksheet
                 .sheet_data
                 .iter()
-                .flat_map(|(r, row_data)| row_data.keys().map(move |c| (*r, *c)))
+                .map(|(r, c, _)| (r, c))
                 .collect()
         };
 

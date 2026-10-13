@@ -30,6 +30,7 @@
 pub mod builtin_styles;
 pub mod calc_result;
 pub mod cell;
+pub mod cell_store;
 pub mod cf_types;
 pub mod colors;
 pub mod expressions;

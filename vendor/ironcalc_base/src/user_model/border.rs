@@ -192,9 +192,8 @@ impl<'a> UserModel<'a> {
                 .workbook
                 .worksheet(sheet)?
                 .sheet_data
-                .get(&row)
-                .map(|row_data| row_data.keys().copied().collect())
-                .unwrap_or_default();
+                .row_columns(row)
+                .collect();
             for column in columns {
                 self.update_single_cell_border(
                     border_area,
@@ -232,8 +231,7 @@ impl<'a> UserModel<'a> {
             .workbook
             .worksheet(sheet)?
             .sheet_data
-            .keys()
-            .copied()
+            .rows()
             .collect();
         let styled_rows = &self.model.workbook.worksheet(sheet)?.rows.clone();
         for column in first_column..=last_column {
@@ -303,15 +301,20 @@ impl<'a> UserModel<'a> {
             }
             // We need to go through each non empty cell in the column
             for &row in &data_rows {
-                if let Some(data_row) = self.model.workbook.worksheet(sheet)?.sheet_data.get(&row) {
-                    if data_row.get(&column).is_some() {
-                        self.update_single_cell_border(
-                            border_area,
-                            (sheet, row, column),
-                            (1, first_column, LAST_ROW, last_column),
-                            &mut diff_list,
-                        )?;
-                    }
+                if self
+                    .model
+                    .workbook
+                    .worksheet(sheet)?
+                    .sheet_data
+                    .get(row, column)
+                    .is_some()
+                {
+                    self.update_single_cell_border(
+                        border_area,
+                        (sheet, row, column),
+                        (1, first_column, LAST_ROW, last_column),
+                        &mut diff_list,
+                    )?;
                 }
             }
 

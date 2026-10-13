@@ -131,23 +131,21 @@ impl Model<'_> {
         let mut index = DependencyIndex::new();
         let mut spills = Vec::new();
         for (sheet, worksheet) in (0u32..).zip(&self.workbook.worksheets) {
-            for (row, cells) in &worksheet.sheet_data {
-                for (column, cell) in cells {
-                    let key = (sheet, *row, *column);
-                    if let Some(node) = self.formula_node(key) {
-                        index.add(key, node);
-                    }
-                    if let Cell::ArrayFormula {
-                        kind: ArrayKind::Dynamic,
-                        r,
-                        ..
-                    } = cell
-                    {
-                        spills.push(Spill {
-                            anchor: key,
-                            size: *r,
-                        });
-                    }
+            for (row, column, cell) in worksheet.sheet_data.iter() {
+                let key = (sheet, row, column);
+                if let Some(node) = self.formula_node(key) {
+                    index.add(key, node);
+                }
+                if let Cell::ArrayFormula {
+                    kind: ArrayKind::Dynamic,
+                    r,
+                    ..
+                } = cell
+                {
+                    spills.push(Spill {
+                        anchor: key,
+                        size: *r,
+                    });
                 }
             }
         }

@@ -22,7 +22,6 @@
 //! Formula in F6 would then be 'A6+C6'
 use std::collections::HashMap;
 
-use itertools::Itertools;
 
 use ironcalc_base::{
     expressions::{
@@ -107,9 +106,9 @@ pub(crate) fn get_worksheet_xml(
         row_style_dict.insert(row.r, row.clone());
     }
 
-    for (row_index, row_data) in worksheet.sheet_data.iter().sorted_by_key(|x| x.0) {
+    for row_index in &worksheet.sheet_data.rows_sorted() {
         let mut row_data_str: Vec<String> = vec![];
-        for (column_index, cell) in row_data.iter().sorted_by_key(|x| x.0) {
+        for (column_index, cell) in &worksheet.sheet_data.row_cells_sorted(*row_index) {
             let column_name = number_to_column(*column_index).unwrap();
             let cell_name = format!("{column_name}{row_index}");
             match cell {
