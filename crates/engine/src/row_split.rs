@@ -9,8 +9,9 @@ use ironcalc::base::types::{Cell, SheetData};
 use crate::error::EngineError;
 
 const MAX_THREADS: usize = 8;
-// Below this many rows per thread a spawn costs more than the work it takes over.
-pub(crate) const MIN_ROWS_PER_THREAD: usize = 32 * 1024;
+// A share of this many rows is about 2 ms of hashing or copying, against tens of microseconds
+// to spawn the thread that takes it.
+pub(crate) const MIN_ROWS_PER_THREAD: usize = 4 * 1024;
 
 pub(crate) type Rows<'s> = [(&'s i32, &'s HashMap<i32, Cell>)];
 
