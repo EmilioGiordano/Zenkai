@@ -823,9 +823,7 @@ impl<'a> UserModel<'a> {
                 return Err("Every area must lie inside the bounds".to_string());
             }
             if !self.model.arrays_inside(area, bounds)? {
-                return Err(
-                    "Cannot clear the range because it contains array formulas".to_string()
-                );
+                return Err("Cannot clear the range because it contains array formulas".to_string());
             }
         }
         if areas.is_empty() {
