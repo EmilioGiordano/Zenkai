@@ -80,6 +80,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   box; an array formula may span areas as long as it lies inside the given bounds
   (`src/user_model/common.rs`, `Model::arrays_inside` and `Model::clear_area_contents` in
   `src/model.rs`). Tests: `src/test/user_model/test_clear_areas.rs`.
+- `Worksheet::sheet_data` is a `CellStore` (`src/cell_store.rs`) instead of nested
+  `HashMap`s, so the cell layout can change without touching the callers; the importer
+  and exporter of `ironcalc` use it too. No behaviour change, same bitcode encoding.
+  Tests in the module.
 
 Zenkai-only, not for upstream:
 
