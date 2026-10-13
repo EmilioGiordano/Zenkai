@@ -1,5 +1,4 @@
 #![allow(clippy::unwrap_used)]
-#![allow(clippy::panic)]
 
 //! # A note on shared formulas
 //! Although both Excel and IronCalc uses shared formulas they are used in a slightly different way that cannot be mapped 1-1
@@ -21,6 +20,7 @@
 //! ```
 //! Formula in F6 would then be 'A6+C6'
 use std::collections::HashMap;
+use std::io::{self, Write};
 
 use ironcalc_base::{
     expressions::{
@@ -65,13 +65,15 @@ fn get_formula_attribute(
     escape_xml(formula).to_string()
 }
 
-pub(crate) fn get_worksheet_xml(
+/// Writes the worksheet part row by row, so a large sheet is never held whole in memory
+/// as text.
+pub fn write_worksheet_xml<W: Write>(
+    writer: &mut W,
     worksheet: &Worksheet,
     parsed_formulas: &[(Node, StaticResult)],
     dimension: &str,
     is_sheet_selected: bool,
-) -> String {
-    let mut sheet_data_str: Vec<String> = vec![];
+) -> io::Result<()> {
     let mut cols_str: Vec<String> = vec![];
     let mut merged_cells_str: Vec<String> = vec![];
 
@@ -104,345 +106,6 @@ pub(crate) fn get_worksheet_xml(
         //   },
         row_style_dict.insert(row.r, row.clone());
     }
-
-    for row_index in &worksheet.sheet_data.rows_sorted() {
-        let mut row_data_str: Vec<String> = vec![];
-        for (column_index, cell) in &worksheet.sheet_data.row_cells_sorted(*row_index) {
-            let column_name = number_to_column(*column_index).unwrap();
-            let cell_name = format!("{column_name}{row_index}");
-            match cell {
-                Cell::EmptyCell { s } => {
-                    // they only hold the style
-                    let style = get_cell_style_attribute(*s);
-                    row_data_str.push(format!("<c r=\"{cell_name}\"{style}/>"));
-                }
-                Cell::BooleanCell { v, s } => {
-                    // <c r="A8" t="b" s="1">
-                    //     <v>1</v>
-                    // </c>
-                    let b = i32::from(*v);
-                    let style = get_cell_style_attribute(*s);
-                    row_data_str.push(format!(
-                        "<c r=\"{cell_name}\" t=\"b\"{style}><v>{b}</v></c>"
-                    ));
-                }
-                Cell::NumberCell { v, s } => {
-                    // Normally the type number is left out. Example:
-                    // <c r="C6" s="1">
-                    //     <v>3</v>
-                    // </c>
-                    let style = get_cell_style_attribute(*s);
-                    row_data_str.push(format!("<c r=\"{cell_name}\"{style}><v>{v}</v></c>"));
-                }
-                Cell::ErrorCell { ei, s } => {
-                    let style = get_cell_style_attribute(*s);
-                    row_data_str.push(format!(
-                        "<c r=\"{cell_name}\" t=\"e\"{style}><v>{ei}</v></c>"
-                    ));
-                }
-                Cell::SharedString { si, s } => {
-                    // Example:
-                    // <c r="A1" s="1" t="s">
-                    //    <v>5</v>
-                    // </c>
-                    // Cell on A1 contains a string (t="s") of style="1". The string is the 6th in the list of shared strings
-                    let style = get_cell_style_attribute(*s);
-                    row_data_str.push(format!(
-                        "<c r=\"{cell_name}\" t=\"s\"{style}><v>{si}</v></c>"
-                    ));
-                }
-                Cell::CellFormula {
-                    v: FormulaValue::Unevaluated,
-                    ..
-                } => {
-                    // TODO: We should NOT panic here.
-                    // Is there like an "import error" we can set in Excel?
-                    panic!("Model needs to be evaluated before saving!");
-                }
-                Cell::CellFormula {
-                    f,
-                    v: FormulaValue::Boolean(v),
-                    s,
-                } => {
-                    // <c r="A4" t="b" s="3">
-                    //   <f>ISTEXT(A5)</f>
-                    //   <v>1</v>
-                    // </c>
-                    let style = get_cell_style_attribute(*s);
-                    let formula = get_formula_attribute(
-                        worksheet.get_name(),
-                        *row_index,
-                        *column_index,
-                        &parsed_formulas[*f as usize].0,
-                    );
-                    let b = i32::from(*v);
-                    row_data_str.push(format!(
-                        "<c r=\"{cell_name}\" t=\"b\"{style}><f>{formula}</f><v>{b}</v></c>"
-                    ));
-                }
-                Cell::CellFormula {
-                    f,
-                    v: FormulaValue::Number(v),
-                    s,
-                } => {
-                    // Note again type is skipped
-                    // <c r="C4" s="3">
-                    //   <f>A5+C3</f>
-                    //   <v>123</v>
-                    // </c>
-                    let formula = get_formula_attribute(
-                        worksheet.get_name(),
-                        *row_index,
-                        *column_index,
-                        &parsed_formulas[*f as usize].0,
-                    );
-                    let style = get_cell_style_attribute(*s);
-                    row_data_str.push(format!(
-                        "<c r=\"{cell_name}\"{style}><f>{formula}</f><v>{v}</v></c>"
-                    ));
-                }
-                Cell::CellFormula {
-                    f,
-                    v: FormulaValue::Text(v),
-                    s,
-                } => {
-                    // <c r="C6" t="str" s="5">
-                    //   <f>CONCATENATE(A1, A2)</f>
-                    //   <v>Hello world!</v>
-                    // </c>
-                    let formula = get_formula_attribute(
-                        worksheet.get_name(),
-                        *row_index,
-                        *column_index,
-                        &parsed_formulas[*f as usize].0,
-                    );
-                    let style = get_cell_style_attribute(*s);
-                    let escaped_v = escape_xml(v);
-                    row_data_str.push(format!(
-                        "<c r=\"{cell_name}\" t=\"str\"{style}><f>{formula}</f><v>{escaped_v}</v></c>"
-                    ));
-                }
-                Cell::CellFormula {
-                    f,
-                    v: FormulaValue::Error(error),
-                    s,
-                } => {
-                    // <c r="C6" t="e" s="4">
-                    //   <f>A1/A3<f/>
-                    //   <v>#DIV/0!</v>
-                    // </c>
-                    let formula = get_formula_attribute(
-                        worksheet.get_name(),
-                        *row_index,
-                        *column_index,
-                        &parsed_formulas[*f as usize].0,
-                    );
-                    let style = get_cell_style_attribute(*s);
-                    let ei = &error.ei;
-                    row_data_str.push(format!(
-                        "<c r=\"{cell_name}\" t=\"e\"{style}><f>{formula}</f><v>{ei}</v></c>"
-                    ));
-                }
-                Cell::SpillCell(spill) => {
-                    let style = get_cell_style_attribute(spill.s);
-                    match &spill.v {
-                        SpillValue::Boolean(v) => {
-                            let b = i32::from(*v);
-                            row_data_str.push(format!(
-                                "<c r=\"{cell_name}\" t=\"b\"{style}><v>{b}</v></c>"
-                            ));
-                        }
-                        SpillValue::Number(v) => {
-                            row_data_str
-                                .push(format!("<c r=\"{cell_name}\"{style}><v>{v}</v></c>"));
-                        }
-                        SpillValue::Error(ei) => {
-                            row_data_str.push(format!(
-                                "<c r=\"{cell_name}\" t=\"e\"{style}><v>{ei}</v></c>"
-                            ));
-                        }
-                        SpillValue::Text(v) => {
-                            // inline string
-                            // <c r="C6" t="str" s="5">
-                            //   <v>Hello world!</v>
-                            // </c>
-                            let escaped_v = escape_xml(v);
-                            row_data_str.push(format!(
-                                "<c r=\"{cell_name}\" t=\"str\"{style}><v>{escaped_v}</v></c>"
-                            ));
-                        }
-                    }
-                }
-                Cell::ArrayFormula(array) => {
-                    let ArrayFormulaCell { f, s, r, kind, v } = &**array;
-                    match v {
-                        FormulaValue::Unevaluated => {
-                            panic!("Model needs to be evaluated before saving!");
-                        }
-                        // The difference between dynamic and array formulas is that dynamic formulas have cm="1"
-                        FormulaValue::Boolean(v) => {
-                            // Dynamic: <c r="D1" s="3" t="b" cm="1">
-                            //            <f t="array" ref="D1:D5">A1:A5</f>
-                            //            <v>TRUE</v>
-                            //          </c>
-                            // CSE:     <c r="D1" s="3" t="b">
-                            //            <f t="array" ref="D1:D5">A1:A5</f>
-                            //            <v>TRUE</v>
-                            //          </c>
-                            let node = match parsed_formulas.get(*f as usize) {
-                                Some(node) => node,
-                                None => continue,
-                            };
-                            let formula = get_formula_attribute(
-                                worksheet.get_name(),
-                                *row_index,
-                                *column_index,
-                                &node.0,
-                            );
-                            let style = get_cell_style_attribute(*s);
-                            let range = match get_range_str(*row_index, *column_index, r.0, r.1) {
-                                Some(range) => range,
-                                None => continue,
-                            };
-                            let b = i32::from(*v);
-                            let cm = if matches!(kind, ArrayKind::Dynamic) {
-                                r#" cm="1""#
-                            } else {
-                                ""
-                            };
-                            row_data_str.push(format!(
-                        r#"<c r="{cell_name}"{style} t="b"{cm}><f t="array" ref="{range}">{formula}</f><v>{b}</v></c>"#
-                    ));
-                        }
-                        FormulaValue::Number(v) => {
-                            // Dynamic: <c r="D1" s="3" cm="1">
-                            //            <f t="array" ref="D1:D5">A1:A5</f>
-                            //            <v>123</v>
-                            //          </c>
-                            // CSE:     <c r="D1" s="3">
-                            //            <f t="array" ref="D1:D5">A1:A5</f>
-                            //            <v>123</v>
-                            //          </c>
-                            let node = match parsed_formulas.get(*f as usize) {
-                                Some(node) => node,
-                                None => continue,
-                            };
-                            let formula = get_formula_attribute(
-                                worksheet.get_name(),
-                                *row_index,
-                                *column_index,
-                                &node.0,
-                            );
-                            let style = get_cell_style_attribute(*s);
-                            let range = match get_range_str(*row_index, *column_index, r.0, r.1) {
-                                Some(range) => range,
-                                None => continue,
-                            };
-                            let cm = if matches!(kind, ArrayKind::Dynamic) {
-                                r#" cm="1""#
-                            } else {
-                                ""
-                            };
-                            row_data_str.push(format!(
-                        r#"<c r="{cell_name}"{style}{cm}><f t="array" ref="{range}">{formula}</f><v>{v}</v></c>"#
-                    ));
-                        }
-                        FormulaValue::Text(v) => {
-                            // Dynamic: <c r="D1" s="3" t="str" cm="1">
-                            //            <f t="array" ref="D1:D5">A1:A5</f>
-                            //            <v>Hello world!</v>
-                            //          </c>
-                            // CSE:     <c r="D1" s="3" t="str">
-                            //            <f t="array" ref="D1:D5">A1:A5</f>
-                            //            <v>Hello world!</v>
-                            //          </c>
-                            let node = match parsed_formulas.get(*f as usize) {
-                                Some(node) => node,
-                                None => continue,
-                            };
-                            let formula = get_formula_attribute(
-                                worksheet.get_name(),
-                                *row_index,
-                                *column_index,
-                                &node.0,
-                            );
-                            let style = get_cell_style_attribute(*s);
-                            let range = match get_range_str(*row_index, *column_index, r.0, r.1) {
-                                Some(range) => range,
-                                None => continue,
-                            };
-                            let escaped_v = escape_xml(v);
-                            let cm = if matches!(kind, ArrayKind::Dynamic) {
-                                r#" cm="1""#
-                            } else {
-                                ""
-                            };
-                            row_data_str.push(format!(
-                        r#"<c r="{cell_name}"{style} t="str"{cm}><f t="array" ref="{range}">{formula}</f><v>{escaped_v}</v></c>"#
-                    ));
-                        }
-                        FormulaValue::Error(error) => {
-                            // Dynamic: <c r="D1" s="3" t="e" cm="1">
-                            //            <f t="array" ref="D1:D5">A1:A5</f>
-                            //            <v>#N/A!</v>
-                            //          </c>
-                            // CSE:     <c r="D1" s="3" t="e">
-                            //            <f t="array" ref="D1:D5">A1:A5</f>
-                            //            <v>#N/A!</v>
-                            //          </c>
-                            let node = match parsed_formulas.get(*f as usize) {
-                                Some(node) => node,
-                                None => continue,
-                            };
-                            let formula = get_formula_attribute(
-                                worksheet.get_name(),
-                                *row_index,
-                                *column_index,
-                                &node.0,
-                            );
-                            let style = get_cell_style_attribute(*s);
-                            let range = match get_range_str(*row_index, *column_index, r.0, r.1) {
-                                Some(range) => range,
-                                None => continue,
-                            };
-                            let ei = &error.ei;
-                            let cm = if matches!(kind, ArrayKind::Dynamic) {
-                                r#" cm="1""#
-                            } else {
-                                ""
-                            };
-                            row_data_str.push(format!(
-                        r#"<c r="{cell_name}"{style} t="e"{cm}><f t="array" ref="{range}">{formula}</f><v>{ei}</v></c>"#
-                    ));
-                        }
-                    }
-                }
-            }
-        }
-        let row_style_str = match row_style_dict.get(row_index) {
-            Some(row_style) => {
-                let hidden_str = if row_style.hidden {
-                    r#" hidden="1""#
-                } else {
-                    ""
-                };
-                format!(
-                    r#" s="{}" ht="{}" customHeight="{}" customFormat="{}"{}"#,
-                    row_style.s,
-                    row_style.height,
-                    i32::from(row_style.custom_height),
-                    i32::from(row_style.custom_format),
-                    hidden_str,
-                )
-            }
-            None => "".to_string(),
-        };
-        sheet_data_str.push(format!(
-            "<row r=\"{row_index}\"{row_style_str}>{}</row>",
-            row_data_str.join("")
-        ))
-    }
-    let sheet_data = sheet_data_str.join("");
 
     for merge_cell_ref in &worksheet.merge_cells {
         merged_cells_str.push(format!("<mergeCell ref=\"{merge_cell_ref}\"/>"))
@@ -541,7 +204,8 @@ pub(crate) fn get_worksheet_xml(
     let (cf_sections, cf_ext_lst) =
         get_conditional_formatting_xml(&worksheet.conditional_formatting);
 
-    format!(
+    write!(
+        writer,
         "{XML_DECLARATION}\
 <worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">\
   <dimension ref=\"{dimension}\"/>\
@@ -551,12 +215,307 @@ pub(crate) fn get_worksheet_xml(
     </sheetView>\
   </sheetViews>\
   {cols}\
-  <sheetData>\
-  {sheet_data}\
-  </sheetData>\
+  <sheetData>"
+    )?;
+
+    let sheet_name = worksheet.get_name();
+    for row_index in &worksheet.sheet_data.rows_sorted() {
+        let row_style_str = match row_style_dict.get(row_index) {
+            Some(row_style) => {
+                let hidden_str = if row_style.hidden {
+                    r#" hidden="1""#
+                } else {
+                    ""
+                };
+                format!(
+                    r#" s="{}" ht="{}" customHeight="{}" customFormat="{}"{}"#,
+                    row_style.s,
+                    row_style.height,
+                    i32::from(row_style.custom_height),
+                    i32::from(row_style.custom_format),
+                    hidden_str,
+                )
+            }
+            None => "".to_string(),
+        };
+        write!(writer, "<row r=\"{row_index}\"{row_style_str}>")?;
+        for (column_index, cell) in worksheet.sheet_data.row_cells_sorted(*row_index) {
+            write_cell(
+                writer,
+                &sheet_name,
+                *row_index,
+                column_index,
+                cell,
+                parsed_formulas,
+            )?;
+        }
+        write!(writer, "</row>")?;
+    }
+
+    write!(
+        writer,
+        "</sheetData>\
   {merge_cells_section}\
   {cf_sections}\
   {cf_ext_lst}\
 </worksheet>"
     )
+}
+
+fn write_cell<W: Write>(
+    writer: &mut W,
+    sheet_name: &str,
+    row_index: i32,
+    column_index: i32,
+    cell: &Cell,
+    parsed_formulas: &[(Node, StaticResult)],
+) -> io::Result<()> {
+    let column_name = number_to_column(column_index).unwrap();
+    let cell_name = format!("{column_name}{row_index}");
+    let formula_of = |f: &i32| {
+        get_formula_attribute(
+            sheet_name.to_string(),
+            row_index,
+            column_index,
+            &parsed_formulas[*f as usize].0,
+        )
+    };
+    // The parts of an array formula: its text, style, spill range and dynamic marker,
+    // or None for one this writer skips.
+    let array_of = |f: &i32, s: &i32, r: &(i32, i32), kind: &ArrayKind| {
+        let node = parsed_formulas.get(*f as usize)?;
+        let formula =
+            get_formula_attribute(sheet_name.to_string(), row_index, column_index, &node.0);
+        let style = get_cell_style_attribute(*s);
+        let range = get_range_str(row_index, column_index, r.0, r.1)?;
+        let cm = if matches!(kind, ArrayKind::Dynamic) {
+            r#" cm="1""#
+        } else {
+            ""
+        };
+        Some((formula, style, range, cm))
+    };
+    match cell {
+        Cell::EmptyCell { s } => {
+            // they only hold the style
+            let style = get_cell_style_attribute(*s);
+            write!(writer, "<c r=\"{cell_name}\"{style}/>")
+        }
+        Cell::BooleanCell { v, s } => {
+            // <c r="A8" t="b" s="1">
+            //     <v>1</v>
+            // </c>
+            let b = i32::from(*v);
+            let style = get_cell_style_attribute(*s);
+            write!(writer, "<c r=\"{cell_name}\" t=\"b\"{style}><v>{b}</v></c>")
+        }
+        Cell::NumberCell { v, s } => {
+            // Normally the type number is left out. Example:
+            // <c r="C6" s="1">
+            //     <v>3</v>
+            // </c>
+            let style = get_cell_style_attribute(*s);
+            write!(writer, "<c r=\"{cell_name}\"{style}><v>{v}</v></c>")
+        }
+        Cell::ErrorCell { ei, s } => {
+            let style = get_cell_style_attribute(*s);
+            write!(
+                writer,
+                "<c r=\"{cell_name}\" t=\"e\"{style}><v>{ei}</v></c>"
+            )
+        }
+        Cell::SharedString { si, s } => {
+            // Example:
+            // <c r="A1" s="1" t="s">
+            //    <v>5</v>
+            // </c>
+            // Cell on A1 contains a string (t="s") of style="1". The string is the 6th in the list of shared strings
+            let style = get_cell_style_attribute(*s);
+            write!(
+                writer,
+                "<c r=\"{cell_name}\" t=\"s\"{style}><v>{si}</v></c>"
+            )
+        }
+        Cell::CellFormula {
+            v: FormulaValue::Unevaluated,
+            ..
+        } => Err(io::Error::other(
+            "Model needs to be evaluated before saving!",
+        )),
+        Cell::CellFormula {
+            f,
+            v: FormulaValue::Boolean(v),
+            s,
+        } => {
+            // <c r="A4" t="b" s="3">
+            //   <f>ISTEXT(A5)</f>
+            //   <v>1</v>
+            // </c>
+            let style = get_cell_style_attribute(*s);
+            let formula = formula_of(f);
+            let b = i32::from(*v);
+            write!(
+                writer,
+                "<c r=\"{cell_name}\" t=\"b\"{style}><f>{formula}</f><v>{b}</v></c>"
+            )
+        }
+        Cell::CellFormula {
+            f,
+            v: FormulaValue::Number(v),
+            s,
+        } => {
+            // Note again type is skipped
+            // <c r="C4" s="3">
+            //   <f>A5+C3</f>
+            //   <v>123</v>
+            // </c>
+            let formula = formula_of(f);
+            let style = get_cell_style_attribute(*s);
+            write!(
+                writer,
+                "<c r=\"{cell_name}\"{style}><f>{formula}</f><v>{v}</v></c>"
+            )
+        }
+        Cell::CellFormula {
+            f,
+            v: FormulaValue::Text(v),
+            s,
+        } => {
+            // <c r="C6" t="str" s="5">
+            //   <f>CONCATENATE(A1, A2)</f>
+            //   <v>Hello world!</v>
+            // </c>
+            let formula = formula_of(f);
+            let style = get_cell_style_attribute(*s);
+            let escaped_v = escape_xml(v);
+            write!(
+                writer,
+                "<c r=\"{cell_name}\" t=\"str\"{style}><f>{formula}</f><v>{escaped_v}</v></c>"
+            )
+        }
+        Cell::CellFormula {
+            f,
+            v: FormulaValue::Error(error),
+            s,
+        } => {
+            let ei = &error.ei;
+            // <c r="C6" t="e" s="4">
+            //   <f>A1/A3<f/>
+            //   <v>#DIV/0!</v>
+            // </c>
+            let formula = formula_of(f);
+            let style = get_cell_style_attribute(*s);
+            write!(
+                writer,
+                "<c r=\"{cell_name}\" t=\"e\"{style}><f>{formula}</f><v>{ei}</v></c>"
+            )
+        }
+        Cell::SpillCell(spill) => {
+            let style = get_cell_style_attribute(spill.s);
+            match &spill.v {
+                SpillValue::Boolean(v) => {
+                    let b = i32::from(*v);
+                    write!(writer, "<c r=\"{cell_name}\" t=\"b\"{style}><v>{b}</v></c>")
+                }
+                SpillValue::Number(v) => {
+                    write!(writer, "<c r=\"{cell_name}\"{style}><v>{v}</v></c>")
+                }
+                SpillValue::Error(ei) => write!(
+                    writer,
+                    "<c r=\"{cell_name}\" t=\"e\"{style}><v>{ei}</v></c>"
+                ),
+                SpillValue::Text(v) => {
+                    // inline string
+                    // <c r="C6" t="str" s="5">
+                    //   <v>Hello world!</v>
+                    // </c>
+                    let escaped_v = escape_xml(v);
+                    write!(
+                        writer,
+                        "<c r=\"{cell_name}\" t=\"str\"{style}><v>{escaped_v}</v></c>"
+                    )
+                }
+            }
+        }
+        Cell::ArrayFormula(array) => {
+            let ArrayFormulaCell { f, s, r, kind, v } = &**array;
+            match v {
+                FormulaValue::Unevaluated => Err(io::Error::other(
+                    "Model needs to be evaluated before saving!",
+                )),
+                // The difference between dynamic and array formulas is that dynamic formulas have cm="1"
+                FormulaValue::Boolean(v) => {
+                    // Dynamic: <c r="D1" s="3" t="b" cm="1">
+                    //            <f t="array" ref="D1:D5">A1:A5</f>
+                    //            <v>TRUE</v>
+                    //          </c>
+                    // CSE:     <c r="D1" s="3" t="b">
+                    //            <f t="array" ref="D1:D5">A1:A5</f>
+                    //            <v>TRUE</v>
+                    //          </c>
+                    let Some((formula, style, range, cm)) = array_of(f, s, r, kind) else {
+                        return Ok(());
+                    };
+                    let b = i32::from(*v);
+                    write!(
+                        writer,
+                        r#"<c r="{cell_name}"{style} t="b"{cm}><f t="array" ref="{range}">{formula}</f><v>{b}</v></c>"#
+                    )
+                }
+                FormulaValue::Number(v) => {
+                    // Dynamic: <c r="D1" s="3" cm="1">
+                    //            <f t="array" ref="D1:D5">A1:A5</f>
+                    //            <v>123</v>
+                    //          </c>
+                    // CSE:     <c r="D1" s="3">
+                    //            <f t="array" ref="D1:D5">A1:A5</f>
+                    //            <v>123</v>
+                    //          </c>
+                    let Some((formula, style, range, cm)) = array_of(f, s, r, kind) else {
+                        return Ok(());
+                    };
+                    write!(
+                        writer,
+                        r#"<c r="{cell_name}"{style}{cm}><f t="array" ref="{range}">{formula}</f><v>{v}</v></c>"#
+                    )
+                }
+                FormulaValue::Text(v) => {
+                    // Dynamic: <c r="D1" s="3" t="str" cm="1">
+                    //            <f t="array" ref="D1:D5">A1:A5</f>
+                    //            <v>Hello world!</v>
+                    //          </c>
+                    // CSE:     <c r="D1" s="3" t="str">
+                    //            <f t="array" ref="D1:D5">A1:A5</f>
+                    //            <v>Hello world!</v>
+                    //          </c>
+                    let Some((formula, style, range, cm)) = array_of(f, s, r, kind) else {
+                        return Ok(());
+                    };
+                    let escaped_v = escape_xml(v);
+                    write!(
+                        writer,
+                        r#"<c r="{cell_name}"{style} t="str"{cm}><f t="array" ref="{range}">{formula}</f><v>{escaped_v}</v></c>"#
+                    )
+                }
+                FormulaValue::Error(error) => {
+                    // Dynamic: <c r="D1" s="3" t="e" cm="1">
+                    //            <f t="array" ref="D1:D5">A1:A5</f>
+                    //            <v>#N/A!</v>
+                    //          </c>
+                    // CSE:     <c r="D1" s="3" t="e">
+                    //            <f t="array" ref="D1:D5">A1:A5</f>
+                    //            <v>#N/A!</v>
+                    //          </c>
+                    let Some((formula, style, range, cm)) = array_of(f, s, r, kind) else {
+                        return Ok(());
+                    };
+                    let ei = &error.ei;
+                    write!(
+                        writer,
+                        r#"<c r="{cell_name}"{style} t="e"{cm}><f t="array" ref="{range}">{formula}</f><v>{ei}</v></c>"#
+                    )
+                }
+            }
+        }
+    }
 }

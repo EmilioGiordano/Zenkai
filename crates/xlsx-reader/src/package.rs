@@ -19,6 +19,14 @@ pub(crate) struct Package {
     pub(crate) sheet_names: Vec<String>,
     pub(crate) defined_names: Vec<DefinedNameS>,
     pub(crate) worksheets: Vec<WorksheetPart>,
+    pub(crate) shared_strings: Option<String>,
+}
+
+pub(crate) fn part_path(target: &str) -> String {
+    match target.strip_prefix('/') {
+        Some(absolute) => absolute.to_string(),
+        None => format!("xl/{target}"),
+    }
 }
 
 struct SheetEntry {
@@ -126,10 +134,7 @@ pub(crate) fn read_package<R: Read + Seek>(
         if !kind.ends_with("worksheet") {
             continue;
         }
-        let path = match target.strip_prefix('/') {
-            Some(absolute) => absolute.to_string(),
-            None => format!("xl/{target}"),
-        };
+        let path = part_path(target);
         if worksheets.iter().any(|w| w.path == path) {
             return Err(ReadError::Unsupported("two sheets share one part".into()));
         }
@@ -142,10 +147,15 @@ pub(crate) fn read_package<R: Read + Seek>(
     if sheets.iter().any(|s| s.name.contains('!')) {
         return Err(ReadError::Unsupported("a sheet name contains '!'".into()));
     }
+    let shared_strings = targets
+        .values()
+        .find(|(kind, _)| kind.ends_with("/sharedStrings"))
+        .map(|(_, target)| part_path(target));
     Ok(Package {
         sheet_names: sheets.into_iter().map(|s| s.name).collect(),
         defined_names,
         worksheets,
+        shared_strings,
     })
 }
 

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 use std::time::Instant;
 use zenkai_i18n::t;
 
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Engine, EngineError, Unsupported, Workbook, xlsx_bytes};
+use zenkai_engine::{Engine, EngineError, SaveSnapshot, SaveTarget, Unsupported, Workbook};
 use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
@@ -331,20 +331,29 @@ pub fn read_shared(shared: &RwLock<Workbook>) -> RwLockReadGuard<'_, Workbook> {
     shared.read().unwrap_or_else(PoisonError::into_inner)
 }
 
-// The read lock is held only while the bytes are made: writing and verifying them takes
-// far longer, and an edit waiting for the write lock blocks every reader meanwhile.
+// The read lock is held only while the snapshot is taken, which fingerprints every sheet and
+// copies the ones the save writes: writing and verifying it takes far longer, and an edit
+// waiting for the write lock blocks every reader meanwhile.
 pub fn write_snapshot(
     shared: &RwLock<Workbook>,
     job: FileJob,
-    write: impl FnOnce(&[u8]) -> Result<(), EngineError>,
+    target: &Path,
+    kind: SaveTarget,
+    write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
 ) -> Result<(), EngineError> {
     let started = Instant::now();
-    let bytes = {
-        let workbook = read_shared(shared);
-        xlsx_bytes(&workbook)
-    };
+    let snapshot = read_shared(shared).save_snapshot(target, kind);
     let locked_ms = started.elapsed().as_millis();
-    let written = bytes.and_then(|bytes| write(&bytes));
+    let written = match snapshot.and_then(&write) {
+        // The engine forgot the file it copies from, so the second snapshot writes it whole.
+        Err(error @ (EngineError::ChangedOnDisk(_) | EngineError::BaseUnusable { .. })) => {
+            tracing::warn!(?job, %error, "the file on disk changed, writing it whole");
+            read_shared(shared)
+                .save_snapshot(target, kind)
+                .and_then(&write)
+        }
+        written => written,
+    };
     let total_ms = started.elapsed().as_millis();
     match &written {
         Ok(()) => tracing::info!(?job, locked_ms, total_ms, "workbook written"),
@@ -495,24 +504,63 @@ mod tests {
     fn a_snapshot_is_written_without_the_lock() {
         let document = document();
         let shared = document.begin_read().unwrap();
-        let mut written = Vec::new();
-        write_snapshot(&shared, FileJob::Autosaving, |bytes| {
-            assert!(shared.try_write().is_ok(), "the read lock is still held");
-            written = bytes.to_vec();
-            Ok(())
-        })
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        write_snapshot(
+            &shared,
+            FileJob::Autosaving,
+            &target,
+            SaveTarget::Copy,
+            |snapshot| {
+                assert!(shared.try_write().is_ok(), "the read lock is still held");
+                zenkai_engine::save_xlsx(snapshot)
+            },
+        )
         .unwrap();
-        assert!(written.starts_with(b"PK"));
+        assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
     }
 
     #[test]
     fn a_failed_snapshot_write_is_reported() {
         let document = document();
         let shared = document.begin_read().unwrap();
-        let failed = write_snapshot(&shared, FileJob::Saving, |_| {
+        let target = Path::new("unused.xlsx");
+        let failed = write_snapshot(&shared, FileJob::Saving, target, SaveTarget::Copy, |_| {
             Err(EngineError::VerifyFailed("disk full".to_string()))
         });
         assert!(matches!(failed, Err(EngineError::VerifyFailed(_))));
+    }
+
+    #[test]
+    fn a_file_changed_on_disk_is_written_whole_in_the_same_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let a1 = CellPos::default();
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_input(SheetId(0), a1, "first").unwrap();
+        zenkai_engine::save_xlsx(book.save_snapshot(&target, SaveTarget::Document).unwrap())
+            .unwrap();
+        let mut other = Workbook::new_empty().unwrap();
+        other.set_input(SheetId(0), a1, "someone else's").unwrap();
+        zenkai_engine::save_xlsx(other.save_snapshot(&target, SaveTarget::Copy).unwrap()).unwrap();
+        book.set_input(SheetId(0), a1, "mine").unwrap();
+
+        let shared = RwLock::new(book);
+        let attempts = std::cell::Cell::new(0);
+        write_snapshot(
+            &shared,
+            FileJob::Saving,
+            &target,
+            SaveTarget::Document,
+            |snapshot| {
+                attempts.set(attempts.get() + 1);
+                zenkai_engine::save_xlsx(snapshot)
+            },
+        )
+        .unwrap();
+        assert_eq!(attempts.get(), 2);
+        let reopened = zenkai_engine::open_xlsx(&target).unwrap().workbook;
+        assert_eq!(reopened.cell(SheetId(0), a1).text, "mine");
     }
 
     #[test]

@@ -16,6 +16,7 @@ zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
+tempfile = "3"
 
 [lints]
 workspace = true
