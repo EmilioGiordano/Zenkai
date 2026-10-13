@@ -3,25 +3,19 @@
 // does not matter. The structs are taken apart field by field so a field added to
 // IronCalc fails to build here instead of going unnoticed.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::num::NonZeroUsize;
 
 use ironcalc::base::expressions::parser::Node;
 use ironcalc::base::expressions::parser::static_analysis::StaticResult;
 use ironcalc::base::types::{
-    ArrayKind, Cell, Col, Comment, FormulaValue, Row, SpillValue, Workbook, Worksheet,
+    ArrayKind, Cell, Col, Comment, FormulaValue, Row, SheetData, SpillValue, Workbook, Worksheet,
 };
 
 use crate::error::EngineError;
+use crate::row_split::{Rows, over_rows};
 use crate::sheet_settings::SheetSettings;
-
-// A print is taken under the workbook's read lock, which edits wait on, so a large sheet's
-// cells are hashed on several threads while the calling thread hashes its formulas.
-const MAX_PRINT_THREADS: usize = 8;
-// Below this many rows per thread the spawn costs more than the hashing it saves.
-const MIN_ROWS_PER_THREAD: usize = 32 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SheetPrint {
@@ -143,8 +137,6 @@ fn hash_layout(hasher: &mut DefaultHasher, cols: &[Col], rows: &[Row], comments:
     }
 }
 
-type Rows<'s> = [(&'s i32, &'s HashMap<i32, Cell>)];
-
 fn rows_print(rows: &Rows<'_>) -> (u64, DynamicArrays) {
     let mut cells = 0u64;
     let mut dynamic_arrays = DynamicArrays::Absent;
@@ -165,46 +157,21 @@ fn rows_print(rows: &Rows<'_>) -> (u64, DynamicArrays) {
     (cells, dynamic_arrays)
 }
 
-fn print_threads() -> usize {
-    std::thread::available_parallelism()
-        .map_or(1, NonZeroUsize::get)
-        .min(MAX_PRINT_THREADS)
-}
-
-// Runs `formulas_hash` on the calling thread, which may be the engine's deep stack, while
-// other threads sum the cell hashes; the sum does not depend on how the rows are split.
+// The sum does not depend on how the rows are split.
 fn cells_and_formulas(
-    sheet_data: &HashMap<i32, HashMap<i32, Cell>>,
+    sheet_data: &SheetData,
     formulas_hash: impl FnOnce() -> Result<u64, EngineError>,
 ) -> Result<(u64, DynamicArrays, u64), EngineError> {
-    let rows: Vec<_> = sheet_data.iter().collect();
-    let per_thread = rows
-        .len()
-        .div_ceil(print_threads())
-        .max(MIN_ROWS_PER_THREAD);
-    let stopped = || EngineError::Rejected("fingerprinting a sheet stopped".to_string());
-    std::thread::scope(|scope| {
-        let workers: Vec<_> = rows
-            .chunks(per_thread)
-            .skip(1)
-            .map(|rows| scope.spawn(move || rows_print(rows)))
-            .collect();
-        let first = rows.chunks(per_thread).next().map(rows_print);
-        let formulas = formulas_hash()?;
-        let mut cells = 0u64;
-        let mut dynamic_arrays = DynamicArrays::Absent;
-        let parts = workers
-            .into_iter()
-            .map(|worker| worker.join().map_err(|_| stopped()));
-        for part in first.into_iter().map(Ok).chain(parts) {
-            let (sum, arrays) = part?;
-            cells = cells.wrapping_add(sum);
-            if arrays == DynamicArrays::Present {
-                dynamic_arrays = DynamicArrays::Present;
-            }
+    let (shares, formulas) = over_rows(sheet_data, rows_print, formulas_hash)?;
+    let mut cells = 0u64;
+    let mut dynamic_arrays = DynamicArrays::Absent;
+    for (sum, arrays) in shares {
+        cells = cells.wrapping_add(sum);
+        if arrays == DynamicArrays::Present {
+            dynamic_arrays = DynamicArrays::Present;
         }
-        Ok((cells, dynamic_arrays, formulas))
-    })
+    }
+    Ok((cells, dynamic_arrays, formulas))
 }
 
 // `formulas` are the sheet's parsed formulas, which cells point into by index: a
@@ -336,7 +303,7 @@ mod tests {
     #[test]
     fn a_sheet_hashed_on_several_threads_matches_one_pass() {
         let mut model = model();
-        let rows = i32::try_from(super::MIN_ROWS_PER_THREAD * 3).unwrap();
+        let rows = i32::try_from(crate::row_split::MIN_ROWS_PER_THREAD * 3).unwrap();
         for row in 1..=rows {
             model.set_user_input(0, row, 3, row.to_string()).unwrap();
         }

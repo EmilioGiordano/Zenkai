@@ -21,6 +21,7 @@ use crate::saved::{
     Contents, Metadata, SavedFile, SavedSlot, Stamp, Strings, selected_sheet, sheet_prints,
     style_counts,
 };
+use crate::sheet_copy::copied_sheet;
 use crate::sheet_settings::{Carried, SheetSettings};
 
 // IronCalc's rows are written in many small pieces; the settings writer and the deflate
@@ -107,11 +108,13 @@ pub(crate) fn sheet_job(
         .formulas
         .get(index)
         .ok_or_else(|| rejected("a sheet has no formulas"))?;
+    let settings = carried.written(sheet).cloned();
+    let (sheet, formulas) = copied_sheet(sheet, formulas)?;
     Ok(SheetJob {
         part,
-        sheet: sheet.clone(),
-        formulas: formulas.clone(),
-        settings: carried.written(sheet).cloned(),
+        sheet,
+        formulas,
+        settings,
         selected,
     })
 }

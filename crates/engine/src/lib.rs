@@ -6,10 +6,12 @@ mod fingerprint;
 mod model;
 mod preflight;
 mod rectangles;
+mod row_split;
 mod save;
 mod save_patch;
 mod save_sheet;
 mod saved;
+mod sheet_copy;
 mod sheet_settings;
 #[cfg(test)]
 mod used_end_property;
