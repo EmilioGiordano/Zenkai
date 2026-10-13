@@ -92,6 +92,18 @@ impl CellStore {
         Some(removed)
     }
 
+    /// Removes the cells from `column` on and returns them by column. The row is kept even
+    /// when it ends up empty.
+    pub fn take_from_column(&mut self, row: i32, column: i32) -> Vec<(i32, Cell)> {
+        let Some(cells) = self.rows.get_mut(&row) else {
+            return Vec::new();
+        };
+        let at = cells.columns.partition_point(|existing| *existing < column);
+        let columns = cells.columns.split_off(at);
+        let taken = cells.cells.split_off(at);
+        columns.into_iter().zip(taken).collect()
+    }
+
     /// Replaces the whole row, keeping it even when `cells` is empty.
     pub fn insert_row(&mut self, row: i32, cells: impl IntoIterator<Item = (i32, Cell)>) {
         self.rows.insert(row, Row::from_unsorted(cells));
@@ -215,6 +227,21 @@ mod tests {
     }
 
     #[test]
+    fn take_from_column_keeps_the_row_and_the_earlier_cells() {
+        let mut store = CellStore::new();
+        for column in [1, 3, 5, 7] {
+            store.insert(2, column, cell(column));
+        }
+        let taken = store.take_from_column(2, 4);
+        assert_eq!(taken, vec![(5, cell(5)), (7, cell(7))]);
+        assert_eq!(store.row_columns_sorted(2), vec![1, 3]);
+        assert_eq!(store.take_from_column(2, 1).len(), 2);
+        assert!(store.has_row(2));
+        assert_eq!(store.row_len(2), 0);
+        assert!(store.take_from_column(9, 1).is_empty());
+    }
+
+    #[test]
     fn insert_row_replaces_the_previous_row() {
         let mut store = CellStore::new();
         store.insert(4, 1, cell(1));
@@ -273,6 +300,7 @@ mod tests {
         use crate::expressions::token::Error;
         use crate::types::{ArrayKind, FormulaValue, SpillValue};
 
+        // Only encoded, never read: the fields exist to be serialized.
         #[derive(bitcode::Encode)]
         #[allow(dead_code)]
         enum InlineCell {
