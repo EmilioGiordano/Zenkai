@@ -344,15 +344,23 @@ pub fn write_snapshot(
     let started = Instant::now();
     let snapshot = read_shared(shared).save_snapshot(target, kind);
     let locked_ms = started.elapsed().as_millis();
-    let written = match snapshot.and_then(&write) {
-        // The engine forgot the file it copies from, so the second snapshot writes it whole.
-        Err(error @ (EngineError::ChangedOnDisk(_) | EngineError::BaseUnusable { .. })) => {
-            tracing::warn!(?job, %error, "the file on disk changed, writing it whole");
+    let first = snapshot.and_then(&write);
+    let retry = match &first {
+        // Like Excel, a save never silently replaces a version another program wrote over
+        // the file itself; the user saves again, and that save writes it whole.
+        Err(EngineError::ChangedOnDisk(changed)) => changed != target,
+        Err(EngineError::BaseUnusable { .. }) => true,
+        _ => false,
+    };
+    // The engine forgot the file it copies from, so the second snapshot writes it whole.
+    let written = match (retry, first) {
+        (true, Err(error)) => {
+            tracing::warn!(?job, %error, "the file copied from changed, writing it whole");
             read_shared(shared)
                 .save_snapshot(target, kind)
                 .and_then(&write)
         }
-        written => written,
+        (_, first) => first,
     };
     let total_ms = started.elapsed().as_millis();
     match &written {
@@ -531,36 +539,65 @@ mod tests {
         assert!(matches!(failed, Err(EngineError::VerifyFailed(_))));
     }
 
-    #[test]
-    fn a_file_changed_on_disk_is_written_whole_in_the_same_save() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("book.xlsx");
+    fn saved_then_changed_by_another_program(target: &Path) -> Workbook {
         let a1 = CellPos::default();
         let mut book = Workbook::new_empty().unwrap();
         book.set_input(SheetId(0), a1, "first").unwrap();
-        zenkai_engine::save_xlsx(book.save_snapshot(&target, SaveTarget::Document).unwrap())
+        zenkai_engine::save_xlsx(book.save_snapshot(target, SaveTarget::Document).unwrap())
             .unwrap();
         let mut other = Workbook::new_empty().unwrap();
         other.set_input(SheetId(0), a1, "someone else's").unwrap();
-        zenkai_engine::save_xlsx(other.save_snapshot(&target, SaveTarget::Copy).unwrap()).unwrap();
+        zenkai_engine::save_xlsx(other.save_snapshot(target, SaveTarget::Copy).unwrap()).unwrap();
         book.set_input(SheetId(0), a1, "mine").unwrap();
+        book
+    }
 
-        let shared = RwLock::new(book);
+    fn saved_text(path: &Path) -> String {
+        let reopened = zenkai_engine::open_xlsx(path).unwrap().workbook;
+        reopened.cell(SheetId(0), CellPos::default()).text
+    }
+
+    fn write_counting(
+        shared: &RwLock<Workbook>,
+        target: &Path,
+        kind: SaveTarget,
+    ) -> (Result<(), EngineError>, u32) {
         let attempts = std::cell::Cell::new(0);
-        write_snapshot(
-            &shared,
-            FileJob::Saving,
-            &target,
-            SaveTarget::Document,
-            |snapshot| {
-                attempts.set(attempts.get() + 1);
-                zenkai_engine::save_xlsx(snapshot)
-            },
-        )
-        .unwrap();
-        assert_eq!(attempts.get(), 2);
-        let reopened = zenkai_engine::open_xlsx(&target).unwrap().workbook;
-        assert_eq!(reopened.cell(SheetId(0), a1).text, "mine");
+        let written = write_snapshot(shared, FileJob::Saving, target, kind, |snapshot| {
+            attempts.set(attempts.get() + 1);
+            zenkai_engine::save_xlsx(snapshot)
+        });
+        (written, attempts.get())
+    }
+
+    #[test]
+    fn a_save_over_a_file_another_program_changed_asks_to_save_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let shared = RwLock::new(saved_then_changed_by_another_program(&target));
+        let (refused, attempts) = write_counting(&shared, &target, SaveTarget::Document);
+        assert!(
+            matches!(refused, Err(EngineError::ChangedOnDisk(_))),
+            "{refused:?}"
+        );
+        assert_eq!(attempts, 1);
+        assert_eq!(saved_text(&target), "someone else's");
+        let (saved, _) = write_counting(&shared, &target, SaveTarget::Document);
+        saved.unwrap();
+        assert_eq!(saved_text(&target), "mine");
+    }
+
+    #[test]
+    fn a_recovery_copy_of_a_changed_file_is_written_whole_in_the_same_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("book.xlsx");
+        let copy = dir.path().join("recovery.xlsx");
+        let shared = RwLock::new(saved_then_changed_by_another_program(&original));
+        let (written, attempts) = write_counting(&shared, &copy, SaveTarget::Copy);
+        written.unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(saved_text(&copy), "mine");
+        assert_eq!(saved_text(&original), "someone else's");
     }
 
     #[test]
