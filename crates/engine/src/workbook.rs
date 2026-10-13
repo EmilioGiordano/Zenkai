@@ -614,22 +614,15 @@ impl Engine for Workbook {
         let cell_at = self.cell_lookup(sheet)?;
         Ok(move |pos| match cell_at(pos) {
             None | Some(Cell::EmptyCell { .. }) => Contents::Empty,
-            Some(
-                Cell::NumberCell { v, .. }
-                | Cell::CellFormula {
-                    v: FormulaValue::Number(v),
-                    ..
-                }
-                | Cell::ArrayFormula {
-                    v: FormulaValue::Number(v),
-                    ..
-                }
-                | Cell::SpillCell {
-                    v: SpillValue::Number(v),
-                    ..
-                },
-            ) => Contents::Number(*v),
-            Some(_) => Contents::NonNumeric,
+            Some(Cell::NumberCell { v, .. }) => Contents::Number(*v),
+            Some(Cell::SpillCell(spill)) => match spill.v {
+                SpillValue::Number(v) => Contents::Number(v),
+                _ => Contents::NonNumeric,
+            },
+            Some(cell) => match cell.formula_value() {
+                Some(FormulaValue::Number(v)) => Contents::Number(*v),
+                _ => Contents::NonNumeric,
+            },
         })
     }
 

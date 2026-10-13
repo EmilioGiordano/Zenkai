@@ -2,7 +2,7 @@
 use crate::types::Color;
 
 use crate::test::util::new_empty_model;
-use crate::types::{ArrayKind, Cell, FormulaValue, SpillValue};
+use crate::types::{Cell, FormulaValue, SpillValue};
 
 // ── Dynamic formula: spill does not overwrite existing cell background colors ─
 
@@ -121,35 +121,22 @@ fn dynamic_formula_spills_array() {
     assert!(!model._has_formula("A3"));
 
     let cell_a1 = model._get_cell("A1");
-    assert!(matches!(
-        cell_a1,
-        Cell::ArrayFormula {
-            kind: ArrayKind::Dynamic,
-            v: FormulaValue::Number(10.0),
-            r: (1, 5),
-            ..
-        }
-    ));
+    assert_eq!(cell_a1.dynamic_range(), Some((1, 5)));
+    assert_eq!(cell_a1.formula_value(), Some(&FormulaValue::Number(10.0)));
 
     // Spill cells point back to the anchor
     let cell_a2 = model._get_cell("A2");
+    assert_eq!(cell_a2.spill_anchor(), Some((1, 1)));
     assert!(matches!(
-        cell_a2,
-        Cell::SpillCell {
-            a: (1, 1),
-            v: SpillValue::Number(20.0),
-            ..
-        }
+        &cell_a2,
+        Cell::SpillCell(spill) if spill.v == SpillValue::Number(20.0)
     ));
 
     let cell_a5 = model._get_cell("A5");
+    assert_eq!(cell_a5.spill_anchor(), Some((1, 1)));
     assert!(matches!(
-        cell_a5,
-        Cell::SpillCell {
-            a: (1, 1),
-            v: SpillValue::Number(0.0),
-            ..
-        }
+        &cell_a5,
+        Cell::SpillCell(spill) if spill.v == SpillValue::Number(0.0)
     ));
 }
 
@@ -231,14 +218,8 @@ fn writing_into_spill_cell_clears_spill() {
     // unevaluated DynamicFormula and the other spill cells cleared.
     let cell_a1 = model._get_cell("A1");
     assert!(
-        matches!(
-            cell_a1,
-            Cell::ArrayFormula {
-                kind: ArrayKind::Dynamic,
-                v: FormulaValue::Unevaluated,
-                ..
-            }
-        ),
+        cell_a1.dynamic_range().is_some()
+            && cell_a1.formula_value() == Some(&FormulaValue::Unevaluated),
         "anchor should be an unevaluated DynamicFormula after spill is broken"
     );
 

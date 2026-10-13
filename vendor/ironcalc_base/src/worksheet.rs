@@ -247,13 +247,13 @@ impl Worksheet {
         width: i32,
         height: i32,
     ) -> Result<(), String> {
-        let cell = Cell::ArrayFormula {
-            f: index,
-            s: style,
-            r: (width, height),
-            kind: ArrayKind::Dynamic,
-            v: FormulaValue::Unevaluated,
-        };
+        let cell = Cell::new_array_formula(
+            index,
+            style,
+            (width, height),
+            ArrayKind::Dynamic,
+            FormulaValue::Unevaluated,
+        );
         self.update_cell(row, column, cell)
     }
 
@@ -266,13 +266,13 @@ impl Worksheet {
         width: i32,
         height: i32,
     ) -> Result<(), String> {
-        let cell = Cell::ArrayFormula {
-            f: index,
-            s: style,
-            r: (width, height),
-            kind: ArrayKind::Cse,
-            v: FormulaValue::Unevaluated,
-        };
+        let cell = Cell::new_array_formula(
+            index,
+            style,
+            (width, height),
+            ArrayKind::Cse,
+            FormulaValue::Unevaluated,
+        );
         self.update_cell(row, column, cell)
     }
 
@@ -733,7 +733,7 @@ impl Worksheet {
             None => return Err("Cell does not exist.".to_string()),
         };
         match cell {
-            Cell::ArrayFormula { r, .. } => Ok((r.0, r.1)),
+            Cell::ArrayFormula(array) => Ok((array.r.0, array.r.1)),
             Cell::CellFormula { .. } => Ok((1, 1)),
             _ => Err("Cell does not contain a formula.".to_string()),
         }
@@ -754,37 +754,26 @@ impl Worksheet {
             None => return Ok(CellStructure::SingleCell),
         };
         match cell {
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Cse,
-                ..
-            } => Ok(CellStructure::ArrayFormula { range: *r }),
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Dynamic,
-                ..
-            } => Ok(CellStructure::DynamicFormula { range: *r }),
-            Cell::SpillCell { a, .. } => {
+            Cell::ArrayFormula(array) => Ok(match array.kind {
+                ArrayKind::Cse => CellStructure::ArrayFormula { range: array.r },
+                ArrayKind::Dynamic => CellStructure::DynamicFormula { range: array.r },
+            }),
+            Cell::SpillCell(spill) => {
+                let a = spill.a;
                 let anchor_cell = match self.cell(a.0, a.1) {
                     Some(c) => c,
                     None => return Err("Invalid spill reference".to_string()),
                 };
                 match anchor_cell {
-                    Cell::ArrayFormula {
-                        r,
-                        kind: ArrayKind::Cse,
-                        ..
-                    } => Ok(CellStructure::SpillArray {
-                        anchor: (a.0, a.1),
-                        range: *r,
-                    }),
-                    Cell::ArrayFormula {
-                        r,
-                        kind: ArrayKind::Dynamic,
-                        ..
-                    } => Ok(CellStructure::SpillDynamic {
-                        anchor: (a.0, a.1),
-                        range: *r,
+                    Cell::ArrayFormula(array) => Ok(match array.kind {
+                        ArrayKind::Cse => CellStructure::SpillArray {
+                            anchor: (a.0, a.1),
+                            range: array.r,
+                        },
+                        ArrayKind::Dynamic => CellStructure::SpillDynamic {
+                            anchor: (a.0, a.1),
+                            range: array.r,
+                        },
                     }),
                     _ => Err("Spill cell does not reference an array formula".to_string()),
                 }

@@ -263,6 +263,76 @@ mod tests {
         assert_eq!(decoded, store);
     }
 
+    #[test]
+    fn a_cell_is_32_bytes() {
+        assert_eq!(std::mem::size_of::<Cell>(), 32);
+    }
+
+    #[test]
+    fn boxed_cell_payloads_encode_like_inline_fields() {
+        use crate::expressions::token::Error;
+        use crate::types::{ArrayKind, FormulaValue, SpillValue};
+
+        #[derive(bitcode::Encode)]
+        #[allow(dead_code)]
+        enum InlineCell {
+            EmptyCell {
+                s: i32,
+            },
+            BooleanCell {
+                v: bool,
+                s: i32,
+            },
+            NumberCell {
+                v: f64,
+                s: i32,
+            },
+            ErrorCell {
+                ei: Error,
+                s: i32,
+            },
+            SharedString {
+                si: i32,
+                s: i32,
+            },
+            CellFormula {
+                f: i32,
+                s: i32,
+                v: FormulaValue,
+            },
+            ArrayFormula {
+                f: i32,
+                s: i32,
+                r: (i32, i32),
+                kind: ArrayKind,
+                v: FormulaValue,
+            },
+            SpillCell {
+                s: i32,
+                a: (i32, i32),
+                v: SpillValue,
+            },
+        }
+
+        let array =
+            Cell::new_array_formula(3, 4, (2, 5), ArrayKind::Dynamic, FormulaValue::Number(1.5));
+        let inline = InlineCell::ArrayFormula {
+            f: 3,
+            s: 4,
+            r: (2, 5),
+            kind: ArrayKind::Dynamic,
+            v: FormulaValue::Number(1.5),
+        };
+        assert_eq!(bitcode::encode(&array), bitcode::encode(&inline));
+        let spill = Cell::new_spill_cell(7, (1, 2), SpillValue::Number(2.5));
+        let inline = InlineCell::SpillCell {
+            s: 7,
+            a: (1, 2),
+            v: SpillValue::Number(2.5),
+        };
+        assert_eq!(bitcode::encode(&spill), bitcode::encode(&inline));
+    }
+
     type Oracle = HashMap<i32, HashMap<i32, Cell>>;
 
     fn assert_same(store: &CellStore, oracle: &Oracle) {

@@ -4,7 +4,7 @@ use crate::{
     cf_types::ConditionalFormatting,
     constants::COLUMN_WIDTH_FACTOR,
     expressions::types::Area,
-    types::{ArrayKind, Cell, Style},
+    types::{Cell, Style},
     UserModel,
 };
 
@@ -35,14 +35,7 @@ impl<'a> UserModel<'a> {
                         .worksheet(*sheet)
                         .ok()
                         .and_then(|ws| ws.cell(*row, *column))
-                        .and_then(|cell| match cell {
-                            Cell::ArrayFormula {
-                                kind: ArrayKind::Dynamic,
-                                r,
-                                ..
-                            } => Some(*r),
-                            _ => None,
-                        });
+                        .and_then(Cell::dynamic_range);
                     if let Some((w, h)) = spill_dims {
                         let ws = self.model.workbook.worksheet_mut(*sheet)?;
                         for r in *row..*row + h {
@@ -50,7 +43,8 @@ impl<'a> UserModel<'a> {
                                 if r == *row && c == *column {
                                     continue;
                                 }
-                                if matches!(ws.cell(r, c), Some(Cell::SpillCell { a, .. }) if *a == (*row, *column))
+                                if ws.cell(r, c).and_then(Cell::spill_anchor)
+                                    == Some((*row, *column))
                                 {
                                     let _ = ws.cell_clear_contents(r, c);
                                 }

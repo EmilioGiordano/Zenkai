@@ -441,20 +441,14 @@ impl<'a> Model<'a> {
                 worksheet.remove_cell(source_row, source_column)?;
                 return Ok(());
             }
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Dynamic,
-                ..
-            } => {
+            Cell::ArrayFormula(anchor) if anchor.kind == ArrayKind::Dynamic => {
+                let r = &anchor.r;
                 // We are moving the anchor of a dynamic formula.
                 // We assume the spill has been taken care of by the caller
                 debug_assert_eq!(*r, (1, 1));
             }
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Cse,
-                ..
-            } => {
+            Cell::ArrayFormula(anchor) => {
+                let r = &anchor.r;
                 // This is an array formula, we need to move the whole range
                 // We rely on the calling function to check that the move is valid and does not split the array formula
                 array = Some(*r);
@@ -998,20 +992,14 @@ impl<'a> Model<'a> {
                     worksheet.remove_cell(r.row, column)?;
                     continue;
                 }
-                Cell::ArrayFormula {
-                    r,
-                    kind: ArrayKind::Dynamic,
-                    ..
-                } => {
+                Cell::ArrayFormula(anchor) if anchor.kind == ArrayKind::Dynamic => {
+                    let r = &anchor.r;
                     // We are moving the anchor of a dynamic formula.
                     // We assume the spill has been taken care of by the caller
                     debug_assert_eq!(*r, (1, 1));
                 }
-                Cell::ArrayFormula {
-                    r,
-                    kind: ArrayKind::Cse,
-                    ..
-                } => {
+                Cell::ArrayFormula(anchor) => {
+                    let r = &anchor.r;
                     // This is an array formula, we need to move the whole range
                     // We rely on the calling function to check that the move is valid and does not split the array formula
                     array = Some(*r);
@@ -1111,20 +1099,14 @@ impl<'a> Model<'a> {
                     worksheet.remove_cell(row, *c)?;
                     continue;
                 }
-                Cell::ArrayFormula {
-                    r,
-                    kind: ArrayKind::Dynamic,
-                    ..
-                } => {
+                Cell::ArrayFormula(anchor) if anchor.kind == ArrayKind::Dynamic => {
+                    let r = &anchor.r;
                     // We are moving the anchor of a dynamic formula.
                     // We assume the spill has been taken care of by the caller
                     debug_assert_eq!(*r, (1, 1));
                 }
-                Cell::ArrayFormula {
-                    r,
-                    kind: ArrayKind::Cse,
-                    ..
-                } => {
+                Cell::ArrayFormula(anchor) => {
+                    let r = &anchor.r;
                     // This is an array formula, we need to move the whole range
                     // We rely on the calling function to check that the move is valid and does not split the array formula
                     array = Some(*r);

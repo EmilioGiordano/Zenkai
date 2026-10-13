@@ -36,7 +36,63 @@ impl From<bool> for CellValue {
     }
 }
 
+fn formula_value_type(value: &FormulaValue) -> CellType {
+    match value {
+        FormulaValue::Unevaluated | FormulaValue::Number(_) => CellType::Number,
+        FormulaValue::Boolean(_) => CellType::LogicalValue,
+        FormulaValue::Text(_) => CellType::Text,
+        FormulaValue::Error(_) => CellType::ErrorValue,
+    }
+}
+
 impl Cell {
+    pub fn new_array_formula(
+        f: i32,
+        s: i32,
+        r: (i32, i32),
+        kind: ArrayKind,
+        v: FormulaValue,
+    ) -> Cell {
+        Cell::ArrayFormula(Box::new(ArrayFormulaCell { f, s, r, kind, v }))
+    }
+
+    pub fn new_spill_cell(s: i32, a: (i32, i32), v: SpillValue) -> Cell {
+        Cell::SpillCell(Box::new(SpillCellValue { s, a, v }))
+    }
+
+    /// The result of a formula cell or of an array formula anchor.
+    pub fn formula_value(&self) -> Option<&FormulaValue> {
+        match self {
+            Cell::CellFormula { v, .. } => Some(v),
+            Cell::ArrayFormula(array) => Some(&array.v),
+            _ => None,
+        }
+    }
+
+    /// The spill size of a dynamic array formula anchor.
+    pub fn dynamic_range(&self) -> Option<(i32, i32)> {
+        match self {
+            Cell::ArrayFormula(array) if array.kind == ArrayKind::Dynamic => Some(array.r),
+            _ => None,
+        }
+    }
+
+    /// The anchor of the array formula a spill cell belongs to.
+    pub fn spill_anchor(&self) -> Option<(i32, i32)> {
+        match self {
+            Cell::SpillCell(spill) => Some(spill.a),
+            _ => None,
+        }
+    }
+
+    pub fn formula_value_mut(&mut self) -> Option<&mut FormulaValue> {
+        match self {
+            Cell::CellFormula { v, .. } => Some(v),
+            Cell::ArrayFormula(array) => Some(&mut array.v),
+            _ => None,
+        }
+    }
+
     /// Creates a new Cell with a shared string (`si` is the string index)
     pub fn new_string(si: i32, s: i32) -> Cell {
         Cell::SharedString { si, s }
@@ -69,7 +125,16 @@ impl Cell {
     /// Returns the formula index of a cell if any.
     pub fn get_formula(&self) -> Option<i32> {
         match self {
-            Cell::CellFormula { f, .. } | Cell::ArrayFormula { f, .. } => Some(*f),
+            Cell::CellFormula { f, .. } => Some(*f),
+            Cell::ArrayFormula(array) => Some(array.f),
+            _ => None,
+        }
+    }
+
+    pub fn formula_mut(&mut self) -> Option<&mut i32> {
+        match self {
+            Cell::CellFormula { f, .. } => Some(f),
+            Cell::ArrayFormula(array) => Some(&mut array.f),
             _ => None,
         }
     }
@@ -85,9 +150,9 @@ impl Cell {
             | Cell::NumberCell { s, .. }
             | Cell::ErrorCell { s, .. }
             | Cell::SharedString { s, .. }
-            | Cell::CellFormula { s, .. }
-            | Cell::ArrayFormula { s, .. }
-            | Cell::SpillCell { s, .. } => *s = style,
+            | Cell::CellFormula { s, .. } => *s = style,
+            Cell::ArrayFormula(array) => array.s = style,
+            Cell::SpillCell(spill) => spill.s = style,
         }
     }
 
@@ -98,9 +163,9 @@ impl Cell {
             | Cell::NumberCell { s, .. }
             | Cell::ErrorCell { s, .. }
             | Cell::SharedString { s, .. }
-            | Cell::CellFormula { s, .. }
-            | Cell::ArrayFormula { s, .. }
-            | Cell::SpillCell { s, .. } => *s,
+            | Cell::CellFormula { s, .. } => *s,
+            Cell::ArrayFormula(array) => array.s,
+            Cell::SpillCell(spill) => spill.s,
         }
     }
 
@@ -111,13 +176,9 @@ impl Cell {
             Cell::NumberCell { .. } => CellType::Number,
             Cell::ErrorCell { .. } => CellType::ErrorValue,
             Cell::SharedString { .. } => CellType::Text,
-            Cell::CellFormula { v, .. } | Cell::ArrayFormula { v, .. } => match v {
-                FormulaValue::Unevaluated | FormulaValue::Number(_) => CellType::Number,
-                FormulaValue::Boolean(_) => CellType::LogicalValue,
-                FormulaValue::Text(_) => CellType::Text,
-                FormulaValue::Error { .. } => CellType::ErrorValue,
-            },
-            Cell::SpillCell { v, .. } => match v {
+            Cell::CellFormula { v, .. } => formula_value_type(v),
+            Cell::ArrayFormula(array) => formula_value_type(&array.v),
+            Cell::SpillCell(spill) => match &spill.v {
                 SpillValue::Number(_) => CellType::Number,
                 SpillValue::Boolean(_) => CellType::LogicalValue,
                 SpillValue::Text(_) => CellType::Text,
@@ -167,10 +228,9 @@ impl Cell {
                     .unwrap_or_default();
                 CellValue::String(v)
             }
-            Cell::CellFormula { v, .. } | Cell::ArrayFormula { v, .. } => {
-                formula_value_to_cell_value(v, language)
-            }
-            Cell::SpillCell { v, .. } => spill_value_to_cell_value(v, language),
+            Cell::CellFormula { v, .. } => formula_value_to_cell_value(v, language),
+            Cell::ArrayFormula(array) => formula_value_to_cell_value(&array.v, language),
+            Cell::SpillCell(spill) => spill_value_to_cell_value(&spill.v, language),
         }
     }
 
@@ -204,7 +264,9 @@ fn formula_value_to_cell_value(v: &FormulaValue, language: &Language) -> CellVal
         FormulaValue::Boolean(b) => CellValue::Boolean(*b),
         FormulaValue::Number(n) => CellValue::Number(*n),
         FormulaValue::Text(s) => CellValue::String(s.clone()),
-        FormulaValue::Error(error) => CellValue::String(error.ei.to_localized_error_string(language)),
+        FormulaValue::Error(error) => {
+            CellValue::String(error.ei.to_localized_error_string(language))
+        }
     }
 }
 

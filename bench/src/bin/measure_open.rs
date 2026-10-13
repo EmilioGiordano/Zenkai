@@ -82,7 +82,7 @@ fn count_cells(model: &Model) -> (u64, u64) {
     for sheet in &model.workbook.worksheets {
         for (_, _, cell) in sheet.sheet_data.iter() {
             stored += 1;
-            if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula { .. }) {
+            if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula(_)) {
                 formulas += 1;
             }
         }
@@ -330,7 +330,7 @@ fn discover(raw: &UserModel) -> Result<Found> {
     let mut per_col: std::collections::HashMap<i32, (i32, i32, u64)> =
         std::collections::HashMap::new();
     for (row, col, cell) in sheet.sheet_data.iter() {
-        if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula { .. }) {
+        if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula(_)) {
             per_col
                 .entry(col)
                 .and_modify(|slot| {

@@ -2,7 +2,7 @@
 
 use crate::cell::CellValue;
 use crate::test::util::new_empty_model;
-use crate::types::{ArrayKind, Cell, CellType, FormulaValue};
+use crate::types::{Cell, CellType, FormulaValue};
 
 #[test]
 fn test_cell_get_type() {
@@ -56,9 +56,10 @@ fn cell_is_always_dynamic() {
         .get(1, 2)
         .unwrap()
         .clone();
+    assert!(b1_cell.dynamic_range().is_some());
     assert!(matches!(
-        b1_cell,
-        Cell::ArrayFormula { kind: ArrayKind::Dynamic, v: FormulaValue::Text(ref v), .. } if v == "$A$1"
+        b1_cell.formula_value(),
+        Some(FormulaValue::Text(v)) if v == "$A$1"
     ));
 
     let b2_cell = model.workbook.worksheets[0]
@@ -66,9 +67,10 @@ fn cell_is_always_dynamic() {
         .get(2, 2)
         .unwrap()
         .clone();
+    assert!(b2_cell.dynamic_range().is_some());
     assert!(matches!(
-        b2_cell,
-        Cell::ArrayFormula { kind: ArrayKind::Dynamic, v: FormulaValue::Number(v), .. } if v == 0.0
+        b2_cell.formula_value(),
+        Some(FormulaValue::Number(v)) if *v == 0.0
     ));
 }
 #[test]

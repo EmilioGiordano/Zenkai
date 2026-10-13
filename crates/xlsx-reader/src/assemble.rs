@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ironcalc::base::types::{Cell, Workbook};
+use ironcalc::base::types::Workbook;
 
 use crate::ReadError;
 use crate::formulas::Converted;
@@ -70,7 +70,7 @@ pub(crate) fn fill(
         remap_strings(&mut data, &cells.string_cells, &local)?;
         for (_, row) in &mut data {
             for (_, cell) in row {
-                if let Cell::CellFormula { f, .. } | Cell::ArrayFormula { f, .. } = cell {
+                if let Some(f) = cell.formula_mut() {
                     *f = *usize::try_from(*f)
                         .ok()
                         .and_then(|event| resolved.get(event))

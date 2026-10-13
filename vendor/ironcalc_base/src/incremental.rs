@@ -6,7 +6,7 @@ use crate::{
     dependency_index::{CellKey, DependencyIndex},
     expressions::{parser::Node, types::CellReferenceIndex},
     model::Model,
-    types::{ArrayKind, Cell},
+    types::Cell,
 };
 
 /// How the last recalculation of a [`Model`] was done.
@@ -136,16 +136,8 @@ impl Model<'_> {
                 if let Some(node) = self.formula_node(key) {
                     index.add(key, node);
                 }
-                if let Cell::ArrayFormula {
-                    kind: ArrayKind::Dynamic,
-                    r,
-                    ..
-                } = cell
-                {
-                    spills.push(Spill {
-                        anchor: key,
-                        size: *r,
-                    });
+                if let Some(size) = cell.dynamic_range() {
+                    spills.push(Spill { anchor: key, size });
                 }
             }
         }
@@ -187,11 +179,7 @@ impl Model<'_> {
             .get(sheet as usize)
             .and_then(|worksheet| worksheet.cell(row, column))
         {
-            Some(Cell::ArrayFormula {
-                kind: ArrayKind::Dynamic,
-                r,
-                ..
-            }) => Some(*r),
+            Some(cell) => cell.dynamic_range(),
             _ => None,
         }
     }
