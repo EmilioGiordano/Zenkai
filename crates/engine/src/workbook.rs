@@ -5,13 +5,13 @@ use ironcalc::base::types::{
     Cell, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
 };
 use ironcalc::base::{BorderArea, ClipboardData, UserModel};
-use ironcalc::export::save_xlsx_to_writer;
 use ironcalc::import::load_from_xlsx_bytes;
 
 use crate::error::EngineError;
 use crate::file::Unsupported;
 use crate::model::CachedModel;
 use crate::rectangles::covering_rectangles;
+use crate::save::SaveSnapshot;
 use crate::sheet_settings::{Carried, SheetSettings};
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
@@ -506,6 +506,12 @@ impl Workbook {
         if let Some(id) = self.sheet_id(sheet) {
             self.carried.columns_moved(id, u32::from(from.get()) + 1);
         }
+    }
+
+    // Copies what a save of this workbook to `path` writes; take it under the read lock and
+    // write it with `save_xlsx` after releasing the lock.
+    pub fn save_snapshot(&self, path: &std::path::Path) -> Result<SaveSnapshot, EngineError> {
+        crate::save::snapshot(path, self.model.get_model(), &self.carried)
     }
 
     pub fn warm_used_areas(&self) {
@@ -1373,10 +1379,9 @@ impl Engine for Workbook {
     }
 
     fn to_xlsx(&self) -> Result<Vec<u8>, EngineError> {
-        let xlsx = save_xlsx_to_writer(self.model.get_model(), Cursor::new(Vec::new()))
-            .map(Cursor::into_inner)
-            .map_err(|e| rejected(format!("{e:?}")))?;
-        crate::sheet_patch::patch_sheets(self.model.get_model(), &self.carried, xlsx)
+        let plan = crate::save::full_plan(self.model.get_model(), &self.carried)?;
+        let (xlsx, _) = crate::save::write_full(plan, Cursor::new(Vec::new()))?;
+        Ok(xlsx.into_inner())
     }
 }
 

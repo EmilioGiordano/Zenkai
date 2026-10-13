@@ -210,13 +210,13 @@ fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.sync_all()
 }
 
-fn remove_temp(temp: &Path) {
+pub(crate) fn remove_temp(temp: &Path) {
     if let Err(error) = fs::remove_file(temp) {
         tracing::warn!(?temp, %error, "could not remove temp file after failed save");
     }
 }
 
-fn temp_path(path: &Path) -> PathBuf {
+pub(crate) fn temp_path(path: &Path) -> PathBuf {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())

@@ -5,7 +5,8 @@ mod file;
 mod model;
 mod preflight;
 mod rectangles;
-mod sheet_patch;
+mod save;
+mod save_sheet;
 mod sheet_settings;
 #[cfg(test)]
 mod used_end_property;
@@ -18,5 +19,6 @@ pub use file::{
     write_atomic, xlsx_bytes,
 };
 pub use preflight::run_with_engine_stack;
+pub use save::{SaveSnapshot, save_xlsx};
 pub use workbook::{Copied, Engine, Workbook, format_preview};
 pub use xlsx_read::{ReadBook, ReaderComparison, XlsxReader, compare_readers, read_xlsx_bytes};
