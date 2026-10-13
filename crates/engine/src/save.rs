@@ -164,7 +164,7 @@ fn choose(
     carried: &Carried,
     slot: &SavedSlot,
 ) -> Result<(Chosen, Option<Contents>), EngineError> {
-    let base = slot.current().filter(|base| base.fits(path));
+    let base = slot.current().filter(|base| base.same_kind(path));
     if base.is_none() && target == SaveTarget::Copy {
         return Ok((Chosen::Full(full_sheets(data, carried)?), None));
     }
@@ -349,8 +349,15 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
         .and_then(|()| unchanged(base));
     if let Err(error) = checked {
         remove_temp(&temp);
-        // A file that cannot be copied from must not keep every later save from working.
-        if base.is_some() {
+        // A file that cannot be copied from must not keep every later save from working;
+        // a failure to write the temp file says nothing about it.
+        let base_failed = matches!(
+            error,
+            EngineError::ChangedOnDisk(_)
+                | EngineError::BaseUnusable { .. }
+                | EngineError::VerifyFailed(_)
+        );
+        if base.is_some() && base_failed {
             tracing::warn!(%error, "copying from the saved file failed; the next save writes it whole");
             slot.set(None);
         }

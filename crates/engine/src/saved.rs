@@ -65,15 +65,14 @@ pub(crate) struct SavedFile {
 }
 
 impl SavedFile {
-    // Only a file still as it was is copied from, and only into a file of its own kind:
-    // the parts of an .xlsm are not those of an .xlsx.
-    pub(crate) fn fits(&self, target: &Path) -> bool {
+    // Only into a file of its own kind: the parts of an .xlsm are not those of an .xlsx.
+    // Whether the file is still as it was is checked by the save, outside the lock.
+    pub(crate) fn same_kind(&self, target: &Path) -> bool {
         let extension = |path: &Path| {
             path.extension()
                 .map(|extension| extension.to_ascii_lowercase())
         };
         extension(&self.path) == extension(target)
-            && Stamp::of(&self.path).is_ok_and(|stamp| stamp == self.stamp)
     }
 }
 

@@ -11,7 +11,7 @@ use rust_xlsxwriter::{
     ConditionalFormatCell, ConditionalFormatCellRule, Format, Formula, Workbook as Source,
 };
 use zenkai_engine::{
-    Engine, SaveTarget, Workbook, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
+    Engine, EngineError, SaveTarget, Workbook, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
 };
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId, StyleChange};
 
@@ -322,7 +322,7 @@ fn an_undone_edit_copies_every_part() {
 }
 
 #[test]
-fn a_file_changed_on_disk_is_written_whole() {
+fn a_file_changed_on_disk_fails_once_then_is_written_whole() {
     let dir = tempfile::tempdir().unwrap();
     let (document, mut book) = opened(dir.path());
     let mut other = Source::new();
@@ -332,6 +332,11 @@ fn a_file_changed_on_disk_is_written_whole() {
         .unwrap();
     other.save(&document).unwrap();
     book.set_input(SheetId(2), pos(0, 0), "mine").unwrap();
+    let refused = save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap());
+    assert!(
+        matches!(refused, Err(EngineError::ChangedOnDisk(_))),
+        "{refused:?}"
+    );
     save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
     let reopened = open_xlsx(&document).unwrap().workbook;
     assert_eq!(reopened.sheets().len(), SHEETS.len());
