@@ -331,8 +331,9 @@ pub fn read_shared(shared: &RwLock<Workbook>) -> RwLockReadGuard<'_, Workbook> {
     shared.read().unwrap_or_else(PoisonError::into_inner)
 }
 
-// The read lock is held only while the snapshot is copied: writing and verifying it takes
-// far longer, and an edit waiting for the write lock blocks every reader meanwhile.
+// The read lock is held only while the snapshot is taken, which fingerprints every sheet and
+// copies the ones the save writes: writing and verifying it takes far longer, and an edit
+// waiting for the write lock blocks every reader meanwhile.
 pub fn write_snapshot(
     shared: &RwLock<Workbook>,
     job: FileJob,
