@@ -6,6 +6,7 @@ mod formulas;
 mod layout;
 pub mod limits;
 mod package;
+mod shared_strings;
 mod sheet_data;
 mod sheet_stream;
 mod stream;
@@ -20,8 +21,9 @@ use std::path::Path;
 use ironcalc::base::types::Workbook;
 
 pub use diff::workbook_differences;
-pub use layout::{PackageLayout, SharedStrings};
+pub use layout::{PackageLayout, SharedStrings, StyleCounts};
 pub use limits::CellBudget;
+pub use shared_strings::SHARED_STRINGS_PART;
 pub use verify::{Written, check_written};
 
 use crate::formulas::Names;
@@ -192,6 +194,7 @@ fn read_from<R: Read + Seek>(
             &package,
             workbook.shared_strings.len(),
         )?,
+        styles: layout::style_counts(&mut archive, meter, &budgets)?,
     };
     let names = Names {
         sheets: &package.sheet_names,
