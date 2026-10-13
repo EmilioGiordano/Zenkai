@@ -3,12 +3,14 @@
 mod assemble;
 mod diff;
 mod formulas;
+mod layout;
 pub mod limits;
 mod package;
 mod sheet_data;
 mod sheet_stream;
 mod stream;
 mod text;
+mod verify;
 
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
@@ -18,7 +20,9 @@ use std::path::Path;
 use ironcalc::base::types::Workbook;
 
 pub use diff::workbook_differences;
+pub use layout::{PackageLayout, SharedStrings};
 pub use limits::CellBudget;
+pub use verify::{Written, check_written};
 
 use crate::formulas::Names;
 use crate::package::{read_package, stub_archive};
@@ -42,6 +46,7 @@ pub type Inspect<'a> = dyn Fn(&str, &[u8]) -> Result<(), ReadError> + Sync + 'a;
 pub struct OpenedBook {
     pub book: Workbook,
     pub sheet_configs: Vec<String>,
+    pub layout: PackageLayout,
 }
 
 // Parts the model never uses and IronCalc's importer never parses are never
@@ -174,6 +179,20 @@ fn read_from<R: Read + Seek>(
             "IronCalc read a different list of sheets".to_string(),
         ));
     }
+    let layout = PackageLayout {
+        worksheets: package
+            .worksheets
+            .iter()
+            .map(|part| part.path.clone())
+            .collect(),
+        shared_strings: layout::shared_strings_layout(
+            &mut archive,
+            meter,
+            &budgets,
+            &package,
+            workbook.shared_strings.len(),
+        )?,
+    };
     let names = Names {
         sheets: &package.sheet_names,
         defined_names: &package.defined_names,
@@ -194,6 +213,7 @@ fn read_from<R: Read + Seek>(
     .map(|book| OpenedBook {
         book,
         sheet_configs: configs,
+        layout,
     })
 }
 
