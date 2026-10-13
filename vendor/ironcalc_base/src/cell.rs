@@ -204,7 +204,7 @@ fn formula_value_to_cell_value(v: &FormulaValue, language: &Language) -> CellVal
         FormulaValue::Boolean(b) => CellValue::Boolean(*b),
         FormulaValue::Number(n) => CellValue::Number(*n),
         FormulaValue::Text(s) => CellValue::String(s.clone()),
-        FormulaValue::Error { ei, .. } => CellValue::String(ei.to_localized_error_string(language)),
+        FormulaValue::Error(error) => CellValue::String(error.ei.to_localized_error_string(language)),
     }
 }
 

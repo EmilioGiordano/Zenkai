@@ -243,7 +243,7 @@ pub(crate) fn get_worksheet_xml(
                 }
                 Cell::CellFormula {
                     f,
-                    v: FormulaValue::Error { ei, .. },
+                    v: FormulaValue::Error(error),
                     s,
                 } => {
                     // <c r="C6" t="e" s="4">
@@ -257,6 +257,7 @@ pub(crate) fn get_worksheet_xml(
                         &parsed_formulas[*f as usize].0,
                     );
                     let style = get_cell_style_attribute(*s);
+                    let ei = &error.ei;
                     row_data_str.push(format!(
                         "<c r=\"{cell_name}\" t=\"e\"{style}><f>{formula}</f><v>{ei}</v></c>"
                     ));
@@ -398,7 +399,7 @@ pub(crate) fn get_worksheet_xml(
                 }
                 Cell::ArrayFormula {
                     f,
-                    v: FormulaValue::Error { ei, .. },
+                    v: FormulaValue::Error(error),
                     s,
                     r,
                     kind,
@@ -426,6 +427,7 @@ pub(crate) fn get_worksheet_xml(
                         Some(range) => range,
                         None => continue,
                     };
+                    let ei = &error.ei;
                     let cm = if matches!(kind, ArrayKind::Dynamic) {
                         r#" cm="1""#
                     } else {

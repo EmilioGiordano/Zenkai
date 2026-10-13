@@ -29,24 +29,16 @@ impl Scanner<'_, '_> {
             "n" => FormulaValue::Number(value.unwrap_or("0").parse::<f64>().unwrap_or(0.0)),
             "e" => {
                 let name = error_name(value, metadata);
-                FormulaValue::Error {
-                    ei: get_error_by_english_name(name).unwrap_or(Error::ERROR),
-                    o: origin(),
-                    m: value.unwrap_or("#ERROR!").to_string(),
-                }
+                FormulaValue::error(
+                    get_error_by_english_name(name).unwrap_or(Error::ERROR),
+                    origin(),
+                    value.unwrap_or("#ERROR!").to_string(),
+                )
             }
-            "s" | "d" => FormulaValue::Error {
-                ei: Error::NIMPL,
-                o: origin(),
-                m: Error::NIMPL.to_string(),
-            },
+            "s" | "d" => FormulaValue::error(Error::NIMPL, origin(), Error::NIMPL.to_string()),
             "str" => FormulaValue::Text(decode_xlsx_escapes(value.unwrap_or(""))),
             "inlineStr" => FormulaValue::Text(inline.unwrap_or_default()),
-            _ => FormulaValue::Error {
-                ei: Error::ERROR,
-                o: origin(),
-                m: Error::ERROR.to_string(),
-            },
+            _ => FormulaValue::error(Error::ERROR, origin(), Error::ERROR.to_string()),
         }
     }
 

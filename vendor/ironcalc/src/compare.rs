@@ -146,14 +146,14 @@ pub fn compare(model1: &Model, model2: &Model) -> CompareResult<Vec<Diff>> {
                         !numbers_are_close(*a, *b, eps)
                     }
                     (FormulaValue::Text(a), FormulaValue::Text(b)) => a != b,
-                    (FormulaValue::Error { ei: e1, .. }, FormulaValue::Error { ei: e2, .. }) => {
-                        e1 != e2
+                    (FormulaValue::Error(e1), FormulaValue::Error(e2)) => {
+                        e1.ei != e2.ei
                     }
                     // Some xlsx files store formula errors as t="str" with the error code as
                     // text instead of the correct t="e". Treat them as equivalent.
-                    (FormulaValue::Text(s), FormulaValue::Error { ei, .. })
-                    | (FormulaValue::Error { ei, .. }, FormulaValue::Text(s)) => {
-                        s != &format!("{ei}")
+                    (FormulaValue::Text(s), FormulaValue::Error(error))
+                    | (FormulaValue::Error(error), FormulaValue::Text(s)) => {
+                        s != &format!("{}", error.ei)
                     }
                     _ => true,
                 };
@@ -242,13 +242,13 @@ fn cell_display(cell: &Cell) -> String {
             ..
         } => format!("\"{v}\" (string)"),
         Cell::CellFormula {
-            v: FormulaValue::Error { ei, .. },
+            v: FormulaValue::Error(error),
             ..
         }
         | Cell::ArrayFormula {
-            v: FormulaValue::Error { ei, .. },
+            v: FormulaValue::Error(error),
             ..
-        } => format!("{ei} (error)"),
+        } => format!("{} (error)", error.ei),
         Cell::ArrayFormula {
             v: FormulaValue::Unevaluated,
             s,

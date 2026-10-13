@@ -141,11 +141,7 @@ fn array_node_to_formula_value(node: ArrayNode) -> FormulaValue {
         ArrayNode::Boolean(b) => FormulaValue::Boolean(b),
         ArrayNode::Number(n) => FormulaValue::Number(n),
         ArrayNode::String(s) => FormulaValue::Text(s),
-        ArrayNode::Error(ei) => FormulaValue::Error {
-            ei,
-            o: String::new(),
-            m: String::new(),
-        },
+        ArrayNode::Error(ei) => FormulaValue::error(ei, String::new(), String::new()),
         ArrayNode::Empty => FormulaValue::Number(0.0),
     }
 }
@@ -166,7 +162,7 @@ fn formula_value_to_spill_value(v: &FormulaValue) -> SpillValue {
         FormulaValue::Boolean(b) => SpillValue::Boolean(*b),
         FormulaValue::Number(n) => SpillValue::Number(*n),
         FormulaValue::Text(s) => SpillValue::Text(s.clone()),
-        FormulaValue::Error { ei, .. } => SpillValue::Error(ei.clone()),
+        FormulaValue::Error(error) => SpillValue::Error(error.ei.clone()),
     }
 }
 
@@ -1033,11 +1029,7 @@ impl<'a> Model<'a> {
                             let new_cell = if r == row && c == column {
                                 let fv = match value {
                                     Some(node) => array_node_to_formula_value(node),
-                                    None => FormulaValue::Error {
-                                        ei: Error::NIMPL,
-                                        o: "".to_string(),
-                                        m: "Unexpected array result".to_string(),
-                                    },
+                                    None => FormulaValue::error(Error::NIMPL, "".to_string(), "Unexpected array result".to_string()),
                                 };
                                 Cell::ArrayFormula {
                                     f: formula,
@@ -1080,11 +1072,7 @@ impl<'a> Model<'a> {
                     let coerced = if array_width == 1 && array_height == 1 {
                         match self.get_value_from_array(array, 1, 1) {
                             Some(node) => array_node_to_formula_value(node),
-                            None => FormulaValue::Error {
-                                ei: Error::VALUE,
-                                o: "".to_string(),
-                                m: "Unexpected array result".to_string(),
-                            },
+                            None => FormulaValue::error(Error::VALUE, "".to_string(), "Unexpected array result".to_string()),
                         }
                     } else {
                         // Currently unreachable from normal user formulas: static
@@ -1100,11 +1088,7 @@ impl<'a> Model<'a> {
                              {array_width}x{array_height}); implicit intersection \
                              was expected to collapse it.",
                         );
-                        FormulaValue::Error {
-                            ei: Error::VALUE,
-                            o: "".to_string(),
-                            m: "Array result in scalar context".to_string(),
-                        }
+                        FormulaValue::error(Error::VALUE, "".to_string(), "Array result in scalar context".to_string())
                     };
                     *self.workbook.worksheets[sheet as usize]
                         .sheet_data
@@ -1147,11 +1131,7 @@ impl<'a> Model<'a> {
                     Ok(s) => s,
                     Err(_) => "".to_string(),
                 };
-                FormulaValue::Error {
-                    ei: error.clone(),
-                    o,
-                    m: message.to_string(),
-                }
+                FormulaValue::error(error.clone(), o, message.to_string())
             }
             CalcResult::Range { .. } => {
                 // This should never happen
@@ -1323,13 +1303,14 @@ impl<'a> Model<'a> {
                 ..
             } => CalcResult::String(v.clone()),
             CellFormula {
-                v: FormulaValue::Error { ei, o, m },
+                v: FormulaValue::Error(error),
                 ..
             }
             | ArrayFormula {
-                v: FormulaValue::Error { ei, o, m },
+                v: FormulaValue::Error(error),
                 ..
             } => {
+                let ErrorValue { ei, o, m } = &**error;
                 if let Some(cell_reference) = self.parse_reference(o) {
                     CalcResult::new_error(ei.clone(), cell_reference, m.clone())
                 } else {

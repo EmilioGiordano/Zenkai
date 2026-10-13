@@ -246,13 +246,23 @@ pub enum FormulaValue {
     Boolean(bool),
     Number(f64),
     Text(String),
-    Error {
-        ei: Error,
-        // Origin cell reference, e.g. "Sheet3!C4"
-        o: String,
-        // Human-readable error message, e.g. "Not implemented function"
-        m: String,
-    },
+    // Boxed so the common variants keep `Cell` small.
+    Error(Box<ErrorValue>),
+}
+
+#[derive(Encode, Decode, Debug, Clone, PartialEq)]
+pub struct ErrorValue {
+    pub ei: Error,
+    // Origin cell reference, e.g. "Sheet3!C4"
+    pub o: String,
+    // Human-readable error message, e.g. "Not implemented function"
+    pub m: String,
+}
+
+impl FormulaValue {
+    pub fn error(ei: Error, o: String, m: String) -> Self {
+        FormulaValue::Error(Box::new(ErrorValue { ei, o, m }))
+    }
 }
 
 /// The value stored in a spill cell (no formula, no origin tracking).
