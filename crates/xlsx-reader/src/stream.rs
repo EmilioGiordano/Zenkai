@@ -486,13 +486,16 @@ impl<R: Read> Guard<'_, R> {
 
     pub(crate) fn check_whole(&self, bytes: u64) -> Result<(), ReadError> {
         self.whole_fits(bytes)?;
+        self.charge_whole(bytes)
+    }
+
+    fn charge_whole(&self, bytes: u64) -> Result<(), ReadError> {
         self.budgets.check_usage(Usage {
             cells: 0,
             formulas: 0,
             bytes,
             rows: 0,
-        })?;
-        Ok(())
+        })
     }
 
     fn compressed_used(&self) -> u64 {
@@ -530,22 +533,44 @@ pub(crate) fn read_part<R: Read>(
     part: &str,
     budgets: &Budgets,
 ) -> Result<Vec<u8>, ReadError> {
-    read_part_with(budgets.stream(entry, meter, part), part)
+    read_part_with(
+        budgets.stream(entry, meter, part),
+        part,
+        WholeLimit::KeptWhole,
+    )
 }
 
-fn read_part_with<R: Read>(mut guard: Guard<'_, R>, part: &str) -> Result<Vec<u8>, ReadError> {
+#[derive(Clone, Copy)]
+enum WholeLimit {
+    KeptWhole,
+    // A worksheet IronCalc reads: IronCalc holds it whole anyway, and the DOM charge
+    // already bounded it before this read, so the cap for other parts kept whole
+    // would only refuse large valid sheets. The per-part cap still applies.
+    DomCharged,
+}
+
+fn read_part_with<R: Read>(
+    mut guard: Guard<'_, R>,
+    part: &str,
+    limit: WholeLimit,
+) -> Result<Vec<u8>, ReadError> {
     let mut bytes = Vec::with_capacity(CHUNK_BYTES);
     let mut chunk = [0u8; CHUNK_BYTES];
     loop {
         match guard.read_chunk(&mut chunk)? {
             0 => {
                 limits::check_ratio(part, guard.compressed_used(), guard.expanded)?;
-                guard.check_whole(bytes.len() as u64)?;
+                match limit {
+                    WholeLimit::KeptWhole => guard.check_whole(bytes.len() as u64)?,
+                    WholeLimit::DomCharged => guard.charge_whole(bytes.len() as u64)?,
+                }
                 return Ok(bytes);
             }
             read => {
                 bytes.extend_from_slice(&chunk[..read]);
-                guard.whole_fits(bytes.len() as u64)?;
+                if let WholeLimit::KeptWhole = limit {
+                    guard.whole_fits(bytes.len() as u64)?;
+                }
             }
         }
     }
@@ -595,12 +620,16 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
         }
         (name, usage)
     };
+    let limit = match count_cells {
+        true => WholeLimit::DomCharged,
+        false => WholeLimit::KeptWhole,
+    };
     let entry = archive
         .by_name(&name)
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
     Ok((
         name.clone(),
-        read_part_with(budgets.stream_reread(entry, meter, &name), &name)?,
+        read_part_with(budgets.stream_reread(entry, meter, &name), &name, limit)?,
         usage,
     ))
 }
@@ -792,6 +821,44 @@ mod tests {
             read_part_if_checked(&mut archive, 1, &meter, &budgets, false).unwrap();
         assert_eq!(name, "xl/workbook.xml");
         assert!(!checked.is_empty(), "a checked part is inflated");
+    }
+
+    fn stored_zip(name: &str, body: &[u8]) -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        writer.start_file(name, options).unwrap();
+        writer.write_all(body).unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn read_checked(
+        bytes: &[u8],
+        budgets: &Budgets,
+        count_cells: bool,
+    ) -> Result<usize, ReadError> {
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(std::io::Cursor::new(bytes))).unwrap();
+        read_part_if_checked(&mut archive, 0, &meter, budgets, count_cells)
+            .map(|(_, part, _)| part.len())
+    }
+
+    #[test]
+    fn a_worksheet_with_formulas_past_the_whole_cap_is_bounded_by_its_dom_charge() {
+        let row = r#"<row r="1"><c r="A1"><f>B1*2</f><v>2</v></c></row>"#;
+        let rows = row.repeat(limits::MAX_WHOLE_PART_BYTES as usize / row.len() + 1);
+        let sheet = format!("<worksheet><sheetData>{rows}</sheetData></worksheet>");
+        let bytes = stored_zip("xl/worksheets/sheet1.xml", sheet.as_bytes());
+        assert_eq!(read_checked(&bytes, &budgets(), true).unwrap(), sheet.len());
+        let error = read_checked(&bytes, &budgets(), false).unwrap_err();
+        assert!(error.to_string().contains("kept whole"), "{error}");
+        let small = Budgets::with_cells(CellBudget::max_cells_for_test(1_000));
+        let error = read_checked(&bytes, &small, true).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        let capped = Budgets::with_entry_cap(CellBudget::max_cells_for_test(u64::MAX), 1024);
+        let error = read_checked(&bytes, &capped, true).unwrap_err();
+        assert!(error.to_string().contains("per-part limit"), "{error}");
     }
 
     #[test]
