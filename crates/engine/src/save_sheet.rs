@@ -63,10 +63,8 @@ pub(crate) fn prepare(sheet: &mut Worksheet, settings: Option<&SheetSettings>) -
         .flatten();
     let bare: Vec<i32> = sheet.rows.iter().map(|row| row.r).chain(outlined).collect();
     for row in bare {
-        if in_grid(&row) {
-            if !sheet.sheet_data.has_row(row) {
-                sheet.sheet_data.insert_row(row, []);
-            }
+        if in_grid(&row) && !sheet.sheet_data.has_row(row) {
+            sheet.sheet_data.insert_row(row, []);
         }
     }
     reference
