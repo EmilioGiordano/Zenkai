@@ -621,7 +621,7 @@ fn row_numbered(tag: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(inner) else {
         return false;
     };
-    BytesStart::from_content(&text[..name_len], name_len)
+    BytesStart::from_content(text, name_len)
         .attributes()
         .with_checks(true)
         .filter_map(Result::ok)
@@ -1465,6 +1465,13 @@ mod tests {
             "xl/worksheets/sheet1.xml",
             budgets,
         )
+    }
+
+    #[test]
+    fn a_row_number_is_read_past_the_tag_name() {
+        assert!(row_numbered(br#"<row r="2" spans="1:4">"#));
+        assert!(row_numbered(br#"<row r="2"/>"#));
+        assert!(!row_numbered(br#"<row spans="1:4" outlineLevel="1">"#));
     }
 
     #[test]
