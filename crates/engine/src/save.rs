@@ -166,8 +166,8 @@ fn choose(
     if base.is_none() && target == SaveTarget::Copy {
         return Ok((Chosen::Full(full_sheets(data, carried)?), None));
     }
-    let book = book_print(data.book);
-    let prints = sheet_prints(data, carried);
+    let book = book_print(data.book)?;
+    let prints = sheet_prints(data, carried)?;
     let patched = match base {
         Some(base) => patch_plan(base, book, &prints, data, carried)?,
         None => None,

@@ -6,6 +6,7 @@ use std::time::SystemTime;
 use ironcalc::base::types::Workbook;
 use zenkai_xlsx_reader::{PackageLayout, SharedStrings};
 
+use crate::error::EngineError;
 use crate::fingerprint::{SheetPrint, book_print, sheet_print};
 use crate::save::ModelData;
 use crate::sheet_settings::Carried;
@@ -91,7 +92,10 @@ impl SavedSlot {
     }
 }
 
-pub(crate) fn sheet_prints(data: ModelData<'_>, carried: &Carried) -> Vec<SheetPrint> {
+pub(crate) fn sheet_prints(
+    data: ModelData<'_>,
+    carried: &Carried,
+) -> Result<Vec<SheetPrint>, EngineError> {
     data.book
         .worksheets
         .iter()
@@ -132,16 +136,26 @@ pub(crate) fn opened(
     let aligned = layout.styles.cell_xfs == styles.cell_xfs.len()
         && layout.styles.dxfs == styles.dxfs.len()
         && layout.worksheets.len() == data.book.worksheets.len();
-    aligned.then(|| SavedFile {
-        path: path.to_path_buf(),
-        stamp,
-        contents: Contents {
-            worksheets: layout.worksheets,
-            strings,
-            book: book_print(data.book),
-            sheets: sheet_prints(data, carried),
-            selected: selected_sheet(data.book),
-            metadata: Metadata::Unknown,
-        },
-    })
+    if !aligned {
+        return None;
+    }
+    let prints = book_print(data.book).and_then(|book| Ok((book, sheet_prints(data, carried)?)));
+    match prints {
+        Ok((book, sheets)) => Some(SavedFile {
+            path: path.to_path_buf(),
+            stamp,
+            contents: Contents {
+                worksheets: layout.worksheets,
+                strings,
+                book,
+                sheets,
+                selected: selected_sheet(data.book),
+                metadata: Metadata::Unknown,
+            },
+        }),
+        Err(error) => {
+            tracing::warn!(%error, "the first save writes the whole file");
+            None
+        }
+    }
 }

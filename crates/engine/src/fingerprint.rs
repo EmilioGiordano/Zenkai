@@ -3,8 +3,10 @@
 // does not matter. The structs are taken apart field by field so a field added to
 // IronCalc fails to build here instead of going unnoticed.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::{self, Write as _};
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::num::NonZeroUsize;
 
 use ironcalc::base::expressions::parser::Node;
 use ironcalc::base::expressions::parser::static_analysis::StaticResult;
@@ -12,7 +14,14 @@ use ironcalc::base::types::{
     ArrayKind, Cell, Col, Comment, FormulaValue, Row, SpillValue, Workbook, Worksheet,
 };
 
+use crate::error::EngineError;
 use crate::sheet_settings::SheetSettings;
+
+// A print is taken under the workbook's read lock, which edits wait on, so a large sheet's
+// cells are hashed on several threads while the calling thread hashes its formulas.
+const MAX_PRINT_THREADS: usize = 8;
+// Below this many rows per thread the spawn costs more than the hashing it saves.
+const MIN_ROWS_PER_THREAD: usize = 32 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SheetPrint {
@@ -34,9 +43,19 @@ impl SheetPrint {
     }
 }
 
-// For the small values IronCalc derives no Hash for.
-fn hash_debug(hasher: &mut DefaultHasher, value: &impl std::fmt::Debug) {
-    format!("{value:?}").hash(hasher);
+struct HashWriter<'h>(&'h mut DefaultHasher);
+
+impl fmt::Write for HashWriter<'_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.0.write(text.as_bytes());
+        Ok(())
+    }
+}
+
+// For the values IronCalc derives no Hash for, without building their text.
+fn hash_debug(hasher: &mut DefaultHasher, value: &impl fmt::Debug) -> Result<(), EngineError> {
+    write!(HashWriter(hasher), "{value:?}")
+        .map_err(|_| EngineError::Rejected("a value could not be fingerprinted".to_string()))
 }
 
 fn hash_formula_value(hasher: &mut DefaultHasher, value: &FormulaValue) {
@@ -124,6 +143,70 @@ fn hash_layout(hasher: &mut DefaultHasher, cols: &[Col], rows: &[Row], comments:
     }
 }
 
+type Rows<'s> = [(&'s i32, &'s HashMap<i32, Cell>)];
+
+fn rows_print(rows: &Rows<'_>) -> (u64, DynamicArrays) {
+    let mut cells = 0u64;
+    let mut dynamic_arrays = DynamicArrays::Absent;
+    for &(row, columns) in rows {
+        // An empty row map writes nothing, but it moves the dimension.
+        cells = cells.wrapping_add(cell_hash(*row, 0, &Cell::EmptyCell { s: -1 }));
+        for (column, cell) in columns {
+            cells = cells.wrapping_add(cell_hash(*row, *column, cell));
+            if let Cell::ArrayFormula {
+                kind: ArrayKind::Dynamic,
+                ..
+            } = cell
+            {
+                dynamic_arrays = DynamicArrays::Present;
+            }
+        }
+    }
+    (cells, dynamic_arrays)
+}
+
+fn print_threads() -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, NonZeroUsize::get)
+        .min(MAX_PRINT_THREADS)
+}
+
+// Runs `formulas_hash` on the calling thread, which may be the engine's deep stack, while
+// other threads sum the cell hashes; the sum does not depend on how the rows are split.
+fn cells_and_formulas(
+    sheet_data: &HashMap<i32, HashMap<i32, Cell>>,
+    formulas_hash: impl FnOnce() -> Result<u64, EngineError>,
+) -> Result<(u64, DynamicArrays, u64), EngineError> {
+    let rows: Vec<_> = sheet_data.iter().collect();
+    let per_thread = rows
+        .len()
+        .div_ceil(print_threads())
+        .max(MIN_ROWS_PER_THREAD);
+    let stopped = || EngineError::Rejected("fingerprinting a sheet stopped".to_string());
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = rows
+            .chunks(per_thread)
+            .skip(1)
+            .map(|rows| scope.spawn(move || rows_print(rows)))
+            .collect();
+        let first = rows.chunks(per_thread).next().map(rows_print);
+        let formulas = formulas_hash()?;
+        let mut cells = 0u64;
+        let mut dynamic_arrays = DynamicArrays::Absent;
+        let parts = workers
+            .into_iter()
+            .map(|worker| worker.join().map_err(|_| stopped()));
+        for part in first.into_iter().map(Ok).chain(parts) {
+            let (sum, arrays) = part?;
+            cells = cells.wrapping_add(sum);
+            if arrays == DynamicArrays::Present {
+                dynamic_arrays = DynamicArrays::Present;
+            }
+        }
+        Ok((cells, dynamic_arrays, formulas))
+    })
+}
+
 // `formulas` are the sheet's parsed formulas, which cells point into by index: a
 // formula rewritten by an edit elsewhere, such as a row inserted on the sheet it reads,
 // changes there and not in the cell.
@@ -131,7 +214,7 @@ pub(crate) fn sheet_print(
     sheet: &Worksheet,
     formulas: &[(Node, StaticResult)],
     settings: Option<&SheetSettings>,
-) -> SheetPrint {
+) -> Result<SheetPrint, EngineError> {
     let Worksheet {
         // Recomputed on every save.
         dimension: _,
@@ -152,42 +235,30 @@ pub(crate) fn sheet_print(
         show_grid_lines,
         conditional_formatting,
     } = sheet;
-    let mut cells = 0u64;
-    let mut dynamic_arrays = DynamicArrays::Absent;
-    for (row, columns) in sheet_data {
-        // An empty row map writes nothing, but it moves the dimension.
-        cells = cells.wrapping_add(cell_hash(*row, 0, &Cell::EmptyCell { s: -1 }));
-        for (column, cell) in columns {
-            cells = cells.wrapping_add(cell_hash(*row, *column, cell));
-            if let Cell::ArrayFormula {
-                kind: ArrayKind::Dynamic,
-                ..
-            } = cell
-            {
-                dynamic_arrays = DynamicArrays::Present;
-            }
+    let (cells, dynamic_arrays, formulas) = cells_and_formulas(sheet_data, || {
+        let mut hasher = DefaultHasher::new();
+        for formula in formulas {
+            hash_debug(&mut hasher, formula)?;
         }
-    }
+        Ok(hasher.finish())
+    })?;
     let mut hasher = DefaultHasher::new();
-    cells.hash(&mut hasher);
+    (cells, formulas).hash(&mut hasher);
     hash_layout(&mut hasher, cols, rows, comments);
-    for formula in formulas {
-        hash_debug(&mut hasher, formula);
-    }
     (name, shared_formulas, sheet_id, merge_cells).hash(&mut hasher);
     (frozen_rows, frozen_columns, show_grid_lines).hash(&mut hasher);
     settings.hash(&mut hasher);
-    hash_debug(&mut hasher, &(state, color, conditional_formatting));
-    SheetPrint {
+    hash_debug(&mut hasher, &(state, color, conditional_formatting))?;
+    Ok(SheetPrint {
         hash: hasher.finish(),
         dynamic_arrays,
-    }
+    })
 }
 
 // What the parts shared by every sheet depend on: the sheet list, the names, the styles
 // and the rest of the workbook a save writes outside the sheets. The shared strings are
 // left out; they only grow, and a save appends them.
-pub(crate) fn book_print(book: &Workbook) -> u64 {
+pub(crate) fn book_print(book: &Workbook) -> Result<u64, EngineError> {
     let Workbook {
         shared_strings: _,
         defined_names,
@@ -210,9 +281,9 @@ pub(crate) fn book_print(book: &Workbook) -> u64 {
     hash_debug(
         &mut hasher,
         &(&sheets, defined_names, styles, &tables, name),
-    );
-    hash_debug(&mut hasher, &(settings, metadata, theme));
-    hasher.finish()
+    )?;
+    hash_debug(&mut hasher, &(settings, metadata, theme))?;
+    Ok(hasher.finish())
 }
 
 #[cfg(test)]
@@ -239,6 +310,7 @@ mod tests {
             &model.parsed_formulas[sheet],
             None,
         )
+        .unwrap()
     }
 
     #[test]
@@ -255,7 +327,27 @@ mod tests {
             .unwrap();
         styled.workbook.worksheets[0].frozen_rows = 1;
         assert_ne!(print(&base, 0), print(&styled, 0));
-        assert_eq!(book_print(&base.workbook), book_print(&model().workbook));
+        assert_eq!(
+            book_print(&base.workbook).unwrap(),
+            book_print(&model().workbook).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_sheet_hashed_on_several_threads_matches_one_pass() {
+        let mut model = model();
+        let rows = i32::try_from(super::MIN_ROWS_PER_THREAD * 3).unwrap();
+        for row in 1..=rows {
+            model.set_user_input(0, row, 3, row.to_string()).unwrap();
+        }
+        let sheet = &model.workbook.worksheets[0];
+        let all: Vec<_> = sheet.sheet_data.iter().collect();
+        let (one_pass, _) = super::rows_print(&all);
+        let (split, _, _) = super::cells_and_formulas(&sheet.sheet_data, || Ok(0)).unwrap();
+        assert_eq!(split, one_pass);
+        let before = print(&model, 0);
+        model.set_user_input(0, rows, 3, "x".to_string()).unwrap();
+        assert_ne!(before, print(&model, 0));
     }
 
     #[test]
