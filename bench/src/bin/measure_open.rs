@@ -55,14 +55,24 @@ fn peak_commit_mb() -> f64 {
     peak_committed_bytes().map_or(-1.0, |b| b as f64 / 1024.0 / 1024.0)
 }
 
+// PrivateMemorySize64 is the committed private bytes right now, after the importer freed its DOM.
+fn current_commit_mb() -> f64 {
+    powershell_number(&format!(
+        "(Get-Process -Id {}).PrivateMemorySize64",
+        std::process::id()
+    ))
+    .map_or(-1.0, |b| b as f64 / 1024.0 / 1024.0)
+}
+
 fn begin(stage: &str) {
     println!("stage={stage} begin");
 }
 
 fn done(stage: &str, elapsed_ms: f64, extra: &str) {
     println!(
-        "stage={stage} ms={elapsed_ms:.0} peak_commit_mb={:.0} {extra}",
-        peak_commit_mb()
+        "stage={stage} ms={elapsed_ms:.0} peak_commit_mb={:.0} commit_mb={:.0} {extra}",
+        peak_commit_mb(),
+        current_commit_mb()
     );
 }
 
