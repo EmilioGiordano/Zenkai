@@ -24,6 +24,7 @@ use ironcalc_base::expressions::utils::number_to_column;
 use ironcalc_base::types::Workbook;
 use ironcalc_base::{get_milliseconds_since_epoch, Model};
 
+pub use self::shared_strings::get_shared_string_item_xml;
 pub use self::worksheets::write_worksheet_xml;
 use self::xml_constants::XML_DECLARATION;
 

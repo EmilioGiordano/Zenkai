@@ -394,3 +394,11 @@ fn written_worksheet_matches_the_saved_part() {
     assert_eq!(String::from_utf8(written).unwrap(), part);
     assert!(part.contains(r#"<c r="A1"><f>1+1</f><v>2</v></c>"#));
 }
+
+#[test]
+fn a_shared_string_item_is_escaped() {
+    assert_eq!(
+        crate::export::get_shared_string_item_xml("a<b & \u{1}"),
+        "<si><t>a&lt;b &amp; _x0001_</t></si>"
+    );
+}

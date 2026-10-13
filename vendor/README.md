@@ -24,6 +24,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   the package itself. An unevaluated formula now returns an error instead of
   panicking (`src/export/mod.rs`, `src/export/worksheets.rs`). Tests:
   `src/export/test/test_export.rs`.
+- `get_shared_string_item_xml` writes one `<si>` element of the shared
+  strings part, so a caller can append strings to an existing part
+  (`src/export/shared_strings.rs`). Tests: `src/export/test/test_export.rs`.
 
 Zenkai-only, not for upstream:
 
