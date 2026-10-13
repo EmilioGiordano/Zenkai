@@ -223,9 +223,7 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    document::write_snapshot(&shared, FileJob::Autosaving, |bytes| {
-                        recovery::write(bytes, &target)
-                    })
+                    document::write_snapshot(&shared, FileJob::Autosaving, &target, recovery::write)
                 })
                 .await;
             let update = this.update(cx, |this, cx| {
@@ -367,7 +365,8 @@ impl Workspace {
                             document::write_snapshot(
                                 &write.workbook,
                                 FileJob::Autosaving,
-                                |bytes| recovery::write(bytes, &write.target),
+                                &write.target,
+                                recovery::write,
                             )
                         })
                         .collect::<Vec<Result<(), EngineError>>>()

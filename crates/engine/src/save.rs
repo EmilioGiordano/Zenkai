@@ -41,6 +41,12 @@ pub struct SaveSnapshot {
     plan: FullPlan,
 }
 
+impl SaveSnapshot {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 fn rejected(error: impl ToString) -> EngineError {
     EngineError::Rejected(format!("saving the workbook: {}", error.to_string()))
 }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::EngineError;
 use crate::preflight;
-use crate::workbook::{Engine, Workbook};
+use crate::workbook::Workbook;
 use crate::xlsx_read::{self, XlsxReader};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -83,12 +83,6 @@ pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineE
     })
 }
 
-// The engine's importer can panic on malformed parts; a broken file must
-// become an error message, never take the application down.
-fn load_guarded(bytes: &[u8], name: &str) -> Result<Workbook, EngineError> {
-    preflight::run_with_engine_stack(|| Workbook::from_xlsx_bytes(bytes, name))
-}
-
 pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
     let found = std::sync::Mutex::new(Vec::new());
     zenkai_xlsx_reader::scan_parts(bytes, &|name, part| inspect_part(&found, name, part))
@@ -99,10 +93,6 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
     found.sort();
     found.dedup();
     Ok(found)
-}
-
-pub fn xlsx_bytes(workbook: &Workbook) -> Result<Vec<u8>, EngineError> {
-    preflight::run_with_engine_stack(|| workbook.to_xlsx())
 }
 
 pub(crate) fn inspect_part(
@@ -153,14 +143,6 @@ pub(crate) fn part_unsupported(name: &str, part: &[u8]) -> Result<Vec<Unsupporte
         }
     }
     Ok(found)
-}
-
-// Write to a sibling temp file, prove it reopens, then replace: the original is
-// never truncated and survives any failure before the final rename.
-pub fn save_xlsx_atomic(bytes: &[u8], path: &Path) -> Result<(), EngineError> {
-    write_atomic(path, bytes, |written| {
-        load_guarded(written, "verify").map(|_| ())
-    })
 }
 
 // Every write over a user file goes through here: sibling temp file, read back
@@ -229,6 +211,7 @@ mod tests {
     use std::io::{Cursor, Read};
 
     use super::*;
+    use crate::workbook::Engine;
     use zenkai_types::{CellPos, Contents, Range, SheetId};
 
     fn number_at(book: &Workbook, pos: CellPos) -> Option<f64> {
@@ -263,7 +246,7 @@ mod tests {
             .workbook
             .set_input(SheetId(0), CellPos::parse_a1("A1").unwrap(), "3")
             .unwrap();
-        save_xlsx_atomic(&xlsx_bytes(&opened.workbook).unwrap(), &path).unwrap();
+        crate::save_xlsx(opened.workbook.save_snapshot(&path).unwrap()).unwrap();
 
         let reopened = open_xlsx(&path).unwrap();
         assert_eq!(reopened.workbook.cell(SheetId(0), a2).text, "63");

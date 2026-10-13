@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use peak_alloc::PeakAlloc;
-use zenkai_engine::{Engine, Workbook, open_xlsx, run_with_engine_stack, write_atomic, xlsx_bytes};
+use zenkai_engine::{Engine, Workbook, open_xlsx, save_xlsx};
 use zenkai_types::{CellPos, SheetId};
 
 #[global_allocator]
@@ -84,25 +84,15 @@ fn main() -> Result<()> {
     workbook.set_input(sheet, pos, &flip_number(&before))?;
     done("edit", start, &format!("cell={cell}"));
 
-    begin("serialize");
+    begin("snapshot");
     let start = Instant::now();
-    let bytes = xlsx_bytes(&workbook)?;
-    done(
-        "serialize",
-        start,
-        &format!("zip_mb={:.1}", bytes.len() as f64 / 1024.0 / 1024.0),
-    );
+    let snapshot = workbook.save_snapshot(&target)?;
+    done("snapshot", start, "");
 
-    begin("write");
+    begin("save");
     let start = Instant::now();
-    write_atomic(&target, &bytes, |_| Ok(()))?;
-    done("write", start, "");
-    drop(bytes);
-
-    begin("verify");
-    let start = Instant::now();
-    let written = std::fs::read(&target)?;
-    run_with_engine_stack(|| Workbook::from_xlsx_bytes(&written, "verify"))?;
-    done("verify", start, "");
+    save_xlsx(snapshot)?;
+    let zip_mb = std::fs::metadata(&target)?.len() as f64 / 1024.0 / 1024.0;
+    done("save", start, &format!("zip_mb={zip_mb:.1}"));
     Ok(())
 }
