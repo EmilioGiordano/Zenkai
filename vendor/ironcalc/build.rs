@@ -114,7 +114,7 @@ fn collect_xlsx(
         parts.push(sanitize_name(stem));
         let fn_suffix = parts.join("_");
 
-        let file_path = format!("{}/{}", cfg_dir, rel.to_string_lossy());
+        let file_path = format!("{}/{}", cfg_dir, rel.to_string_lossy().replace('\\', "/"));
         results.push((fn_suffix, file_path));
     }
 }
