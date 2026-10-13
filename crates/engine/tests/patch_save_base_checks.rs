@@ -103,6 +103,7 @@ const SPARE_PART: &str = "xl/worksheets/spare2.xml";
 const RELS_PART: &str = "xl/_rels/workbook.xml.rels";
 
 type Entries = Vec<(String, Vec<u8>)>;
+type Swap = fn(Entries) -> Entries;
 
 fn edited(entries: Entries, name: &str, edit: impl Fn(String) -> String) -> Entries {
     entries
@@ -158,7 +159,7 @@ fn swap_keeping_stamp(path: &Path, entries: &Entries) {
 
 #[test]
 fn a_file_swapped_with_the_same_stamp_fails_the_save_and_the_next_one_works() {
-    let swaps: [(&str, fn(Entries) -> Entries); 3] = [
+    let swaps: [(&str, Swap); 3] = [
         ("strings merged", strings_merged),
         ("notes twice", notes_twice),
         ("sheet moved", sheet_moved),
