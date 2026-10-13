@@ -10,7 +10,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use zenkai_agent::settings::SettingsError;
-use zenkai_engine::{Copied, Engine, EngineError, Workbook, save_xlsx_atomic};
+use zenkai_engine::{Copied, Engine, EngineError, SaveTarget, Workbook, save_xlsx};
 use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
@@ -1615,9 +1615,13 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    document::write_snapshot(&shared, FileJob::Saving, |bytes| {
-                        save_xlsx_atomic(bytes, &target)
-                    })
+                    document::write_snapshot(
+                        &shared,
+                        FileJob::Saving,
+                        &target,
+                        SaveTarget::Document,
+                        save_xlsx,
+                    )
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {

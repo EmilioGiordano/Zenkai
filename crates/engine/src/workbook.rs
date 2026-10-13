@@ -4,14 +4,15 @@ use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::{
     Cell, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
 };
-use ironcalc::base::{BorderArea, ClipboardData, UserModel};
-use ironcalc::export::save_xlsx_to_writer;
+use ironcalc::base::{BorderArea, ClipboardData, Model, UserModel};
 use ironcalc::import::load_from_xlsx_bytes;
 
 use crate::error::EngineError;
 use crate::file::Unsupported;
 use crate::model::CachedModel;
 use crate::rectangles::covering_rectangles;
+use crate::save::{ModelData, SaveSnapshot, SaveTarget};
+use crate::saved::{FileOnDisk, SavedSlot};
 use crate::sheet_settings::{Carried, SheetSettings};
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
@@ -170,6 +171,7 @@ pub trait Engine: Send {
 pub struct Workbook {
     model: CachedModel,
     carried: Carried,
+    saved: SavedSlot,
 }
 
 // What a copy produced: the text Excel and other apps understand, plus the engine's
@@ -430,6 +432,7 @@ impl Workbook {
         Ok(Workbook {
             model: CachedModel::new(model),
             carried: Carried::default(),
+            saved: SavedSlot::default(),
         })
     }
 
@@ -440,43 +443,25 @@ impl Workbook {
     pub(crate) fn from_book(
         book: ironcalc::base::types::Workbook,
     ) -> Result<Workbook, EngineError> {
-        let model = ironcalc::base::Model::from_workbook(book, LANGUAGE).map_err(|error| {
-            if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
-                EngineError::Unsafe(error)
-            } else {
-                EngineError::InvalidFile(error)
-            }
-        })?;
-        let mut model = UserModel::from_model(model);
-        model.evaluate();
-        let workbook = Workbook {
-            model: CachedModel::new(model),
-            carried: Carried::default(),
-        };
-        workbook.warm_used_areas();
-        Ok(workbook)
+        let model = engine_model(book)?;
+        Ok(evaluated(model, Carried::default(), SavedSlot::default()))
     }
 
-    // Call on a background thread after building or editing, so the UI thread never walks a sheet.
-    // `settings` are by position among the file's worksheets, the order IronCalc loads them in.
-    pub(crate) fn carry(&mut self, settings: Vec<SheetSettings>) {
-        let ids: Vec<u32> = self
-            .model
-            .get_model()
-            .workbook
-            .worksheets
-            .iter()
-            .map(|sheet| sheet.sheet_id)
-            .collect();
-        if ids.len() != settings.len() {
-            tracing::error!(
-                sheets = ids.len(),
-                read = settings.len(),
-                "sheet settings do not match the loaded sheets; they are not kept"
-            );
-            return;
+    // `settings` are by position among the file's worksheets, the order IronCalc loads them
+    // in. The file is remembered by the values it stores, before the engine recalculates
+    // them, so a sheet whose stored values were stale is written again by the next save.
+    pub(crate) fn from_file(
+        book: ironcalc::base::types::Workbook,
+        settings: Vec<SheetSettings>,
+        file: Option<FileOnDisk<'_>>,
+    ) -> Result<Workbook, EngineError> {
+        let model = engine_model(book)?;
+        let carried = carried_by_position(&model, settings);
+        let saved = SavedSlot::default();
+        if let Some(file) = file {
+            saved.set(crate::saved::opened(file, ModelData::of(&model), &carried));
         }
-        self.carried = Carried::new(ids.into_iter().zip(settings).collect());
+        Ok(evaluated(model, carried, saved))
     }
 
     // What a save will leave out because an edit made it wrong, such as grouping after
@@ -503,6 +488,18 @@ impl Workbook {
         }
     }
 
+    // Copies what a save of this workbook to `path` writes; take it under the read lock and
+    // write it with `save_xlsx` after releasing the lock.
+    pub fn save_snapshot(
+        &self,
+        path: &std::path::Path,
+        target: SaveTarget,
+    ) -> Result<SaveSnapshot, EngineError> {
+        let model = self.model.get_model();
+        crate::save::snapshot(path, target, model, &self.carried, &self.saved)
+    }
+
+    // Call on a background thread after building or editing, so the UI thread never walks a sheet.
     pub fn warm_used_areas(&self) {
         for sheet in self.sheets() {
             self.model.used_end(sheet.id);
@@ -1366,10 +1363,9 @@ impl Engine for Workbook {
     }
 
     fn to_xlsx(&self) -> Result<Vec<u8>, EngineError> {
-        let xlsx = save_xlsx_to_writer(self.model.get_model(), Cursor::new(Vec::new()))
-            .map(Cursor::into_inner)
-            .map_err(|e| rejected(format!("{e:?}")))?;
-        crate::sheet_patch::patch_sheets(self.model.get_model(), &self.carried, xlsx)
+        let plan = crate::save::full_plan(self.model.get_model(), &self.carried)?;
+        let (xlsx, _) = crate::save::write_full(plan, Cursor::new(Vec::new()))?;
+        Ok(xlsx.into_inner())
     }
 }
 
@@ -1543,6 +1539,46 @@ pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
         Some(error) => Err(rejected(error)),
         None => Ok(formatted.text),
     }
+}
+
+fn engine_model(book: ironcalc::base::types::Workbook) -> Result<Model<'static>, EngineError> {
+    Model::from_workbook(book, LANGUAGE).map_err(|error| {
+        if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
+            EngineError::Unsafe(error)
+        } else {
+            EngineError::InvalidFile(error)
+        }
+    })
+}
+
+fn evaluated(model: Model<'static>, carried: Carried, saved: SavedSlot) -> Workbook {
+    let mut model = UserModel::from_model(model);
+    model.evaluate();
+    let workbook = Workbook {
+        model: CachedModel::new(model),
+        carried,
+        saved,
+    };
+    workbook.warm_used_areas();
+    workbook
+}
+
+fn carried_by_position(model: &Model<'_>, settings: Vec<SheetSettings>) -> Carried {
+    let ids: Vec<u32> = model
+        .workbook
+        .worksheets
+        .iter()
+        .map(|sheet| sheet.sheet_id)
+        .collect();
+    if ids.len() != settings.len() {
+        tracing::error!(
+            sheets = ids.len(),
+            read = settings.len(),
+            "sheet settings do not match the loaded sheets; they are not kept"
+        );
+        return Carried::default();
+    }
+    Carried::new(ids.into_iter().zip(settings).collect())
 }
 
 #[cfg(test)]

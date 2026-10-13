@@ -354,3 +354,51 @@ fn test_defined_name_lambda_exports_excel_prefixes() {
     );
     fs::remove_file(temp_file_name).unwrap();
 }
+
+#[test]
+fn unevaluated_formula_is_an_error_not_a_panic() {
+    let mut model = new_empty_model();
+    model.set_user_input(0, 1, 1, "=1+1".to_string()).unwrap();
+    let saved = crate::export::save_xlsx_to_writer(&model, std::io::Cursor::new(Vec::new()));
+    assert!(matches!(saved, Err(XlsxError::IO(_))));
+}
+
+#[test]
+fn written_worksheet_matches_the_saved_part() {
+    use std::io::Read;
+
+    let mut model = new_empty_model();
+    model.set_user_input(0, 1, 1, "=1+1".to_string()).unwrap();
+    model.set_user_input(0, 3, 2, "text".to_string()).unwrap();
+    model.evaluate();
+    let saved = crate::export::save_xlsx_to_writer(&model, std::io::Cursor::new(Vec::new()))
+        .unwrap()
+        .into_inner();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+    let mut part = String::new();
+    archive
+        .by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut part)
+        .unwrap();
+
+    let mut written = Vec::new();
+    crate::export::write_worksheet_xml(
+        &mut written,
+        &model.workbook.worksheets[0],
+        &model.parsed_formulas[0],
+        "A1:B3",
+        true,
+    )
+    .unwrap();
+    assert_eq!(String::from_utf8(written).unwrap(), part);
+    assert!(part.contains(r#"<c r="A1"><f>1+1</f><v>2</v></c>"#));
+}
+
+#[test]
+fn a_shared_string_item_is_escaped() {
+    assert_eq!(
+        crate::export::get_shared_string_item_xml("a<b & \u{1}"),
+        "<si><t>a&lt;b &amp; _x0001_</t></si>"
+    );
+}
