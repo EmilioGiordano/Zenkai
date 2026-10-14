@@ -112,15 +112,16 @@ fn print_sizes() {
 
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (path, edits) = match args
+    let (path, edits, app_only) = match args
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>()
         .as_slice()
     {
-        [file] => (PathBuf::from(file), false),
-        [file, "--edits"] => (PathBuf::from(file), true),
-        _ => bail!("usage: measure_open <file.xlsx> [--edits]"),
+        [file] => (PathBuf::from(file), false, false),
+        [file, "--edits"] => (PathBuf::from(file), true, false),
+        [file, "--app"] => (PathBuf::from(file), false, true),
+        _ => bail!("usage: measure_open <file.xlsx> [--edits | --app]"),
     };
     if !path.is_file() {
         bail!("not a file: {}", path.display());
@@ -137,6 +138,10 @@ fn main() -> Result<()> {
     );
     print_sizes();
     PEAK.reset_peak_usage();
+
+    if app_only {
+        return run_app_open(&path);
+    }
 
     let name = path
         .file_stem()
@@ -233,6 +238,42 @@ fn main() -> Result<()> {
     drop(raw);
     drop(bytes);
     run_engine_edits(&path, &found)?;
+    Ok(())
+}
+
+// The app's own open path alone (streaming reader, model build, first evaluation),
+// so the process peak is what a user's open costs.
+fn run_app_open(path: &Path) -> Result<()> {
+    begin("app");
+    let start = Instant::now();
+    if std::env::var_os("ZENKAI_OPEN_TIMELINE").is_some() {
+        std::thread::spawn(|| {
+            let origin = Instant::now();
+            loop {
+                eprintln!(
+                    "timeline ms={} alloc_mb={:.0}",
+                    origin.elapsed().as_millis(),
+                    PEAK.current_usage() as f64 / 1024.0 / 1024.0
+                );
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+        });
+    }
+    let opened = open_xlsx_with(path, XlsxReader::Fast)?;
+    let open_ms = ms(start);
+    let fallback = opened
+        .fallback
+        .clone()
+        .unwrap_or_else(|| "none".to_string());
+    let at_rest = PEAK.current_usage() as f64 / 1024.0 / 1024.0;
+    done(
+        "app",
+        open_ms,
+        &format!(
+            "fallback={fallback} alloc_peak_mb={:.0} alloc_at_rest_mb={at_rest:.0}",
+            PEAK.peak_usage_as_mb()
+        ),
+    );
     Ok(())
 }
 
