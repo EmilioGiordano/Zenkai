@@ -729,6 +729,38 @@ mod tests {
     }
 
     #[test]
+    fn the_fallback_walk_is_charged_at_the_importer_cost() {
+        let usage = Usage {
+            cells: 300,
+            formulas: 0,
+            bytes: 0,
+            rows: 0,
+        };
+        let streaming = Budgets::with_cells(CellBudget::max_cells_for_test(1_000));
+        assert!(streaming.check_usage(usage).is_ok());
+        let importer = Budgets::with_cells(CellBudget::max_cells_for_test(1_000));
+        let error = importer.check_importer_usage(usage).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
+    }
+
+    #[test]
+    fn declared_worksheet_sizes_only_shape_the_refusal_message() {
+        let usage = Usage {
+            cells: 1_001,
+            formulas: 0,
+            bytes: 0,
+            rows: 0,
+        };
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1_000));
+        budgets.expect_sheet_bytes(u64::MAX);
+        assert!(budgets.check_usage(usage).is_err());
+        let roomy = Budgets::with_cells(CellBudget::max_cells_for_test(2_000));
+        roomy.expect_sheet_bytes(u64::MAX);
+        assert!(roomy.check_usage(usage).is_ok());
+    }
+
+    #[test]
     fn parts_past_the_per_part_cap_are_refused() {
         let budgets = Budgets::with_entry_cap(CellBudget::max_cells_for_test(u64::MAX), 1024);
         let data = vec![7u8; 2048];

@@ -390,13 +390,74 @@ mod tests {
     fn the_importer_route_is_charged_more_than_the_streaming_route() {
         let budget = CellBudget::from_budget_mb(9_752);
         let usage = Usage {
-            cells: 19_451_599,
+            cells: 21_000_000,
             formulas: 269_081,
             bytes: 0,
             rows: 0,
         };
         assert!(budget.check_route(usage, Route::Streaming, None).is_ok());
         assert!(budget.check_route(usage, Route::Importer, None).is_err());
+    }
+
+    #[test]
+    fn the_importer_route_is_refused_exactly_past_its_own_cost() {
+        let budget = CellBudget::max_cells_for_test(1_000);
+        let supported = 1_000 * BYTES_PER_CELL;
+        let cells = supported / ironcalc::base::open_budget::IMPORTER_BYTES_PER_CELL;
+        let usage = |cells| Usage {
+            cells,
+            formulas: 0,
+            bytes: 0,
+            rows: 0,
+        };
+        assert!(
+            budget
+                .check_route(usage(cells), Route::Importer, None)
+                .is_ok()
+        );
+        assert!(
+            budget
+                .check_route(usage(cells + 1), Route::Importer, None)
+                .is_err()
+        );
+        assert!(
+            budget
+                .check_route(usage(cells + 1), Route::Streaming, None)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_projection_only_applies_while_the_file_has_more_to_read() {
+        let budget = CellBudget::max_cells_for_test(1_000);
+        let usage = Usage {
+            cells: 1_001,
+            formulas: 0,
+            bytes: 0,
+            rows: 0,
+        };
+        for projection in [(10, 10), (5, 10), (40, 0)] {
+            let error = budget
+                .check_route(usage, Route::Streaming, Some(projection))
+                .unwrap_err();
+            assert!(error.to_string().contains("1001 cells"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_projection_past_the_integer_range_saturates_instead_of_overflowing() {
+        let budget = CellBudget::max_cells_for_test(1);
+        let usage = Usage {
+            cells: u64::MAX / 2,
+            formulas: 1,
+            bytes: 1,
+            rows: 1,
+        };
+        assert!(
+            budget
+                .check_route(usage, Route::Importer, Some((u64::MAX, 1)))
+                .is_err()
+        );
     }
 
     #[test]
