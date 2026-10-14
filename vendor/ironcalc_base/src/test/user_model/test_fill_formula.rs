@@ -30,7 +30,9 @@ fn model_with(source: &str) -> UserModel<'static> {
             .set_user_input(0, row, 2, &format!("{}%", row * 3))
             .unwrap();
         model.set_user_input(0, row, 3, "text").unwrap();
-        model.set_user_input(1, row, 1, &(row * 10).to_string()).unwrap();
+        model
+            .set_user_input(1, row, 1, &(row * 10).to_string())
+            .unwrap();
     }
     model.set_user_input(0, 5, 6, source).unwrap();
     model.set_user_input(0, 8, 6, "=1+1").unwrap();
@@ -102,7 +104,11 @@ fn assert_same_fill(source_formula: &str, source: (i32, i32), target: &Area) {
 
     by_text.undo().unwrap();
     by_sharing.undo().unwrap();
-    assert_eq!(snapshot(&by_sharing), snapshot(&by_text), "{source_formula} undo");
+    assert_eq!(
+        snapshot(&by_sharing),
+        snapshot(&by_text),
+        "{source_formula} undo"
+    );
     assert_eq!(content(&by_sharing), before, "{source_formula} undo state");
 
     by_text.redo().unwrap();
@@ -135,7 +141,13 @@ fn filling_up_matches_filling_as_text() {
 #[test]
 fn a_fill_keeps_the_formula_stored_once() {
     let mut model = model_with("=A5+B5");
-    let stored = model.model.workbook.worksheet(0).unwrap().shared_formulas.len();
+    let stored = model
+        .model
+        .workbook
+        .worksheet(0)
+        .unwrap()
+        .shared_formulas
+        .len();
     assert!(model.fill_formula((5, 6), &area(6, 6, 1, 500)).unwrap());
     let worksheet = model.model.workbook.worksheet(0).unwrap();
     assert_eq!(worksheet.shared_formulas.len(), stored);
@@ -157,8 +169,12 @@ fn a_fill_that_leaves_the_sheet_is_left_to_the_text_path() {
     model
         .set_user_input(0, last - 3, 2, &format!("=A{}", last - 2))
         .unwrap();
-    assert!(model.fill_formula((last - 3, 2), &area(last - 2, 2, 1, 2)).unwrap());
-    assert!(!model.fill_formula((last - 3, 2), &area(last - 2, 2, 1, 3)).unwrap());
+    assert!(model
+        .fill_formula((last - 3, 2), &area(last - 2, 2, 1, 2))
+        .unwrap());
+    assert!(!model
+        .fill_formula((last - 3, 2), &area(last - 2, 2, 1, 3))
+        .unwrap());
 }
 
 #[test]
@@ -169,7 +185,9 @@ fn only_a_plain_formula_is_filled_by_sharing() {
     assert!(!model.fill_formula((5, 6), &area(6, 7, 1, 2)).unwrap());
     model.set_user_input(0, 5, 6, "=A5").unwrap();
     assert!(!model.fill_formula((5, 6), &area(5, 6, 1, 2)).unwrap());
-    model.set_user_array_formula(0, 10, 8, 2, 2, "=A1:B2").unwrap();
+    model
+        .set_user_array_formula(0, 10, 8, 2, 2, "=A1:B2")
+        .unwrap();
     assert!(!model.fill_formula((5, 6), &area(9, 8, 1, 3)).unwrap());
 }
 
@@ -180,7 +198,9 @@ fn a_group_of_edits_is_one_undo_step() {
     model.begin_edit_group().unwrap();
     assert!(model.fill_formula((5, 6), &area(6, 6, 1, 4)).unwrap());
     model.set_user_input(0, 1, 9, "13").unwrap();
-    model.paste_csv_string(&area(3, 9, 1, 1), "1\t2\n3\t4").unwrap();
+    model
+        .paste_csv_string(&area(3, 9, 1, 1), "1\t2\n3\t4")
+        .unwrap();
     model.end_edit_group().unwrap();
     let after = snapshot(&model);
     assert_eq!(model.get_formatted_cell_value(0, 1, 9).unwrap(), "13");

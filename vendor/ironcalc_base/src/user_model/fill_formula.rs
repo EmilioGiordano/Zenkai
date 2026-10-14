@@ -112,11 +112,7 @@ impl UserModel<'_> {
     /// the formula is copied, as one undo step. Returns false, changing nothing, when the
     /// cells have to be filled as text: the source is not a plain formula, a reference would
     /// leave the sheet or invert a range, or the target holds an array or a spill.
-    pub fn fill_formula(
-        &mut self,
-        source: (i32, i32),
-        target: &Area,
-    ) -> Result<bool, String> {
+    pub fn fill_formula(&mut self, source: (i32, i32), target: &Area) -> Result<bool, String> {
         let Some(old_values) = self.write_filled_formula(source, target)? else {
             return Ok(false);
         };
@@ -130,12 +126,6 @@ impl UserModel<'_> {
             height: target.height,
             old_values,
         }]);
-        self.set_selected_range(
-            target.row,
-            target.column,
-            target.row + target.height - 1,
-            target.column + target.width - 1,
-        )?;
         self.evaluate_if_not_paused();
         Ok(true)
     }
@@ -166,10 +156,7 @@ impl UserModel<'_> {
         for row in target.row..target.row + target.height {
             for column in target.column..target.column + target.width {
                 let old = worksheet.cell(row, column);
-                if matches!(
-                    old,
-                    Some(Cell::ArrayFormula(_)) | Some(Cell::SpillCell(_))
-                ) {
+                if matches!(old, Some(Cell::ArrayFormula(_)) | Some(Cell::SpillCell(_))) {
                     return Ok(None);
                 }
                 old_values.push(old.cloned());
