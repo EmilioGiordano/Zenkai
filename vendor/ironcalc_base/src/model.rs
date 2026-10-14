@@ -2877,6 +2877,25 @@ impl<'a> Model<'a> {
         cells
     }
 
+    /// Returns the cells holding a formula, in natural (sheet, row, column) order.
+    fn get_formula_cells(&self) -> Vec<CellIndex> {
+        let mut cells = Vec::new();
+        for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
+            for row in sheet.sheet_data.rows_sorted() {
+                for (column, cell) in sheet.sheet_data.row_cells(row) {
+                    if cell.get_formula().is_some() {
+                        cells.push(CellIndex {
+                            index: index as u32,
+                            row,
+                            column,
+                        });
+                    }
+                }
+            }
+        }
+        cells
+    }
+
     /// Collects all dynamic-formula anchor cells in natural (sheet, row, column) order
     /// and stores them in `self.spill_cells`.
     fn collect_spill_cells(&mut self) {
@@ -3015,8 +3034,11 @@ impl<'a> Model<'a> {
 
         // Phase 2: evaluate everything else; spill cells are already Evaluated and skipped.
         // Fallback when max restarts is exceeded (circular spill dependency).
-        let all_cells = self.get_all_cells();
-        for cell in all_cells {
+        // Only formula cells do work here: reading any other cell changes nothing, and the
+        // anchor of an array or spill sits before the cells it covers in this order. Listing
+        // every cell would cost 12 bytes each and double while it grew.
+        let formula_cells = self.get_formula_cells();
+        for cell in formula_cells {
             self.evaluate_cell(CellReferenceIndex {
                 sheet: cell.index,
                 row: cell.row,

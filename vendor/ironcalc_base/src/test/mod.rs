@@ -97,6 +97,7 @@ mod test_cycle_reference;
 mod test_datetime_format;
 mod test_empty_formula_result;
 mod test_escape_quotes;
+mod test_full_evaluation_cells;
 mod test_even_odd;
 mod test_exp_sign;
 mod test_extend;

@@ -105,6 +105,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - `StaticResult` derives `Clone`, `Debug` and `PartialEq`, so a caller can copy a
   sheet's parsed formulas, for instance to save them away from the model
   (`src/expressions/parser/static_analysis.rs`).
+- The full evaluation lists the cells holding a formula instead of every cell, so a
+  workbook of millions of values no longer builds a 12-byte index of each one first
+  (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
+  `src/test/test_full_evaluation_cells.rs`.
 
 Zenkai-only, not for upstream:
 
