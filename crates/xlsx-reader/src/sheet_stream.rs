@@ -1560,7 +1560,7 @@ mod tests {
         let error = stream_with(&xml, &budgets)
             .err()
             .expect("ten cells with huge strings must trip the budget");
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
     }
 
     #[test]
@@ -1586,7 +1586,7 @@ mod tests {
             .err()
             .expect("a growing sheet must stop");
         let message = error.to_string();
-        assert!(message.contains("needs at least"), "{message}");
+        assert!(message.contains("needs about"), "{message}");
     }
 
     #[test]
@@ -1603,7 +1603,7 @@ mod tests {
         let error = stream_with(&xml, &budgets)
             .err()
             .expect("outline tags with kilobytes of attributes must trip the budget");
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
     }
 
     #[test]
@@ -1618,7 +1618,7 @@ mod tests {
         let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
         let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(500));
         let error = config_with(&xml, &budgets).expect_err("outline tags must trip the budget");
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
     }
 
     #[test]
@@ -1634,6 +1634,6 @@ mod tests {
             .err()
             .expect("a sheet over budget must stop");
         let message = error.to_string();
-        assert!(message.contains("needs at least"), "{message}");
+        assert!(message.contains("needs about"), "{message}");
     }
 }

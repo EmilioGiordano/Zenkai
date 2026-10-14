@@ -120,6 +120,15 @@ fn read_from<R: Read + Seek>(
         .enumerate()
         .map(|(position, part)| (part.path.as_str(), position))
         .collect();
+    let declared = (0..archive.len())
+        .filter_map(|index| {
+            let entry = archive.by_index_raw(index).ok()?;
+            positions
+                .contains_key(entry.name())
+                .then_some(entry.size())
+        })
+        .fold(0u64, u64::saturating_add);
+    budgets.expect_sheet_bytes(declared);
     let mut sheets: Vec<Option<StreamedSheet>> =
         (0..package.worksheets.len()).map(|_| None).collect();
     for index in 0..archive.len() {
@@ -306,7 +315,7 @@ fn scan_archive<R: Read + Seek>(
                 .starts_with("xl/worksheets/");
         let (_, part, usage) = read_part_if_checked(archive, index, meter, budgets, count_cells)?;
         if count_cells {
-            budgets.check_usage(usage)?;
+            budgets.check_importer_usage(usage)?;
         }
         inspect(&entry_name, &part)?;
     }
@@ -430,7 +439,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
         let error = scan_archive(&mut archive, &meter, &tiny, &|_, _| Ok(())).unwrap_err();
         assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
         let roomy = Budgets::with_cells(CellBudget::max_cells_for_test(10_000));
         let meter = CompressedMeter::new();
         let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
@@ -454,7 +463,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
         let error = scan_archive(&mut archive, &meter, &tiny, &|_, _| Ok(())).unwrap_err();
         assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
         let roomy = Budgets::with_cells(CellBudget::max_cells_for_test(10_000));
         let meter = CompressedMeter::new();
         let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
@@ -501,7 +510,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
         let error = scan_archive(&mut archive, &meter, &tiny, &|_, _| Ok(())).unwrap_err();
         assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
     }
 
     #[test]
