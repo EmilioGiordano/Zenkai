@@ -15,6 +15,7 @@ struct Shape {
     formula_percent: u64,
     string_percent: u64,
     distinct_formulas: bool,
+    unique_strings: bool,
     styles: usize,
 }
 
@@ -33,6 +34,7 @@ fn parse(args: &[String]) -> Result<Shape> {
         formula_percent: 0,
         string_percent: 0,
         distinct_formulas: false,
+        unique_strings: false,
         styles: 0,
     };
     for pair in args {
@@ -46,6 +48,7 @@ fn parse(args: &[String]) -> Result<Shape> {
             "formulas" => shape.formula_percent = value.parse()?,
             "strings" => shape.string_percent = value.parse()?,
             "distinct" => shape.distinct_formulas = value == "1",
+            "unique_strings" => shape.unique_strings = value == "1",
             "styles" => shape.styles = value.parse()?,
             _ => bail!("unknown key {key}"),
         }
@@ -60,7 +63,7 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some((out, rest)) = args.split_first() else {
         bail!(
-            "usage: gen_open_matrix <out.xlsx> [sheets=1 rows=100000 cols=10 formulas=0 strings=0 distinct=0 styles=0]"
+            "usage: gen_open_matrix <out.xlsx> [sheets=1 rows=100000 cols=10 formulas=0 strings=0 distinct=0 unique_strings=0 styles=0]"
         );
     };
     let shape = parse(rest)?;
@@ -73,7 +76,7 @@ fn main() -> Result<()> {
         .collect();
     let mut book = Workbook::new();
     let mut state = 7;
-    for _ in 0..shape.sheets {
+    for sheet_index in 0..shape.sheets {
         let sheet = book.add_worksheet();
         for row in 0..shape.rows {
             for column in 0..shape.columns {
@@ -94,7 +97,11 @@ fn main() -> Result<()> {
                         None => sheet.write_formula(row, column, formula)?,
                     };
                 } else if column >= 2 && roll >= 100 - shape.string_percent {
-                    let text = format!("item {}", next(&mut state) % 5_000);
+                    let text = if shape.unique_strings {
+                        format!("item {sheet_index}-{row}-{column}")
+                    } else {
+                        format!("item {}", next(&mut state) % 5_000)
+                    };
                     match format {
                         Some(format) => {
                             sheet.write_string_with_format(row, column, text, format)?
