@@ -120,12 +120,15 @@ fn read_from<R: Read + Seek>(
         .enumerate()
         .map(|(position, part)| (part.path.as_str(), position))
         .collect();
-    let declared = (0..archive.len())
-        .filter_map(|index| {
-            let entry = archive.by_index_raw(index).ok()?;
-            positions.contains_key(entry.name()).then_some(entry.size())
-        })
-        .fold(0u64, u64::saturating_add);
+    let mut declared = 0u64;
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index_raw(index)
+            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+        if positions.contains_key(entry.name()) {
+            declared = declared.saturating_add(entry.size());
+        }
+    }
     budgets.expect_sheet_bytes(declared);
     let mut sheets: Vec<Option<StreamedSheet>> =
         (0..package.worksheets.len()).map(|_| None).collect();
