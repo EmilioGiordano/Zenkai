@@ -401,15 +401,16 @@ impl Workspace {
         let Some(document) = self.documents.active() else {
             return;
         };
-        let id = document.id;
+        let (id, generation) = (document.id, document.generation());
+        let refresh = self.missed.upgraded(generation, refresh);
         let Some(mut cells) = document.cells(&ranges, self.show_formulas) else {
-            self.missed.miss_cells(refresh);
+            self.missed.miss_cells(generation, refresh);
             self.wait_for_workbook(id, cx);
             return;
         };
         self.previews
-            .apply(document.generation(), document.sheet, &ranges, &mut cells);
-        self.missed.cells_done();
+            .apply(generation, document.sheet, &ranges, &mut cells);
+        self.missed.cells_done(generation);
         self.grid.update(cx, |grid, cx| match refresh {
             CellsRefresh::Merge => grid.merge_cells(cells, &ranges, cx),
             CellsRefresh::Replace => grid.replace_cells(cells, cx),
@@ -447,6 +448,7 @@ impl Workspace {
         let Some(document) = self.documents.get_mut(id) else {
             return;
         };
+        let generation = document.generation();
         if document.sheets_stale() {
             let sheet_before = document.sheet;
             document.sync_sheets();
@@ -460,7 +462,7 @@ impl Workspace {
         if !shown {
             return;
         }
-        let missed = self.missed.take();
+        let missed = self.missed.take(generation);
         if let Some(refresh) = missed.cells {
             self.fetch_cells(refresh, cx);
         }
@@ -838,9 +840,9 @@ impl Workspace {
         if !inline {
             self.stats = None;
         }
-        let id = document.id;
+        let (id, generation) = (document.id, document.generation());
         if let Some(wb) = document.workbook() {
-            self.missed.stats_done();
+            self.missed.stats_done(generation);
             if inline {
                 self.stats = stats::compute(&wb, sheet, range);
             }
@@ -855,7 +857,7 @@ impl Workspace {
             self.grid
                 .update(cx, |grid, _| grid.set_active_formula(formula));
         } else {
-            self.missed.miss_stats();
+            self.missed.miss_stats(generation);
             self.wait_for_workbook(id, cx);
         }
         if !inline && self.stats_job.request() {
