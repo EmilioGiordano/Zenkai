@@ -219,3 +219,32 @@ fn an_empty_group_leaves_no_undo_step() {
     assert!(!model.can_undo());
     assert!(model.end_edit_group().is_err());
 }
+
+#[test]
+fn structure_edits_inside_a_filled_run_match_the_text_path() {
+    for formula in FORMULAS {
+        let target = area(6, 6, 1, 7);
+        let mut by_text = model_with(formula);
+        let mut by_sharing = model_with(formula);
+        fill_as_text(&mut by_text, (5, 6), &target);
+        assert!(by_sharing.fill_formula((5, 6), &target).unwrap());
+        for model in [&mut by_text, &mut by_sharing] {
+            model.insert_rows(0, 9, 2).unwrap();
+            model.set_user_input(0, 8, 6, "=A1").unwrap();
+            model.delete_rows(0, 6, 1).unwrap();
+            model.insert_columns(0, 2, 1).unwrap();
+            model.delete_columns(0, 1, 1).unwrap();
+        }
+        assert_eq!(snapshot(&by_sharing), snapshot(&by_text), "{formula}");
+        for _ in 0..5 {
+            by_text.undo().unwrap();
+            by_sharing.undo().unwrap();
+        }
+        assert_eq!(snapshot(&by_sharing), snapshot(&by_text), "{formula} undo");
+        for _ in 0..5 {
+            by_text.redo().unwrap();
+            by_sharing.redo().unwrap();
+        }
+        assert_eq!(snapshot(&by_sharing), snapshot(&by_text), "{formula} redo");
+    }
+}
