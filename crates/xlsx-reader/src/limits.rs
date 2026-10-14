@@ -31,7 +31,9 @@ pub const RATIO_GATE_BYTES: u64 = 64 * 1024 * 1024;
 // read refuses files the model build could not hold. The importer route has its
 // own, higher costs: its DOM and conversion peak far above the streaming reader's.
 pub use ironcalc::base::open_budget::BYTES_PER_ROW as ROW_BYTES;
-pub use ironcalc::base::open_budget::{BYTES_PER_CELL, BYTES_PER_FORMULA, DOM_BYTES_PER_XML_BYTE};
+pub use ironcalc::base::open_budget::{
+    BYTES_PER_CELL, BYTES_PER_FORMULA, BYTES_PER_UNIQUE_STRING, DOM_BYTES_PER_XML_BYTE,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Route {

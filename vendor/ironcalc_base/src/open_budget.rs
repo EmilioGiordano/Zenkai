@@ -10,6 +10,10 @@ use crate::types::{Cell, Workbook};
 pub const BYTES_PER_CELL: u64 = 140;
 // Extra per formula cell over a value cell.
 pub const BYTES_PER_FORMULA: u64 = 200;
+// Extra per distinct string over its text: the shared Arc, the reader's index entry and list
+// slot, and the copies made when the sheets are assembled. Interim, to be set by the unique
+// string shape in the staging matrix.
+pub const BYTES_PER_UNIQUE_STRING: u64 = 100;
 // A row costs a hash map entry plus two vector headers, about 90 B measured on rows of
 // two cells; kept at the earlier 128 B.
 pub const BYTES_PER_ROW: u64 = 128;
@@ -53,7 +57,7 @@ pub fn open_cost(book: &Workbook) -> OpenCost {
         }
     }
     for string in &book.shared_strings {
-        cost.bytes += string.len() as u64;
+        cost.bytes += string.len() as u64 + BYTES_PER_UNIQUE_STRING;
     }
     cost
 }

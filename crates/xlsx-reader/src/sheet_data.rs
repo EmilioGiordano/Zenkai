@@ -14,7 +14,7 @@ mod values;
 mod xml;
 
 use crate::ReadError;
-use crate::limits;
+use crate::limits::{self, BYTES_PER_UNIQUE_STRING};
 use crate::text::parse_bool_false;
 use values::{ValueCell, formula_cell};
 
@@ -445,7 +445,7 @@ impl<'a> Scanner<'a, '_> {
             None => {
                 let next = self.cells.strings.len();
                 let shared: Arc<str> = Arc::from(text);
-                self.cells.string_bytes += shared.len() as u64;
+                self.cells.string_bytes += shared.len() as u64 + BYTES_PER_UNIQUE_STRING;
                 self.cells.string_index.insert(shared.clone(), next);
                 self.cells.strings.push(shared);
                 next
@@ -519,6 +519,13 @@ mod tests {
 
     fn array_row(row: u32, reference: &str) -> String {
         format!(r#"<row r="{row}"><c r="A{row}"><f t="array" ref="{reference}">1</f></c></row>"#)
+    }
+
+    #[test]
+    fn each_distinct_string_is_charged_once_beyond_its_text() {
+        let rows = r#"<row r="1"><c r="A1" t="inlineStr"><is><t>ab</t></is></c><c r="B1" t="inlineStr"><is><t>ab</t></is></c><c r="C1" t="inlineStr"><is><t>cde</t></is></c></row>"#;
+        let cells = scan(rows).unwrap();
+        assert_eq!(cells.totals().bytes, 2 + 3 + 2 * BYTES_PER_UNIQUE_STRING);
     }
 
     #[test]
