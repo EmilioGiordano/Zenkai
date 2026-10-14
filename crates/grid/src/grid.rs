@@ -357,8 +357,8 @@ impl Grid {
         self.viewport_changed(cx);
     }
 
-    pub fn clear_cells(&mut self, cx: &mut Context<Self>) {
-        self.cells = Rc::new(HashMap::new());
+    pub fn replace_cells(&mut self, cells: HashMap<CellPos, GridCell>, cx: &mut Context<Self>) {
+        self.cells = Rc::new(cells);
         cx.notify();
     }
 
@@ -368,13 +368,8 @@ impl Grid {
         covered: &[Range],
         cx: &mut Context<Self>,
     ) {
-        cell_cache::merge(
-            Rc::make_mut(&mut self.cells),
-            fresh,
-            covered,
-            self.visible_rows.saturating_mul(2),
-            self.visible_cols,
-        );
+        let old = std::mem::take(&mut self.cells);
+        self.cells = Rc::new(cell_cache::merge(old, fresh, covered));
         cx.notify();
     }
 

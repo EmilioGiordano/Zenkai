@@ -55,7 +55,7 @@ use crate::panel_width::{Panel, Resize};
 use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
-use crate::refresh::MissedRefreshes;
+use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
 use crate::session::Session;
 use crate::space_appearance::SpaceAppearance;
@@ -391,6 +391,10 @@ impl Workspace {
     }
 
     fn refresh_cells(&mut self, cx: &mut Context<Self>) {
+        self.fetch_cells(CellsRefresh::Merge, cx);
+    }
+
+    fn fetch_cells(&mut self, refresh: CellsRefresh, cx: &mut Context<Self>) {
         // While the workbook is busy the grid keeps the last values it knows; the refresh
         // is retried the moment the workbook is free, not only when a batch ends.
         let ranges = self.grid.read(cx).cached_ranges();
@@ -399,20 +403,17 @@ impl Workspace {
         };
         let id = document.id;
         let Some(mut cells) = document.cells(&ranges, self.show_formulas) else {
-            self.missed.miss_cells();
+            self.missed.miss_cells(refresh);
             self.wait_for_workbook(id, cx);
             return;
         };
         self.previews
             .apply(document.generation(), document.sheet, &ranges, &mut cells);
         self.missed.cells_done();
-        self.grid.update(cx, |grid, cx| grid.merge_cells(cells, &ranges, cx));
-    }
-
-    // A change in how every cell is displayed must not leave old text in the kept cache.
-    fn clear_cached_cells(&mut self, cx: &mut Context<Self>) {
-        self.grid.update(cx, |grid, cx| grid.clear_cells(cx));
-        self.refresh_cells(cx);
+        self.grid.update(cx, |grid, cx| match refresh {
+            CellsRefresh::Merge => grid.merge_cells(cells, &ranges, cx),
+            CellsRefresh::Replace => grid.replace_cells(cells, cx),
+        });
     }
 
     // A background task waits for the lock, so the UI thread never does, and then hands the
@@ -460,8 +461,8 @@ impl Workspace {
             return;
         }
         let missed = self.missed.take();
-        if missed.cells {
-            self.refresh_cells(cx);
+        if let Some(refresh) = missed.cells {
+            self.fetch_cells(refresh, cx);
         }
         if missed.stats {
             self.refresh_stats(cx);
@@ -838,7 +839,6 @@ impl Workspace {
             self.stats = None;
         }
         let id = document.id;
-        let mut busy = false;
         if let Some(wb) = document.workbook() {
             self.missed.stats_done();
             if inline {
@@ -855,9 +855,6 @@ impl Workspace {
             self.grid
                 .update(cx, |grid, _| grid.set_active_formula(formula));
         } else {
-            busy = true;
-        }
-        if busy {
             self.missed.miss_stats();
             self.wait_for_workbook(id, cx);
         }
@@ -1145,7 +1142,7 @@ impl Workspace {
                         this.grid.update(cx, |grid, cx| grid.update_view(view, cx));
                     }
                     this.sync_review_marks(cx);
-                    this.clear_cached_cells(cx);
+                    this.refresh_cells(cx);
                     this.refresh_stats(cx);
                     this.refresh_chart();
                     this.forget_find_results();
@@ -3162,7 +3159,7 @@ impl Render for Workspace {
                     t!("notice.showing_values")
                 };
                 this.notify(Severity::Info, message, cx);
-                this.clear_cached_cells(cx);
+                this.fetch_cells(CellsRefresh::Replace, cx);
             }))
             .on_action(
                 cx.listener(|this, _: &PasteValues, window, cx| this.paste_values(window, cx)),
