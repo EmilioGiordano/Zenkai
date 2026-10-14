@@ -105,6 +105,14 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - `StaticResult` derives `Clone`, `Debug` and `PartialEq`, so a caller can copy a
   sheet's parsed formulas, for instance to save them away from the model
   (`src/expressions/parser/static_analysis.rs`).
+- `UserModel::fill_formula` writes the formula of one cell over an area by storing the
+  same formula index in each cell, instead of printing, parsing and storing a text per
+  cell. It leaves the cells alone and returns false when a reference would leave the sheet
+  or invert a range, or the area holds an array or a spill, so the caller fills as text.
+  Undo restores the old cells; redo reads the source cell again (new `Diff::FillFormula`).
+  `UserModel::begin_edit_group` and `end_edit_group` join the edits between them into one
+  undo step, evaluating once (`src/user_model/fill_formula.rs`, `common.rs`). Tests:
+  `src/test/user_model/test_fill_formula.rs`.
 
 Zenkai-only, not for upstream:
 
