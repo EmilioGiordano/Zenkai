@@ -143,9 +143,12 @@ impl UserModel<'_> {
             && target.column >= 1
             && target.row.saturating_add(target.height - 1) <= LAST_ROW
             && target.column.saturating_add(target.width - 1) <= LAST_COLUMN;
+        if !fits {
+            return Ok(None);
+        }
         let source_inside = (target.row..target.row + target.height).contains(&source.0)
             && (target.column..target.column + target.width).contains(&source.1);
-        if !fits || source_inside {
+        if source_inside {
             return Ok(None);
         }
         let Some(formula_index) = self.model.shareable_formula(sheet, source, target) else {
