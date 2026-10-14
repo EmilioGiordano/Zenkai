@@ -411,12 +411,7 @@ mod tests {
         let plain = budget.check_route(usage, Route::Streaming, None);
         let projected = budget.check_route(usage, Route::Streaming, Some((40, 10)));
         assert!(plain.unwrap_err().to_string().contains("1001 cells"));
-        assert!(
-            projected
-                .unwrap_err()
-                .to_string()
-                .contains("4004 cells")
-        );
+        assert!(projected.unwrap_err().to_string().contains("4004 cells"));
     }
 
     #[test]

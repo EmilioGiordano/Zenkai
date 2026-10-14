@@ -423,7 +423,9 @@ fn generated(shape: &Shape) -> Vec<u8> {
                         format!("=A{line}*2+B{line}")
                     };
                     let written = match format {
-                        Some(f) => sheet.write_formula_with_format(row, column, Formula::new(text), f),
+                        Some(f) => {
+                            sheet.write_formula_with_format(row, column, Formula::new(text), f)
+                        }
                         None => sheet.write_formula(row, column, Formula::new(text)),
                     };
                     written.unwrap();
@@ -469,7 +471,9 @@ fn generated_shapes_read_the_same_with_both_readers() {
             styles,
         };
         assert_agree(
-            &format!("sheets {sheets} rows {rows} columns {columns} formulas {formula_percent} strings {string_percent} distinct {distinct_formulas} styles {styles}"),
+            &format!(
+                "sheets {sheets} rows {rows} columns {columns} formulas {formula_percent} strings {string_percent} distinct {distinct_formulas} styles {styles}"
+            ),
             &generated(&shape),
             false,
         );

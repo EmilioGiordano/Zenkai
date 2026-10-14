@@ -282,12 +282,7 @@ fn parse_unit(
     let rowtags_bytes = rowtags_from_unit(rowtags, cut, unit);
     let text = std::str::from_utf8(unit).map_err(unreadable)?;
     let before = driver.merged.totals();
-    let spills = scan_rows_into(
-        &mut driver.merged,
-        text,
-        driver.prefixes,
-        driver.sheet_name,
-    )?;
+    let spills = scan_rows_into(&mut driver.merged, text, driver.prefixes, driver.sheet_name)?;
     // An array formula spills into later rows; when its range runs past the rows
     // read so far a later piece would miss the cover, so the file goes to IronCalc.
     if spills {

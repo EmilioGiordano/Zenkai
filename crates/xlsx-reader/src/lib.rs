@@ -123,9 +123,7 @@ fn read_from<R: Read + Seek>(
     let declared = (0..archive.len())
         .filter_map(|index| {
             let entry = archive.by_index_raw(index).ok()?;
-            positions
-                .contains_key(entry.name())
-                .then_some(entry.size())
+            positions.contains_key(entry.name()).then_some(entry.size())
         })
         .fold(0u64, u64::saturating_add);
     budgets.expect_sheet_bytes(declared);
