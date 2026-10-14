@@ -27,10 +27,7 @@ const BRAND_MARKS: [(&str, &[u8]); 7] = [
         OPENCODE_MARK,
         include_bytes!("../assets/marks/agents/opencode.svg"),
     ),
-    (
-        GROK_MARK,
-        include_bytes!("../assets/marks/agents/grok.svg"),
-    ),
+    (GROK_MARK, include_bytes!("../assets/marks/agents/grok.svg")),
 ];
 
 // The component icons plus the brand and agent marks the AI settings and chat show.
