@@ -416,6 +416,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(name) = self.documents.entry(id).map(Entry::name) else {
+            self.departure_load_finished(id, window, cx);
             return;
         };
         match load {
@@ -470,6 +471,7 @@ impl Workspace {
                 );
             }
         }
+        self.departure_load_finished(id, window, cx);
     }
 
     // The copy moves under this session's own name only once its workbook is in the list, and

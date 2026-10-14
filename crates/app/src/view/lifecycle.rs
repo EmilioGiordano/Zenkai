@@ -7,8 +7,10 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
+use crate::close_prompt::ClosePlan;
 use crate::document::{self, FileJob, SharedWorkbook};
 use crate::documents::Intent;
+use crate::entry::Entry;
 use crate::recovery;
 use zenkai_agent::settings_file::{self, SettingsPaths};
 
@@ -324,9 +326,19 @@ impl Workspace {
         .detach();
     }
 
-    // Closing keeps unsaved work: every workbook holding some is written to its recovery
-    // copy, and the session lists them so the next start brings them back.
     pub(super) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.run_close(ClosePlan::default(), window, cx);
+    }
+
+    // Closing keeps unsaved work: every workbook holding some, except the ones the plan
+    // discards, is written to its recovery copy, and the session lists them so the next start
+    // brings them back.
+    pub(super) fn run_close(
+        &mut self,
+        plan: ClosePlan,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.lifecycle == Lifecycle::Closing {
             return;
         }
@@ -337,12 +349,17 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let mut polls = 0;
             let batch = loop {
-                match this.update(cx, |this, _| this.begin_recovery_writes()) {
+                match this.update(cx, |this, _| this.begin_recovery_writes(&plan)) {
                     Ok(Some(batch)) => break batch,
                     Ok(None) if polls < CLOSE_POLLS_BEFORE_ASKING => polls += 1,
                     Ok(None) => {
                         let asked = this.update_in(cx, |this, window, cx| {
-                            this.ask_to_quit_anyway(t!("quit.busy_reason"), window, cx)
+                            this.ask_to_quit_anyway(
+                                t!("quit.busy_reason"),
+                                plan.clone(),
+                                window,
+                                cx,
+                            )
                         });
                         if let Err(error) = asked {
                             tracing::debug!(%error, "workspace gone while closing");
@@ -380,9 +397,9 @@ impl Workspace {
                     }
                 }
                 // Edits made while the copies were written are not in them: write again.
-                if this.documents.unsaved_edits() != edits {
+                if this.unsaved_edits_kept(&plan) != edits {
                     this.lifecycle = Lifecycle::Running;
-                    this.request_close(window, cx);
+                    this.run_close(plan.clone(), window, cx);
                     return;
                 }
                 let failures: Vec<String> = results
@@ -390,9 +407,9 @@ impl Workspace {
                     .filter_map(|result| result.as_ref().err().map(ToString::to_string))
                     .collect();
                 if failures.is_empty() {
-                    this.finish_close_with_session(window, cx);
+                    this.finish_close_with_session(plan.clone(), window, cx);
                 } else {
-                    this.ask_to_quit_anyway(&failures.join("; "), window, cx);
+                    this.ask_to_quit_anyway(&failures.join("; "), plan.clone(), window, cx);
                 }
             });
             if let Err(error) = finished {
@@ -402,21 +419,29 @@ impl Workspace {
         .detach();
     }
 
+    fn unsaved_edits_kept(&self, plan: &ClosePlan) -> Vec<(WorkbookId, u64)> {
+        self.documents
+            .unsaved_edits()
+            .into_iter()
+            .filter(|(id, _)| plan.keeps(*id))
+            .collect()
+    }
+
     // `None` while a recalculation or an autosave still holds a workbook that needs saving.
-    fn begin_recovery_writes(&mut self) -> Option<RecoveryBatch> {
+    fn begin_recovery_writes(&mut self, plan: &ClosePlan) -> Option<RecoveryBatch> {
+        let edits = self.unsaved_edits_kept(plan);
         let Some(directory) = self.recovery_dir.clone() else {
             return Some(RecoveryBatch {
                 writes: Vec::new(),
-                edits: self.documents.unsaved_edits(),
+                edits,
             });
         };
-        let edits = self.documents.unsaved_edits();
         let mut writes = Vec::new();
         let mut blocked = false;
         for document in self
             .documents
             .iter_mut()
-            .filter(|document| document.needs_recovery())
+            .filter(|document| document.needs_recovery() && plan.keeps(document.id))
         {
             match document.begin_file_job(FileJob::Autosaving) {
                 Some(workbook) => writes.push(RecoveryWrite {
@@ -442,28 +467,53 @@ impl Workspace {
         Some(RecoveryBatch { writes, edits })
     }
 
-    fn finish_close_with_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_close_with_session(
+        &mut self,
+        plan: ClosePlan,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let unprotected = self.recovery_dir.is_none()
             && self
                 .documents
                 .iter()
-                .any(|document| document.needs_recovery());
+                .any(|document| document.needs_recovery() && plan.keeps(document.id));
         if unprotected {
-            self.ask_to_quit_anyway(t!("quit.autosave_off_reason"), window, cx);
+            self.ask_to_quit_anyway(t!("quit.autosave_off_reason"), plan, window, cx);
             return;
         }
-        self.write_session_and_quit(cx);
+        self.write_session_and_quit(plan, cx);
+    }
+
+    fn recovery_file_of(&self, id: WorkbookId) -> Option<PathBuf> {
+        self.recovery_dir
+            .as_deref()
+            .map(|directory| recovery::document_file(directory, id))
     }
 
     fn snapshot_session(&self, cx: &App) -> Session {
-        let directory = self.recovery_dir.clone();
         self.documents
             .snapshot(self.sidebar.visible, space_settings::current(cx), |id| {
-                directory
-                    .as_deref()
-                    .map(|directory| recovery::document_file(directory, id))
+                self.recovery_file_of(id)
             })
             .with_panel_widths(self.panels.widths)
+    }
+
+    fn snapshot_session_leaving(&self, plan: &ClosePlan, cx: &App) -> Session {
+        let session = self
+            .documents
+            .snapshot_leaving(
+                self.sidebar.visible,
+                space_settings::current(cx),
+                |id| self.recovery_file_of(id),
+                &plan.discard,
+            )
+            .with_panel_widths(self.panels.widths);
+        if plan.start_empty {
+            session.without_unsaved_work()
+        } else {
+            session
+        }
     }
 
     // Written when something changed, so a crash leaves the spaces and files as they were a
@@ -490,20 +540,23 @@ impl Workspace {
     }
 
     // The spaces and links are kept even when unsaved work could not be.
-    fn write_session_and_quit(&mut self, cx: &mut Context<Self>) {
-        let directory = self.recovery_dir.clone();
-        let session = self.snapshot_session(cx);
+    fn write_session_and_quit(&mut self, plan: ClosePlan, cx: &mut Context<Self>) {
+        let session = self.snapshot_session_leaving(&plan, cx);
         let session_directory = recovery::session_directory();
-        let clean: Vec<PathBuf> = self
+        let mut clean: Vec<PathBuf> = self
             .documents
             .iter()
-            .filter(|document| !document.needs_recovery())
-            .filter_map(|document| {
-                directory
-                    .as_deref()
-                    .map(|directory| recovery::document_file(directory, document.id))
-            })
+            .filter(|document| !document.needs_recovery() || !plan.keeps(document.id))
+            .filter_map(|document| self.recovery_file_of(document.id))
             .collect();
+        clean.extend(
+            plan.discard
+                .iter()
+                .filter_map(|id| match self.documents.entry(*id) {
+                    Some(Entry::Link(link)) => link.recovery.clone(),
+                    _ => None,
+                }),
+        );
         cx.spawn(async move |_, cx| {
             let written = cx
                 .background_executor()
@@ -523,7 +576,13 @@ impl Workspace {
         .detach();
     }
 
-    fn ask_to_quit_anyway(&mut self, reason: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn ask_to_quit_anyway(
+        &mut self,
+        reason: &str,
+        plan: ClosePlan,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let detail = t!("quit.detail", reason = reason);
         let answer = window.prompt(
             PromptLevel::Critical,
@@ -536,7 +595,7 @@ impl Workspace {
             let quit = answer.await == Ok(1);
             let update = this.update(cx, |this, cx| {
                 if quit {
-                    this.write_session_and_quit(cx);
+                    this.write_session_and_quit(plan, cx);
                 } else {
                     this.lifecycle = Lifecycle::Running;
                     this.clear_busy(t!("busy.closing"), cx);
