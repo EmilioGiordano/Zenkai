@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -2792,21 +2793,36 @@ impl Workspace {
     fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let access_chip = self.render_access_chip(cx);
         let theme = cx.theme();
-        let mut left = h_flex().gap_3().items_center();
+        let mut left = h_flex()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .gap_3()
+            .items_center();
         if let Some(busy) = &self.busy {
-            left = left.child(div().text_color(theme.primary).child(busy.clone()));
+            left = left.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.primary)
+                    .child(busy.clone()),
+            );
         } else if let Some(notice) = &self.notice {
             let (icon, color) = match notice.severity {
                 Severity::Info => ("ⓘ", theme.muted_foreground),
                 Severity::Warning => ("⚠", theme.warning),
                 Severity::Error => ("✕", theme.danger),
             };
+            let full_text = notice.text.clone();
             left = left.child(
                 h_flex()
+                    .id("status-notice")
+                    .min_w_0()
                     .gap_1()
                     .text_color(color)
-                    .child(icon)
-                    .child(notice.text.clone()),
+                    .tooltip(move |window, cx| Tooltip::new(full_text.clone()).build(window, cx))
+                    .child(div().flex_none().child(icon))
+                    .child(div().min_w_0().truncate().child(notice.text.clone())),
             );
         } else {
             left = left.child(
@@ -2818,6 +2834,8 @@ impl Workspace {
         let automatic =
             cx.global::<AgentConfig>().state.current.agents.permission == PermissionMode::Automatic;
         let mut right = h_flex()
+            .flex_none()
+            .whitespace_nowrap()
             .gap_4()
             .items_center()
             .text_color(theme.muted_foreground)
@@ -2872,6 +2890,7 @@ impl Workspace {
         h_flex()
             .h(px(26.0))
             .px_3()
+            .gap_4()
             .justify_between()
             .items_center()
             .text_xs()
