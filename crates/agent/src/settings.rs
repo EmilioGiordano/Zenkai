@@ -827,4 +827,21 @@ mod tests {
         );
         assert!(granting("{}").general.restore_session);
     }
+
+    #[test]
+    fn a_settings_file_from_before_the_close_setting_asks_when_closing() {
+        use crate::preferences::CloseWithUnsaved;
+
+        let old =
+            granting(r#"{ "general": { "restore_session": false, "autosave_seconds": 30 } }"#);
+        assert_eq!(old.general.close_with_unsaved, CloseWithUnsaved::Ask);
+        assert!(!old.general.restore_session);
+        let keeping = granting(r#"{ "general": { "close_with_unsaved": "keep" } }"#);
+        assert_eq!(keeping.general.close_with_unsaved, CloseWithUnsaved::Keep);
+        assert!(keeping.general.restore_session);
+        assert_eq!(
+            Settings::parse(&keeping.to_json().unwrap()).unwrap(),
+            keeping
+        );
+    }
 }
