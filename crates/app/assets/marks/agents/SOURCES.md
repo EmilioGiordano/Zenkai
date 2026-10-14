@@ -28,6 +28,18 @@ takes the surrounding text colour. Custom agents keep the letter mark.
 - Note: this is the mark of sst/opencode, the terminal agent Zenkai starts. It
   is not the logo of the newer OpenCode v2 product at opencode.ai/brand.
 
+## grok.svg
+
+- Source: `https://cdn.agentclientprotocol.com/registry/v1/latest/grok-build.svg`
+  (agent id `grok-build` in
+  `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`),
+  fetched 2026-10-14.
+- Terms: the registry lists xAI as author with its terms of service
+  (`https://x.ai/legal/terms-of-service`); the npm package is Apache-2.0. Used
+  unmodified to identify the agent, the same way the ACP registry uses it.
+- Note: the file paints with the surrounding text colour (`fill="currentColor"`)
+  and contains no scripts or editor metadata.
+
 ## Skipped brands
 
 - Gemini: stays on the letter mark (deprecated). Google retired Gemini CLI for free and

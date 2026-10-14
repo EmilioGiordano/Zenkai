@@ -9,8 +9,9 @@ pub const LOCK_MARK: &str = "marks/lock.svg";
 pub const LOCK_OPEN_MARK: &str = "marks/lock-open.svg";
 pub const CODEX_AGENT_MARK: &str = "marks/agents/codex.svg";
 pub const OPENCODE_MARK: &str = "marks/agents/opencode.svg";
+pub const GROK_MARK: &str = "marks/agents/grok.svg";
 
-const BRAND_MARKS: [(&str, &[u8]); 6] = [
+const BRAND_MARKS: [(&str, &[u8]); 7] = [
     (CLAUDE_MARK, include_bytes!("../assets/brands/claude.svg")),
     (GEMINI_MARK, include_bytes!("../assets/brands/gemini.svg")),
     (LOCK_MARK, include_bytes!("../assets/marks/lock.svg")),
@@ -25,6 +26,10 @@ const BRAND_MARKS: [(&str, &[u8]); 6] = [
     (
         OPENCODE_MARK,
         include_bytes!("../assets/marks/agents/opencode.svg"),
+    ),
+    (
+        GROK_MARK,
+        include_bytes!("../assets/marks/agents/grok.svg"),
     ),
 ];
 
