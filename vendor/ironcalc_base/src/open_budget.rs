@@ -2,10 +2,12 @@
 
 use crate::types::{Cell, Workbook};
 
-// Peak committed memory while opening through the streaming reader, measured with
-// `measure_open --app` (reader, model build and first evaluation, committed MB) over
-// generated workbooks and real files; see DECISIONS.md for the matrix and the margin.
-pub const BYTES_PER_CELL: u64 = 100;
+// Peak committed memory per cell while opening through the streaming reader. Interim:
+// 132 B was measured before the reader scanned rows straight into the cell store and the
+// first evaluation listed only formula cells (together they remove the roughly 110 B
+// intermediate row vectors and the 12 B per cell evaluation index), so 140 is an upper
+// bound until `measure_open --app` over the generated matrix sets the final value.
+pub const BYTES_PER_CELL: u64 = 140;
 // Extra per formula cell over a value cell.
 pub const BYTES_PER_FORMULA: u64 = 200;
 // A row costs a hash map entry plus two vector headers, about 90 B measured on rows of
