@@ -10,6 +10,7 @@ use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
 use crate::actions::*;
 use crate::autocomplete;
+use crate::cell_cache;
 use crate::formula_refs;
 use crate::layout::Layout;
 use crate::paint::{self, Frame};
@@ -356,8 +357,24 @@ impl Grid {
         self.viewport_changed(cx);
     }
 
-    pub fn set_cells(&mut self, cells: HashMap<CellPos, GridCell>, cx: &mut Context<Self>) {
-        self.cells = Rc::new(cells);
+    pub fn clear_cells(&mut self, cx: &mut Context<Self>) {
+        self.cells = Rc::new(HashMap::new());
+        cx.notify();
+    }
+
+    pub fn merge_cells(
+        &mut self,
+        fresh: HashMap<CellPos, GridCell>,
+        covered: &[Range],
+        cx: &mut Context<Self>,
+    ) {
+        cell_cache::merge(
+            Rc::make_mut(&mut self.cells),
+            fresh,
+            covered,
+            self.visible_rows.saturating_mul(2),
+            self.visible_cols,
+        );
         cx.notify();
     }
 

@@ -399,7 +399,13 @@ impl Workspace {
         };
         self.previews
             .apply(document.generation(), document.sheet, &ranges, &mut cells);
-        self.grid.update(cx, |grid, cx| grid.set_cells(cells, cx));
+        self.grid.update(cx, |grid, cx| grid.merge_cells(cells, &ranges, cx));
+    }
+
+    // A change in how every cell is displayed must not leave old text in the kept cache.
+    fn clear_cached_cells(&mut self, cx: &mut Context<Self>) {
+        self.grid.update(cx, |grid, cx| grid.clear_cells(cx));
+        self.refresh_cells(cx);
     }
 
     fn refresh_chart(&mut self) {
@@ -1067,7 +1073,7 @@ impl Workspace {
                         this.grid.update(cx, |grid, cx| grid.update_view(view, cx));
                     }
                     this.sync_review_marks(cx);
-                    this.refresh_cells(cx);
+                    this.clear_cached_cells(cx);
                     this.refresh_stats(cx);
                     this.refresh_chart();
                     this.forget_find_results();
@@ -3084,7 +3090,7 @@ impl Render for Workspace {
                     t!("notice.showing_values")
                 };
                 this.notify(Severity::Info, message, cx);
-                this.refresh_cells(cx);
+                this.clear_cached_cells(cx);
             }))
             .on_action(
                 cx.listener(|this, _: &PasteValues, window, cx| this.paste_values(window, cx)),
