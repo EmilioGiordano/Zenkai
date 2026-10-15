@@ -6,6 +6,7 @@ mod diff;
 mod formulas;
 mod layout;
 pub mod limits;
+mod links;
 mod package;
 mod shared_strings;
 mod sheet_data;
@@ -24,6 +25,7 @@ use ironcalc::base::types::Workbook;
 pub use base::{BaseFacts, BasePackage, CalcChain};
 pub use diff::workbook_differences;
 pub use layout::{PackageLayout, PartNames, SharedStrings, StyleCounts};
+pub use links::{SheetLink, SheetLinks, relationships_part};
 pub use limits::CellBudget;
 pub use shared_strings::SHARED_STRINGS_PART;
 pub use verify::{Written, check_written};
@@ -183,12 +185,14 @@ fn read_from<R: Read + Seek>(
             "IronCalc read a different list of sheets".to_string(),
         ));
     }
+    let worksheet_paths: Vec<String> = package
+        .worksheets
+        .iter()
+        .map(|part| part.path.clone())
+        .collect();
+    let sheet_links = links::sheet_links(&mut archive, meter, &budgets, &worksheet_paths)?;
     let layout = PackageLayout {
-        worksheets: package
-            .worksheets
-            .iter()
-            .map(|part| part.path.clone())
-            .collect(),
+        worksheets: worksheet_paths,
         shared_strings: layout::shared_strings_layout(
             &mut archive,
             meter,
@@ -198,6 +202,7 @@ fn read_from<R: Read + Seek>(
         )?,
         styles: layout::style_counts(&mut archive, meter, &budgets)?,
         part_names: layout::part_names_of(&layout::names_in_order(&mut archive)?),
+        sheet_links,
     };
     let names = Names {
         sheets: &package.sheet_names,
