@@ -288,6 +288,38 @@ fn a_pivot_table_is_dropped_only_with_its_sheet() {
     assert_eq!(dropped_by_each_path(&path), [Unsupported::PivotTables]);
 }
 
+// A drawing whose relationships cannot be read may hold anything, so the sheet pointing at
+// it is taken to own every part no worksheet is known to own.
+#[test]
+fn a_sheet_with_unreadable_links_is_taken_to_own_everything_outside_the_sheets() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = source(dir.path(), |_| {});
+    with_parts(
+        &path,
+        &[
+            (
+                "xl/drawings/drawing1.xml",
+                "application/vnd.openxmlformats-officedocument.drawing+xml",
+                r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"/>"#,
+            ),
+            ("xl/drawings/_rels/drawing1.xml.rels", "", "not <XML"),
+            (
+                "xl/worksheets/_rels/sheet1.xml.rels",
+                "",
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#,
+            ),
+            (
+                "xl/pivotTables/pivotTable1.xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml",
+                PIVOT_TABLE,
+            ),
+        ],
+    );
+    let found = scan(&std::fs::read(&path).unwrap());
+    assert_eq!(found, [Unsupported::Images, Unsupported::PivotTables]);
+    assert_eq!(dropped_by_each_path(&path), found);
+}
+
 // No worksheet owns it, so only a full save drops it.
 #[test]
 fn an_external_link_is_dropped_only_by_a_full_save() {
