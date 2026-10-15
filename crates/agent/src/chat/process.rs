@@ -81,10 +81,17 @@ fn kill_tree(pid: u32) -> std::io::Result<()> {
             ));
         }
     };
-    std::process::Command::new("kill")
+    let output = std::process::Command::new("kill")
         .args(["-KILL", "--", &pid.to_string()])
-        .output()
-        .map(|_| ())
+        .output()?;
+    if !output.status.success() {
+        // kill fails when the process already ended, which is the goal.
+        tracing::debug!(
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "kill reported a failure"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
