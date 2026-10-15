@@ -133,7 +133,10 @@ mod tests {
         missed.miss_stats(1);
         assert_eq!(missed.take(2), Missed::default());
         missed.cells_done(2);
-        assert_eq!(missed.upgraded(1, CellsRefresh::Merge), CellsRefresh::Replace);
+        assert_eq!(
+            missed.upgraded(1, CellsRefresh::Merge),
+            CellsRefresh::Replace
+        );
         assert!(missed.take(1).stats);
     }
 
