@@ -12,10 +12,12 @@ use zip::ZipWriter;
 use crate::error::EngineError;
 use crate::file::Unsupported;
 use crate::fingerprint::{DynamicArrays, SheetPrint};
+use crate::held::Held;
 use crate::save::{ModelData, SheetJob, deflated, rejected, sheet_job, write_sheet};
 use crate::saved::{Contents, Metadata, Remains, SavedFile, Strings};
 use crate::sheet_elements::Relationships;
 use crate::sheet_settings::Carried;
+use crate::table_headers::{headers_match, tables_on};
 
 pub(crate) struct PatchPlan {
     pub(crate) base: Arc<SavedFile>,
@@ -84,6 +86,10 @@ pub(crate) fn patch_plan(
     for index in changed {
         let part = saved.worksheets[index].clone();
         let in_file = remains.get(index).copied().unwrap_or(Remains::Nothing);
+        let in_file = match tables_intact(data, &held, index) {
+            true => in_file,
+            false => in_file.unlinked(),
+        };
         let job = sheet_job(data, carried, index, part, index == saved.selected, in_file)?;
         let written = job
             .settings
@@ -119,6 +125,19 @@ pub(crate) fn patch_plan(
         contents,
         dropped,
     }))
+}
+
+// A sheet keeps its relationships only while each of its tables can be checked and its
+// header cells still hold the column names the table part holds.
+fn tables_intact(data: ModelData<'_>, held: &Held, index: usize) -> bool {
+    let Some(sheet) = data.book.worksheets.get(index) else {
+        return false;
+    };
+    // A table part IronCalc did not read cannot be checked.
+    if held.links_to(index, Unsupported::Tables) && tables_on(data.book, sheet).is_empty() {
+        return false;
+    }
+    headers_match(data.book, sheet)
 }
 
 fn base_unusable(base: &SavedFile) -> impl Fn(&dyn std::fmt::Display) -> EngineError + '_ {

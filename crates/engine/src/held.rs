@@ -80,6 +80,12 @@ impl Held {
             .collect()
     }
 
+    pub(crate) fn links_to(&self, index: usize, kind: Unsupported) -> bool {
+        self.sheets
+            .get(index)
+            .is_some_and(|owned| owned.linked.contains(&kind))
+    }
+
     // Sheet `index` is rewritten with elements that hold `written`, keeping its
     // relationships part or not. Returns what it held and no longer does.
     pub(crate) fn rewrite(
@@ -144,6 +150,8 @@ mod tests {
         let pivot = SheetLinks::Known(set_of_links(&[SheetLink::PivotTable]));
         let none = SheetLinks::Known(BTreeSet::new());
         let mut held = Held::of(&found(), &layout(vec![none, pivot]));
+        assert!(held.links_to(1, Unsupported::PivotTables));
+        assert!(!held.links_to(0, Unsupported::PivotTables));
         assert!(
             held.rewrite(1, BTreeSet::new(), Relationships::Kept)
                 .is_empty()
@@ -158,6 +166,7 @@ mod tests {
             held.rewrite(1, BTreeSet::new(), Relationships::Dropped),
             set(&[Unsupported::PivotTables])
         );
+        assert!(!held.links_to(1, Unsupported::PivotTables));
         assert_eq!(
             held.all(),
             set(&[Unsupported::PivotTables, Unsupported::Macros])

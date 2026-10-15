@@ -576,6 +576,26 @@ fn inserting_a_row_on_a_table_sheet_drops_its_tables_and_says_so() {
     open_xlsx(&saved.path).unwrap();
 }
 
+// Excel repairs a file whose table header cells differ from the column names the table
+// part holds, and the part is copied unchanged.
+#[test]
+fn editing_a_table_header_drops_its_tables_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = source(dir.path(), with_table);
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.set_input(SheetId(0), pos("A1"), "Renamed").unwrap();
+    let saved = save(&book, &dir.path().join("header.xlsx"));
+    assert!(
+        saved.dropped.contains(&Unsupported::Tables),
+        "{:?}",
+        saved.dropped
+    );
+    assert_eq!(saved.kept, scan(&saved.bytes));
+    assert_eq!(part(&saved.bytes, HELD_RELS), None);
+    assert!(referenced_ids(&held_sheet(&saved.bytes)).is_empty());
+    open_xlsx(&saved.path).unwrap();
+}
+
 // A whole save writes no sheet relationships, so a later patch save into that file must
 // not write back an element that points into them.
 #[test]
