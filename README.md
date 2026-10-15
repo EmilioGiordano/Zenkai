@@ -156,7 +156,6 @@ workspace; staging runs every vendor crate present:
 
 ```powershell
 cargo test -j 4 --manifest-path vendor\ironcalc_base\Cargo.toml --target-dir target\vendor
-cargo test -j 4 --manifest-path vendor\ironcalc\Cargo.toml --target-dir target\vendor
 ```
 
 ## Benchmark
