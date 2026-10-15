@@ -121,40 +121,34 @@ impl CachedModel {
         extent.last.unwrap_or_default()
     }
 
-    // Every sheet is cached and none holds a dynamic array, so evaluation adds or removes
-    // no cell and an edit changes only the cells it writes.
-    fn evaluation_keeps_cells(&mut self) -> bool {
-        let sheets = self.model.get_model().workbook.worksheets.len();
-        let cache = self.cache_mut();
-        cache.len() == sheets && cache.values().all(|extent| !extent.spills)
-    }
-
     // For edits that write only inside `area` of `sheet` and remove no cell: the cached
-    // end grows to the cells now there instead of walking the sheet again.
+    // end grows to the cells now there instead of walking the sheet again. Evaluation adds
+    // or removes cells only on sheets holding a dynamic array, so only those drop their
+    // entry; every other sheet keeps its end however large it is.
     pub(crate) fn write_within<T>(
         &mut self,
         sheet: SheetId,
         area: Range,
         edit: impl FnOnce(&mut UserModel<'static>) -> T,
     ) -> T {
-        let kept = self.evaluation_keeps_cells();
         let result = edit(&mut self.model);
         let grown = match self.cache().get(&sheet).copied() {
             Some(Extent {
-                last: Some(last), ..
-            }) if kept => self.grown(sheet, area, last),
+                last: Some(last),
+                spills: false,
+            }) => self.grown(sheet, area, last),
             _ => None,
         };
         let cache = self.cache_mut();
+        cache.retain(|_, extent| !extent.spills);
         match grown {
             Some(extent) if !extent.spills => {
                 cache.insert(sheet, extent);
             }
             // A sheet that had no cells may still hold empty rows, which the walk counts.
-            None if kept => {
+            _ => {
                 cache.remove(&sheet);
             }
-            _ => cache.clear(),
         }
         result
     }
@@ -179,11 +173,8 @@ impl CachedModel {
         &mut self,
         edit: impl FnOnce(&mut UserModel<'static>) -> T,
     ) -> T {
-        let kept = self.evaluation_keeps_cells();
         let result = edit(&mut self.model);
-        if !kept {
-            self.cache_mut().clear();
-        }
+        self.cache_mut().retain(|_, extent| !extent.spills);
         result
     }
 
@@ -236,6 +227,43 @@ mod tests {
         assert_eq!(model.cache().len(), 1);
         let _ = &mut *model;
         assert!(model.cache().is_empty());
+    }
+
+    fn type_into(model: &mut CachedModel, sheet: u32, text: &str) {
+        model.write_within(SheetId(sheet), Range::single(CellPos::default()), |model| {
+            model.set_user_input(sheet, 1, 1, text).unwrap();
+        });
+    }
+
+    fn two_filled_sheets() -> CachedModel {
+        let mut model = model();
+        model.new_sheet().unwrap();
+        model.set_user_input(0, 1, 1, "1").unwrap();
+        model.set_user_input(1, 1, 1, "1").unwrap();
+        model.used_end(SheetId(0));
+        model.used_end(SheetId(1));
+        model
+    }
+
+    #[test]
+    fn an_edit_keeps_the_ends_of_the_other_sheets() {
+        let mut model = two_filled_sheets();
+        type_into(&mut model, 0, "2");
+        assert_eq!(model.cache().len(), 2);
+    }
+
+    #[test]
+    fn only_the_sheet_with_a_spill_drops_its_end() {
+        let mut model = two_filled_sheets();
+        type_into(&mut model, 1, "=SEQUENCE(3)");
+        assert!(!model.cache().contains_key(&SheetId(1)));
+        assert!(model.cache().contains_key(&SheetId(0)));
+        let spill_end = CellPos::parse_a1("A3").unwrap();
+        assert_eq!(model.used_end(SheetId(1)), spill_end);
+        type_into(&mut model, 0, "2");
+        assert!(!model.cache().contains_key(&SheetId(1)));
+        assert!(model.cache().contains_key(&SheetId(0)));
+        assert_eq!(model.used_end(SheetId(1)), spill_end);
     }
 
     #[test]
