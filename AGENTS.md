@@ -242,8 +242,7 @@ in a staging branch.
    `docs/SPEC.md` performance budgets. Fixes go on the branch as new commits.
    Each review and each fix round is posted on the PR (`scripts/pr/review.sh`,
    `scripts/pr/reply.sh`). The reviewers get the spec with decisions as plain statements,
-   `AGENTS.md` and the diff: no reasons,
-   no `DECISIONS.md`. The lead reconciles each finding against decisions.
+   `AGENTS.md` and the diff: no reasons, no `DECISIONS.md`. The lead reconciles each finding against decisions.
 4. **Staging.** `staging-integrator` (one agent, fresh context) validates the batch per
    Validation above: one branch is gated in its own worktree, several branches are merged
    one at a time with `--no-ff` into a fresh staging branch. After each merge it runs
