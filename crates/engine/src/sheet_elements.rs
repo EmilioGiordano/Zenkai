@@ -19,6 +19,8 @@ use crate::saved::Remains;
 
 const MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+// Bound to the xml prefix in every document, so xml:space needs no declaration.
+const XML: &str = "http://www.w3.org/XML/1998/namespace";
 const MAX_ROW: u32 = 1_048_576;
 const MAX_COLUMN: u32 = 16_384;
 // Excel allows 65,530 hyperlinks on a sheet; at about 250 bytes each they are the largest
@@ -462,6 +464,7 @@ fn rebuild(node: Node) -> Option<String> {
                     let prefix = match attribute.namespace() {
                         None => "",
                         Some(RELATIONSHIPS) => "r:",
+                        Some(XML) => "xml:",
                         Some(other) if other.ends_with("/relationships") => return None,
                         Some(_) => continue,
                     };
@@ -645,6 +648,15 @@ mod tests {
             at(&sheet, Place::AfterBreaks),
             r#"<drawing r:id="rId1"/><tableParts count="1"><tablePart r:id="rId3"/></tableParts>"#
         );
+    }
+
+    #[test]
+    fn white_space_handling_is_kept() {
+        let validation = concat!(
+            r#"<dataValidations count="1"><dataValidation sqref="A1" xml:space="preserve">"#,
+            r#"<formula1>" a "</formula1></dataValidation></dataValidations>"#
+        );
+        assert_eq!(at(&elements(validation), Place::BeforePrint), validation);
     }
 
     #[test]
