@@ -84,10 +84,10 @@ pub(crate) fn patch_plan(
     let mut dropped = BTreeSet::new();
     let mut sheets = Vec::with_capacity(changed.len());
     for index in changed {
-        let part = saved.worksheets[index].clone();
-        let in_file = *remains
-            .get(index)
-            .ok_or_else(|| rejected("a changed sheet is not in the saved file"))?;
+        let (Some(part), Some(&in_file)) = (saved.worksheets.get(index), remains.get(index)) else {
+            return Err(rejected("a changed sheet is not in the saved file"));
+        };
+        let part = part.clone();
         let in_file = match tables_intact(data, &held, index) {
             true => in_file,
             false => in_file.unlinked(),
@@ -259,4 +259,58 @@ pub(crate) fn write_patch<W: Write + Seek>(
         return Err(base_unusable(saved)(&"a part is missing from it"));
     }
     Ok((zip.finish().map_err(rejected)?, written))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use ironcalc::base::Model;
+
+    use super::patch_plan;
+    use crate::error::EngineError;
+    use crate::fingerprint::book_print;
+    use crate::held::Held;
+    use crate::save::ModelData;
+    use crate::saved::{
+        Contents, Metadata, Remains, SavedFile, Stamp, Strings, sheet_prints, style_counts,
+    };
+    use crate::sheet_settings::Carried;
+
+    #[test]
+    fn a_changed_sheet_missing_from_the_saved_parts_fails_the_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        std::fs::write(&path, b"").unwrap();
+        let carried = Carried::default();
+        let mut model = Model::new_empty("b", "en", "UTC", "en").unwrap();
+        let sheets = sheet_prints(ModelData::of(&model), &carried).unwrap();
+        model.set_user_input(0, 1, 1, "5".to_string()).unwrap();
+        model.evaluate();
+        let data = ModelData::of(&model);
+        let book = book_print(data.book).unwrap();
+        let base = SavedFile {
+            path: path.clone(),
+            stamp: Stamp::of(&path).unwrap(),
+            contents: Contents {
+                worksheets: Vec::new(),
+                strings: Strings::Aligned(data.book.shared_strings.len()),
+                styles: style_counts(data.book),
+                book,
+                sheets,
+                selected: 0,
+                metadata: Metadata::Written,
+                held: Held::written_whole(1),
+                remains: vec![Remains::All],
+                losses_through: 0,
+            },
+        };
+        let prints = sheet_prints(data, &carried).unwrap();
+        let Err(EngineError::Rejected(reason)) =
+            patch_plan(Arc::new(base), book, &prints, data, &carried)
+        else {
+            panic!("a plan for a sheet the saved file lacks was not rejected");
+        };
+        assert!(reason.contains("not in the saved file"), "{reason}");
+    }
 }
