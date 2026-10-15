@@ -372,7 +372,8 @@ struct Splice<'s, F> {
 impl<F> Splice<'_, F> {
     fn covered(&self, first: u32, last: u32) -> bool {
         let mut row = first;
-        for span in self.spans {
+        // Spans before `next` were written already and end before the row being read.
+        for span in &self.spans[self.next..] {
             if span.last < row {
                 continue;
             }
