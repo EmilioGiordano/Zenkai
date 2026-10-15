@@ -381,6 +381,9 @@ pub fn report(dir: &Path, out: &Path) -> Result<()> {
         "- **Cached = recalculated**: each value saved in the file (read with calamine) ",
         "against the value Zenkai shows after recalculating.\n",
         "- **Round trip**: save, reopen and compare every filled cell.\n\n",
+        "Content of a kind Zenkai does not detect (embedded objects, form controls, slicers, ",
+        "printer settings) is never warned about and may be dropped when the sheet holding it ",
+        "is written again.\n\n",
         "| File | Opens | Warned on open | Dropped by save | Dropped without warning | Cached = recalculated | Round trip |\n",
         "| --- | --- | --- | --- | --- | --- | --- |\n",
     ));
