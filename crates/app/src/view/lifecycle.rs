@@ -8,8 +8,9 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
+use crate::autosave;
 use crate::close_prompt::ClosePlan;
-use crate::document::{self, FileJob, SharedWorkbook};
+use crate::document::{self, FileJob, SharedWorkbook, SnapshotOutcome};
 use crate::documents::Intent;
 use crate::entry::Entry;
 use crate::recovery;
@@ -115,22 +116,20 @@ impl Workspace {
                 tracing::debug!(%error, "workspace closed before the session was restored");
             }
             // Short ticks against the elapsed time, so a new interval applies at once.
-            'cycles: loop {
-                let started = Instant::now();
-                loop {
-                    cx.background_executor().timer(AUTOSAVE_TICK).await;
-                    let Ok(every) = this.update(cx, |_, cx| {
-                        Duration::from_secs(u64::from(
-                            agent_settings::settings(cx).general.autosave_seconds,
-                        ))
-                    }) else {
-                        break 'cycles;
-                    };
-                    if started.elapsed() >= every {
-                        break;
+            let mut persisted = Instant::now();
+            loop {
+                cx.background_executor().timer(AUTOSAVE_TICK).await;
+                let update = this.update(cx, |this, cx| {
+                    let every = Duration::from_secs(u64::from(
+                        agent_settings::settings(cx).general.autosave_seconds,
+                    ));
+                    this.autosave_all(every, cx);
+                    if persisted.elapsed() >= every {
+                        persisted = Instant::now();
+                        this.persist_session(cx);
                     }
-                }
-                if this.update(cx, |this, cx| this.autosave_all(cx)).is_err() {
+                });
+                if update.is_err() {
                     break;
                 }
             }
@@ -199,27 +198,34 @@ impl Workspace {
         cx.notify();
     }
 
-    fn autosave_all(&mut self, cx: &mut Context<Self>) {
+    fn autosave_all(&mut self, every: Duration, cx: &mut Context<Self>) {
         // Closing writes its own copies; a stray autosave could outlive a discarded workbook.
         if self.lifecycle == Lifecycle::Closing {
             return;
         }
         let ids: Vec<WorkbookId> = self.documents.iter().map(|document| document.id).collect();
         for id in ids {
-            self.autosave(id, cx);
+            self.autosave(id, every, cx);
         }
-        self.persist_session(cx);
     }
 
-    fn autosave(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
+    fn autosave(&mut self, id: WorkbookId, every: Duration, cx: &mut Context<Self>) {
         let Some(directory) = self.recovery_dir.clone() else {
             return;
         };
         let Some(document) = self.documents.get_mut(id) else {
             return;
         };
+        if !autosave::is_due(
+            document.since_last_edit(),
+            document.since_last_autosave_attempt(),
+            every,
+        ) {
+            return;
+        }
         let target = recovery::document_file(&directory, id);
         if !document.needs_recovery() {
+            document.mark_autosave_attempt();
             document.set_autosaved_at(None);
             cx.background_executor()
                 .spawn(async move { recovery::remove(&target) })
@@ -234,15 +240,20 @@ impl Workspace {
         let Some(shared) = document.begin_file_job(FileJob::Autosaving) else {
             return;
         };
+        document.mark_autosave_attempt();
+        let cancelled = document.autosave_cancel();
         let edits = document.edit_count();
         let generation = document.generation();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    document::write_snapshot(&shared, FileJob::Autosaving, |bytes| {
-                        recovery::write(bytes, &target)
-                    })
+                    document::write_snapshot_unless(
+                        &shared,
+                        FileJob::Autosaving,
+                        &cancelled,
+                        |bytes| recovery::write(bytes, &target),
+                    )
                 })
                 .await;
             let update = this.update(cx, |this, cx| {
@@ -254,7 +265,8 @@ impl Workspace {
                     return;
                 }
                 match result {
-                    Ok(()) => document.set_autosaved_at(Some(edits)),
+                    Ok(SnapshotOutcome::Written) => document.set_autosaved_at(Some(edits)),
+                    Ok(SnapshotOutcome::Abandoned) => {}
                     Err(error) => this.notify(
                         Severity::Warning,
                         t!("notice.autosave_failed", error = error),
