@@ -200,12 +200,14 @@ GitHub Actions, in `.github/workflows/`:
 - `ci.yml` (pull requests and pushes to `main`, skipped when only docs, scripts, Markdown,
   `.claude` or `.agents` change): draft PRs run `cargo fmt --check` and `cargo clippy
   --all-targets -- -D warnings` on Linux; ready PRs add `cargo test` and also run on Windows,
-  plus the `vendor/` crates' own tests when the PR touches `vendor/`. A push to `main` runs
-  fmt and clippy on Linux to warm the cache. macOS runs only from a manual dispatch.
+  plus the `vendor/` crates' own tests when the PR touches `vendor/`. A push to `main` only
+  builds the test artifacts (`cargo test --workspace --no-run`) on Linux and Windows to warm
+  the cache that ready PRs use; runs on `main` are never cancelled. Jobs time out after 30
+  minutes. macOS runs only from a manual dispatch.
 - `deny.yml` (PRs that change `Cargo.toml`, `Cargo.lock` or `deny.toml`, weekly, and manual
   runs): `cargo deny check` on Linux.
-- `bench.yml` (manual runs only): builds the benchmark in release on Windows and runs the baseline check
-  above. Each run uploads its numbers as the `bench-current` artifact.
+- `bench.yml` (manual runs only): builds the benchmark in release on Windows and runs the
+  baseline check above. Each run uploads its numbers as the `bench-current` artifact.
 
 The baseline in `bench\baseline.csv` comes from the Phase 0 run on a desktop machine, not
 from a CI runner, so the timing gate fails until it is refreshed: copy the `bench-current`
