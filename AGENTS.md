@@ -155,11 +155,32 @@ Never comments that narrate the code, decorative section headers or commented-ou
 - One branch per feature or logical change. Group only changes that are related;
   never several unrelated features on one branch.
 - Names: `feat/<topic>`, `fix/<topic>`, `perf/<topic>`, `test/<topic>`, `chore/<topic>`.
-- Never push, merge or open a PR without the user's explicit approval.
+- Only the lead pushes and opens PRs, through scripts/pr; merging needs the user's explicit approval.
 
 Good subjects: `Add atomic save with temp file swap`, `Fix range selection past frozen panes`,
 `Cache visible range values in grid`. Bad: `Update files`, `Implement phase 2` (too big),
 `Fixed bug in grid.` (past tense, vague, trailing period).
+
+## Pull requests
+
+Agents write the content; `scripts/pr` (bash, `gh`, `jq`) does the GitHub mechanics. Use
+`--dry-run` to preview. All text is English and never contains the middle dot character.
+
+- **Title:** `<type>: <imperative summary>`, type one of feat, fix, perf, chore, test, docs;
+  at most 72 characters, no trailing period, ` (N/M)` appended for stacked PRs.
+- **Body:** `## Why` (1 or 2 sentences), `## What` (2 to 5 bullets), `## Decisions`
+  (optional: choice and reason), `## Validation` (tests, staging result, what was not
+  verified), then `Card: <url>` and, when stacked, `Stacked on #N`. At most 40 lines.
+  `scripts/pr/lint.sh` enforces it and `scripts/pr/open.sh` runs it before opening.
+- **Review:** a summary of at most 6 lines and inline comments of at most 3 lines, each
+  with an optional suggestion block. Low findings without action go only in the summary.
+  A review is never an approval: it is REQUEST_CHANGES with a Critical, High or BLOCKER
+  finding, otherwise COMMENT.
+- **Thread replies:** one line: `Fixed in <sha>.`, `Won't fix: <reason>` or
+  `False positive: <reason>`.
+- **Staging comment, one per PR:** gate result, measurements before and after, and what to
+  test by hand.
+- `scripts/pr/test.sh` checks the scripts in dry-run against local fixtures.
 
 ## Validation
 
@@ -207,9 +228,13 @@ in a staging branch.
 1. **Design.** A UI task gets a design artifact approved before implementation.
 2. **Branch.** The implementer works per the code rules and runs the per-branch checks above.
    It commits in logical commits and never pushes.
+   When the branch is ready for review, the lead pushes it and opens a draft PR with
+   `scripts/pr/open.sh`.
 3. **Static review, in parallel, no builds.** `quality-reviewer`, `security-reviewer` and
    `perf-auditor` read the diff against `AGENTS.md`, the security threat model and the
-   `docs/SPEC.md` performance budgets. Fixes go on the branch as new commits. The reviewers
+   `docs/SPEC.md` performance budgets. Fixes go on the branch as new commits.
+   Each review and each fix round is posted on the PR (`scripts/pr/review.sh`,
+   `scripts/pr/reply.sh`). The reviewers
    get the spec with decisions as plain statements, `AGENTS.md` and the diff: no reasons,
    no `DECISIONS.md`. The lead reconciles each finding against decisions.
 4. **Staging.** `staging-integrator` (one agent, fresh context) validates the batch per
@@ -219,19 +244,19 @@ in a staging branch.
    it runs the full gate. It copies the release exe to
    `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`, overwriting; if the file is locked it
    reports it and never kills the process. Staging uses the persistent target dir
-   `D:/More-Code-Projects/Zenkai-compiled/staging`, which is never cleaned.
+   `D:/More-Code-Projects/Zenkai-compiled/staging`, which is never cleaned. The result is
+   commented on each PR of the batch.
 5. **Failures.** A fix for one branch goes back to the owning branch and is validated in
    a new staging round. A fix caused only by the combination goes in its own `fix/<topic>`
    branch, never on staging.
-6. **Manual test.** The user tests the exe by hand. Agents never drive the GUI or
+6. **Manual test.** The user tests the exe by hand and approves the PRs. Agents never drive the GUI or
    send input to the desktop.
-7. **Merge.** On the user's approval the branches are merged into `main` one at a time,
-   in the same order, with `--no-ff`; then `git diff staging/<date> main` must be empty.
-   Staging is never merged into `main`. Merging into `main` is done by the user or by
-   Claude with the user's explicit approval, and the user pushes `main` and the merged work
-   branches (`feat/*`, `fix/*`, `chore/*`, `perf/*`, `test/*`), so every branch is kept on
-   GitHub. Muse never pushes; never push `staging/*`, `night/*` or `worktree-agent-*`.
-   Never merge to `main` before the manual test.
+7. **Merge.** On the user's approval the lead merges the PRs into `main` one at a time,
+   in staging order, with merge commits (`--no-ff`); then `git diff staging/<date> main`
+   must be empty. Staging is never merged into `main`. The lead pushes `main` and the merged
+   work branches (`feat/*`, `fix/*`, `chore/*`, `perf/*`, `test/*`) with the user's approval,
+   so every branch is kept on GitHub. Muse never pushes; never push `staging/*`, `night/*`
+   or `worktree-agent-*`. Never merge to `main` before the manual test.
 
 Long commands run in the background and the agent waits for them; it never hands back early.
 After two failed review rounds on a branch, stop and ask the user instead of iterating.

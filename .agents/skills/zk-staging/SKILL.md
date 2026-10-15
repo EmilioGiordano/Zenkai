@@ -16,8 +16,8 @@ Read `AGENTS.md` first; it is the rulebook.
 
 Hard rules for the whole run:
 
-- Never push, never merge into `main`. Merging staging into `main` happens only
-  when the user explicitly says so after testing the exe, and the user pushes.
+- Never push, never merge into `main`. Merging into `main` happens only
+  when the user explicitly says so after testing the exe; the lead pushes then.
 - Never open or drive the GUI, never send input to the desktop.
 - Never kill a process, including a running `zenkai.exe`.
 - One `cargo` process at a time, at most `-j 8` in total. If another `zk-branch`
@@ -50,12 +50,17 @@ Hard rules for the whole run:
 5. Copy the release exe to `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`,
    overwriting. If the file is locked, report it and stop; never kill the
    process.
-6. After the manual test, on the user's approval: merge the branches (never
+6. Per-PR comment: for each PR of the batch, write a staging comment of at most 10 lines
+   (gate result, measurements before and after, what to test by hand) and post it with
+   `gh pr comment <n> --body-file <file>`, or leave the text in the report for the lead.
+   Never post to a PR that is not in the batch.
+7. After the manual test, on the user's approval: merge the branches (never
    staging) into `main` one at a time, in the same order, with `--no-ff`;
    then `git diff staging/<date> main` must be empty. Done by the user or by
-   Claude with the user's explicit approval; the user pushes `main` and the merged work
-   branches (`feat/*`, `fix/*`, `chore/*`, `perf/*`, `test/*`), so every branch is kept on
-   GitHub. Muse never pushes; never push `staging/*`, `night/*` or `worktree-agent-*`.
+   the lead with the user's explicit approval, as merge commits of the PRs in staging order;
+   the lead then pushes `main` and the merged work branches (`feat/*`, `fix/*`, `chore/*`,
+   `perf/*`, `test/*`) with the user's approval, so every branch is kept on GitHub.
+   Muse never pushes; never push `staging/*`, `night/*` or `worktree-agent-*`.
 
 ## Failures
 
