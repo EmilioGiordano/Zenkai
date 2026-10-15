@@ -63,7 +63,8 @@ shape_errors=$(jq -r '
         (if ["Critical", "High", "BLOCKER", "Medium", "Low"] | index($f.severity) then empty else "finding severity must be Critical, High, BLOCKER, Medium or Low (\($f.path))" end),
         (if ($f.text | nonempty) then empty else "finding text must be a non-empty string (\($f.path))" end),
         (if ($f.text | type) == "string" and ($f.text | line_count) > 3 then "finding text has more than 3 lines (\($f.path):\($f.line))" else empty end),
-        (if ($f.suggestion == null) or ($f.suggestion | type) == "string" then empty else "finding suggestion must be a string (\($f.path))" end)
+        (if ($f.suggestion == null) or ($f.suggestion | type) == "string" then empty else "finding suggestion must be a string (\($f.path))" end),
+        (if ($f.suggestion | type) == "string" and ($f.suggestion | contains("```")) then "finding suggestion contains a triple backtick (\($f.path):\($f.line))" else empty end)
       end) else empty end)
   ] | .[] end
 ' "$review_file") || {
@@ -115,4 +116,4 @@ if [ "$dry_run" -eq 1 ]; then
   exit 0
 fi
 
-echo "$payload" | gh api "repos/{owner}/{repo}/pulls/$pr/reviews" --input -
+echo "$payload" | gh api "repos/{owner}/{repo}/pulls/$pr/reviews" --input - | jq -r .html_url

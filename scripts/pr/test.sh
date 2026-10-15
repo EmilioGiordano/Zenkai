@@ -55,6 +55,7 @@ expect_output '\[quality-reviewer\] PASS' "review body prefix" "$dir/review.sh" 
 expect_output 'suggestion' "review suggestion block" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"
 expect 1 "review bad shape" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/bad-review.json"
 expect 1 "review middle dot" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/dot-review.json"
+expect_output "triple backtick" "review rejects a fence in a suggestion" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/fence-review.json"
 expect 2 "review non-numeric pr" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" abc "$fx/good-review.json"
 
 expect 0 "open good" "$dir/open.sh" --dry-run chore/x main "feat: add pr scripts" "$fx/good-body.md"
