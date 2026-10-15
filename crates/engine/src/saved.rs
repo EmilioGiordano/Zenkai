@@ -8,6 +8,7 @@ use zenkai_xlsx_reader::{PackageLayout, PartNames, SharedStrings, StyleCounts};
 
 use crate::error::EngineError;
 use crate::fingerprint::{SheetPrint, book_print, sheet_print};
+use crate::held::Held;
 use crate::save::ModelData;
 use crate::sheet_settings::Carried;
 
@@ -53,6 +54,10 @@ pub(crate) struct Contents {
     // The sheet the file opens on. A save that copies the workbook part keeps it.
     pub(crate) selected: usize,
     pub(crate) metadata: Metadata,
+    pub(crate) held: Held,
+    // The losses `Carried` counted when the file was written: it lacks those, and only
+    // later ones are still in it.
+    pub(crate) losses_through: u64,
 }
 
 // The workbook's file on disk as it was last read or written, so a save can copy the
@@ -115,11 +120,17 @@ pub(crate) fn selected_sheet(book: &Workbook) -> usize {
     book.views.get(&0).map_or(0, |view| view.sheet as usize)
 }
 
+// Where an opened file's parts are and what they hold that Zenkai does not model.
+pub(crate) struct OpenedParts {
+    pub(crate) layout: PackageLayout,
+    pub(crate) held: Held,
+}
+
 // A file just read by the streaming reader, unchanged on disk while it was read.
 pub(crate) struct FileOnDisk<'a> {
     pub(crate) path: &'a Path,
     pub(crate) stamp: Stamp,
-    pub(crate) layout: PackageLayout,
+    pub(crate) parts: OpenedParts,
 }
 
 // When a save could copy from the file: its strings and styles line up with the model's,
@@ -130,7 +141,7 @@ pub(crate) fn opened(
     FileOnDisk {
         path,
         stamp,
-        layout,
+        parts: OpenedParts { layout, held },
     }: FileOnDisk<'_>,
     data: ModelData<'_>,
     carried: &Carried,
@@ -159,6 +170,8 @@ pub(crate) fn opened(
                 sheets,
                 selected: selected_sheet(data.book),
                 metadata: Metadata::Unknown,
+                held,
+                losses_through: carried.losses(),
             },
         }),
         Err(error) => {

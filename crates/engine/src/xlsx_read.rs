@@ -2,10 +2,11 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use ironcalc::base::types::Workbook as Book;
-use zenkai_xlsx_reader::{PackageLayout, ReadError, workbook_differences};
+use zenkai_xlsx_reader::{ReadError, workbook_differences};
 
 use crate::error::EngineError;
-use crate::file::{Unsupported, inspect_part};
+use crate::file::{Found, Unsupported, inspect_part, kinds};
+use crate::held::Held;
 
 // Only a refused file reports harm; a corrupt or non-zip file is not a valid workbook.
 pub(crate) fn engine_error(error: ReadError) -> EngineError {
@@ -17,6 +18,7 @@ pub(crate) fn engine_error(error: ReadError) -> EngineError {
     }
 }
 use crate::preflight::run_with_engine_stack;
+use crate::saved::OpenedParts;
 use crate::sheet_settings::{self, SheetSettings};
 use crate::workbook::{read_book, read_book_fast, read_book_streaming};
 
@@ -47,8 +49,8 @@ impl ReadBook {
 pub(crate) struct FileRead {
     pub(crate) read: ReadBook,
     pub(crate) settings: Vec<SheetSettings>,
-    // Where the file's parts are, when a save can copy from it.
-    pub(crate) layout: Option<PackageLayout>,
+    // Where the file's parts are and what they hold, when a save can copy from it.
+    pub(crate) parts: Option<OpenedParts>,
 }
 
 type Outcome<E> = Result<(Book, Vec<Unsupported>), E>;
@@ -101,7 +103,7 @@ pub(crate) fn read_xlsx_file(
     let finish = |read: ReadBook, settings| FileRead {
         read,
         settings,
-        layout: None,
+        parts: None,
     };
     match reader {
         XlsxReader::IronCalc => {
@@ -142,7 +144,7 @@ pub(crate) fn read_xlsx_file(
 // refuses the file as harmful; any other walk failure fails it as an invalid
 // workbook, the same mapping as the direct IronCalc read.
 fn fallback_to_ironcalc(bytes: &[u8], name: &str, declined: &ReadError) -> Outcome<EngineError> {
-    let found = Mutex::new(Vec::new());
+    let found: Found = Mutex::new(Vec::new());
     let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
     if let Err(limited) = zenkai_xlsx_reader::scan_with_caps(bytes, &inspect) {
         let message = format!(
@@ -178,32 +180,29 @@ fn read_settings(bytes: &[u8]) -> Result<Vec<SheetSettings>, EngineError> {
 }
 
 fn read_with_ironcalc(bytes: &[u8], name: &str) -> Outcome<EngineError> {
-    let found = Mutex::new(Vec::new());
+    let found: Found = Mutex::new(Vec::new());
     let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
     zenkai_xlsx_reader::scan_with_caps(bytes, &inspect).map_err(engine_error)?;
     let book = run_with_engine_stack(|| read_book(bytes, name))?;
     Ok((book, take_unsupported(found)?))
 }
 
-fn take_unsupported(found: Mutex<Vec<Unsupported>>) -> Result<Vec<Unsupported>, EngineError> {
-    let mut unsupported = found
+fn take_unsupported(found: Found) -> Result<Vec<Unsupported>, EngineError> {
+    let found = found
         .into_inner()
         .map_err(|_| EngineError::InvalidFile("a part check stopped".to_string()))?;
-    unsupported.sort();
-    unsupported.dedup();
-    Ok(unsupported)
+    Ok(kinds(&found))
 }
 
 fn read_streaming(path: &Path, name: &str) -> Result<FileRead, ReadError> {
-    let found = Mutex::new(Vec::new());
+    let found: Found = Mutex::new(Vec::new());
     let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
     let opened = run_with_engine_stack(|| Ok(read_book_streaming(path, name, &inspect)))
         .map_err(|error| ReadError::Unsupported(error.to_string()))??;
-    let mut unsupported = found
+    let found = found
         .into_inner()
         .map_err(|_| ReadError::Unsupported("a part check stopped".to_string()))?;
-    unsupported.sort();
-    unsupported.dedup();
+    let held = Held::of(&found, &opened.layout);
     let settings = opened
         .sheet_configs
         .iter()
@@ -218,25 +217,26 @@ fn read_streaming(path: &Path, name: &str) -> Result<FileRead, ReadError> {
     Ok(FileRead {
         read: ReadBook {
             book: opened.book,
-            unsupported,
+            unsupported: kinds(&found),
             fallback: None,
         },
         settings,
-        layout: Some(opened.layout),
+        parts: Some(OpenedParts {
+            layout: opened.layout,
+            held,
+        }),
     })
 }
 
 fn read_fast(bytes: &[u8], name: &str) -> Outcome<ReadError> {
-    let found = Mutex::new(Vec::new());
+    let found: Found = Mutex::new(Vec::new());
     let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
     let book = run_with_engine_stack(|| Ok(read_book_fast(bytes, name, &inspect)))
         .map_err(|error| ReadError::Unsupported(error.to_string()))??;
-    let mut unsupported = found
+    let found = found
         .into_inner()
         .map_err(|_| ReadError::Unsupported("a part check stopped".to_string()))?;
-    unsupported.sort();
-    unsupported.dedup();
-    Ok((book, unsupported))
+    Ok((book, kinds(&found)))
 }
 
 #[derive(Debug)]

@@ -299,18 +299,22 @@ fn inserting_above_the_outline_drops_it_and_says_so() {
     let path = dir.path().join("layout.xlsx");
     layout_source(&path);
     let mut book = open_xlsx(&path).unwrap().workbook;
+    let dropped = |book: &zenkai_engine::Workbook| {
+        let snapshot = book.save_snapshot(&path, SaveTarget::Document).unwrap();
+        snapshot.dropped().to_vec()
+    };
     book.insert_rows(SheetId(1), RowIdx::new(20).unwrap(), 1)
         .unwrap();
     book.insert_columns(SheetId(1), ColIdx::new(10).unwrap(), 1)
         .unwrap();
-    assert!(book.dropped_on_save().is_empty());
+    assert!(dropped(&book).is_empty());
     let kept = settings(&part(&book.to_xlsx().unwrap(), "xl/worksheets/sheet2.xml"));
     assert!(kept.contains_key("row8@outlineLevel") && kept.contains_key("rowBreaks/6@id"));
 
     book.insert_rows(SheetId(1), RowIdx::new(0).unwrap(), 1)
         .unwrap();
     assert_eq!(
-        book.dropped_on_save(),
+        dropped(&book),
         [Unsupported::Outline, Unsupported::PageBreaks]
     );
     book.undo().unwrap();
@@ -327,6 +331,9 @@ fn inserting_above_the_outline_drops_it_and_says_so() {
         "columns were not moved: {saved:?}"
     );
     assert!(saved.contains_key("pageMargins@left"));
+    // The file written after the loss lacks it, so the next save loses nothing more.
+    save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
+    assert!(dropped(&book).is_empty());
 }
 
 // Excel writes r:id on <pageSetup> for its printer settings part, which Zenkai does not
