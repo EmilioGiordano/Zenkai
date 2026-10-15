@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use gpui_kit::*;
+use zenkai_agent::preferences::CloseWithUnsaved;
 use zenkai_engine::{EngineError, open_xlsx};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
@@ -326,7 +327,24 @@ impl Workspace {
         .detach();
     }
 
+    // With the default setting the unsaved workbooks are listed first and the user decides
+    // which to save; "keep changes" goes straight to recovery copies.
     pub(super) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.lifecycle == Lifecycle::Closing
+            || self.close_dialog.is_some()
+            || self.departure.is_some()
+        {
+            return;
+        }
+        self.park_active(window, cx);
+        let general = &agent_settings::settings(cx).general;
+        let asks = general.close_with_unsaved == CloseWithUnsaved::Ask;
+        let reopen_offered = general.restore_session;
+        let unsaved = self.documents.unsaved();
+        if asks && !unsaved.is_empty() {
+            self.ask_to_close_app(unsaved, reopen_offered, window, cx);
+            return;
+        }
         self.run_close(ClosePlan::default(), window, cx);
     }
 

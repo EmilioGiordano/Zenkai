@@ -27,6 +27,7 @@ mod agent_chip;
 mod agent_files;
 mod agent_review;
 mod chat_dock;
+mod close_dialog;
 mod closing;
 mod settings_gate;
 mod space_panel;
@@ -185,6 +186,7 @@ pub struct Workspace {
     lifecycle: Lifecycle,
     // Saves ahead of closing a tab or the app; `None` when no close waits on a save.
     departure: Option<Departure>,
+    close_dialog: Option<close_dialog::CloseDialog>,
     saved_session: Option<Session>,
     cell_refresh: CellRefresh,
     space_panel: Option<space_panel::SpacePanel>,
@@ -296,6 +298,7 @@ impl Workspace {
             panels: PanelsState::new(cx),
             lifecycle: Lifecycle::Running,
             departure: None,
+            close_dialog: None,
             saved_session: None,
             cell_refresh: CellRefresh::Idle,
             space_panel: None,
@@ -3137,6 +3140,15 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CloseFormatDialog, window, cx| {
                 this.close_format_dialog(window, cx)
             }))
+            .on_action(cx.listener(|this, _: &ConfirmCloseDialog, window, cx| {
+                this.confirm_close_dialog(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DiscardCloseDialog, window, cx| {
+                this.discard_close_dialog(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CancelCloseDialog, window, cx| {
+                this.cancel_close_dialog(window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &OpenRecent1, window, cx| this.open_recent(0, window, cx)),
             )
@@ -3463,6 +3475,7 @@ impl Render for Workspace {
             .children(self.render_toast(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
+            .children(self.render_close_dialog(cx))
             .children(self.render_generate())
             .children(self.render_space_panel(window, cx))
     }
