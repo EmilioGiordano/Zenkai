@@ -159,6 +159,7 @@ impl Elements {
         let mut linked = Some(Vec::new());
         let mut standalone = Vec::new();
         let mut bytes = 0;
+        let extended = extended_names(sheet);
         for (order, (name, place)) in CARRIED.into_iter().enumerate() {
             let Some(node) = sheet
                 .children()
@@ -167,7 +168,14 @@ impl Elements {
                 continue;
             };
             let points = points_into_relationships(node);
-            let Some(xml) = rebuild(node) else {
+            // Excel writes part of some elements, such as list validations naming another
+            // sheet, into the sheet's extension list, which is not kept: keeping the rest
+            // would hide the loss.
+            let rebuilt = match extended.contains(&name) {
+                true => None,
+                false => rebuild(node),
+            };
+            let Some(xml) = rebuilt else {
                 tracing::debug!(
                     element = name,
                     "a sheet element that cannot be rebuilt is not kept"
@@ -261,6 +269,17 @@ impl Elements {
 
 fn in_main(node: Node) -> bool {
     node.tag_name().namespace() == Some(MAIN)
+}
+
+// The names of the elements in the sheet's own extension list.
+fn extended_names<'a>(sheet: Node<'a, '_>) -> Vec<&'a str> {
+    sheet
+        .children()
+        .filter(|n| n.is_element() && in_main(*n) && n.tag_name().name() == "extLst")
+        .flat_map(|list| list.descendants())
+        .filter(Node::is_element)
+        .map(|n| n.tag_name().name())
+        .collect()
 }
 
 fn points_into_relationships(node: Node) -> bool {
@@ -453,6 +472,20 @@ mod tests {
             )
         );
         assert_eq!(filter.kinds(), BTreeSet::from([Unsupported::AutoFilter]));
+    }
+
+    #[test]
+    fn an_element_excel_extends_in_the_extension_list_is_not_kept() {
+        let validations = elements(concat!(
+            r#"<dataValidations count="1"><dataValidation sqref="A1"/></dataValidations>"#,
+            r#"<autoFilter ref="A1:B2"/><extLst><ext uri="{CCE6A557-97BC-4b89-ADB6-D9C93CAAB3DF}" "#,
+            r#"xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">"#,
+            r#"<x14:dataValidations count="1"/></ext></extLst>"#
+        ));
+        assert_eq!(
+            validations.kinds(),
+            BTreeSet::from([Unsupported::AutoFilter])
+        );
     }
 
     #[test]

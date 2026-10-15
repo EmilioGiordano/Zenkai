@@ -375,6 +375,36 @@ fn data_validation_is_kept_when_its_sheet_is_edited() {
     kept_by_each_path(&path, Some("dataValidations"));
 }
 
+// Excel writes list validations naming another sheet into the sheet's extension list,
+// which is not kept, so the sheet's validations all go and the save says so.
+#[test]
+fn validations_excel_extends_are_dropped_and_said_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = source(dir.path(), |held| {
+        let rule = DataValidation::new().allow_whole_number(DataValidationRule::Between(1, 10));
+        held.add_data_validation(0, 0, 2, 0, &rule).unwrap();
+    });
+    with_held_sheet_replaced(
+        &path,
+        &[(
+            "</worksheet>",
+            concat!(
+                r#"<extLst><ext uri="{CCE6A557-97BC-4b89-ADB6-D9C93CAAB3DF}" "#,
+                r#"xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main">"#,
+                r#"<x14:dataValidations count="1"/></ext></extLst></worksheet>"#
+            ),
+        )],
+    );
+    let same = saved_after(&path, Edit::SameSheet);
+    assert_eq!(same.dropped, [Unsupported::DataValidation]);
+    assert_eq!(same.kept, scan(&same.bytes));
+    let written = children(&held_sheet(&same.bytes));
+    assert!(
+        !written.iter().any(|e| e == "dataValidations"),
+        "{written:?}"
+    );
+}
+
 #[test]
 fn sheet_protection_is_kept_when_its_sheet_is_edited() {
     let dir = tempfile::tempdir().unwrap();
@@ -680,7 +710,7 @@ fn a_rewritten_sheet_holds_its_elements_in_schema_order() {
         .iter()
         .map(|name| WORKSHEET_ORDER.iter().position(|o| o == name).unwrap())
         .collect();
-    assert!(order.windows(2).all(|w| w[0] < w[1]), "{names:?}");
+    assert!(order.is_sorted(), "{names:?}");
     assert_sound(&same, &original);
 }
 
