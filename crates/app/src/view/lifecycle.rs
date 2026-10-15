@@ -190,6 +190,10 @@ impl Workspace {
     }
 
     fn autosave_all(&mut self, cx: &mut Context<Self>) {
+        // Closing writes its own copies; a stray autosave could outlive a discarded workbook.
+        if self.lifecycle == Lifecycle::Closing {
+            return;
+        }
         let ids: Vec<WorkbookId> = self.documents.iter().map(|document| document.id).collect();
         for id in ids {
             self.autosave(id, cx);
@@ -447,6 +451,15 @@ impl Workspace {
 
     // `None` while a recalculation or an autosave still holds a workbook that needs saving.
     fn begin_recovery_writes(&mut self, plan: &ClosePlan) -> Option<RecoveryBatch> {
+        // A workbook the plan discards must be idle too: an autosave finishing after its copy
+        // was deleted would leave a file the next start offers as crash recovery.
+        if self
+            .documents
+            .iter()
+            .any(|document| !plan.keeps(document.id) && document.file_job() != FileJob::Idle)
+        {
+            return None;
+        }
         let edits = self.unsaved_edits_kept(plan);
         let Some(directory) = self.recovery_dir.clone() else {
             return Some(RecoveryBatch {
