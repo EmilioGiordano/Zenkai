@@ -277,6 +277,10 @@ impl Workspace {
                     Ok(SnapshotOutcome::Written { lacks }) => {
                         document.recovery_written(edits);
                         document.recovery_lacks(&lacks);
+                        // A restored copy must not be saved over a file it lacks content of.
+                        if !lacks.is_empty() {
+                            this.persist_session(cx);
+                        }
                     }
                     Ok(SnapshotOutcome::Abandoned) => {}
                     Err(error) => this.notify(
