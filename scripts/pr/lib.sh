@@ -3,7 +3,7 @@
 
 project_number=${ZENKAI_PROJECT_NUMBER:-2}
 project_owner=${ZENKAI_PROJECT_OWNER:-EmilioGiordano}
-card_query='query($id:ID!){node(id:$id){... on ProjectV2Item{content{__typename ... on DraftIssue{id body}}}}}'
+card_query='query($id:ID!){node(id:$id){... on ProjectV2Item{content{__typename ... on DraftIssue{id body} ... on Issue{number repository{nameWithOwner}}}}}}'
 card_mutation='mutation($id:ID!,$body:String!){updateProjectV2DraftIssue(input:{draftIssueId:$id,body:$body}){draftIssue{id}}}'
 
 # Usage: card_content <project-item-id>; prints the content JSON, fails when the item has none.
@@ -43,6 +43,33 @@ append_to_draft_card() {
   gh api graphql -f query="$card_mutation" -f id="$draft_id" -f body="$body
 
 $text" >/dev/null
+}
+
+# Usage: add_tldr_to_card <dry-run 0|1> <project-item-id> <text>
+# A draft card gets the text appended; an issue card gets it as a comment on the issue.
+add_tldr_to_card() {
+  local dry_run=$1 item=$2 text=$3
+  if [ "$dry_run" -eq 1 ]; then
+    echo "# draft card:"
+    append_to_draft_card 1 "$item" "$text"
+    echo "# issue card:"
+    echo "gh issue comment <number> --repo <owner/repo> --body \"$text\""
+    return 0
+  fi
+  local content kind
+  content=$(card_content "$item") || return 1
+  kind=$(echo "$content" | jq -r '.__typename')
+  case "$kind" in
+    DraftIssue) append_to_draft_card 0 "$item" "$text" ;;
+    Issue)
+      gh issue comment "$(echo "$content" | jq -r '.number')" \
+        --repo "$(echo "$content" | jq -r '.repository.nameWithOwner')" --body "$text" >/dev/null
+      ;;
+    *)
+      echo "card: item $item is a $kind; only draft and issue cards take a TLDR" >&2
+      return 1
+      ;;
+  esac
 }
 
 # Usage: link_pr_to_card <dry-run 0|1> <project-item-id> <pr-url>

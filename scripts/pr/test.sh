@@ -94,6 +94,7 @@ expect_output '"comments": ..' "review with no commentable line has no inline co
 
 expect 0 "card good" "$dir/card.sh" --dry-run PVTI_x "$fx/tldr-good.txt"
 expect_output 'TLDR: Review found' "card prefixes TLDR" "$dir/card.sh" --dry-run PVTI_x "$fx/tldr-good.txt"
+expect_output 'gh issue comment' "card comments on an issue card" "$dir/card.sh" --dry-run PVTI_x "$fx/tldr-good.txt"
 expect 1 "card too long" "$dir/card.sh" --dry-run PVTI_x "$fx/tldr-long.txt"
 expect 1 "card middle dot" "$dir/card.sh" --dry-run PVTI_x "$fx/tldr-dot.txt"
 

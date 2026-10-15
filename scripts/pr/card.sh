@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Usage: card.sh [--dry-run] <project-item-id> <tldr-file>
-# Appends a TLDR paragraph (what the review found, how it was resolved) to a draft card.
+# Adds a TLDR paragraph (what the review found, how it was resolved) to a draft card, or
+# comments it on the issue of an issue card.
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
@@ -36,4 +37,4 @@ if grep -qF "$(printf '\302\267')" "$tldr_file"; then
   exit 1
 fi
 
-append_to_draft_card "$dry_run" "$item" "TLDR: $(cat "$tldr_file")"
+add_tldr_to_card "$dry_run" "$item" "TLDR: $(cat "$tldr_file")"
