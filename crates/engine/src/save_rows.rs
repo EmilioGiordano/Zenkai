@@ -295,24 +295,19 @@ impl RowJob {
         let range = span_rows(span);
         let first = self.rows.partition_point(|row| row < range.start());
         let last = self.rows.partition_point(|row| row <= range.end());
-        let mut written = Vec::new();
-        write_rows_xml(
-            &mut written,
-            &self.sheet,
-            &self.formulas,
-            styles,
-            &self.rows[first..last],
-            |row, column| {
-                anchors
-                    .get(&(row, column))
-                    .copied()
-                    .unwrap_or(SharedFormula::No)
-            },
-        )?;
-        if !self.outline.is_empty() {
-            written = with_row_outline(&written, &self.outline)?;
+        let rows = &self.rows[first..last];
+        let shared = |row, column| {
+            anchors
+                .get(&(row, column))
+                .copied()
+                .unwrap_or(SharedFormula::No)
+        };
+        if self.outline.is_empty() {
+            return write_rows_xml(out, &self.sheet, &self.formulas, styles, rows, shared);
         }
-        out.write_all(&written)
+        let mut written = Vec::new();
+        write_rows_xml(&mut written, &self.sheet, &self.formulas, styles, rows, shared)?;
+        out.write_all(&with_row_outline(&written, &self.outline)?)
     }
 }
 
