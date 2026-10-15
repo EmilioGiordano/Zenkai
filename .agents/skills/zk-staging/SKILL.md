@@ -20,8 +20,8 @@ Hard rules for the whole run:
   when the user explicitly says so after testing the exe; the lead pushes then.
 - Never open or drive the GUI, never send input to the desktop.
 - Never kill a process, including a running `zenkai.exe`.
-- One `cargo` process at a time, at most `-j 8` in total. If another `zk-branch`
-  or `zk-staging` run is building, wait for it.
+- One `cargo` process at a time, `-j 4`, and no heavy measurement alongside a build.
+  If another `zk-staging` run is building, wait for it.
 - Builds use the staging target dir below. Never clean it and never override
   `CARGO_TARGET_DIR`.
 
@@ -44,7 +44,9 @@ Hard rules for the whole run:
    the branch and report it.
 4. Then once, in this order: `cargo fmt --check`,
    `cargo clippy --all-targets -- -D warnings`, `cargo test`,
-   `cargo deny check`, `cargo build --release`. Plus the benchmark in `bench/`
+   `cargo deny check`, `cargo build --release`, then the vendor suites the workspace
+   excludes: `cargo test --manifest-path vendor/ironcalc_base/Cargo.toml` and
+   `cargo test --manifest-path vendor/ironcalc/Cargo.toml`. Plus the benchmark in `bench/`
    (release, as `README.md` documents it) when a merged branch touches
    `crates/engine`, `crates/grid`, `crates/formats` or `bench/`.
 5. Copy the release exe to `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`,
