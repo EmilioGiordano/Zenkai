@@ -3,8 +3,9 @@ use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use ironcalc::base::cell_store::CellStore;
+use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::Cell;
-use ironcalc::base::{Recalculation, UserModel};
+use ironcalc::base::{Recalculation, StepCells, UserModel};
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
 
 use crate::workbook::{col_i32, row_i32};
@@ -27,6 +28,19 @@ struct Extent {
     spills: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum HistoryStep {
+    Undo,
+    Redo,
+}
+
+// What an edit may do to the cells inside the areas it reports.
+#[derive(Clone, Copy)]
+enum CellChange {
+    AddOnly,
+    AddOrRemove,
+}
+
 fn is_dynamic(cell: &Cell) -> bool {
     cell.dynamic_range().is_some()
 }
@@ -36,6 +50,20 @@ fn position(row: i32, col: i32) -> CellPos {
         RowIdx::clamped(i64::from(row) - 1),
         ColIdx::clamped(i64::from(col) - 1),
     )
+}
+
+fn step_area(area: &Area) -> Option<(SheetId, Range)> {
+    if area.width < 1 || area.height < 1 {
+        return None;
+    }
+    let end = position(
+        area.row.saturating_add(area.height - 1),
+        area.column.saturating_add(area.width - 1),
+    );
+    Some((
+        SheetId(area.sheet),
+        Range::new(position(area.row, area.column), end),
+    ))
 }
 
 // Matches IronCalc's `Worksheet::dimension`: rows without cells still count, but a sheet
@@ -131,7 +159,7 @@ impl CachedModel {
         edit: impl FnOnce(&mut UserModel<'static>) -> T,
     ) -> T {
         let result = edit(&mut self.model);
-        self.keep_extents(&[(sheet, area)]);
+        self.keep_extents(&[(sheet, area)], CellChange::AddOnly, &[]);
         result
     }
 
@@ -141,34 +169,83 @@ impl CachedModel {
         edit: impl FnOnce(&mut UserModel<'static>) -> T,
     ) -> T {
         let result = edit(&mut self.model);
-        self.keep_extents(&[]);
+        self.keep_extents(&[], CellChange::AddOnly, &[]);
+        result
+    }
+
+    // `apply` must take exactly the next step of `step`'s kind. The cells it changes are
+    // read before it is taken; a step that failed may have applied in part, so it drops
+    // every end.
+    pub(crate) fn step<T>(
+        &mut self,
+        step: HistoryStep,
+        apply: impl FnOnce(&mut UserModel<'static>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let reach = match step {
+            HistoryStep::Undo => self.model.undo_cells(),
+            HistoryStep::Redo => self.model.redo_cells(),
+        };
+        let result = apply(&mut self.model);
+        match (reach, &result) {
+            (Some(StepCells { areas, sheets }), Ok(_)) => {
+                let changed: Vec<(SheetId, Range)> = areas.iter().filter_map(step_area).collect();
+                let rebuilt: Vec<SheetId> = sheets.into_iter().map(SheetId).collect();
+                self.keep_extents(&changed, CellChange::AddOrRemove, &rebuilt);
+            }
+            _ => self.cache_mut().clear(),
+        }
         result
     }
 
     // Evaluation adds or removes cells only on sheets holding a dynamic array, and only in
     // a full recalculation: an incremental one falls back to a full one whenever a spill
-    // could grow, shrink or move. Every other sheet keeps its end however large it is.
-    fn keep_extents(&mut self, written: &[(SheetId, Range)]) {
+    // could grow, shrink or move. Every other sheet keeps its end however large it is,
+    // unless the edit changed cells of it or, for `rebuilt`, its rows, columns or settings.
+    fn keep_extents(
+        &mut self,
+        changed: &[(SheetId, Range)],
+        change: CellChange,
+        rebuilt: &[SheetId],
+    ) {
         let spills_unchanged =
             self.model.get_model().last_recalculation() == Recalculation::Incremental;
         let cached = std::mem::take(self.cache_mut());
         let kept: HashMap<SheetId, Extent> = cached
             .into_iter()
-            .filter(|(_, extent)| spills_unchanged || !extent.spills)
+            .filter(|(sheet, extent)| {
+                (spills_unchanged || !extent.spills) && !rebuilt.contains(sheet)
+            })
             .filter_map(|(sheet, extent)| {
-                let areas: Vec<Range> = written
+                let areas: Vec<Range> = changed
                     .iter()
-                    .filter(|(written_sheet, _)| *written_sheet == sheet)
+                    .filter(|(changed_sheet, _)| *changed_sheet == sheet)
                     .map(|(_, area)| *area)
                     .collect();
                 if areas.is_empty() {
                     return Some((sheet, extent));
                 }
-                self.grown(sheet, &areas, extent)
-                    .map(|grown| (sheet, grown))
+                let kept = match change {
+                    CellChange::AddOnly => self.grown(sheet, &areas, extent),
+                    CellChange::AddOrRemove => self.kept_inside(sheet, &areas, extent),
+                };
+                kept.map(|kept| (sheet, kept))
             })
             .collect();
         *self.cache_mut() = kept;
+    }
+
+    // Removing a cell shrinks the end only when it sat on the last row or column, so the
+    // end holds when every area lies before both. Undoing a dynamic array's anchor also
+    // clears the cells it spilled into, outside its area.
+    fn kept_inside(&self, sheet: SheetId, areas: &[Range], extent: Extent) -> Option<Extent> {
+        let last = extent.last?;
+        let inside = areas
+            .iter()
+            .all(|area| area.end.row < last.row && area.end.col < last.col);
+        if extent.spills || !inside {
+            return None;
+        }
+        self.grown(sheet, areas, extent)
     }
 
     // `None` when the sheet must be walked again: a sheet that had no cells may still hold
@@ -317,6 +394,92 @@ mod tests {
             Some(model.used_end(SheetId(1))),
             model.walked_end(SheetId(1))
         );
+    }
+
+    fn undo(model: &mut CachedModel) {
+        model.step(HistoryStep::Undo, UserModel::undo).unwrap();
+    }
+
+    fn redo(model: &mut CachedModel) {
+        model.step(HistoryStep::Redo, UserModel::redo).unwrap();
+    }
+
+    fn assert_cached_ends_match_a_walk(model: &CachedModel) {
+        let cached: Vec<(SheetId, CellPos)> = model
+            .cache()
+            .iter()
+            .map(|(sheet, extent)| (*sheet, extent.last.unwrap_or_default()))
+            .collect();
+        for (sheet, last) in cached {
+            assert_eq!(Some(last), model.walked_end(sheet), "sheet {}", sheet.0);
+        }
+    }
+
+    #[test]
+    fn an_undo_keeps_the_ends_of_the_sheets_it_does_not_touch() {
+        let mut model = two_filled_sheets();
+        type_at(&mut model, 0, "C3", "x");
+        undo(&mut model);
+        assert!(model.cache().contains_key(&SheetId(1)));
+        assert!(!model.cache().contains_key(&SheetId(0)));
+        model.used_end(SheetId(0));
+        redo(&mut model);
+        assert!(model.cache().contains_key(&SheetId(1)));
+        model.used_end(SheetId(0));
+        assert_cached_ends_match_a_walk(&model);
+    }
+
+    #[test]
+    fn an_undo_inside_the_used_area_keeps_its_end() {
+        let mut model = two_filled_sheets();
+        type_at(&mut model, 0, "D9", "end");
+        type_at(&mut model, 0, "B2", "x");
+        undo(&mut model);
+        assert!(model.cache().contains_key(&SheetId(0)));
+        assert_cached_ends_match_a_walk(&model);
+        redo(&mut model);
+        assert!(model.cache().contains_key(&SheetId(0)));
+        assert_cached_ends_match_a_walk(&model);
+    }
+
+    #[test]
+    fn an_undo_on_the_last_row_drops_its_end() {
+        let mut model = two_filled_sheets();
+        type_at(&mut model, 0, "D9", "end");
+        undo(&mut model);
+        assert!(!model.cache().contains_key(&SheetId(0)));
+    }
+
+    #[test]
+    fn an_undo_of_inserted_rows_drops_only_that_sheets_end() {
+        let mut model = two_filled_sheets();
+        model.insert_rows(0, 1, 1).unwrap();
+        model.used_end(SheetId(0));
+        model.used_end(SheetId(1));
+        undo(&mut model);
+        assert!(!model.cache().contains_key(&SheetId(0)));
+        assert!(model.cache().contains_key(&SheetId(1)));
+        assert_cached_ends_match_a_walk(&model);
+    }
+
+    #[test]
+    fn an_undo_of_a_new_sheet_drops_every_end() {
+        let mut model = model();
+        model.new_sheet().unwrap();
+        model.used_end(SheetId(0));
+        model.used_end(SheetId(1));
+        undo(&mut model);
+        assert!(model.cache().is_empty());
+    }
+
+    #[test]
+    fn an_incremental_undo_keeps_the_end_of_an_untouched_sheet_with_a_spill() {
+        let mut model = spill_on_the_second_sheet();
+        type_at(&mut model, 0, "B1", "7");
+        undo(&mut model);
+        assert_eq!(last_recalculation(&model), Recalculation::Incremental);
+        assert!(model.cache().contains_key(&SheetId(1)));
+        assert_cached_ends_match_a_walk(&model);
     }
 
     #[test]

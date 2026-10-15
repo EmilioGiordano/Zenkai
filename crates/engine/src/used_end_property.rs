@@ -1,5 +1,6 @@
 // The cached used end of every sheet equals a fresh walk of the sheet after any edit,
-// including spills that grow or shrink on another sheet.
+// undo or redo, including spills that grow or shrink on another sheet and steps that
+// move or remove sheets.
 #![allow(clippy::unwrap_used)]
 
 use proptest::prelude::*;
@@ -19,6 +20,9 @@ enum Op {
     Bold(u32, i64, i64, i64, i64),
     InsertRow(u32, i64),
     DeleteRow(u32, i64),
+    HideRow(u32, i64),
+    DeleteSheet(u32),
+    MoveSheet(u32, u32),
     Undo,
     Redo,
 }
@@ -57,9 +61,12 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (sheet.clone(), area.clone()).prop_map(|(s, (a, b, c, d))| Op::ClearAll(s, a, b, c, d)),
         1 => (sheet.clone(), area).prop_map(|(s, (a, b, c, d))| Op::Bold(s, a, b, c, d)),
         1 => (sheet.clone(), row.clone()).prop_map(|(s, r)| Op::InsertRow(s, r)),
-        1 => (sheet, row).prop_map(|(s, r)| Op::DeleteRow(s, r)),
-        1 => Just(Op::Undo),
-        1 => Just(Op::Redo),
+        1 => (sheet.clone(), row.clone()).prop_map(|(s, r)| Op::DeleteRow(s, r)),
+        1 => (sheet.clone(), row).prop_map(|(s, r)| Op::HideRow(s, r)),
+        1 => sheet.clone().prop_map(Op::DeleteSheet),
+        1 => (sheet.clone(), sheet).prop_map(|(s, to)| Op::MoveSheet(s, to)),
+        3 => Just(Op::Undo),
+        2 => Just(Op::Redo),
     ]
 }
 
@@ -76,6 +83,9 @@ fn apply(book: &mut Workbook, op: &Op) {
         }
         Op::InsertRow(s, r) => book.insert_rows(SheetId(*s), RowIdx::clamped(*r), 1),
         Op::DeleteRow(s, r) => book.delete_rows(SheetId(*s), RowIdx::clamped(*r), 1),
+        Op::HideRow(s, r) => book.set_rows_hidden(SheetId(*s), span(*r, 0, *r, 0), true),
+        Op::DeleteSheet(s) => book.delete_sheet(SheetId(*s)),
+        Op::MoveSheet(s, to) => book.move_sheet(SheetId(*s), *to),
         Op::Undo => book.undo(),
         Op::Redo => book.redo(),
     };
@@ -85,7 +95,7 @@ proptest! {
     #![proptest_config(ProptestConfig { cases: 128, ..ProptestConfig::default() })]
 
     #[test]
-    fn cached_end_matches_a_fresh_walk(ops in prop::collection::vec(op(), 1..16)) {
+    fn cached_end_matches_a_fresh_walk(ops in prop::collection::vec(op(), 1..24)) {
         let mut book = Workbook::new_empty().unwrap();
         book.add_sheet().unwrap();
         // Undo must not take the second sheet away again.

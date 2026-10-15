@@ -11,7 +11,7 @@ use ironcalc::import::load_from_xlsx_bytes;
 use crate::edit_profile::{EditProfile, RecalcMode};
 use crate::error::EngineError;
 use crate::file::Unsupported;
-use crate::model::CachedModel;
+use crate::model::{CachedModel, HistoryStep};
 use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
 use crate::saved::{FileOnDisk, SavedSlot};
@@ -1192,11 +1192,15 @@ impl Engine for Workbook {
     }
 
     fn undo(&mut self) -> Result<(), EngineError> {
-        self.model.undo().map_err(rejected)
+        self.model
+            .step(HistoryStep::Undo, UserModel::undo)
+            .map_err(rejected)
     }
 
     fn redo(&mut self) -> Result<(), EngineError> {
-        self.model.redo().map_err(rejected)
+        self.model
+            .step(HistoryStep::Redo, UserModel::redo)
+            .map_err(rejected)
     }
 
     fn sizes(&self, sheet: SheetId) -> SheetSizes {
