@@ -20,7 +20,7 @@ use crate::{
 };
 
 use crate::user_model::history::{
-    ColumnData, Diff, DiffList, DiffType, History, QueueDiffs, RowData,
+    step_cells, ColumnData, Diff, DiffList, DiffType, History, QueueDiffs, RowData, StepCells,
 };
 
 use super::border_utils::is_max_border;
@@ -361,6 +361,30 @@ impl<'a> UserModel<'a> {
     /// Returns true if there are items to be redone
     pub fn can_redo(&self) -> bool {
         !self.history.redo_stack.is_empty()
+    }
+
+    /// Returns the cells the next [UserModel::undo] can change, or `None` when it adds,
+    /// removes, renames or reorders sheets or changes something every sheet depends on.
+    ///
+    /// See also:
+    /// * [UserModel::redo_cells]
+    pub fn undo_cells(&self) -> Option<StepCells> {
+        match self.history.undo_stack.last() {
+            Some(diff_list) => step_cells(diff_list),
+            None => Some(StepCells::default()),
+        }
+    }
+
+    /// Returns the cells the next [UserModel::redo] can change, or `None` when it adds,
+    /// removes, renames or reorders sheets or changes something every sheet depends on.
+    ///
+    /// See also:
+    /// * [UserModel::undo_cells]
+    pub fn redo_cells(&self) -> Option<StepCells> {
+        match self.history.redo_stack.last() {
+            Some(diff_list) => step_cells(diff_list),
+            None => Some(StepCells::default()),
+        }
     }
 
     /// Pauses automatic evaluation.

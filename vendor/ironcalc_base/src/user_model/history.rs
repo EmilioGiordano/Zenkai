@@ -4,6 +4,7 @@ use bitcode::{Decode, Encode};
 
 use crate::{
     cf_types::CfRule,
+    expressions::types::Area,
     types::{Cell, Col, Color, Row, SheetState, Style, StyleIncludes, Theme, Worksheet},
 };
 
@@ -296,6 +297,115 @@ pub(crate) enum Diff {
 }
 
 pub(crate) type DiffList = Vec<Diff>;
+
+/// The cells an undo or redo step can change. See [crate::UserModel::undo_cells].
+#[derive(Default)]
+pub struct StepCells {
+    /// Areas whose cells the step writes, clears or restyles. Clearing a dynamic array
+    /// anchor also clears the cells it spills into, which are not listed.
+    pub areas: Vec<Area>,
+    /// Sheets whose rows, columns or settings the step changes, which can move, add or
+    /// remove any of their cells.
+    pub sheets: Vec<u32>,
+}
+
+fn cell_area(sheet: u32, row: i32, column: i32, width: i32, height: i32) -> Area {
+    Area {
+        sheet,
+        row,
+        column,
+        width,
+        height,
+    }
+}
+
+// `None` when the step adds, removes, renames or reorders sheets, or changes something
+// every sheet depends on, such as defined names, styles or the locale.
+pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
+    let mut cells = StepCells::default();
+    for diff in diff_list {
+        match diff {
+            Diff::SetCellValue {
+                sheet, row, column, ..
+            }
+            | Diff::CellClearFormatting {
+                sheet, row, column, ..
+            }
+            | Diff::SetCellStyle {
+                sheet, row, column, ..
+            }
+            | Diff::ApplyNamedStyle {
+                sheet, row, column, ..
+            } => cells.areas.push(cell_area(*sheet, *row, *column, 1, 1)),
+            Diff::SetArrayValue {
+                sheet,
+                row,
+                column,
+                width,
+                height,
+                ..
+            }
+            | Diff::RangeClearContents {
+                sheet,
+                row,
+                column,
+                width,
+                height,
+                ..
+            }
+            | Diff::RangeClearAll {
+                sheet,
+                row,
+                column,
+                width,
+                height,
+                ..
+            } => cells
+                .areas
+                .push(cell_area(*sheet, *row, *column, *width, *height)),
+            Diff::SetColumnWidth { sheet, .. }
+            | Diff::SetColumnHidden { sheet, .. }
+            | Diff::SetRowHeight { sheet, .. }
+            | Diff::SetRowHidden { sheet, .. }
+            | Diff::SetColumnStyle { sheet, .. }
+            | Diff::SetRowStyle { sheet, .. }
+            | Diff::DeleteColumnStyle { sheet, .. }
+            | Diff::DeleteRowStyle { sheet, .. }
+            | Diff::InsertRows { sheet, .. }
+            | Diff::DeleteRows { sheet, .. }
+            | Diff::InsertColumns { sheet, .. }
+            | Diff::DeleteColumns { sheet, .. }
+            | Diff::MoveColumns { sheet, .. }
+            | Diff::MoveRows { sheet, .. }
+            | Diff::SetFrozenRowsCount { sheet, .. }
+            | Diff::SetFrozenColumnsCount { sheet, .. }
+            | Diff::SetShowGridLines { sheet, .. }
+            | Diff::AddConditionalFormatting { sheet, .. }
+            | Diff::DeleteConditionalFormatting { sheet, .. }
+            | Diff::UpdateConditionalFormatting { sheet, .. }
+            | Diff::SwapConditionalFormattingPriority { sheet, .. } => cells.sheets.push(*sheet),
+            Diff::SetSheetColor { index, .. } | Diff::SetSheetState { index, .. } => {
+                cells.sheets.push(*index)
+            }
+            Diff::DeleteSheet { .. }
+            | Diff::NewSheet { .. }
+            | Diff::DuplicateSheet { .. }
+            | Diff::RenameSheet { .. }
+            | Diff::MoveSheet { .. }
+            | Diff::SetTheme { .. }
+            | Diff::CreateDefinedName { .. }
+            | Diff::DeleteDefinedName { .. }
+            | Diff::UpdateDefinedName { .. }
+            | Diff::SetLocale { .. }
+            | Diff::SetWorkbookName { .. }
+            | Diff::SetTimezone { .. }
+            | Diff::CreateNamedStyle { .. }
+            | Diff::DeleteNamedStyle { .. }
+            | Diff::UpdateNamedStyle { .. } => return None,
+        }
+    }
+    Some(cells)
+}
 
 #[derive(Default)]
 pub(crate) struct History {
