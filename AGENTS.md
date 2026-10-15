@@ -39,8 +39,8 @@ Design principle: reinvent nothing. Shortcuts, menu names, selection, formula er
 - A decision the spec does not cover: choose the option closest to how Excel behaves and
   record it in `DECISIONS.md`.
 - No functionality outside the spec, even if it is easy. Propose it in `docs/IDEAS.md`.
-- Before closing a phase (in staging): `cargo fmt`, `cargo clippy` with no warnings, every test green,
-  benchmark without regressions.
+- Before closing a phase, in staging, run: `cargo fmt`, `cargo clippy` with no warnings,
+  every test green, benchmark without regressions.
 - If an engine or GPUI limitation blocks a requirement: stop and report it with
   alternatives. Never work around it silently.
 - Keep `README.md` current with how to build, test and run the benchmark on Windows.
@@ -315,7 +315,7 @@ session's model.
 - `.claude/skills/review-changes/SKILL.md`: runs the reviewers in parallel and combines
   the verdict. It never fixes anything.
 - `.agents/skills/zk-task/SKILL.md`: Muse workflow (`/zk-task`) turning a plain-words request into a TASK file on a fresh branch worktree, then stopping for approval.
-- `.agents/skills/zk-branch/SKILL.md`: Muse workflow (`/zk-branch`) running a TASK file end to end: implement, branch checks, parallel reviews, fixes, REPORT.
+- `.agents/skills/zk-branch/SKILL.md`: Muse workflow (`/zk-branch`) running a TASK file end to end: implement, static checks, parallel reviews, fixes, REPORT.
 - `.agents/skills/zk-staging/SKILL.md`: Muse workflow (`/zk-staging`) merging ready branches into `staging/<date>`, running the full gate and benchmark once, delivering the exe and report.
 
 Each reviewer has a "Known false positives" section. It starts empty and grows with every
