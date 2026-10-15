@@ -14,6 +14,7 @@ use crate::agent_review::Review;
 use crate::entry::display_name;
 use crate::find::FindBar;
 use crate::spaces::SpaceId;
+use crate::stale_view::{StaleRequest, StaleSlot};
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -34,6 +35,7 @@ pub struct Document {
     pub space: SpaceId,
     untitled: u32,
     workbook: SharedWorkbook,
+    stale: Arc<StaleSlot>,
     batch_running: bool,
     sheets_stale: bool,
     file_job: FileJob,
@@ -98,6 +100,7 @@ impl Document {
             space,
             untitled,
             workbook: Arc::new(RwLock::new(workbook)),
+            stale: Arc::default(),
             batch_running: false,
             sheets_stale: false,
             file_job: FileJob::Idle,
@@ -164,6 +167,20 @@ impl Document {
         };
         self.review
             .retain_unchanged(|cell| workbook.input(cell.sheet, cell.pos));
+    }
+
+    pub fn stale_slot(&self) -> Arc<StaleSlot> {
+        Arc::clone(&self.stale)
+    }
+
+    // While a batch holds the write lock: the cells of `ranges` as they were before it, and
+    // the part of `ranges` that answer covers. Never a substitute for a live read.
+    pub fn stale_cells(
+        &self,
+        ranges: &[Range],
+        formulas: bool,
+    ) -> Option<(HashMap<CellPos, GridCell>, Vec<Range>)> {
+        self.stale.current()?.cells_in(self.sheet, formulas, ranges)
     }
 
     pub fn queue(&mut self, edit: Edit) {
@@ -314,6 +331,7 @@ impl Document {
             return false;
         }
         self.batch_running = false;
+        self.stale.clear();
         self.sync_sheets();
         true
     }
@@ -494,6 +512,19 @@ pub fn write_snapshot_unless(
 }
 
 pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError> {
+    run_batch_serving(shared, edits, None)
+}
+
+// The engine recalculates in place and cannot yield, so the write lock is held for the whole
+// batch. The grid's reads meanwhile come from a copy of its surroundings taken just before.
+pub fn run_batch_serving(
+    shared: &RwLock<Workbook>,
+    edits: Vec<Edit>,
+    stale: Option<StaleRequest>,
+) -> Vec<EngineError> {
+    if let Some(request) = stale {
+        request.publish_from(&read_shared(shared));
+    }
     let waited = Instant::now();
     let mut guard = shared.write().unwrap_or_else(PoisonError::into_inner);
     let started = Instant::now();
