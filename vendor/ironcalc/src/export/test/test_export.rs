@@ -455,3 +455,52 @@ fn a_run_of_the_same_formula_is_written_as_a_shared_formula() {
         }
     }
 }
+
+#[test]
+fn chosen_rows_are_written_with_the_caller_s_shared_formulas() {
+    use crate::export::SharedFormula;
+    use ironcalc_base::types::Row;
+
+    let mut model = new_empty_model();
+    for row in 1..=4 {
+        model.set_user_input(0, row, 1, row.to_string()).unwrap();
+        model
+            .set_user_input(0, row, 2, format!("=A{row}*2"))
+            .unwrap();
+    }
+    model.evaluate();
+    let mut worksheet = model.workbook.worksheets[0].clone();
+    worksheet.rows.push(Row {
+        r: 7,
+        height: 30.0,
+        custom_format: false,
+        custom_height: true,
+        s: 0,
+        hidden: true,
+    });
+
+    let mut written = Vec::new();
+    crate::export::write_rows_xml(
+        &mut written,
+        &worksheet,
+        &model.parsed_formulas[0],
+        &[2, 3, 7],
+        |row, column| match (row, column) {
+            (2, 2) => SharedFormula::Anchor {
+                si: 5,
+                last_row: 9,
+                last_column: 3,
+            },
+            _ => SharedFormula::No,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(written).unwrap(),
+        concat!(
+            r#"<row r="2"><c r="A2"><v>2</v></c><c r="B2"><f t="shared" ref="B2:C9" si="5">A2*2</f><v>4</v></c></row>"#,
+            r#"<row r="3"><c r="A3"><v>3</v></c><c r="B3"><f>A3*2</f><v>6</v></c></row>"#,
+            r#"<row r="7" s="0" ht="30" customHeight="1" customFormat="0" hidden="1"></row>"#,
+        )
+    );
+}
