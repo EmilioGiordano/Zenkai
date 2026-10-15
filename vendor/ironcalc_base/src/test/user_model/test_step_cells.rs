@@ -59,6 +59,17 @@ fn inserted_rows_reach_their_whole_sheet() {
 }
 
 #[test]
+fn row_heights_and_frozen_panes_reach_no_cell() {
+    let mut model = new_empty_user_model();
+    model.set_rows_height(0, 2, 4, 30.0).unwrap();
+    let undo = model.undo_cells().unwrap();
+    assert!(undo.areas.is_empty() && undo.sheets.is_empty());
+    model.set_frozen_rows_count(0, 2).unwrap();
+    let undo = model.undo_cells().unwrap();
+    assert!(undo.areas.is_empty() && undo.sheets.is_empty());
+}
+
+#[test]
 fn a_new_sheet_reaches_the_whole_workbook() {
     let mut model = new_empty_user_model();
     model.new_sheet().unwrap();

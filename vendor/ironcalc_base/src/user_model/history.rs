@@ -304,8 +304,10 @@ pub struct StepCells {
     /// Areas whose cells the step writes, clears or restyles. Clearing a dynamic array
     /// anchor also clears the cells it spills into, which are not listed.
     pub areas: Vec<Area>,
-    /// Sheets whose rows, columns or settings the step changes, which can move, add or
-    /// remove any of their cells.
+    /// Sheets whose rows or columns the step inserts, deletes or moves, which can move
+    /// any of their cells. Row and column sizes, visibility and styles, panes, grid
+    /// lines, sheet colour and state and conditional formatting add, move or remove no
+    /// cell and are not listed.
     pub sheets: Vec<u32>,
 }
 
@@ -363,30 +365,29 @@ pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
             } => cells
                 .areas
                 .push(cell_area(*sheet, *row, *column, *width, *height)),
-            Diff::SetColumnWidth { sheet, .. }
-            | Diff::SetColumnHidden { sheet, .. }
-            | Diff::SetRowHeight { sheet, .. }
-            | Diff::SetRowHidden { sheet, .. }
-            | Diff::SetColumnStyle { sheet, .. }
-            | Diff::SetRowStyle { sheet, .. }
-            | Diff::DeleteColumnStyle { sheet, .. }
-            | Diff::DeleteRowStyle { sheet, .. }
-            | Diff::InsertRows { sheet, .. }
+            Diff::InsertRows { sheet, .. }
             | Diff::DeleteRows { sheet, .. }
             | Diff::InsertColumns { sheet, .. }
             | Diff::DeleteColumns { sheet, .. }
             | Diff::MoveColumns { sheet, .. }
-            | Diff::MoveRows { sheet, .. }
-            | Diff::SetFrozenRowsCount { sheet, .. }
-            | Diff::SetFrozenColumnsCount { sheet, .. }
-            | Diff::SetShowGridLines { sheet, .. }
-            | Diff::AddConditionalFormatting { sheet, .. }
-            | Diff::DeleteConditionalFormatting { sheet, .. }
-            | Diff::UpdateConditionalFormatting { sheet, .. }
-            | Diff::SwapConditionalFormattingPriority { sheet, .. } => cells.sheets.push(*sheet),
-            Diff::SetSheetColor { index, .. } | Diff::SetSheetState { index, .. } => {
-                cells.sheets.push(*index)
-            }
+            | Diff::MoveRows { sheet, .. } => cells.sheets.push(*sheet),
+            Diff::SetColumnWidth { .. }
+            | Diff::SetColumnHidden { .. }
+            | Diff::SetRowHeight { .. }
+            | Diff::SetRowHidden { .. }
+            | Diff::SetColumnStyle { .. }
+            | Diff::SetRowStyle { .. }
+            | Diff::DeleteColumnStyle { .. }
+            | Diff::DeleteRowStyle { .. }
+            | Diff::SetFrozenRowsCount { .. }
+            | Diff::SetFrozenColumnsCount { .. }
+            | Diff::SetShowGridLines { .. }
+            | Diff::AddConditionalFormatting { .. }
+            | Diff::DeleteConditionalFormatting { .. }
+            | Diff::UpdateConditionalFormatting { .. }
+            | Diff::SwapConditionalFormattingPriority { .. }
+            | Diff::SetSheetColor { .. }
+            | Diff::SetSheetState { .. } => {}
             Diff::DeleteSheet { .. }
             | Diff::NewSheet { .. }
             | Diff::DuplicateSheet { .. }

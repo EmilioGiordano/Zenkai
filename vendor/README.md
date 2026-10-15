@@ -129,8 +129,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
   `src/test/test_full_evaluation_cells.rs`.
 - `UserModel::undo_cells` and `UserModel::redo_cells` tell which cells the next undo or
-  redo step can change (`StepCells`: cell areas and whole sheets, or `None` for the
-  workbook), so a caller that caches per-sheet facts keeps the ones the step cannot touch
+  redo step can change (`StepCells`: cell areas and the sheets whose rows or columns move,
+  or `None` for the workbook; size, visibility, style, pane and sheet-setting diffs add
+  or remove no cell), so a caller that caches per-sheet facts keeps the ones the step cannot touch
   (`src/user_model/history.rs`, `src/user_model/common.rs`). Stands on its own. Tests:
   `src/test/user_model/test_step_cells.rs`.
 
