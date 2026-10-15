@@ -13,10 +13,17 @@ use crate::{
 // (first row, first column, last row, last column)
 pub(crate) type Rect = (i32, i32, i32, i32);
 
-// A rule updated for a list of cells costs a rectangle of 16 bytes per range of the rule
-// holding the cell and one evaluation of the rule per cell, as a whole pass does; past
-// this the rule is evaluated over its whole range instead of listing the cells.
+// A rule updated for a list of cells costs one evaluation of the rule per cell, as a whole
+// pass does; past this many cells the rule is evaluated over its whole range instead.
 const MAX_PARTIAL_CELLS: usize = 4096;
+// A cell is visited once per range of the rule holding it, and each visit is a rectangle of
+// 16 bytes, so this bounds the list to 256 KiB however many ranges a hostile file gives
+// the rule. Past it the rule is evaluated over its whole range.
+const MAX_PARTIAL_VISITS: usize = 16_384;
+// Checking a cell against every range of a rule is skipped past this many ranges, for the
+// box around them: a cell outside it is outside every range, one inside it only makes the
+// rule be evaluated over its whole range, which is always right.
+const MAX_CHECKED_RANGES: usize = 64;
 
 // What decides the result of a rule at a cell.
 enum Scope {
@@ -78,6 +85,7 @@ enum Refresh {
 pub(crate) struct CfRun {
     rule: CfRule,
     ranges: Vec<Rect>,
+    bounds: Rect,
     reads: Reads,
     readers: Option<Readers>,
     // The day of the last evaluation, for the rules that depend on today.
@@ -162,11 +170,23 @@ impl CfRun {
         }
     }
 
+    fn many_ranges(&self) -> bool {
+        self.ranges.len() > MAX_CHECKED_RANGES
+    }
+
+    fn holds(&self, row: i32, column: i32) -> bool {
+        if self.many_ranges() {
+            inside(self.bounds, row, column)
+        } else {
+            self.ranges.iter().any(|&rect| inside(rect, row, column))
+        }
+    }
+
     fn cells_changed_inside(&self, changed: &[(i32, i32)]) -> Vec<(i32, i32)> {
         changed
             .iter()
             .copied()
-            .filter(|&(row, column)| self.ranges.iter().any(|&rect| inside(rect, row, column)))
+            .filter(|&(row, column)| self.holds(row, column))
             .collect()
     }
 
@@ -224,14 +244,25 @@ impl Model<'_> {
             let sheet = sheet_idx as u32;
             let mut runs = Vec::new();
             for cf in cfs {
-                let ranges = parse_sqref(&cf.range);
-                if ranges.is_empty() {
+                let mut ranges = parse_sqref(&cf.range);
+                // A repeated area would only repeat its results.
+                let mut seen = HashSet::new();
+                ranges.retain(|rect| seen.insert(*rect));
+                let Some(bounds) = ranges.iter().copied().reduce(|one, other| {
+                    (
+                        one.0.min(other.0),
+                        one.1.min(other.1),
+                        one.2.max(other.2),
+                        one.3.max(other.3),
+                    )
+                }) else {
                     continue;
-                }
+                };
                 let (reads, readers) = self.cf_reads(sheet, &cf.cf_rule, &ranges);
                 let mut run = CfRun {
                     rule: cf.cf_rule,
                     ranges,
+                    bounds,
                     reads,
                     readers,
                     day: None,
@@ -284,7 +315,9 @@ impl Model<'_> {
         }
         let refresh = match scope(&run.rule) {
             Scope::Range => {
-                if run.reads_changed(changed) || !run.cells_changed_inside(on_sheet).is_empty() {
+                if run.reads_changed(changed)
+                    || on_sheet.iter().any(|&(row, column)| run.holds(row, column))
+                {
                     Refresh::Whole
                 } else {
                     Refresh::Nothing
@@ -303,14 +336,17 @@ impl Model<'_> {
                 }
             }
             Scope::Formula => match &run.readers {
-                Some(readers) => run.cells_reading(readers, changed),
-                None if run.reads_changed(changed) => Refresh::Whole,
-                None => Refresh::Nothing,
+                Some(readers) if !run.many_ranges() => run.cells_reading(readers, changed),
+                _ if run.reads_changed(changed) => Refresh::Whole,
+                _ => Refresh::Nothing,
             },
         };
         match refresh {
             Refresh::Nothing => {}
-            Refresh::Cells(cells) if cells.len() <= MAX_PARTIAL_CELLS => {
+            Refresh::Cells(cells)
+                if cells.len() <= MAX_PARTIAL_CELLS
+                    && cells.len().saturating_mul(run.ranges.len()) <= MAX_PARTIAL_VISITS =>
+            {
                 self.evaluate_cf_cells(sheet, run, &cells);
             }
             Refresh::Cells(_) | Refresh::Whole => self.evaluate_cf_run(sheet, run, today),
@@ -597,6 +633,25 @@ mod tests {
         model.cf_runs[0][0].day = Some(0);
         model.update_conditional_formatting(&HashSet::new());
         assert!(!survives(&model, 9));
+    }
+
+    #[test]
+    fn a_rule_with_many_areas_evaluates_the_whole_rule_past_the_visit_limit() {
+        let areas = |count: usize| {
+            ["A1:A5000", "B1:B5000", "C1:C5000", "D1:D5000", "E1:E5000"][..count].join(" ")
+        };
+        let changed: HashSet<_> = (1..=4096).map(|row| (0, row, 1)).collect();
+        for (count, kept) in [(4, true), (5, false)] {
+            let mut model = planted(&areas(count), text_contains_a(), 5000);
+            model.update_conditional_formatting(&changed);
+            assert_eq!(survives(&model, 5000), kept, "{count} areas");
+        }
+    }
+
+    #[test]
+    fn repeated_areas_of_a_rule_are_kept_once() {
+        let model = planted("A1:A10 A1:A10 B1:B2", text_contains_a(), 9);
+        assert_eq!(model.cf_runs[0][0].ranges.len(), 2);
     }
 
     #[test]
