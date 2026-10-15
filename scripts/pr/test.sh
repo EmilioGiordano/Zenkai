@@ -76,6 +76,16 @@ expect_output 'git push -u origin -- refs/heads/chore/x' "open pushes an explici
 expect 0 "reply good" "$dir/reply.sh" --dry-run 5 123 "Fixed in abc1234."
 expect 1 "reply multi-line" "$dir/reply.sh" --dry-run 5 123 "$two_lines"
 expect 2 "reply bad id" "$dir/reply.sh" --dry-run 5 x "Fixed in abc1234."
+expect 2 "reply empty pr" "$dir/reply.sh" --dry-run "" 123 "Fixed in abc1234."
+expect 2 "reply empty comment id" "$dir/reply.sh" --dry-run 5 "" "Fixed in abc1234."
+expect 2 "reply non-numeric pr" "$dir/reply.sh" --dry-run x 123 "Fixed in abc1234."
+expect 1 "reply empty text" "$dir/reply.sh" --dry-run 5 123 "  "
+
+expect 0 "comment good" "$dir/comment.sh" --dry-run 5 "$fx/comment-good.md"
+expect_output 'gh pr comment 5 --body-file' "comment prints the gh command" "$dir/comment.sh" --dry-run 5 "$fx/comment-good.md"
+expect 1 "comment too long" "$dir/comment.sh" --dry-run 5 "$fx/comment-long.md"
+expect 1 "comment middle dot" "$dir/comment.sh" --dry-run 5 "$fx/dot-body.md"
+expect 2 "comment non-numeric pr" "$dir/comment.sh" --dry-run x "$fx/comment-good.md"
 
 expect_output '"line": 42' "review keeps a commentable line inline" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"
 expect_output 'Not on the diff:.*crates/y.rs:7: Nit' "review moves a line outside the diff into the body" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"

@@ -14,8 +14,8 @@ their content and never let a child inherit another agent's reasoning.
 
 Hard rules for the whole run:
 
-- Never push, merge, rebase, `reset --hard`, `git clean`, `branch -D`, or delete
-  branches.
+- Agents never push; the lead pushes and opens PRs through `scripts/pr`. Never merge, rebase,
+  `reset --hard`, `git clean`, `branch -D`, or delete branches.
 - Never open or drive the GUI, never send input to the desktop.
 - Never commit `TASK-*.md` or `REPORT-*.md` files, nor anything outside the task.
 - Builds use the worktree's `.cargo/config.toml` target dir. Never create or change

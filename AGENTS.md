@@ -179,8 +179,8 @@ Agents write the content; `scripts/pr` (bash, `gh`, `jq`) does the GitHub mechan
   with `[reviewer] VERDICT`. Findings on lines outside the PR diff go into the review body.
 - **Thread replies:** one line: `Fixed in <sha>.`, `Won't fix: <reason>` or
   `False positive: <reason>`.
-- **Staging comment, one per PR:** gate result, measurements before and after, and what to
-  test by hand.
+- **Staging comment, one per PR** (`scripts/pr/comment.sh`, at most 10 lines): gate result,
+  measurements before and after, and what to test by hand.
 - **Card:** every board card links its PR. `scripts/pr/open.sh --card <project-item-id>`
   appends `PR: <url>` to a draft card, or adds the PR to the project for an issue card.
   When the review closes, `scripts/pr/card.sh <project-item-id> <tldr-file>` appends a
@@ -241,8 +241,8 @@ in a staging branch.
    `perf-auditor` read the diff against `AGENTS.md`, the security threat model and the
    `docs/SPEC.md` performance budgets. Fixes go on the branch as new commits.
    Each review and each fix round is posted on the PR (`scripts/pr/review.sh`,
-   `scripts/pr/reply.sh`). The reviewers
-   get the spec with decisions as plain statements, `AGENTS.md` and the diff: no reasons,
+   `scripts/pr/reply.sh`). The reviewers get the spec with decisions as plain statements,
+   `AGENTS.md` and the diff: no reasons,
    no `DECISIONS.md`. The lead reconciles each finding against decisions.
 4. **Staging.** `staging-integrator` (one agent, fresh context) validates the batch per
    Validation above: one branch is gated in its own worktree, several branches are merged

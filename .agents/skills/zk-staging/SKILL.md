@@ -52,7 +52,7 @@ Hard rules for the whole run:
    process.
 6. Per-PR comment: for each PR of the batch, write a staging comment of at most 10 lines
    (gate result, measurements before and after, what to test by hand) and post it with
-   `gh pr comment <n> --body-file <file>`, or leave the text in the report for the lead.
+   `scripts/pr/comment.sh <n> <file>`, or leave the text in the report for the lead.
    Never post to a PR that is not in the batch.
 7. After the manual test, on the user's approval: merge the branches (never
    staging) into `main` one at a time, in the same order, with `--no-ff`;
