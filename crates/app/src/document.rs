@@ -482,19 +482,8 @@ pub fn write_snapshot_unless(
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Accepted {
-    Anything,
-    Only(Vec<Unsupported>),
-}
-
-impl Accepted {
-    fn allows(&self, dropped: &[Unsupported]) -> bool {
-        match self {
-            Accepted::Anything => true,
-            Accepted::Only(accepted) => dropped.iter().all(|kind| accepted.contains(kind)),
-        }
-    }
+fn allows(accepted: &[Unsupported], dropped: &[Unsupported]) -> bool {
+    dropped.iter().all(|kind| accepted.contains(kind))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -507,7 +496,7 @@ pub enum DocumentSave {
 pub fn save_document_file(
     shared: &RwLock<Workbook>,
     target: &Path,
-    accepted: &Accepted,
+    accepted: &[Unsupported],
     write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
 ) -> Result<DocumentSave, EngineError> {
     with_snapshot(
@@ -516,13 +505,32 @@ pub fn save_document_file(
         target,
         SaveTarget::Document,
         |snapshot| {
-            if !accepted.allows(snapshot.dropped()) {
+            if !allows(accepted, snapshot.dropped()) {
                 return Ok(DocumentSave::Refused {
                     dropped: snapshot.dropped().to_vec(),
                 });
             }
             let kept = snapshot.kept().to_vec();
             write(snapshot).map(|()| DocumentSave::Written { kept })
+        },
+    )
+}
+
+// For a file Save As gave a name of its own, which nothing is lost from. Returns what the
+// written file holds that Zenkai does not show.
+pub fn write_document_copy(
+    shared: &RwLock<Workbook>,
+    target: &Path,
+    write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
+) -> Result<Vec<Unsupported>, EngineError> {
+    with_snapshot(
+        shared,
+        FileJob::Saving,
+        target,
+        SaveTarget::Document,
+        |snapshot| {
+            let kept = snapshot.kept().to_vec();
+            write(snapshot).map(|()| kept)
         },
     )
 }
@@ -838,11 +846,11 @@ mod tests {
     fn a_save_goes_ahead_only_when_it_drops_nothing_unaccepted() {
         let filter = [Unsupported::AutoFilter];
         let both = [Unsupported::Charts, Unsupported::AutoFilter];
-        assert!(Accepted::Only(Vec::new()).allows(&[]));
-        assert!(!Accepted::Only(Vec::new()).allows(&filter));
-        assert!(Accepted::Only(filter.to_vec()).allows(&filter));
-        assert!(!Accepted::Only(filter.to_vec()).allows(&both));
-        assert!(Accepted::Anything.allows(&both));
+        assert!(allows(&[], &[]));
+        assert!(!allows(&[], &filter));
+        assert!(allows(&filter, &filter));
+        assert!(!allows(&filter, &both));
+        assert!(allows(&both, &filter));
     }
 
     #[test]
@@ -850,12 +858,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("book.xlsx");
         let shared = RwLock::new(Workbook::new_empty().unwrap());
-        let saved = save_document_file(
-            &shared,
-            &target,
-            &Accepted::Only(Vec::new()),
-            zenkai_engine::save_xlsx,
-        );
+        let saved = save_document_file(&shared, &target, &[], zenkai_engine::save_xlsx);
         assert_eq!(saved.unwrap(), DocumentSave::Written { kept: Vec::new() });
         assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
     }

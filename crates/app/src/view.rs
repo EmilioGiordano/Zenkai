@@ -45,7 +45,7 @@ use crate::clipboard;
 use crate::close_prompt::Departure;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
-use crate::document::{self, Accepted, Document, DocumentSave, FileJob};
+use crate::document::{self, Document, DocumentSave, FileJob};
 use crate::documents::{Documents, Step};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
@@ -207,23 +207,30 @@ enum CellRefresh {
     Scheduled,
 }
 
-// What a save over a file may leave out of it; the engine answers what it would.
-enum Clearance {
-    // Save As already gave the copy a name of its own.
-    NewFile,
+// A save over the document's own file, which stops before dropping anything not accepted.
+enum Overwrite {
     InPlace,
-    ReplacingOriginal,
+    Original,
     Confirmed(Vec<Unsupported>),
 }
 
-impl Clearance {
-    fn accepted(&self) -> Accepted {
+impl Overwrite {
+    fn accepted(&self) -> &[Unsupported] {
         match self {
-            Clearance::NewFile => Accepted::Anything,
-            Clearance::InPlace | Clearance::ReplacingOriginal => Accepted::Only(Vec::new()),
-            Clearance::Confirmed(lost) => Accepted::Only(lost.clone()),
+            Overwrite::InPlace | Overwrite::Original => &[],
+            Overwrite::Confirmed(lost) => lost,
         }
     }
+}
+
+enum Saved {
+    Written {
+        kept: Vec<Unsupported>,
+    },
+    Refused {
+        dropped: Vec<Unsupported>,
+        overwrite: Overwrite,
+    },
 }
 
 enum Replacing {
@@ -1478,7 +1485,9 @@ impl Workspace {
         let must_rename =
             document.may_lose_unseen_content() || document.is_macro_enabled() || document.read_only;
         match document.path.clone() {
-            Some(path) if !must_rename => self.save_to(id, path, Clearance::InPlace, window, cx),
+            Some(path) if !must_rename => {
+                self.save_to(id, path, Some(Overwrite::InPlace), window, cx)
+            }
             Some(_) => {
                 let held = document::labels(&document.unsupported);
                 let detail = if document.read_only {
@@ -1615,11 +1624,11 @@ impl Workspace {
             let lost = document.unsupported.clone();
             self.confirm_replace(id, path, Replacing::Original(lost), window, cx);
         } else if replaces_source {
-            self.save_to(id, path, Clearance::ReplacingOriginal, window, cx);
+            self.save_to(id, path, Some(Overwrite::Original), window, cx);
         } else if renamed && path.exists() {
             self.confirm_replace(id, path, Replacing::Existing, window, cx);
         } else {
-            self.save_to(id, path, Clearance::NewFile, window, cx);
+            self.save_to(id, path, None, window, cx);
         }
     }
 
@@ -1631,11 +1640,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let (title, detail, clearance) = match replacing {
+        let (title, detail, overwrite) = match replacing {
             Replacing::Existing => (
                 t!("save.replace_existing_title"),
                 t!("save.replace_existing_detail", path = path.display()),
-                Clearance::NewFile,
+                None,
             ),
             Replacing::Original(lost) => (
                 t!("save.replace_original_title"),
@@ -1643,7 +1652,7 @@ impl Workspace {
                     "save.replace_original_detail",
                     list = document::labels(&lost)
                 ),
-                Clearance::Confirmed(lost),
+                Some(Overwrite::Confirmed(lost)),
             ),
         };
         let answer = window.prompt(
@@ -1657,7 +1666,7 @@ impl Workspace {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| {
                 if choice == Ok(1) {
-                    this.save_to(id, path, clearance, window, cx)
+                    this.save_to(id, path, overwrite, window, cx)
                 } else {
                     this.save_ended(id, false, window, cx)
                 }
@@ -1673,7 +1682,8 @@ impl Workspace {
         &mut self,
         id: WorkbookId,
         path: PathBuf,
-        clearance: Clearance,
+        // None for a file Save As gave a name of its own.
+        overwrite: Option<Overwrite>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1696,11 +1706,20 @@ impl Workspace {
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
-            let accepted = clearance.accepted();
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    document::save_document_file(&shared, &target, &accepted, save_xlsx)
+                    let Some(overwrite) = overwrite else {
+                        return document::write_document_copy(&shared, &target, save_xlsx)
+                            .map(|kept| Saved::Written { kept });
+                    };
+                    document::save_document_file(&shared, &target, overwrite.accepted(), save_xlsx)
+                        .map(|saved| match saved {
+                            DocumentSave::Written { kept } => Saved::Written { kept },
+                            DocumentSave::Refused { dropped } => {
+                                Saved::Refused { dropped, overwrite }
+                            }
+                        })
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
@@ -1723,7 +1742,7 @@ impl Workspace {
                 };
                 let fully_saved;
                 match result {
-                    Ok(DocumentSave::Written { kept }) => {
+                    Ok(Saved::Written { kept }) => {
                         document.saved_over_file(kept);
                         document.path = Some(path);
                         let edited_meanwhile = document.edit_count() != edits_at_start;
@@ -1735,17 +1754,15 @@ impl Workspace {
                         this.notify(Severity::Info, t!("notice.saved"), cx);
                     }
                     // Nothing was written; the file on disk is as it was.
-                    Ok(DocumentSave::Refused { dropped }) => {
+                    Ok(Saved::Refused { dropped, overwrite }) => {
                         this.flush_edits(id, cx);
-                        match clearance {
-                            Clearance::InPlace => {
+                        match overwrite {
+                            Overwrite::InPlace => {
                                 let list = document::labels(&dropped);
                                 let detail = t!("save.loses_detail", list = list);
                                 this.offer_save_as(id, &detail, window, cx);
                             }
-                            Clearance::NewFile
-                            | Clearance::ReplacingOriginal
-                            | Clearance::Confirmed(_) => {
+                            Overwrite::Original | Overwrite::Confirmed(_) => {
                                 let replacing = Replacing::Original(dropped);
                                 this.confirm_replace(id, path, replacing, window, cx);
                             }
