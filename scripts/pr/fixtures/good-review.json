@@ -1,0 +1,1 @@
+{"reviewer":"quality-reviewer","verdict":"PASS","summary":"Looks fine.","findings":[{"path":"crates/x.rs","line":42,"severity":"Medium","text":"Rename this.","suggestion":"let cell_ref = 1;"},{"path":"crates/y.rs","line":7,"severity":"Low","text":"Nit."}]}
