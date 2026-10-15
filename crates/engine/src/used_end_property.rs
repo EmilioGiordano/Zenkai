@@ -44,6 +44,7 @@ fn value() -> impl Strategy<Value = String> {
         Just("=A1+1".to_string()),
         (1i32..4).prop_map(|n| format!("=SEQUENCE({n})")),
         Just("=IF(Sheet2!A1>0,SEQUENCE(3),1)".to_string()),
+        Just("=IF(B1>0,SEQUENCE(4),0)".to_string()),
         Just("=SEQUENCE(MAX(1,Sheet1!A1))".to_string()),
     ]
 }

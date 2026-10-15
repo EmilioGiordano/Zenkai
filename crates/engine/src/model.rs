@@ -24,7 +24,9 @@ struct Extent {
     // `None` for a sheet without cells, which reads as ending at A1.
     last: Option<CellPos>,
     // A dynamic array formula spills on evaluation, adding or removing cells wherever its
-    // result reaches, even after an edit on another sheet.
+    // result reaches, even after an edit on another sheet. IronCalc stores a formula that
+    // may return an array as a dynamic anchor as soon as it is entered, so a sheet only
+    // gains one where a cell is written.
     spills: bool,
 }
 
@@ -542,6 +544,27 @@ mod tests {
         undo(&mut model);
         undo(&mut model);
         assert_eq!(model.cache().len(), 2);
+        assert_cached_ends_match_a_walk(&model);
+    }
+
+    #[test]
+    fn a_formula_that_may_spill_marks_its_sheet_before_it_spills() {
+        let mut model = two_filled_sheets();
+        type_at(&mut model, 0, "C1", "=IF(B1>0,SEQUENCE(9),0)");
+        let anchor = model
+            .get_model()
+            .workbook
+            .worksheet(0)
+            .unwrap()
+            .cell(1, 3)
+            .and_then(Cell::dynamic_range);
+        assert_eq!(anchor, Some((1, 1)));
+        model.used_end(SheetId(0));
+        assert!(model.cache().get(&SheetId(0)).unwrap().spills);
+        type_at(&mut model, 0, "B1", "1");
+        assert_eq!(last_recalculation(&model), Recalculation::Full);
+        assert!(!model.cache().contains_key(&SheetId(0)));
+        assert_eq!(model.used_end(SheetId(0)), CellPos::parse_a1("C9").unwrap());
         assert_cached_ends_match_a_walk(&model);
     }
 
