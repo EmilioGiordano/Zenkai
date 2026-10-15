@@ -8,7 +8,7 @@ use rust_xlsxwriter::{Formula, Workbook, Worksheet};
 const COLUMNS: u16 = 8;
 const SMALL_ROWS: u32 = 1_000;
 const SHEETS: u32 = 16;
-const ROW_COUNTS: [u32; 2] = [100_000, 400_000];
+const ROW_COUNTS: [u32; 3] = [100_000, 200_000, 400_000];
 const DISTINCT_TEXTS: u32 = 200;
 
 #[derive(Clone, Copy)]
@@ -17,14 +17,17 @@ enum Shape {
     BigPlusSmall,
     Even,
     DistinctFormulas,
+    // Five formulas a row, about a million at 200,000 rows.
+    FormulaHeavy,
 }
 
 impl Shape {
-    const ALL: [Shape; 4] = [
+    const ALL: [Shape; 5] = [
         Shape::OneSheet,
         Shape::BigPlusSmall,
         Shape::Even,
         Shape::DistinctFormulas,
+        Shape::FormulaHeavy,
     ];
 
     fn name(self) -> &'static str {
@@ -33,12 +36,13 @@ impl Shape {
             Shape::BigPlusSmall => "big-plus-small",
             Shape::Even => "even",
             Shape::DistinctFormulas => "distinct-formulas",
+            Shape::FormulaHeavy => "formula-heavy",
         }
     }
 
     fn sheet_rows(self, rows: u32) -> Vec<u32> {
         match self {
-            Shape::OneSheet | Shape::DistinctFormulas => vec![rows],
+            Shape::OneSheet | Shape::DistinctFormulas | Shape::FormulaHeavy => vec![rows],
             Shape::BigPlusSmall => std::iter::once(rows)
                 .chain(std::iter::repeat_n(SMALL_ROWS, SHEETS as usize - 1))
                 .collect(),
@@ -52,7 +56,9 @@ impl Shape {
         let line = row + 1;
         match self {
             Shape::DistinctFormulas => format!("=A{line}*C{line}+{row}"),
-            Shape::OneSheet | Shape::BigPlusSmall | Shape::Even => format!("=A{line}*C{line}"),
+            Shape::OneSheet | Shape::BigPlusSmall | Shape::Even | Shape::FormulaHeavy => {
+                format!("=A{line}*C{line}")
+            }
         }
     }
 }
@@ -68,7 +74,9 @@ fn fill(sheet: &mut Worksheet, shape: Shape, rows: u32) -> Result<()> {
         sheet.write_number(row, 2, price)?;
         let result = match shape {
             Shape::DistinctFormulas => id * price + id,
-            Shape::OneSheet | Shape::BigPlusSmall | Shape::Even => id * price,
+            Shape::OneSheet | Shape::BigPlusSmall | Shape::Even | Shape::FormulaHeavy => {
+                id * price
+            }
         };
         sheet.write_formula(
             row,
@@ -76,7 +84,19 @@ fn fill(sheet: &mut Worksheet, shape: Shape, rows: u32) -> Result<()> {
             Formula::new(shape.formula(row)).set_result(result.to_string()),
         )?;
         for column in 4..COLUMNS {
-            sheet.write_number(row, column, f64::from(row % (u32::from(column) * 31)))?;
+            let line = row + 1;
+            let factor = f64::from(column);
+            match shape {
+                Shape::FormulaHeavy => sheet.write_formula(
+                    row,
+                    column,
+                    Formula::new(format!("=A{line}*{column}+C{line}"))
+                        .set_result((id * factor + price).to_string()),
+                )?,
+                Shape::OneSheet | Shape::BigPlusSmall | Shape::Even | Shape::DistinctFormulas => {
+                    sheet.write_number(row, column, f64::from(row % (u32::from(column) * 31)))?
+                }
+            };
         }
     }
     Ok(())
