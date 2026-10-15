@@ -29,6 +29,9 @@ enum Reference {
 struct References {
     found: Vec<Reference>,
     volatile: bool,
+    // Reads cells it cannot name beforehand, which not every volatile formula does: NOW
+    // and RAND read nothing.
+    reads_at_run_time: bool,
 }
 
 impl References {
@@ -36,6 +39,7 @@ impl References {
         let mut references = References {
             found: Vec::new(),
             volatile: false,
+            reads_at_run_time: false,
         };
         references.visit(node, cell);
         references
@@ -98,6 +102,7 @@ impl References {
                 self.visit(left, cell);
                 self.visit(right, cell);
                 self.volatile = true;
+                self.reads_at_run_time = true;
             }
             Node::OpConcatenateKind { left, right }
             | Node::OpSumKind { left, right, .. }
@@ -114,6 +119,7 @@ impl References {
                     widen_to_largest_shape(&mut self.found[first..]);
                 }
                 self.volatile |= is_volatile(kind);
+                self.reads_at_run_time |= reads_at_run_time(kind);
             }
             Node::LambdaDefKind { body, .. } => self.visit(body, cell),
             Node::LambdaCallKind { lambda, args } => {
@@ -124,8 +130,12 @@ impl References {
             Node::NamedFunctionKind { args, .. } => {
                 self.visit_all(args, cell);
                 self.volatile = true;
+                self.reads_at_run_time = true;
             }
-            Node::DefinedNameKind(_) | Node::TableNameKind(_) => self.volatile = true,
+            Node::DefinedNameKind(_) | Node::TableNameKind(_) => {
+                self.volatile = true;
+                self.reads_at_run_time = true;
+            }
             Node::ImplicitIntersection { child, .. }
             | Node::SpillRangeOperator { child }
             | Node::UnaryKind { right: child, .. } => self.visit(child, cell),
@@ -155,6 +165,13 @@ fn is_volatile(kind: &Function) -> bool {
             | Function::Offset
             | Function::Cell
             | Function::Info
+    )
+}
+
+fn reads_at_run_time(kind: &Function) -> bool {
+    matches!(
+        kind,
+        Function::Indirect | Function::Offset | Function::Cell | Function::Info
     )
 }
 
@@ -470,6 +487,7 @@ pub(crate) struct DependencyIndex {
     columns: HashMap<(u32, i32), ColumnDependents>,
     wide_ranges: HashMap<u32, RowIntervals<(i32, i32, CellKey)>>,
     volatile: HashSet<CellKey>,
+    reads_at_run_time: HashSet<CellKey>,
     unsorted_columns: HashSet<(u32, i32)>,
     unsorted_sheets: HashSet<u32>,
 }
@@ -480,6 +498,7 @@ impl DependencyIndex {
             columns: HashMap::new(),
             wide_ranges: HashMap::new(),
             volatile: HashSet::new(),
+            reads_at_run_time: HashSet::new(),
             unsorted_columns: HashSet::new(),
             unsorted_sheets: HashSet::new(),
         }
@@ -502,6 +521,9 @@ impl DependencyIndex {
         references.found.dedup();
         if references.volatile {
             self.volatile.insert(formula);
+        }
+        if references.reads_at_run_time {
+            self.reads_at_run_time.insert(formula);
         }
         for reference in references.found {
             match reference {
@@ -540,6 +562,7 @@ impl DependencyIndex {
 
     pub(crate) fn forget_volatile(&mut self, formula: CellKey) {
         self.volatile.remove(&formula);
+        self.reads_at_run_time.remove(&formula);
     }
 
     // Only once built: shrinking after each edit would reallocate a large column twice.
@@ -600,8 +623,8 @@ impl DependencyIndex {
         examined
     }
 
-    pub(crate) fn has_volatile(&self) -> bool {
-        !self.volatile.is_empty()
+    pub(crate) fn has_reads_at_run_time(&self) -> bool {
+        !self.reads_at_run_time.is_empty()
     }
 
     // None when following the dependents would cost more than evaluating everything.

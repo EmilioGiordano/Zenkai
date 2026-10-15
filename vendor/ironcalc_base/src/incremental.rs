@@ -48,6 +48,11 @@ pub(crate) struct Dependencies {
     spills: Vec<Spill>,
     // The cells a circular reference was found at when the index was built.
     circular: Vec<CellKey>,
+    // The cells and everything that reads them, worked out the first time an edit needs it.
+    // An edit that gives a cell a formula may add readers, so it drops this; one that only
+    // writes a value or clears a cell cannot, and the stale entries left by cleared formulas
+    // only make the check more cautious.
+    tainted: Option<HashSet<CellKey>>,
 }
 
 fn reference((sheet, row, column): CellKey) -> CellReferenceIndex {
@@ -68,20 +73,22 @@ impl Model<'_> {
 
     // The result of a circular reference depends on the order formulas are visited in, so
     // an edit may only leave it alone if no cell it changes is, or reads, a cell the
-    // cycle was found at, and if it cannot read one through a volatile formula.
+    // cycle was found at, and if it cannot read one through a reference found at run time.
     fn edits_reach_cycles(
-        &self,
-        dependencies: &Dependencies,
+        dependencies: &mut Dependencies,
         edited: &[CellKey],
         dirty: &[CellKey],
     ) -> bool {
         if dependencies.circular.is_empty() {
             return false;
         }
-        if dependencies.index.has_volatile() {
+        if dependencies.index.has_reads_at_run_time() {
             return true;
         }
-        let Some(tainted) = dependencies.index.dependents_of(&dependencies.circular) else {
+        if dependencies.tainted.is_none() {
+            dependencies.tainted = dependencies.index.dependents_of(&dependencies.circular);
+        }
+        let Some(tainted) = &dependencies.tainted else {
             return true;
         };
         edited
@@ -106,6 +113,7 @@ impl Model<'_> {
             dependencies.index.forget_volatile(cell);
             if let Some(node) = self.formula_node(cell) {
                 dependencies.index.add(cell, node);
+                dependencies.tainted = None;
             }
         }
         dependencies.index.sort();
@@ -121,7 +129,7 @@ impl Model<'_> {
         // The order of a full evaluation, so recursion stays as shallow as there.
         dirty.sort_unstable();
         if dirty.iter().any(|cell| self.is_array_formula(*cell))
-            || self.edits_reach_cycles(&dependencies, edited, &dirty)
+            || Self::edits_reach_cycles(&mut dependencies, edited, &dirty)
         {
             self.evaluate_indexed();
             return;
@@ -189,6 +197,7 @@ impl Model<'_> {
             index,
             spills,
             circular,
+            tainted: None,
         }
     }
 

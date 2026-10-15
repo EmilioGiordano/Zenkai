@@ -74,9 +74,31 @@ fn edits_that_change_or_read_a_cycle_are_evaluated_in_full() {
 }
 
 #[test]
-fn a_volatile_formula_beside_a_cycle_forces_a_full_evaluation() {
+fn a_formula_reading_at_run_time_beside_a_cycle_forces_a_full_evaluation() {
+    let mut model = model_with_a_cycle();
+    model.set_user_input(0, 5, 6, "=INDIRECT(\"C1\")").unwrap();
+    model.set_user_input(0, 1, 1, "2").unwrap();
+    assert_eq!(mode(&model), Recalculation::Full);
+    assert_matches_full_evaluation(&model);
+}
+
+#[test]
+fn volatile_formulas_that_read_nothing_do_not_force_a_full_evaluation() {
     let mut model = model_with_a_cycle();
     model.set_user_input(0, 5, 6, "=TODAY()-TODAY()").unwrap();
+    model.set_user_input(0, 6, 6, "=RAND()*0").unwrap();
+    model.set_user_input(0, 1, 1, "2").unwrap();
+    assert_eq!(mode(&model), Recalculation::Incremental);
+    assert_matches_full_evaluation(&model);
+    model.set_user_input(0, 1, 1, "3").unwrap();
+    assert_eq!(mode(&model), Recalculation::Incremental);
+    assert_matches_full_evaluation(&model);
+}
+
+#[test]
+fn a_volatile_formula_reading_a_cycle_is_evaluated_in_full() {
+    let mut model = model_with_a_cycle();
+    model.set_user_input(0, 5, 6, "=NOW()*0+C1").unwrap();
     model.set_user_input(0, 1, 1, "2").unwrap();
     assert_eq!(mode(&model), Recalculation::Full);
     assert_matches_full_evaluation(&model);

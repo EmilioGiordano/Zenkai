@@ -56,7 +56,8 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `evaluate_cell`). Tests: `src/test/test_empty_formula_result.rs`.
 - A workbook with circular references keeps its dependency index, and an edit is
   recalculated incrementally unless a cell it changes is, or reads, a cell a cycle was
-  found at, or the workbook has a volatile formula (`src/incremental.rs`,
+  found at, or the workbook has a formula that reads cells found at run time
+  (INDIRECT, OFFSET, CELL, INFO, names) (`src/incremental.rs`,
   `src/dependency_index.rs`, `Model::circular_cells`). Needs the incremental
   recalculation. Tests: `src/test/test_incremental_cycles.rs`.
 - Conditional formatting is re-evaluated after an incremental recalculation only for the
