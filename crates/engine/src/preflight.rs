@@ -1,4 +1,5 @@
 use crate::error::EngineError;
+use crate::file::Unsupported;
 use zenkai_xlsx_reader::has_checked_element;
 
 pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
@@ -13,14 +14,14 @@ fn reject(reason: String) -> EngineError {
 // Every XML part is checked, wherever it lives: the engine follows relationship
 // targets to any path and also parses formulas outside worksheets (defined names,
 // conditional-format rules, validations). Parts that are not XML are left to the engine.
-pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
-    let mut features = SheetFeatures::default();
+pub fn check_part(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
+    let mut found = Vec::new();
     let Ok(text) = std::str::from_utf8(bytes) else {
-        return Ok(features);
+        return Ok(found);
     };
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     if !has_checked_element(text.as_bytes()) {
-        return Ok(features);
+        return Ok(found);
     }
     // The engine reads parts with this same roxmltree, so a part it cannot parse can
     // never feed it a formula; rejecting here would only refuse valid files (VML).
@@ -28,28 +29,35 @@ pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
         Ok(document) => document,
         Err(error) => {
             tracing::debug!(%error, "skipping a part that is not well-formed XML");
-            return Ok(features);
+            return Ok(found);
         }
     };
     for node in document.descendants().filter(roxmltree::Node::is_element) {
-        match node.tag_name().name() {
-            "f" | "formula" | "formula1" | "formula2" | "definedName" => check_formula(&node)?,
-            "hyperlinks" => features.hyperlinks = true,
-            "dataValidations" => features.data_validation = true,
-            "autoFilter" => features.auto_filter = true,
-            "sheetProtection" => features.protection = true,
-            _ => {}
+        let name = node.tag_name().name();
+        if matches!(
+            name,
+            "f" | "formula" | "formula1" | "formula2" | "definedName"
+        ) {
+            check_formula(&node)?;
+        }
+        if let Some(kind) = element_kind(name)
+            && !found.contains(&kind)
+        {
+            found.push(kind);
         }
     }
-    Ok(features)
+    Ok(found)
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct SheetFeatures {
-    pub hyperlinks: bool,
-    pub data_validation: bool,
-    pub auto_filter: bool,
-    pub protection: bool,
+// What an element of this name holds, wherever in a part it is found.
+pub(crate) fn element_kind(name: &str) -> Option<Unsupported> {
+    match name {
+        "hyperlinks" => Some(Unsupported::Hyperlinks),
+        "dataValidations" => Some(Unsupported::DataValidation),
+        "autoFilter" => Some(Unsupported::AutoFilter),
+        "sheetProtection" => Some(Unsupported::SheetProtection),
+        _ => None,
+    }
 }
 
 fn check_formula(node: &roxmltree::Node<'_, '_>) -> Result<(), EngineError> {
@@ -166,9 +174,17 @@ mod tests {
     #[test]
     fn reports_hyperlinks_and_validation() {
         let xml = r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/><sheetProtection sheet="1"/><autoFilter ref="A1:B2"/><dataValidations count="0"/><hyperlinks/></worksheet>"#;
-        let features = check_part(xml.as_bytes()).unwrap();
-        assert!(features.hyperlinks && features.data_validation);
-        assert!(features.auto_filter && features.protection);
+        let mut found = check_part(xml.as_bytes()).unwrap();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                Unsupported::Hyperlinks,
+                Unsupported::DataValidation,
+                Unsupported::AutoFilter,
+                Unsupported::SheetProtection
+            ]
+        );
     }
 
     #[test]
