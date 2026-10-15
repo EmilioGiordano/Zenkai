@@ -6,6 +6,7 @@
 // only into the file they were read from are `sheet_elements`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::io::{self, Write};
 
 use roxmltree::Node;
 
@@ -250,16 +251,14 @@ impl SheetSettings {
         format!("<sheetFormatPr{attributes}/>")
     }
 
-    // Elements after IronCalc's conditional formatting, in the order CT_Worksheet requires.
-    pub fn trailing_elements(&self) -> String {
-        format!(
-            "{}{}{}{}{}",
-            self.elements.at(Place::BeforePrint),
-            self.print,
-            self.rows.breaks_element("rowBreaks"),
-            self.columns.breaks_element("colBreaks"),
-            self.elements.at(Place::AfterBreaks)
-        )
+    // Writes the elements after IronCalc's conditional formatting, in the order
+    // CT_Worksheet requires.
+    pub fn write_trailing_elements(&self, out: &mut impl Write) -> io::Result<()> {
+        self.elements.write_at(out, Place::BeforePrint)?;
+        out.write_all(self.print.as_bytes())?;
+        out.write_all(self.rows.breaks_element("rowBreaks").as_bytes())?;
+        out.write_all(self.columns.breaks_element("colBreaks").as_bytes())?;
+        self.elements.write_at(out, Place::AfterBreaks)
     }
 
     // What a save writes into a file that holds `remains` of the sheet.

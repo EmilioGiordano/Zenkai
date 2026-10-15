@@ -100,11 +100,10 @@ impl<'a, W: Write> SheetWriter<'a, W> {
             return Err(other("the written sheet has no </sheetData>"));
         };
         let tail = String::from_utf8(tail).map_err(other_utf8)?;
-        let tail = match self.settings {
-            Some(settings) => with_trailing_elements(tail, settings)?,
-            None => tail,
-        };
-        self.inner.write_all(tail.as_bytes())?;
+        match self.settings {
+            Some(settings) => write_tail(&mut self.inner, &tail, settings)?,
+            None => self.inner.write_all(tail.as_bytes())?,
+        }
         Ok(self.inner)
     }
 
@@ -246,21 +245,20 @@ fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<Stri
 
 // `tail` starts with </sheetData>; IronCalc writes <mergeCells>, <conditionalFormatting>
 // and its own <extLst> after it.
-fn with_trailing_elements(tail: String, settings: &SheetSettings) -> io::Result<String> {
-    let mut tail = tail;
-    let at = tail
+fn write_tail(out: &mut impl Write, tail: &str, settings: &SheetSettings) -> io::Result<()> {
+    let rest = tail
+        .strip_prefix(SHEET_DATA_END)
+        .ok_or_else(|| other("the written sheet data is not closed"))?;
+    let at = rest
         .find("<extLst")
-        .or_else(|| tail.rfind("</worksheet>"))
+        .or_else(|| rest.rfind("</worksheet>"))
         .ok_or_else(|| other("the written sheet is not closed"))?;
-    tail.insert_str(at, &settings.trailing_elements());
-    if !tail.starts_with(SHEET_DATA_END) {
-        return Err(other("the written sheet data is not closed"));
-    }
-    tail.insert_str(
-        SHEET_DATA_END.len(),
-        &settings.elements.at(Place::AfterCellData),
-    );
-    Ok(tail)
+    let (ironcalc_elements, closing) = rest.split_at(at);
+    out.write_all(SHEET_DATA_END.as_bytes())?;
+    settings.elements.write_at(out, Place::AfterCellData)?;
+    out.write_all(ironcalc_elements.as_bytes())?;
+    settings.write_trailing_elements(out)?;
+    out.write_all(closing.as_bytes())
 }
 
 // Each exported <col min max .../> is split where the outline changes inside its range.

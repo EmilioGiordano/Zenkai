@@ -7,6 +7,8 @@
 // namespace (such as xr:uid) and extension lists are left out.
 
 use std::collections::BTreeSet;
+use std::io::{self, Write};
+use std::sync::Arc;
 
 use roxmltree::{Edge, Node};
 
@@ -132,7 +134,8 @@ struct Element {
     order: usize,
     name: &'static str,
     place: Place,
-    xml: String,
+    // Shared, so a save takes the elements without copying their text.
+    xml: Arc<str>,
     reach: Reach,
 }
 
@@ -217,7 +220,7 @@ impl Elements {
                 order,
                 name,
                 place,
-                xml,
+                xml: xml.into(),
                 reach: reach(node),
             };
             match (&mut linked, points) {
@@ -251,11 +254,13 @@ impl Elements {
         linked.iter().chain(&self.standalone)
     }
 
-    // The elements written at `place`, in schema order.
-    pub fn at(&self, place: Place) -> String {
+    // Writes the elements that go at `place`, in schema order.
+    pub fn write_at(&self, out: &mut impl Write, place: Place) -> io::Result<()> {
         let mut placed: Vec<&Element> = self.all().filter(|e| e.place == place).collect();
         placed.sort_by_key(|e| e.order);
-        placed.iter().map(|e| e.xml.as_str()).collect()
+        placed
+            .iter()
+            .try_for_each(|e| out.write_all(e.xml.as_bytes()))
     }
 
     pub fn kinds(&self) -> BTreeSet<Unsupported> {
@@ -467,6 +472,7 @@ fn rebuild(node: Node) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::sync::Arc;
 
     use super::{
         Axis, ElementBudget, Elements, MAX_ELEMENT_BYTES, MAX_WORKBOOK_ELEMENT_BYTES, Place,
@@ -498,10 +504,16 @@ mod tests {
         Elements::read(document.root_element(), budget)
     }
 
+    fn at(elements: &Elements, place: Place) -> String {
+        let mut out = Vec::new();
+        elements.write_at(&mut out, place).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
     fn written(elements: &Elements) -> String {
         [Place::AfterCellData, Place::BeforePrint, Place::AfterBreaks]
             .into_iter()
-            .map(|place| elements.at(place))
+            .map(|place| at(elements, place))
             .collect()
     }
 
@@ -513,7 +525,7 @@ mod tests {
             r#"<x14:f xmlns:x14="urn:x14"/></ext></extLst></autoFilter>"#
         ));
         assert_eq!(
-            filter.at(Place::AfterCellData),
+            at(&filter, Place::AfterCellData),
             concat!(
                 r#"<autoFilter ref="A1:C9"><filterColumn colId="0"><filters>"#,
                 r#"<filter val="a&amp;b"/></filters></filterColumn></autoFilter>"#
@@ -543,7 +555,10 @@ mod tests {
             r#"xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
             r#"<x:drawing rel:id="rId1"/></x:worksheet>"#
         ));
-        assert_eq!(drawing.at(Place::AfterBreaks), r#"<drawing r:id="rId1"/>"#);
+        assert_eq!(
+            at(&drawing, Place::AfterBreaks),
+            r#"<drawing r:id="rId1"/>"#
+        );
         assert_eq!(drawing.relationships(), Relationships::Kept);
     }
 
@@ -597,18 +612,18 @@ mod tests {
             r#"<dataValidations count="1"><dataValidation sqref="C3"/></dataValidations>"#
         ));
         assert_eq!(
-            sheet.at(Place::AfterCellData),
+            at(&sheet, Place::AfterCellData),
             r#"<sheetProtection sheet="1"/><autoFilter ref="A1:B2"/>"#
         );
         assert_eq!(
-            sheet.at(Place::BeforePrint),
+            at(&sheet, Place::BeforePrint),
             concat!(
                 r#"<dataValidations count="1"><dataValidation sqref="C3"/></dataValidations>"#,
                 r#"<hyperlinks><hyperlink ref="B2" location="A1"/></hyperlinks>"#
             )
         );
         assert_eq!(
-            sheet.at(Place::AfterBreaks),
+            at(&sheet, Place::AfterBreaks),
             r#"<drawing r:id="rId1"/><tableParts count="1"><tablePart r:id="rId3"/></tableParts>"#
         );
     }
@@ -620,7 +635,7 @@ mod tests {
             r#"prompt="say &quot;hi&quot;&#9;&#10;&lt;&amp;"><formula1>"a&lt;b&gt;&amp;"</formula1>"#,
             r#"</dataValidation></dataValidations>"#
         );
-        assert_eq!(elements(validation).at(Place::BeforePrint), validation);
+        assert_eq!(at(&elements(validation), Place::BeforePrint), validation);
     }
 
     #[test]
@@ -686,6 +701,15 @@ mod tests {
     }
 
     #[test]
+    fn a_save_takes_the_elements_without_copying_their_text() {
+        let sheet = elements(r#"<autoFilter ref="A1:B2"/><drawing r:id="rId1"/>"#);
+        let taken = sheet.left_in(Remains::All);
+        let pairs: Vec<_> = taken.all().zip(sheet.all()).collect();
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs.iter().all(|(a, b)| Arc::ptr_eq(&a.xml, &b.xml)));
+    }
+
+    #[test]
     fn whole_columns_reach_every_row() {
         let mut columns = elements(r#"<autoFilter ref="A:C"/>"#);
         columns.moved(Axis::Rows, 1_048_576);
@@ -702,7 +726,7 @@ mod tests {
             ))
         };
         let at_budget = links(MAX_ELEMENT_BYTES - frame);
-        assert_eq!(at_budget.at(Place::BeforePrint).len(), MAX_ELEMENT_BYTES);
+        assert_eq!(at(&at_budget, Place::BeforePrint).len(), MAX_ELEMENT_BYTES);
         assert_eq!(links(MAX_ELEMENT_BYTES - frame + 1), Elements::default());
     }
 
