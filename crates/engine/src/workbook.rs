@@ -1,12 +1,14 @@
 use std::io::Cursor;
+use std::time::{Duration, Instant};
 
 use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::{
     Cell, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
 };
-use ironcalc::base::{BorderArea, ClipboardData, Model, UserModel};
+use ironcalc::base::{BorderArea, ClipboardData, Model, Recalculation, UserModel};
 use ironcalc::import::load_from_xlsx_bytes;
 
+use crate::edit_profile::{EditProfile, RecalcMode};
 use crate::error::EngineError;
 use crate::file::Unsupported;
 use crate::model::CachedModel;
@@ -497,6 +499,45 @@ impl Workbook {
     ) -> Result<SaveSnapshot, EngineError> {
         let model = self.model.get_model();
         crate::save::snapshot(path, target, model, &self.carried, &self.saved)
+    }
+
+    // `set_input` with the edit, the recalculation and the refresh of the used areas timed
+    // apart, for the edit benchmark.
+    pub fn set_input_profiled(
+        &mut self,
+        sheet: SheetId,
+        pos: CellPos,
+        text: &str,
+    ) -> Result<EditProfile, EngineError> {
+        check_input(text)?;
+        let mut profile = self
+            .model
+            .write_within(sheet, Range::new(pos, pos), |model| {
+                model.pause_evaluation();
+                let started = Instant::now();
+                let written =
+                    model.set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text);
+                let edit = started.elapsed();
+                model.resume_evaluation();
+                let started = Instant::now();
+                model.evaluate();
+                let recalculation = started.elapsed();
+                let mode = match model.get_model().last_recalculation() {
+                    Recalculation::Full => RecalcMode::Full,
+                    Recalculation::Incremental => RecalcMode::Incremental,
+                };
+                written.map(|()| EditProfile {
+                    edit,
+                    recalculation,
+                    mode,
+                    warm_used_areas: Duration::ZERO,
+                })
+            })
+            .map_err(rejected)?;
+        let started = Instant::now();
+        self.warm_used_areas();
+        profile.warm_used_areas = started.elapsed();
+        Ok(profile)
     }
 
     // Call on a background thread after building or editing, so the UI thread never walks a sheet.
