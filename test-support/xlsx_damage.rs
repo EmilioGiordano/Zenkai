@@ -1,5 +1,5 @@
 // Damage for xlsx files, the way a corrupt or hostile file would be damaged: bytes flipped,
-// cut or removed, hostile tokens spliced into parts, parts dropped or renamed. Included by
+// cut or removed, hostile tokens spliced into parts, parts dropped, doubled or renamed. Included by
 // `#[path]` into the test files that open xlsx files.
 #![allow(dead_code)]
 
@@ -41,7 +41,7 @@ pub fn damage() -> impl Strategy<Value = Damage> {
     (
         any::<prop::sample::Index>(),
         any::<prop::sample::Index>(),
-        0u8..7,
+        0u8..8,
         0..TOKENS.len(),
         any::<u8>(),
     )
@@ -111,6 +111,11 @@ pub fn apply(parts: &mut Vec<(String, Vec<u8>)>, damage: &Damage) {
         4 => bytes.clear(),
         5 => {
             parts.remove(index);
+        }
+        // Readers get one of two entries of a name; a save must not rewrite the other.
+        6 => {
+            let twin = parts[index].clone();
+            parts.push(twin);
         }
         _ => parts[index].0 = parts[index].0.to_uppercase(),
     }

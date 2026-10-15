@@ -18,6 +18,15 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - The xlsx import refuses a worksheet or shared string part past the open
   budget before inflating it: a worksheet DOM holds about sixteen times its
   bytes (`src/import/mod.rs`, constants in `ironcalc_base::open_budget`).
+- The xlsx export writes each worksheet row by row to the zip through
+  `write_worksheet_xml` instead of building the whole part as one string, and
+  exposes the other parts through `get_package_parts`, so a caller can write
+  the package itself. An unevaluated formula now returns an error instead of
+  panicking (`src/export/mod.rs`, `src/export/worksheets.rs`). Tests:
+  `src/export/test/test_export.rs`.
+- `get_shared_string_item_xml` writes one `<si>` element of the shared
+  strings part, so a caller can append strings to an existing part
+  (`src/export/shared_strings.rs`). Tests: `src/export/test/test_export.rs`.
 
 Zenkai-only, not for upstream:
 
@@ -80,6 +89,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   box; an array formula may span areas as long as it lies inside the given bounds
   (`src/user_model/common.rs`, `Model::arrays_inside` and `Model::clear_area_contents` in
   `src/model.rs`). Tests: `src/test/user_model/test_clear_areas.rs`.
+- `StaticResult` derives `Clone`, `Debug` and `PartialEq`, so a caller can copy a
+  sheet's parsed formulas, for instance to save them away from the model
+  (`src/expressions/parser/static_analysis.rs`).
 
 Zenkai-only, not for upstream:
 

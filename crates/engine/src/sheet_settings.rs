@@ -1,6 +1,6 @@
 // IronCalc 0.8.3 reads past a sheet's tab colour, view zoom, default sizes, print
 // settings and outline, and never writes them. They are read from the original sheet
-// parts on open and written back by `sheet_patch` on save. Every element is rebuilt
+// parts on open and written back by `save_sheet` on save. Every element is rebuilt
 // from validated values, never copied as text: the file is hostile input and IronCalc's
 // output declares only the main and relationship namespaces.
 
@@ -134,7 +134,7 @@ const HEADER_FOOTER_TEXTS: [&str; 6] = [
     "firstFooter",
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Outline {
     pub level: u32,
     pub collapsed: bool,
@@ -155,7 +155,7 @@ impl Outline {
 
 // Settings that name rows or columns by index: they stay right only while no row or
 // column is inserted or deleted before the last index they name.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
 pub struct Indexed {
     pub outline: BTreeMap<u32, Outline>,
     pub breaks: String,
@@ -213,7 +213,7 @@ impl Indexed {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
 pub struct SheetSettings {
     pub properties: String,
     pub view: String,
@@ -275,6 +275,15 @@ impl Carried {
 
     pub fn get(&self, sheet_id: u32) -> Option<&SheetSettings> {
         self.sheets.get(&sheet_id)
+    }
+
+    // What a save writes for the sheet; empty settings write nothing.
+    pub(crate) fn written(
+        &self,
+        sheet: &ironcalc::base::types::Worksheet,
+    ) -> Option<&SheetSettings> {
+        self.get(sheet.sheet_id)
+            .filter(|settings| !settings.is_empty())
     }
 
     pub fn rows_moved(&mut self, sheet_id: u32, from: u32) {

@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use ironcalc::base::types::Workbook as Book;
-use zenkai_xlsx_reader::{ReadError, workbook_differences};
+use zenkai_xlsx_reader::{PackageLayout, ReadError, workbook_differences};
 
 use crate::error::EngineError;
 use crate::file::{Unsupported, inspect_part};
@@ -47,6 +47,8 @@ impl ReadBook {
 pub(crate) struct FileRead {
     pub(crate) read: ReadBook,
     pub(crate) settings: Vec<SheetSettings>,
+    // Where the file's parts are, when a save can copy from it.
+    pub(crate) layout: Option<PackageLayout>,
 }
 
 type Outcome<E> = Result<(Book, Vec<Unsupported>), E>;
@@ -96,7 +98,11 @@ pub(crate) fn read_xlsx_file(
         path: path.to_path_buf(),
         source,
     };
-    let finish = |read: ReadBook, settings| FileRead { read, settings };
+    let finish = |read: ReadBook, settings| FileRead {
+        read,
+        settings,
+        layout: None,
+    };
     match reader {
         XlsxReader::IronCalc => {
             let bytes = std::fs::read(path).map_err(read_error)?;
@@ -105,14 +111,7 @@ pub(crate) fn read_xlsx_file(
             Ok(finish(read, settings))
         }
         XlsxReader::Fast => match read_streaming(path, name) {
-            Ok((book, unsupported, settings)) => Ok(finish(
-                ReadBook {
-                    book,
-                    unsupported,
-                    fallback: None,
-                },
-                settings,
-            )),
+            Ok(read) => Ok(read),
             Err(ReadError::Unsafe(reason)) => Err(EngineError::Unsafe(reason)),
             Err(error) => {
                 let bytes = std::fs::read(path).map_err(read_error)?;
@@ -195,10 +194,7 @@ fn take_unsupported(found: Mutex<Vec<Unsupported>>) -> Result<Vec<Unsupported>, 
     Ok(unsupported)
 }
 
-fn read_streaming(
-    path: &Path,
-    name: &str,
-) -> Result<(Book, Vec<Unsupported>, Vec<SheetSettings>), ReadError> {
+fn read_streaming(path: &Path, name: &str) -> Result<FileRead, ReadError> {
     let found = Mutex::new(Vec::new());
     let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
     let opened = run_with_engine_stack(|| Ok(read_book_streaming(path, name, &inspect)))
@@ -219,7 +215,15 @@ fn read_streaming(
             }
         })
         .collect();
-    Ok((opened.book, unsupported, settings))
+    Ok(FileRead {
+        read: ReadBook {
+            book: opened.book,
+            unsupported,
+            fallback: None,
+        },
+        settings,
+        layout: Some(opened.layout),
+    })
 }
 
 fn read_fast(bytes: &[u8], name: &str) -> Outcome<ReadError> {
