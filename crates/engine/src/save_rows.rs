@@ -173,9 +173,8 @@ pub(crate) fn row_job(
         .unwrap_or_default();
     let in_spans = |row: i32| {
         u32::try_from(row).is_ok_and(|row| {
-            spans
-                .iter()
-                .any(|span| (span.first..=span.last).contains(&row))
+            let at = spans.partition_point(|span| span.last < row);
+            spans.get(at).is_some_and(|span| span.first <= row)
         })
     };
     let styles: Vec<Row> = sheet
