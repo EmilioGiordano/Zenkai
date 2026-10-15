@@ -522,7 +522,9 @@ pub fn run_batch_serving(
     edits: Vec<Edit>,
     stale: Option<StaleRequest>,
 ) -> Vec<EngineError> {
-    if let Some(request) = stale {
+    if let Some(request) = &stale
+        && request.slot.last_batch_was_slow()
+    {
         request.publish_from(&read_shared(shared));
     }
     let waited = Instant::now();
@@ -539,6 +541,9 @@ pub fn run_batch_serving(
         Ok(errors)
     });
     let errors = run.unwrap_or_else(|error| vec![error]);
+    if let Some(request) = &stale {
+        request.slot.record_hold(started.elapsed());
+    }
     let (waited_ms, ran_ms) = (
         started.duration_since(waited).as_millis(),
         started.elapsed().as_millis(),

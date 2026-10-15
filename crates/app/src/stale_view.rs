@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use zenkai_engine::{Engine, Workbook};
 use zenkai_grid::GridCell;
@@ -29,23 +31,40 @@ pub struct StaleRequest {
     pub viewport: Vec<Range>,
 }
 
+// A document whose last batch held the write lock this long gets a copy before the next one;
+// faster ones never pay the cell reads.
+pub const SLOW_BATCH: Duration = Duration::from_millis(100);
+
 #[derive(Default)]
-pub struct StaleSlot(Mutex<Option<Arc<StaleView>>>);
+pub struct StaleSlot {
+    view: Mutex<Option<Arc<StaleView>>>,
+    last_hold_micros: AtomicU64,
+}
 
 impl StaleSlot {
+    pub fn record_hold(&self, held: Duration) {
+        let micros = u64::try_from(held.as_micros()).unwrap_or(u64::MAX);
+        self.last_hold_micros.store(micros, Ordering::Relaxed);
+    }
+
+    pub fn last_batch_was_slow(&self) -> bool {
+        self.last_hold_micros.load(Ordering::Relaxed)
+            >= u64::try_from(SLOW_BATCH.as_micros()).unwrap_or(u64::MAX)
+    }
+
     pub fn current(&self) -> Option<Arc<StaleView>> {
-        self.0
+        self.view
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
 
     pub fn clear(&self) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        *self.view.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
     fn publish(&self, view: StaleView) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(view));
+        *self.view.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(view));
     }
 }
 
@@ -241,6 +260,7 @@ mod tests {
         let generation = document.generation();
         let (shared, edits) = document.take_batch().unwrap();
         let slot = document.stale_slot();
+        slot.record_hold(SLOW_BATCH);
         let batch = std::thread::spawn({
             let request = request(&slot, "A1:A40");
             move || run_batch_serving(&shared, edits, Some(request))
@@ -262,6 +282,61 @@ mod tests {
         assert!(document.stale_cells(&[unloaded], false).is_none());
         let live = document.cells(&[unloaded], false).unwrap();
         assert!(live.values().all(|cell| cell.text.as_ref() == "new"));
+    }
+
+    fn run_with_copy(slot: &Arc<StaleSlot>, edit: Edit) {
+        let shared = std::sync::RwLock::new(workbook_with_column(3, "old"));
+        assert!(run_batch_serving(&shared, vec![edit], Some(request(slot, "A1:A3"))).is_empty());
+    }
+
+    #[test]
+    fn a_document_with_no_slow_batch_yet_builds_no_copy() {
+        let slot = Arc::new(StaleSlot::default());
+        assert!(!slot.last_batch_was_slow());
+        let seen = Arc::clone(&slot);
+        run_with_copy(
+            &slot,
+            Box::new(move |_| {
+                assert!(seen.current().is_none());
+                Ok(())
+            }),
+        );
+    }
+
+    #[test]
+    fn a_fast_batch_keeps_the_next_one_copy_free() {
+        let slot = Arc::new(StaleSlot::default());
+        slot.record_hold(SLOW_BATCH);
+        slot.record_hold(SLOW_BATCH / 2);
+        assert!(!slot.last_batch_was_slow());
+    }
+
+    #[test]
+    fn a_slow_batch_makes_the_next_one_build_a_copy() {
+        let slot = Arc::new(StaleSlot::default());
+        slot.record_hold(SLOW_BATCH);
+        assert!(slot.last_batch_was_slow());
+        let seen = Arc::clone(&slot);
+        run_with_copy(
+            &slot,
+            Box::new(move |_| {
+                assert!(seen.current().is_some());
+                Ok(())
+            }),
+        );
+    }
+
+    #[test]
+    fn a_batch_records_how_long_it_held_the_lock() {
+        let slot = Arc::new(StaleSlot::default());
+        run_with_copy(
+            &slot,
+            Box::new(|_| {
+                std::thread::sleep(SLOW_BATCH);
+                Ok(())
+            }),
+        );
+        assert!(slot.last_batch_was_slow());
     }
 
     #[test]
