@@ -154,16 +154,18 @@ impl<R: Read> Scanner<R> {
     fn markup(&mut self) -> io::Result<Markup> {
         self.tag.clear();
         let head = self.input.available(4)?;
-        let (kind, terminator): (Markup, &[u8]) = if head.starts_with(b"<!--") {
-            (Markup::Other, b"-->")
+        // The terminator is searched after the opener, which it must not share bytes with:
+        // `<!-->` and `<?>` stay open in an XML parser.
+        let (kind, terminator, opener): (Markup, &[u8], usize) = if head.starts_with(b"<!--") {
+            (Markup::Other, b"-->", 4)
         } else if head.starts_with(b"<?") {
-            (Markup::Other, b"?>")
+            (Markup::Other, b"?>", 2)
         } else if head.starts_with(b"<!") {
             return Err(unusable("a DTD or CDATA section in a sheet"));
         } else if head.starts_with(b"</") {
-            (Markup::End, b">")
+            (Markup::End, b">", 0)
         } else if head.starts_with(b"<") {
-            (Markup::Start, b">")
+            (Markup::Start, b">", 0)
         } else {
             return Err(unusable("the sheet ends where a tag was expected"));
         };
@@ -181,7 +183,10 @@ impl<R: Read> Scanner<R> {
                     Some(open) if open == byte => quote = None,
                     Some(_) => {}
                     None if honor_quotes && matches!(byte, b'"' | b'\'') => quote = Some(byte),
-                    None if byte == b'>' && ends_across(&self.tag, &window[..=at], terminator) => {
+                    None if byte == b'>'
+                        && self.tag.len() + at + 1 >= opener + terminator.len()
+                        && ends_across(&self.tag, &window[..=at], terminator) =>
+                    {
                         finished = Some(at + 1);
                         break;
                     }
@@ -839,6 +844,32 @@ mod tests {
         );
         let (out, _) = spliced(&xml, &[]).unwrap();
         assert_eq!(out, xml);
+    }
+
+    #[test]
+    fn a_comment_or_instruction_is_not_closed_by_its_own_opener() {
+        let row_1 = r#"<row r="1"><c r="A1"><v>0</v></c></row>"#;
+        for hidden in ["<!--> <sheetData/> -->", "<!---> <sheetData/> -->", "<?> <sheetData/> ?>"] {
+            let xml = format!(r#"{ROOT}{hidden}<sheetData><row r="1"/></sheetData></worksheet>"#);
+            let (out, _) = spliced(&xml, &[span(1, 1)]).unwrap();
+            assert_eq!(
+                out,
+                format!("{ROOT}{hidden}<sheetData>{row_1}</sheetData></worksheet>")
+            );
+        }
+        let closed = format!(r#"{ROOT}<?x?><!----><!-- a -- b ->--><sheetData/></worksheet>"#);
+        let (out, _) = spliced(&closed, &[]).unwrap();
+        assert_eq!(out, closed);
+    }
+
+    #[test]
+    fn a_comment_ending_across_a_chunk_boundary_is_closed() {
+        for ends_at in [CHUNK_BYTES - 1, CHUNK_BYTES, CHUNK_BYTES + 1] {
+            let filler = "x".repeat(ends_at - ROOT.len() - 6);
+            let xml = format!(r#"{ROOT}<!--{filler}--><sheetData/></worksheet>"#);
+            let (out, _) = spliced(&xml, &[]).unwrap();
+            assert_eq!(out, xml);
+        }
     }
 
     #[test]
