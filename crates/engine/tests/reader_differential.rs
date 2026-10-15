@@ -209,6 +209,10 @@ fn every_importer_quirk_reads_the_same() {
         "<si><t>x</t></si><si><t>hello</t></si><si><r><t>a</t></r><r><t>_x0042_</t></r></si><si><t>x</t></si>",
     );
     for (label, data) in QUIRKS {
+        if label == "whitespace between rows" {
+            whitespace_between_rows_reads_right(data);
+            continue;
+        }
         let other = sheet(
             r#"<row r="1"><c r="A1" t="inlineStr"><is><t>hello</t></is></c><c r="B1"><f>Sheet1!A1+1</f></c></row>"#,
         );
@@ -218,12 +222,24 @@ fn every_importer_quirk_reads_the_same() {
     }
 }
 
+// IronCalc fails inter-row whitespace as a row without an index, so the readers
+// cannot agree here; the fast result is asserted directly instead.
+fn whitespace_between_rows_reads_right(data: &str) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("whitespace.xlsx");
+    std::fs::write(&path, workbook(&[&sheet(data)], None)).unwrap();
+    let fast = open_xlsx_with(&path, XlsxReader::Fast).unwrap();
+    assert!(fast.fallback.is_none());
+    let first = zenkai_types::SheetId(0);
+    let a1 = zenkai_types::CellPos::parse_a1("A1").unwrap();
+    assert_eq!(fast.workbook.input(first, a1), "1");
+}
+
 #[test]
 fn the_fast_reader_handles_the_ordinary_quirks_itself() {
     let declined = [
         "shared child before anchor",
         "data table",
-        "whitespace between rows",
         "rows out of order",
         "duplicate cells",
         "bad references",

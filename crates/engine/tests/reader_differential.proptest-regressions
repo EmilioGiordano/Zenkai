@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc d3bf51109c64df3af1f3b5a0ce7c47543acd679d1799ec97b473f33dcbc41db5 # shrinks to file = Index(8513881880173639208), damages = [Damage { part: Index(14757395258967641293), at: Index(0), how: 0, token: 0, byte: 0 }]

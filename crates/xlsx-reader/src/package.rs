@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use ironcalc::base::expressions::parser::DefinedNameS;
 
 use crate::ReadError;
-use crate::limits::MAX_ENTRY_BYTES;
+use crate::skipped_part;
+use crate::stream::{Budgets, CompressedMeter, read_part};
 
 pub(crate) struct WorksheetPart {
     pub(crate) name: String,
@@ -31,65 +31,31 @@ fn unreadable(error: impl ToString) -> ReadError {
     ReadError::Unreadable(error.to_string())
 }
 
-// Declared sizes in an archive can lie, so what is really decompressed is counted here.
-pub(crate) struct ByteBudget {
-    remaining: AtomicU64,
-}
-
-impl ByteBudget {
-    pub(crate) fn new(total: u64) -> Self {
-        Self {
-            remaining: AtomicU64::new(total),
-        }
-    }
-
-    fn charge(&self, bytes: u64) -> Result<(), ReadError> {
-        self.remaining
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                left.checked_sub(bytes)
-            })
-            .map(|_| ())
-            .map_err(|_| {
-                ReadError::Unsafe(
-                    "the workbook expands past the size the reader allows".to_string(),
-                )
-            })
-    }
-}
-
 pub(crate) fn read_entry(
     entry: zip::read::ZipFile<'_>,
-    budget: &ByteBudget,
+    meter: &CompressedMeter,
+    budgets: &Budgets,
 ) -> Result<Vec<u8>, ReadError> {
-    let mut bytes =
-        Vec::with_capacity(usize::try_from(entry.size().min(MAX_ENTRY_BYTES)).unwrap_or(0));
-    entry
-        .take(MAX_ENTRY_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(unreadable)?;
-    budget.charge(bytes.len() as u64)?;
-    if bytes.len() as u64 > MAX_ENTRY_BYTES {
-        return Err(ReadError::Unsupported(
-            "a part expands past the size its archive declares".to_string(),
-        ));
-    }
-    Ok(bytes)
+    let name = entry.name().to_string();
+    read_part(entry, meter, &name, budgets)
 }
 
 fn read_text<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     name: &str,
-    budget: &ByteBudget,
+    meter: &CompressedMeter,
+    budgets: &Budgets,
 ) -> Result<String, ReadError> {
     let entry = archive.by_name(name).map_err(unreadable)?;
-    String::from_utf8(read_entry(entry, budget)?).map_err(unreadable)
+    String::from_utf8(read_entry(entry, meter, budgets)?).map_err(unreadable)
 }
 
 pub(crate) fn read_package<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
-    budget: &ByteBudget,
+    meter: &CompressedMeter,
+    budgets: &Budgets,
 ) -> Result<Package, ReadError> {
-    let workbook = read_text(archive, "xl/workbook.xml", budget)?;
+    let workbook = read_text(archive, "xl/workbook.xml", meter, budgets)?;
     let workbook = roxmltree::Document::parse(&workbook).map_err(unreadable)?;
     let mut sheets = Vec::new();
     for node in workbook.descendants().filter(|n| n.has_tag_name("sheet")) {
@@ -139,7 +105,7 @@ pub(crate) fn read_package<R: Read + Seek>(
         ));
     }
 
-    let rels = read_text(archive, "xl/_rels/workbook.xml.rels", budget)?;
+    let rels = read_text(archive, "xl/_rels/workbook.xml.rels", meter, budgets)?;
     let rels = roxmltree::Document::parse(&rels).map_err(unreadable)?;
     let mut targets = HashMap::new();
     for node in rels
@@ -184,7 +150,8 @@ pub(crate) fn read_package<R: Read + Seek>(
 }
 
 // The archive IronCalc's own importer reads for everything but the cells: every entry is
-// copied untouched except the worksheets, whose <sheetData> is emptied.
+// copied untouched except the worksheets, whose <sheetData> is emptied, and the parts
+// the model never uses, which stay out.
 pub(crate) fn stub_archive<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     replaced: &HashMap<String, Vec<u8>>,
@@ -205,6 +172,9 @@ pub(crate) fn stub_archive<R: Read + Seek>(
                 writer.start_file(name, stored).map_err(unreadable)?;
                 writer.write_all(bytes).map_err(unreadable)?;
             }
+            // Parts the model never uses stay out of the stub: IronCalc's import
+            // never reads them, so copying them only costs memory.
+            None if skipped_part(&name) => {}
             None => writer.raw_copy_file(entry).map_err(unreadable)?,
         }
     }
@@ -215,27 +185,43 @@ pub(crate) fn stub_archive<R: Read + Seek>(
 mod tests {
     use super::*;
 
-    fn archive_of(parts: &[(&str, usize)]) -> zip::ZipArchive<Cursor<Vec<u8>>> {
+    fn zipped(names: &[&str]) -> Vec<u8> {
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
-        for (name, size) in parts {
-            writer
-                .start_file(*name, zip::write::FileOptions::default())
-                .unwrap();
-            writer.write_all(&vec![b'a'; *size]).unwrap();
+        let options = zip::write::FileOptions::default();
+        for name in names {
+            writer.start_file(*name, options).unwrap();
+            writer.write_all(b"placeholder").unwrap();
         }
-        zip::ZipArchive::new(writer.finish().unwrap()).unwrap()
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn listed(bytes: &[u8]) -> Vec<String> {
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        (0..archive.len())
+            .map(|index| archive.by_index(index).unwrap().name().to_string())
+            .collect()
     }
 
     #[test]
-    fn the_bytes_really_read_are_counted_across_entries() {
-        let mut archive = archive_of(&[("a", 600), ("b", 600)]);
-        let budget = ByteBudget::new(1000);
-        let first = archive.by_name("a").unwrap();
-        assert_eq!(read_entry(first, &budget).unwrap().len(), 600);
-        let second = archive.by_name("b").unwrap();
-        assert!(matches!(
-            read_entry(second, &budget),
-            Err(ReadError::Unsafe(_))
-        ));
+    fn skipped_parts_stay_out_of_the_stub() {
+        let bytes = zipped(&[
+            "xl/workbook.xml",
+            "xl/drawings/drawing1.xml",
+            "xl/worksheets/sheet1.xml",
+        ]);
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        let mut replaced = HashMap::new();
+        replaced.insert(
+            "xl/worksheets/sheet1.xml".to_string(),
+            b"<worksheet/>".to_vec(),
+        );
+        let stub = stub_archive(&mut archive, &replaced).unwrap();
+        let names = listed(&stub);
+        assert!(names.contains(&"xl/workbook.xml".to_string()));
+        assert!(names.contains(&"xl/worksheets/sheet1.xml".to_string()));
+        assert!(
+            !names.iter().any(|name| name.contains("drawing")),
+            "{names:?}"
+        );
     }
 }

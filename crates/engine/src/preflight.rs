@@ -1,4 +1,5 @@
 use crate::error::EngineError;
+use zenkai_xlsx_reader::has_checked_element;
 
 pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 // Engine parsing and evaluation recurse on the formula tree; a dedicated stack
@@ -43,38 +44,6 @@ pub fn check_part(bytes: &[u8]) -> Result<SheetFeatures, EngineError> {
     Ok(features)
 }
 
-const CHECKED_ELEMENTS: [&[u8]; 9] = [
-    b"f",
-    b"formula",
-    b"formula1",
-    b"formula2",
-    b"definedName",
-    b"hyperlinks",
-    b"dataValidations",
-    b"autoFilter",
-    b"sheetProtection",
-];
-
-// XML forbids entities or whitespace between '<' and an element name, so a part with
-// no '<name' or '<prefix:name' start tag for these names cannot contain them; the
-// full parse is skipped for it. Text that only looks like a tag merely costs a parse.
-fn has_checked_element(bytes: &[u8]) -> bool {
-    let mut rest = bytes;
-    while let Some(at) = rest.iter().position(|b| *b == b'<') {
-        rest = &rest[at + 1..];
-        let name_end = rest
-            .iter()
-            .position(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/' | b'<'))
-            .unwrap_or(rest.len());
-        let name = &rest[..name_end];
-        let local = name.rsplit(|b| *b == b':').next().unwrap_or(name);
-        if CHECKED_ELEMENTS.contains(&local) {
-            return true;
-        }
-    }
-    false
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SheetFeatures {
     pub hyperlinks: bool,
@@ -87,6 +56,7 @@ fn check_formula(node: &roxmltree::Node<'_, '_>) -> Result<(), EngineError> {
     zenkai_xlsx_reader::limits::check_formula(
         node.text().unwrap_or_default(),
         node.attribute("ref"),
+        node.attribute("t") == Some("shared"),
     )
     .map_err(reject)
 }
@@ -151,6 +121,9 @@ mod tests {
         assert!(check_part(huge.as_bytes()).is_err());
         let small = sheet(r#"<c r="A1"><f t="shared" ref="A1:A100" si="0">B1*2</f></c>"#);
         assert!(check_part(small.as_bytes()).is_ok());
+        let whole_column =
+            sheet(r#"<c r="A1"><f t="shared" ref="A1:A1048576" si="0">B1*2</f></c>"#);
+        assert!(check_part(whole_column.as_bytes()).is_ok());
     }
 
     #[test]
