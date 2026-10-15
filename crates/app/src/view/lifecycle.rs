@@ -155,6 +155,7 @@ impl Workspace {
                 } else {
                     session.without_unsaved_work()
                 };
+                let reopened_as_saved = session.reopened_as_saved;
                 cx.set_global(session.space_appearance);
                 referenced = session
                     .recovery_files()
@@ -171,6 +172,15 @@ impl Workspace {
                     self.begin_load(active, window, cx);
                 }
                 self.probe_links(cx);
+                if reopened_as_saved > 0 {
+                    self.notify(
+                        Severity::Info,
+                        t!("notice.reopened_as_saved", count = reopened_as_saved),
+                        cx,
+                    );
+                    // The next write drops the count, so the notice shows once.
+                    self.persist_session(cx);
+                }
             }
             Loaded::Unreadable => {
                 self.notify(Severity::Warning, t!("notice.session_unreadable"), cx)

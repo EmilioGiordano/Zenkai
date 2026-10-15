@@ -97,7 +97,13 @@ impl Documents {
                     .collect(),
             })
             .collect();
-        Session::new(sidebar_visible, spaces).with_space_appearance(space_appearance)
+        let reopened = discarded
+            .iter()
+            .filter(|id| self.entry(**id).is_some_and(|entry| entry.path().is_some()))
+            .count();
+        Session::new(sidebar_visible, spaces)
+            .with_space_appearance(space_appearance)
+            .with_reopened_as_saved(u32::try_from(reopened).unwrap_or(u32::MAX))
     }
 }
 
@@ -437,5 +443,38 @@ mod tests {
         assert!(!files[0].dirty);
         assert_eq!(files[0].recovery, None);
         assert!(snapshot_files(&documents, &[])[0].recovery.is_some());
+    }
+
+    fn reopened_after(documents: &Documents, discarded: &[WorkbookId]) -> u32 {
+        documents
+            .snapshot_leaving(true, SpaceAppearance::default(), |_| None, discarded)
+            .reopened_as_saved
+    }
+
+    #[test]
+    fn the_reopened_notice_counts_only_discarded_workbooks_that_come_back() {
+        let mut documents = busy();
+        let blank = documents.active_id().unwrap();
+        let saved = open_file(&mut documents, "saved.xlsx");
+        documents.get_mut(saved).unwrap().dirty = true;
+        assert_eq!(reopened_after(&documents, &[]), 0);
+        assert_eq!(reopened_after(&documents, &[blank]), 0);
+        assert_eq!(reopened_after(&documents, &[blank, saved]), 1);
+    }
+
+    #[test]
+    fn starting_empty_or_a_crash_never_carries_the_notice() {
+        let mut documents = documents();
+        let saved = open_file(&mut documents, "saved.xlsx");
+        let session =
+            documents.snapshot_leaving(true, SpaceAppearance::default(), |_| None, &[saved]);
+        assert_eq!(session.reopened_as_saved, 1);
+        assert_eq!(session.without_unsaved_work().reopened_as_saved, 0);
+        assert_eq!(
+            documents
+                .snapshot(true, SpaceAppearance::default(), |_| None)
+                .reopened_as_saved,
+            0
+        );
     }
 }
