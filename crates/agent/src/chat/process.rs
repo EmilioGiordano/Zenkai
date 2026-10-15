@@ -105,6 +105,11 @@ mod tests {
 
     impl Drop for KillOnDrop {
         fn drop(&mut self) {
+            #[cfg(unix)]
+            Command::new("kill")
+                .args(["-KILL", "--", &format!("-{}", self.0.id())])
+                .output()
+                .ok();
             self.0.kill().ok();
             self.0.wait().ok();
         }
