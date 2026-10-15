@@ -2893,6 +2893,11 @@ impl<'a> Model<'a> {
     fn get_formula_cells(&self) -> Vec<CellIndex> {
         let mut cells = Vec::new();
         for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
+            // A formula cell holds an index into the sheet's formulas, so a sheet without
+            // any cannot have one.
+            if sheet.shared_formulas.is_empty() {
+                continue;
+            }
             for row in sheet.sheet_data.rows_sorted() {
                 for (column, cell) in sheet.sheet_data.row_cells(row) {
                     if cell.get_formula().is_some() {
@@ -2913,6 +2918,10 @@ impl<'a> Model<'a> {
     fn collect_spill_cells(&mut self) {
         let mut spill_cells = Vec::new();
         for (sheet_index, worksheet) in self.workbook.worksheets.iter().enumerate() {
+            // The anchor of a dynamic formula is a formula cell.
+            if worksheet.shared_formulas.is_empty() {
+                continue;
+            }
             for row in worksheet.sheet_data.rows_sorted() {
                 for (col, cell) in worksheet.sheet_data.row_cells(row) {
                     if cell.dynamic_range().is_some() {

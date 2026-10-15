@@ -168,6 +168,9 @@ impl Model<'_> {
         let mut index = DependencyIndex::new();
         let mut spills = Vec::new();
         for (sheet, worksheet) in (0u32..).zip(&self.workbook.worksheets) {
+            if worksheet.shared_formulas.is_empty() {
+                continue;
+            }
             for (row, column, cell) in worksheet.sheet_data.iter() {
                 let key = (sheet, row, column);
                 if let Some(node) = self.formula_node(key) {

@@ -68,7 +68,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   Tests: `src/cf_runs.rs`, `src/dependency_index.rs`,
   `src/test/conditional_formatting/incremental.rs`.
 - Collecting the spill anchors reads each row's cells in column order without allocating
-  a vector per row (`src/model.rs`, `collect_spill_cells`). Stands on its own.
+  a vector per row, and the walks that look for formula cells or dynamic anchors skip a
+  sheet with no formulas (`src/model.rs`, `get_formula_cells`, `collect_spill_cells`,
+  `src/incremental.rs`, `build_dependencies`). Stands on its own. Tests:
+  `src/test/test_full_evaluation_cells.rs`.
 - `Model::support` recorded only when the workbook has spills (`src/model.rs`,
   `record_support`).
 - Hiding or showing rows recalculates what reads them, for SUBTOTAL
