@@ -1558,7 +1558,7 @@ impl Workspace {
                         .trim_start_matches("• ")
                         .to_string()
                 },
-                |s| format!("{} (Zenkai)", s.to_string_lossy()),
+                |stem| files::copy_stem(&stem.to_string_lossy()),
             );
         let path = cx.prompt_for_new_path(&directory, Some(&format!("{suggested}.xlsx")));
         cx.spawn_in(window, async move |this, cx| {

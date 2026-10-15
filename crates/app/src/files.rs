@@ -28,6 +28,17 @@ pub fn xlsx_target(chosen: &Path) -> PathBuf {
     }
 }
 
+const COPY_MARKER: &str = " (Zenkai)";
+
+// The name Save As suggests for a copy; a copy of a copy keeps a single marker.
+pub fn copy_stem(stem: &str) -> String {
+    if stem.ends_with(COPY_MARKER) {
+        stem.to_string()
+    } else {
+        format!("{stem}{COPY_MARKER}")
+    }
+}
+
 pub fn same_file(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
@@ -282,6 +293,16 @@ mod tests {
             Path::new("a/report.v2.xlsx")
         );
         assert_eq!(xlsx_target(Path::new("a/book")), Path::new("a/book.xlsx"));
+    }
+
+    #[test]
+    fn a_copy_name_carries_the_marker_once() {
+        assert_eq!(copy_stem("Report"), "Report (Zenkai)");
+        assert_eq!(copy_stem("Report (Zenkai)"), "Report (Zenkai)");
+        assert_eq!(
+            copy_stem("Report (Zenkai) v2"),
+            "Report (Zenkai) v2 (Zenkai)"
+        );
     }
 
     #[test]
