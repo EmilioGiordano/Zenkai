@@ -128,6 +128,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   workbook of millions of values no longer builds a 12-byte index of each one first
   (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
   `src/test/test_full_evaluation_cells.rs`.
+- `UserModel::sheets_moved_by_undo` and `sheets_moved_by_redo` say which sheets the next
+  undo or redo inserts or deletes rows or columns on, or `None` when the step also adds,
+  removes or moves sheets, so a caller tracking row moves need not assume the worst on
+  every replay (`src/user_model/history.rs`, `common.rs`). Tests:
+  `src/test/user_model/test_sheets_moved.rs`.
 
 Zenkai-only, not for upstream:
 
