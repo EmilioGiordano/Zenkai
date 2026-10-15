@@ -197,11 +197,14 @@ $env:ZENKAI_READER_CORPUS = "C:\files;D:\big.xlsx"; cargo test -p zenkai-engine 
 
 GitHub Actions, in `.github/workflows/`:
 
-- `ci.yml` (pushes to `main` and every pull request): `cargo fmt --check`, `cargo clippy
-  --all-targets -- -D warnings` and `cargo test` on Windows, Linux and macOS, plus
-  `cargo deny check` on Linux.
-- `bench.yml` (pull requests that touch the engine, formats, grid, types or bench, and
-  manual runs): builds the benchmark in release on Windows and runs the baseline check
+- `ci.yml` (pull requests and pushes to `main`, skipped when only docs, scripts, Markdown,
+  `.claude` or `.agents` change): draft PRs run `cargo fmt --check` and `cargo clippy
+  --all-targets -- -D warnings` on Linux; ready PRs add `cargo test` and also run on Windows,
+  plus the `vendor/` crates' own tests when the PR touches `vendor/`. A push to `main` runs
+  fmt and clippy on Linux to warm the cache. macOS runs only from a manual dispatch.
+- `deny.yml` (PRs that change `Cargo.toml`, `Cargo.lock` or `deny.toml`, weekly, and manual
+  runs): `cargo deny check` on Linux.
+- `bench.yml` (manual runs only): builds the benchmark in release on Windows and runs the baseline check
   above. Each run uploads its numbers as the `bench-current` artifact.
 
 The baseline in `bench\baseline.csv` comes from the Phase 0 run on a desktop machine, not
