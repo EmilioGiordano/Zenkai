@@ -314,13 +314,11 @@ impl Elements {
         self.standalone.retain(|e| e.reach.survives(axis, from));
     }
 
-    // Rows or columns were inserted or deleted on another sheet.
+    // Rows or columns were inserted or deleted on another sheet. The parts the
+    // relationships point at (chart series, table formulas, pivot tables) may name cells
+    // there and are never read, so they all go, even those that name none.
     pub fn moved_elsewhere(&mut self) {
-        if let Linked::Kept(linked) = &self.linked
-            && linked.iter().any(|e| e.reach == Reach::Workbook)
-        {
-            self.linked = Linked::Dropped;
-        }
+        self.linked = Linked::Dropped;
         self.standalone.retain(|e| e.reach != Reach::Workbook);
     }
 }
@@ -688,8 +686,6 @@ mod tests {
         );
 
         let mut drawing = elements(r#"<drawing r:id="rId1"/>"#);
-        drawing.moved_elsewhere();
-        assert_eq!(drawing.relationships(), Relationships::Kept);
         drawing.moved(Axis::Rows, 1_000_000);
         assert_eq!(drawing.relationships(), Relationships::Dropped);
 
@@ -730,11 +726,31 @@ mod tests {
         assert_eq!(same_sheet.kinds().len(), 1);
         same_sheet.moved(Axis::Rows, 1_000_000);
         assert!(same_sheet.kinds().is_empty());
-        let mut external =
-            elements(r#"<hyperlinks><hyperlink ref="B2" r:id="rId1"/></hyperlinks>"#);
-        external.moved_elsewhere();
-        assert_eq!(external.relationships(), Relationships::Kept);
-        assert_eq!(external.kinds().len(), 1);
+    }
+
+    #[test]
+    fn a_move_on_another_sheet_drops_the_relationships() {
+        for linked in [
+            r#"<drawing r:id="rId1"/>"#,
+            r#"<hyperlinks><hyperlink ref="B2" r:id="rId1"/></hyperlinks>"#,
+            r#"<tableParts count="1"><tablePart r:id="rId1"/></tableParts>"#,
+        ] {
+            let mut sheet = elements(&format!(r#"{linked}<sheetProtection sheet="1"/>"#));
+            assert_eq!(sheet.relationships(), Relationships::Kept);
+            sheet.moved_elsewhere();
+            assert_eq!(sheet.relationships(), Relationships::Dropped, "{linked}");
+            assert_eq!(
+                sheet.kinds(),
+                BTreeSet::from([Unsupported::SheetProtection]),
+                "{linked}"
+            );
+        }
+        // Pivot tables are reached through the relationships part alone.
+        let mut unpointed = elements(r#"<sheetProtection sheet="1"/>"#);
+        assert_eq!(unpointed.relationships(), Relationships::Kept);
+        unpointed.moved_elsewhere();
+        assert_eq!(unpointed.relationships(), Relationships::Dropped);
+        assert_eq!(unpointed.kinds().len(), 1);
     }
 
     #[test]

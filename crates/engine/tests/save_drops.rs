@@ -612,6 +612,35 @@ fn a_row_inserted_on_a_linked_sheet_drops_the_link_and_says_so() {
     open_xlsx(&saved.path).unwrap();
 }
 
+// Zenkai cannot shift the cells a chart series names, as Excel would, so a row inserted on
+// the sheet it names drops the chart from the sheet showing it.
+#[test]
+fn a_row_inserted_on_a_charted_sheet_drops_the_chart_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = source(dir.path(), |held| {
+        held.autofilter(0, 0, 2, 2).unwrap();
+        let mut chart = Chart::new(ChartType::Column);
+        chart.add_series().set_values("Other!$A$1:$A$3");
+        held.insert_chart(8, 4, &chart).unwrap();
+    });
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.insert_rows(SheetId(1), RowIdx::clamped(0), 1).unwrap();
+    let saved = save(&book, &dir.path().join("moved.xlsx"));
+    assert_eq!(
+        set(&saved.dropped),
+        set(&[Unsupported::Charts, Unsupported::Images])
+    );
+    assert_eq!(saved.kept, scan(&saved.bytes));
+    assert_eq!(part(&saved.bytes, HELD_RELS), None);
+    let sheet = held_sheet(&saved.bytes);
+    assert!(referenced_ids(&sheet).is_empty(), "{sheet}");
+    assert!(
+        children(&sheet).iter().any(|e| e == "autoFilter"),
+        "{sheet}"
+    );
+    open_xlsx(&saved.path).unwrap();
+}
+
 // A table part names its range and the parts a drawing anchors name cells, so any row
 // inserted on the sheet drops its relationships and what they point at.
 #[test]
@@ -829,9 +858,11 @@ fn saving_in_place_names_each_loss_once() {
     assert_eq!(set(&data.kept), set(&all));
     assert_eq!(data.kept, scan(&data.bytes));
 
+    // The chart names the moved cells, and what the other sheets' relationships point at
+    // is never read, so every sheet's relationships go with the filter.
     book.insert_rows(SheetId(0), RowIdx::clamped(0), 1).unwrap();
     let moved = save(&book, &path);
-    assert_eq!(moved.dropped, [Unsupported::AutoFilter]);
+    assert_eq!(set(&moved.dropped), set(&all));
     assert_eq!(moved.kept, scan(&moved.bytes));
 
     book.set_input(SheetId(0), pos("B2"), "8").unwrap();
