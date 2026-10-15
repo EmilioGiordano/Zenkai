@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
-use zenkai_engine::{Engine, Workbook, open_xlsx, save_xlsx_atomic, xlsx_bytes};
+use zenkai_engine::{Engine, SaveTarget, Workbook, open_xlsx, save_xlsx};
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
 
 use crate::scale_memory as mem;
@@ -106,8 +106,8 @@ fn save_stage(path: &Path, out: &Path) -> Result<()> {
 // The corpus file is never touched: bytes go to a temp path through the atomic save.
 fn save_to(workbook: Workbook, out: &Path) -> Result<f64> {
     let start = Instant::now();
-    let bytes = xlsx_bytes(&workbook)?;
-    save_xlsx_atomic(&bytes, out).with_context(|| format!("saving {}", out.display()))?;
+    let snapshot = workbook.save_snapshot(out, SaveTarget::Copy)?;
+    save_xlsx(snapshot).with_context(|| format!("saving {}", out.display()))?;
     Ok(ms(start))
 }
 
