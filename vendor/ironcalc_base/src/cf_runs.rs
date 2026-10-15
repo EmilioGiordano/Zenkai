@@ -388,22 +388,34 @@ impl Model<'_> {
             row,
             column,
         };
+        // CF formulas are stored internally in English.
         Some(self.parse_internal_formula(body, &context))
+    }
+
+    // The node of a formula rule and the cell it is parsed at, which both evaluating the rule
+    // and working out what it reads use. The anchor is the top-left of the bounding box of
+    // *all* areas: for a rule like "D4:D8 B10:D10" it is B4, not the first area's D4.
+    pub(crate) fn parse_cf_rule_formula(
+        &mut self,
+        sheet: u32,
+        formula: &str,
+        all_ranges: &[Rect],
+    ) -> Option<(Node, (i32, i32))> {
+        let anchor = all_ranges
+            .iter()
+            .map(|&(row, column, _, _)| (row, column))
+            .reduce(|(top, left), (row, column)| (top.min(row), left.min(column)))?;
+        let body = formula_body(formula)?;
+        let node = self.parse_cf_formula(sheet, body, anchor)?;
+        Some((node, anchor))
     }
 
     fn cf_reads(&mut self, sheet: u32, rule: &CfRule, ranges: &[Rect]) -> (Reads, Option<Readers>) {
         let CfRule::Formula { formula, .. } = rule else {
             return (self.threshold_reads(sheet, rule), None);
         };
-        let Some(body) = formula_body(formula) else {
-            return (Reads::Nothing, None);
-        };
-        // The same anchor `apply_cf_formula` parses at.
-        let Some(anchor) = ranges
-            .iter()
-            .map(|&(row, column, _, _)| (row, column))
-            .reduce(|(top, left), (row, column)| (top.min(row), left.min(column)))
-        else {
+        let Some((node, anchor)) = self.parse_cf_rule_formula(sheet, formula, ranges) else {
+            // Evaluating the rule does nothing when there is no formula to parse.
             return (Reads::Nothing, None);
         };
         let far = ranges
@@ -412,9 +424,6 @@ impl Model<'_> {
             .fold(anchor, |(bottom, right), (row, column)| {
                 (bottom.max(row), right.max(column))
             });
-        let Some(node) = self.parse_cf_formula(sheet, body, anchor) else {
-            return (Reads::Always, None);
-        };
         let key = (sheet, anchor.0, anchor.1);
         if let Some(precedents) = precedents_by_offset(&node, key) {
             let shift = (far.0 - anchor.0, far.1 - anchor.1);
