@@ -21,9 +21,9 @@ const MAX_FORMULA_BYTES: usize = 8192 * 6;
 // four bytes each, 256 KiB. Past this many the part is not copied.
 const MAX_DROPPED_GROUPS: usize = 64 * 1024;
 // Formulas from dropped rows whose range reaches kept rows, each holding its text of at
-// most MAX_FORMULA_BYTES: 192 MiB at worst. Past this many in one span the part is not
-// copied.
-const MAX_REACHING_ANCHORS: usize = 4096;
+// most MAX_FORMULA_BYTES: 256 * 48 KiB = 12 MiB at worst. Past this many in one span the
+// part is not copied.
+const MAX_REACHING_ANCHORS: usize = 256;
 
 // Rows `first` to `last`, both included, numbered from 1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -892,6 +892,25 @@ mod tests {
             let refused = spliced_with(xml.as_bytes(), &[span(1, 1)], &|_| String::new());
             assert!(refused.is_err(), "{xml}");
         }
+    }
+
+    #[test]
+    fn formulas_reaching_kept_rows_are_capped() {
+        let reaching = |count: usize| {
+            let rows: String = (1..=count)
+                .map(|r| {
+                    row(
+                        r as u32,
+                        &format!(r#"<c r="A{r}"><f t="array" ref="A{r}:A{}">1</f></c>"#, r + 5000),
+                    )
+                })
+                .collect();
+            let span = span(1, count as u32);
+            spliced_with(sheet(&rows).as_bytes(), &[span], &|_| String::new())
+        };
+        assert!(reaching(MAX_REACHING_ANCHORS).is_ok());
+        let error = reaching(MAX_REACHING_ANCHORS + 1).unwrap_err();
+        assert!(error.to_string().contains("too many formulas"), "{error}");
     }
 
     #[test]
