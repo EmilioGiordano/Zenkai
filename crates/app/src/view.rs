@@ -3575,16 +3575,13 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
     // The tallest wrapped cell sets each row, once.
     let mut lines_per_row: std::collections::BTreeMap<zenkai_types::RowIdx, f32> =
         Default::default();
-    for pos in wb
-        .filled_cells(sheet)
-        .into_iter()
-        .filter(|pos| range.contains(*pos))
-    {
+    // Every cell of `range` is read, so callers cap it at MAX_AUTOFIT_CELLS.
+    for pos in range.positions() {
         if sizes.rows.iter().any(|(row, _)| *row == pos.row) {
             continue;
         }
         let view = wb.cell(sheet, pos);
-        if view.kind != zenkai_types::ValueKind::Text {
+        if view.kind != zenkai_types::ValueKind::Text || wb.input(sheet, pos).is_empty() {
             continue;
         }
         let per_line = ((width(pos.col) - 12.0) / AUTOFIT_CHAR_WIDTH).max(1.0);
@@ -3743,6 +3740,17 @@ mod tests {
         wb.set_input(SHEET, a1(), &"word ".repeat(40)).unwrap();
         grow_wrapped_rows(&mut wb, SHEET, Range::parse_a1("C3:D4").unwrap()).unwrap();
         assert_eq!(row_height(&wb, a1().row), None);
+    }
+
+    #[test]
+    fn only_the_rows_of_the_range_grow() {
+        let mut wb = Workbook::new_empty().unwrap();
+        let a3 = CellPos::parse_a1("A3").unwrap();
+        wb.set_input(SHEET, a1(), &"word ".repeat(40)).unwrap();
+        wb.set_input(SHEET, a3, &"word ".repeat(40)).unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, Range::parse_a1("A1:XFD1").unwrap()).unwrap();
+        assert!(row_height(&wb, a1().row).is_some());
+        assert_eq!(row_height(&wb, a3.row), None);
     }
 
     #[test]
