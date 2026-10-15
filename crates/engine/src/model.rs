@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use ironcalc::base::UserModel;
 use ironcalc::base::cell_store::CellStore;
 use ironcalc::base::types::Cell;
+use ironcalc::base::{Recalculation, UserModel};
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
 
 use crate::workbook::{col_i32, row_i32};
@@ -12,7 +12,7 @@ use crate::workbook::{col_i32, row_i32};
 // IronCalc computes a sheet's dimension by walking every cell, which on a large sheet
 // is too slow to repeat on every scroll or keystroke. Any mutable access to the model
 // goes through `deref_mut`, which drops the cached ends, so they can never go stale;
-// only `write_within` and `rewrite_values` keep them, for edits whose reach is known.
+// only the methods below that know an edit's reach keep them.
 pub struct CachedModel {
     model: UserModel<'static>,
     extents: Mutex<HashMap<SheetId, Extent>>,
@@ -121,10 +121,9 @@ impl CachedModel {
         extent.last.unwrap_or_default()
     }
 
-    // For edits that write only inside `area` of `sheet` and remove no cell: the cached
-    // end grows to the cells now there instead of walking the sheet again. Evaluation adds
-    // or removes cells only on sheets holding a dynamic array, so only those drop their
-    // entry; every other sheet keeps its end however large it is.
+    // For edits that write only inside `area` of `sheet` and remove no cell; `edit` must
+    // leave the workbook evaluated. The cached end grows to the cells now there instead of
+    // walking the sheet again.
     pub(crate) fn write_within<T>(
         &mut self,
         sheet: SheetId,
@@ -132,40 +131,8 @@ impl CachedModel {
         edit: impl FnOnce(&mut UserModel<'static>) -> T,
     ) -> T {
         let result = edit(&mut self.model);
-        let grown = match self.cache().get(&sheet).copied() {
-            Some(Extent {
-                last: Some(last),
-                spills: false,
-            }) => self.grown(sheet, area, last),
-            _ => None,
-        };
-        let cache = self.cache_mut();
-        cache.retain(|_, extent| !extent.spills);
-        match grown {
-            Some(extent) if !extent.spills => {
-                cache.insert(sheet, extent);
-            }
-            // A sheet that had no cells may still hold empty rows, which the walk counts.
-            _ => {
-                cache.remove(&sheet);
-            }
-        }
+        self.keep_extents(&[(sheet, area)]);
         result
-    }
-
-    fn grown(&self, sheet: SheetId, area: Range, last: CellPos) -> Option<Extent> {
-        let ws = self.model.get_model().workbook.worksheet(sheet.0).ok()?;
-        let mut end = last;
-        let mut spills = false;
-        for_each_within(&ws.sheet_data, area, |row, col, cell| {
-            let at = position(row, col);
-            end = CellPos::new(end.row.max(at.row), end.col.max(at.col));
-            spills |= is_dynamic(cell);
-        });
-        Some(Extent {
-            last: Some(end),
-            spills,
-        })
     }
 
     // For edits that change the values of existing cells only, adding or removing none.
@@ -174,8 +141,57 @@ impl CachedModel {
         edit: impl FnOnce(&mut UserModel<'static>) -> T,
     ) -> T {
         let result = edit(&mut self.model);
-        self.cache_mut().retain(|_, extent| !extent.spills);
+        self.keep_extents(&[]);
         result
+    }
+
+    // Evaluation adds or removes cells only on sheets holding a dynamic array, and only in
+    // a full recalculation: an incremental one falls back to a full one whenever a spill
+    // could grow, shrink or move. Every other sheet keeps its end however large it is.
+    fn keep_extents(&mut self, written: &[(SheetId, Range)]) {
+        let spills_unchanged =
+            self.model.get_model().last_recalculation() == Recalculation::Incremental;
+        let cached = std::mem::take(self.cache_mut());
+        let kept: HashMap<SheetId, Extent> = cached
+            .into_iter()
+            .filter(|(_, extent)| spills_unchanged || !extent.spills)
+            .filter_map(|(sheet, extent)| {
+                let areas: Vec<Range> = written
+                    .iter()
+                    .filter(|(written_sheet, _)| *written_sheet == sheet)
+                    .map(|(_, area)| *area)
+                    .collect();
+                if areas.is_empty() {
+                    return Some((sheet, extent));
+                }
+                self.grown(sheet, &areas, extent)
+                    .map(|grown| (sheet, grown))
+            })
+            .collect();
+        *self.cache_mut() = kept;
+    }
+
+    // `None` when the sheet must be walked again: a sheet that had no cells may still hold
+    // empty rows, which the walk counts, and a new dynamic array spills past its area.
+    fn grown(&self, sheet: SheetId, areas: &[Range], extent: Extent) -> Option<Extent> {
+        let last = extent.last?;
+        let ws = self.model.get_model().workbook.worksheet(sheet.0).ok()?;
+        let mut end = last;
+        let mut dynamic = false;
+        for area in areas {
+            for_each_within(&ws.sheet_data, *area, |row, col, cell| {
+                let at = position(row, col);
+                end = CellPos::new(end.row.max(at.row), end.col.max(at.col));
+                dynamic |= is_dynamic(cell);
+            });
+        }
+        if dynamic && !extent.spills {
+            return None;
+        }
+        Some(Extent {
+            last: Some(end),
+            spills: extent.spills,
+        })
     }
 
     // Only for access that never changes cell content, such as moving the selection
@@ -229,10 +245,17 @@ mod tests {
         assert!(model.cache().is_empty());
     }
 
-    fn type_into(model: &mut CachedModel, sheet: u32, text: &str) {
-        model.write_within(SheetId(sheet), Range::single(CellPos::default()), |model| {
-            model.set_user_input(sheet, 1, 1, text).unwrap();
+    fn type_at(model: &mut CachedModel, sheet: u32, at: &str, text: &str) {
+        let pos = CellPos::parse_a1(at).unwrap();
+        model.write_within(SheetId(sheet), Range::single(pos), |model| {
+            model
+                .set_user_input(sheet, row_i32(pos.row), col_i32(pos.col), text)
+                .unwrap();
         });
+    }
+
+    fn last_recalculation(model: &CachedModel) -> Recalculation {
+        model.get_model().last_recalculation()
     }
 
     fn two_filled_sheets() -> CachedModel {
@@ -248,22 +271,52 @@ mod tests {
     #[test]
     fn an_edit_keeps_the_ends_of_the_other_sheets() {
         let mut model = two_filled_sheets();
-        type_into(&mut model, 0, "2");
+        type_at(&mut model, 0, "A1", "2");
         assert_eq!(model.cache().len(), 2);
     }
 
-    #[test]
-    fn only_the_sheet_with_a_spill_drops_its_end() {
+    fn spill_on_the_second_sheet() -> CachedModel {
         let mut model = two_filled_sheets();
-        type_into(&mut model, 1, "=SEQUENCE(3)");
+        type_at(&mut model, 1, "A1", "=SEQUENCE(3)");
+        assert_eq!(last_recalculation(&model), Recalculation::Full);
         assert!(!model.cache().contains_key(&SheetId(1)));
         assert!(model.cache().contains_key(&SheetId(0)));
-        let spill_end = CellPos::parse_a1("A3").unwrap();
-        assert_eq!(model.used_end(SheetId(1)), spill_end);
-        type_into(&mut model, 0, "2");
+        assert_eq!(model.used_end(SheetId(1)), CellPos::parse_a1("A3").unwrap());
+        model
+    }
+
+    #[test]
+    fn an_incremental_edit_keeps_the_end_of_a_sheet_with_a_spill() {
+        let mut model = spill_on_the_second_sheet();
+        type_at(&mut model, 0, "A1", "2");
+        assert_eq!(last_recalculation(&model), Recalculation::Incremental);
+        assert!(model.cache().contains_key(&SheetId(1)));
+        assert_eq!(
+            Some(model.used_end(SheetId(1))),
+            model.walked_end(SheetId(1))
+        );
+    }
+
+    #[test]
+    fn a_sheet_with_a_spill_grows_by_an_incremental_write_and_drops_on_a_full_one() {
+        let mut model = spill_on_the_second_sheet();
+        type_at(&mut model, 1, "D7", "5");
+        assert_eq!(last_recalculation(&model), Recalculation::Incremental);
+        let grown = model.cache().get(&SheetId(1)).copied().unwrap();
+        assert_eq!(grown.last, CellPos::parse_a1("D7"));
+        assert!(grown.spills);
+        type_at(&mut model, 0, "B1", "=SEQUENCE(2)");
+        assert_eq!(last_recalculation(&model), Recalculation::Full);
+        assert!(!model.cache().contains_key(&SheetId(0)));
         assert!(!model.cache().contains_key(&SheetId(1)));
-        assert!(model.cache().contains_key(&SheetId(0)));
-        assert_eq!(model.used_end(SheetId(1)), spill_end);
+        assert_eq!(
+            Some(model.used_end(SheetId(0))),
+            model.walked_end(SheetId(0))
+        );
+        assert_eq!(
+            Some(model.used_end(SheetId(1))),
+            model.walked_end(SheetId(1))
+        );
     }
 
     #[test]
