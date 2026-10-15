@@ -218,7 +218,11 @@ impl Elements {
             // would hide the loss.
             let rebuilt = match extended.contains(&name) {
                 true => None,
-                false => rebuild(node),
+                false => match rebuild(node, cap - bytes) {
+                    Ok(xml) => Some(xml),
+                    Err(Unbuildable::Foreign) => None,
+                    Err(Unbuildable::TooLarge) => return Elements::over(budget),
+                },
             };
             let Some(xml) = rebuilt else {
                 tracing::debug!(
@@ -232,9 +236,6 @@ impl Elements {
                 continue;
             };
             bytes += xml.len();
-            if bytes > cap {
-                return Elements::over(budget);
-            }
             let element = Element {
                 order,
                 name,
@@ -428,34 +429,52 @@ fn attribute_entity(c: char) -> Option<&'static str> {
     }
 }
 
-fn push_escaped(out: &mut String, text: &str, entity: fn(char) -> Option<&'static str>) {
+enum Unbuildable {
+    // An element of another namespace outside an extension list, or a relationship
+    // attribute of another namespace: written back, it would not mean the same.
+    Foreign,
+    // Rebuilt, it would pass the bytes the sheet has left.
+    TooLarge,
+}
+
+// Checked per character: one character escapes to up to six bytes, so a check after the
+// whole text could build six times the limit.
+fn push_escaped(
+    out: &mut String,
+    text: &str,
+    entity: fn(char) -> Option<&'static str>,
+    limit: usize,
+) -> Result<(), Unbuildable> {
     for c in text.chars() {
         match entity(c) {
             Some(escaped) => out.push_str(escaped),
             None => out.push(c),
         }
+        if out.len() > limit {
+            return Err(Unbuildable::TooLarge);
+        }
     }
+    Ok(())
 }
 
 fn has_content(node: Node) -> bool {
     node.children().any(|n| n.is_element() || n.is_text())
 }
 
-// None when the element holds what cannot be written back meaning the same: an element
-// of another namespace outside an extension list, or a relationship attribute of another
-// namespace. Walks the tree without recursion, however deep the file nests it.
-fn rebuild(node: Node) -> Option<String> {
+// Walks the tree without recursion, however deep the file nests it, and stops once the
+// text passes `limit`.
+fn rebuild(node: Node, limit: usize) -> Result<String, Unbuildable> {
     let mut xml = String::new();
     let mut skipped = None;
     for edge in node.traverse() {
         match edge {
             Edge::Open(_) if skipped.is_some() => {}
             Edge::Open(n) if n.is_text() => {
-                push_escaped(&mut xml, n.text().unwrap_or_default(), text_entity);
+                push_escaped(&mut xml, n.text().unwrap_or_default(), text_entity, limit)?;
             }
             Edge::Open(n) if n.is_element() => {
                 if !in_main(n) {
-                    return None;
+                    return Err(Unbuildable::Foreign);
                 }
                 let name = n.tag_name().name();
                 if name == "extLst" {
@@ -469,14 +488,16 @@ fn rebuild(node: Node) -> Option<String> {
                         None => "",
                         Some(RELATIONSHIPS) => "r:",
                         Some(XML) => "xml:",
-                        Some(other) if other.ends_with("/relationships") => return None,
+                        Some(other) if other.ends_with("/relationships") => {
+                            return Err(Unbuildable::Foreign);
+                        }
                         Some(_) => continue,
                     };
                     xml.push(' ');
                     xml.push_str(prefix);
                     xml.push_str(attribute.name());
                     xml.push_str("=\"");
-                    push_escaped(&mut xml, attribute.value(), attribute_entity);
+                    push_escaped(&mut xml, attribute.value(), attribute_entity, limit)?;
                     xml.push('"');
                 }
                 xml.push_str(if has_content(n) { ">" } else { "/>" });
@@ -490,8 +511,11 @@ fn rebuild(node: Node) -> Option<String> {
             }
             Edge::Close(_) => {}
         }
+        if xml.len() > limit {
+            return Err(Unbuildable::TooLarge);
+        }
     }
-    Some(xml)
+    Ok(xml)
 }
 
 #[cfg(test)]
@@ -502,7 +526,7 @@ mod tests {
 
     use super::{
         Axis, ElementBudget, Elements, MAX_ELEMENT_BYTES, MAX_WORKBOOK_ELEMENT_BYTES, Place,
-        Relationships, cell_position, is_literal,
+        Relationships, Unbuildable, attribute_entity, cell_position, is_literal, push_escaped,
     };
     use crate::file::Unsupported;
     use crate::saved::Remains;
@@ -863,6 +887,28 @@ mod tests {
         assert_eq!(elements_within(tagged, &mut budget), Elements::default());
         let mut budget = ElementBudget { left: filter.len() };
         assert_eq!(written(&elements_within(filter, &mut budget)), filter);
+    }
+
+    #[test]
+    fn escaping_stops_just_past_the_limit() {
+        let quotes = "\"".repeat(1_000);
+        let mut out = String::new();
+        assert!(matches!(
+            push_escaped(&mut out, &quotes, attribute_entity, 60),
+            Err(Unbuildable::TooLarge)
+        ));
+        assert!(out.len() <= 60 + "&quot;".len(), "{}", out.len());
+        let mut out = String::new();
+        assert!(push_escaped(&mut out, "\"\"", attribute_entity, 12).is_ok());
+        assert_eq!(out, "&quot;&quot;");
+    }
+
+    #[test]
+    fn an_element_whose_escaped_text_passes_the_budget_is_not_kept() {
+        let quoted = format!(r#"<sheetProtection algorithmName='{}'/>"#, "\"".repeat(100));
+        let mut budget = ElementBudget { left: quoted.len() };
+        assert_eq!(elements_within(&quoted, &mut budget), Elements::default());
+        assert_eq!(budget.left, 0);
     }
 
     #[test]
