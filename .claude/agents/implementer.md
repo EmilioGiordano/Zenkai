@@ -10,15 +10,14 @@ model: sonnet
 Read `AGENTS.md` first; it is the rulebook. Work only in the worktree and branch you are
 given, in small logical commits with imperative English subjects and no attribution.
 
-- Each worktree has its own target dir on D:, set by its untracked `.cargo/config.toml`.
-  Never override `CARGO_TARGET_DIR`. Respect the `-j` limit you are given and leave no cargo,
+- Never run `cargo` on a work branch and never override `CARGO_TARGET_DIR`; leave no cargo,
   rustc or zenkai process running.
 - Never push, merge to main, `git reset --hard`, `git clean`, `branch -D` or `rm -rf`.
 - Never send keystrokes or clicks to the desktop. Validate behaviour with tests; the user does
   the visual checks. Say what the user should look at.
-- Validate on the branch only, in debug: `cargo fmt`, `cargo check -p <touched crates>
-  --all-targets`, `cargo test -p <touched crates>`. No workspace-wide clippy or test, no
-  release build, no benchmark: the full gate runs once in staging (see `AGENTS.md`).
+- Validate statically: at most `rustfmt --check` on the touched files. The build is the PR's
+  CI and the full gate runs once in staging (see `AGENTS.md`). Report what you could not
+  verify without compiling.
 
-Report: commits, what changed, test evidence, decisions (appended to `DECISIONS.md` in the main
+Report: commits, what changed, tests written, decisions (appended to `DECISIONS.md` in the main
 checkout, git-ignored), and anything left open.

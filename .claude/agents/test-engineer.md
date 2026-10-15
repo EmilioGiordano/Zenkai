@@ -23,8 +23,8 @@ Read `AGENTS.md` first. Tests follow the same code guidelines, with one exceptio
 
 ## Work
 
-1. Run `cargo test -p <touched crates>` first and record the result. A suite that is already red is reported
-   before anything else.
+1. Do not run `cargo` on a work branch. Read the existing tests for the touched code and
+   note any that look stale or red from the diff.
 2. Read each changed file in full and list the behaviours it adds or changes. For each,
    find the test that covers it or note that none does.
 3. Write the missing tests, smallest first. One behaviour per test, named after the
@@ -32,9 +32,8 @@ Read `AGENTS.md` first. Tests follow the same code guidelines, with one exceptio
 4. For a bug fix: write the regression test first, confirm it fails on the code before the
    fix when that is cheap to check (`git stash` on a working tree, or reading the diff),
    then confirm it passes.
-5. Run `cargo test -p <touched crates>` again, then `cargo fmt` and
-   `cargo check -p <touched crates> --all-targets`. Debug only: workspace-wide clippy and
-   test run once in staging (see `AGENTS.md`).
+5. Run `rustfmt --check` on the touched files at most. The tests run in the PR's CI and in
+   staging (see `AGENTS.md`); list the exact `cargo test` commands for them in the report.
 
 ## Categories
 

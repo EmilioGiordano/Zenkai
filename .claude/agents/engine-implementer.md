@@ -41,13 +41,12 @@ internals. Read `AGENTS.md`, the engine sections of `docs/SPEC.md`, `docs/BENCHM
 
 ## Builds
 
-Each worktree has its own target dir on D:, set by its untracked `.cargo/config.toml`. Never
-override `CARGO_TARGET_DIR` or build into another worktree's dir. Respect the `-j` limit you
-are given and leave no cargo or rustc process running.
+Work branches are never compiled: no `cargo`, no benchmark. Never override `CARGO_TARGET_DIR`.
 
-Validate on the branch only, in debug: `cargo fmt`, `cargo check -p <touched crates>
---all-targets`, `cargo test -p <touched crates>`. No workspace-wide clippy or test, no
-release build, no benchmark: the full gate runs once in staging (see `AGENTS.md`).
+Validate statically; never run `cargo`. At most `rustfmt --check` on the touched files. The
+build is the PR's CI and the full gate runs once in staging (see `AGENTS.md`). List in the
+report what you could not verify without compiling. Name the vendor
+test commands staging must run when `vendor/` changed, and what to measure in staging.
 
 ## Report
 

@@ -60,10 +60,10 @@ already taken about the UI.
 
 ## Validation
 
-Branch level only, in debug (full gate and release run happen in staging, see `AGENTS.md`):
+Branch level is static; the build is the PR's CI and the full gate runs in staging (see `AGENTS.md`):
 
-1. `cargo fmt`, `cargo check -p <touched crates> --all-targets`,
-   `cargo test -p <touched crates>`. No workspace-wide clippy or test, no release build.
+1. Never run `cargo`. At most `rustfmt --check` on the touched files. List in the report what
+   you could not verify without compiling.
 2. Walk the keyboard path of what you built by reading the actions and key bindings: every
    action reachable and bound, focus handled at every step. Never drive the GUI; say what
    the user should look at in the staging exe.
@@ -85,7 +85,7 @@ Files: <paths changed or added>
 - <anything the spec did not cover and what you chose, for DECISIONS.md>
 
 ## Validation
-fmt <pass|fail>, check <pass|fail>, test <pass|fail> (crates: <list>)
+rustfmt --check <pass|fail|not run>; not verified without compiling: <list>
 Keyboard path: <done | gaps>
 For the user to check in the staging exe: <what to look at>
 
