@@ -19,6 +19,7 @@ pub(crate) fn engine_error(error: ReadError) -> EngineError {
 }
 use crate::preflight::run_with_engine_stack;
 use crate::saved::OpenedParts;
+use crate::sheet_elements::ElementBudget;
 use crate::sheet_settings::{self, SheetSettings};
 use crate::workbook::{read_book, read_book_fast, read_book_streaming};
 
@@ -165,13 +166,14 @@ fn fallback_to_ironcalc(bytes: &[u8], name: &str, declined: &ReadError) -> Outco
 fn read_settings(bytes: &[u8]) -> Result<Vec<SheetSettings>, EngineError> {
     zenkai_xlsx_reader::sheet_configs_from_bytes(bytes)
         .map(|configs| {
+            let mut budget = ElementBudget::workbook();
             configs
                 .iter()
                 .map(|config| {
                     if config.is_empty() {
                         SheetSettings::default()
                     } else {
-                        sheet_settings::read(config)
+                        sheet_settings::read(config, &mut budget)
                     }
                 })
                 .collect()
@@ -203,6 +205,7 @@ fn read_streaming(path: &Path, name: &str) -> Result<FileRead, ReadError> {
         .into_inner()
         .map_err(|_| ReadError::Unsupported("a part check stopped".to_string()))?;
     let held = Held::of(&found, &opened.layout);
+    let mut budget = ElementBudget::workbook();
     let settings = opened
         .sheet_configs
         .iter()
@@ -210,7 +213,7 @@ fn read_streaming(path: &Path, name: &str) -> Result<FileRead, ReadError> {
             if config.is_empty() {
                 SheetSettings::default()
             } else {
-                sheet_settings::read(config)
+                sheet_settings::read(config, &mut budget)
             }
         })
         .collect();

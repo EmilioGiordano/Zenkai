@@ -21,6 +21,9 @@ const MAX_COLUMN: u32 = 16_384;
 // Excel allows 65,530 hyperlinks on a sheet; at about 250 bytes each they are the largest
 // element a sheet carries. A sheet whose elements are larger keeps none of them.
 pub const MAX_ELEMENT_BYTES: usize = 16 * 1024 * 1024;
+// Four sheets at the cap above. The workbook holds these bytes while it is open and copies
+// them into each save, so they stay bounded whatever the sheet count.
+pub const MAX_WORKBOOK_ELEMENT_BYTES: usize = 4 * MAX_ELEMENT_BYTES;
 
 // Where an element goes among those IronCalc writes after the cell data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -144,6 +147,20 @@ enum Linked {
     Dropped,
 }
 
+// What is left of the element bytes a workbook may hold, spent sheet by sheet as they are
+// read.
+pub struct ElementBudget {
+    left: usize,
+}
+
+impl ElementBudget {
+    pub fn workbook() -> ElementBudget {
+        ElementBudget {
+            left: MAX_WORKBOOK_ELEMENT_BYTES,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Elements {
     linked: Linked,
@@ -152,10 +169,11 @@ pub struct Elements {
 
 impl Elements {
     // `sheet` is the root of the sheet part as `sheet_settings::read` parsed it.
-    pub fn read(sheet: Node) -> Elements {
+    pub fn read(sheet: Node, budget: &mut ElementBudget) -> Elements {
         if sheet.tag_name().namespace() != Some(MAIN) {
             return Elements::default();
         }
+        let cap = MAX_ELEMENT_BYTES.min(budget.left);
         let mut linked = Some(Vec::new());
         let mut standalone = Vec::new();
         let mut bytes = 0;
@@ -167,6 +185,11 @@ impl Elements {
             else {
                 continue;
             };
+            // The rebuilt text is never built for an element whose text in the file is
+            // already past the cap.
+            if bytes + node.range().len() > cap {
+                return Elements::over(budget);
+            }
             let points = points_into_relationships(node);
             // Excel writes part of some elements, such as list validations naming another
             // sheet, into the sheet's extension list, which is not kept: keeping the rest
@@ -187,9 +210,8 @@ impl Elements {
                 continue;
             };
             bytes += xml.len();
-            if bytes > MAX_ELEMENT_BYTES {
-                tracing::warn!("sheet elements larger than supported are not kept");
-                return Elements::default();
+            if bytes > cap {
+                return Elements::over(budget);
             }
             let element = Element {
                 order,
@@ -204,10 +226,21 @@ impl Elements {
                 (_, false) => standalone.push(element),
             }
         }
+        budget.left -= bytes;
         Elements {
             linked: linked.map_or(Linked::Dropped, Linked::Kept),
             standalone,
         }
+    }
+
+    // A sheet past its own cap keeps none of its elements; one past what the workbook has
+    // left also leaves nothing for the sheets read after it.
+    fn over(budget: &mut ElementBudget) -> Elements {
+        tracing::warn!("sheet elements larger than supported are not kept");
+        if budget.left < MAX_ELEMENT_BYTES {
+            budget.left = 0;
+        }
+        Elements::default()
     }
 
     fn all(&self) -> impl Iterator<Item = &Element> {
@@ -436,7 +469,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        Axis, Elements, MAX_ELEMENT_BYTES, Place, Relationships, cell_position, is_literal,
+        Axis, ElementBudget, Elements, MAX_ELEMENT_BYTES, MAX_WORKBOOK_ELEMENT_BYTES, Place,
+        Relationships, cell_position, is_literal,
     };
     use crate::file::Unsupported;
     use crate::saved::Remains;
@@ -451,11 +485,17 @@ mod tests {
 
     fn parsed(sheet: &str) -> Elements {
         let document = roxmltree::Document::parse(sheet).unwrap();
-        Elements::read(document.root_element())
+        Elements::read(document.root_element(), &mut ElementBudget::workbook())
     }
 
     fn elements(body: &str) -> Elements {
         parsed(&format!("{ROOT}{body}</worksheet>"))
+    }
+
+    fn elements_within(body: &str, budget: &mut ElementBudget) -> Elements {
+        let sheet = format!("{ROOT}{body}</worksheet>");
+        let document = roxmltree::Document::parse(&sheet).unwrap();
+        Elements::read(document.root_element(), budget)
     }
 
     fn written(elements: &Elements) -> String {
@@ -664,6 +704,39 @@ mod tests {
         let at_budget = links(MAX_ELEMENT_BYTES - frame);
         assert_eq!(at_budget.at(Place::BeforePrint).len(), MAX_ELEMENT_BYTES);
         assert_eq!(links(MAX_ELEMENT_BYTES - frame + 1), Elements::default());
+    }
+
+    #[test]
+    fn sheets_past_the_workbook_budget_keep_nothing() {
+        assert_eq!(ElementBudget::workbook().left, MAX_WORKBOOK_ELEMENT_BYTES);
+        let filter = r#"<autoFilter ref="A1:B2"/>"#;
+        let calc = "<sheetCalcPr/>";
+        let mut budget = ElementBudget {
+            left: 2 * filter.len(),
+        };
+        assert_eq!(written(&elements_within(filter, &mut budget)), filter);
+        assert_eq!(written(&elements_within(filter, &mut budget)), filter);
+        assert_eq!(budget.left, 0);
+        assert_eq!(elements_within(calc, &mut budget), Elements::default());
+
+        let mut budget = ElementBudget {
+            left: filter.len() + calc.len(),
+        };
+        assert_eq!(written(&elements_within(filter, &mut budget)), filter);
+        let both = format!(r#"{filter}<sheetProtection sheet="1"/>"#);
+        assert_eq!(elements_within(&both, &mut budget), Elements::default());
+        assert_eq!(budget.left, 0);
+        assert_eq!(elements_within(calc, &mut budget), Elements::default());
+    }
+
+    #[test]
+    fn an_element_past_the_budget_in_the_file_is_not_rebuilt() {
+        let filter = r#"<autoFilter ref="A1:B2"/>"#;
+        let tagged = r#"<autoFilter ref="A1:B2" xr:uid="{00000000-0000-0000-0000-000000000001}"/>"#;
+        let mut budget = ElementBudget { left: filter.len() };
+        assert_eq!(elements_within(tagged, &mut budget), Elements::default());
+        let mut budget = ElementBudget { left: filter.len() };
+        assert_eq!(written(&elements_within(filter, &mut budget)), filter);
     }
 
     #[test]

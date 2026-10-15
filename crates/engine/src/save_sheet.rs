@@ -370,7 +370,8 @@ mod tests {
             r#"count="1" manualBreakCount="1"><brk id="5" max="16383" man="1"/></rowBreaks>"#,
             r#"<drawing r:id="rId1"/></worksheet>"#
         );
-        let settings = crate::sheet_settings::read(source);
+        let mut budget = crate::sheet_elements::ElementBudget::workbook();
+        let settings = crate::sheet_settings::read(source, &mut budget);
         let xml = concat!(
             "<worksheet><sheetData><row r=\"1\"/></sheetData><mergeCells/>",
             "<conditionalFormatting/><extLst/></worksheet>"

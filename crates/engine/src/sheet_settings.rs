@@ -11,7 +11,7 @@ use roxmltree::Node;
 
 use crate::file::Unsupported;
 use crate::saved::Remains;
-use crate::sheet_elements::{Axis, Elements, Place};
+use crate::sheet_elements::{Axis, ElementBudget, Elements, Place};
 
 const MAX_ROW: u32 = 1_048_576;
 const MAX_COLUMN: u32 = 16_384;
@@ -427,7 +427,8 @@ fn escape_text(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-pub fn read(part: &str) -> SheetSettings {
+// `budget` is what the workbook has left for the elements `sheet_elements` keeps.
+pub fn read(part: &str, budget: &mut ElementBudget) -> SheetSettings {
     let part = part.strip_prefix('\u{feff}').unwrap_or(part);
     let (head, data, tail) = split_at_cell_data(part);
     let outside = format!("{head}{tail}");
@@ -450,7 +451,7 @@ pub fn read(part: &str) -> SheetSettings {
             .unwrap_or_default(),
         format: child(sheet, "sheetFormatPr").map(|format| attributes(format, SHEET_FORMAT)),
         print: print(sheet),
-        elements: Elements::read(sheet),
+        elements: Elements::read(sheet, budget),
         ..SheetSettings::default()
     };
     read_column_outline(sheet, &mut settings.columns);
@@ -723,7 +724,7 @@ mod tests {
         let part = sheet(
             r#"<sheetData/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape" scale="5000" r:id="rId1"/>"#,
         );
-        let settings = read(&part);
+        let settings = read(&part, &mut ElementBudget::workbook());
         assert_eq!(
             settings.print,
             r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape"/>"#
@@ -735,7 +736,7 @@ mod tests {
         let part = format!(
             r#"<x:worksheet xmlns:x="{MAIN}"><x:sheetPr><x:tabColor rgb="FFFF0000"/></x:sheetPr><x:sheetData><x:row r="2" outlineLevel="1"><x:c r="A2"/></x:row></x:sheetData><x:headerFooter><x:oddHeader>&amp;CA &lt; B</x:oddHeader></x:headerFooter></x:worksheet>"#
         );
-        let settings = read(&part);
+        let settings = read(&part, &mut ElementBudget::workbook());
         assert_eq!(
             settings.properties,
             r#"<sheetPr><tabColor rgb="FFFF0000"/></sheetPr>"#
