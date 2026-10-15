@@ -348,45 +348,53 @@ impl Document {
     // With `formulas`, cells holding a formula show it instead of its value (Ctrl+`).
     pub fn cells(&self, ranges: &[Range], formulas: bool) -> Option<HashMap<CellPos, GridCell>> {
         let workbook = self.workbook()?;
-        let end = workbook.used_end(self.sheet);
-        let limit = CellPos::new(end.row.offset(1), end.col.offset(1));
-        let clipped: Vec<Range> = ranges
-            .iter()
-            .filter_map(|range| range.clip_to(limit))
-            .collect();
-        let cells = clipped
-            .iter()
-            .flat_map(Range::positions)
-            .filter_map(|pos| {
-                let view = workbook.cell(self.sheet, pos);
-                let blank = view.text.is_empty()
-                    && view.style.fill.is_none()
-                    && !view.style.border_top
-                    && !view.style.border_left
-                    && !view.style.border_bottom
-                    && !view.style.border_right;
-                (!blank).then(|| {
-                    let formula = formulas
-                        .then(|| workbook.input(self.sheet, pos))
-                        .filter(|input| input.starts_with('='));
-                    let cell = match formula {
-                        Some(formula) => GridCell {
-                            text: formula.into(),
-                            kind: zenkai_types::ValueKind::Text,
-                            style: view.style,
-                        },
-                        None => GridCell {
-                            text: view.text.into(),
-                            kind: view.kind,
-                            style: view.style,
-                        },
-                    };
-                    (pos, cell)
-                })
-            })
-            .collect();
-        Some(cells)
+        Some(read_cells(&workbook, self.sheet, ranges, formulas))
     }
+}
+
+pub fn read_cells(
+    workbook: &Workbook,
+    sheet: SheetId,
+    ranges: &[Range],
+    formulas: bool,
+) -> HashMap<CellPos, GridCell> {
+    let end = workbook.used_end(sheet);
+    let limit = CellPos::new(end.row.offset(1), end.col.offset(1));
+    let clipped: Vec<Range> = ranges
+        .iter()
+        .filter_map(|range| range.clip_to(limit))
+        .collect();
+    clipped
+        .iter()
+        .flat_map(Range::positions)
+        .filter_map(|pos| {
+            let view = workbook.cell(sheet, pos);
+            let blank = view.text.is_empty()
+                && view.style.fill.is_none()
+                && !view.style.border_top
+                && !view.style.border_left
+                && !view.style.border_bottom
+                && !view.style.border_right;
+            (!blank).then(|| {
+                let formula = formulas
+                    .then(|| workbook.input(sheet, pos))
+                    .filter(|input| input.starts_with('='));
+                let cell = match formula {
+                    Some(formula) => GridCell {
+                        text: formula.into(),
+                        kind: zenkai_types::ValueKind::Text,
+                        style: view.style,
+                    },
+                    None => GridCell {
+                        text: view.text.into(),
+                        kind: view.kind,
+                        style: view.style,
+                    },
+                };
+                (pos, cell)
+            })
+        })
+        .collect()
 }
 
 pub fn contents_of(
