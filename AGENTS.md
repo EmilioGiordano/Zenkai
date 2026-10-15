@@ -185,6 +185,8 @@ Agents write the content; `scripts/pr` (bash, `gh`, `jq`) does the GitHub mechan
   appends `PR: <url>` to a draft card, or adds the PR to the project for an issue card.
   When the review closes, `scripts/pr/card.sh <project-item-id> <tldr-file>` appends a
   `TLDR:` of 2 or 3 lines to the card: what the review found and how it was resolved.
+- `scripts/pr/open.sh --card` and `card.sh` use project `ZENKAI_PROJECT_NUMBER` (default 2) owned
+  by `ZENKAI_PROJECT_OWNER` (default EmilioGiordano).
 - `scripts/pr/test.sh` checks the scripts in dry-run against local fixtures.
 
 ## Validation

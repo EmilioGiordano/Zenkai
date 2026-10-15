@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: lint.sh <title> <body-file>. Prints one message per violation.
-set -u
+set -uo pipefail
 
 if [ "$#" -ne 2 ]; then
   echo "usage: lint.sh <title> <body-file>" >&2

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: open.sh [--dry-run] [--card <project-item-id>] <branch> <base> <title> <body-file>
-set -eu
+set -euo pipefail
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 . "$script_dir/lib.sh"

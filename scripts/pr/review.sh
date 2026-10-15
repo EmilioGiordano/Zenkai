@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: review.sh [--dry-run] [--files <pr-files.json>] <pr-number> <review.json>
-set -eu
+set -euo pipefail
 
 # --files uses a saved copy of the PR files API response instead of fetching it.
 dry_run=0

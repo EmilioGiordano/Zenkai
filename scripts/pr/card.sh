@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Usage: card.sh [--dry-run] <project-item-id> <tldr-file>
 # Appends a TLDR paragraph (what the review found, how it was resolved) to a draft card.
-set -eu
+set -euo pipefail
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
 . "$script_dir/lib.sh"

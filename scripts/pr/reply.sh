@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Usage: reply.sh [--dry-run] <pr-number> <comment-id> <text>
 # Does not resolve the thread: the thread id needs a separate GraphQL lookup.
-set -eu
+set -euo pipefail
 
 dry_run=0
 if [ "${1:-}" = "--dry-run" ]; then

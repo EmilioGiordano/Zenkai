@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Dry-run tests for the PR scripts. Never touches GitHub.
-set -u
+set -uo pipefail
 
 dir=$(cd "$(dirname "$0")" && pwd)
 fx=$dir/fixtures
@@ -22,7 +22,9 @@ expect() {
 expect_output() {
   local pattern=$1 name=$2
   shift 2
-  if "$@" 2>&1 | grep -q -- "$pattern"; then
+  local output
+  output=$("$@" 2>&1)
+  if grep -q -- "$pattern" <<<"$output"; then
     echo "ok   $name"
   else
     echo "FAIL $name (missing: $pattern)"
@@ -87,6 +89,7 @@ expect 1 "card middle dot" "$dir/card.sh" --dry-run PVTI_x "$fx/tldr-dot.txt"
 
 expect_output 'updateProjectV2DraftIssue' "open --card updates a draft card" "$dir/open.sh" --dry-run --card PVTI_x chore/x main "feat: add pr scripts" "$fx/good-body.md"
 expect_output 'gh project item-add 2 --owner EmilioGiordano' "open --card adds an issue card to the project" "$dir/open.sh" --dry-run --card PVTI_x chore/x main "feat: add pr scripts" "$fx/good-body.md"
+expect_output 'gh project item-add 7 --owner someone' "open --card honours the project env vars" env ZENKAI_PROJECT_NUMBER=7 ZENKAI_PROJECT_OWNER=someone "$dir/open.sh" --dry-run --card PVTI_x chore/x main "feat: add pr scripts" "$fx/good-body.md"
 expect 2 "open --card without value" "$dir/open.sh" --dry-run --card
 
 if [ "$failed" -eq 0 ]; then
