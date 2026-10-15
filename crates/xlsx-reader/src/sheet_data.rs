@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use ironcalc::base::expressions::utils::{
     column_to_number, is_valid_column_number, is_valid_row, parse_reference_a1,
@@ -33,16 +34,16 @@ const DEFAULT_ROW_HEIGHT: f64 = 14.5;
 
 // Cells in document order. Cells listed in `string_cells` hold a sheet-local string index
 // and every formula cell holds an index into `events`; both are resolved once all sheets
-// are read, because IronCalc numbers strings and formulas in document order.
+// are read, because IronCalc numbers strings and formulas in document order. Formula
+// texts are owned so row pieces can be dropped as the worksheet streams in.
 #[derive(Default)]
-pub(crate) struct SheetCells<'a> {
+pub(crate) struct SheetCells {
     pub(crate) rows: Vec<Row>,
     pub(crate) data: Vec<(i32, Vec<(i32, Cell)>)>,
-    pub(crate) strings: Vec<String>,
+    pub(crate) strings: Vec<Arc<str>>,
     pub(crate) string_cells: Vec<Slot>,
     pub(crate) events: Vec<FormulaEvent>,
-    pub(crate) jobs: Vec<FormulaJob<'a>>,
-    pub(crate) has_arrays: bool,
+    pub(crate) jobs: Vec<FormulaJob>,
 }
 
 #[derive(Clone, Copy)]
@@ -91,14 +92,14 @@ impl FormulaEvent {
     }
 }
 
-pub(crate) struct FormulaJob<'a> {
-    pub(crate) text: Cow<'a, str>,
+pub(crate) struct FormulaJob {
+    pub(crate) text: String,
     pub(crate) row: i32,
     pub(crate) column: i32,
     pub(crate) array: bool,
 }
 
-fn unreadable(error: impl ToString) -> ReadError {
+pub(crate) fn unreadable(error: impl ToString) -> ReadError {
     ReadError::Unreadable(error.to_string())
 }
 
@@ -107,11 +108,11 @@ fn unsupported(what: &str) -> ReadError {
 }
 
 // Reads a run of whole <row> elements, the content of <sheetData> or a piece of it.
-pub(crate) fn scan_rows<'a>(
-    rows: &'a str,
+pub(crate) fn scan_rows(
+    rows: &str,
     prefixes: &[Vec<u8>],
     sheet_name: &str,
-) -> Result<SheetCells<'a>, ReadError> {
+) -> Result<SheetCells, ReadError> {
     let mut reader = Reader::from_str(rows);
     let config = reader.config_mut();
     config.check_end_names = true;
@@ -127,10 +128,9 @@ pub(crate) fn scan_rows<'a>(
     };
     scanner.rows()?;
     let mut cells = scanner.cells;
-    let mut strings: Vec<(String, usize)> = scanner.strings.into_iter().collect();
+    let mut strings: Vec<(Arc<str>, usize)> = scanner.strings.into_iter().collect();
     strings.sort_unstable_by_key(|(_, index)| *index);
     cells.strings = strings.into_iter().map(|(text, _)| text).collect();
-    cells.has_arrays = !scanner.array_cells.is_empty();
     Ok(cells)
 }
 
@@ -138,10 +138,10 @@ struct Scanner<'a, 's> {
     reader: Reader<&'a [u8]>,
     prefixes: &'s [Vec<u8>],
     sheet_name: &'s str,
-    strings: HashMap<String, usize>,
+    strings: HashMap<Arc<str>, usize>,
     array_cells: HashMap<(i32, i32), (i32, i32)>,
     array_cells_claimed: u64,
-    cells: SheetCells<'a>,
+    cells: SheetCells,
 }
 
 struct CellXml<'a> {
@@ -176,6 +176,9 @@ impl<'a> Scanner<'a, '_> {
                 Event::Empty(start) if start.local_name().as_ref() == b"row" => {
                     self.row(&start, true)?;
                 }
+                // Blank text between rows, including carriage returns from
+                // Windows line endings, is not a cell.
+                Event::Text(text) if Self::is_blank(&text) => {}
                 Event::Eof => return Ok(()),
                 _ => return Err(unsupported("something other than a row in sheetData")),
             }
@@ -198,6 +201,11 @@ impl<'a> Scanner<'a, '_> {
             Some(r) => Some(r.parse::<i32>().map_err(unreadable)?),
             None => None,
         };
+        if let Some(r) = row_index
+            && !is_valid_row(r)
+        {
+            return Err(unreadable("a row index outside the sheet"));
+        }
         let (has_height, height) = match ht {
             Some(ht) => (true, ht.parse::<f64>().unwrap_or(DEFAULT_ROW_HEIGHT)),
             None => (false, DEFAULT_ROW_HEIGHT),
@@ -404,10 +412,14 @@ impl<'a> Scanner<'a, '_> {
         Ok(())
     }
 
-    fn job(&mut self, text: Cow<'a, str>, cell_ref: &str, array: bool) -> Result<usize, ReadError> {
+    fn job(&mut self, text: Cow<'_, str>, cell_ref: &str, array: bool) -> Result<usize, ReadError> {
+        // The preflight checker used to refuse hostile formulas before the rows were
+        // read; with the rows streaming, each formula is checked as it arrives, with
+        // the same refusal instead of a fallback.
+        limits::check_formula_text(&text).map_err(ReadError::Unsafe)?;
         let (row, column) = formula_context(cell_ref)?;
         self.cells.jobs.push(FormulaJob {
-            text,
+            text: text.into_owned(),
             row,
             column,
             array,
@@ -417,7 +429,7 @@ impl<'a> Scanner<'a, '_> {
 
     fn intern(&mut self, text: String) -> i32 {
         let next = self.strings.len();
-        let index = *self.strings.entry(text).or_insert(next);
+        let index = *self.strings.entry(Arc::from(text)).or_insert(next);
         i32::try_from(index).unwrap_or(i32::MAX)
     }
 
@@ -443,6 +455,8 @@ fn formula_context(cell_ref: &str) -> Result<(i32, i32), ReadError> {
 }
 
 // IronCalc's `parse_reference_a1`, without its allocations for the plain "B12" form.
+// Both spellings are checked against the sheet limits, so no out-of-range row or
+// column ever reaches the model.
 fn cell_position(cell_ref: &str) -> Option<(i32, i32)> {
     let bytes = cell_ref.as_bytes();
     let letters = bytes.iter().take_while(|b| b.is_ascii_uppercase()).count();
@@ -457,7 +471,9 @@ fn cell_position(cell_ref: &str) -> Option<(i32, i32)> {
         }
         return None;
     }
-    parse_reference_a1(cell_ref).map(|r| (r.row, r.column))
+    parse_reference_a1(cell_ref)
+        .filter(|r| is_valid_row(r.row) && is_valid_column_number(r.column))
+        .map(|r| (r.row, r.column))
 }
 
 fn parse_range(range: &str) -> Option<(i32, i32, i32, i32)> {
@@ -476,7 +492,7 @@ fn parse_range(range: &str) -> Option<(i32, i32, i32, i32)> {
 mod tests {
     use super::*;
 
-    fn scan(rows: &str) -> Result<SheetCells<'_>, ReadError> {
+    fn scan(rows: &str) -> Result<SheetCells, ReadError> {
         scan_rows(rows, &[Vec::new()], "Sheet1")
     }
 
@@ -506,5 +522,46 @@ mod tests {
             .map(|n| array_row(n, &format!("A{n}:B{n}")))
             .collect();
         assert!(scan(&rows).is_ok());
+    }
+
+    #[test]
+    fn a_shared_formula_covering_a_whole_column_is_read() {
+        let rows = r#"<row r="1"><c r="A1"><f t="shared" ref="A1:A1048576" si="0">B1*2</f><v>0</v></c></row>"#;
+        assert!(scan(rows).is_ok());
+    }
+
+    #[test]
+    fn blank_text_between_rows_is_ignored() {
+        let rows = "<row r=\"1\"><c r=\"A1\"><v>1</v></c></row>\n  \r\n <row r=\"2\"><c r=\"A2\"><v>2</v></c></row>\r\n";
+        let cells = scan(rows).unwrap();
+        assert_eq!(cells.data.len(), 2);
+    }
+
+    #[test]
+    fn row_indexes_outside_the_sheet_are_left_to_ironcalc() {
+        for rows in [
+            r#"<row r="0"><c r="A1"><v>1</v></c></row>"#,
+            r#"<row r="1048577"><c r="A1"><v>1</v></c></row>"#,
+            r#"<row r="2147483647"><c r="A1"><v>1</v></c></row>"#,
+        ] {
+            assert!(
+                matches!(scan(rows), Err(ReadError::Unreadable(_))),
+                "{rows}"
+            );
+        }
+    }
+
+    #[test]
+    fn cell_references_outside_the_sheet_are_left_to_ironcalc() {
+        for rows in [
+            r#"<row r="1"><c r="A1048577"><v>1</v></c></row>"#,
+            r#"<row r="1"><c r="XFE1"><v>1</v></c></row>"#,
+            r#"<row r="1"><c r="A1"><f t="array" ref="A1:B1048577">1</f></c></row>"#,
+        ] {
+            assert!(
+                matches!(scan(rows), Err(ReadError::Unreadable(_))),
+                "{rows}"
+            );
+        }
     }
 }

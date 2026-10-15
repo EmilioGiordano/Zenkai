@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Write;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ironcalc::base::expressions::lexer::{Lexer, LexerMode};
 use ironcalc::base::expressions::parser::static_analysis::add_implicit_intersection;
@@ -30,7 +30,7 @@ pub(crate) struct Names<'n> {
 // The R1C1 text of every job, as one table of distinct formulas and, per sheet, the index
 // of each job's formula in it.
 pub(crate) struct Converted {
-    pub(crate) distinct: Vec<String>,
+    pub(crate) distinct: Vec<Arc<str>>,
     pub(crate) per_sheet: Vec<Vec<u32>>,
 }
 
@@ -41,12 +41,12 @@ struct Chunk {
 }
 
 struct WorkerOutput {
-    distinct: Vec<String>,
+    distinct: Vec<Arc<str>>,
     chunks: Vec<(usize, Vec<u32>)>,
 }
 
 pub(crate) fn convert(
-    sheets: &[(&str, &[FormulaJob<'_>])],
+    sheets: &[(&str, &[FormulaJob])],
     names: &Names<'_>,
 ) -> Result<Converted, ReadError> {
     let mut chunks = Vec::new();
@@ -92,7 +92,7 @@ pub(crate) fn convert(
         .map_err(|_| ReadError::Unsupported("a formula worker stopped".to_string()))?;
 
     let mut distinct = Vec::new();
-    let mut index_of: HashMap<String, u32> = HashMap::new();
+    let mut index_of: HashMap<Arc<str>, u32> = HashMap::new();
     let mut per_sheet: Vec<Vec<u32>> = sheets.iter().map(|(_, jobs)| vec![0; jobs.len()]).collect();
     let mut done = 0;
     for output in outputs {
@@ -126,7 +126,7 @@ pub(crate) fn convert(
 }
 
 fn work(
-    sheets: &[(&str, &[FormulaJob<'_>])],
+    sheets: &[(&str, &[FormulaJob])],
     chunks: &[Chunk],
     next: &AtomicUsize,
     names: &Names<'_>,
@@ -156,8 +156,8 @@ pub(crate) struct Converter<'n> {
     lexer: Lexer<'n>,
     key: String,
     cache: HashMap<String, u32>,
-    index_of: HashMap<String, u32>,
-    distinct: Vec<String>,
+    index_of: HashMap<Arc<str>, u32>,
+    distinct: Vec<Arc<str>>,
 }
 
 impl<'n> Converter<'n> {
@@ -181,7 +181,7 @@ impl<'n> Converter<'n> {
         }
     }
 
-    pub(crate) fn convert(&mut self, sheet: usize, sheet_name: &str, job: &FormulaJob<'_>) -> u32 {
+    pub(crate) fn convert(&mut self, sheet: usize, sheet_name: &str, job: &FormulaJob) -> u32 {
         let cacheable = self.cache_key(sheet, job).unwrap_or(false);
         if cacheable && let Some(id) = self.cache.get(&self.key) {
             return *id;
@@ -196,17 +196,18 @@ impl<'n> Converter<'n> {
 
     fn intern(&mut self, text: String) -> u32 {
         let next = u32::try_from(self.distinct.len()).unwrap_or(u32::MAX);
-        if let Some(id) = self.index_of.get(&text) {
+        if let Some(id) = self.index_of.get(text.as_str()) {
             return *id;
         }
-        self.index_of.insert(text.clone(), next);
-        self.distinct.push(text);
+        let shared: Arc<str> = Arc::from(text);
+        self.index_of.insert(shared.clone(), next);
+        self.distinct.push(shared);
         next
     }
 
     // IronCalc's own conversion. The result is reusable for another cell with the same
     // key unless a parse error kept the raw formula text in it.
-    pub(crate) fn parse(&mut self, sheet_name: &str, job: &FormulaJob<'_>) -> (String, bool) {
+    pub(crate) fn parse(&mut self, sheet_name: &str, job: &FormulaJob) -> (String, bool) {
         let context = CellReferenceRC {
             sheet: sheet_name.to_string(),
             column: job.column,
@@ -223,7 +224,7 @@ impl<'n> Converter<'n> {
     // The formula's tokens from IronCalc's own lexer, with every relative reference written
     // as its offset from the cell: two formulas with the same key parse to the same R1C1
     // text. Structured references read the cell's row, so they are never cached.
-    fn cache_key(&mut self, sheet: usize, job: &FormulaJob<'_>) -> Result<bool, std::fmt::Error> {
+    fn cache_key(&mut self, sheet: usize, job: &FormulaJob) -> Result<bool, std::fmt::Error> {
         self.key.clear();
         write!(self.key, "{sheet}|{}|", job.array)?;
         self.lexer.set_formula(&job.text);
@@ -292,6 +293,27 @@ mod tests {
 
     use super::*;
     use ironcalc::base::expressions::utils::number_to_column;
+
+    #[test]
+    fn worker_indexes_share_each_formula_text() {
+        let sheets = vec!["Sheet1".to_string()];
+        let defined_names = Vec::new();
+        let tables = HashMap::new();
+        let names = Names {
+            sheets: &sheets,
+            defined_names: &defined_names,
+            tables: &tables,
+        };
+        let mut converter = Converter::new(&names);
+        let first = converter.intern("A1*2".to_string());
+        let second = converter.intern("A1*2".to_string());
+        assert_eq!((first, second), (0, 0));
+        assert_eq!(converter.distinct.len(), 1);
+        assert!(Arc::ptr_eq(
+            &converter.distinct[0],
+            converter.index_of.keys().next().unwrap()
+        ));
+    }
 
     #[derive(Clone, Debug)]
     enum Atom {
@@ -411,13 +433,13 @@ mod tests {
             let mut fresh = Converter::new(&names);
             for (row, column, array) in places {
                 let Some(text) = formula(&atoms, row, column) else { continue };
-                let job = FormulaJob { text: text.clone().into(), row, column, array };
+                let job = FormulaJob { text: text.clone(), row, column, array };
                 // IronCalc's lexer overflows on very long column names in debug builds.
                 let converted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     (cached.convert(0, "Sheet1", &job), fresh.parse("Sheet1", &job).0)
                 }));
                 let Ok((id, expected)) = converted else { continue };
-                prop_assert_eq!(&cached.distinct[id as usize], &expected, "{} at {:?}", text, (row, column));
+            prop_assert_eq!(&cached.distinct[id as usize][..], &expected, "{} at {:?}", text, (row, column));
             }
         }
     }

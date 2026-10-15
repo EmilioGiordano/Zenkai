@@ -141,11 +141,7 @@ fn array_node_to_formula_value(node: ArrayNode) -> FormulaValue {
         ArrayNode::Boolean(b) => FormulaValue::Boolean(b),
         ArrayNode::Number(n) => FormulaValue::Number(n),
         ArrayNode::String(s) => FormulaValue::Text(s),
-        ArrayNode::Error(ei) => FormulaValue::Error {
-            ei,
-            o: String::new(),
-            m: String::new(),
-        },
+        ArrayNode::Error(ei) => FormulaValue::error(ei, String::new(), String::new()),
         ArrayNode::Empty => FormulaValue::Number(0.0),
     }
 }
@@ -166,7 +162,7 @@ fn formula_value_to_spill_value(v: &FormulaValue) -> SpillValue {
         FormulaValue::Boolean(b) => SpillValue::Boolean(*b),
         FormulaValue::Number(n) => SpillValue::Number(*n),
         FormulaValue::Text(s) => SpillValue::Text(s.clone()),
-        FormulaValue::Error { ei, .. } => SpillValue::Error(ei.clone()),
+        FormulaValue::Error(error) => SpillValue::Error(error.ei.clone()),
     }
 }
 
@@ -908,16 +904,9 @@ impl<'a> Model<'a> {
     ) -> Result<(), String> {
         let CellReferenceIndex { sheet, column, row } = cell_reference;
         let original_range = match cell {
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Cse,
-                ..
-            } => Some((false, (r.0, r.1))),
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Dynamic,
-                ..
-            } => Some((true, (r.0, r.1))),
+            Cell::ArrayFormula(array) => {
+                Some((array.kind == ArrayKind::Dynamic, (array.r.0, array.r.1)))
+            }
             _ => None,
         };
         // An array result or an array formula writes, grows, shrinks or clears spill cells.
@@ -964,7 +953,6 @@ impl<'a> Model<'a> {
                     // The stored range may be (1,1) on first evaluation, so we must re-check here.
                     let sheet_data = &self.workbook.worksheets[sheet as usize].sheet_data;
                     for r in row..row + array_height {
-                        let row_data = sheet_data.get(&r);
                         for c in column..column + array_width {
                             if r == row && c == column {
                                 continue;
@@ -975,11 +963,11 @@ impl<'a> Model<'a> {
                             // and must never prevent the formula from re-spilling (this
                             // matters after undo restores a SpillCell while the anchor's
                             // stored `r` is still (1,1) from a prior #SPILL! evaluation).
-                            let blocking = row_data
-                                .and_then(|row_map| row_map.get(&c))
+                            let blocking = sheet_data
+                                .get(r, c)
                                 .map(|cell| match cell {
                                     Cell::EmptyCell { .. } => false,
-                                    Cell::SpillCell { a, .. } if *a == (row, column) => false,
+                                    Cell::SpillCell(spill) if spill.a == (row, column) => false,
                                     _ => true,
                                 })
                                 .unwrap_or(false);
@@ -1003,20 +991,20 @@ impl<'a> Model<'a> {
                         for c in column..column + array_width {
                             let value = array[(r - row) as usize][(c - column) as usize].clone();
                             let cell = if r == row && c == column {
-                                Cell::ArrayFormula {
-                                    f: formula,
+                                Cell::new_array_formula(
+                                    formula,
                                     s,
-                                    r: (array_width, array_height),
-                                    kind: ArrayKind::Dynamic,
-                                    v: array_node_to_formula_value(value),
-                                }
+                                    (array_width, array_height),
+                                    ArrayKind::Dynamic,
+                                    array_node_to_formula_value(value),
+                                )
                             } else {
                                 let existing_style = worksheet.get_style(r, c);
-                                Cell::SpillCell {
-                                    a: (row, column),
-                                    s: existing_style,
-                                    v: array_node_to_spill_value(value),
-                                }
+                                Cell::new_spill_cell(
+                                    existing_style,
+                                    (row, column),
+                                    array_node_to_spill_value(value),
+                                )
                             };
                             worksheet.update_cell(r, c, cell)?;
                         }
@@ -1034,19 +1022,19 @@ impl<'a> Model<'a> {
                             let new_cell = if r == row && c == column {
                                 let fv = match value {
                                     Some(node) => array_node_to_formula_value(node),
-                                    None => FormulaValue::Error {
-                                        ei: Error::NIMPL,
-                                        o: "".to_string(),
-                                        m: "Unexpected array result".to_string(),
-                                    },
+                                    None => FormulaValue::error(
+                                        Error::NIMPL,
+                                        "".to_string(),
+                                        "Unexpected array result".to_string(),
+                                    ),
                                 };
-                                Cell::ArrayFormula {
-                                    f: formula,
+                                Cell::new_array_formula(
+                                    formula,
                                     s,
-                                    r: (original_width, original_height),
-                                    kind: ArrayKind::Cse,
-                                    v: fv,
-                                }
+                                    (original_width, original_height),
+                                    ArrayKind::Cse,
+                                    fv,
+                                )
                             } else {
                                 let sv = match value {
                                     Some(node) => array_node_to_spill_value(node),
@@ -1054,18 +1042,12 @@ impl<'a> Model<'a> {
                                 };
                                 let existing_style =
                                     self.workbook.worksheets[sheet as usize].get_style(r, c);
-                                Cell::SpillCell {
-                                    s: existing_style,
-                                    a: (row, column),
-                                    v: sv,
-                                }
+                                Cell::new_spill_cell(existing_style, (row, column), sv)
                             };
                             *self.workbook.worksheets[sheet as usize]
                                 .sheet_data
-                                .get_mut(&r)
-                                .ok_or("expected a row")?
-                                .get_mut(&c)
-                                .ok_or("expected a column")? = new_cell;
+                                .get_mut(r, c)
+                                .ok_or("expected a cell")? = new_cell;
                         }
                     }
                     // All cells (anchor + spills) have been written above.
@@ -1083,11 +1065,11 @@ impl<'a> Model<'a> {
                     let coerced = if array_width == 1 && array_height == 1 {
                         match self.get_value_from_array(array, 1, 1) {
                             Some(node) => array_node_to_formula_value(node),
-                            None => FormulaValue::Error {
-                                ei: Error::VALUE,
-                                o: "".to_string(),
-                                m: "Unexpected array result".to_string(),
-                            },
+                            None => FormulaValue::error(
+                                Error::VALUE,
+                                "".to_string(),
+                                "Unexpected array result".to_string(),
+                            ),
                         }
                     } else {
                         // Currently unreachable from normal user formulas: static
@@ -1103,18 +1085,16 @@ impl<'a> Model<'a> {
                              {array_width}x{array_height}); implicit intersection \
                              was expected to collapse it.",
                         );
-                        FormulaValue::Error {
-                            ei: Error::VALUE,
-                            o: "".to_string(),
-                            m: "Array result in scalar context".to_string(),
-                        }
+                        FormulaValue::error(
+                            Error::VALUE,
+                            "".to_string(),
+                            "Array result in scalar context".to_string(),
+                        )
                     };
                     *self.workbook.worksheets[sheet as usize]
                         .sheet_data
-                        .get_mut(&row)
-                        .ok_or("expected a row")?
-                        .get_mut(&column)
-                        .ok_or("expected a column")? = Cell::CellFormula {
+                        .get_mut(row, column)
+                        .ok_or("expected a cell")? = Cell::CellFormula {
                         f: formula,
                         s,
                         v: coerced,
@@ -1152,11 +1132,7 @@ impl<'a> Model<'a> {
                     Ok(s) => s,
                     Err(_) => "".to_string(),
                 };
-                FormulaValue::Error {
-                    ei: error.clone(),
-                    o,
-                    m: message.to_string(),
-                }
+                FormulaValue::error(error.clone(), o, message.to_string())
             }
             CalcResult::Range { .. } => {
                 // This should never happen
@@ -1181,13 +1157,7 @@ impl<'a> Model<'a> {
                 } else {
                     (ArrayKind::Cse, (width, height))
                 };
-                Cell::ArrayFormula {
-                    f: formula,
-                    s,
-                    r,
-                    kind,
-                    v: formula_value.clone(),
-                }
+                Cell::new_array_formula(formula, s, r, kind, formula_value.clone())
             }
             None => Cell::CellFormula {
                 f: formula,
@@ -1209,11 +1179,7 @@ impl<'a> Model<'a> {
                     ws.update_cell(
                         r,
                         c,
-                        Cell::SpillCell {
-                            a: (row, column),
-                            s: existing_style,
-                            v: spill_value.clone(),
-                        },
+                        Cell::new_spill_cell(existing_style, (row, column), spill_value.clone()),
                     )?;
                 }
             }
@@ -1291,50 +1257,36 @@ impl<'a> Model<'a> {
                     CalcResult::new_error(Error::ERROR, cell_reference, message)
                 }
             }
-            CellFormula {
-                v: FormulaValue::Unevaluated,
-                ..
-            }
-            | ArrayFormula {
-                v: FormulaValue::Unevaluated,
-                ..
-            } => CalcResult::Error {
+            CellFormula { v, .. } => self.formula_value_result(v, cell_reference),
+            ArrayFormula(array) => self.formula_value_result(&array.v, cell_reference),
+            SpillCell(spill) => match &spill.v {
+                SpillValue::Number(v) => CalcResult::Number(*v),
+                SpillValue::Boolean(v) => CalcResult::Boolean(*v),
+                SpillValue::Text(v) => CalcResult::String(v.clone()),
+                SpillValue::Error(ei) => {
+                    let message = ei.to_localized_error_string(self.language);
+                    CalcResult::new_error(ei.clone(), cell_reference, message)
+                }
+            },
+        }
+    }
+
+    fn formula_value_result(
+        &self,
+        value: &FormulaValue,
+        cell_reference: CellReferenceIndex,
+    ) -> CalcResult {
+        match value {
+            FormulaValue::Unevaluated => CalcResult::Error {
                 error: Error::ERROR,
                 origin: cell_reference,
                 message: "Unevaluated formula".to_string(),
             },
-            CellFormula {
-                v: FormulaValue::Boolean(v),
-                ..
-            }
-            | ArrayFormula {
-                v: FormulaValue::Boolean(v),
-                ..
-            } => CalcResult::Boolean(*v),
-            CellFormula {
-                v: FormulaValue::Number(v),
-                ..
-            }
-            | ArrayFormula {
-                v: FormulaValue::Number(v),
-                ..
-            } => CalcResult::Number(*v),
-            CellFormula {
-                v: FormulaValue::Text(v),
-                ..
-            }
-            | ArrayFormula {
-                v: FormulaValue::Text(v),
-                ..
-            } => CalcResult::String(v.clone()),
-            CellFormula {
-                v: FormulaValue::Error { ei, o, m },
-                ..
-            }
-            | ArrayFormula {
-                v: FormulaValue::Error { ei, o, m },
-                ..
-            } => {
+            FormulaValue::Boolean(v) => CalcResult::Boolean(*v),
+            FormulaValue::Number(v) => CalcResult::Number(*v),
+            FormulaValue::Text(v) => CalcResult::String(v.clone()),
+            FormulaValue::Error(error) => {
+                let ErrorValue { ei, o, m } = &**error;
                 if let Some(cell_reference) = self.parse_reference(o) {
                     CalcResult::new_error(ei.clone(), cell_reference, m.clone())
                 } else {
@@ -1344,25 +1296,6 @@ impl<'a> Model<'a> {
                         message: ei.to_localized_error_string(self.language),
                     }
                 }
-            }
-            SpillCell {
-                v: SpillValue::Number(v),
-                ..
-            } => CalcResult::Number(*v),
-            SpillCell {
-                v: SpillValue::Boolean(v),
-                ..
-            } => CalcResult::Boolean(*v),
-            SpillCell {
-                v: SpillValue::Text(v),
-                ..
-            } => CalcResult::String(v.clone()),
-            SpillCell {
-                v: SpillValue::Error(ei),
-                ..
-            } => {
-                let message = ei.to_localized_error_string(self.language);
-                CalcResult::new_error(ei.clone(), cell_reference, message)
             }
         }
     }
@@ -1423,8 +1356,7 @@ impl<'a> Model<'a> {
     fn fetch_cell(&self, cell_reference: CellReferenceIndex) -> Option<&Cell> {
         self.workbook.worksheets[cell_reference.sheet as usize]
             .sheet_data
-            .get(&cell_reference.row)?
-            .get(&cell_reference.column)
+            .get(cell_reference.row, cell_reference.column)
     }
 
     // Evaluates a cell and returns the value in the cell
@@ -1435,7 +1367,7 @@ impl<'a> Model<'a> {
             None => return CalcResult::EmptyCell,
         };
 
-        if let Cell::SpillCell { a, .. } = original_cell {
+        if let Some(a) = original_cell.spill_anchor() {
             // If it is part of an array or dynamic formula we need to evaluate the anchor cell
             // strictly speaking we don't need to evaluate the anchor cell of a dynamic array formula
             // but it is most likely a good guess anyway
@@ -1480,14 +1412,8 @@ impl<'a> Model<'a> {
                 // Clear the pre-existing spill area of a dynamic formula before re-evaluating.
                 // This must happen after the CellState check so that a recursive call from a
                 // spill cell does not wipe out spill cells that were just written.
-                if let Cell::ArrayFormula {
-                    r,
-                    kind: ArrayKind::Dynamic,
-                    ..
-                } = &original_cell
-                {
+                if let Some((width, height)) = original_cell.dynamic_range() {
                     self.criteria_ranges.forget_values();
-                    let (width, height) = *r;
                     let ws = match self.workbook.worksheet_mut(cell_reference.sheet) {
                         Ok(ws) => ws,
                         Err(_) => {
@@ -1508,11 +1434,10 @@ impl<'a> Model<'a> {
                             // so they can block the spill on re-evaluation.
                             let is_own_spill = ws
                                 .sheet_data
-                                .get(&r)
-                                .and_then(|row_data| row_data.get(&c))
+                                .get(r, c)
                                 .map(|cell| {
-                                    matches!(cell, Cell::SpillCell { a, .. }
-                                        if *a == (cell_reference.row, cell_reference.column))
+                                    cell.spill_anchor()
+                                        == Some((cell_reference.row, cell_reference.column))
                                 })
                                 .unwrap_or(false);
                             if is_own_spill {
@@ -1692,6 +1617,9 @@ impl<'a> Model<'a> {
     /// # }
     /// ```
     pub fn from_workbook(workbook: Workbook, language_id: &str) -> Result<Model<'_>, String> {
+        // Parsing every formula past this point can hang the machine on a file
+        // bigger than its budget; the estimate above refuses first.
+        crate::open_budget::check_open_budget(&workbook)?;
         let parsed_formulas = Vec::new();
         let worksheets = &workbook.worksheets;
 
@@ -2936,17 +2864,12 @@ impl<'a> Model<'a> {
     pub fn get_all_cells(&self) -> Vec<CellIndex> {
         let mut cells = Vec::new();
         for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
-            let mut sorted_rows: Vec<_> = sheet.sheet_data.keys().collect();
-            sorted_rows.sort_unstable();
-            for row in sorted_rows {
-                let row_data = &sheet.sheet_data[row];
-                let mut sorted_columns: Vec<_> = row_data.keys().collect();
-                sorted_columns.sort_unstable();
-                for column in sorted_columns {
+            for row in sheet.sheet_data.rows_sorted() {
+                for column in sheet.sheet_data.row_columns_sorted(row) {
                     cells.push(CellIndex {
                         index: index as u32,
-                        row: *row,
-                        column: *column,
+                        row,
+                        column,
                     });
                 }
             }
@@ -2959,24 +2882,13 @@ impl<'a> Model<'a> {
     fn collect_spill_cells(&mut self) {
         let mut spill_cells = Vec::new();
         for (sheet_index, worksheet) in self.workbook.worksheets.iter().enumerate() {
-            let mut sorted_rows: Vec<i32> = worksheet.sheet_data.keys().copied().collect();
-            sorted_rows.sort_unstable();
-            for row in &sorted_rows {
-                let row_data = &worksheet.sheet_data[row];
-                let mut sorted_cols: Vec<i32> = row_data.keys().copied().collect();
-                sorted_cols.sort_unstable();
-                for col in &sorted_cols {
-                    if matches!(
-                        &row_data[col],
-                        Cell::ArrayFormula {
-                            kind: ArrayKind::Dynamic,
-                            ..
-                        }
-                    ) {
+            for row in worksheet.sheet_data.rows_sorted() {
+                for (col, cell) in worksheet.sheet_data.row_cells_sorted(row) {
+                    if cell.dynamic_range().is_some() {
                         spill_cells.push(CellReferenceIndex {
                             sheet: sheet_index as u32,
-                            row: *row,
-                            column: *col,
+                            row,
+                            column: col,
                         });
                     }
                 }
@@ -2992,13 +2904,11 @@ impl<'a> Model<'a> {
             Ok(ws) => ws,
             Err(_) => return Vec::new(),
         };
-        let (width, height) = match ws.cell(cell_ref.row, cell_ref.column) {
-            Some(Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Dynamic,
-                ..
-            }) => *r,
-            _ => return Vec::new(),
+        let Some((width, height)) = ws
+            .cell(cell_ref.row, cell_ref.column)
+            .and_then(Cell::dynamic_range)
+        else {
+            return Vec::new();
         };
         (cell_ref.row..cell_ref.row + height)
             .flat_map(|r| {
@@ -3259,28 +3169,21 @@ impl<'a> Model<'a> {
         let sheet_data = &mut worksheet.sheet_data;
         let mut cells_to_clear = Vec::new();
         for row in area.row..area.row + area.height {
-            if let Some(row_data) = sheet_data.get_mut(&row) {
+            if sheet_data.has_row(row) {
                 for column in area.column..area.column + area.width {
                     // If it is part of a dynamic array we need to clear the spill
-                    if let Some(Cell::ArrayFormula {
-                        r,
-                        kind: ArrayKind::Dynamic,
-                        ..
-                    }) = row_data.get(&column)
+                    if let Some((width, height)) =
+                        sheet_data.get(row, column).and_then(Cell::dynamic_range)
                     {
                         // clear the spill of the dynamic formula
-                        let (width, height) = r;
                         for r in row..row + height {
                             for c in column..column + width {
                                 cells_to_clear.push((r, c));
                             }
                         }
                     }
-                    row_data.remove(&column);
+                    sheet_data.remove(row, column);
                 }
-                if row_data.is_empty() {
-                    sheet_data.remove(&row);
-                };
             }
         }
         for (row, column) in cells_to_clear {
@@ -3298,19 +3201,11 @@ impl<'a> Model<'a> {
         let anchors: Vec<(i32, i32, i32, i32, i32, i32)> = {
             let ws = self.workbook.worksheet(sheet)?;
             let mut result = Vec::new();
-            for (row, row_data) in &ws.sheet_data {
-                for (column, cell) in row_data {
-                    if let Cell::ArrayFormula {
-                        r,
-                        f,
-                        s,
-                        kind: ArrayKind::Dynamic,
-                        ..
-                    } = cell
-                    {
-                        let (width, height) = *r;
-                        result.push((*row, *column, *f, *s, width, height));
-                    }
+            for (row, column, cell) in ws.sheet_data.iter() {
+                if let (Some((width, height)), Cell::ArrayFormula(array)) =
+                    (cell.dynamic_range(), cell)
+                {
+                    result.push((row, column, array.f, array.s, width, height));
                 }
             }
             result
@@ -3319,16 +3214,13 @@ impl<'a> Model<'a> {
         for (row, column, f, s, width, height) in anchors {
             let ws = self.workbook.worksheet_mut(sheet)?;
             // Reset the anchor cell to DynamicFormula with r = (1, 1)
-            if let Some(row_data) = ws.sheet_data.get_mut(&row) {
-                row_data.insert(
-                    column,
-                    Cell::ArrayFormula {
-                        f,
-                        s,
-                        r: (1, 1),
-                        kind: ArrayKind::Dynamic,
-                        v: FormulaValue::Unevaluated,
-                    },
+            if let Some(anchor) = ws.sheet_data.get_mut(row, column) {
+                *anchor = Cell::new_array_formula(
+                    f,
+                    s,
+                    (1, 1),
+                    ArrayKind::Dynamic,
+                    FormulaValue::Unevaluated,
                 );
             }
             // Delete all spill cells

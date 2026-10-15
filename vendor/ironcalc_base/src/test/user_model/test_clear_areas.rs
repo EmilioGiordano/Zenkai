@@ -20,10 +20,7 @@ fn several_areas_are_one_undo_step() {
     model.set_user_input(0, 5, 4, "=A1+B1").unwrap();
     model.set_user_input(0, 9, 1, "keep").unwrap();
     model
-        .range_clear_contents_of_areas(
-            &area(1, 1, 4, 5),
-            &[area(1, 1, 2, 1), area(5, 4, 1, 1)],
-        )
+        .range_clear_contents_of_areas(&area(1, 1, 4, 5), &[area(1, 1, 2, 1), area(5, 4, 1, 1)])
         .unwrap();
     assert_eq!(model.get_cell_content(0, 1, 1), Ok("".to_string()));
     assert_eq!(model.get_cell_content(0, 1, 2), Ok("".to_string()));
@@ -53,16 +50,19 @@ fn spill_split_across_areas_clears_inside_bounds() {
     model.set_user_input(0, 2, 2, "x").unwrap();
     model.set_user_input(0, 3, 2, "y").unwrap();
     model
-        .range_clear_contents_of_areas(
-            &area(1, 1, 2, 3),
-            &[area(1, 1, 1, 1), area(2, 1, 2, 2)],
-        )
+        .range_clear_contents_of_areas(&area(1, 1, 2, 3), &[area(1, 1, 1, 1), area(2, 1, 2, 2)])
         .unwrap();
     for row in 1..=3 {
-        assert_eq!(model.get_formatted_cell_value(0, row, 1), Ok("".to_string()));
+        assert_eq!(
+            model.get_formatted_cell_value(0, row, 1),
+            Ok("".to_string())
+        );
     }
     model.undo().unwrap();
-    assert_eq!(model.get_cell_content(0, 1, 1), Ok("=SEQUENCE(3)".to_string()));
+    assert_eq!(
+        model.get_cell_content(0, 1, 1),
+        Ok("=SEQUENCE(3)".to_string())
+    );
     assert_eq!(model.get_formatted_cell_value(0, 3, 1), Ok("3".to_string()));
     assert_eq!(model.get_cell_content(0, 3, 2), Ok("y".to_string()));
 }
@@ -91,10 +91,8 @@ fn array_reaching_outside_bounds_changes_nothing() {
     model
         .set_user_array_formula(0, 1, 1, 1, 3, "=SEQUENCE(3)")
         .unwrap();
-    let result = model.range_clear_contents_of_areas(
-        &area(1, 1, 3, 2),
-        &[area(1, 3, 1, 1), area(1, 1, 1, 2)],
-    );
+    let result = model
+        .range_clear_contents_of_areas(&area(1, 1, 3, 2), &[area(1, 3, 1, 1), area(1, 1, 1, 2)]);
     assert!(result.is_err());
     assert_eq!(model.get_cell_content(0, 1, 3), Ok("kept".to_string()));
     assert_eq!(model.get_formatted_cell_value(0, 3, 1), Ok("3".to_string()));

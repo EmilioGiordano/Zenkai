@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::*;
 use zenkai_agent::preferences::CloseWithUnsaved;
-use zenkai_engine::{EngineError, open_xlsx};
+use zenkai_engine::{EngineError, SaveTarget, open_xlsx};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
@@ -258,8 +258,10 @@ impl Workspace {
                     document::write_snapshot_unless(
                         &shared,
                         FileJob::Autosaving,
+                        &target,
+                        SaveTarget::Copy,
                         &cancelled,
-                        |bytes| recovery::write(bytes, &target),
+                        recovery::write,
                     )
                 })
                 .await;
@@ -441,7 +443,9 @@ impl Workspace {
                             document::write_snapshot(
                                 &write.workbook,
                                 FileJob::Autosaving,
-                                |bytes| recovery::write(bytes, &write.target),
+                                &write.target,
+                                SaveTarget::Copy,
+                                recovery::write,
                             )
                         })
                         .collect::<Vec<Result<(), EngineError>>>()
