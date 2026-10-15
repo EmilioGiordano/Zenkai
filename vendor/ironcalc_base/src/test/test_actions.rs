@@ -797,3 +797,45 @@ fn test_column_move_right_two_updates_intermediate_refs_by_one() {
 
 // A  B  C  D  E  F  G   H  I  J   K   L   M   N   O   P   Q   R
 // 1  2  3  4  5  6  7   8  9  10  11  12  13  14  15  16  17  18
+
+#[test]
+fn insert_and_delete_columns_in_a_wide_row() {
+    let mut model = new_empty_model();
+    let width = 3000;
+    for column in 1..=width {
+        let input = if column % 3 == 0 {
+            format!("=A1+{column}")
+        } else {
+            column.to_string()
+        };
+        model.set_user_input(0, 1, column, input).unwrap();
+    }
+    model.set_user_input(0, 2, 2, "kept".to_string()).unwrap();
+    model.evaluate();
+
+    model.insert_columns(0, 2, 2).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "1");
+    assert_eq!(model._get_text("B1"), "");
+    assert_eq!(model._get_text("C1"), "");
+    assert_eq!(model._get_text("D1"), "2");
+    assert_eq!(model._get_text("E1"), "4");
+    assert_eq!(model._get_text("F1"), "4");
+    assert_eq!(model._get_text("D2"), "kept");
+    assert_eq!(
+        model.workbook.worksheets[0].sheet_data.row_len(1),
+        width as usize
+    );
+
+    model.delete_columns(0, 2, 2).unwrap();
+    model.evaluate();
+    assert_eq!(model._get_text("B1"), "2");
+    assert_eq!(model._get_text("C1"), "4");
+    assert_eq!(model._get_text("D1"), "4");
+    assert_eq!(model._get_text("B2"), "kept");
+    let columns = model.workbook.worksheets[0]
+        .sheet_data
+        .row_columns_sorted(1);
+    assert_eq!(columns.len(), width as usize);
+    assert!(columns.windows(2).all(|pair| pair[0] < pair[1]));
+}

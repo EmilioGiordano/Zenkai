@@ -393,6 +393,61 @@ impl<'a> Model<'a> {
         }
     }
 
+    /// Moves the cells of one row from `first_column` on by `delta` columns, dropping the
+    /// first `dropped` columns of that range (deleted columns).
+    ///
+    /// The cells are lifted out of the row and put back one at a time, and each moved cell is
+    /// parked until the end, so the sorted row never shifts more than a cell per step.
+    fn shift_row_cells(
+        &mut self,
+        sheet: u32,
+        row: i32,
+        first_column: i32,
+        delta: i32,
+        dropped: i32,
+    ) -> Result<(), String> {
+        let lifted = self
+            .workbook
+            .worksheet_mut(sheet)?
+            .sheet_data
+            .take_from_column(row, first_column);
+        // Moving right goes from the last cell to the first so no cell lands on another one.
+        let mut pending: Vec<(i32, Cell)> = if delta > 0 {
+            lifted
+        } else {
+            lifted.into_iter().rev().collect()
+        };
+        let mut parked: Vec<(i32, Cell)> = Vec::with_capacity(pending.len());
+        let mut failure = None;
+        while let Some((column, cell)) = pending.pop() {
+            if column < first_column + dropped {
+                continue;
+            }
+            let step = (|| -> Result<(), String> {
+                let data = &mut self.workbook.worksheet_mut(sheet)?.sheet_data;
+                data.insert(row, column, cell);
+                self.move_cell(sheet, row, column, row, column + delta)?;
+                Ok(())
+            })();
+            let data = &mut self.workbook.worksheet_mut(sheet)?.sheet_data;
+            if let Some(moved) = data.remove(row, column + delta) {
+                parked.push((column + delta, moved));
+            }
+            if let Err(error) = step {
+                failure = Some(error);
+                break;
+            }
+        }
+        if delta > 0 {
+            parked.reverse();
+        }
+        let data = &mut self.workbook.worksheet_mut(sheet)?.sheet_data;
+        for (column, cell) in pending.into_iter().chain(parked) {
+            data.insert(row, column, cell);
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
     /// Moves the contents of cell (source_row, source_column) to (target_row, target_column).
     ///
     /// It assumes that the caller has already checked that the move is valid
@@ -441,20 +496,14 @@ impl<'a> Model<'a> {
                 worksheet.remove_cell(source_row, source_column)?;
                 return Ok(());
             }
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Dynamic,
-                ..
-            } => {
+            Cell::ArrayFormula(anchor) if anchor.kind == ArrayKind::Dynamic => {
+                let r = &anchor.r;
                 // We are moving the anchor of a dynamic formula.
                 // We assume the spill has been taken care of by the caller
                 debug_assert_eq!(*r, (1, 1));
             }
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Cse,
-                ..
-            } => {
+            Cell::ArrayFormula(anchor) => {
+                let r = &anchor.r;
                 // This is an array formula, we need to move the whole range
                 // We rely on the calling function to check that the move is valid and does not split the array formula
                 array = Some(*r);
@@ -529,15 +578,7 @@ impl<'a> Model<'a> {
         let worksheet = self.workbook.worksheet(sheet)?;
         let all_rows: Vec<i32> = worksheet.sheet_data.rows().collect();
         for row in all_rows {
-            let sorted_columns = self.get_columns_for_row(sheet, row, true)?;
-            for col in sorted_columns {
-                if col >= column {
-                    self.move_cell(sheet, row, col, row, col + column_count)?;
-                } else {
-                    // Break because columns are in descending order.
-                    break;
-                }
-            }
+            self.shift_row_cells(sheet, row, column, column_count, 0)?;
         }
 
         // Update all formulas in the workbook
@@ -620,16 +661,7 @@ impl<'a> Model<'a> {
         all_rows.sort_unstable();
 
         for r in all_rows {
-            let columns: Vec<i32> = self.get_columns_for_row(sheet, r, false)?;
-            for col in columns {
-                if col >= column_start {
-                    if col > column_end {
-                        self.move_cell(sheet, r, col, r, col - column_count)?;
-                    } else {
-                        self.workbook.worksheet_mut(sheet)?.remove_cell(r, col)?;
-                    }
-                }
-            }
+            self.shift_row_cells(sheet, r, column_start, -column_count, column_count)?;
         }
         // Update all formulas in the workbook
         let disp = DisplaceData::Column {
@@ -998,20 +1030,14 @@ impl<'a> Model<'a> {
                     worksheet.remove_cell(r.row, column)?;
                     continue;
                 }
-                Cell::ArrayFormula {
-                    r,
-                    kind: ArrayKind::Dynamic,
-                    ..
-                } => {
+                Cell::ArrayFormula(anchor) if anchor.kind == ArrayKind::Dynamic => {
+                    let r = &anchor.r;
                     // We are moving the anchor of a dynamic formula.
                     // We assume the spill has been taken care of by the caller
                     debug_assert_eq!(*r, (1, 1));
                 }
-                Cell::ArrayFormula {
-                    r,
-                    kind: ArrayKind::Cse,
-                    ..
-                } => {
+                Cell::ArrayFormula(anchor) => {
+                    let r = &anchor.r;
                     // This is an array formula, we need to move the whole range
                     // We rely on the calling function to check that the move is valid and does not split the array formula
                     array = Some(*r);
@@ -1111,20 +1137,14 @@ impl<'a> Model<'a> {
                     worksheet.remove_cell(row, *c)?;
                     continue;
                 }
-                Cell::ArrayFormula {
-                    r,
-                    kind: ArrayKind::Dynamic,
-                    ..
-                } => {
+                Cell::ArrayFormula(anchor) if anchor.kind == ArrayKind::Dynamic => {
+                    let r = &anchor.r;
                     // We are moving the anchor of a dynamic formula.
                     // We assume the spill has been taken care of by the caller
                     debug_assert_eq!(*r, (1, 1));
                 }
-                Cell::ArrayFormula {
-                    r,
-                    kind: ArrayKind::Cse,
-                    ..
-                } => {
+                Cell::ArrayFormula(anchor) => {
+                    let r = &anchor.r;
                     // This is an array formula, we need to move the whole range
                     // We rely on the calling function to check that the move is valid and does not split the array formula
                     array = Some(*r);

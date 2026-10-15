@@ -1138,8 +1138,8 @@ impl<'a> UserModel<'a> {
                 .sheet_data
                 .row_cells(r)
                 .map(|(k, v)| {
-                    let cell = if let Cell::SpillCell { s, .. } = v {
-                        Cell::EmptyCell { s: *s }
+                    let cell = if let Cell::SpillCell(spill) = v {
+                        Cell::EmptyCell { s: spill.s }
                     } else {
                         v.clone()
                     };
@@ -1202,8 +1202,8 @@ impl<'a> UserModel<'a> {
             let mut data = HashMap::new();
             for row_idx in worksheet.sheet_data.rows() {
                 if let Some(cell) = worksheet.sheet_data.get(row_idx, c) {
-                    let saved = if let Cell::SpillCell { s, .. } = cell {
-                        Cell::EmptyCell { s: *s }
+                    let saved = if let Cell::SpillCell(spill) = cell {
+                        Cell::EmptyCell { s: spill.s }
                     } else {
                         cell.clone()
                     };
@@ -2042,8 +2042,8 @@ impl<'a> UserModel<'a> {
             | Cell::ErrorCell { .. }
             | Cell::SharedString { .. }
             | Cell::CellFormula { .. } => Ok(CellArrayStructure::SingleCell),
-            Cell::SpillCell { a, .. } => {
-                let (m_row, m_column) = a;
+            Cell::SpillCell(spill) => {
+                let (m_row, m_column) = spill.a;
                 let m_cell = self
                     .model
                     .workbook
@@ -2052,16 +2052,9 @@ impl<'a> UserModel<'a> {
                     .cloned()
                     .unwrap_or_default();
                 let (width, height, is_dynamic) = match m_cell {
-                    Cell::ArrayFormula {
-                        r,
-                        kind: ArrayKind::Dynamic,
-                        ..
-                    } => (r.0, r.1, true),
-                    Cell::ArrayFormula {
-                        r,
-                        kind: ArrayKind::Cse,
-                        ..
-                    } => (r.0, r.1, false),
+                    Cell::ArrayFormula(array) => {
+                        (array.r.0, array.r.1, array.kind == ArrayKind::Dynamic)
+                    }
                     _ => return Err("Invalid structure".to_string()),
                 };
                 if is_dynamic {
@@ -2074,16 +2067,10 @@ impl<'a> UserModel<'a> {
                     ))
                 }
             }
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Dynamic,
-                ..
-            } => Ok(CellArrayStructure::DynamicAnchor(r.0, r.1)),
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Cse,
-                ..
-            } => Ok(CellArrayStructure::ArrayAnchor(r.0, r.1)),
+            Cell::ArrayFormula(array) => Ok(match array.kind {
+                ArrayKind::Dynamic => CellArrayStructure::DynamicAnchor(array.r.0, array.r.1),
+                ArrayKind::Cse => CellArrayStructure::ArrayAnchor(array.r.0, array.r.1),
+            }),
         }
     }
 

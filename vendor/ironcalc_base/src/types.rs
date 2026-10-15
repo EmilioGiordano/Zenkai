@@ -246,13 +246,23 @@ pub enum FormulaValue {
     Boolean(bool),
     Number(f64),
     Text(String),
-    Error {
-        ei: Error,
-        // Origin cell reference, e.g. "Sheet3!C4"
-        o: String,
-        // Human-readable error message, e.g. "Not implemented function"
-        m: String,
-    },
+    // Boxed so the common variants keep `Cell` small.
+    Error(Box<ErrorValue>),
+}
+
+#[derive(Encode, Decode, Debug, Clone, PartialEq)]
+pub struct ErrorValue {
+    pub ei: Error,
+    // Origin cell reference, e.g. "Sheet3!C4"
+    pub o: String,
+    // Human-readable error message, e.g. "Not implemented function"
+    pub m: String,
+}
+
+impl FormulaValue {
+    pub fn error(ei: Error, o: String, m: String) -> Self {
+        FormulaValue::Error(Box::new(ErrorValue { ei, o, m }))
+    }
 }
 
 /// The value stored in a spill cell (no formula, no origin tracking).
@@ -284,50 +294,39 @@ pub enum ArrayKind {
 // * `a`    — anchor cell (row, column) for spill cells
 #[derive(Encode, Decode, Debug, Clone, PartialEq)]
 pub enum Cell {
-    EmptyCell {
-        s: i32,
-    },
-    BooleanCell {
-        v: bool,
-        s: i32,
-    },
-    NumberCell {
-        v: f64,
-        s: i32,
-    },
+    EmptyCell { s: i32 },
+    BooleanCell { v: bool, s: i32 },
+    NumberCell { v: f64, s: i32 },
     // Maybe we should not have this type. In Excel this is just a string
-    ErrorCell {
-        ei: Error,
-        s: i32,
-    },
+    ErrorCell { ei: Error, s: i32 },
     // Always a shared string
-    SharedString {
-        si: i32,
-        s: i32,
-    },
+    SharedString { si: i32, s: i32 },
     // A regular (non-array) formula cell.
     // `v` is `Unevaluated` transiently during evaluation, then holds the result.
-    CellFormula {
-        f: i32,
-        s: i32,
-        v: FormulaValue,
-    },
-    // The anchor of an array or dynamic formula.
-    // `kind` distinguishes CSE from dynamic; `r` is the spill range (width, height).
-    // `v` is `Unevaluated` transiently during evaluation, then holds the anchor cell result.
-    ArrayFormula {
-        f: i32,
-        s: i32,
-        r: (i32, i32),
-        kind: ArrayKind,
-        v: FormulaValue,
-    },
+    CellFormula { f: i32, s: i32, v: FormulaValue },
+    // The anchor of an array or dynamic formula. Boxed, with the spill cell below, to keep
+    // `Cell` at 32 bytes.
+    ArrayFormula(Box<ArrayFormulaCell>),
     // A spill cell: holds a value produced by an array/dynamic formula at `a` (row, column).
-    SpillCell {
-        s: i32,
-        a: (i32, i32),
-        v: SpillValue,
-    },
+    SpillCell(Box<SpillCellValue>),
+}
+
+// `kind` distinguishes CSE from dynamic; `r` is the spill range (width, height).
+// `v` is `Unevaluated` transiently during evaluation, then holds the anchor cell result.
+#[derive(Encode, Decode, Debug, Clone, PartialEq)]
+pub struct ArrayFormulaCell {
+    pub f: i32,
+    pub s: i32,
+    pub r: (i32, i32),
+    pub kind: ArrayKind,
+    pub v: FormulaValue,
+}
+
+#[derive(Encode, Decode, Debug, Clone, PartialEq)]
+pub struct SpillCellValue {
+    pub s: i32,
+    pub a: (i32, i32),
+    pub v: SpillValue,
 }
 
 impl Default for Cell {

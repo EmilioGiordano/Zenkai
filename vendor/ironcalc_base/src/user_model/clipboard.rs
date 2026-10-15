@@ -12,7 +12,7 @@ use crate::{
     cf_types::ConditionalFormatting,
     expressions::types::{Area, CellReferenceIndex},
     model::CellStructure,
-    types::{ArrayKind, Cell, Style},
+    types::{Cell, Style},
     UserModel,
 };
 
@@ -248,14 +248,7 @@ impl<'a> UserModel<'a> {
                     // would erase its entire spill — including cells that were just
                     // written to by this paste.  Clear the anchor and its spill cells
                     // individually instead, skipping any paste-target cells.
-                    let spill_dims = match &old_value {
-                        Some(Cell::ArrayFormula {
-                            kind: ArrayKind::Dynamic,
-                            r,
-                            ..
-                        }) => Some(*r),
-                        _ => None,
-                    };
+                    let spill_dims = old_value.as_ref().and_then(Cell::dynamic_range);
                     if let Some((spill_w, spill_h)) = spill_dims {
                         let ws = self.model.workbook.worksheet_mut(source_sheet)?;
                         for sr in row..row + spill_h {

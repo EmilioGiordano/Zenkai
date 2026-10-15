@@ -11,7 +11,7 @@ use ironcalc::base::cell_store::CellStore;
 use ironcalc::base::expressions::parser::Node;
 use ironcalc::base::expressions::parser::static_analysis::StaticResult;
 use ironcalc::base::types::{
-    ArrayKind, Cell, Col, Comment, FormulaValue, Row, SpillValue, Workbook, Worksheet,
+    Cell, Col, Comment, FormulaValue, Row, SpillValue, Workbook, Worksheet,
 };
 
 use crate::error::EngineError;
@@ -60,10 +60,10 @@ fn hash_formula_value(hasher: &mut DefaultHasher, value: &FormulaValue) {
         FormulaValue::Boolean(v) => v.hash(hasher),
         FormulaValue::Number(v) => v.to_bits().hash(hasher),
         FormulaValue::Text(v) => v.hash(hasher),
-        FormulaValue::Error { ei, o, m } => {
-            std::mem::discriminant(ei).hash(hasher);
-            o.hash(hasher);
-            m.hash(hasher);
+        FormulaValue::Error(error) => {
+            std::mem::discriminant(&error.ei).hash(hasher);
+            error.o.hash(hasher);
+            error.m.hash(hasher);
         }
     }
 }
@@ -85,15 +85,15 @@ fn cell_hash(row: i32, column: i32, cell: &Cell) -> u64 {
             (f, s).hash(&mut hasher);
             hash_formula_value(&mut hasher, v);
         }
-        Cell::ArrayFormula { f, s, r, kind, v } => {
-            (f, s, r).hash(&mut hasher);
-            std::mem::discriminant(kind).hash(&mut hasher);
-            hash_formula_value(&mut hasher, v);
+        Cell::ArrayFormula(array) => {
+            (array.f, array.s, array.r).hash(&mut hasher);
+            std::mem::discriminant(&array.kind).hash(&mut hasher);
+            hash_formula_value(&mut hasher, &array.v);
         }
-        Cell::SpillCell { s, a, v } => {
-            (s, a).hash(&mut hasher);
-            std::mem::discriminant(v).hash(&mut hasher);
-            match v {
+        Cell::SpillCell(spill) => {
+            (spill.s, spill.a).hash(&mut hasher);
+            std::mem::discriminant(&spill.v).hash(&mut hasher);
+            match &spill.v {
                 SpillValue::Boolean(v) => v.hash(&mut hasher),
                 SpillValue::Number(v) => v.to_bits().hash(&mut hasher),
                 SpillValue::Text(v) => v.hash(&mut hasher),
@@ -146,11 +146,7 @@ fn rows_print(sheet_data: &CellStore, rows: &[i32]) -> (u64, DynamicArrays) {
         cells = cells.wrapping_add(cell_hash(row, 0, &Cell::EmptyCell { s: -1 }));
         for (column, cell) in sheet_data.row_cells(row) {
             cells = cells.wrapping_add(cell_hash(row, column, cell));
-            if let Cell::ArrayFormula {
-                kind: ArrayKind::Dynamic,
-                ..
-            } = cell
-            {
+            if cell.dynamic_range().is_some() {
                 dynamic_arrays = DynamicArrays::Present;
             }
         }

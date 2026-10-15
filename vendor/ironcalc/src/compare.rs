@@ -136,9 +136,12 @@ pub fn compare(model1: &Model, model2: &Model) -> CompareResult<Vec<Diff>> {
             }
 
             (
-                Cell::CellFormula { v: v1, .. } | Cell::ArrayFormula { v: v1, .. },
-                Cell::CellFormula { v: v2, .. } | Cell::ArrayFormula { v: v2, .. },
+                Cell::CellFormula { .. } | Cell::ArrayFormula(_),
+                Cell::CellFormula { .. } | Cell::ArrayFormula(_),
             ) => {
+                let (Some(v1), Some(v2)) = (cell1.formula_value(), cell2.formula_value()) else {
+                    continue;
+                };
                 let mismatch = match (v1, v2) {
                     (FormulaValue::Unevaluated, FormulaValue::Unevaluated) => false,
                     (FormulaValue::Boolean(a), FormulaValue::Boolean(b)) => a != b,
@@ -146,14 +149,12 @@ pub fn compare(model1: &Model, model2: &Model) -> CompareResult<Vec<Diff>> {
                         !numbers_are_close(*a, *b, eps)
                     }
                     (FormulaValue::Text(a), FormulaValue::Text(b)) => a != b,
-                    (FormulaValue::Error { ei: e1, .. }, FormulaValue::Error { ei: e2, .. }) => {
-                        e1 != e2
-                    }
+                    (FormulaValue::Error(e1), FormulaValue::Error(e2)) => e1.ei != e2.ei,
                     // Some xlsx files store formula errors as t="str" with the error code as
                     // text instead of the correct t="e". Treat them as equivalent.
-                    (FormulaValue::Text(s), FormulaValue::Error { ei, .. })
-                    | (FormulaValue::Error { ei, .. }, FormulaValue::Text(s)) => {
-                        s != &format!("{ei}")
+                    (FormulaValue::Text(s), FormulaValue::Error(error))
+                    | (FormulaValue::Error(error), FormulaValue::Text(s)) => {
+                        s != &format!("{}", error.ei)
                     }
                     _ => true,
                 };
@@ -169,8 +170,8 @@ pub fn compare(model1: &Model, model2: &Model) -> CompareResult<Vec<Diff>> {
                 }
             }
 
-            (Cell::SpillCell { v: v1, .. }, Cell::SpillCell { v: v2, .. }) => {
-                let mismatch = match (v1, v2) {
+            (Cell::SpillCell(spill1), Cell::SpillCell(spill2)) => {
+                let mismatch = match (&spill1.v, &spill2.v) {
                     (SpillValue::Boolean(a), SpillValue::Boolean(b)) => a != b,
                     (SpillValue::Number(a), SpillValue::Number(b)) => {
                         !numbers_are_close(*a, *b, eps)
@@ -217,75 +218,33 @@ fn cell_display(cell: &Cell) -> String {
             v: FormulaValue::Unevaluated,
             ..
         } => "(unevaluated formula)".to_string(),
-        Cell::CellFormula {
-            v: FormulaValue::Boolean(v),
-            ..
+        Cell::CellFormula { v, .. } => formula_value_display(v),
+        Cell::ArrayFormula(array) => match &array.v {
+            FormulaValue::Unevaluated => format!(
+                "(unevaluated {:?} formula, size={}, range={:?})",
+                array.kind, array.s, array.r
+            ),
+            v => formula_value_display(v),
+        },
+        Cell::SpillCell(spill) => {
+            let (s, a) = (spill.s, spill.a);
+            match &spill.v {
+                SpillValue::Number(v) => format!("{v} (spill, size={s}, area={a:?})"),
+                SpillValue::Boolean(v) => format!("{v} (spill, size={s}, area={a:?})"),
+                SpillValue::Error(ei) => format!("{ei} (spill, size={s}, area={a:?})"),
+                SpillValue::Text(v) => format!("\"{v}\" (spill, size={s}, area={a:?})"),
+            }
         }
-        | Cell::ArrayFormula {
-            v: FormulaValue::Boolean(v),
-            ..
-        } => format!("{v} (bool)"),
-        Cell::CellFormula {
-            v: FormulaValue::Number(v),
-            ..
-        }
-        | Cell::ArrayFormula {
-            v: FormulaValue::Number(v),
-            ..
-        } => format!("{v} (number)"),
-        Cell::CellFormula {
-            v: FormulaValue::Text(v),
-            ..
-        }
-        | Cell::ArrayFormula {
-            v: FormulaValue::Text(v),
-            ..
-        } => format!("\"{v}\" (string)"),
-        Cell::CellFormula {
-            v: FormulaValue::Error { ei, .. },
-            ..
-        }
-        | Cell::ArrayFormula {
-            v: FormulaValue::Error { ei, .. },
-            ..
-        } => format!("{ei} (error)"),
-        Cell::ArrayFormula {
-            v: FormulaValue::Unevaluated,
-            s,
-            r,
-            kind,
-            ..
-        } => {
-            format!("(unevaluated {kind:?} formula, size={s}, range={r:?})")
-        }
-        Cell::SpillCell {
-            v: SpillValue::Number(v),
-            s,
-            a,
-        } => {
-            format!("{v} (spill, size={s}, area={a:?})")
-        }
-        Cell::SpillCell {
-            v: SpillValue::Boolean(v),
-            s,
-            a,
-        } => {
-            format!("{v} (spill, size={s}, area={a:?})")
-        }
-        Cell::SpillCell {
-            v: SpillValue::Error(ei),
-            s,
-            a,
-        } => {
-            format!("{ei} (spill, size={s}, area={a:?})")
-        }
-        Cell::SpillCell {
-            v: SpillValue::Text(v),
-            s,
-            a,
-        } => {
-            format!("\"{v}\" (spill, size={s}, area={a:?})")
-        }
+    }
+}
+
+fn formula_value_display(value: &FormulaValue) -> String {
+    match value {
+        FormulaValue::Unevaluated => "(unevaluated formula)".to_string(),
+        FormulaValue::Boolean(v) => format!("{v} (bool)"),
+        FormulaValue::Number(v) => format!("{v} (number)"),
+        FormulaValue::Text(v) => format!("\"{v}\" (string)"),
+        FormulaValue::Error(error) => format!("{} (error)", error.ei),
     }
 }
 

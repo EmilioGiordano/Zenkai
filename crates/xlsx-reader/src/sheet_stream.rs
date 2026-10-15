@@ -646,9 +646,9 @@ fn spill_past_piece(piece: &SheetCells) -> bool {
         return false;
     };
     piece.data.iter().any(|(row, cells)| {
-        cells.iter().any(|(_, cell)| {
-            matches!(cell, Cell::ArrayFormula { r: (_, height), .. } if row + height - 1 > *last)
-        })
+        cells.iter().any(
+            |(_, cell)| matches!(cell, Cell::ArrayFormula(array) if row + array.r.1 - 1 > *last),
+        )
     })
 }
 
@@ -683,7 +683,7 @@ fn merge(
     remap_strings(&mut data, &piece.string_cells, &table)?;
     for (_, row) in &mut data {
         for (_, cell) in row {
-            if let Cell::CellFormula { f, .. } | Cell::ArrayFormula { f, .. } = cell {
+            if let Some(f) = cell.formula_mut() {
                 *f += event_offset;
             }
         }

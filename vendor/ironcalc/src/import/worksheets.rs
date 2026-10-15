@@ -355,11 +355,11 @@ fn get_cell_from_excel(
         match cell_type {
             "b" => {
                 if let Some(anchor) = anchor_cell {
-                    Cell::SpillCell {
-                        v: SpillValue::Boolean(cell_value == Some("1")),
-                        s: cell_style,
-                        a: anchor,
-                    }
+                    Cell::new_spill_cell(
+                        cell_style,
+                        anchor,
+                        SpillValue::Boolean(cell_value == Some("1")),
+                    )
                 } else {
                     Cell::BooleanCell {
                         v: cell_value == Some("1"),
@@ -369,13 +369,11 @@ fn get_cell_from_excel(
             }
             "n" => {
                 if let Some(anchor) = anchor_cell {
-                    Cell::SpillCell {
-                        v: SpillValue::Number(
-                            cell_value.unwrap_or("0").parse::<f64>().unwrap_or(0.0),
-                        ),
-                        s: cell_style,
-                        a: anchor,
-                    }
+                    Cell::new_spill_cell(
+                        cell_style,
+                        anchor,
+                        SpillValue::Number(cell_value.unwrap_or("0").parse::<f64>().unwrap_or(0.0)),
+                    )
                 } else {
                     Cell::NumberCell {
                         v: cell_value.unwrap_or("0").parse::<f64>().unwrap_or(0.0),
@@ -395,13 +393,13 @@ fn get_cell_from_excel(
                     }
                 }
                 if let Some(anchor) = anchor_cell {
-                    Cell::SpillCell {
-                        v: SpillValue::Error(
+                    Cell::new_spill_cell(
+                        cell_style,
+                        anchor,
+                        SpillValue::Error(
                             get_error_by_english_name(error_name).unwrap_or(Error::ERROR),
                         ),
-                        s: cell_style,
-                        a: anchor,
-                    }
+                    )
                 } else {
                     Cell::ErrorCell {
                         ei: get_error_by_english_name(error_name).unwrap_or(Error::ERROR),
@@ -423,11 +421,7 @@ fn get_cell_from_excel(
                 } as i32;
 
                 if let Some(anchor) = anchor_cell {
-                    Cell::SpillCell {
-                        v: SpillValue::Text(s),
-                        s: cell_style,
-                        a: anchor,
-                    }
+                    Cell::new_spill_cell(cell_style, anchor, SpillValue::Text(s))
                 } else {
                     Cell::SharedString { si, s: cell_style }
                 }
@@ -468,20 +462,20 @@ fn get_cell_from_excel(
                 s: cell_style,
                 v: fv,
             },
-            CellArrayKind::DynamicArray(width, height) => Cell::ArrayFormula {
-                f: formula_index,
-                s: cell_style,
-                r: (width, height),
-                kind: ArrayKind::Dynamic,
-                v: fv,
-            },
-            CellArrayKind::ArrayFormula(width, height) => Cell::ArrayFormula {
-                f: formula_index,
-                s: cell_style,
-                r: (width, height),
-                kind: ArrayKind::Cse,
-                v: fv,
-            },
+            CellArrayKind::DynamicArray(width, height) => Cell::new_array_formula(
+                formula_index,
+                cell_style,
+                (width, height),
+                ArrayKind::Dynamic,
+                fv,
+            ),
+            CellArrayKind::ArrayFormula(width, height) => Cell::new_array_formula(
+                formula_index,
+                cell_style,
+                (width, height),
+                ArrayKind::Cse,
+                fv,
+            ),
         };
         match cell_type {
             "b" => make_cell(FormulaValue::Boolean(cell_value == Some("1"))),
@@ -499,20 +493,20 @@ fn get_cell_from_excel(
                         _ => error_name,
                     }
                 }
-                make_cell(FormulaValue::Error {
-                    ei: get_error_by_english_name(error_name).unwrap_or(Error::ERROR),
-                    o: format!("{sheet_name}!{cell_ref}"),
-                    m: cell_value.unwrap_or("#ERROR!").to_string(),
-                })
+                make_cell(FormulaValue::error(
+                    get_error_by_english_name(error_name).unwrap_or(Error::ERROR),
+                    format!("{sheet_name}!{cell_ref}"),
+                    cell_value.unwrap_or("#ERROR!").to_string(),
+                ))
             }
             "s" => {
                 // Not implemented
                 println!("Invalid type (s) in {sheet_name}!{cell_ref}");
-                make_cell(FormulaValue::Error {
-                    ei: Error::NIMPL,
-                    o: format!("{sheet_name}!{cell_ref}"),
-                    m: Error::NIMPL.to_string(),
-                })
+                make_cell(FormulaValue::error(
+                    Error::NIMPL,
+                    format!("{sheet_name}!{cell_ref}"),
+                    Error::NIMPL.to_string(),
+                ))
             }
             "str" => {
                 // In Excel and in IronCalc all strings in cells result of a formula are *not* shared strings.
@@ -523,11 +517,11 @@ fn get_cell_from_excel(
             "d" => {
                 // Not implemented
                 println!("Invalid type (d) in {sheet_name}!{cell_ref}");
-                make_cell(FormulaValue::Error {
-                    ei: Error::NIMPL,
-                    o: format!("{sheet_name}!{cell_ref}"),
-                    m: Error::NIMPL.to_string(),
-                })
+                make_cell(FormulaValue::error(
+                    Error::NIMPL,
+                    format!("{sheet_name}!{cell_ref}"),
+                    Error::NIMPL.to_string(),
+                ))
             }
             "inlineStr" => {
                 // NB: This is untested, I don't know of any engine that uses inline strings in formulas
@@ -538,11 +532,11 @@ fn get_cell_from_excel(
             _ => {
                 // error
                 println!("Unexpected type ({cell_type}) in {sheet_name}!{cell_ref}");
-                make_cell(FormulaValue::Error {
-                    ei: Error::ERROR,
-                    o: format!("{sheet_name}!{cell_ref}"),
-                    m: Error::ERROR.to_string(),
-                })
+                make_cell(FormulaValue::error(
+                    Error::ERROR,
+                    format!("{sheet_name}!{cell_ref}"),
+                    Error::ERROR.to_string(),
+                ))
             }
         }
     }

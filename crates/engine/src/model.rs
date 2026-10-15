@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use ironcalc::base::UserModel;
 use ironcalc::base::cell_store::CellStore;
-use ironcalc::base::types::{ArrayKind, Cell};
+use ironcalc::base::types::Cell;
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
 
 use crate::workbook::{col_i32, row_i32};
@@ -28,13 +28,7 @@ struct Extent {
 }
 
 fn is_dynamic(cell: &Cell) -> bool {
-    matches!(
-        cell,
-        Cell::ArrayFormula {
-            kind: ArrayKind::Dynamic,
-            ..
-        }
-    )
+    cell.dynamic_range().is_some()
 }
 
 fn position(row: i32, col: i32) -> CellPos {
