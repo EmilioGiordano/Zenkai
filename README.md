@@ -145,14 +145,18 @@ cargo test -j 6
 cargo deny check            # cargo install cargo-deny --locked
 ```
 
+These run in staging and in CI, not on work branches (see `AGENTS.md`, Validation).
+
 The calculation engine is IronCalc's `ironcalc_base` 0.8.3, vendored in
 `vendor/ironcalc_base` with Zenkai's changes (incremental recalculation) and built in
 place of the crates.io release through `[patch.crates-io]`. It sits outside the
 workspace, so the commands above do not cover it; after changing it, also run its own
-test suite:
+test suite, together with `vendor\ironcalc`, which is also outside the workspace; staging
+runs both:
 
 ```powershell
-cargo test -j 6 --manifest-path vendor\ironcalc_base\Cargo.toml --target-dir target\vendor
+cargo test -j 4 --manifest-path vendor\ironcalc_base\Cargo.toml --target-dir target\vendor
+cargo test -j 4 --manifest-path vendor\ironcalc\Cargo.toml --target-dir target\vendor
 ```
 
 ## Benchmark
