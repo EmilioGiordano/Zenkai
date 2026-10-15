@@ -618,6 +618,16 @@ impl<F> Splice<'_, F> {
     }
 }
 
+// The rows written in place are UTF-8, so the copy must be too.
+fn check_encoding(declaration: &[u8]) -> io::Result<()> {
+    match attribute_span(declaration, b"encoding") {
+        Some((start, end)) if !declaration[start..end].eq_ignore_ascii_case(b"UTF-8") => {
+            Err(unusable("a sheet that is not encoded as UTF-8"))
+        }
+        _ => Ok(()),
+    }
+}
+
 enum SheetData {
     Open,
     Empty,
@@ -644,7 +654,12 @@ fn head<R: Read>(
         );
         let prefixed_data = name.ends_with(b":sheetData");
         match kind {
-            Markup::Other => out.write_all(&scan.tag)?,
+            Markup::Other => {
+                if name == b"?xml" {
+                    check_encoding(&scan.tag)?;
+                }
+                out.write_all(&scan.tag)?;
+            }
             Markup::End if depth <= 1 => return Err(unusable("the sheet has no sheet data")),
             Markup::End => {
                 out.write_all(&scan.tag)?;
@@ -978,6 +993,31 @@ mod tests {
         assert!(reaching(MAX_REACHING_ANCHORS).is_ok());
         let error = reaching(MAX_REACHING_ANCHORS + 1).unwrap_err();
         assert!(error.to_string().contains("too many formulas"), "{error}");
+    }
+
+    #[test]
+    fn a_declaration_naming_another_encoding_is_refused() {
+        let with = |declaration: &str| {
+            let xml = format!(
+                r#"{declaration}<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#
+            );
+            spliced_with(xml.as_bytes(), &[span(1, 1)], &|_| String::new())
+        };
+        for accepted in [
+            r#"<?xml version="1.0" encoding="UTF-8"?>"#,
+            r#"<?xml version="1.0" encoding='utf-8' standalone="yes"?>"#,
+            r#"<?xml version="1.0"?>"#,
+            "",
+        ] {
+            assert!(with(accepted).is_ok(), "{accepted}");
+        }
+        for refused in [
+            r#"<?xml version="1.0" encoding="UTF-16"?>"#,
+            r#"<?xml version="1.0" encoding='ISO-8859-1' standalone="yes"?>"#,
+            r#"<?xml version="1.0" encoding="utf8"?>"#,
+        ] {
+            assert!(with(refused).is_err(), "{refused}");
+        }
     }
 
     #[test]
