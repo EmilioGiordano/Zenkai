@@ -364,6 +364,7 @@ async fn drive(
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
+        tree.forget();
         return Err(SessionError::Spawn(
             "the agent has no standard streams".into(),
         ));

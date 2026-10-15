@@ -71,8 +71,9 @@ pub(super) async fn install(
     let child = command.spawn().map_err(failed)?;
     tree.register(child.id());
     tracing::info!(package = %package.spec(), "installing the agent package");
-    let output = child.output().await.map_err(failed)?;
+    let output = child.output().await;
     tree.forget();
+    let output = output.map_err(failed)?;
     if output.status.success() {
         std::fs::write(&marker, package.spec()).map_err(failed)
     } else {
