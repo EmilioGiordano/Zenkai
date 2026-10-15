@@ -3530,15 +3530,24 @@ fn rgb_of(color: Hsla) -> Rgb {
 fn widen_for_numbers(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<(), EngineError> {
     let sizes = wb.sizes(sheet);
     let mut needed: std::collections::BTreeMap<ColIdx, f32> = Default::default();
-    // Small ranges are read cell by cell; large ones only where the sheet has content.
+    // Small ranges are read cell by cell, and so is the used part of a large one when it
+    // is small; otherwise only where the sheet has content.
     let cells: Vec<CellPos> = if range.cell_count() <= MAX_AUTOFIT_CELLS as u64 {
         range.positions().collect()
     } else {
-        wb.filled_cells(sheet)
-            .into_iter()
-            .filter(|pos| range.contains(*pos))
-            .take(MAX_AUTOFIT_CELLS)
-            .collect()
+        match range.clip_to(wb.used_end(sheet)) {
+            None => Vec::new(),
+            Some(used) if used.cell_count() <= MAX_AUTOFIT_CELLS as u64 => used
+                .positions()
+                .filter(|pos| !wb.input(sheet, *pos).is_empty())
+                .collect(),
+            Some(_) => wb
+                .filled_cells(sheet)
+                .into_iter()
+                .filter(|pos| range.contains(*pos))
+                .take(MAX_AUTOFIT_CELLS)
+                .collect(),
+        }
     };
     for pos in cells {
         let custom = sizes
@@ -3679,6 +3688,14 @@ mod tests {
             .collect();
         assert_eq!(widths.len(), 1);
         assert!(widths[0] < DEFAULT_COL_WIDTH);
+    }
+
+    #[test]
+    fn a_whole_column_widens_for_the_numbers_in_its_used_part() {
+        let mut wb = Workbook::new_empty().unwrap();
+        priced_number(&mut wb, "$#,##0.00");
+        widen_for_numbers(&mut wb, SHEET, Range::parse_a1("A1:A1048576").unwrap()).unwrap();
+        assert!(column_is_widened(&wb));
     }
 
     #[test]
