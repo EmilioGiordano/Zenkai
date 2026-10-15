@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
-# Usage: open.sh [--dry-run] <branch> <base> <title> <body-file>
+# Usage: open.sh [--dry-run] [--card <project-item-id>] <branch> <base> <title> <body-file>
 set -eu
 
 script_dir=$(cd "$(dirname "$0")" && pwd)
+. "$script_dir/lib.sh"
+
 dry_run=0
-if [ "${1:-}" = "--dry-run" ]; then
-  dry_run=1
-  shift
-fi
+card=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --card)
+      if [ "$#" -lt 2 ]; then
+        echo "open: --card needs a project item id" >&2
+        exit 2
+      fi
+      card=$2
+      shift 2
+      ;;
+    *) break ;;
+  esac
+done
 if [ "$#" -ne 4 ]; then
-  echo "usage: open.sh [--dry-run] <branch> <base> <title> <body-file>" >&2
+  echo "usage: open.sh [--dry-run] [--card <project-item-id>] <branch> <base> <title> <body-file>" >&2
   exit 2
 fi
 branch=$1
@@ -29,8 +45,15 @@ esac
 if [ "$dry_run" -eq 1 ]; then
   echo "git push -u origin $branch"
   echo "gh pr create --draft --base $base --head $branch --title \"$title\" --body-file $body_file"
+  if [ -n "$card" ]; then
+    link_pr_to_card 1 "$card" "<pr-url>"
+  fi
   exit 0
 fi
 
 git push -u origin "$branch"
-gh pr create --draft --base "$base" --head "$branch" --title "$title" --body-file "$body_file"
+url=$(gh pr create --draft --base "$base" --head "$branch" --title "$title" --body-file "$body_file" | tail -n 1)
+echo "$url"
+if [ -n "$card" ]; then
+  link_pr_to_card 0 "$card" "$url"
+fi
