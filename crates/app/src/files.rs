@@ -30,9 +30,9 @@ pub fn xlsx_target(chosen: &Path) -> PathBuf {
 
 const COPY_MARKER: &str = " (Zenkai)";
 
-// The name Save As suggests for a copy; a copy of a copy keeps a single marker.
+// The name Save As suggests for a copy; a copy of a copy, even renamed, keeps one marker.
 pub fn copy_stem(stem: &str) -> String {
-    if stem.ends_with(COPY_MARKER) {
+    if stem.contains(COPY_MARKER) {
         stem.to_string()
     } else {
         format!("{stem}{COPY_MARKER}")
@@ -299,10 +299,7 @@ mod tests {
     fn a_copy_name_carries_the_marker_once() {
         assert_eq!(copy_stem("Report"), "Report (Zenkai)");
         assert_eq!(copy_stem("Report (Zenkai)"), "Report (Zenkai)");
-        assert_eq!(
-            copy_stem("Report (Zenkai) v2"),
-            "Report (Zenkai) v2 (Zenkai)"
-        );
+        assert_eq!(copy_stem("Report (Zenkai) v2"), "Report (Zenkai) v2");
     }
 
     #[test]
