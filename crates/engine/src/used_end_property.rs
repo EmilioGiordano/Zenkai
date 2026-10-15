@@ -25,6 +25,8 @@ enum Op {
     MoveSheet(u32, u32),
     Undo,
     Redo,
+    UndoProfiled,
+    RedoProfiled,
 }
 
 fn pos(row: i64, col: i64) -> CellPos {
@@ -67,6 +69,8 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (sheet.clone(), sheet).prop_map(|(s, to)| Op::MoveSheet(s, to)),
         3 => Just(Op::Undo),
         2 => Just(Op::Redo),
+        1 => Just(Op::UndoProfiled),
+        1 => Just(Op::RedoProfiled),
     ]
 }
 
@@ -88,6 +92,8 @@ fn apply(book: &mut Workbook, op: &Op) {
         Op::MoveSheet(s, to) => book.move_sheet(SheetId(*s), *to),
         Op::Undo => book.undo(),
         Op::Redo => book.redo(),
+        Op::UndoProfiled => book.undo_profiled().map(|_| ()),
+        Op::RedoProfiled => book.redo_profiled().map(|_| ()),
     };
 }
 

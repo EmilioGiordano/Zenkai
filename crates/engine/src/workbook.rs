@@ -255,6 +255,30 @@ fn timezone() -> &'static str {
     })
 }
 
+fn profiled(
+    model: &mut UserModel<'static>,
+    change: impl FnOnce(&mut UserModel<'static>) -> Result<(), String>,
+) -> Result<EditProfile, String> {
+    model.pause_evaluation();
+    let started = Instant::now();
+    let changed = change(model);
+    let edit = started.elapsed();
+    model.resume_evaluation();
+    let started = Instant::now();
+    model.evaluate();
+    let recalculation = started.elapsed();
+    let mode = match model.get_model().last_recalculation() {
+        Recalculation::Full => RecalcMode::Full,
+        Recalculation::Incremental => RecalcMode::Incremental,
+    };
+    changed.map(|()| EditProfile {
+        edit,
+        recalculation,
+        mode,
+        warm_used_areas: Duration::ZERO,
+    })
+}
+
 fn rejected(message: String) -> EngineError {
     EngineError::Rejected(message)
 }
@@ -526,30 +550,39 @@ impl Workbook {
         pos: CellPos,
         text: &str,
     ) -> Result<EditProfile, EngineError> {
-        let mut profile = self.write_cell(sheet, pos, text, |model, row, col| {
-            model.pause_evaluation();
-            let started = Instant::now();
-            let written = model.set_user_input(sheet.0, row, col, text);
-            let edit = started.elapsed();
-            model.resume_evaluation();
-            let started = Instant::now();
-            model.evaluate();
-            let recalculation = started.elapsed();
-            let mode = match model.get_model().last_recalculation() {
-                Recalculation::Full => RecalcMode::Full,
-                Recalculation::Incremental => RecalcMode::Incremental,
-            };
-            written.map(|()| EditProfile {
-                edit,
-                recalculation,
-                mode,
-                warm_used_areas: Duration::ZERO,
-            })
+        let profile = self.write_cell(sheet, pos, text, |model, row, col| {
+            profiled(model, |model| model.set_user_input(sheet.0, row, col, text))
         })?;
+        Ok(self.warmed(profile))
+    }
+
+    // `undo` and `redo` timed like `set_input_profiled`, for the edit benchmark.
+    pub fn undo_profiled(&mut self) -> Result<EditProfile, EngineError> {
+        self.step_profiled(HistoryStep::Undo)
+    }
+
+    pub fn redo_profiled(&mut self) -> Result<EditProfile, EngineError> {
+        self.step_profiled(HistoryStep::Redo)
+    }
+
+    fn step_profiled(&mut self, step: HistoryStep) -> Result<EditProfile, EngineError> {
+        let profile = self
+            .model
+            .step(step, |model| {
+                profiled(model, |model| match step {
+                    HistoryStep::Undo => model.undo(),
+                    HistoryStep::Redo => model.redo(),
+                })
+            })
+            .map_err(rejected)?;
+        Ok(self.warmed(profile))
+    }
+
+    fn warmed(&self, mut profile: EditProfile) -> EditProfile {
         let started = Instant::now();
         self.warm_used_areas();
         profile.warm_used_areas = started.elapsed();
-        Ok(profile)
+        profile
     }
 
     // Call on a background thread after building or editing, so the UI thread never walks a sheet.
