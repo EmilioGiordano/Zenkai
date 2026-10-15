@@ -304,7 +304,7 @@ impl<'a> Model<'a> {
         }
     }
 
-    fn update_cf_cache(&mut self, row: i32, col: i32, result: CfCellResult, stop_if_true: bool) {
+    fn record_cf_result(&mut self, row: i32, col: i32, result: CfCellResult, stop_if_true: bool) {
         self.cf_sink.push((row, col, result, stop_if_true));
     }
 
@@ -385,7 +385,7 @@ impl<'a> Model<'a> {
                     if let Ok(CellValue::Number(v)) = self.get_cell_value_by_index(sheet, row, col)
                     {
                         let color = interpolate_color(v, &stops, &colors);
-                        self.update_cf_cache(
+                        self.record_cf_result(
                             row,
                             col,
                             CfCellResult::ColorScale(Color::Rgb(color)),
@@ -433,7 +433,7 @@ impl<'a> Model<'a> {
                     if let Ok(CellValue::Number(v)) = self.get_cell_value_by_index(sheet, row, col)
                     {
                         let proportion = ((v - min_val) / span).clamp(0.0, 1.0);
-                        self.update_cf_cache(
+                        self.record_cf_result(
                             row,
                             col,
                             CfCellResult::DataBar {
@@ -475,7 +475,7 @@ impl<'a> Model<'a> {
                     if let Ok(CellValue::Number(v)) = self.get_cell_value_by_index(sheet, row, col)
                     {
                         let idx = (compute_icon_index(v, &stops) as usize).min(n - 1);
-                        self.update_cf_cache(
+                        self.record_cf_result(
                             row,
                             col,
                             CfCellResult::Icon {
@@ -532,7 +532,7 @@ impl<'a> Model<'a> {
                                 count += 1;
                             }
                         }
-                        self.update_cf_cache(
+                        self.record_cf_result(
                             row,
                             col,
                             CfCellResult::Rating {
@@ -589,7 +589,12 @@ impl<'a> Model<'a> {
                             }
                         };
                         if matches {
-                            self.update_cf_cache(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
+                            self.record_cf_result(
+                                row,
+                                col,
+                                CfCellResult::Dxf(dxf_id),
+                                stop_if_true,
+                            );
                         }
                     }
                 }
@@ -617,7 +622,12 @@ impl<'a> Model<'a> {
                     if let Ok(CellValue::Number(v)) = self.get_cell_value_by_index(sheet, row, col)
                     {
                         if (above && v > avg) || (!above && v < avg) {
-                            self.update_cf_cache(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
+                            self.record_cf_result(
+                                row,
+                                col,
+                                CfCellResult::Dxf(dxf_id),
+                                stop_if_true,
+                            );
                         }
                     }
                 }
@@ -666,7 +676,12 @@ impl<'a> Model<'a> {
                             v >= threshold
                         };
                         if matches {
-                            self.update_cf_cache(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
+                            self.record_cf_result(
+                                row,
+                                col,
+                                CfCellResult::Dxf(dxf_id),
+                                stop_if_true,
+                            );
                         }
                     }
                 }
@@ -698,7 +713,12 @@ impl<'a> Model<'a> {
                             TextOperator::Equals => cell_lower == search.as_str(),
                         };
                         if matches {
-                            self.update_cf_cache(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
+                            self.record_cf_result(
+                                row,
+                                col,
+                                CfCellResult::Dxf(dxf_id),
+                                stop_if_true,
+                            );
                         }
                     }
                 }
@@ -733,7 +753,7 @@ impl<'a> Model<'a> {
                         _ => false,
                     };
                     if matches {
-                        self.update_cf_cache(row, column, CfCellResult::Dxf(dxf_id), stop_if_true);
+                        self.record_cf_result(row, column, CfCellResult::Dxf(dxf_id), stop_if_true);
                     }
                 }
             }
@@ -765,7 +785,7 @@ impl<'a> Model<'a> {
                     if let Ok(v) = self.get_cell_value_by_index(sheet, row, col) {
                         if let Some(k) = cell_value_key(&v) {
                             if counts.get(&k).copied().unwrap_or(0) == 1 {
-                                self.update_cf_cache(
+                                self.record_cf_result(
                                     row,
                                     col,
                                     CfCellResult::Dxf(dxf_id),
@@ -914,7 +934,12 @@ impl<'a> Model<'a> {
                         let day = v.floor();
                         let inside = day >= range.0 && day <= range.1;
                         if inside != negate {
-                            self.update_cf_cache(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
+                            self.record_cf_result(
+                                row,
+                                col,
+                                CfCellResult::Dxf(dxf_id),
+                                stop_if_true,
+                            );
                         }
                     }
                 }
@@ -948,7 +973,7 @@ impl<'a> Model<'a> {
                     if let Ok(v) = self.get_cell_value_by_index(sheet, row, col) {
                         if let Some(k) = cell_value_key(&v) {
                             if counts.get(&k).copied().unwrap_or(0) > 1 {
-                                self.update_cf_cache(
+                                self.record_cf_result(
                                     row,
                                     col,
                                     CfCellResult::Dxf(dxf_id),
@@ -978,7 +1003,7 @@ impl<'a> Model<'a> {
                         Ok(CellValue::None)
                     );
                     if is_blank != invert {
-                        self.update_cf_cache(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
+                        self.record_cf_result(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
                     }
                 }
             }
@@ -1004,7 +1029,7 @@ impl<'a> Model<'a> {
                         .and_then(|ws| ws.cell(row, col))
                         .is_some_and(|c| c.get_type() == CellType::ErrorValue);
                     if is_error != invert {
-                        self.update_cf_cache(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
+                        self.record_cf_result(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
                     }
                 }
             }
