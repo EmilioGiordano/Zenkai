@@ -478,7 +478,7 @@ fn formula_context(cell_ref: &str) -> Result<(i32, i32), ReadError> {
 // IronCalc's `parse_reference_a1`, without its allocations for the plain "B12" form.
 // Both spellings are checked against the sheet limits, so no out-of-range row or
 // column ever reaches the model.
-fn cell_position(cell_ref: &str) -> Option<(i32, i32)> {
+pub(crate) fn cell_position(cell_ref: &str) -> Option<(i32, i32)> {
     let bytes = cell_ref.as_bytes();
     let letters = bytes.iter().take_while(|b| b.is_ascii_uppercase()).count();
     let digits = &bytes[letters..];
@@ -497,7 +497,7 @@ fn cell_position(cell_ref: &str) -> Option<(i32, i32)> {
         .map(|r| (r.row, r.column))
 }
 
-fn parse_range(range: &str) -> Option<(i32, i32, i32, i32)> {
+pub(crate) fn parse_range(range: &str) -> Option<(i32, i32, i32, i32)> {
     let parts: Vec<&str> = range.split(':').collect();
     match parts.as_slice() {
         [single] => parse_reference_a1(single).map(|r| (r.row, r.column, r.row, r.column)),

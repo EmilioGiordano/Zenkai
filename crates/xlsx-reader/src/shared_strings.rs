@@ -93,7 +93,7 @@ impl Closing {
     }
 }
 
-struct GuardRead<'g, 'b, R>(&'g mut Guard<'b, R>);
+pub(crate) struct GuardRead<'g, 'b, R>(pub(crate) &'g mut Guard<'b, R>);
 
 impl<R: Read> Read for GuardRead<'_, '_, R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
