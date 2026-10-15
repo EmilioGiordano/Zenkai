@@ -702,6 +702,7 @@ impl<'a> Model<'a> {
             last_recalculation: Recalculation::Full,
             criteria_ranges: CriteriaRanges::new(),
             criteria_deltas: 0,
+            evaluation_milliseconds: get_milliseconds_since_epoch(),
         };
         model.parse_formulas();
         model.evaluate_conditional_formatting();

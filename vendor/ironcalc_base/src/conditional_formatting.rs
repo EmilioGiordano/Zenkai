@@ -880,10 +880,11 @@ impl<'a> Model<'a> {
         stop_if_true: bool,
         ranges: &[(i32, i32, i32, i32)],
     ) {
-        let today_serial = match crate::tz::excel_serial_for_now(&self.tz) {
-            Some(s) => s.floor() as i64,
-            None => return,
-        };
+        let today_serial =
+            match crate::tz::excel_serial_for_now(&self.tz, self.evaluation_milliseconds) {
+                Some(s) => s.floor() as i64,
+                None => return,
+            };
         let today = match from_excel_date(today_serial) {
             Ok(d) => d,
             Err(_) => return,

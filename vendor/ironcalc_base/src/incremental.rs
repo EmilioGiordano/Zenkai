@@ -59,6 +59,7 @@ impl Model<'_> {
     // evaluation; `UserModel` tracks that. Falls back to `evaluate_indexed` when there is
     // no index, or an array, a spill or a circular reference is involved.
     pub(crate) fn evaluate_incremental(&mut self, edited: &[CellKey]) {
+        self.evaluation_milliseconds = crate::model::get_milliseconds_since_epoch();
         let Some(mut dependencies) = self.dependencies.take() else {
             self.evaluate_indexed();
             return;

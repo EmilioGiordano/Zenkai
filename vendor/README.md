@@ -56,6 +56,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   box; an array formula may span areas as long as it lies inside the given bounds
   (`src/user_model/common.rs`, `Model::arrays_inside` and `Model::clear_area_contents` in
   `src/model.rs`). Tests: `src/test/user_model/test_clear_areas.rs`.
+- NOW and TODAY read the clock once per evaluation, as Excel does, so `=NOW()-NOW()` is
+  always 0 (`src/model.rs` `evaluation_milliseconds`, `src/incremental.rs`, `src/tz/`).
+  Tests: `src/test/test_now.rs`. Stands on its own.
 
 Zenkai-only, not for upstream:
 
