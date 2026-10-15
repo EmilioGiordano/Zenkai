@@ -44,7 +44,7 @@ pub(crate) fn patch_plan(
         return Ok(None);
     }
     let changed: Vec<usize> = (0..prints.len())
-        .filter(|&index| prints[index] != saved.sheets[index])
+        .filter(|&index| prints[index].changed_since(&saved.sheets[index]))
         .collect();
     let new_arrays = changed
         .iter()

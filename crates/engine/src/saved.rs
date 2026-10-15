@@ -7,7 +7,7 @@ use ironcalc::base::types::Workbook;
 use zenkai_xlsx_reader::{PackageLayout, PartNames, SharedStrings, StyleCounts};
 
 use crate::error::EngineError;
-use crate::fingerprint::{SheetPrint, book_print, sheet_print};
+use crate::fingerprint::{ROW_PRINT_BUDGET_BYTES, SheetPrint, book_print, sheet_print};
 use crate::save::ModelData;
 use crate::sheet_settings::Carried;
 
@@ -96,11 +96,14 @@ pub(crate) fn sheet_prints(
     data: ModelData<'_>,
     carried: &Carried,
 ) -> Result<Vec<SheetPrint>, EngineError> {
+    let mut budget = ROW_PRINT_BUDGET_BYTES;
     data.book
         .worksheets
         .iter()
         .zip(data.formulas)
-        .map(|(sheet, formulas)| sheet_print(sheet, formulas, carried.written(sheet)))
+        .map(|(sheet, formulas)| {
+            sheet_print(sheet, formulas, carried.written(sheet), &mut budget)
+        })
         .collect()
 }
 
