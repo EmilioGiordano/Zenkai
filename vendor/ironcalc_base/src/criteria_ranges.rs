@@ -302,8 +302,7 @@ impl Model<'_> {
             .worksheets
             .get(sheet as usize)?
             .sheet_data
-            .get(&row)?
-            .get(&column)?;
+            .get(row, column)?;
         let evaluated = match cell {
             Cell::SpillCell { .. } | Cell::ArrayFormula { .. } => false,
             Cell::CellFormula { .. } => matches!(

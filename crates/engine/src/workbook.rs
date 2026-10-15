@@ -271,7 +271,7 @@ impl Workbook {
             .worksheet(sheet.0)
             .map_err(|_| EngineError::UnknownSheet(sheet))?
             .sheet_data;
-        Ok(move |pos: CellPos| sheet_data.get(&row_i32(pos.row))?.get(&col_i32(pos.col)))
+        Ok(move |pos: CellPos| sheet_data.get(row_i32(pos.row), col_i32(pos.col)))
     }
 }
 
@@ -360,19 +360,14 @@ impl Workbook {
         Ok(ws
             .sheet_data
             .iter()
-            .filter(|(row, _)| rows.contains(*row))
-            .flat_map(|(row, columns)| {
-                columns
-                    .iter()
-                    .filter(|(col, cell)| {
-                        cols.contains(*col) && !matches!(cell, Cell::EmptyCell { .. })
-                    })
-                    .map(move |(col, _)| {
-                        CellPos::new(
-                            RowIdx::clamped(i64::from(*row) - 1),
-                            ColIdx::clamped(i64::from(*col) - 1),
-                        )
-                    })
+            .filter(|(row, col, cell)| {
+                rows.contains(row) && cols.contains(col) && !matches!(cell, Cell::EmptyCell { .. })
+            })
+            .map(|(row, col, _)| {
+                CellPos::new(
+                    RowIdx::clamped(i64::from(row) - 1),
+                    ColIdx::clamped(i64::from(col) - 1),
+                )
             })
             .collect())
     }
@@ -1327,13 +1322,11 @@ impl Engine for Workbook {
         let mut cells: Vec<CellPos> = ws
             .sheet_data
             .iter()
-            .flat_map(|(row, columns)| {
-                columns.keys().map(move |col| {
-                    CellPos::new(
-                        RowIdx::clamped(i64::from(*row) - 1),
-                        ColIdx::clamped(i64::from(*col) - 1),
-                    )
-                })
+            .map(|(row, col, _)| {
+                CellPos::new(
+                    RowIdx::clamped(i64::from(row) - 1),
+                    ColIdx::clamped(i64::from(col) - 1),
+                )
             })
             .collect();
         cells.retain(|pos| !self.input(sheet, *pos).is_empty());

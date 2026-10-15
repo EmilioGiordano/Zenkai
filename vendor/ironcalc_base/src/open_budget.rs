@@ -36,13 +36,11 @@ pub struct OpenCost {
 pub fn open_cost(book: &Workbook) -> OpenCost {
     let mut cost = OpenCost::default();
     for sheet in &book.worksheets {
-        cost.rows += sheet.sheet_data.len() as u64;
-        for columns in sheet.sheet_data.values() {
-            for cell in columns.values() {
-                cost.cells += 1;
-                if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula { .. }) {
-                    cost.formulas += 1;
-                }
+        cost.rows += sheet.sheet_data.row_count() as u64;
+        for (_, _, cell) in sheet.sheet_data.iter() {
+            cost.cells += 1;
+            if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula { .. }) {
+                cost.formulas += 1;
             }
         }
         for formula in &sheet.shared_formulas {

@@ -7,14 +7,15 @@ use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 use std::hash::{DefaultHasher, Hash, Hasher};
 
+use ironcalc::base::cell_store::CellStore;
 use ironcalc::base::expressions::parser::Node;
 use ironcalc::base::expressions::parser::static_analysis::StaticResult;
 use ironcalc::base::types::{
-    ArrayKind, Cell, Col, Comment, FormulaValue, Row, SheetData, SpillValue, Workbook, Worksheet,
+    ArrayKind, Cell, Col, Comment, FormulaValue, Row, SpillValue, Workbook, Worksheet,
 };
 
 use crate::error::EngineError;
-use crate::row_split::{Formulas, Rows, over_formulas, over_rows};
+use crate::row_split::{Formulas, over_formulas, over_rows};
 use crate::sheet_settings::SheetSettings;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,14 +138,14 @@ fn hash_layout(hasher: &mut DefaultHasher, cols: &[Col], rows: &[Row], comments:
     }
 }
 
-fn rows_print(rows: &Rows<'_>) -> (u64, DynamicArrays) {
+fn rows_print(sheet_data: &CellStore, rows: &[i32]) -> (u64, DynamicArrays) {
     let mut cells = 0u64;
     let mut dynamic_arrays = DynamicArrays::Absent;
-    for &(row, columns) in rows {
+    for &row in rows {
         // An empty row map writes nothing, but it moves the dimension.
-        cells = cells.wrapping_add(cell_hash(*row, 0, &Cell::EmptyCell { s: -1 }));
-        for (column, cell) in columns {
-            cells = cells.wrapping_add(cell_hash(*row, *column, cell));
+        cells = cells.wrapping_add(cell_hash(row, 0, &Cell::EmptyCell { s: -1 }));
+        for (column, cell) in sheet_data.row_cells(row) {
+            cells = cells.wrapping_add(cell_hash(row, column, cell));
             if let Cell::ArrayFormula {
                 kind: ArrayKind::Dynamic,
                 ..
@@ -159,7 +160,7 @@ fn rows_print(rows: &Rows<'_>) -> (u64, DynamicArrays) {
 
 // The sum does not depend on how the rows are split.
 fn cells_and_formulas(
-    sheet_data: &SheetData,
+    sheet_data: &CellStore,
     formulas_hash: impl FnOnce() -> Result<u64, EngineError>,
 ) -> Result<(u64, DynamicArrays, u64), EngineError> {
     let (shares, formulas) = over_rows(sheet_data, rows_print, formulas_hash)?;
@@ -322,8 +323,8 @@ mod tests {
             model.set_user_input(0, row, 3, row.to_string()).unwrap();
         }
         let sheet = &model.workbook.worksheets[0];
-        let all: Vec<_> = sheet.sheet_data.iter().collect();
-        let (one_pass, _) = super::rows_print(&all);
+        let all: Vec<i32> = sheet.sheet_data.rows().collect();
+        let (one_pass, _) = super::rows_print(&sheet.sheet_data, &all);
         let (split, _, _) = super::cells_and_formulas(&sheet.sheet_data, || Ok(0)).unwrap();
         assert_eq!(split, one_pass);
         let before = print(&model, 0);

@@ -964,7 +964,6 @@ impl<'a> Model<'a> {
                     // The stored range may be (1,1) on first evaluation, so we must re-check here.
                     let sheet_data = &self.workbook.worksheets[sheet as usize].sheet_data;
                     for r in row..row + array_height {
-                        let row_data = sheet_data.get(&r);
                         for c in column..column + array_width {
                             if r == row && c == column {
                                 continue;
@@ -975,8 +974,8 @@ impl<'a> Model<'a> {
                             // and must never prevent the formula from re-spilling (this
                             // matters after undo restores a SpillCell while the anchor's
                             // stored `r` is still (1,1) from a prior #SPILL! evaluation).
-                            let blocking = row_data
-                                .and_then(|row_map| row_map.get(&c))
+                            let blocking = sheet_data
+                                .get(r, c)
                                 .map(|cell| match cell {
                                     Cell::EmptyCell { .. } => false,
                                     Cell::SpillCell { a, .. } if *a == (row, column) => false,
@@ -1062,10 +1061,8 @@ impl<'a> Model<'a> {
                             };
                             *self.workbook.worksheets[sheet as usize]
                                 .sheet_data
-                                .get_mut(&r)
-                                .ok_or("expected a row")?
-                                .get_mut(&c)
-                                .ok_or("expected a column")? = new_cell;
+                                .get_mut(r, c)
+                                .ok_or("expected a cell")? = new_cell;
                         }
                     }
                     // All cells (anchor + spills) have been written above.
@@ -1111,10 +1108,8 @@ impl<'a> Model<'a> {
                     };
                     *self.workbook.worksheets[sheet as usize]
                         .sheet_data
-                        .get_mut(&row)
-                        .ok_or("expected a row")?
-                        .get_mut(&column)
-                        .ok_or("expected a column")? = Cell::CellFormula {
+                        .get_mut(row, column)
+                        .ok_or("expected a cell")? = Cell::CellFormula {
                         f: formula,
                         s,
                         v: coerced,
@@ -1423,8 +1418,7 @@ impl<'a> Model<'a> {
     fn fetch_cell(&self, cell_reference: CellReferenceIndex) -> Option<&Cell> {
         self.workbook.worksheets[cell_reference.sheet as usize]
             .sheet_data
-            .get(&cell_reference.row)?
-            .get(&cell_reference.column)
+            .get(cell_reference.row, cell_reference.column)
     }
 
     // Evaluates a cell and returns the value in the cell
@@ -1508,8 +1502,7 @@ impl<'a> Model<'a> {
                             // so they can block the spill on re-evaluation.
                             let is_own_spill = ws
                                 .sheet_data
-                                .get(&r)
-                                .and_then(|row_data| row_data.get(&c))
+                                .get(r, c)
                                 .map(|cell| {
                                     matches!(cell, Cell::SpillCell { a, .. }
                                         if *a == (cell_reference.row, cell_reference.column))
@@ -2939,17 +2932,12 @@ impl<'a> Model<'a> {
     pub fn get_all_cells(&self) -> Vec<CellIndex> {
         let mut cells = Vec::new();
         for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
-            let mut sorted_rows: Vec<_> = sheet.sheet_data.keys().collect();
-            sorted_rows.sort_unstable();
-            for row in sorted_rows {
-                let row_data = &sheet.sheet_data[row];
-                let mut sorted_columns: Vec<_> = row_data.keys().collect();
-                sorted_columns.sort_unstable();
-                for column in sorted_columns {
+            for row in sheet.sheet_data.rows_sorted() {
+                for column in sheet.sheet_data.row_columns_sorted(row) {
                     cells.push(CellIndex {
                         index: index as u32,
-                        row: *row,
-                        column: *column,
+                        row,
+                        column,
                     });
                 }
             }
@@ -2962,15 +2950,10 @@ impl<'a> Model<'a> {
     fn collect_spill_cells(&mut self) {
         let mut spill_cells = Vec::new();
         for (sheet_index, worksheet) in self.workbook.worksheets.iter().enumerate() {
-            let mut sorted_rows: Vec<i32> = worksheet.sheet_data.keys().copied().collect();
-            sorted_rows.sort_unstable();
-            for row in &sorted_rows {
-                let row_data = &worksheet.sheet_data[row];
-                let mut sorted_cols: Vec<i32> = row_data.keys().copied().collect();
-                sorted_cols.sort_unstable();
-                for col in &sorted_cols {
+            for row in worksheet.sheet_data.rows_sorted() {
+                for (col, cell) in worksheet.sheet_data.row_cells_sorted(row) {
                     if matches!(
-                        &row_data[col],
+                        cell,
                         Cell::ArrayFormula {
                             kind: ArrayKind::Dynamic,
                             ..
@@ -2978,8 +2961,8 @@ impl<'a> Model<'a> {
                     ) {
                         spill_cells.push(CellReferenceIndex {
                             sheet: sheet_index as u32,
-                            row: *row,
-                            column: *col,
+                            row,
+                            column: col,
                         });
                     }
                 }
@@ -3262,14 +3245,14 @@ impl<'a> Model<'a> {
         let sheet_data = &mut worksheet.sheet_data;
         let mut cells_to_clear = Vec::new();
         for row in area.row..area.row + area.height {
-            if let Some(row_data) = sheet_data.get_mut(&row) {
+            if sheet_data.has_row(row) {
                 for column in area.column..area.column + area.width {
                     // If it is part of a dynamic array we need to clear the spill
                     if let Some(Cell::ArrayFormula {
                         r,
                         kind: ArrayKind::Dynamic,
                         ..
-                    }) = row_data.get(&column)
+                    }) = sheet_data.get(row, column)
                     {
                         // clear the spill of the dynamic formula
                         let (width, height) = r;
@@ -3279,11 +3262,8 @@ impl<'a> Model<'a> {
                             }
                         }
                     }
-                    row_data.remove(&column);
+                    sheet_data.remove(row, column);
                 }
-                if row_data.is_empty() {
-                    sheet_data.remove(&row);
-                };
             }
         }
         for (row, column) in cells_to_clear {
@@ -3301,19 +3281,17 @@ impl<'a> Model<'a> {
         let anchors: Vec<(i32, i32, i32, i32, i32, i32)> = {
             let ws = self.workbook.worksheet(sheet)?;
             let mut result = Vec::new();
-            for (row, row_data) in &ws.sheet_data {
-                for (column, cell) in row_data {
-                    if let Cell::ArrayFormula {
-                        r,
-                        f,
-                        s,
-                        kind: ArrayKind::Dynamic,
-                        ..
-                    } = cell
-                    {
-                        let (width, height) = *r;
-                        result.push((*row, *column, *f, *s, width, height));
-                    }
+            for (row, column, cell) in ws.sheet_data.iter() {
+                if let Cell::ArrayFormula {
+                    r,
+                    f,
+                    s,
+                    kind: ArrayKind::Dynamic,
+                    ..
+                } = cell
+                {
+                    let (width, height) = *r;
+                    result.push((row, column, *f, *s, width, height));
                 }
             }
             result
@@ -3322,17 +3300,14 @@ impl<'a> Model<'a> {
         for (row, column, f, s, width, height) in anchors {
             let ws = self.workbook.worksheet_mut(sheet)?;
             // Reset the anchor cell to DynamicFormula with r = (1, 1)
-            if let Some(row_data) = ws.sheet_data.get_mut(&row) {
-                row_data.insert(
-                    column,
-                    Cell::ArrayFormula {
-                        f,
-                        s,
-                        r: (1, 1),
-                        kind: ArrayKind::Dynamic,
-                        v: FormulaValue::Unevaluated,
-                    },
-                );
+            if let Some(anchor) = ws.sheet_data.get_mut(row, column) {
+                *anchor = Cell::ArrayFormula {
+                    f,
+                    s,
+                    r: (1, 1),
+                    kind: ArrayKind::Dynamic,
+                    v: FormulaValue::Unevaluated,
+                };
             }
             // Delete all spill cells
             for r in row..row + height {

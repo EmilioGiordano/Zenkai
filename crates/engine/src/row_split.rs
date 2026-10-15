@@ -1,12 +1,11 @@
 // Work over every row and parsed formula of a sheet that runs under the workbook's read
 // lock, which edits wait on, is split over several threads.
 
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
+use ironcalc::base::cell_store::CellStore;
 use ironcalc::base::expressions::parser::Node;
 use ironcalc::base::expressions::parser::static_analysis::StaticResult;
-use ironcalc::base::types::{Cell, SheetData};
 
 use crate::error::EngineError;
 use crate::preflight::ENGINE_STACK_BYTES;
@@ -15,8 +14,6 @@ const MAX_THREADS: usize = 8;
 // A share of this many rows is about 2 ms of hashing or copying, against tens of microseconds
 // to spawn the thread that takes it.
 pub(crate) const MIN_ROWS_PER_THREAD: usize = 4 * 1024;
-
-pub(crate) type Rows<'s> = [(&'s i32, &'s HashMap<i32, Cell>)];
 
 fn threads() -> usize {
     std::thread::available_parallelism()
@@ -28,21 +25,26 @@ fn threads() -> usize {
 // results in share order. The calling thread, which may be the engine's deep stack, runs
 // `meanwhile` and the first share; the other threads only run `share`.
 pub(crate) fn over_rows<T: Send, U>(
-    sheet_data: &SheetData,
-    share: impl Fn(&Rows<'_>) -> T + Sync,
+    sheet_data: &CellStore,
+    share: impl Fn(&CellStore, &[i32]) -> T + Sync,
     meanwhile: impl FnOnce() -> Result<U, EngineError>,
 ) -> Result<(Vec<T>, U), EngineError> {
-    let rows: Vec<_> = sheet_data.iter().collect();
+    let rows: Vec<i32> = sheet_data.rows().collect();
     let per_thread = rows.len().div_ceil(threads()).max(MIN_ROWS_PER_THREAD);
     let share = &share;
     std::thread::scope(|scope| {
         let workers = rows
             .chunks(per_thread)
             .skip(1)
-            .map(|rows| std::thread::Builder::new().spawn_scoped(scope, move || share(rows)))
+            .map(|rows| {
+                std::thread::Builder::new().spawn_scoped(scope, move || share(sheet_data, rows))
+            })
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| EngineError::Rejected(format!("could not start a thread: {e}")))?;
-        let first = rows.chunks(per_thread).next().map(share);
+        let first = rows
+            .chunks(per_thread)
+            .next()
+            .map(|rows| share(sheet_data, rows));
         let also = meanwhile()?;
         let mut results = Vec::with_capacity(workers.len() + 1);
         results.extend(first);
@@ -104,21 +106,21 @@ pub(crate) fn over_formulas<T: Send>(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use ironcalc::base::Model;
-    use ironcalc::base::types::Cell;
+    use ironcalc::base::cell_store::CellStore;
 
     use super::{MIN_FORMULAS_PER_THREAD, MIN_ROWS_PER_THREAD, over_formulas, over_rows};
 
     #[test]
     fn every_row_is_in_exactly_one_share() {
         let rows = i32::try_from(MIN_ROWS_PER_THREAD * 3 + 5).unwrap();
-        let sheet_data: HashMap<i32, HashMap<i32, Cell>> =
-            (1..=rows).map(|row| (row, HashMap::new())).collect();
+        let mut sheet_data = CellStore::new();
+        for row in 1..=rows {
+            sheet_data.insert_row(row, []);
+        }
         let (shares, also) = over_rows(
             &sheet_data,
-            |rows| rows.iter().map(|(row, _)| i64::from(**row)).sum::<i64>(),
+            |_, rows| rows.iter().map(|row| i64::from(*row)).sum::<i64>(),
             || Ok("meanwhile"),
         )
         .unwrap();
@@ -128,7 +130,7 @@ mod tests {
             (1..=i64::from(rows)).sum::<i64>()
         );
         assert_eq!(also, "meanwhile");
-        let (none, _) = over_rows(&HashMap::new(), |rows| rows.len(), || Ok(())).unwrap();
+        let (none, _) = over_rows(&CellStore::new(), |_, rows| rows.len(), || Ok(())).unwrap();
         assert!(none.is_empty());
     }
 

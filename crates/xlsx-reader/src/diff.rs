@@ -137,28 +137,28 @@ impl Differences {
             &expected.conditional_formatting,
             &actual.conditional_formatting,
         );
-        let rows: BTreeSet<&i32> = expected
+        let rows: BTreeSet<i32> = expected
             .sheet_data
-            .keys()
-            .chain(actual.sheet_data.keys())
+            .rows()
+            .chain(actual.sheet_data.rows())
             .collect();
         for row in rows {
-            let (expected_row, actual_row) =
-                (expected.sheet_data.get(row), actual.sheet_data.get(row));
-            let columns: BTreeSet<&i32> = expected_row
-                .into_iter()
-                .chain(actual_row)
-                .flat_map(|cells| cells.keys())
+            let columns: BTreeSet<i32> = expected
+                .sheet_data
+                .row_columns(row)
+                .chain(actual.sheet_data.row_columns(row))
                 .collect();
-            if columns.is_empty() && expected_row.is_some() != actual_row.is_some() {
+            if columns.is_empty()
+                && expected.sheet_data.has_row(row) != actual.sheet_data.has_row(row)
+            {
                 self.report(|| format!("{sheet}: empty row {row} present in only one"));
             }
             for column in columns {
-                let name = number_to_column(*column).unwrap_or_else(|| column.to_string());
+                let name = number_to_column(column).unwrap_or_else(|| column.to_string());
                 self.value(
                     &format!("{sheet}!{name}{row}"),
-                    &expected_row.and_then(|cells| cells.get(column)),
-                    &actual_row.and_then(|cells| cells.get(column)),
+                    &expected.sheet_data.get(row, column),
+                    &actual.sheet_data.get(row, column),
                 );
             }
         }
@@ -197,9 +197,7 @@ mod tests {
             .push("R[1]C".to_string());
         changed.worksheets[0]
             .sheet_data
-            .entry(7)
-            .or_default()
-            .insert(3, Cell::NumberCell { v: -0.0, s: 0 });
+            .insert(7, 3, Cell::NumberCell { v: -0.0, s: 0 });
         changed.styles.cell_xfs[0].num_fmt_id += 1;
         let found = workbook_differences(&book, &changed, 10).join("\n");
         for expected in [
@@ -217,9 +215,7 @@ mod tests {
         let mut negative_zero = changed.clone();
         negative_zero.worksheets[0]
             .sheet_data
-            .entry(7)
-            .or_default()
-            .insert(3, Cell::NumberCell { v: 0.0, s: 0 });
+            .insert(7, 3, Cell::NumberCell { v: 0.0, s: 0 });
         assert_eq!(workbook_differences(&changed, &negative_zero, 10).len(), 1);
         assert_eq!(workbook_differences(&book, &changed, 2).len(), 3);
     }

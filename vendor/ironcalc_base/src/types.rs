@@ -2,7 +2,7 @@ use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Display};
 
-use crate::{cf_types::ConditionalFormatting, expressions::token::Error};
+use crate::{cell_store::CellStore, cf_types::ConditionalFormatting, expressions::token::Error};
 
 fn default_as_false() -> bool {
     false
@@ -186,7 +186,7 @@ pub struct Worksheet {
     pub cols: Vec<Col>,
     pub rows: Vec<Row>,
     pub name: String,
-    pub sheet_data: SheetData,
+    pub sheet_data: CellStore,
     pub shared_formulas: Vec<String>,
     pub sheet_id: u32,
     pub state: SheetState,
@@ -200,10 +200,6 @@ pub struct Worksheet {
     pub show_grid_lines: bool,
     pub conditional_formatting: Vec<ConditionalFormatting>,
 }
-
-/// Internal representation of Excel's sheet_data
-/// It is row first and because of this all of our API's should be row first
-pub type SheetData = HashMap<i32, HashMap<i32, Cell>>;
 
 // ECMA-376-1:2016 section 18.3.1.73
 #[derive(Encode, Decode, Debug, PartialEq, Clone)]

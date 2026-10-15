@@ -1,9 +1,10 @@
+use ironcalc::base::cell_store::CellStore;
 use ironcalc::base::expressions::parser::Node;
 use ironcalc::base::expressions::parser::static_analysis::StaticResult;
-use ironcalc::base::types::{SheetData, Worksheet};
+use ironcalc::base::types::Worksheet;
 
 use crate::error::EngineError;
-use crate::row_split::{Formulas, Rows, over_formulas, over_rows};
+use crate::row_split::{Formulas, over_formulas, over_rows};
 
 // The copy is taken under the workbook's read lock, so a large sheet's rows and formulas
 // are copied on several threads.
@@ -29,18 +30,24 @@ pub(crate) fn copied_sheet(
         show_grid_lines,
         conditional_formatting,
     } = sheet;
-    let copy_rows = |rows: &Rows<'_>| {
+    let copy_rows = |sheet_data: &CellStore, rows: &[i32]| {
         rows.iter()
-            .map(|&(row, cells)| (*row, cells.clone()))
+            .map(|&row| {
+                let cells: Vec<_> = sheet_data
+                    .row_cells(row)
+                    .map(|(column, cell)| (column, cell.clone()))
+                    .collect();
+                (row, cells)
+            })
             .collect::<Vec<_>>()
     };
     let (shares, formulas) = over_rows(sheet_data, copy_rows, || {
         let shares = over_formulas(formulas, |_, share| share.to_vec())?;
         Ok(shares.into_iter().flatten().collect())
     })?;
-    let mut copied_data = SheetData::with_capacity(sheet_data.len());
-    for share in shares {
-        copied_data.extend(share);
+    let mut copied_data = CellStore::new();
+    for (row, cells) in shares.into_iter().flatten() {
+        copied_data.insert_row(row, cells);
     }
     let copied = Worksheet {
         dimension: dimension.clone(),

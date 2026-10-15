@@ -260,7 +260,10 @@ impl<'a> UserModel<'a> {
                         if let Some(row_style) = row_data.row.clone() {
                             worksheet.rows.push(row_style);
                         }
-                        worksheet.sheet_data.insert(r, row_data.data.clone());
+                        worksheet.sheet_data.insert_row(
+                            r,
+                            row_data.data.iter().map(|(c, cell)| (*c, cell.clone())),
+                        );
                     }
                 }
                 Diff::InsertColumns {
@@ -428,10 +431,8 @@ impl<'a> UserModel<'a> {
                     self.model
                         .insert_sheet(sheet_name, sheet_index, Some(sheet_id))?;
                     let worksheet = self.model.workbook.worksheet_mut(*sheet)?;
-                    for (row, row_data) in &old_data.sheet_data {
-                        for (column, cell) in row_data {
-                            worksheet.update_cell(*row, *column, cell.clone())?;
-                        }
+                    for (row, column, cell) in old_data.sheet_data.iter() {
+                        worksheet.update_cell(row, column, cell.clone())?;
                     }
                     worksheet.rows = old_data.rows.clone();
                     worksheet.cols = old_data.cols.clone();

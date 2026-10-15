@@ -22,7 +22,6 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-use itertools::Itertools;
 
 use ironcalc_base::{
     expressions::{
@@ -221,7 +220,7 @@ pub fn write_worksheet_xml<W: Write>(
     )?;
 
     let sheet_name = worksheet.get_name();
-    for (row_index, row_data) in worksheet.sheet_data.iter().sorted_by_key(|x| x.0) {
+    for row_index in &worksheet.sheet_data.rows_sorted() {
         let row_style_str = match row_style_dict.get(row_index) {
             Some(row_style) => {
                 let hidden_str = if row_style.hidden {
@@ -241,12 +240,12 @@ pub fn write_worksheet_xml<W: Write>(
             None => "".to_string(),
         };
         write!(writer, "<row r=\"{row_index}\"{row_style_str}>")?;
-        for (column_index, cell) in row_data.iter().sorted_by_key(|x| x.0) {
+        for (column_index, cell) in worksheet.sheet_data.row_cells_sorted(*row_index) {
             write_cell(
                 writer,
                 &sheet_name,
                 *row_index,
-                *column_index,
+                column_index,
                 cell,
                 parsed_formulas,
             )?;

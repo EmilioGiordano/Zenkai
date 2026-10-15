@@ -5,7 +5,7 @@
 // original file (`sheet_settings`) as the sheet streams past, so no sheet is ever held
 // whole as text.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 
 use ironcalc::base::expressions::utils::number_to_column;
@@ -31,7 +31,14 @@ fn other(message: impl Into<String>) -> io::Error {
 // lose formatting. Returns the sheet's <dimension> reference.
 pub(crate) fn prepare(sheet: &mut Worksheet, settings: Option<&SheetSettings>) -> String {
     let in_grid = |row: &i32| (1..=MAX_ROW).contains(row);
-    sheet.sheet_data.retain(|row, _| in_grid(row));
+    let outside: Vec<i32> = sheet
+        .sheet_data
+        .rows()
+        .filter(|row| !in_grid(row))
+        .collect();
+    for row in outside {
+        sheet.sheet_data.remove_row(row);
+    }
     sheet.rows.retain(|row| in_grid(&row.r));
     for row in &mut sheet.rows {
         row.height = if row.height.is_finite() {
@@ -56,8 +63,8 @@ pub(crate) fn prepare(sheet: &mut Worksheet, settings: Option<&SheetSettings>) -
         .flatten();
     let bare: Vec<i32> = sheet.rows.iter().map(|row| row.r).chain(outlined).collect();
     for row in bare {
-        if in_grid(&row) {
-            sheet.sheet_data.entry(row).or_insert_with(HashMap::new);
+        if in_grid(&row) && !sheet.sheet_data.has_row(row) {
+            sheet.sheet_data.insert_row(row, []);
         }
     }
     reference
@@ -357,12 +364,12 @@ mod tests {
             hidden: false,
         };
         sheet.rows = vec![row(5, 5000.0), row(0, 20.0), row(9, f64::NAN)];
-        sheet.sheet_data.insert(2_000_000, Default::default());
+        sheet.sheet_data.insert_row(2_000_000, []);
         let mut settings = SheetSettings::default();
         settings.rows.outline.insert(7, level(1, false));
         let dimension = super::prepare(sheet, Some(&settings));
         assert_eq!(dimension, "A2:A2");
-        let mut rows: Vec<i32> = sheet.sheet_data.keys().copied().collect();
+        let mut rows: Vec<i32> = sheet.sheet_data.rows().collect();
         rows.sort();
         assert_eq!(rows, [2, 5, 7, 9]);
         let heights: Vec<(i32, f64)> = sheet.rows.iter().map(|r| (r.r, r.height)).collect();

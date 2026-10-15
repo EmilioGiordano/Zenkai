@@ -180,20 +180,18 @@ impl<'a> Model<'a> {
                 let ws = &self.workbook.worksheets[ws_idx];
                 ws.sheet_data
                     .iter()
-                    .flat_map(|(&row, col_map)| {
-                        col_map.iter().filter_map(move |(&col, cell)| {
-                            cell.get_formula()?;
-                            // skip cells inside the area being moved
-                            if ws_idx_u32 == area.sheet
-                                && row >= area.row
-                                && row < area.row + area.height
-                                && col >= area.column
-                                && col < area.column + area.width
-                            {
-                                return None;
-                            }
-                            Some((row, col))
-                        })
+                    .filter_map(|(row, col, cell)| {
+                        cell.get_formula()?;
+                        // skip cells inside the area being moved
+                        if ws_idx_u32 == area.sheet
+                            && row >= area.row
+                            && row < area.row + area.height
+                            && col >= area.column
+                            && col < area.column + area.width
+                        {
+                            return None;
+                        }
+                        Some((row, col))
                     })
                     .collect()
             };

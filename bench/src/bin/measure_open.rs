@@ -80,12 +80,10 @@ fn count_cells(model: &Model) -> (u64, u64) {
     let mut stored = 0u64;
     let mut formulas = 0u64;
     for sheet in &model.workbook.worksheets {
-        for columns in sheet.sheet_data.values() {
-            for cell in columns.values() {
-                stored += 1;
-                if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula { .. }) {
-                    formulas += 1;
-                }
+        for (_, _, cell) in sheet.sheet_data.iter() {
+            stored += 1;
+            if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula { .. }) {
+                formulas += 1;
             }
         }
     }
@@ -331,18 +329,16 @@ fn discover(raw: &UserModel) -> Result<Found> {
         .map_err(|e| anyhow!("sheet 0: {e}"))?;
     let mut per_col: std::collections::HashMap<i32, (i32, i32, u64)> =
         std::collections::HashMap::new();
-    for (row, columns) in sheet.sheet_data.iter() {
-        for (col, cell) in columns.iter() {
-            if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula { .. }) {
-                per_col
-                    .entry(*col)
-                    .and_modify(|slot| {
-                        slot.0 = slot.0.min(*row);
-                        slot.1 = slot.1.max(*row);
-                        slot.2 += 1;
-                    })
-                    .or_insert((*row, *row, 1));
-            }
+    for (row, col, cell) in sheet.sheet_data.iter() {
+        if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula { .. }) {
+            per_col
+                .entry(col)
+                .and_modify(|slot| {
+                    slot.0 = slot.0.min(row);
+                    slot.1 = slot.1.max(row);
+                    slot.2 += 1;
+                })
+                .or_insert((row, row, 1));
         }
     }
     let (formula_col, (mut top, bottom, count)) = per_col

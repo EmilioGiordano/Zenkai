@@ -78,10 +78,9 @@ pub(crate) fn fill(
                 }
             }
         }
-        worksheet.sheet_data = data
-            .into_iter()
-            .map(|(row, cells)| (row, cells.into_iter().collect()))
-            .collect();
+        for (row, cells) in data {
+            worksheet.sheet_data.insert_row(row, cells);
+        }
         worksheet.rows = cells.rows;
         worksheet.shared_formulas = shared_formulas;
     }
