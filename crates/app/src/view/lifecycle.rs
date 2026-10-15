@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use gpui_kit::*;
@@ -8,7 +10,7 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
-use crate::autosave;
+use crate::autosave::{self, Due};
 use crate::close_prompt::ClosePlan;
 use crate::document::{self, FileJob, SharedWorkbook, SnapshotOutcome};
 use crate::documents::Intent;
@@ -216,11 +218,13 @@ impl Workspace {
         let Some(document) = self.documents.get_mut(id) else {
             return;
         };
-        if !autosave::is_due(
+        let due = autosave::due(
             document.since_last_edit(),
             document.since_last_autosave_attempt(),
+            document.recovery_stale_for(),
             every,
-        ) {
+        );
+        if due == Due::No {
             return;
         }
         let target = recovery::document_file(&directory, id);
@@ -241,7 +245,10 @@ impl Workspace {
             return;
         };
         document.mark_autosave_attempt();
-        let cancelled = document.autosave_cancel();
+        let cancelled = match due {
+            Due::Overdue => Arc::new(AtomicBool::new(false)),
+            Due::AfterPause | Due::No => document.autosave_cancel(),
+        };
         let edits = document.edit_count();
         let generation = document.generation();
         cx.spawn(async move |this, cx| {
@@ -265,7 +272,7 @@ impl Workspace {
                     return;
                 }
                 match result {
-                    Ok(SnapshotOutcome::Written) => document.set_autosaved_at(Some(edits)),
+                    Ok(SnapshotOutcome::Written) => document.recovery_written(edits),
                     Ok(SnapshotOutcome::Abandoned) => {}
                     Err(error) => this.notify(
                         Severity::Warning,
@@ -332,11 +339,17 @@ impl Workspace {
                         window.set_window_title(&document.title());
                     }
                     // Kept as this document's own recovery copy until the work is saved.
-                    if let Some(directory) = &this.recovery_dir
-                        && let Err(error) =
-                            recovery::adopt(&path, &recovery::document_file(directory, id))
-                    {
-                        tracing::warn!(?path, %error, "could not adopt the recovery file");
+                    if let Some(directory) = &this.recovery_dir {
+                        match recovery::adopt(&path, &recovery::document_file(directory, id)) {
+                            Ok(()) => {
+                                if let Some(document) = this.documents.get_mut(id) {
+                                    document.mark_recovery_adopted();
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!(?path, %error, "could not adopt the recovery file")
+                            }
+                        }
                     }
                     this.notify(Severity::Warning, t!("notice.recovered_work"), cx);
                 }
@@ -435,9 +448,12 @@ impl Workspace {
                 })
                 .await;
             let finished = this.update_in(cx, |this, window, cx| {
-                for (id, generation) in &generations {
+                for ((id, generation), result) in generations.iter().zip(&results) {
                     if let Some(document) = this.documents.get_mut(*id) {
                         document.end_file_job(*generation);
+                        if result.is_ok() {
+                            document.mark_recovery_adopted();
+                        }
                     }
                 }
                 // Edits made while the copies were written are not in them: write again.

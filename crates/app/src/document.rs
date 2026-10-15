@@ -56,6 +56,10 @@ pub struct Document {
     pub last_used: Instant,
     last_edited: Option<Instant>,
     autosave_attempted: Instant,
+    // Since when the recovery copy on disk has missed edits; `None` while it holds them all.
+    recovery_stale_since: Option<Instant>,
+    // Whether a recovery copy of this session exists on disk for the session file to point at.
+    recovery_on_disk: bool,
     // Set by an edit; the running autosave drops its write and leaves the old copy in place.
     autosave_cancel: Arc<AtomicBool>,
 }
@@ -113,6 +117,8 @@ impl Document {
             last_used: Instant::now(),
             last_edited: None,
             autosave_attempted: Instant::now(),
+            recovery_stale_since: None,
+            recovery_on_disk: false,
             autosave_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -162,6 +168,7 @@ impl Document {
         self.edit_count += 1;
         self.last_edited = Some(Instant::now());
         self.autosave_cancel.store(true, Ordering::Relaxed);
+        self.recovery_stale_since.get_or_insert_with(Instant::now);
         self.pending.push(edit);
     }
 
@@ -246,6 +253,24 @@ impl Document {
 
     pub fn set_autosaved_at(&mut self, edits: Option<u64>) {
         self.autosaved_at = edits;
+        self.recovery_on_disk = edits.is_some();
+    }
+
+    pub fn recovery_written(&mut self, edits: u64) {
+        self.set_autosaved_at(Some(edits));
+        self.recovery_stale_since = (edits != self.edit_count).then(Instant::now);
+    }
+
+    pub fn recovery_stale_for(&self) -> Option<Duration> {
+        self.recovery_stale_since.map(|since| since.elapsed())
+    }
+
+    pub fn has_recovery_copy(&self) -> bool {
+        self.recovery_on_disk
+    }
+
+    pub fn mark_recovery_adopted(&mut self) {
+        self.recovery_on_disk = true;
     }
 
     pub fn is_pristine(&self) -> bool {
@@ -398,13 +423,17 @@ pub fn write_snapshot_unless(
     });
     let total_ms = started.elapsed().as_millis();
     match &written {
-        Ok(outcome) => tracing::info!(
-            ?job,
-            ?outcome,
-            locked_ms,
-            total_ms,
-            "workbook snapshot done"
-        ),
+        Ok(SnapshotOutcome::Written) => {
+            tracing::info!(?job, locked_ms, total_ms, "workbook written")
+        }
+        Ok(SnapshotOutcome::Abandoned) => {
+            tracing::info!(
+                ?job,
+                locked_ms,
+                total_ms,
+                "workbook write abandoned after an edit"
+            )
+        }
         Err(error) => {
             tracing::warn!(?job, %error, locked_ms, total_ms, "writing the workbook failed")
         }
@@ -579,6 +608,31 @@ mod tests {
         document.finish_batch(generation);
         assert!(document.begin_file_job(FileJob::Autosaving).is_some());
         assert!(!document.autosave_cancel().load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn the_recovery_copy_is_stale_from_the_first_edit_it_misses() {
+        let mut document = document();
+        assert!(document.recovery_stale_for().is_none());
+        document.queue(noop());
+        assert!(document.recovery_stale_for().is_some());
+        document.recovery_written(document.edit_count());
+        assert!(document.recovery_stale_for().is_none());
+        assert!(document.has_recovery_copy());
+        let at_start = document.edit_count();
+        document.queue(noop());
+        document.recovery_written(at_start);
+        assert!(document.recovery_stale_for().is_some());
+    }
+
+    #[test]
+    fn a_workbook_has_no_recovery_copy_until_one_is_written_or_adopted() {
+        let mut document = document();
+        assert!(!document.has_recovery_copy());
+        document.mark_recovery_adopted();
+        assert!(document.has_recovery_copy());
+        document.set_autosaved_at(None);
+        assert!(!document.has_recovery_copy());
     }
 
     #[test]
