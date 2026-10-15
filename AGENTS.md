@@ -256,7 +256,8 @@ in a staging branch.
 5. **Failures.** A fix for one branch goes back to the owning branch and is validated in
    a new staging round. A fix caused only by the combination goes in its own `fix/<topic>`
    branch, never on staging.
-6. **Manual test.** The user tests the exe by hand and approves the PRs. Agents never drive the GUI or
+6. **Manual test.** The user tests the exe by hand and gives the OK in the session; every PR
+   is the user's own, so GitHub cannot record an approval. Agents never drive the GUI or
    send input to the desktop.
 7. **Merge.** On the user's approval the lead merges the PRs into `main` one at a time,
    in staging order, with merge commits (`--no-ff`); then `git diff staging/<date> main`
