@@ -602,11 +602,15 @@ impl Workspace {
             let written = cx
                 .background_executor()
                 .spawn(async move {
-                    clean.iter().for_each(|file| recovery::remove(file));
-                    match session_directory {
+                    // The copies go only once the session no longer points at them.
+                    let saved = match session_directory {
                         Some(directory) => session::save(&directory, &session),
                         None => Ok(()),
+                    };
+                    if saved.is_ok() {
+                        clean.iter().for_each(|file| recovery::remove(file));
                     }
+                    saved
                 })
                 .await;
             if let Err(error) = written {
