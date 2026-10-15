@@ -20,6 +20,9 @@ const MAX_FORMULA_BYTES: usize = 8192 * 6;
 // Shared formulas dropped with their rows, whose `si` kept rows must no longer use; at
 // four bytes each, 256 KiB. Past this many the part is not copied.
 const MAX_DROPPED_GROUPS: usize = 64 * 1024;
+// Shared formula indices are remembered in a bitmap, 16 Mi bits = 2 MiB. Excel numbers
+// them from 0, so a larger one is not what it writes.
+const MAX_SHARED_INDEX: i32 = 16 * 1024 * 1024;
 // Formulas from dropped rows whose range reaches kept rows, each holding its text of at
 // most MAX_FORMULA_BYTES: 256 * 48 KiB = 12 MiB at worst. Past this many in one span the
 // part is not copied.
@@ -326,10 +329,41 @@ fn ranged_formula(tag: &[u8]) -> io::Result<Option<RangedFormula>> {
     Ok(Some(RangedFormula { kind, first, last }))
 }
 
+// The `si` of every shared formula anchor read so far, in rows kept and dropped alike.
+#[derive(Default)]
+struct SeenAnchors {
+    words: Vec<u64>,
+}
+
+impl SeenAnchors {
+    fn slot(si: i32) -> io::Result<(usize, u64)> {
+        if !(0..MAX_SHARED_INDEX).contains(&si) {
+            return Err(unusable("a shared formula index outside what Excel writes"));
+        }
+        let bit = si as usize;
+        Ok((bit / 64, 1 << (bit % 64)))
+    }
+
+    fn insert(&mut self, si: i32) -> io::Result<()> {
+        let (word, mask) = Self::slot(si)?;
+        if self.words.len() <= word {
+            self.words.resize(word + 1, 0);
+        }
+        self.words[word] |= mask;
+        Ok(())
+    }
+
+    fn contains(&self, si: i32) -> io::Result<bool> {
+        let (word, mask) = Self::slot(si)?;
+        Ok(self.words.get(word).is_some_and(|bits| bits & mask != 0))
+    }
+}
+
 struct Splice<'s, F> {
     spans: &'s [RowSpan],
     next: usize,
     reaching: Vec<ReachingAnchor>,
+    seen_anchors: SeenAnchors,
     dropped_groups: HashSet<i32>,
     last_row: u32,
     write_span: F,
@@ -396,6 +430,9 @@ impl<F> Splice<'_, F> {
         let Some(RangedFormula { kind, first, last }) = ranged_formula(&scan.tag)? else {
             return Ok(false);
         };
+        if let AnchorKind::Shared { si } = kind {
+            self.seen_anchors.insert(si)?;
+        }
         if self.covered(first.0, last.0) {
             if let AnchorKind::Shared { si } = kind {
                 if self.dropped_groups.len() >= MAX_DROPPED_GROUPS {
@@ -488,8 +525,8 @@ impl<F> Splice<'_, F> {
                     depth -= 1;
                 }
                 Markup::Start | Markup::Empty => {
-                    if !self.dropped_groups.is_empty() && tag_name(&scan.tag) == b"f" {
-                        self.check_follower(&scan.tag)?;
+                    if tag_name(&scan.tag) == b"f" {
+                        self.check_shared(&scan.tag)?;
                     }
                     out.write_all(&scan.tag)?;
                     if kind == Markup::Start {
@@ -500,15 +537,25 @@ impl<F> Splice<'_, F> {
         }
     }
 
-    // A kept cell must not take a shared formula whose anchor was dropped.
-    fn check_follower(&self, tag: &[u8]) -> io::Result<()> {
-        if attribute(tag, b"t")? != Some("shared") || attribute(tag, b"ref")?.is_some() {
+    // A kept cell must not take a shared formula whose anchor was dropped or has not been
+    // read yet: readers resolve a follower by si alone, so a later anchor could be one
+    // that the written rows replace.
+    fn check_shared(&mut self, tag: &[u8]) -> io::Result<()> {
+        if attribute(tag, b"t")? != Some("shared") {
             return Ok(());
         }
         let Some(si) = attribute(tag, b"si")? else {
             return Ok(());
         };
         let si = si.parse::<i32>().map_err(unusable)?;
+        if attribute(tag, b"ref")?.is_some() {
+            return self.seen_anchors.insert(si);
+        }
+        if !self.seen_anchors.contains(si)? {
+            return Err(unusable(
+                "a kept cell takes a shared formula whose anchor was not read before it",
+            ));
+        }
         if self.dropped_groups.contains(&si) {
             return Err(unusable(
                 "a kept cell takes a shared formula that is written again",
@@ -670,6 +717,7 @@ pub(crate) fn splice_rows<R: Read, W: Write>(
         spans,
         next: 0,
         reaching: Vec::new(),
+        seen_anchors: SeenAnchors::default(),
         dropped_groups: HashSet::new(),
         last_row: 0,
         write_span,
@@ -822,6 +870,25 @@ mod tests {
         ];
         let error = spliced(&sheet(&rows.concat()), &[span(2, 3)]).unwrap_err();
         assert!(error.to_string().contains("shared formula"), "{error}");
+    }
+
+    #[test]
+    fn a_kept_follower_needs_its_anchor_read_before_it() {
+        let anchor = row(1, r#"<c r="B1"><f t="shared" ref="B1:B3" si="0">A1</f><v>1</v></c>"#);
+        let follower = row(2, r#"<c r="B2"><f t="shared" si="0"/><v>1</v></c>"#);
+        let (out, _) = spliced(&sheet(&format!("{anchor}{follower}")), &[span(5, 5)]).unwrap();
+        assert!(out.contains(&follower));
+        let later = row(3, r#"<c r="B3"><f t="shared" ref="B3:B4" si="0">A3</f></c>"#);
+        for rows in [
+            follower.clone(),
+            format!("{follower}{later}"),
+            row(2, r#"<c r="B2"><f t="shared" si="1"/><v>1</v></c>"#),
+        ] {
+            let error = spliced(&sheet(&rows), &[span(5, 5)]).unwrap_err();
+            assert!(error.to_string().contains("anchor"), "{error}");
+        }
+        let huge = row(1, r#"<c r="B1"><f t="shared" ref="B1:B3" si="99999999">A1</f></c>"#);
+        assert!(spliced(&sheet(&huge), &[span(5, 5)]).is_err());
     }
 
     #[test]
