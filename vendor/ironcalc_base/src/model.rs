@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::vec::Vec;
 
 use crate::expressions::parser::static_analysis::run_static_analysis_on_node;
@@ -35,7 +35,7 @@ use crate::{
 };
 
 use crate::criteria_ranges::CriteriaRanges;
-use crate::incremental::{Dependencies, Recalculation};
+use crate::incremental::{circular_cells_fit, Dependencies, Recalculation};
 use crate::{cf_types::CfCellResult, tz::Tz};
 
 #[cfg(any(test, feature = "mock_time"))]
@@ -225,6 +225,9 @@ pub struct Model<'a> {
     pub(crate) dependencies: Option<Box<Dependencies>>,
     /// How many times a formula was reached again while it was being evaluated.
     pub(crate) circular_hits: u64,
+    /// The cells that were reached again while being evaluated, since the last full
+    /// evaluation, up to one past `MAX_CIRCULAR_CELLS`.
+    pub(crate) circular_cells: HashSet<(u32, i32, i32)>,
     pub(crate) last_recalculation: Recalculation,
     pub(crate) criteria_ranges: CriteriaRanges,
     /// How many SUMIF(S) and COUNTIF(S) totals were updated by what changed.
@@ -1398,6 +1401,9 @@ impl<'a> Model<'a> {
                     match state {
                         CellState::Evaluating => {
                             self.circular_hits += 1;
+                            if circular_cells_fit(self.circular_cells.len()) {
+                                self.circular_cells.insert(key);
+                            }
                             return CalcResult::new_error(
                                 Error::CIRC,
                                 cell_reference,
@@ -1677,6 +1683,7 @@ impl<'a> Model<'a> {
             cf_cache: HashMap::new(),
             dependencies: None,
             circular_hits: 0,
+            circular_cells: HashSet::new(),
             last_recalculation: Recalculation::Full,
             criteria_ranges: CriteriaRanges::new(),
             criteria_deltas: 0,
@@ -2902,7 +2909,7 @@ impl<'a> Model<'a> {
         let mut spill_cells = Vec::new();
         for (sheet_index, worksheet) in self.workbook.worksheets.iter().enumerate() {
             for row in worksheet.sheet_data.rows_sorted() {
-                for (col, cell) in worksheet.sheet_data.row_cells_sorted(row) {
+                for (col, cell) in worksheet.sheet_data.row_cells(row) {
                     if cell.dynamic_range().is_some() {
                         spill_cells.push(CellReferenceIndex {
                             sheet: sheet_index as u32,
@@ -2989,6 +2996,7 @@ impl<'a> Model<'a> {
     pub fn evaluate(&mut self) {
         self.dependencies = None;
         self.circular_hits = 0;
+        self.circular_cells.clear();
         self.last_recalculation = Recalculation::Full;
         self.collect_spill_cells();
 

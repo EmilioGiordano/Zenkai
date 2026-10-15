@@ -415,10 +415,23 @@ impl DependencyIndex {
         examined
     }
 
+    pub(crate) fn has_volatile(&self) -> bool {
+        !self.volatile.is_empty()
+    }
+
     // None when following the dependents would cost more than evaluating everything.
     pub(crate) fn affected_by(&self, edited: &[CellKey]) -> Option<HashSet<CellKey>> {
+        self.reach(edited.iter().chain(&self.volatile).copied().collect())
+    }
+
+    // The cells and everything that reads them, directly or not; volatile formulas only
+    // when they read one.
+    pub(crate) fn dependents_of(&self, cells: &[CellKey]) -> Option<HashSet<CellKey>> {
+        self.reach(cells.to_vec())
+    }
+
+    fn reach(&self, mut pending: Vec<CellKey>) -> Option<HashSet<CellKey>> {
         let mut affected = HashSet::new();
-        let mut pending: Vec<CellKey> = edited.iter().chain(&self.volatile).copied().collect();
         let mut visits = 0usize;
         while let Some(cell) = pending.pop() {
             if !affected.insert(cell) {

@@ -54,6 +54,13 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/test/test_recalculation_fallbacks.rs`.
 - A formula that evaluates to an empty cell reads as 0 the first time too (`src/model.rs`,
   `evaluate_cell`). Tests: `src/test/test_empty_formula_result.rs`.
+- A workbook with circular references keeps its dependency index, and an edit is
+  recalculated incrementally unless a cell it changes is, or reads, a cell a cycle was
+  found at, or the workbook has a volatile formula (`src/incremental.rs`,
+  `src/dependency_index.rs`, `Model::circular_cells`). Needs the incremental
+  recalculation. Tests: `src/test/test_incremental_cycles.rs`.
+- Collecting the spill anchors reads each row's cells in column order without allocating
+  a vector per row (`src/model.rs`, `collect_spill_cells`). Stands on its own.
 - `Model::support` recorded only when the workbook has spills (`src/model.rs`,
   `record_support`).
 - Hiding or showing rows recalculates what reads them, for SUBTOTAL
