@@ -1,6 +1,6 @@
 ---
 name: zk-task
-description: Turn a plain-words request into a TASK file on a fresh branch worktree with its own target dir, then stop for user approval without implementing.
+description: Turn a plain-words request into a TASK file on a fresh branch worktree, then stop for user approval without implementing.
 ---
 
 # zk-task
@@ -22,17 +22,8 @@ From the repo root, on branch `main`:
 git worktree add -b <type>/<topic> .claude/worktrees/<topic> main
 ```
 
-`<type>` is one of `feat`, `fix`, `perf`, `test`, `chore`. Then write the
-untracked file `.cargo/config.toml` in the new worktree:
-
-```toml
-[build]
-rustc-wrapper = "sccache"
-target-dir = "D:/More-Code-Projects/Zenkai-compiled/<topic>"
-```
-
-Never create or change that file afterwards, and never override
-`CARGO_TARGET_DIR`. That target dir is persistent and is never cleaned.
+`<type>` is one of `feat`, `fix`, `perf`, `test`, `chore`. Work branches are never
+compiled, so the worktree gets no `.cargo/config.toml` and no target dir.
 
 ## 3. Write the TASK file
 
