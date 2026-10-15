@@ -85,6 +85,21 @@ impl Workspace {
         }
     }
 
+    // Save As chose a CSV: the export leaves the workbook unsaved, so the close stops, and the
+    // user is told why.
+    pub(super) fn csv_ended_departure(
+        &mut self,
+        id: WorkbookId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let waiting = self.departure.as_ref().and_then(Departure::current) == Some(id);
+        self.save_ended(id, false, window, cx);
+        if waiting {
+            self.notify(Severity::Warning, t!("close.csv_kept_open"), cx);
+        }
+    }
+
     fn finish_departure(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(departure) = self.departure.take() else {
             return;

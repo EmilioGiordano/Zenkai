@@ -1559,7 +1559,7 @@ impl Workspace {
     ) {
         if files::is_delimited_text(&chosen) {
             self.export_csv(id, chosen, window, cx);
-            self.save_ended(id, false, window, cx);
+            self.csv_ended_departure(id, window, cx);
             return;
         }
         let Some(document) = self.documents.get(id) else {
