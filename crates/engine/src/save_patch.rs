@@ -94,7 +94,14 @@ pub(crate) fn patch_plan(
         .map(|&index| -> Result<SheetPatch, EngineError> {
             let part = saved.worksheets[index].clone();
             Ok(match dirty_blocks(&saved.sheets[index], &prints[index]) {
-                Some(blocks) => SheetPatch::Rows(row_job(data, carried, index, part, blocks)?),
+                Some(blocks) => SheetPatch::Rows(row_job(
+                    data,
+                    carried,
+                    index,
+                    part,
+                    blocks,
+                    &prints[index].bounds(),
+                )?),
                 None => SheetPatch::Whole(sheet_job(
                     data,
                     carried,

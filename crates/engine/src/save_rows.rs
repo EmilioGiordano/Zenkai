@@ -18,9 +18,9 @@ use zenkai_xlsx_reader::{AnchorKind, BasePackage, ReachingAnchor, RowSpan};
 use zip::ZipWriter;
 
 use crate::error::EngineError;
-use crate::fingerprint::{MAX_ROW, ROWS_PER_BLOCK, SheetPrint};
+use crate::fingerprint::{MAX_ROW, ROWS_PER_BLOCK, SheetPrint, UsedBounds};
 use crate::save::{ModelData, SHEET_BUFFER_BYTES, rejected};
-use crate::save_sheet::{dimension_reference, with_row_outline, written_height};
+use crate::save_sheet::{bounds_reference, with_row_outline, written_height};
 use crate::sheet_settings::{Carried, Outline};
 
 // The blocks of rows that changed, when the sheet can be written row by row.
@@ -144,12 +144,14 @@ fn renumbered(
 }
 
 // Runs under the workbook's read lock: the work is proportional to the rows in `blocks`.
+// `bounds` are the sheet's used extent from the fingerprint pass of the same save.
 pub(crate) fn row_job(
     data: ModelData<'_>,
     carried: &Carried,
     index: usize,
     part: String,
     blocks: BTreeSet<usize>,
+    bounds: &UsedBounds,
 ) -> Result<RowJob, EngineError> {
     let sheet = data
         .book
@@ -226,7 +228,7 @@ pub(crate) fn row_job(
     }
     Ok(RowJob {
         part,
-        dimension: dimension_reference(sheet),
+        dimension: bounds_reference(bounds),
         sheet: small,
         formulas,
         rows: rows.into_iter().collect(),
@@ -466,6 +468,7 @@ mod tests {
             0,
             "xl/worksheets/sheet1.xml".to_string(),
             BTreeSet::from([2]),
+            &print(&model).bounds(),
         )
         .unwrap();
         assert_eq!(job.rows, (33..=48).collect::<Vec<_>>());

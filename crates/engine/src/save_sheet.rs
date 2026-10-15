@@ -11,6 +11,7 @@ use std::io::{self, Write};
 use ironcalc::base::expressions::utils::number_to_column;
 use ironcalc::base::types::Worksheet;
 
+use crate::fingerprint::UsedBounds;
 use crate::sheet_settings::{Outline, SheetSettings, attribute};
 
 const MAX_ROW: i32 = 1_048_576;
@@ -68,12 +69,21 @@ pub(crate) fn written_height(height: f64) -> f64 {
 // The <dimension> reference of the sheet's cells, which must all lie in Excel's grid.
 pub(crate) fn dimension_reference(sheet: &Worksheet) -> String {
     let dimension = sheet.dimension();
+    bounds_reference(&UsedBounds {
+        min_row: dimension.min_row,
+        max_row: dimension.max_row,
+        min_column: dimension.min_column,
+        max_column: dimension.max_column,
+    })
+}
+
+pub(crate) fn bounds_reference(bounds: &UsedBounds) -> String {
     match (
-        number_to_column(dimension.min_column),
-        number_to_column(dimension.max_column),
+        number_to_column(bounds.min_column),
+        number_to_column(bounds.max_column),
     ) {
         (Some(first), Some(last)) => {
-            format!("{first}{}:{last}{}", dimension.min_row, dimension.max_row)
+            format!("{first}{}:{last}{}", bounds.min_row, bounds.max_row)
         }
         _ => "A1".to_string(),
     }

@@ -30,9 +30,53 @@ pub(crate) struct SheetPrint {
     // Everything a sheet writes outside its rows.
     frame: u64,
     rows: RowBlocks,
+    bounds: UsedBounds,
     dynamic_arrays: DynamicArrays,
     // Kept out of the hash: an insert undone before a save leaves the part as it was.
     moves: u64,
+}
+
+// What IronCalc's `Worksheet::dimension` reports, found in the pass that hashes the rows
+// so a row-level save does not walk every cell again. A sheet without cells is A1:A1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct UsedBounds {
+    pub(crate) min_row: i32,
+    pub(crate) max_row: i32,
+    pub(crate) min_column: i32,
+    pub(crate) max_column: i32,
+}
+
+type Reach = Option<(i32, i32)>;
+
+fn widen(reach: &mut Reach, value: i32) {
+    *reach = Some(match *reach {
+        Some((low, high)) => (low.min(value), high.max(value)),
+        None => (value, value),
+    });
+}
+
+fn join(reach: &mut Reach, other: Reach) {
+    for value in other.into_iter().flat_map(|(low, high)| [low, high]) {
+        widen(reach, value);
+    }
+}
+
+// Rows count even without cells, but a sheet whose rows hold no cell has no columns.
+fn used_bounds(rows: Reach, columns: Reach) -> UsedBounds {
+    match rows.zip(columns) {
+        Some(((min_row, max_row), (min_column, max_column))) => UsedBounds {
+            min_row,
+            max_row,
+            min_column,
+            max_column,
+        },
+        None => UsedBounds {
+            min_row: 1,
+            max_row: 1,
+            min_column: 1,
+            max_column: 1,
+        },
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +95,10 @@ pub(crate) enum DynamicArrays {
 }
 
 impl SheetPrint {
+    pub(crate) fn bounds(&self) -> UsedBounds {
+        self.bounds
+    }
+
     pub(crate) fn dynamic_arrays(&self) -> DynamicArrays {
         self.dynamic_arrays
     }
@@ -196,6 +244,8 @@ fn hash_frame(hasher: &mut DefaultHasher, cols: &[Col], comments: &[Comment]) {
 
 struct RowsShare {
     rows: Vec<(i32, u64)>,
+    row_reach: Reach,
+    column_reach: Reach,
     dynamic_arrays: DynamicArrays,
 }
 
@@ -206,11 +256,14 @@ fn rows_print(
 ) -> Result<RowsShare, EngineError> {
     let mut hashed = Vec::with_capacity(rows.len());
     let mut dynamic_arrays = DynamicArrays::Absent;
+    let (mut row_reach, mut column_reach) = (None, None);
     for &row in rows {
+        widen(&mut row_reach, row);
         // An empty row map writes nothing, but it moves the dimension.
         let mut sum = cell_hash(row, 0, &Cell::EmptyCell { s: -1 }, formulas)?;
         for (column, cell) in sheet_data.row_cells(row) {
             sum = sum.wrapping_add(cell_hash(row, column, cell, formulas)?);
+            widen(&mut column_reach, column);
             if cell.dynamic_range().is_some() {
                 dynamic_arrays = DynamicArrays::Present;
             }
@@ -219,6 +272,8 @@ fn rows_print(
     }
     Ok(RowsShare {
         rows: hashed,
+        row_reach,
+        column_reach,
         dynamic_arrays,
     })
 }
@@ -306,8 +361,11 @@ pub(crate) fn sheet_print(
     )?;
     let mut hashed = Vec::with_capacity(sheet_data.row_count() + rows.len());
     let mut dynamic_arrays = DynamicArrays::Absent;
+    let (mut row_reach, mut column_reach) = (None, None);
     for share in shares {
         let share = share?;
+        join(&mut row_reach, share.row_reach);
+        join(&mut column_reach, share.column_reach);
         hashed.extend(share.rows);
         if share.dynamic_arrays == DynamicArrays::Present {
             dynamic_arrays = DynamicArrays::Present;
@@ -330,6 +388,7 @@ pub(crate) fn sheet_print(
         hash: hasher.finish(),
         frame,
         rows: row_blocks(&hashed, budget),
+        bounds: used_bounds(row_reach, column_reach),
         dynamic_arrays,
         moves,
     })
@@ -372,7 +431,7 @@ mod tests {
     use ironcalc::base::types::Row;
 
     use super::{
-        MAX_ROW, ROW_PRINT_BUDGET_BYTES, ROWS_PER_BLOCK, RowBlocks, SheetPrint, book_print,
+        MAX_ROW, ROW_PRINT_BUDGET_BYTES, ROWS_PER_BLOCK, RowBlocks, SheetPrint, UsedBounds, book_print,
         formula_hashes, row_blocks, rows_print, sheet_print,
     };
 
@@ -583,5 +642,43 @@ mod tests {
             crate::saved::sheet_prints(crate::save::ModelData::of(&model), &carried).unwrap();
         assert!(prints[..64].iter().all(|print| print.row_blocks().is_some()));
         assert!(prints[64].row_blocks().is_none());
+    }
+
+    fn walked(model: &Model, sheet: usize) -> UsedBounds {
+        let dimension = model.workbook.worksheets[sheet].dimension();
+        UsedBounds {
+            min_row: dimension.min_row,
+            max_row: dimension.max_row,
+            min_column: dimension.min_column,
+            max_column: dimension.max_column,
+        }
+    }
+
+    #[test]
+    fn the_bounds_found_while_hashing_equal_the_walked_dimension() {
+        let mut model = Model::new_empty("b", "en", "UTC", "en").unwrap();
+        assert_eq!(print(&model, 0).bounds(), walked(&model, 0));
+        model.workbook.worksheets[0].sheet_data.insert_row(40, []);
+        assert_eq!(print(&model, 0).bounds(), walked(&model, 0));
+        model.set_user_input(0, 7, 5, "1".to_string()).unwrap();
+        assert_eq!(print(&model, 0).bounds(), walked(&model, 0));
+        assert_eq!(
+            print(&model, 0).bounds(),
+            UsedBounds {
+                min_row: 7,
+                max_row: 40,
+                min_column: 5,
+                max_column: 5
+            }
+        );
+        for row in (3..4000).step_by(7) {
+            model
+                .set_user_input(0, row, 2 + row % 9, row.to_string())
+                .unwrap();
+        }
+        model.set_user_input(0, 3000, 1, "x".to_string()).unwrap();
+        assert_eq!(print(&model, 0).bounds(), walked(&model, 0));
+        let fresh = Model::new_empty("b", "en", "UTC", "en").unwrap();
+        assert_eq!(print(&fresh, 0).bounds(), walked(&fresh, 0));
     }
 }
