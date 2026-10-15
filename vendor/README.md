@@ -59,6 +59,14 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   found at, or the workbook has a volatile formula (`src/incremental.rs`,
   `src/dependency_index.rs`, `Model::circular_cells`). Needs the incremental
   recalculation. Tests: `src/test/test_incremental_cycles.rs`.
+- Conditional formatting is re-evaluated after an incremental recalculation only for the
+  rules, and for rules that look at one cell at a time only for the cells, that the
+  changed cells can affect; each rule keeps what it gave to its cells and
+  `get_extended_style_for_cell` merges them in priority order, so the results are those of
+  a full evaluation (`src/cf_runs.rs`, `src/conditional_formatting.rs`,
+  `src/dependency_index.rs`, `src/incremental.rs`). Needs the incremental recalculation.
+  Tests: `src/cf_runs.rs`, `src/dependency_index.rs`,
+  `src/test/conditional_formatting/incremental.rs`.
 - Collecting the spill anchors reads each row's cells in column order without allocating
   a vector per row (`src/model.rs`, `collect_spill_cells`). Stands on its own.
 - `Model::support` recorded only when the workbook has spills (`src/model.rs`,

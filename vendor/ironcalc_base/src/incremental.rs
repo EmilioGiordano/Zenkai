@@ -148,7 +148,7 @@ impl Model<'_> {
             self.evaluate_indexed();
             return;
         }
-        self.evaluate_conditional_formatting();
+        self.update_conditional_formatting(&changed);
         self.dependencies = Some(dependencies);
         self.last_recalculation = Recalculation::Incremental;
     }

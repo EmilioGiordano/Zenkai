@@ -4,7 +4,11 @@
 #![allow(clippy::unwrap_used)]
 
 use ironcalc::base::cell::CellValue;
+use ironcalc::base::cf_types::{
+    CfRuleInput, Cfvo, ColorScaleThreshold, TextOperator, ValueOperator,
+};
 use ironcalc::base::expressions::types::Area;
+use ironcalc::base::types::{Color, Dxf, Fill};
 use ironcalc::base::{ClipboardData, Model, Recalculation, UserModel};
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
@@ -29,6 +33,7 @@ enum Op {
     DeleteRow(u32, i32),
     HideRow(u32, i32, bool),
     DefineName(String),
+    AddRule(u32, u8),
     Undo,
     Redo,
 }
@@ -162,9 +167,111 @@ fn op() -> impl Strategy<Value = Op> {
         1 => (0..SHEETS, row.clone()).prop_map(|(s, r)| Op::DeleteRow(s, r)),
         1 => (0..SHEETS, row, any::<bool>()).prop_map(|(s, r, hidden)| Op::HideRow(s, r, hidden)),
         1 => range().prop_map(Op::DefineName),
+        2 => (0..SHEETS, 0..10u8).prop_map(|(s, kind)| Op::AddRule(s, kind)),
         2 => Just(Op::Undo),
         1 => Just(Op::Redo),
     ]
+}
+
+fn red_format() -> Dxf {
+    Dxf {
+        fill: Some(Fill {
+            color: Color::Rgb("#FF0000".to_string()),
+        }),
+        font: None,
+        border: None,
+        num_fmt: None,
+        alignment: None,
+    }
+}
+
+// Rules of the kinds that differ in what they read: the cell alone, the whole range, a
+// formula over the grid, and thresholds read from cells.
+fn rule(kind: u8) -> (&'static str, CfRuleInput) {
+    let cell_is = |operator, formula: &str, formula2: Option<&str>| CfRuleInput::CellIs {
+        operator,
+        formula: formula.to_string(),
+        formula2: formula2.map(str::to_string),
+        format: red_format(),
+        stop_if_true: kind % 2 == 0,
+    };
+    match kind % 10 {
+        0 => (
+            "A1:D6",
+            CfRuleInput::ColorScale {
+                thresholds: vec![
+                    ColorScaleThreshold {
+                        cfvo: Cfvo::Min,
+                        color: Color::Rgb("#FF0000".to_string()),
+                    },
+                    ColorScaleThreshold {
+                        cfvo: Cfvo::Max,
+                        color: Color::Rgb("#00FF00".to_string()),
+                    },
+                ],
+            },
+        ),
+        1 => ("A1:B6", cell_is(ValueOperator::GreaterThan, "2", None)),
+        2 => (
+            "A1:D6",
+            CfRuleInput::Formula {
+                formula: "=B1>2".to_string(),
+                format: red_format(),
+                stop_if_true: false,
+            },
+        ),
+        3 => (
+            "B1:C6",
+            CfRuleInput::Formula {
+                formula: "=SUM(Sheet2!$A$1:$A$3)>3".to_string(),
+                format: red_format(),
+                stop_if_true: false,
+            },
+        ),
+        4 => (
+            "A1:D6",
+            CfRuleInput::Text {
+                operator: TextOperator::Contains,
+                value: "a".to_string(),
+                format: red_format(),
+                stop_if_true: false,
+            },
+        ),
+        5 => (
+            "C1:D6",
+            CfRuleInput::AboveAverage {
+                format: red_format(),
+                stop_if_true: false,
+            },
+        ),
+        6 => (
+            "A1:A6",
+            CfRuleInput::DuplicateValues {
+                format: red_format(),
+                stop_if_true: false,
+            },
+        ),
+        7 => (
+            "A1:D6",
+            cell_is(ValueOperator::Between, "=$E$1", Some("=$E$2")),
+        ),
+        8 => (
+            "A1:D6",
+            CfRuleInput::Top10 {
+                rank: 2,
+                percent: false,
+                format: red_format(),
+                stop_if_true: false,
+            },
+        ),
+        _ => (
+            "A1:D6",
+            CfRuleInput::Blanks {
+                format: red_format(),
+                stop_if_true: false,
+            },
+        ),
+    }
 }
 
 fn tsv(rows: &[Vec<String>]) -> String {
@@ -248,6 +355,10 @@ fn apply(model: &mut UserModel, op: &Op) -> bool {
         Op::DeleteRow(sheet, row) => model.delete_rows(*sheet, *row, 1),
         Op::HideRow(sheet, row, hidden) => model.set_rows_hidden(*sheet, *row, *row, *hidden),
         Op::DefineName(range) => define_name(model, range),
+        Op::AddRule(sheet, kind) => {
+            let (range, rule) = rule(*kind);
+            model.add_conditional_formatting(*sheet, range, rule)
+        }
         Op::Undo => model.undo(),
         Op::Redo => model.redo(),
     };
@@ -268,6 +379,22 @@ fn values(model: &UserModel) -> Vec<(u32, i32, i32, CellValue)> {
         }
     }
     values
+}
+
+fn styles(model: &UserModel) -> Vec<String> {
+    let mut styles = Vec::new();
+    for sheet in 0..SHEETS {
+        for row in 1..=COMPARED_ROWS {
+            for column in 1..=COLUMNS + 1 {
+                let style = model
+                    .get_model()
+                    .get_extended_style_for_cell(sheet, row, column)
+                    .unwrap();
+                styles.push(serde_json::to_string(&style).unwrap());
+            }
+        }
+    }
+    styles
 }
 
 fn evaluated_from_scratch(model: &UserModel) -> UserModel<'static> {
@@ -311,8 +438,9 @@ fn incremental_recalculation_matches_a_full_evaluation() {
             if model.get_model().criteria_deltas() > deltas_before {
                 deltas.set(deltas.get() + 1);
             }
-            let expected = values(&evaluated_from_scratch(&model));
-            prop_assert_eq!(values(&model), expected, "after {:?}", op);
+            let fresh = evaluated_from_scratch(&model);
+            prop_assert_eq!(values(&model), values(&fresh), "after {:?}", op);
+            prop_assert_eq!(styles(&model), styles(&fresh), "styles after {:?}", op);
         }
         Ok(())
     });

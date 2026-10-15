@@ -4,6 +4,7 @@ mod average;
 mod cell_is;
 mod duplicates;
 mod formula;
+mod incremental;
 mod priority;
 mod stop_if_true;
 mod text;

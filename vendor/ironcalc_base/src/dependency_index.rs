@@ -205,6 +205,191 @@ fn widen_to_largest_shape(references: &mut [Reference]) {
     }
 }
 
+// (sheet, first row, first column, last row, last column)
+pub(crate) type PrecedentRect = (u32, i32, i32, i32, i32);
+
+fn bounds(reference: &Reference) -> PrecedentRect {
+    match *reference {
+        Reference::Cell((sheet, row, column)) => (sheet, row, column, row, column),
+        Reference::Range {
+            sheet,
+            first_row,
+            first_column,
+            last_row,
+            last_column,
+        } => (sheet, first_row, first_column, last_row, last_column),
+    }
+}
+
+// What a formula that is evaluated at every cell between `first` and `second` can read:
+// each reference as the box covering where it lands for any of those cells, or None when
+// the formula is volatile and so reads what it cannot tell beforehand. References move
+// in step with the cell, so the corners bound all the cells between them.
+pub(crate) fn precedent_rects(
+    node: &Node,
+    first: CellKey,
+    second: CellKey,
+) -> Option<Vec<PrecedentRect>> {
+    let at_first = References::of(node, first);
+    let at_second = References::of(node, second);
+    if at_first.volatile || at_second.volatile || at_first.found.len() != at_second.found.len() {
+        return None;
+    }
+    let mut rects = Vec::with_capacity(at_first.found.len());
+    for (one, other) in at_first.found.iter().zip(&at_second.found) {
+        let (sheet, row1, column1, row2, column2) = bounds(one);
+        let (other_sheet, other_row1, other_column1, other_row2, other_column2) = bounds(other);
+        if sheet != other_sheet {
+            return None;
+        }
+        rects.push((
+            sheet,
+            row1.min(other_row1),
+            column1.min(other_column1),
+            row2.max(other_row2),
+            column2.max(other_column2),
+        ));
+    }
+    Some(rects)
+}
+
+// A reference of a formula evaluated at many cells, as it lands for the anchor cell and
+// whether it shifts with the row and with the column of the cell the formula is at.
+pub(crate) struct OffsetPrecedent {
+    rect: PrecedentRect,
+    moves_with_row: bool,
+    moves_with_column: bool,
+}
+
+impl OffsetPrecedent {
+    // The box this reference covers for the cells up to `shift` rows and columns from the
+    // anchor cell.
+    pub(crate) fn reach(&self, (rows, columns): (i32, i32)) -> PrecedentRect {
+        let (sheet, row1, column1, row2, column2) = self.rect;
+        (
+            sheet,
+            row1,
+            column1,
+            if self.moves_with_row {
+                row2.saturating_add(rows)
+            } else {
+                row2
+            },
+            if self.moves_with_column {
+                column2.saturating_add(columns)
+            } else {
+                column2
+            },
+        )
+    }
+
+    // The box of cells, as (first row, first column, last row, last column), whose formula
+    // reads `cell` through this reference, or None when none does.
+    pub(crate) fn readers_of(
+        &self,
+        (sheet, row, column): CellKey,
+        (anchor_row, anchor_column): (i32, i32),
+    ) -> Option<(i32, i32, i32, i32)> {
+        let (rect_sheet, row1, column1, row2, column2) = self.rect;
+        if rect_sheet != sheet {
+            return None;
+        }
+        let rows = readers_on_axis(row, row1, row2, anchor_row, self.moves_with_row)?;
+        let columns = readers_on_axis(
+            column,
+            column1,
+            column2,
+            anchor_column,
+            self.moves_with_column,
+        )?;
+        Some((rows.0, columns.0, rows.1, columns.1))
+    }
+}
+
+fn readers_on_axis(
+    position: i32,
+    first: i32,
+    last: i32,
+    anchor: i32,
+    moves: bool,
+) -> Option<(i32, i32)> {
+    if moves {
+        Some((
+            position.saturating_sub(last).saturating_add(anchor),
+            position.saturating_sub(first).saturating_add(anchor),
+        ))
+    } else if (first..=last).contains(&position) {
+        Some((i32::MIN, i32::MAX))
+    } else {
+        None
+    }
+}
+
+// The references of a formula parsed for `anchor`, each marked with whether it shifts with
+// the cell the formula is evaluated at. None when the formula is volatile or a reference
+// does something else, such as swapping its ends: the probes at other cells tell.
+pub(crate) fn precedents_by_offset(node: &Node, anchor: CellKey) -> Option<Vec<OffsetPrecedent>> {
+    let (sheet, row, column) = anchor;
+    let probe = |rows: i32, columns: i32| {
+        References::of(
+            node,
+            (
+                sheet,
+                row.saturating_add(rows),
+                column.saturating_add(columns),
+            ),
+        )
+    };
+    let base = probe(0, 0);
+    let near = probe(1, 1);
+    let far = probe(3, 7);
+    if base.volatile || base.found.len() != near.found.len() || base.found.len() != far.found.len()
+    {
+        return None;
+    }
+    let mut precedents = Vec::with_capacity(base.found.len());
+    for ((at_base, at_near), at_far) in base.found.iter().zip(&near.found).zip(&far.found) {
+        let rect @ (rect_sheet, row1, column1, row2, column2) = bounds(at_base);
+        let (near_sheet, near_row1, near_column1, near_row2, near_column2) = bounds(at_near);
+        if near_sheet != rect_sheet {
+            return None;
+        }
+        let moves_with_row =
+            near_row1 == row1.saturating_add(1) && near_row2 == row2.saturating_add(1);
+        let rows_stay = near_row1 == row1 && near_row2 == row2;
+        let moves_with_column =
+            near_column1 == column1.saturating_add(1) && near_column2 == column2.saturating_add(1);
+        let columns_stay = near_column1 == column1 && near_column2 == column2;
+        if !(moves_with_row || rows_stay) || !(moves_with_column || columns_stay) {
+            return None;
+        }
+        let shifted = |value: i32, moves: bool, by: i32| {
+            if moves {
+                value.saturating_add(by)
+            } else {
+                value
+            }
+        };
+        if bounds(at_far)
+            != (
+                rect_sheet,
+                shifted(row1, moves_with_row, 3),
+                shifted(column1, moves_with_column, 7),
+                shifted(row2, moves_with_row, 3),
+                shifted(column2, moves_with_column, 7),
+            )
+        {
+            return None;
+        }
+        precedents.push(OffsetPrecedent {
+            rect,
+            moves_with_row,
+            moves_with_column,
+        });
+    }
+    Some(precedents)
+}
+
 // Finds the intervals containing a row in logarithmic time plus the number of matches.
 struct RowIntervals<T> {
     // Sorted by first row. `max_last_row[mid]` holds the largest last row in the slice
@@ -452,9 +637,32 @@ impl DependencyIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::{DependencyIndex, RowIntervals};
+    #![allow(clippy::unwrap_used)]
+
+    use super::{precedent_rects, precedents_by_offset, DependencyIndex, RowIntervals};
     use crate::expressions::parser::Node;
+    use crate::expressions::token::OpSum;
     use crate::functions::Function;
+
+    fn reference(absolute_row: bool, absolute_column: bool, row: i32, column: i32) -> Node {
+        Node::ReferenceKind {
+            sheet_name: None,
+            sheet_index: 0,
+            absolute_row,
+            absolute_column,
+            row,
+            column,
+        }
+    }
+
+    // `=$B1+C$2` parsed for A1.
+    fn mixed_sum() -> Node {
+        Node::OpSumKind {
+            kind: OpSum::Add,
+            left: Box::new(reference(false, true, 0, 2)),
+            right: Box::new(reference(true, false, 2, 2)),
+        }
+    }
 
     fn range(row1: i32, row2: i32, absolute: bool) -> Node {
         Node::RangeKind {
@@ -517,5 +725,57 @@ mod tests {
                 .collect();
             assert_eq!(found, expected, "row {row}");
         }
+    }
+
+    #[test]
+    fn offset_precedents_tell_which_cells_read_an_edited_one() {
+        let precedents = precedents_by_offset(&mixed_sum(), (0, 1, 1)).unwrap();
+        assert_eq!(precedents.len(), 2);
+        // $B1 follows the row of the cell and stays in column B.
+        assert_eq!(
+            precedents[0].readers_of((0, 5, 2), (1, 1)),
+            Some((5, i32::MIN, 5, i32::MAX))
+        );
+        assert_eq!(precedents[0].readers_of((0, 5, 3), (1, 1)), None);
+        // C$2 follows the column of the cell and stays in row 2.
+        assert_eq!(
+            precedents[1].readers_of((0, 2, 7), (1, 1)),
+            Some((i32::MIN, 5, i32::MAX, 5))
+        );
+        assert_eq!(precedents[1].readers_of((0, 3, 7), (1, 1)), None);
+        // Up to 10 rows and 4 columns from A1 they can reach (11, 2) and (2, 7).
+        assert_eq!(precedents[0].reach((10, 4)), (0, 1, 2, 11, 2));
+        assert_eq!(precedents[1].reach((10, 4)), (0, 2, 3, 2, 7));
+    }
+
+    #[test]
+    fn offset_precedents_refuse_what_they_cannot_tell() {
+        let rand = Node::FunctionKind {
+            kind: Function::Rand,
+            args: Vec::new(),
+        };
+        assert!(precedents_by_offset(&rand, (0, 1, 1)).is_none());
+        // `$A$5:A1` swaps its ends once the cell is below row 5.
+        let swapping = Node::RangeKind {
+            sheet_name: None,
+            sheet_index: 0,
+            absolute_row1: true,
+            absolute_column1: true,
+            row1: 5,
+            column1: 1,
+            absolute_row2: false,
+            absolute_column2: false,
+            row2: 0,
+            column2: 0,
+        };
+        assert!(precedents_by_offset(&swapping, (0, 1, 1)).is_none());
+    }
+
+    #[test]
+    fn precedent_rects_cover_every_cell_between_the_corners() {
+        assert_eq!(
+            precedent_rects(&mixed_sum(), (0, 1, 1), (0, 10, 4)).unwrap(),
+            vec![(0, 1, 2, 10, 2), (0, 2, 3, 2, 6)]
+        );
     }
 }

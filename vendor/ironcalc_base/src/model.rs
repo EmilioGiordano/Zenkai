@@ -34,6 +34,7 @@ use crate::{
     utils as common,
 };
 
+use crate::cf_runs::CfRun;
 use crate::criteria_ranges::CriteriaRanges;
 use crate::incremental::{circular_cells_fit, Dependencies, Recalculation};
 use crate::{cf_types::CfCellResult, tz::Tz};
@@ -218,9 +219,12 @@ pub struct Model<'a> {
     pub(crate) spill_cells: Vec<CellReferenceIndex>,
     /// A dictionary to keep track of which cells or ranges support a given cell.
     pub(crate) support: HashMap<CellReferenceIndex, Vec<CellOrRange>>,
-    /// Evaluated CF results per cell, keyed by (sheet_index, row, column).
-    /// Rebuilt from scratch on every call to evaluate_conditional_formatting().
-    pub(crate) cf_cache: HashMap<(u32, i32, i32), Vec<CfCellResult>>,
+    /// What each conditional formatting rule gave to its cells, per sheet in priority
+    /// order. Rebuilt by evaluate_conditional_formatting(), and updated for the cells an
+    /// incremental recalculation changed.
+    pub(crate) cf_runs: Vec<Vec<CfRun>>,
+    /// Results of the rule being evaluated: (row, column, result, stops the rules below).
+    pub(crate) cf_sink: Vec<(i32, i32, CfCellResult, bool)>,
     /// Which formulas refer to which cells, for incremental recalculation.
     pub(crate) dependencies: Option<Box<Dependencies>>,
     /// How many times a formula was reached again while it was being evaluated.
@@ -1680,7 +1684,8 @@ impl<'a> Model<'a> {
             last_lambda_id: 0,
             spill_cells: Vec::new(),
             support: HashMap::new(),
-            cf_cache: HashMap::new(),
+            cf_runs: Vec::new(),
+            cf_sink: Vec::new(),
             dependencies: None,
             circular_hits: 0,
             circular_cells: HashSet::new(),
