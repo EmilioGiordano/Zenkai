@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn a_workbook_never_saved_is_listed_without_a_folder_once_it_has_work() {
-        let mut documents = busy();
+        let documents = busy();
         let blank = documents.active_id().unwrap();
         let listed = documents.unsaved();
         assert_eq!(listed.len(), 1);

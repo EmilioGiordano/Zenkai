@@ -1668,7 +1668,7 @@ impl Workspace {
                     this.save_ended(id, false, window, cx);
                     return;
                 };
-                let mut fully_saved = false;
+                let fully_saved;
                 match result {
                     Ok(()) => {
                         if document.path.as_ref() != Some(&path) {
