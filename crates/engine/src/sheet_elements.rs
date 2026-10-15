@@ -7,6 +7,7 @@
 // namespace (such as xr:uid) and extension lists are left out.
 
 use std::collections::BTreeSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -128,7 +129,7 @@ impl Reach {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Element {
     // Position in CARRIED, which is the schema order.
     order: usize,
@@ -136,7 +137,23 @@ struct Element {
     place: Place,
     // Shared, so a save takes the elements without copying their text.
     xml: Arc<str>,
+    // Of `xml`, taken once when read.
+    digest: u64,
     reach: Reach,
+}
+
+// Every save and open hashes a sheet's elements into its print; the text, up to the byte
+// cap, is hashed once when read, and its digest stands for it.
+impl Hash for Element {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.order, self.place, self.digest, self.reach).hash(state);
+    }
+}
+
+fn digest(xml: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    xml.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -220,6 +237,7 @@ impl Elements {
                 order,
                 name,
                 place,
+                digest: digest(&xml),
                 xml: xml.into(),
                 reach: reach(node),
             };
@@ -472,6 +490,7 @@ fn rebuild(node: Node) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::hash::{DefaultHasher, Hash, Hasher};
     use std::sync::Arc;
 
     use super::{
@@ -707,6 +726,23 @@ mod tests {
         let pairs: Vec<_> = taken.all().zip(sheet.all()).collect();
         assert_eq!(pairs.len(), 2);
         assert!(pairs.iter().all(|(a, b)| Arc::ptr_eq(&a.xml, &b.xml)));
+    }
+
+    fn hashed(elements: &Elements) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        elements.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn the_hash_follows_the_text_and_what_a_move_drops() {
+        let filter = r#"<autoFilter ref="A1:B2"/>"#;
+        assert_eq!(hashed(&elements(filter)), hashed(&elements(filter)));
+        let other = r#"<autoFilter ref="A1:B3"/>"#;
+        assert_ne!(hashed(&elements(filter)), hashed(&elements(other)));
+        let mut moved = elements(filter);
+        moved.moved(Axis::Rows, 1);
+        assert_ne!(hashed(&moved), hashed(&elements(filter)));
     }
 
     #[test]
