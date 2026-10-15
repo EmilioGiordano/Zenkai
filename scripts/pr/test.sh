@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Dry-run tests for the PR scripts. Never touches GitHub.
+set -u
+
+dir=$(cd "$(dirname "$0")" && pwd)
+fx=$dir/fixtures
+failed=0
+
+expect() {
+  local want=$1 name=$2
+  shift 2
+  "$@" >/dev/null 2>&1
+  local got=$?
+  if [ "$got" -eq "$want" ]; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name (exit $got, wanted $want)"
+    failed=$((failed + 1))
+  fi
+}
+
+expect_output() {
+  local pattern=$1 name=$2
+  shift 2
+  if "$@" 2>&1 | grep -q -- "$pattern"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name (missing: $pattern)"
+    failed=$((failed + 1))
+  fi
+}
+
+long_title="feat: $(printf 'a%.0s' $(seq 1 70))"
+dot_title="feat: add $(printf '\302\267') thing"
+two_lines=$(printf 'a\nb')
+
+expect 0 "lint good" "$dir/lint.sh" "feat: add pr scripts" "$fx/good-body.md"
+expect 0 "lint stacked title and decisions" "$dir/lint.sh" "feat: add pr scripts (2/3)" "$fx/good-body-decisions.md"
+expect 1 "lint bad type" "$dir/lint.sh" "wip: add pr scripts" "$fx/good-body.md"
+expect 1 "lint trailing period" "$dir/lint.sh" "feat: add pr scripts." "$fx/good-body.md"
+expect 1 "lint uppercase" "$dir/lint.sh" "feat: Add pr scripts" "$fx/good-body.md"
+expect 1 "lint long title" "$dir/lint.sh" "$long_title" "$fx/good-body.md"
+expect 1 "lint dot title" "$dir/lint.sh" "$dot_title" "$fx/good-body.md"
+expect 1 "lint bad section order" "$dir/lint.sh" "feat: add pr scripts" "$fx/bad-body.md"
+expect 1 "lint dot body" "$dir/lint.sh" "feat: add pr scripts" "$fx/dot-body.md"
+expect 1 "lint long body" "$dir/lint.sh" "feat: add pr scripts" "$fx/long-body.md"
+expect_output "missing '## Why'" "lint reports missing section" "$dir/lint.sh" "feat: x" "$fx/long-body.md"
+expect_output "Card" "lint reports missing card" "$dir/lint.sh" "feat: x" "$fx/long-body.md"
+
+expect 0 "review good" "$dir/review.sh" --dry-run 5 "$fx/good-review.json"
+expect_output '"event": "COMMENT"' "review without blockers is COMMENT" "$dir/review.sh" --dry-run 5 "$fx/good-review.json"
+expect_output '"event": "REQUEST_CHANGES"' "review with High requests changes" "$dir/review.sh" --dry-run 5 "$fx/blocking-review.json"
+expect_output '\[quality-reviewer\] PASS' "review body prefix" "$dir/review.sh" --dry-run 5 "$fx/good-review.json"
+expect_output 'suggestion' "review suggestion block" "$dir/review.sh" --dry-run 5 "$fx/good-review.json"
+expect 1 "review bad shape" "$dir/review.sh" --dry-run 5 "$fx/bad-review.json"
+expect 1 "review middle dot" "$dir/review.sh" --dry-run 5 "$fx/dot-review.json"
+expect 2 "review non-numeric pr" "$dir/review.sh" --dry-run abc "$fx/good-review.json"
+
+expect 0 "open good" "$dir/open.sh" --dry-run chore/x main "feat: add pr scripts" "$fx/good-body.md"
+expect_output 'gh pr create --draft --base main --head chore/x' "open prints gh command" "$dir/open.sh" --dry-run chore/x main "feat: add pr scripts" "$fx/good-body.md"
+expect 1 "open refuses main" "$dir/open.sh" --dry-run main main "feat: x" "$fx/good-body.md"
+expect 1 "open refuses staging" "$dir/open.sh" --dry-run staging/2026-10-14 main "feat: x" "$fx/good-body.md"
+expect 1 "open refuses night" "$dir/open.sh" --dry-run night/a main "feat: x" "$fx/good-body.md"
+expect 1 "open refuses agent" "$dir/open.sh" --dry-run worktree-agent-1 main "feat: x" "$fx/good-body.md"
+expect 1 "open runs lint" "$dir/open.sh" --dry-run chore/x main "bad title." "$fx/good-body.md"
+
+expect 0 "reply good" "$dir/reply.sh" --dry-run 5 123 "Fixed in abc1234."
+expect 1 "reply multi-line" "$dir/reply.sh" --dry-run 5 123 "$two_lines"
+expect 2 "reply bad id" "$dir/reply.sh" --dry-run 5 x "Fixed in abc1234."
+
+if [ "$failed" -eq 0 ]; then
+  echo "all passed"
+fi
+[ "$failed" -eq 0 ]
