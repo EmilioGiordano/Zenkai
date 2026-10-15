@@ -63,6 +63,11 @@ expect 1 "open refuses staging" "$dir/open.sh" --dry-run staging/2026-10-14 main
 expect 1 "open refuses night" "$dir/open.sh" --dry-run night/a main "feat: x" "$fx/good-body.md"
 expect 1 "open refuses agent" "$dir/open.sh" --dry-run worktree-agent-1 main "feat: x" "$fx/good-body.md"
 expect 1 "open runs lint" "$dir/open.sh" --dry-run chore/x main "bad title." "$fx/good-body.md"
+for bad_branch in "HEAD:main" "+x:main" "refs/heads/main" "--receive-pack=x" "HEAD" "x:y" "@{-1}" "a..b"; do
+  expect_output "refusing\|not a valid" "open refuses branch $bad_branch" "$dir/open.sh" --dry-run "$bad_branch" main "feat: x" "$fx/good-body.md"
+  expect 1 "open exit status for branch $bad_branch" "$dir/open.sh" --dry-run "$bad_branch" main "feat: x" "$fx/good-body.md"
+done
+expect_output 'git push -u origin -- refs/heads/chore/x' "open pushes an explicit ref" "$dir/open.sh" --dry-run chore/x main "feat: add thing" "$fx/good-body.md"
 
 expect 0 "reply good" "$dir/reply.sh" --dry-run 5 123 "Fixed in abc1234."
 expect 1 "reply multi-line" "$dir/reply.sh" --dry-run 5 123 "$two_lines"

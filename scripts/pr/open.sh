@@ -34,6 +34,16 @@ title=$3
 body_file=$4
 
 case "$branch" in
+  '' | -* | +* | *:* | *@\{* | refs/* | HEAD)
+    echo "open: refusing branch name '$branch'" >&2
+    exit 1
+    ;;
+esac
+if ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
+  echo "open: '$branch' is not a valid branch name" >&2
+  exit 1
+fi
+case "$branch" in
   main | staging/* | night/* | worktree-agent-*)
     echo "open: refusing to open a PR from '$branch'" >&2
     exit 1
@@ -43,7 +53,7 @@ esac
 "$script_dir/lint.sh" "$title" "$body_file"
 
 if [ "$dry_run" -eq 1 ]; then
-  echo "git push -u origin $branch"
+  echo "git push -u origin -- refs/heads/$branch"
   echo "gh pr create --draft --base $base --head $branch --title \"$title\" --body-file $body_file"
   if [ -n "$card" ]; then
     link_pr_to_card 1 "$card" "<pr-url>"
@@ -51,7 +61,7 @@ if [ "$dry_run" -eq 1 ]; then
   exit 0
 fi
 
-git push -u origin "$branch"
+git push -u origin -- "refs/heads/$branch"
 url=$(gh pr create --draft --base "$base" --head "$branch" --title "$title" --body-file "$body_file" | tail -n 1)
 echo "$url"
 if [ -n "$card" ]; then
