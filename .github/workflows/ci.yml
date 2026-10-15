@@ -35,8 +35,8 @@ env:
 jobs:
   check:
     # Manual run: macOS, everything. Draft PR: fmt and clippy on Linux. Ready PR: everything on
-    # Linux and Windows. Push to main: builds the test artifacts on Linux and Windows to warm the
-    # cache, nothing else.
+    # Linux and Windows. Push to main: clippy and the test artifacts on Linux and Windows, to warm
+    # the cache.
     name: Check (${{ matrix.os }})
     strategy:
       fail-fast: false
@@ -86,7 +86,6 @@ jobs:
         run: cargo fmt --check
 
       - name: Clippy
-        if: github.event_name != 'push'
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
