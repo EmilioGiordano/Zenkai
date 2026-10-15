@@ -83,18 +83,16 @@ impl Documents {
                 files: self
                     .members(space.id)
                     .filter(|entry| !entry.loaded().is_some_and(Document::is_pristine))
-                    .filter_map(|entry| {
+                    .filter(|entry| entry.path().is_some() || !discarded.contains(&entry.id()))
+                    .map(|entry| {
                         let mut link = entry.to_link();
                         if discarded.contains(&link.id) {
-                            if link.path.is_none() {
-                                return None;
-                            }
                             link.dirty = false;
                             link.recovery = None;
                         } else if entry.loaded().is_some_and(Document::needs_recovery) {
                             link.recovery = recovery_file(link.id);
                         }
-                        Some(session::record_of(&link, Some(link.id) == active))
+                        session::record_of(&link, Some(link.id) == active)
                     })
                     .collect(),
             })
