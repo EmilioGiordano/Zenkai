@@ -1,6 +1,6 @@
 ---
 name: zk-branch
-description: Run a Zenkai task branch end to end from a TASK file in a worktree: implement, branch checks, parallel reviews, fixes, and a REPORT file.
+description: Run a Zenkai task branch end to end from a TASK file in a worktree: implement, static checks, parallel reviews, fixes, and a REPORT file.
 ---
 
 # zk-branch
@@ -34,7 +34,7 @@ engine work under `crates/engine` or `vendor/` gets
 `.claude/agents/engine-implementer.md`, everything else gets
 `.claude/agents/implementer.md`.
 
-## 2. Branch checks
+## 2. Static checks
 
 Static only, no `cargo`: the implementer self-reviews every changed signature, call site,
 import and `match`, and may run `rustfmt --check` on the touched files. The build is the
@@ -69,7 +69,7 @@ defect, failure scenario.
 
 Hand the findings to the same implementer subagent from step 1 across all fix
 rounds. It verifies each finding, fixes the real ones, rejects the wrong ones
-with a reason, and reruns the branch checks from step 2.
+with a reason, and reruns the static checks from step 2.
 
 ## 5. Rounds
 
@@ -78,5 +78,5 @@ At most 2 review rounds (steps 3-4). If round 2 still fails, stop and report.
 ## 6. Report
 
 Write `REPORT-<topic>.md` in the worktree root, at most 60 lines: verdict,
-commits, checks run with their results, each finding fixed or rejected with a
+commits, self-review and `rustfmt --check` result, each finding fixed or rejected with a
 reason, open risks, and what needs a manual GUI test.
