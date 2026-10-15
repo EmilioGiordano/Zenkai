@@ -151,8 +151,8 @@ The calculation engine is IronCalc's `ironcalc_base` 0.8.3, vendored in
 `vendor/ironcalc_base` with Zenkai's changes (incremental recalculation) and built in
 place of the crates.io release through `[patch.crates-io]`. It sits outside the
 workspace, so the commands above do not cover it; after changing it, also run its own
-test suite, together with `vendor\ironcalc`, which is also outside the workspace; staging
-runs both:
+test suite, together with `vendor\ironcalc` once it exists, which is also outside the
+workspace; staging runs every vendor crate present:
 
 ```powershell
 cargo test -j 4 --manifest-path vendor\ironcalc_base\Cargo.toml --target-dir target\vendor

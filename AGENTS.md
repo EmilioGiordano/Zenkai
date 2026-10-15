@@ -224,11 +224,11 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo deny check
 cargo build --release
-cargo test --manifest-path vendor/ironcalc_base/Cargo.toml
-cargo test --manifest-path vendor/ironcalc/Cargo.toml
+cargo test --manifest-path vendor/<crate>/Cargo.toml
 ```
 
-The workspace excludes the two vendor crates, so their suites are run explicitly.
+The workspace excludes the vendor crates, so the last line runs once for each one present
+under `vendor/`: `ironcalc_base`, and `ironcalc` once it exists.
 
 Plus the benchmark in `bench/` (release build) when the batch touches `crates/engine`,
 `crates/grid`, `crates/formats` or `bench/`. Never draw performance conclusions from a
