@@ -11,6 +11,7 @@ use std::io::{self, Write};
 use ironcalc::base::expressions::utils::number_to_column;
 use ironcalc::base::types::Worksheet;
 
+use crate::sheet_elements::Place;
 use crate::sheet_settings::{Outline, SheetSettings, attribute};
 
 const MAX_ROW: i32 = 1_048_576;
@@ -243,6 +244,8 @@ fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<Stri
     outline_columns(&head, &settings.columns.outline).map_err(other)
 }
 
+// `tail` starts with </sheetData>; IronCalc writes <mergeCells>, <conditionalFormatting>
+// and its own <extLst> after it.
 fn with_trailing_elements(tail: String, settings: &SheetSettings) -> io::Result<String> {
     let mut tail = tail;
     let at = tail
@@ -250,6 +253,13 @@ fn with_trailing_elements(tail: String, settings: &SheetSettings) -> io::Result<
         .or_else(|| tail.rfind("</worksheet>"))
         .ok_or_else(|| other("the written sheet is not closed"))?;
     tail.insert_str(at, &settings.trailing_elements());
+    if !tail.starts_with(SHEET_DATA_END) {
+        return Err(other("the written sheet data is not closed"));
+    }
+    tail.insert_str(
+        SHEET_DATA_END.len(),
+        &settings.elements.at(Place::AfterCellData),
+    );
     Ok(tail)
 }
 
@@ -347,6 +357,43 @@ mod tests {
         let mut writer = SheetWriter::new(Vec::new(), None);
         std::io::Write::write_all(&mut writer, b"<worksheet><sheetData><row r=\"1\">").unwrap();
         assert!(writer.finish().is_err());
+    }
+
+    #[test]
+    fn carried_elements_go_around_what_ironcalc_writes_in_schema_order() {
+        let source = concat!(
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<sheetData/><sheetProtection sheet="1"/><autoFilter ref="A1:B2"/>"#,
+            r#"<hyperlinks><hyperlink ref="A1" r:id="rId2"/></hyperlinks><pageMargins left="0.7" "#,
+            r#"right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><rowBreaks "#,
+            r#"count="1" manualBreakCount="1"><brk id="5" max="16383" man="1"/></rowBreaks>"#,
+            r#"<drawing r:id="rId1"/></worksheet>"#
+        );
+        let settings = crate::sheet_settings::read(source);
+        let xml = concat!(
+            "<worksheet><sheetData><row r=\"1\"/></sheetData><mergeCells/>",
+            "<conditionalFormatting/><extLst/></worksheet>"
+        );
+        let order = [
+            "</sheetData>",
+            "<sheetProtection",
+            "<autoFilter",
+            "<mergeCells",
+            "<conditionalFormatting",
+            "<hyperlinks",
+            "<pageMargins",
+            "<rowBreaks",
+            "<drawing",
+            "<extLst",
+            "</worksheet>",
+        ];
+        for piece in [1, 5, xml.len()] {
+            let written = streamed(xml, Some(&settings), piece);
+            let positions: Vec<Option<usize>> = order.iter().map(|tag| written.find(tag)).collect();
+            assert!(positions.iter().all(Option::is_some), "{written}");
+            assert!(positions.is_sorted(), "{written}");
+        }
     }
 
     #[test]

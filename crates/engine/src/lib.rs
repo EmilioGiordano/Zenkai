@@ -13,6 +13,7 @@ mod save_patch;
 mod save_sheet;
 mod saved;
 mod sheet_copy;
+mod sheet_elements;
 mod sheet_settings;
 #[cfg(test)]
 mod used_end_property;

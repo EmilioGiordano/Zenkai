@@ -20,10 +20,11 @@ use crate::preflight::run_with_engine_stack;
 use crate::save_patch::{PatchPlan, Patched, patch_plan, write_patch};
 use crate::save_sheet::{SheetWriter, prepare};
 use crate::saved::{
-    Contents, Metadata, SavedFile, SavedSlot, Stamp, Strings, selected_sheet, sheet_prints,
-    style_counts,
+    Contents, Metadata, Remains, SavedFile, SavedSlot, Stamp, Strings, selected_sheet,
+    sheet_prints, style_counts,
 };
 use crate::sheet_copy::copied_sheet;
+use crate::sheet_elements::Relationships;
 use crate::sheet_settings::{Carried, SheetSettings};
 
 // IronCalc's rows are written in many small pieces; the settings writer and the deflate
@@ -44,6 +45,16 @@ pub(crate) struct SheetJob {
     pub(crate) formulas: Vec<(Node, StaticResult)>,
     pub(crate) settings: Option<SheetSettings>,
     pub(crate) selected: bool,
+}
+
+impl SheetJob {
+    // Whether the sheet's relationships part goes with it: only then are the elements
+    // pointing into it written.
+    pub(crate) fn relationships(&self) -> Relationships {
+        self.settings
+            .as_ref()
+            .map_or(Relationships::Dropped, |s| s.elements.relationships())
+    }
 }
 
 // Everything a full save writes, copied out of the model so the file is written without
@@ -118,12 +129,14 @@ impl<'m> ModelData<'m> {
     }
 }
 
+// `remains` is what the file the sheet is written into holds of it.
 pub(crate) fn sheet_job(
     data: ModelData<'_>,
     carried: &Carried,
     index: usize,
     part: String,
     selected: bool,
+    remains: Remains,
 ) -> Result<SheetJob, EngineError> {
     let sheet = data
         .book
@@ -134,7 +147,9 @@ pub(crate) fn sheet_job(
         .formulas
         .get(index)
         .ok_or_else(|| rejected("a sheet has no formulas"))?;
-    let settings = carried.written(sheet).cloned();
+    let settings = carried
+        .written(sheet)
+        .map(|settings| settings.left_in(remains));
     let (sheet, formulas) = copied_sheet(sheet, formulas)?;
     Ok(SheetJob {
         part,
@@ -152,7 +167,17 @@ fn full_part(index: usize) -> String {
 fn full_sheets(data: ModelData<'_>, carried: &Carried) -> Result<Vec<SheetJob>, EngineError> {
     let selected = selected_sheet(data.book);
     (0..data.book.worksheets.len())
-        .map(|index| sheet_job(data, carried, index, full_part(index), index == selected))
+        .map(|index| {
+            let part = full_part(index);
+            sheet_job(
+                data,
+                carried,
+                index,
+                part,
+                index == selected,
+                Remains::Nothing,
+            )
+        })
         .collect()
 }
 
@@ -177,6 +202,7 @@ fn full_contents(
 ) -> Contents {
     Contents {
         worksheets: (0..sheets.len()).map(full_part).collect(),
+        remains: vec![Remains::Nothing; sheets.len()],
         strings: Strings::Aligned(data.book.shared_strings.len()),
         styles: style_counts(data.book),
         book,
@@ -236,11 +262,10 @@ fn choose(
         Some(Patched {
             plan,
             contents,
-            rewritten,
+            dropped,
         }) => {
-            let owned = plan.base.contents.held.owned_by(&rewritten);
             let fate = Fate {
-                dropped: owned.union(&lost).copied().collect(),
+                dropped: dropped.union(&lost).copied().collect(),
                 kept: contents.held.all().into_iter().collect(),
             };
             (Chosen::Patch(plan), contents, fate)

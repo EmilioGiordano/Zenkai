@@ -2,13 +2,16 @@
 // settings and outline, and never writes them. They are read from the original sheet
 // parts on open and written back by `save_sheet` on save. Every element is rebuilt
 // from validated values, never copied as text: the file is hostile input and IronCalc's
-// output declares only the main and relationship namespaces.
+// output declares only the main and relationship namespaces. The elements written back
+// only into the file they were read from are `sheet_elements`.
 
 use std::collections::{BTreeMap, HashMap};
 
 use roxmltree::Node;
 
 use crate::file::Unsupported;
+use crate::saved::Remains;
+use crate::sheet_elements::{Axis, Elements, Place};
 
 const MAX_ROW: u32 = 1_048_576;
 const MAX_COLUMN: u32 = 16_384;
@@ -221,6 +224,7 @@ pub struct SheetSettings {
     pub print: String,
     pub rows: Indexed,
     pub columns: Indexed,
+    pub elements: Elements,
 }
 
 impl SheetSettings {
@@ -246,14 +250,29 @@ impl SheetSettings {
         format!("<sheetFormatPr{attributes}/>")
     }
 
-    // Elements after the cell data, in the order CT_Worksheet requires.
+    // Elements after IronCalc's conditional formatting, in the order CT_Worksheet requires.
     pub fn trailing_elements(&self) -> String {
         format!(
-            "{}{}{}",
+            "{}{}{}{}{}",
+            self.elements.at(Place::BeforePrint),
             self.print,
             self.rows.breaks_element("rowBreaks"),
-            self.columns.breaks_element("colBreaks")
+            self.columns.breaks_element("colBreaks"),
+            self.elements.at(Place::AfterBreaks)
         )
+    }
+
+    // What a save writes into a file that holds `remains` of the sheet.
+    pub(crate) fn left_in(&self, remains: Remains) -> SheetSettings {
+        SheetSettings {
+            properties: self.properties.clone(),
+            view: self.view.clone(),
+            format: self.format.clone(),
+            print: self.print.clone(),
+            rows: self.rows.clone(),
+            columns: self.columns.clone(),
+            elements: self.elements.left_in(remains),
+        }
     }
 }
 
@@ -291,17 +310,29 @@ impl Carried {
     }
 
     pub fn rows_moved(&mut self, sheet_id: u32, from: u32) {
-        if let Some(settings) = self.sheets.get_mut(&sheet_id) {
-            let lost = settings.rows.moved_from(from);
-            self.record(lost);
-        }
+        self.moved(sheet_id, Axis::Rows, from);
     }
 
     pub fn columns_moved(&mut self, sheet_id: u32, from: u32) {
-        if let Some(settings) = self.sheets.get_mut(&sheet_id) {
-            let lost = settings.columns.moved_from(from);
-            self.record(lost);
+        self.moved(sheet_id, Axis::Columns, from);
+    }
+
+    // The elements a move drops are reported by the save that writes the sheet without
+    // them, against what the file it copies from holds (`Held`).
+    fn moved(&mut self, sheet_id: u32, axis: Axis, from: u32) {
+        let mut lost = Vec::new();
+        for (id, settings) in &mut self.sheets {
+            if *id != sheet_id {
+                settings.elements.moved_elsewhere();
+                continue;
+            }
+            lost = match axis {
+                Axis::Rows => settings.rows.moved_from(from),
+                Axis::Columns => settings.columns.moved_from(from),
+            };
+            settings.elements.moved(axis, from);
         }
+        self.record(lost);
     }
 
     fn record(&mut self, lost: Vec<Unsupported>) {
@@ -419,6 +450,7 @@ pub fn read(part: &str) -> SheetSettings {
             .unwrap_or_default(),
         format: child(sheet, "sheetFormatPr").map(|format| attributes(format, SHEET_FORMAT)),
         print: print(sheet),
+        elements: Elements::read(sheet),
         ..SheetSettings::default()
     };
     read_column_outline(sheet, &mut settings.columns);

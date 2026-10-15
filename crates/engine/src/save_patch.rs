@@ -1,7 +1,7 @@
 // A save that starts from the file on disk: every part the workbook did not change is
 // copied without inflating it, and only the changed sheets are written again.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{BufWriter, Seek, Write};
 use std::sync::Arc;
 
@@ -10,9 +10,11 @@ use zenkai_xlsx_reader::{BasePackage, SHARED_STRINGS_PART, Written, relationship
 use zip::ZipWriter;
 
 use crate::error::EngineError;
+use crate::file::Unsupported;
 use crate::fingerprint::{DynamicArrays, SheetPrint};
 use crate::save::{ModelData, SheetJob, deflated, rejected, sheet_job, write_sheet};
-use crate::saved::{Contents, Metadata, SavedFile, Strings};
+use crate::saved::{Contents, Metadata, Remains, SavedFile, Strings};
+use crate::sheet_elements::Relationships;
 use crate::sheet_settings::Carried;
 
 pub(crate) struct PatchPlan {
@@ -28,8 +30,8 @@ pub(crate) struct PatchPlan {
 pub(crate) struct Patched {
     pub(crate) plan: PatchPlan,
     pub(crate) contents: Contents,
-    // The positions of the sheets written again; every other part is copied.
-    pub(crate) rewritten: Vec<usize>,
+    // What the rewritten sheets held in the file and are written without.
+    pub(crate) dropped: BTreeSet<Unsupported>,
 }
 
 // None when the workbook changed in a way only a full save writes: the sheet list, the
@@ -75,13 +77,26 @@ pub(crate) fn patch_plan(
         Strings::Absent if all_strings.is_empty() => (Vec::new(), Strings::Absent),
         Strings::Absent => return Ok(None),
     };
-    let sheets = changed
-        .iter()
-        .map(|&index| {
-            let part = saved.worksheets[index].clone();
-            sheet_job(data, carried, index, part, index == saved.selected)
-        })
-        .collect::<Result<_, _>>()?;
+    let mut held = saved.held.clone();
+    let mut remains = saved.remains.clone();
+    let mut dropped = BTreeSet::new();
+    let mut sheets = Vec::with_capacity(changed.len());
+    for index in changed {
+        let part = saved.worksheets[index].clone();
+        let in_file = remains.get(index).copied().unwrap_or(Remains::Nothing);
+        let job = sheet_job(data, carried, index, part, index == saved.selected, in_file)?;
+        let written = job
+            .settings
+            .as_ref()
+            .map(|settings| settings.elements.kinds())
+            .unwrap_or_default();
+        let relationships = job.relationships();
+        dropped.extend(held.rewrite(index, written, relationships));
+        if let Some(slot) = remains.get_mut(index) {
+            *slot = in_file.rewritten(relationships);
+        }
+        sheets.push(job);
+    }
     let contents = Contents {
         worksheets: saved.worksheets.clone(),
         strings: written_strings,
@@ -90,7 +105,8 @@ pub(crate) fn patch_plan(
         sheets: prints.to_vec(),
         selected: saved.selected,
         metadata: saved.metadata,
-        held: saved.held.without(&changed),
+        held,
+        remains,
         losses_through: carried.losses(),
     };
     Ok(Some(Patched {
@@ -101,7 +117,7 @@ pub(crate) fn patch_plan(
             strings_in_file,
         },
         contents,
-        rewritten: changed,
+        dropped,
     }))
 }
 
@@ -165,10 +181,12 @@ pub(crate) fn write_patch<W: Write + Seek>(
     if !plan.sheets.is_empty() && plan.strings.is_empty() {
         check_strings(saved, &mut base, &names)?;
     }
-    // The relationships of a rewritten sheet point at parts its new XML no longer refers to.
+    // A rewritten sheet written without the elements that point into its relationships
+    // part leaves the part out; the parts it pointed at stay, unreferenced.
     let rels: HashSet<String> = plan
         .sheets
         .iter()
+        .filter(|job| job.relationships() == Relationships::Dropped)
         .map(|job| relationships_part(&job.part))
         .collect();
     let chain = if plan.sheets.is_empty() {
