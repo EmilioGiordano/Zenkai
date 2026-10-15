@@ -17,7 +17,8 @@ You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` fi
 - Never send keystrokes or clicks to the desktop and never launch the app. The user tests
   the exe by hand.
 - Never kill a process, including a running `zenkai.exe`.
-- One `cargo` process at a time, `-j 4`, and no heavy measurement alongside a build. Do not override `CARGO_TARGET_DIR`; use the target dir below.
+- One `cargo` process at a time, `-j 4`, and no heavy measurement alongside a build. Do not
+  override `CARGO_TARGET_DIR`; use the target dir below.
 - Run long commands in the background and wait for the completion notification. Never hand
   back while a build or test is still running, and leave no cargo or rustc process behind.
 

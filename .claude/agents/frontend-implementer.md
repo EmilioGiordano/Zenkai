@@ -60,7 +60,8 @@ already taken about the UI.
 
 ## Validation
 
-Branch level is static; the build is the PR's CI and the full gate runs in staging (see `AGENTS.md`):
+Branch level is static; the build is the PR's CI and the full gate runs in staging (see
+`AGENTS.md`):
 
 1. Never run `cargo`. At most `rustfmt --check` on the touched files. List in the report what
    you could not verify without compiling.
