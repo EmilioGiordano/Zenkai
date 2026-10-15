@@ -47,14 +47,14 @@ expect 1 "lint long body" "$dir/lint.sh" "feat: add pr scripts" "$fx/long-body.m
 expect_output "missing '## Why'" "lint reports missing section" "$dir/lint.sh" "feat: x" "$fx/long-body.md"
 expect_output "Card" "lint reports missing card" "$dir/lint.sh" "feat: x" "$fx/long-body.md"
 
-expect 0 "review good" "$dir/review.sh" --dry-run 5 "$fx/good-review.json"
-expect_output '"event": "COMMENT"' "review without blockers is COMMENT" "$dir/review.sh" --dry-run 5 "$fx/good-review.json"
-expect_output '"event": "REQUEST_CHANGES"' "review with High requests changes" "$dir/review.sh" --dry-run 5 "$fx/blocking-review.json"
-expect_output '\[quality-reviewer\] PASS' "review body prefix" "$dir/review.sh" --dry-run 5 "$fx/good-review.json"
-expect_output 'suggestion' "review suggestion block" "$dir/review.sh" --dry-run 5 "$fx/good-review.json"
-expect 1 "review bad shape" "$dir/review.sh" --dry-run 5 "$fx/bad-review.json"
-expect 1 "review middle dot" "$dir/review.sh" --dry-run 5 "$fx/dot-review.json"
-expect 2 "review non-numeric pr" "$dir/review.sh" --dry-run abc "$fx/good-review.json"
+expect 0 "review good" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"
+expect_output '"event": "COMMENT"' "review without blockers is COMMENT" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"
+expect_output '"event": "REQUEST_CHANGES"' "review with High requests changes" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/blocking-review.json"
+expect_output '\[quality-reviewer\] PASS' "review body prefix" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"
+expect_output 'suggestion' "review suggestion block" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"
+expect 1 "review bad shape" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/bad-review.json"
+expect 1 "review middle dot" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/dot-review.json"
+expect 2 "review non-numeric pr" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" abc "$fx/good-review.json"
 
 expect 0 "open good" "$dir/open.sh" --dry-run chore/x main "feat: add pr scripts" "$fx/good-body.md"
 expect_output 'gh pr create --draft --base main --head chore/x' "open prints gh command" "$dir/open.sh" --dry-run chore/x main "feat: add pr scripts" "$fx/good-body.md"
@@ -67,6 +67,20 @@ expect 1 "open runs lint" "$dir/open.sh" --dry-run chore/x main "bad title." "$f
 expect 0 "reply good" "$dir/reply.sh" --dry-run 5 123 "Fixed in abc1234."
 expect 1 "reply multi-line" "$dir/reply.sh" --dry-run 5 123 "$two_lines"
 expect 2 "reply bad id" "$dir/reply.sh" --dry-run 5 x "Fixed in abc1234."
+
+expect_output '"line": 42' "review keeps a commentable line inline" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"
+expect_output 'Not on the diff:.*crates/y.rs:7: Nit' "review moves a line outside the diff into the body" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"
+expect_output 'Not on the diff:.*crates/x.rs:1: Unchecked index' "review moves a line outside every hunk into the body" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/blocking-review.json"
+expect_output '"comments": ..' "review with no commentable line has no inline comments" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/blocking-review.json"
+
+expect 0 "card good" "$dir/card.sh" --dry-run PVTI_x "$fx/tldr-good.txt"
+expect_output 'TLDR: Review found' "card prefixes TLDR" "$dir/card.sh" --dry-run PVTI_x "$fx/tldr-good.txt"
+expect 1 "card too long" "$dir/card.sh" --dry-run PVTI_x "$fx/tldr-long.txt"
+expect 1 "card middle dot" "$dir/card.sh" --dry-run PVTI_x "$fx/tldr-dot.txt"
+
+expect_output 'updateProjectV2DraftIssue' "open --card updates a draft card" "$dir/open.sh" --dry-run --card PVTI_x chore/x main "feat: add pr scripts" "$fx/good-body.md"
+expect_output 'gh project item-add 2 --owner EmilioGiordano' "open --card adds an issue card to the project" "$dir/open.sh" --dry-run --card PVTI_x chore/x main "feat: add pr scripts" "$fx/good-body.md"
+expect 2 "open --card without value" "$dir/open.sh" --dry-run --card
 
 if [ "$failed" -eq 0 ]; then
   echo "all passed"

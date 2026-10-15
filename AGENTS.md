@@ -175,11 +175,15 @@ Agents write the content; `scripts/pr` (bash, `gh`, `jq`) does the GitHub mechan
 - **Review:** a summary of at most 6 lines and inline comments of at most 3 lines, each
   with an optional suggestion block. Low findings without action go only in the summary.
   A review is never an approval: it is REQUEST_CHANGES with a Critical, High or BLOCKER
-  finding, otherwise COMMENT.
+  finding, otherwise COMMENT. Findings on lines outside the PR diff go into the review body.
 - **Thread replies:** one line: `Fixed in <sha>.`, `Won't fix: <reason>` or
   `False positive: <reason>`.
 - **Staging comment, one per PR:** gate result, measurements before and after, and what to
   test by hand.
+- **Card:** every board card links its PR. `scripts/pr/open.sh --card <project-item-id>`
+  appends `PR: <url>` to a draft card, or adds the PR to the project for an issue card.
+  When the review closes, `scripts/pr/card.sh <project-item-id> <tldr-file>` appends a
+  `TLDR:` of 2 or 3 lines to the card: what the review found and how it was resolved.
 - `scripts/pr/test.sh` checks the scripts in dry-run against local fixtures.
 
 ## Validation
