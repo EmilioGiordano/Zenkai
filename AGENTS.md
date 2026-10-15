@@ -286,7 +286,7 @@ grow them with every bug found:
   open/edit/save/reopen, session close and restore, incremental versus full recalculation.
 - Fuzz targets for every parser of untrusted input: xlsx, csv, session.json,
   settings.json, MCP messages.
-- Mutation testing (`cargo mutants`) on changed modules, to check the tests would notice a
+- Mutation testing (`cargo mutants`, in staging) on changed modules, to check the tests would notice a
   broken implementation.
 - Values computed by Excel and cached in the corpus files, compared with the engine.
 - For changes to the engine, file I/O or the agent security boundary, a second review by a
