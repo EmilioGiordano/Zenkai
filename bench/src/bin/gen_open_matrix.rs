@@ -3,7 +3,10 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
-use rust_xlsxwriter::{Format, Formula, Workbook};
+use rust_xlsxwriter::{
+    ConditionalFormat2ColorScale, ConditionalFormatCell, ConditionalFormatCellRule,
+    ConditionalFormatFormula, Format, Formula, Workbook, Worksheet,
+};
 
 const SEED_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
 const SEED_INCREMENT: u64 = 1_442_695_040_888_963_407;
@@ -17,6 +20,9 @@ struct Shape {
     distinct_formulas: bool,
     unique_strings: bool,
     styles: usize,
+    conditional_rules: u32,
+    cycle: bool,
+    spills: u32,
 }
 
 fn next(state: &mut u64) -> u64 {
@@ -36,6 +42,9 @@ fn parse(args: &[String]) -> Result<Shape> {
         distinct_formulas: false,
         unique_strings: false,
         styles: 0,
+        conditional_rules: 0,
+        cycle: false,
+        spills: 0,
     };
     for pair in args {
         let Some((key, value)) = pair.split_once('=') else {
@@ -50,6 +59,9 @@ fn parse(args: &[String]) -> Result<Shape> {
             "distinct" => shape.distinct_formulas = value == "1",
             "unique_strings" => shape.unique_strings = value == "1",
             "styles" => shape.styles = value.parse()?,
+            "cf" => shape.conditional_rules = value.parse()?,
+            "cycle" => shape.cycle = value == "1",
+            "spills" => shape.spills = value.parse()?,
             _ => bail!("unknown key {key}"),
         }
     }
@@ -59,11 +71,56 @@ fn parse(args: &[String]) -> Result<Shape> {
     Ok(shape)
 }
 
+// What an edit has to deal with besides the data, all on the first sheet: rules over the
+// whole data columns, two cells that read each other below the data, and dynamic arrays
+// beside it.
+fn add_extras(sheet: &mut Worksheet, shape: &Shape) -> Result<()> {
+    let last_row = shape.rows.saturating_sub(1);
+    for kind in 0..shape.conditional_rules {
+        match kind % 3 {
+            0 => sheet.add_conditional_format(
+                0,
+                0,
+                last_row,
+                0,
+                &ConditionalFormatCell::new()
+                    .set_rule(ConditionalFormatCellRule::GreaterThan(5000))
+                    .set_format(Format::new().set_bold()),
+            )?,
+            1 => sheet.add_conditional_format(
+                0,
+                1,
+                last_row,
+                1,
+                &ConditionalFormat2ColorScale::new(),
+            )?,
+            _ => sheet.add_conditional_format(
+                0,
+                0,
+                last_row,
+                0,
+                &ConditionalFormatFormula::new()
+                    .set_rule("=$B1>5000")
+                    .set_format(Format::new().set_italic()),
+            )?,
+        };
+    }
+    if shape.cycle {
+        let line = shape.rows + 1;
+        sheet.write_formula(shape.rows, 0, Formula::new(format!("=B{line}+1")))?;
+        sheet.write_formula(shape.rows, 1, Formula::new(format!("=A{line}+1")))?;
+    }
+    for spill in 0..shape.spills {
+        sheet.write_dynamic_formula(spill * 10, shape.columns + 1, "=SEQUENCE(5)")?;
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some((out, rest)) = args.split_first() else {
         bail!(
-            "usage: gen_open_matrix <out.xlsx> [sheets=1 rows=100000 cols=10 formulas=0 strings=0 distinct=0 unique_strings=0 styles=0]"
+            "usage: gen_open_matrix <out.xlsx> [sheets=1 rows=100000 cols=10 formulas=0 strings=0 distinct=0 unique_strings=0 styles=0 cf=0 cycle=0 spills=0]"
         );
     };
     let shape = parse(rest)?;
@@ -78,6 +135,9 @@ fn main() -> Result<()> {
     let mut state = 7;
     for sheet_index in 0..shape.sheets {
         let sheet = book.add_worksheet();
+        if sheet_index == 0 {
+            add_extras(sheet, &shape)?;
+        }
         for row in 0..shape.rows {
             for column in 0..shape.columns {
                 let roll = next(&mut state) % 100;
