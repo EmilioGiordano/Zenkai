@@ -28,13 +28,21 @@ fn kind_of(link: SheetLink) -> Unsupported {
 }
 
 impl Held {
-    // `found` holds every kind found in a part, by the part's name in the archive.
+    // `found` holds every kind found in a part, by the part's name in the archive. Names are
+    // compared without case, as the package format and the relationships reader do.
     pub(crate) fn of(found: &[(String, Unsupported)], layout: &PackageLayout) -> Held {
-        let mut by_part: HashMap<&str, BTreeSet<Unsupported>> = HashMap::new();
+        let mut by_part: HashMap<String, BTreeSet<Unsupported>> = HashMap::new();
         for (name, kind) in found {
-            by_part.entry(name.as_str()).or_default().insert(*kind);
+            by_part
+                .entry(name.to_ascii_lowercase())
+                .or_default()
+                .insert(*kind);
         }
-        let worksheets: HashSet<&str> = layout.worksheets.iter().map(String::as_str).collect();
+        let worksheets: HashSet<String> = layout
+            .worksheets
+            .iter()
+            .map(|part| part.to_ascii_lowercase())
+            .collect();
         let book: BTreeSet<Unsupported> = by_part
             .iter()
             .filter(|(name, _)| !worksheets.contains(*name))
@@ -45,7 +53,8 @@ impl Held {
             .iter()
             .zip(&layout.sheet_links)
             .map(|(part, links)| {
-                let mut owned = by_part.get(part.as_str()).cloned().unwrap_or_default();
+                let part = part.to_ascii_lowercase();
+                let mut owned = by_part.get(&part).cloned().unwrap_or_default();
                 match links {
                     SheetLinks::Known(links) => owned.extend(links.iter().map(|l| kind_of(*l))),
                     // Whatever the other parts hold may hang off this sheet.
@@ -141,6 +150,17 @@ mod tests {
             after.all(),
             set(&[Unsupported::PivotTables, Unsupported::Macros])
         );
+    }
+
+    #[test]
+    fn part_names_match_without_case() {
+        let found = [(
+            "XL/Worksheets/Sheet1.xml".to_string(),
+            Unsupported::AutoFilter,
+        )];
+        let held = Held::of(&found, &layout(vec![SheetLinks::Known(BTreeSet::new())]));
+        assert_eq!(held.owned_by(&[0]), set(&[Unsupported::AutoFilter]));
+        assert_eq!(held.without(&[0]).all(), BTreeSet::new());
     }
 
     #[test]

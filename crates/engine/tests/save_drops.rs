@@ -320,6 +320,24 @@ fn a_sheet_with_unreadable_links_is_taken_to_own_everything_outside_the_sheets()
     assert_eq!(dropped_by_each_path(&path), found);
 }
 
+// Readers disagree on which of two entries of one name they take, so no save copies from
+// such a file and every save reports what it holds.
+#[test]
+fn relationships_stored_twice_make_every_save_report_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = source(dir.path(), |_| {});
+    with_pivot(&path);
+    let empty =
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#;
+    with_parts(&path, &[("xl/worksheets/_rels/sheet1.xml.rels", "", empty)]);
+    let found = scan(&std::fs::read(&path).unwrap());
+    assert_eq!(found, [Unsupported::PivotTables]);
+    let other = saved_after(&path, Edit::OtherSheet);
+    assert_eq!(other.dropped, found);
+    assert!(other.kept.is_empty(), "{:?}", other.kept);
+    assert!(scan(&other.bytes).is_empty(), "{:?}", scan(&other.bytes));
+}
+
 // No worksheet owns it, so only a full save drops it.
 #[test]
 fn an_external_link_is_dropped_only_by_a_full_save() {
