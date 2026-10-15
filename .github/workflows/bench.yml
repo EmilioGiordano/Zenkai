@@ -1,17 +1,6 @@
 name: Benchmark
 
 on:
-  pull_request:
-    paths:
-      - "bench/**"
-      - "crates/engine/**"
-      - "crates/formats/**"
-      - "crates/grid/**"
-      - "crates/types/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - ".github/workflows/bench.yml"
   workflow_dispatch:
 
 permissions:
