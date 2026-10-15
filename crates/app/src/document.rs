@@ -40,7 +40,12 @@ pub struct Document {
     pub dirty: bool,
     pub sheet: SheetId,
     pub sheets: Vec<SheetInfo>,
+    // What the document's file holds that this workbook may not, for the open notice and a
+    // restored session.
     pub unsupported: Vec<Unsupported>,
+    // Restored from a recovery copy, which may lack content the file holds: no snapshot of
+    // the copy can tell what saving over the file drops.
+    pub restored: bool,
     pub read_only: bool,
     // Where the file came from; a download keeps agents read-only, as Excel's Protected View.
     pub origin: FileOrigin,
@@ -62,6 +67,11 @@ pub struct Document {
     recovery_on_disk: bool,
     // Set by an edit; the running autosave drops its write and leaves the old copy in place.
     autosave_cancel: Arc<AtomicBool>,
+}
+
+pub fn labels(kinds: &[Unsupported]) -> String {
+    let labels: Vec<&str> = kinds.iter().map(|kind| unsupported_label(*kind)).collect();
+    labels.join(", ")
 }
 
 fn unsupported_label(unsupported: Unsupported) -> &'static str {
@@ -104,6 +114,7 @@ impl Document {
             sheet: SheetId(0),
             sheets,
             unsupported,
+            restored: false,
             read_only: false,
             origin: FileOrigin::Local,
             pending: Vec::new(),
@@ -281,13 +292,25 @@ impl Document {
         self.batch_running || !self.pending.is_empty()
     }
 
-    pub fn unsupported_labels(&self) -> String {
-        let labels: Vec<&str> = self
-            .unsupported
-            .iter()
-            .map(|u| unsupported_label(*u))
-            .collect();
-        labels.join(", ")
+    // A copy that lacks some of the file's content keeps it listed, so a restored session
+    // still warns before saving over the file.
+    pub fn recovery_lacks(&mut self, lacks: &[Unsupported]) {
+        for kind in lacks {
+            if !self.unsupported.contains(kind) {
+                self.unsupported.push(*kind);
+            }
+        }
+        self.unsupported.sort();
+    }
+
+    pub fn saved_over_file(&mut self, kept: Vec<Unsupported>) {
+        self.unsupported = kept;
+        self.restored = false;
+    }
+
+    // Before a save is tried: the engine answers for every other case once it has run.
+    pub fn may_lose_unseen_content(&self) -> bool {
+        self.restored && !self.unsupported.is_empty()
     }
 
     pub fn is_macro_enabled(&self) -> bool {
@@ -308,17 +331,8 @@ impl Document {
             return false;
         }
         self.batch_running = false;
-        if let Some((sheets, dropped)) = self
-            .workbook()
-            .map(|workbook| (workbook.sheets(), workbook.dropped_on_save()))
-        {
+        if let Some(sheets) = self.workbook().map(|workbook| workbook.sheets()) {
             self.sheets = sheets;
-            for lost in dropped {
-                if !self.unsupported.contains(&lost) {
-                    self.unsupported.push(lost);
-                }
-            }
-            self.unsupported.sort();
         }
         let last = u32::try_from(self.sheets.len().saturating_sub(1)).unwrap_or(0);
         if self.sheet.0 > last {
@@ -388,48 +402,17 @@ pub fn read_shared(shared: &RwLock<Workbook>) -> RwLockReadGuard<'_, Workbook> {
 // The read lock is held only while the snapshot is taken, which fingerprints every sheet and
 // copies the ones the save writes: writing and verifying it takes far longer, and an edit
 // waiting for the write lock blocks every reader meanwhile.
-pub fn write_snapshot(
+fn with_snapshot<T: std::fmt::Debug>(
     shared: &RwLock<Workbook>,
     job: FileJob,
     target: &Path,
     kind: SaveTarget,
-    write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
-) -> Result<(), EngineError> {
-    write_snapshot_unless(shared, job, target, kind, &AtomicBool::new(false), write).map(|_| ())
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SnapshotOutcome {
-    Written,
-    Abandoned,
-}
-
-// The snapshot is taken regardless, but once the edit that cancelled it is known the write
-// never starts: the writer only renames a finished temp file over the target, so the copy
-// already on disk stays whole and the next idle retries.
-fn write_unless(
-    snapshot: SaveSnapshot,
-    cancelled: &AtomicBool,
-    write: &impl Fn(SaveSnapshot) -> Result<(), EngineError>,
-) -> Result<SnapshotOutcome, EngineError> {
-    if cancelled.load(Ordering::Relaxed) {
-        return Ok(SnapshotOutcome::Abandoned);
-    }
-    write(snapshot).map(|()| SnapshotOutcome::Written)
-}
-
-pub fn write_snapshot_unless(
-    shared: &RwLock<Workbook>,
-    job: FileJob,
-    target: &Path,
-    kind: SaveTarget,
-    cancelled: &AtomicBool,
-    write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
-) -> Result<SnapshotOutcome, EngineError> {
+    attempt: impl Fn(SaveSnapshot) -> Result<T, EngineError>,
+) -> Result<T, EngineError> {
     let started = Instant::now();
     let snapshot = read_shared(shared).save_snapshot(target, kind);
     let locked_ms = started.elapsed().as_millis();
-    let first = snapshot.and_then(|snapshot| write_unless(snapshot, cancelled, &write));
+    let first = snapshot.and_then(&attempt);
     let retry = match &first {
         // Like Excel, a save never silently replaces a version another program wrote over
         // the file itself; the user saves again, and that save writes it whole.
@@ -438,33 +421,108 @@ pub fn write_snapshot_unless(
         _ => false,
     };
     // The engine forgot the file it copies from, so the second snapshot writes it whole.
-    let written = match (retry, first) {
+    let finished = match (retry, first) {
         (true, Err(error)) => {
             tracing::warn!(?job, %error, "the file copied from changed, writing it whole");
             read_shared(shared)
                 .save_snapshot(target, kind)
-                .and_then(|snapshot| write_unless(snapshot, cancelled, &write))
+                .and_then(&attempt)
         }
         (_, first) => first,
     };
     let total_ms = started.elapsed().as_millis();
-    match &written {
-        Ok(SnapshotOutcome::Written) => {
-            tracing::info!(?job, locked_ms, total_ms, "workbook written")
-        }
-        Ok(SnapshotOutcome::Abandoned) => {
-            tracing::info!(
-                ?job,
-                locked_ms,
-                total_ms,
-                "workbook write abandoned after an edit"
-            )
-        }
+    match &finished {
+        Ok(outcome) => tracing::info!(?job, ?outcome, locked_ms, total_ms, "workbook save ended"),
         Err(error) => {
             tracing::warn!(?job, %error, locked_ms, total_ms, "writing the workbook failed")
         }
     }
-    written
+    finished
+}
+
+// Returns what the written copy lacks of the document's own file.
+pub fn write_snapshot(
+    shared: &RwLock<Workbook>,
+    job: FileJob,
+    target: &Path,
+    kind: SaveTarget,
+    write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
+) -> Result<Vec<Unsupported>, EngineError> {
+    with_snapshot(shared, job, target, kind, |snapshot| {
+        let lacks = snapshot.dropped().to_vec();
+        write(snapshot).map(|()| lacks)
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SnapshotOutcome {
+    Written { lacks: Vec<Unsupported> },
+    Abandoned,
+}
+
+// The snapshot is taken regardless, but once the edit that cancelled it is known the write
+// never starts: the writer only renames a finished temp file over the target, so the copy
+// already on disk stays whole and the next idle retries.
+pub fn write_snapshot_unless(
+    shared: &RwLock<Workbook>,
+    job: FileJob,
+    target: &Path,
+    kind: SaveTarget,
+    cancelled: &AtomicBool,
+    write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
+) -> Result<SnapshotOutcome, EngineError> {
+    with_snapshot(shared, job, target, kind, |snapshot| {
+        if cancelled.load(Ordering::Relaxed) {
+            return Ok(SnapshotOutcome::Abandoned);
+        }
+        let lacks = snapshot.dropped().to_vec();
+        write(snapshot).map(|()| SnapshotOutcome::Written { lacks })
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Accepted {
+    Anything,
+    Only(Vec<Unsupported>),
+}
+
+impl Accepted {
+    fn allows(&self, dropped: &[Unsupported]) -> bool {
+        match self {
+            Accepted::Anything => true,
+            Accepted::Only(accepted) => dropped.iter().all(|kind| accepted.contains(kind)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DocumentSave {
+    Written { kept: Vec<Unsupported> },
+    Refused { dropped: Vec<Unsupported> },
+}
+
+// Checked on every attempt: a retry writes the whole file and may drop more than the first.
+pub fn save_document_file(
+    shared: &RwLock<Workbook>,
+    target: &Path,
+    accepted: &Accepted,
+    write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
+) -> Result<DocumentSave, EngineError> {
+    with_snapshot(
+        shared,
+        FileJob::Saving,
+        target,
+        SaveTarget::Document,
+        |snapshot| {
+            if !accepted.allows(snapshot.dropped()) {
+                return Ok(DocumentSave::Refused {
+                    dropped: snapshot.dropped().to_vec(),
+                });
+            }
+            let kept = snapshot.kept().to_vec();
+            write(snapshot).map(|()| DocumentSave::Written { kept })
+        },
+    )
 }
 
 pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError> {
@@ -696,7 +754,10 @@ mod tests {
             &cancelled,
             |_| Ok(()),
         );
-        assert_eq!(outcome.unwrap(), SnapshotOutcome::Written);
+        assert_eq!(
+            outcome.unwrap(),
+            SnapshotOutcome::Written { lacks: Vec::new() }
+        );
     }
 
     #[test]
@@ -738,7 +799,7 @@ mod tests {
             attempts.set(attempts.get() + 1);
             zenkai_engine::save_xlsx(snapshot)
         });
-        (written, attempts.get())
+        (written.map(|_| ()), attempts.get())
     }
 
     #[test]
@@ -769,6 +830,49 @@ mod tests {
         assert_eq!(attempts, 2);
         assert_eq!(saved_text(&copy), "mine");
         assert_eq!(saved_text(&original), "someone else's");
+    }
+
+    #[test]
+    fn a_save_goes_ahead_only_when_it_drops_nothing_unaccepted() {
+        let filter = [Unsupported::AutoFilter];
+        let both = [Unsupported::Charts, Unsupported::AutoFilter];
+        assert!(Accepted::Only(Vec::new()).allows(&[]));
+        assert!(!Accepted::Only(Vec::new()).allows(&filter));
+        assert!(Accepted::Only(filter.to_vec()).allows(&filter));
+        assert!(!Accepted::Only(filter.to_vec()).allows(&both));
+        assert!(Accepted::Anything.allows(&both));
+    }
+
+    #[test]
+    fn a_save_that_drops_nothing_writes_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let shared = RwLock::new(Workbook::new_empty().unwrap());
+        let saved = save_document_file(
+            &shared,
+            &target,
+            &Accepted::Only(Vec::new()),
+            zenkai_engine::save_xlsx,
+        );
+        assert_eq!(saved.unwrap(), DocumentSave::Written { kept: Vec::new() });
+        assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
+    }
+
+    #[test]
+    fn a_restored_document_warns_until_it_is_saved_over_its_file() {
+        let mut document = document();
+        document.restored = true;
+        assert!(!document.may_lose_unseen_content());
+        document.recovery_lacks(&[Unsupported::Outline, Unsupported::Charts]);
+        document.recovery_lacks(&[Unsupported::Charts]);
+        assert_eq!(
+            document.unsupported,
+            [Unsupported::Charts, Unsupported::Outline]
+        );
+        assert!(document.may_lose_unseen_content());
+        document.saved_over_file(vec![Unsupported::Charts]);
+        assert_eq!(document.unsupported, [Unsupported::Charts]);
+        assert!(!document.may_lose_unseen_content());
     }
 
     #[test]

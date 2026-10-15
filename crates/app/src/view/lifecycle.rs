@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::*;
 use zenkai_agent::preferences::CloseWithUnsaved;
-use zenkai_engine::{EngineError, SaveTarget, open_xlsx};
+use zenkai_engine::{EngineError, SaveTarget, Unsupported, open_xlsx};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
@@ -274,7 +274,10 @@ impl Workspace {
                     return;
                 }
                 match result {
-                    Ok(SnapshotOutcome::Written) => document.recovery_written(edits),
+                    Ok(SnapshotOutcome::Written { lacks }) => {
+                        document.recovery_written(edits);
+                        document.recovery_lacks(&lacks);
+                    }
                     Ok(SnapshotOutcome::Abandoned) => {}
                     Err(error) => this.notify(
                         Severity::Warning,
@@ -448,15 +451,16 @@ impl Workspace {
                                 recovery::write,
                             )
                         })
-                        .collect::<Vec<Result<(), EngineError>>>()
+                        .collect::<Vec<Result<Vec<Unsupported>, EngineError>>>()
                 })
                 .await;
             let finished = this.update_in(cx, |this, window, cx| {
                 for ((id, generation), result) in generations.iter().zip(&results) {
                     if let Some(document) = this.documents.get_mut(*id) {
                         document.end_file_job(*generation);
-                        if result.is_ok() {
+                        if let Ok(lacks) = result {
                             document.mark_recovery_adopted();
+                            document.recovery_lacks(lacks);
                         }
                     }
                 }
