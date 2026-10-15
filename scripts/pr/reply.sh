@@ -16,12 +16,22 @@ pr=$1
 comment_id=$2
 text=$3
 
-case "$pr$comment_id" in
+case "$pr" in
   '' | *[!0-9]*)
-    echo "reply: PR number and comment id must be numeric" >&2
+    echo "reply: PR number must be numeric" >&2
     exit 2
     ;;
 esac
+case "$comment_id" in
+  '' | *[!0-9]*)
+    echo "reply: comment id must be numeric" >&2
+    exit 2
+    ;;
+esac
+if ! printf '%s' "$text" | grep -q '[^[:space:]]'; then
+  echo "reply: text is empty" >&2
+  exit 1
+fi
 case "$text" in
   *$'\n'*)
     echo "reply: text must be one line" >&2
