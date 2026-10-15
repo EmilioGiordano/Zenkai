@@ -361,20 +361,25 @@ fn write_row<W: Write>(
     write!(writer, "</row>")
 }
 
+/// The rows of `worksheet` that carry a height or a style, by row number.
+pub fn row_styles(worksheet: &Worksheet) -> HashMap<i32, &Row> {
+    worksheet.rows.iter().map(|row| (row.r, row)).collect()
+}
+
 /// Writes the `<row>` elements of `rows`, in the order given, and nothing else of the
 /// part, so the rows can be placed among rows written earlier. A listed row without
-/// cells is written empty, with its height and style. `shared(row, column)` says how
+/// cells is written empty, with its height and style from `row_styles`, which the caller
+/// builds once for all its calls. `shared(row, column)` says how
 /// each formula cell refers to a shared formula; answering [`SharedFormula::No`] never
 /// starts a shared formula whose `si` could clash with the rows around them.
 pub fn write_rows_xml<W: Write>(
     writer: &mut W,
     worksheet: &Worksheet,
     parsed_formulas: &[(Node, StaticResult)],
+    row_styles: &HashMap<i32, &Row>,
     rows: &[i32],
     shared: impl Fn(i32, i32) -> SharedFormula,
 ) -> io::Result<()> {
-    let row_style_dict: HashMap<i32, &Row> =
-        worksheet.rows.iter().map(|row| (row.r, row)).collect();
     let sheet_name = worksheet.get_name();
     for &row_index in rows {
         write_row(
@@ -383,7 +388,7 @@ pub fn write_rows_xml<W: Write>(
             parsed_formulas,
             &sheet_name,
             row_index,
-            row_style_dict.get(&row_index).copied(),
+            row_styles.get(&row_index).copied(),
             |column_index, _| shared(row_index, column_index),
         )?;
     }

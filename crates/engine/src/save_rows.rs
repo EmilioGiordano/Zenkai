@@ -13,7 +13,7 @@ use ironcalc::base::expressions::parser::static_analysis::StaticResult;
 use ironcalc::base::expressions::parser::stringify::to_excel_string;
 use ironcalc::base::expressions::types::CellReferenceRC;
 use ironcalc::base::types::{Cell, Row, Worksheet};
-use ironcalc::export::{SharedFormula, write_rows_xml};
+use ironcalc::export::{SharedFormula, row_styles, write_rows_xml};
 use zenkai_xlsx_reader::{AnchorKind, BasePackage, ReachingAnchor, RowSpan};
 use zip::ZipWriter;
 
@@ -288,6 +288,7 @@ impl RowJob {
         &self,
         span: &RowSpan,
         reaching: &[ReachingAnchor],
+        styles: &HashMap<i32, &Row>,
         out: &mut W,
     ) -> io::Result<()> {
         let anchors = self.kept_anchors(reaching)?;
@@ -299,6 +300,7 @@ impl RowJob {
             &mut written,
             &self.sheet,
             &self.formulas,
+            styles,
             &self.rows[first..last],
             |row, column| {
                 anchors
@@ -320,13 +322,14 @@ pub(crate) fn write_rows<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     job: &RowJob,
 ) -> io::Result<()> {
+    let styles = row_styles(&job.sheet);
     let mut buffered = BufWriter::with_capacity(SHEET_BUFFER_BYTES, zip);
     base.splice_rows(
         &job.part,
         &job.dimension,
         &job.spans,
         &mut buffered,
-        |span, reaching, out| job.write_span(span, reaching, out),
+        |span, reaching, out| job.write_span(span, reaching, &styles, out),
     )?;
     buffered.flush()
 }
@@ -338,6 +341,8 @@ mod tests {
     use ironcalc::base::Model;
     use ironcalc::base::types::{ArrayKind, Cell, FormulaValue};
     use zenkai_xlsx_reader::RowSpan;
+
+    use ironcalc::export::row_styles;
 
     use super::{dirty_blocks, row_job, spans_of, with_arrays};
     use crate::fingerprint::{ROW_PRINT_BUDGET_BYTES, SheetPrint, sheet_print};
@@ -473,7 +478,9 @@ mod tests {
         assert_eq!(job.formulas.len(), 1, "the column shares one formula");
         assert_eq!(job.dimension, "A1:B100");
         let mut written = Vec::new();
-        job.write_span(&job.spans[0], &[], &mut written).unwrap();
+        let styles = row_styles(&job.sheet);
+        job.write_span(&job.spans[0], &[], &styles, &mut written)
+            .unwrap();
         let written = String::from_utf8(written).unwrap();
         assert!(written.starts_with(r#"<row r="33">"#), "{written}");
         assert!(written.contains("<f>A40*2</f>"), "{written}");

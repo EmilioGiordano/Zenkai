@@ -484,6 +484,7 @@ fn chosen_rows_are_written_with_the_caller_s_shared_formulas() {
         &mut written,
         &worksheet,
         &model.parsed_formulas[0],
+        &crate::export::row_styles(&worksheet),
         &[2, 3, 7],
         |row, column| match (row, column) {
             (2, 2) => SharedFormula::Anchor {

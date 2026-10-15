@@ -32,7 +32,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   encoding (`SharedFormula`) the caller chooses for each formula cell, so rows can be
   placed among rows copied from an existing part without clashing with its `si` numbers
   (`src/export/worksheets.rs`). Builds on the shared formula runs above, whose row writer
-  it shares. Tests: `src/export/test/test_export.rs`.
+  it shares. The caller builds the row styles once with `row_styles` and passes them to every
+  call, so a caller writing many spans does not rebuild the map per span. Tests:
+  `src/export/test/test_export.rs`.
 - `get_shared_string_item_xml` writes one `<si>` element of the shared
   strings part, so a caller can append strings to an existing part
   (`src/export/shared_strings.rs`). Tests: `src/export/test/test_export.rs`.
