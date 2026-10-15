@@ -550,11 +550,28 @@ impl Workbook {
         }
     }
 
-    // A row-level save copies what the model does not hold from the file, which a
-    // replayed move would leave in the wrong place.
-    fn history_replayed(&mut self) {
+    // The ids of the sheets a replayed step moves rows or columns on, read before the
+    // replay while the step's sheet indices still hold; every sheet when the step also
+    // changes the sheets themselves.
+    fn replay_moves(&self, moved: Option<Vec<u32>>) -> Option<Vec<u32>> {
         let worksheets = &self.model.get_model().workbook.worksheets;
-        let sheet_ids: Vec<u32> = worksheets.iter().map(|ws| ws.sheet_id).collect();
+        moved?
+            .into_iter()
+            .map(|index| worksheets.get(usize::try_from(index).ok()?).map(|ws| ws.sheet_id))
+            .collect()
+    }
+
+    // A row-level save copies what the model does not hold from the file, which a
+    // replayed move would leave in the wrong place. Only the sheets that step moved
+    // count; a failed replay may have stopped anywhere, so it counts every sheet.
+    fn history_replayed(&mut self, moved: Option<Vec<u32>>, replayed: bool) {
+        let sheet_ids = match moved.filter(|_| replayed) {
+            Some(ids) => ids,
+            None => {
+                let worksheets = &self.model.get_model().workbook.worksheets;
+                worksheets.iter().map(|ws| ws.sheet_id).collect()
+            }
+        };
         self.carried.history_replayed(sheet_ids);
     }
 
@@ -1262,14 +1279,16 @@ impl Engine for Workbook {
     }
 
     fn undo(&mut self) -> Result<(), EngineError> {
+        let moved = self.replay_moves(self.model.sheets_moved_by_undo());
         let undone = self.model.undo().map_err(rejected);
-        self.history_replayed();
+        self.history_replayed(moved, undone.is_ok());
         undone
     }
 
     fn redo(&mut self) -> Result<(), EngineError> {
+        let moved = self.replay_moves(self.model.sheets_moved_by_redo());
         let redone = self.model.redo().map_err(rejected);
-        self.history_replayed();
+        self.history_replayed(moved, redone.is_ok());
         redone
     }
 

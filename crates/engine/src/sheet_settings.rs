@@ -285,7 +285,7 @@ impl Carried {
         *moves = moves.wrapping_add(1);
     }
 
-    // IronCalc's undo and redo do not say whether the step moved rows or columns.
+    // The sheets a replayed undo or redo step moved rows or columns on.
     pub(crate) fn history_replayed(&mut self, sheet_ids: impl IntoIterator<Item = u32>) {
         for sheet_id in sheet_ids {
             self.count_move(sheet_id);
@@ -750,7 +750,7 @@ mod tests {
     }
 
     #[test]
-    fn moves_are_counted_per_sheet_and_for_every_sheet_on_undo() {
+    fn moves_are_counted_per_sheet_and_for_the_sheets_of_a_replayed_step() {
         let mut carried = Carried::default();
         carried.rows_moved(1, 3);
         carried.columns_moved(1, 2);

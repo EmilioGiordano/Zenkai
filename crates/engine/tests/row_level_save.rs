@@ -257,6 +257,49 @@ fn a_move_redone_after_a_save_rewrites_the_sheet_whole() {
 }
 
 #[test]
+fn an_undone_edit_does_not_stop_the_next_save_from_copying_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let document = dir.path().join("book.xlsx");
+    excel_base(&document);
+    let base = copy_of(&document);
+    let mut book = open_xlsx(&document).unwrap().workbook;
+    book.set_input(SheetId(0), pos(49, 0), "1000").unwrap();
+    book.undo().unwrap();
+    book.set_input(SheetId(0), pos(104, 1), "kiwi").unwrap();
+    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    let copied = copied_rows(&base, &document);
+    let expected: Vec<u32> = (1..=ROWS)
+        .filter(|row| block_of(*row) != block_of(105))
+        .collect();
+    assert_eq!(copied, expected);
+    let whole = Workbook::from_xlsx_bytes(&book.to_xlsx().unwrap(), "book").unwrap();
+    let expected = cells(&whole);
+    for cells in reopened(&document) {
+        assert!(cells == expected, "{}", first_difference(&expected, &cells));
+    }
+}
+
+#[test]
+fn rows_inserted_then_undone_before_a_save_still_save_correctly() {
+    let dir = tempfile::tempdir().unwrap();
+    let document = dir.path().join("book.xlsx");
+    excel_base(&document);
+    with_validation_below(&document);
+    let base = copy_of(&document);
+    let mut book = open_xlsx(&document).unwrap().workbook;
+    book.insert_rows(SheetId(0), RowIdx::clamped(2), 1).unwrap();
+    book.undo().unwrap();
+    book.set_input(SheetId(0), pos(49, 0), "1000").unwrap();
+    save(&book, &document);
+    assert!(copied_rows(&base, &document).is_empty());
+    let whole = Workbook::from_xlsx_bytes(&book.to_xlsx().unwrap(), "book").unwrap();
+    let expected = cells(&whole);
+    for cells in reopened(&document) {
+        assert!(cells == expected, "{}", first_difference(&expected, &cells));
+    }
+}
+
+#[test]
 fn a_change_around_the_rows_rewrites_the_sheet_whole() {
     let dir = tempfile::tempdir().unwrap();
     let document = dir.path().join("book.xlsx");
