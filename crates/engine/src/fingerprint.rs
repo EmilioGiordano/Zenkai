@@ -335,7 +335,7 @@ pub(crate) fn sheet_print(
     })
 }
 
-/ What the parts shared by every sheet depend on: the sheet list, the names, the styles
+// What the parts shared by every sheet depend on: the sheet list, the names, the styles
 // and the rest of the workbook a save writes outside the sheets. The shared strings are
 // left out; they only grow, and a save appends them.
 pub(crate) fn book_print(book: &Workbook) -> Result<u64, EngineError> {
