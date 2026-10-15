@@ -14,7 +14,7 @@ use crate::file::Unsupported;
 use crate::fingerprint::{DynamicArrays, SheetPrint};
 use crate::held::Held;
 use crate::save::{ModelData, SheetJob, deflated, rejected, sheet_job, write_sheet};
-use crate::saved::{Contents, Metadata, Remains, SavedFile, Strings};
+use crate::saved::{Contents, Metadata, SavedFile, Strings};
 use crate::sheet_elements::Relationships;
 use crate::sheet_settings::Carried;
 use crate::table_headers::{headers_match, tables_on};
@@ -85,7 +85,9 @@ pub(crate) fn patch_plan(
     let mut sheets = Vec::with_capacity(changed.len());
     for index in changed {
         let part = saved.worksheets[index].clone();
-        let in_file = remains.get(index).copied().unwrap_or(Remains::Nothing);
+        let in_file = *remains
+            .get(index)
+            .ok_or_else(|| rejected("a changed sheet is not in the saved file"))?;
         let in_file = match tables_intact(data, &held, index) {
             true => in_file,
             false => in_file.unlinked(),
@@ -97,10 +99,11 @@ pub(crate) fn patch_plan(
             .map(|settings| settings.elements.kinds())
             .unwrap_or_default();
         let relationships = job.relationships();
-        dropped.extend(held.rewrite(index, written, relationships));
-        if let Some(slot) = remains.get_mut(index) {
-            *slot = in_file.rewritten(relationships);
-        }
+        dropped.extend(held.rewrite(index, written, relationships)?);
+        *remains
+            .get_mut(index)
+            .ok_or_else(|| rejected("a changed sheet is not in the saved file"))? =
+            in_file.rewritten(relationships);
         sheets.push(job);
     }
     let contents = Contents {

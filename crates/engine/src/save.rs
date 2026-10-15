@@ -203,13 +203,13 @@ fn full_contents(
     Contents {
         worksheets: (0..sheets.len()).map(full_part).collect(),
         remains: vec![Remains::Nothing; sheets.len()],
+        held: Held::written_whole(sheets.len()),
         strings: Strings::Aligned(data.book.shared_strings.len()),
         styles: style_counts(data.book),
         book,
         sheets,
         selected: selected_sheet(data.book),
         metadata: Metadata::Written,
-        held: Held::default(),
         losses_through: carried.losses(),
     }
 }
