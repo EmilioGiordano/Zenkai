@@ -100,7 +100,16 @@ mod tests {
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};
 
-    fn spawn_long_lived_child() -> Child {
+    struct KillOnDrop(Child);
+
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            self.0.kill().ok();
+            self.0.wait().ok();
+        }
+    }
+
+    fn spawn_long_lived_child() -> KillOnDrop {
         #[cfg(windows)]
         let mut command = {
             let mut command = Command::new("ping");
@@ -118,6 +127,7 @@ mod tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
+            .map(KillOnDrop)
             .unwrap()
     }
 
@@ -127,12 +137,12 @@ mod tests {
         let tree = ProcessTree::default();
         tree.close();
         assert!(tree.is_closed());
-        tree.register(child.id());
+        tree.register(child.0.id());
         assert!(tree.pid.lock().unwrap().is_none());
 
         let deadline = Instant::now() + Duration::from_secs(10);
         let exited = loop {
-            if child.try_wait().unwrap().is_some() {
+            if child.0.try_wait().unwrap().is_some() {
                 break true;
             }
             if Instant::now() >= deadline {
@@ -140,10 +150,6 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(50));
         };
-        if !exited {
-            child.kill().unwrap();
-            child.wait().unwrap();
-        }
         assert!(
             exited,
             "the registered child was still running after 10 seconds"
