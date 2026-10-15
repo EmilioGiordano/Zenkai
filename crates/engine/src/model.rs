@@ -34,6 +34,8 @@ pub(crate) enum HistoryStep {
     Redo,
 }
 
+pub(crate) type HistoryTake = fn(&mut UserModel<'static>) -> Result<(), String>;
+
 // What an edit may do to the cells inside the areas it reports.
 #[derive(Clone, Copy)]
 enum CellChange {
@@ -173,19 +175,19 @@ impl CachedModel {
         result
     }
 
-    // `apply` must take exactly the next step of `step`'s kind. The cells it changes are
-    // read before it is taken; a step that failed may have applied in part, so it drops
-    // every end.
+    // `run` gets the model and the undo or redo to take on it, once, so a caller can wrap
+    // the step, for instance to time it. The cells it changes are read before it is taken;
+    // a step that failed may have applied in part, so it drops every end.
     pub(crate) fn step<T>(
         &mut self,
         step: HistoryStep,
-        apply: impl FnOnce(&mut UserModel<'static>) -> Result<T, String>,
+        run: impl FnOnce(&mut UserModel<'static>, HistoryTake) -> Result<T, String>,
     ) -> Result<T, String> {
-        let reach = match step {
-            HistoryStep::Undo => self.model.undo_cells(),
-            HistoryStep::Redo => self.model.redo_cells(),
+        let (reach, take) = match step {
+            HistoryStep::Undo => (self.model.undo_cells(), UserModel::undo as HistoryTake),
+            HistoryStep::Redo => (self.model.redo_cells(), UserModel::redo as HistoryTake),
         };
-        let result = apply(&mut self.model);
+        let result = run(&mut self.model, take);
         match (reach, &result) {
             (Some(StepCells { areas, sheets }), Ok(_)) => {
                 let changed: Vec<(SheetId, Range)> = areas.iter().filter_map(step_area).collect();
@@ -397,11 +399,15 @@ mod tests {
     }
 
     fn undo(model: &mut CachedModel) {
-        model.step(HistoryStep::Undo, UserModel::undo).unwrap();
+        model
+            .step(HistoryStep::Undo, |model, take| take(model))
+            .unwrap();
     }
 
     fn redo(model: &mut CachedModel) {
-        model.step(HistoryStep::Redo, UserModel::redo).unwrap();
+        model
+            .step(HistoryStep::Redo, |model, take| take(model))
+            .unwrap();
     }
 
     fn assert_cached_ends_match_a_walk(model: &CachedModel) {

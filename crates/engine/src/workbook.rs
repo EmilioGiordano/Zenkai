@@ -568,12 +568,7 @@ impl Workbook {
     fn step_profiled(&mut self, step: HistoryStep) -> Result<EditProfile, EngineError> {
         let profile = self
             .model
-            .step(step, |model| {
-                profiled(model, |model| match step {
-                    HistoryStep::Undo => model.undo(),
-                    HistoryStep::Redo => model.redo(),
-                })
-            })
+            .step(step, |model, take| profiled(model, take))
             .map_err(rejected)?;
         Ok(self.warmed(profile))
     }
@@ -1226,13 +1221,13 @@ impl Engine for Workbook {
 
     fn undo(&mut self) -> Result<(), EngineError> {
         self.model
-            .step(HistoryStep::Undo, UserModel::undo)
+            .step(HistoryStep::Undo, |model, take| take(model))
             .map_err(rejected)
     }
 
     fn redo(&mut self) -> Result<(), EngineError> {
         self.model
-            .step(HistoryStep::Redo, UserModel::redo)
+            .step(HistoryStep::Redo, |model, take| take(model))
             .map_err(rejected)
     }
 
