@@ -293,14 +293,16 @@ impl Document {
     }
 
     // A copy that lacks some of the file's content keeps it listed, so a restored session
-    // still warns before saving over the file.
-    pub fn recovery_lacks(&mut self, lacks: &[Unsupported]) {
+    // still warns before saving over the file. Returns whether the list grew.
+    pub fn recovery_lacks(&mut self, lacks: &[Unsupported]) -> bool {
+        let before = self.unsupported.len();
         for kind in lacks {
             if !self.unsupported.contains(kind) {
                 self.unsupported.push(*kind);
             }
         }
         self.unsupported.sort();
+        self.unsupported.len() != before
     }
 
     pub fn saved_over_file(&mut self, kept: Vec<Unsupported>) {
@@ -863,8 +865,8 @@ mod tests {
         let mut document = document();
         document.restored = true;
         assert!(!document.may_lose_unseen_content());
-        document.recovery_lacks(&[Unsupported::Outline, Unsupported::Charts]);
-        document.recovery_lacks(&[Unsupported::Charts]);
+        assert!(document.recovery_lacks(&[Unsupported::Outline, Unsupported::Charts]));
+        assert!(!document.recovery_lacks(&[Unsupported::Charts]));
         assert_eq!(
             document.unsupported,
             [Unsupported::Charts, Unsupported::Outline]
