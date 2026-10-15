@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: &no-rust
+    paths-ignore:
       - "docs/**"
       - "scripts/**"
       - "**.md"
@@ -11,7 +11,12 @@ on:
       - ".agents/**"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore: *no-rust
+    paths-ignore:
+      - "docs/**"
+      - "scripts/**"
+      - "**.md"
+      - ".claude/**"
+      - ".agents/**"
   # macOS is manual only: its minutes cost 10x those of Linux.
   workflow_dispatch:
 
