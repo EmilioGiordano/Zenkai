@@ -60,6 +60,7 @@ Hard rules for the whole run:
    the lead with the user's explicit approval, as merge commits of the PRs in staging order;
    the lead then pushes `main` and the merged work branches (`feat/*`, `fix/*`, `chore/*`,
    `perf/*`, `test/*`) with the user's approval, so every branch is kept on GitHub.
+   `main` is pushed right after the merge, before any new PR is opened.
    Muse never pushes; never push `staging/*`, `night/*` or `worktree-agent-*`.
 
 ## Failures

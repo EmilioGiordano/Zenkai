@@ -261,7 +261,8 @@ in a staging branch.
    in staging order, with merge commits (`--no-ff`); then `git diff staging/<date> main`
    must be empty. Staging is never merged into `main`. The lead pushes `main` and the merged
    work branches (`feat/*`, `fix/*`, `chore/*`, `perf/*`, `test/*`) with the user's approval,
-   so every branch is kept on GitHub. Muse never pushes; never push `staging/*`, `night/*`
+   so every branch is kept on GitHub. `main` is pushed right after the merge: a PR opened
+   against a stale `origin/main` lists commits that are not its own. Muse never pushes; never push `staging/*`, `night/*`
    or `worktree-agent-*`. Never merge to `main` before the manual test.
 
 Long commands run in the background and the agent waits for them; it never hands back early.
