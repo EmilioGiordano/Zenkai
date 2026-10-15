@@ -17,6 +17,7 @@ jobs:
   regression:
     name: Regression gate (Windows, release)
     runs-on: windows-latest
+    # Longer than the 30 min CI cap: release build plus the full benchmark run.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
