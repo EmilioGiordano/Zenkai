@@ -588,6 +588,30 @@ fn inserting_rows_through_a_filter_drops_it_and_says_so() {
     open_xlsx(&through.path).unwrap();
 }
 
+// Zenkai cannot shift where a link to another sheet points, as Excel would, so a row
+// inserted on that sheet drops the link.
+#[test]
+fn a_row_inserted_on_a_linked_sheet_drops_the_link_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = source(dir.path(), |held| {
+        held.write_url(6, 0, "internal:Other!A5").unwrap();
+    });
+    let original = std::fs::read(&path).unwrap();
+    assert!(
+        String::from_utf8(part(&original, HELD_PART).unwrap())
+            .unwrap()
+            .contains("location=\"Other!A5\"")
+    );
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.insert_rows(SheetId(1), RowIdx::clamped(1), 1).unwrap();
+    let saved = save(&book, &dir.path().join("moved.xlsx"));
+    assert_eq!(saved.dropped, [Unsupported::Hyperlinks]);
+    assert_eq!(saved.kept, scan(&saved.bytes));
+    let written = children(&held_sheet(&saved.bytes));
+    assert!(!written.iter().any(|e| e == "hyperlinks"), "{written:?}");
+    open_xlsx(&saved.path).unwrap();
+}
+
 // A table part names its range and the parts a drawing anchors name cells, so any row
 // inserted on the sheet drops its relationships and what they point at.
 #[test]

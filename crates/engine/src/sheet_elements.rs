@@ -294,11 +294,19 @@ fn points_into_relationships(node: Node) -> bool {
 fn reach(node: Node) -> Reach {
     let mut reach = Reach::NONE;
     for n in node.descendants().filter(|n| n.is_element() && in_main(*n)) {
-        let text = n.text().unwrap_or_default();
-        let formula = matches!(n.tag_name().name(), "formula" | "formula1" | "formula2");
-        if formula && !is_literal(text) {
-            // A formula without a sheet name names cells of its own sheet only.
-            reach = reach.and(match text.contains('!') {
+        let named = match n.tag_name().name() {
+            "formula" | "formula1" | "formula2" => {
+                Some(n.text().unwrap_or_default()).filter(|text| !is_literal(text))
+            }
+            "hyperlink" => n
+                .attribute("location")
+                .filter(|location| !location.is_empty()),
+            _ => None,
+        };
+        if let Some(named) = named {
+            // A formula or a link location without a sheet name names cells of its own
+            // sheet only.
+            reach = reach.and(match named.contains('!') {
                 true => Reach::Workbook,
                 false => Reach::SHEET,
             });
@@ -613,6 +621,28 @@ mod tests {
         let mut other_sheet = validation("Lists!$A$1:$A$5");
         other_sheet.moved_elsewhere();
         assert!(other_sheet.kinds().is_empty());
+    }
+
+    #[test]
+    fn a_link_location_reaches_the_sheet_it_names() {
+        let link = |location: &str| {
+            elements(&format!(
+                r#"<hyperlinks><hyperlink ref="B2" location="{location}"/></hyperlinks>"#
+            ))
+        };
+        let mut other_sheet = link("Other!A5");
+        other_sheet.moved_elsewhere();
+        assert!(other_sheet.kinds().is_empty());
+        let mut same_sheet = link("A5");
+        same_sheet.moved_elsewhere();
+        assert_eq!(same_sheet.kinds().len(), 1);
+        same_sheet.moved(Axis::Rows, 1_000_000);
+        assert!(same_sheet.kinds().is_empty());
+        let mut external =
+            elements(r#"<hyperlinks><hyperlink ref="B2" r:id="rId1"/></hyperlinks>"#);
+        external.moved_elsewhere();
+        assert_eq!(external.relationships(), Relationships::Kept);
+        assert_eq!(external.kinds().len(), 1);
     }
 
     #[test]
