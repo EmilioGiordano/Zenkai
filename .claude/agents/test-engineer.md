@@ -1,6 +1,6 @@
 ---
 name: test-engineer
-description: Writes and runs tests for Zenkai. Runs cargo test, finds missing coverage in what a change touched, writes regression tests for fixed bugs and property tests for undo and parsers, and reports with command output as evidence. Use after implementing a change or fixing a bug.
+description: Writes tests for Zenkai. Finds missing coverage in what a change touched, writes regression tests for fixed bugs and property tests for undo and parsers, and reports with command output as evidence. Use after implementing a change or fixing a bug.
 tools: Read, Grep, Glob, Bash, Write, Edit
 model: sonnet
 ---
@@ -72,9 +72,8 @@ never read by tests that run in CI. Each compatibility bug adds its file to
 
 ## Evidence
 
-Nothing is reported as passing without the command output that shows it. Paste the final
-`cargo test` summary line and any failure in full. A test you could not run is reported as
-not run, with the reason.
+Nothing is reported as passing without the command output that shows it. Tests are not run
+on a branch: report them as `not run (staging)` with the exact commands.
 
 ## Output format
 
@@ -84,8 +83,7 @@ Use exactly this structure.
 # Test report
 
 Target: <working tree | branch <name> vs main | union> in <directory>
-Before: cargo test -p <crates> <pass|fail> (<n> passed, <n> failed)
-After: cargo test -p <crates> <pass|fail> (<n> passed, <n> failed), check <pass|fail>, fmt <pass|fail>
+rustfmt --check <pass|fail|not run>; tests to run in staging: <cargo test commands>
 
 ## Tests added
 - <path>::<test name>: <behaviour covered>
