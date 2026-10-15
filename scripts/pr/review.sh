@@ -1,14 +1,29 @@
 #!/usr/bin/env bash
-# Usage: review.sh [--dry-run] <pr-number> <review.json>
+# Usage: review.sh [--dry-run] [--files <pr-files.json>] <pr-number> <review.json>
 set -eu
 
+# --files uses a saved copy of the PR files API response instead of fetching it.
 dry_run=0
-if [ "${1:-}" = "--dry-run" ]; then
-  dry_run=1
-  shift
-fi
+files_json=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    --files)
+      if [ "$#" -lt 2 ]; then
+        echo "review: --files needs a file" >&2
+        exit 2
+      fi
+      files_json=$2
+      shift 2
+      ;;
+    *) break ;;
+  esac
+done
 if [ "$#" -ne 2 ]; then
-  echo "usage: review.sh [--dry-run] <pr-number> <review.json>" >&2
+  echo "usage: review.sh [--dry-run] [--files <pr-files.json>] <pr-number> <review.json>" >&2
   exit 2
 fi
 pr=$1
@@ -60,12 +75,32 @@ if [ -n "$shape_errors" ]; then
   exit 1
 fi
 
-payload=$(jq '
+# GitHub rejects the whole review when an inline comment targets a line outside the diff,
+# so such findings go into the review body instead.
+if [ -z "$files_json" ]; then
+  files_json=$(mktemp)
+  trap 'rm -f "$files_json"' EXIT
+  gh api --paginate "repos/{owner}/{repo}/pulls/$pr/files" | jq -s 'add' >"$files_json"
+fi
+
+payload=$(jq --slurpfile files "$files_json" '
   def blocking: IN("Critical", "High", "BLOCKER");
-  {
+  def right_lines:
+    reduce (. // "" | split("\n"))[] as $row ({next: 0, lines: []};
+      if ($row | startswith("@@")) then .next = ($row | capture("[+](?<start>[0-9]+)").start | tonumber)
+      elif ($row | startswith("+")) or ($row | startswith(" ")) then .lines += [.next] | .next += 1
+      else . end) | .lines;
+  def placed($c): . as $f | (($c[$f.path] // []) | index($f.line)) != null;
+  ($files[0] | map({key: .filename, value: (.patch | right_lines)}) | from_entries) as $commentable
+  | ([.findings[] | select(placed($commentable))]) as $placed
+  | ([.findings[] | select(placed($commentable) | not)]) as $unplaced
+  | {
     event: (if any(.findings[]; .severity | blocking) then "REQUEST_CHANGES" else "COMMENT" end),
-    body: "[\(.reviewer)] \(.verdict)\n\n\(.summary)",
-    comments: [.findings[] | {
+    body: ("[\(.reviewer)] \(.verdict)\n\n\(.summary)"
+      + (if ($unplaced | length) > 0
+         then "\n\nNot on the diff:\n" + ($unplaced | map("- **\(.severity)** \(.path):\(.line): \(.text)") | join("\n"))
+         else "" end)),
+    comments: [$placed[] | {
       path: .path,
       line: .line,
       side: "RIGHT",
