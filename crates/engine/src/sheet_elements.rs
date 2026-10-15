@@ -79,7 +79,7 @@ pub enum Relationships {
 enum Reach {
     // The last row and column its ranges name.
     Cells { rows: u32, columns: u32 },
-    // Its formulas may name cells on any sheet.
+    // Its formulas or link locations may name cells on any sheet.
     Workbook,
 }
 
@@ -362,11 +362,9 @@ fn reach(node: Node) -> Reach {
             _ => None,
         };
         if let Some(named) = named {
-            // A formula or a link location without a sheet name names cells of its own
-            // sheet only.
-            reach = reach.and(match named.contains('!') {
-                true => Reach::Workbook,
-                false => Reach::SHEET,
+            reach = reach.and(match is_plain_range(named) {
+                true => Reach::SHEET,
+                false => Reach::Workbook,
             });
         }
         for ranges in ["ref", "sqref"].into_iter().filter_map(|a| n.attribute(a)) {
@@ -374,6 +372,14 @@ fn reach(node: Node) -> Reach {
         }
     }
     reach
+}
+
+// Only a plain cell or range is known to name cells of its own sheet alone; a defined
+// name, a table column or a function may name cells on any sheet.
+fn is_plain_range(text: &str) -> bool {
+    let text = text.trim();
+    let range = text.strip_prefix('=').unwrap_or(text);
+    range.split(':').count() <= 2 && range.split(':').all(|cell| cell_position(cell).is_some())
 }
 
 // A number or a quoted text names no cell.
@@ -729,6 +735,38 @@ mod tests {
         external.moved_elsewhere();
         assert_eq!(external.relationships(), Relationships::Kept);
         assert_eq!(external.kinds().len(), 1);
+    }
+
+    #[test]
+    fn only_a_plain_cell_or_range_reaches_its_own_sheet_alone() {
+        let validation = |formula: &str| {
+            elements(&format!(
+                r#"<dataValidations count="1"><dataValidation sqref="B2"><formula1>{formula}</formula1></dataValidation></dataValidations>"#
+            ))
+        };
+        for own in ["A5", "$A$1:$A$5", " =B2 "] {
+            let mut kept = validation(own);
+            kept.moved_elsewhere();
+            assert_eq!(kept.kinds().len(), 1, "{own}");
+        }
+        for named in [
+            "MyName",
+            "Table1[Col]",
+            "OFFSET(A1,0,0)",
+            "A1,B2",
+            "A1:B2:C3",
+            "TRUE",
+            "A:A",
+            "",
+        ] {
+            let mut dropped = validation(named);
+            dropped.moved_elsewhere();
+            assert!(dropped.kinds().is_empty(), "{named}");
+        }
+        let mut named_link =
+            elements(r#"<hyperlinks><hyperlink ref="B2" location="Target"/></hyperlinks>"#);
+        named_link.moved_elsewhere();
+        assert!(named_link.kinds().is_empty());
     }
 
     #[test]
