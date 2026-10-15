@@ -174,8 +174,9 @@ Agents write the content; `scripts/pr` (bash, `gh`, `jq`) does the GitHub mechan
   `scripts/pr/lint.sh` enforces it and `scripts/pr/open.sh` runs it before opening.
 - **Review:** a summary of at most 6 lines and inline comments of at most 3 lines, each
   with an optional suggestion block. Low findings without action go only in the summary.
-  A review is never an approval: it is REQUEST_CHANGES with a Critical, High or BLOCKER
-  finding, otherwise COMMENT. Findings on lines outside the PR diff go into the review body.
+  The event is always COMMENT, never APPROVE or REQUEST_CHANGES: GitHub rejects
+  REQUEST_CHANGES on the lead's own PR, so the verdict lives in the body, which starts
+  with `[reviewer] VERDICT`. Findings on lines outside the PR diff go into the review body.
 - **Thread replies:** one line: `Fixed in <sha>.`, `Won't fix: <reason>` or
   `False positive: <reason>`.
 - **Staging comment, one per PR:** gate result, measurements before and after, and what to

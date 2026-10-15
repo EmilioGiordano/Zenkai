@@ -84,7 +84,6 @@ if [ -z "$files_json" ]; then
 fi
 
 payload=$(jq --slurpfile files "$files_json" '
-  def blocking: IN("Critical", "High", "BLOCKER");
   def right_lines:
     reduce (. // "" | split("\n"))[] as $row ({next: 0, lines: []};
       if ($row | startswith("@@")) then .next = ($row | capture("[+](?<start>[0-9]+)").start | tonumber)
@@ -95,7 +94,7 @@ payload=$(jq --slurpfile files "$files_json" '
   | ([.findings[] | select(placed($commentable))]) as $placed
   | ([.findings[] | select(placed($commentable) | not)]) as $unplaced
   | {
-    event: (if any(.findings[]; .severity | blocking) then "REQUEST_CHANGES" else "COMMENT" end),
+    event: "COMMENT",
     body: ("[\(.reviewer)] \(.verdict)\n\n\(.summary)"
       + (if ($unplaced | length) > 0
          then "\n\nNot on the diff:\n" + ($unplaced | map("- **\(.severity)** \(.path):\(.line): \(.text)") | join("\n"))
