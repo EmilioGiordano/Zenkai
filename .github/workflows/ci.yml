@@ -3,7 +3,17 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: &no-rust
+      - "docs/**"
+      - "scripts/**"
+      - "**.md"
+      - ".claude/**"
+      - ".agents/**"
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore: *no-rust
+  # macOS is manual only: its minutes cost 10x those of Linux.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,14 +29,20 @@ env:
 
 jobs:
   check:
+    # Manual run: macOS, everything. Draft PR: fmt and clippy on Linux. Ready PR: everything on
+    # Linux and Windows. Push to main: fmt and clippy on Linux, which also warms the cache.
     name: Check (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, macos-latest]
+        os: ${{ fromJSON(github.event_name == 'workflow_dispatch' && '["macos-latest"]' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && '["ubuntu-latest","windows-latest"]') || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Two commits so the vendor step can diff the merge commit against the base.
+          fetch-depth: 2
 
       - name: Install the toolchain from rust-toolchain.toml
         run: |
@@ -55,6 +71,9 @@ jobs:
           fi
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Format
         run: cargo fmt --check
@@ -63,4 +82,13 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Test
+        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && !github.event.pull_request.draft)
         run: cargo test
+
+      - name: Test the vendored crates if the PR touches vendor
+        if: runner.os == 'Linux' && github.event_name == 'pull_request' && !github.event.pull_request.draft
+        run: |
+          if git diff --name-only HEAD^1 HEAD | grep -q '^vendor/'; then
+            cargo test --manifest-path vendor/ironcalc_base/Cargo.toml
+            cargo test --manifest-path vendor/ironcalc/Cargo.toml
+          fi
