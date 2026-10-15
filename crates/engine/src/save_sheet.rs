@@ -41,22 +41,9 @@ pub(crate) fn prepare(sheet: &mut Worksheet, settings: Option<&SheetSettings>) -
     }
     sheet.rows.retain(|row| in_grid(&row.r));
     for row in &mut sheet.rows {
-        row.height = if row.height.is_finite() {
-            row.height.clamp(0.0, MAX_HEIGHT)
-        } else {
-            15.0
-        };
+        row.height = written_height(row.height);
     }
-    let dimension = sheet.dimension();
-    let reference = match (
-        number_to_column(dimension.min_column),
-        number_to_column(dimension.max_column),
-    ) {
-        (Some(first), Some(last)) => {
-            format!("{first}{}:{last}{}", dimension.min_row, dimension.max_row)
-        }
-        _ => "A1".to_string(),
-    };
+    let reference = dimension_reference(sheet);
     let outlined = settings
         .map(|s| s.rows.outline.keys().filter_map(|r| i32::try_from(*r).ok()))
         .into_iter()
@@ -68,6 +55,28 @@ pub(crate) fn prepare(sheet: &mut Worksheet, settings: Option<&SheetSettings>) -
         }
     }
     reference
+}
+
+pub(crate) fn written_height(height: f64) -> f64 {
+    if height.is_finite() {
+        height.clamp(0.0, MAX_HEIGHT)
+    } else {
+        15.0
+    }
+}
+
+// The <dimension> reference of the sheet's cells, which must all lie in Excel's grid.
+pub(crate) fn dimension_reference(sheet: &Worksheet) -> String {
+    let dimension = sheet.dimension();
+    match (
+        number_to_column(dimension.min_column),
+        number_to_column(dimension.max_column),
+    ) {
+        (Some(first), Some(last)) => {
+            format!("{first}{}:{last}{}", dimension.min_row, dimension.max_row)
+        }
+        _ => "A1".to_string(),
+    }
 }
 
 enum Stage {
@@ -188,7 +197,10 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 // Text and formulas are escaped, so `<row r="` only ever starts a row tag.
-fn with_row_outline(rows: &[u8], outline: &BTreeMap<u32, Outline>) -> io::Result<Vec<u8>> {
+pub(crate) fn with_row_outline(
+    rows: &[u8],
+    outline: &BTreeMap<u32, Outline>,
+) -> io::Result<Vec<u8>> {
     const OPEN: &[u8] = b"<row r=\"";
     let mut out = Vec::with_capacity(rows.len() + 64);
     let mut rest = rows;

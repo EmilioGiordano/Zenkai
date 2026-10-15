@@ -26,7 +26,7 @@ use crate::sheet_settings::{Carried, SheetSettings};
 
 // IronCalc's rows are written in many small pieces; the settings writer and the deflate
 // stream take them in chunks this large.
-const SHEET_BUFFER_BYTES: usize = 256 * 1024;
+pub(crate) const SHEET_BUFFER_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveTarget {

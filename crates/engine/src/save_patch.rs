@@ -1,5 +1,6 @@
 // A save that starts from the file on disk: every part the workbook did not change is
-// copied without inflating it, and only the changed sheets are written again.
+// copied without inflating it, and only the changed sheets, or their changed rows, are
+// written again.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufWriter, Seek, Write};
@@ -12,12 +13,27 @@ use zip::ZipWriter;
 use crate::error::EngineError;
 use crate::fingerprint::{DynamicArrays, SheetPrint};
 use crate::save::{ModelData, SheetJob, deflated, rejected, sheet_job, write_sheet};
+use crate::save_rows::{RowJob, dirty_blocks, row_job, write_rows};
 use crate::saved::{Contents, Metadata, SavedFile, Strings};
 use crate::sheet_settings::Carried;
 
+enum SheetPatch {
+    Whole(SheetJob),
+    Rows(RowJob),
+}
+
+impl SheetPatch {
+    fn part(&self) -> &str {
+        match self {
+            SheetPatch::Whole(job) => &job.part,
+            SheetPatch::Rows(job) => &job.part,
+        }
+    }
+}
+
 pub(crate) struct PatchPlan {
     pub(crate) base: Arc<SavedFile>,
-    sheets: Vec<SheetJob>,
+    sheets: Vec<SheetPatch>,
     // Whole <si> elements for the strings the model added since the file was written,
     // which held `strings_in_file`.
     strings: Vec<u8>,
@@ -75,9 +91,18 @@ pub(crate) fn patch_plan(
     };
     let sheets = changed
         .iter()
-        .map(|&index| {
+        .map(|&index| -> Result<SheetPatch, EngineError> {
             let part = saved.worksheets[index].clone();
-            sheet_job(data, carried, index, part, index == saved.selected)
+            Ok(match dirty_blocks(&saved.sheets[index], &prints[index]) {
+                Some(blocks) => SheetPatch::Rows(row_job(data, carried, index, part, blocks)?),
+                None => SheetPatch::Whole(sheet_job(
+                    data,
+                    carried,
+                    index,
+                    part,
+                    index == saved.selected,
+                )?),
+            })
         })
         .collect::<Result<_, _>>()?;
     let contents = Contents {
@@ -168,10 +193,15 @@ pub(crate) fn write_patch<W: Write + Seek>(
     if !plan.sheets.is_empty() && plan.strings.is_empty() {
         check_strings(saved, &mut base, &names)?;
     }
+    // A sheet written row by row keeps the part around its rows, and with it what its
+    // relationships point at.
     let rels: HashSet<String> = plan
         .sheets
         .iter()
-        .map(|job| sheet_rels(&job.part))
+        .filter_map(|job| match job {
+            SheetPatch::Whole(job) => Some(sheet_rels(&job.part)),
+            SheetPatch::Rows(_) => None,
+        })
         .collect();
     let chain = if plan.sheets.is_empty() {
         None
@@ -182,17 +212,24 @@ pub(crate) fn write_patch<W: Write + Seek>(
         Some(chain) => (chain.dropped, chain.rewritten.into_iter().collect()),
         None => (Vec::new(), HashMap::new()),
     };
-    let mut sheets: HashMap<String, SheetJob> = plan
+    let mut sheets: HashMap<String, SheetPatch> = plan
         .sheets
         .into_iter()
-        .map(|job| (job.part.clone(), job))
+        .map(|job| (job.part().to_string(), job))
         .collect();
     let mut strings_left = plan.strings;
     let mut zip = ZipWriter::new(writer);
     let mut written = Vec::with_capacity(names.len());
     for (index, name) in names.into_iter().enumerate() {
         if let Some(job) = sheets.remove(&name) {
-            write_sheet(&mut zip, job)?;
+            match job {
+                SheetPatch::Whole(job) => write_sheet(&mut zip, job)?,
+                SheetPatch::Rows(job) => {
+                    zip.start_file(name.as_str(), deflated())
+                        .map_err(rejected)?;
+                    write_rows(&mut base, &mut zip, &job).map_err(copy_failed)?;
+                }
+            }
         } else if rels.contains(&name) || dropped.iter().any(|d| d.eq_ignore_ascii_case(&name)) {
             continue;
         } else if let Some(bytes) = rewritten.remove(&name) {

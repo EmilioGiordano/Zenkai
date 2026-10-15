@@ -233,7 +233,7 @@ fn formula_hashes(formulas: &Formulas) -> Result<Vec<u64>, EngineError> {
     Ok(hashes)
 }
 
-pub(crate) fn block_of(row: i32) -> Option<usize> {
+fn block_of(row: i32) -> Option<usize> {
     let row = u32::try_from(row)
         .ok()
         .filter(|row| (1..=MAX_ROW).contains(row))?;
