@@ -1,0 +1,1 @@
+{"reviewer":"security-reviewer","verdict":"FAIL","summary":"One blocker.","findings":[{"path":"crates/x.rs","line":1,"severity":"High","text":"Unchecked index."}]}

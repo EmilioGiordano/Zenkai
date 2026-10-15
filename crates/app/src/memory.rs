@@ -27,6 +27,13 @@ fn budget_from(override_mb: Option<&str>, total_mb: Option<u64>) -> u64 {
         .unwrap_or(FALLBACK_BUDGET_MB)
 }
 
+// Committed private bytes of this process, never the working set: Windows pages
+// a process out under pressure, so the working set stays low while committed grows.
+pub fn current_committed_mb() -> Option<u64> {
+    let bytes = memory_stats::memory_stats()?.virtual_mem;
+    u64::try_from(bytes / 1024 / 1024).ok()
+}
+
 pub struct Candidate {
     pub id: WorkbookId,
     pub last_used: Instant,

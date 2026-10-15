@@ -24,6 +24,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   the package itself. An unevaluated formula now returns an error instead of
   panicking (`src/export/mod.rs`, `src/export/worksheets.rs`). Tests:
   `src/export/test/test_export.rs`.
+- The xlsx export writes a run of the same formula down a column as an Excel shared
+  formula (`<f t="shared" ref=".." si="..">` once, then `<f t="shared" si=".."/>`), so the
+  formula is stringified once per run and the part is smaller (`src/export/worksheets.rs`).
+  Tests: `src/export/test/test_export.rs`.
 - `get_shared_string_item_xml` writes one `<si>` element of the shared
   strings part, so a caller can append strings to an existing part
   (`src/export/shared_strings.rs`). Tests: `src/export/test/test_export.rs`.
@@ -105,6 +109,14 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - `StaticResult` derives `Clone`, `Debug` and `PartialEq`, so a caller can copy a
   sheet's parsed formulas, for instance to save them away from the model
   (`src/expressions/parser/static_analysis.rs`).
+- `UserModel::fill_formula` writes the formula of one cell over an area by storing the
+  same formula index in each cell, instead of printing, parsing and storing a text per
+  cell. It leaves the cells alone and returns false when a reference would leave the sheet
+  or invert a range, or the area holds an array or a spill, so the caller fills as text.
+  Undo restores the old cells; redo reads the source cell again (new `Diff::FillFormula`).
+  `UserModel::begin_edit_group` and `end_edit_group` join the edits between them into one
+  undo step, evaluating once (`src/user_model/fill_formula.rs`, `common.rs`). Tests:
+  `src/test/user_model/test_fill_formula.rs`.
 - The full evaluation lists the cells holding a formula instead of every cell, so a
   workbook of millions of values no longer builds a 12-byte index of each one first
   (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
