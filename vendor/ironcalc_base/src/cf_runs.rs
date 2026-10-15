@@ -196,7 +196,11 @@ impl CfRun {
                 }
             }
         }
-        Refresh::Cells(cells.into_iter().collect())
+        if cells.is_empty() {
+            Refresh::Nothing
+        } else {
+            Refresh::Cells(cells.into_iter().collect())
+        }
     }
 }
 
@@ -316,7 +320,6 @@ impl Model<'_> {
     fn evaluate_cf_run(&mut self, sheet: u32, run: &mut CfRun, today: Option<i64>) {
         run.results = HashMap::new();
         run.day = today;
-        self.cf_sink.clear();
         self.apply_cf_rule(sheet, &run.rule, &run.ranges, &run.ranges);
         self.keep_cf_results(run);
     }
@@ -333,13 +336,14 @@ impl Model<'_> {
                 }
             }
         }
-        self.cf_sink.clear();
         self.apply_cf_rule(sheet, &run.rule, &visits, &run.ranges);
         self.keep_cf_results(run);
     }
 
+    // The sink is taken, not drained in place, so a rule over a million cells does not leave
+    // its buffer behind.
     fn keep_cf_results(&mut self, run: &mut CfRun) {
-        for (row, column, result, stop_if_true) in self.cf_sink.drain(..) {
+        for (row, column, result, stop_if_true) in std::mem::take(&mut self.cf_sink) {
             run.results
                 .entry((row, column))
                 .or_default()
