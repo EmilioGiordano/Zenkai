@@ -102,7 +102,8 @@ pub(crate) fn sheet_prints(
         .iter()
         .zip(data.formulas)
         .map(|(sheet, formulas)| {
-            sheet_print(sheet, formulas, carried.written(sheet), &mut budget)
+            let moves = carried.moves(sheet.sheet_id);
+            sheet_print(sheet, formulas, carried.written(sheet), moves, &mut budget)
         })
         .collect()
 }

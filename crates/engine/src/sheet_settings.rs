@@ -263,6 +263,7 @@ impl SheetSettings {
 pub struct Carried {
     sheets: HashMap<u32, SheetSettings>,
     dropped: BTreeSet<Unsupported>,
+    moves: HashMap<u32, u64>,
 }
 
 impl Carried {
@@ -270,6 +271,24 @@ impl Carried {
         Carried {
             sheets,
             dropped: BTreeSet::new(),
+            moves: HashMap::new(),
+        }
+    }
+
+    // How many times the sheet's rows or columns may have moved; it only grows.
+    pub(crate) fn moves(&self, sheet_id: u32) -> u64 {
+        self.moves.get(&sheet_id).copied().unwrap_or(0)
+    }
+
+    fn count_move(&mut self, sheet_id: u32) {
+        let moves = self.moves.entry(sheet_id).or_default();
+        *moves = moves.wrapping_add(1);
+    }
+
+    // IronCalc's undo and redo do not say whether the step moved rows or columns.
+    pub(crate) fn history_replayed(&mut self, sheet_ids: impl IntoIterator<Item = u32>) {
+        for sheet_id in sheet_ids {
+            self.count_move(sheet_id);
         }
     }
 
@@ -287,12 +306,14 @@ impl Carried {
     }
 
     pub fn rows_moved(&mut self, sheet_id: u32, from: u32) {
+        self.count_move(sheet_id);
         if let Some(settings) = self.sheets.get_mut(&sheet_id) {
             self.dropped.extend(settings.rows.moved_from(from));
         }
     }
 
     pub fn columns_moved(&mut self, sheet_id: u32, from: u32) {
+        self.count_move(sheet_id);
         if let Some(settings) = self.sheets.get_mut(&sheet_id) {
             self.dropped.extend(settings.columns.moved_from(from));
         }
@@ -726,6 +747,16 @@ mod tests {
         carried.rows_moved(1, 5);
         assert_eq!(carried.dropped(), [Unsupported::Outline]);
         assert!(carried.get(1).is_some_and(|s| s.rows.outline.is_empty()));
+    }
+
+    #[test]
+    fn moves_are_counted_per_sheet_and_for_every_sheet_on_undo() {
+        let mut carried = Carried::default();
+        carried.rows_moved(1, 3);
+        carried.columns_moved(1, 2);
+        assert_eq!((carried.moves(1), carried.moves(2)), (2, 0));
+        carried.history_replayed([1, 2]);
+        assert_eq!((carried.moves(1), carried.moves(2)), (3, 1));
     }
 
     #[test]

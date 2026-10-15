@@ -25,7 +25,7 @@ use crate::sheet_settings::{Carried, Outline};
 
 // The blocks of rows that changed, when the sheet can be written row by row.
 pub(crate) fn dirty_blocks(saved: &SheetPrint, now: &SheetPrint) -> Option<BTreeSet<usize>> {
-    if !now.same_frame(saved) {
+    if !now.same_frame(saved) || now.moved_since(saved) {
         return None;
     }
     let (before, after) = (saved.row_blocks()?, now.row_blocks()?);
@@ -41,8 +41,7 @@ pub(crate) fn dirty_blocks(saved: &SheetPrint, now: &SheetPrint) -> Option<BTree
             dirty.insert(index);
         }
     }
-    // Past half of the blocks in use the copy saves little; rows inserted or deleted near
-    // the top, which move every block below them, are rewritten whole here.
+    // Past half of the blocks in use the copy saves little.
     let few = !dirty.is_empty() && dirty.len().saturating_mul(2) <= used;
     few.then_some(dirty)
 }
@@ -352,6 +351,7 @@ mod tests {
             &model.workbook.worksheets[0],
             &model.parsed_formulas[0],
             None,
+            0,
             &mut budget,
         )
         .unwrap()
@@ -409,6 +409,25 @@ mod tests {
     }
 
     #[test]
+    fn rows_moved_since_the_save_rewrite_the_sheet() {
+        let mut model = filled(320);
+        let before = print(&model);
+        model.set_user_input(0, 300, 1, "7".to_string()).unwrap();
+        model.evaluate();
+        let mut budget = ROW_PRINT_BUDGET_BYTES;
+        let moved = sheet_print(
+            &model.workbook.worksheets[0],
+            &model.parsed_formulas[0],
+            None,
+            1,
+            &mut budget,
+        )
+        .unwrap();
+        assert!(dirty_blocks(&before, &print(&model)).is_some());
+        assert!(dirty_blocks(&before, &moved).is_none());
+    }
+
+    #[test]
     fn a_sheet_without_blocks_is_rewritten() {
         let model = filled(20);
         let mut none = 0;
@@ -416,6 +435,7 @@ mod tests {
             &model.workbook.worksheets[0],
             &model.parsed_formulas[0],
             None,
+            0,
             &mut none,
         )
         .unwrap();

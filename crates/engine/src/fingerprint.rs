@@ -31,6 +31,8 @@ pub(crate) struct SheetPrint {
     frame: u64,
     rows: RowBlocks,
     dynamic_arrays: DynamicArrays,
+    // Kept out of the hash: an insert undone before a save leaves the part as it was.
+    moves: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -60,6 +62,12 @@ impl SheetPrint {
 
     pub(crate) fn same_frame(&self, saved: &SheetPrint) -> bool {
         self.frame == saved.frame
+    }
+
+    // Whether rows or columns may have moved since `saved`, which shifts what the file
+    // holds beyond the model (validations, hyperlinks, drawings) and a copy would keep.
+    pub(crate) fn moved_since(&self, saved: &SheetPrint) -> bool {
+        self.moves != saved.moves
     }
 
     pub(crate) fn row_blocks(&self) -> Option<&[u64]> {
@@ -259,11 +267,13 @@ fn row_blocks(rows: &[(i32, u64)], budget: &mut usize) -> RowBlocks {
     RowBlocks::Hashed(hashes)
 }
 
-// `budget` is what is left of ROW_PRINT_BUDGET_BYTES for the workbook's row blocks.
+// `budget` is what is left of ROW_PRINT_BUDGET_BYTES for the workbook's row blocks;
+// `moves` counts the row and column moves the sheet may have had, see `Carried::moves`.
 pub(crate) fn sheet_print(
     sheet: &Worksheet,
     formulas: &Formulas,
     settings: Option<&SheetSettings>,
+    moves: u64,
     budget: &mut usize,
 ) -> Result<SheetPrint, EngineError> {
     let Worksheet {
@@ -321,6 +331,7 @@ pub(crate) fn sheet_print(
         frame,
         rows: row_blocks(&hashed, budget),
         dynamic_arrays,
+        moves,
     })
 }
 
@@ -383,6 +394,7 @@ mod tests {
             &model.workbook.worksheets[sheet],
             &model.parsed_formulas[sheet],
             None,
+            0,
             &mut budget,
         )
         .unwrap()

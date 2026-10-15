@@ -550,6 +550,14 @@ impl Workbook {
         }
     }
 
+    // A row-level save copies what the model does not hold from the file, which a
+    // replayed move would leave in the wrong place.
+    fn history_replayed(&mut self) {
+        let worksheets = &self.model.get_model().workbook.worksheets;
+        let sheet_ids: Vec<u32> = worksheets.iter().map(|ws| ws.sheet_id).collect();
+        self.carried.history_replayed(sheet_ids);
+    }
+
     fn columns_moved(&mut self, sheet: SheetId, from: ColIdx) {
         if let Some(id) = self.sheet_id(sheet) {
             self.carried.columns_moved(id, u32::from(from.get()) + 1);
@@ -1254,11 +1262,15 @@ impl Engine for Workbook {
     }
 
     fn undo(&mut self) -> Result<(), EngineError> {
-        self.model.undo().map_err(rejected)
+        let undone = self.model.undo().map_err(rejected);
+        self.history_replayed();
+        undone
     }
 
     fn redo(&mut self) -> Result<(), EngineError> {
-        self.model.redo().map_err(rejected)
+        let redone = self.model.redo().map_err(rejected);
+        self.history_replayed();
+        redone
     }
 
     fn sizes(&self, sheet: SheetId) -> SheetSizes {

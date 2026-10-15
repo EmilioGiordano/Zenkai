@@ -206,22 +206,54 @@ fn rows_inserted_near_the_top_rewrite_the_sheet_whole() {
     assert_eq!(reopened.input(SheetId(0), pos(10, 2)), "=A11*2");
 }
 
+// A validation below the moved rows that the model does not hold; a copy of the part
+// around the rows would keep it on its old row.
+fn with_validation_below(document: &Path) {
+    replace_part(document, ROWS_PART, |sheet| {
+        let validation = "<dataValidations count=\"1\"><dataValidation type=\"whole\" \
+                          sqref=\"A195\"><formula1>1</formula1></dataValidation>\
+                          </dataValidations>";
+        sheet.replacen("<pageMargins", &format!("{validation}<pageMargins"), 1)
+    });
+    assert!(part(document, ROWS_PART).contains("sqref=\"A195\""));
+}
+
 #[test]
-fn a_row_deleted_near_the_end_moves_only_the_blocks_below_it() {
+fn a_row_deleted_near_the_end_rewrites_the_sheet_whole() {
     let dir = tempfile::tempdir().unwrap();
     let document = dir.path().join("book.xlsx");
     excel_base(&document);
+    with_validation_below(&document);
     let base = copy_of(&document);
     let mut book = open_xlsx(&document).unwrap().workbook;
     book.delete_rows(SheetId(0), RowIdx::clamped(189), 1).unwrap();
     save(&book, &document);
-    let copied = copied_rows(&base, &document);
-    assert_eq!(copied, (1..=176).collect::<Vec<u32>>());
+    assert!(copied_rows(&base, &document).is_empty());
+    assert!(!part(&document, ROWS_PART).contains("sqref=\"A195\""));
     let whole = Workbook::from_xlsx_bytes(&book.to_xlsx().unwrap(), "book").unwrap();
     let expected = cells(&whole);
     for cells in reopened(&document) {
         assert!(cells == expected, "{}", first_difference(&expected, &cells));
     }
+}
+
+#[test]
+fn a_move_redone_after_a_save_rewrites_the_sheet_whole() {
+    let dir = tempfile::tempdir().unwrap();
+    let document = dir.path().join("book.xlsx");
+    excel_base(&document);
+    with_validation_below(&document);
+    let base = copy_of(&document);
+    let mut book = open_xlsx(&document).unwrap().workbook;
+    book.delete_rows(SheetId(0), RowIdx::clamped(189), 1).unwrap();
+    book.undo().unwrap();
+    save(&book, &document);
+    assert!(part(&document, ROWS_PART).contains("sqref=\"A195\""));
+    book.redo().unwrap();
+    book.set_input(SheetId(0), pos(49, 0), "1000").unwrap();
+    save(&book, &document);
+    assert!(copied_rows(&base, &document).is_empty());
+    assert!(!part(&document, ROWS_PART).contains("sqref=\"A195\""));
 }
 
 #[test]
