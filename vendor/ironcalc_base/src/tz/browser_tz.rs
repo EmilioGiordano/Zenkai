@@ -75,8 +75,7 @@ pub fn get_all_timezone_names() -> Vec<String> {
 }
 
 pub(crate) fn excel_serial_for_now(tz: &Tz, milliseconds: i64) -> Option<f64> {
-    let ms = milliseconds;
-    let parts = js::ic_tz_parts(ms as f64, &tz.0);
+    let parts = js::ic_tz_parts(milliseconds as f64, &tz.0);
     if parts.length() != 6 {
         return None;
     }
