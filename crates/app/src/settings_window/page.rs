@@ -3,7 +3,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::*;
 use zenkai_agent::preferences::{
-    ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS, XlsxReaderChoice,
+    CloseWithUnsaved, ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS, XlsxReaderChoice,
 };
 use zenkai_agent::settings::{PermissionMode, Settings};
 use zenkai_i18n::t;
@@ -161,16 +161,42 @@ impl SettingsWindow {
         let weak = cx.entity().downgrade();
         match row {
             RowId::RestoreSession => {
-                parts.control = Some(controls::switch(
-                    ("row", id),
-                    info.title,
-                    settings.general.restore_session,
-                    |on, _, cx| {
-                        agent_settings::change(cx, move |settings| {
-                            settings.general.restore_session = on
-                        })
-                    },
-                ));
+                let reopen = settings.general.restore_session;
+                parts.control = Some(
+                    segmented(
+                        "startup",
+                        vec![
+                            (true, t!("settings.startup.reopen"), reopen),
+                            (false, t!("settings.startup.empty"), !reopen),
+                        ],
+                        |on, _, cx| {
+                            agent_settings::change(cx, move |settings| {
+                                settings.general.restore_session = on
+                            })
+                        },
+                        cx,
+                    )
+                    .into_any_element(),
+                );
+            }
+            RowId::CloseWithUnsaved => {
+                let current = settings.general.close_with_unsaved;
+                parts.control = Some(
+                    segmented(
+                        "close-unsaved",
+                        CloseWithUnsaved::ALL
+                            .into_iter()
+                            .map(|choice| (choice, choice.label(), choice == current))
+                            .collect(),
+                        |choice, _, cx| {
+                            agent_settings::change(cx, move |settings| {
+                                settings.general.close_with_unsaved = choice
+                            })
+                        },
+                        cx,
+                    )
+                    .into_any_element(),
+                );
             }
             RowId::FastXlsxReader => {
                 parts.control = Some(controls::switch(
