@@ -1110,7 +1110,7 @@ impl Engine for Workbook {
             .map(|rectangle| area(sheet, rectangle))
             .collect();
         self.model
-            .rewrite_values(|model| {
+            .edit_keeping_cells(|model| {
                 model.range_clear_contents_of_areas(&area(sheet, range), &areas)
             })
             .map_err(rejected)
@@ -1149,7 +1149,9 @@ impl Engine for Workbook {
         };
         let target = self.formattable(sheet, range)?;
         self.model
-            .update_range_style(&area(sheet, target), path, &value)
+            .write_within(sheet, target, |model| {
+                model.update_range_style(&area(sheet, target), path, &value)
+            })
             .map_err(rejected)
     }
 
@@ -1162,7 +1164,9 @@ impl Engine for Workbook {
         check_format_code(code)?;
         let target = self.formattable(sheet, range)?;
         self.model
-            .update_range_style(&area(sheet, target), "num_fmt", code)
+            .write_within(sheet, target, |model| {
+                model.update_range_style(&area(sheet, target), "num_fmt", code)
+            })
             .map_err(rejected)
     }
 
@@ -1194,12 +1198,14 @@ impl Engine for Workbook {
         hidden: bool,
     ) -> Result<(), EngineError> {
         self.model
-            .set_rows_hidden(
-                sheet.0,
-                row_i32(range.start.row),
-                row_i32(range.end.row),
-                hidden,
-            )
+            .edit_keeping_cells(|model| {
+                model.set_rows_hidden(
+                    sheet.0,
+                    row_i32(range.start.row),
+                    row_i32(range.end.row),
+                    hidden,
+                )
+            })
             .map_err(rejected)
     }
 
@@ -1210,12 +1216,14 @@ impl Engine for Workbook {
         hidden: bool,
     ) -> Result<(), EngineError> {
         self.model
-            .set_columns_hidden(
-                sheet.0,
-                col_i32(range.start.col),
-                col_i32(range.end.col),
-                hidden,
-            )
+            .edit_keeping_cells(|model| {
+                model.set_columns_hidden(
+                    sheet.0,
+                    col_i32(range.start.col),
+                    col_i32(range.end.col),
+                    hidden,
+                )
+            })
             .map_err(rejected)
     }
 
@@ -1279,7 +1287,9 @@ impl Engine for Workbook {
         let chars = ((pixels - CHAR_WIDTH_PADDING) / PIXELS_PER_CHAR).clamp(0.0, 255.0);
         let column = col_i32(col);
         self.model
-            .set_columns_width(sheet.0, column, column, chars * COLUMN_WIDTH_FACTOR)
+            .edit_keeping_cells(|model| {
+                model.set_columns_width(sheet.0, column, column, chars * COLUMN_WIDTH_FACTOR)
+            })
             .map_err(rejected)
     }
 
@@ -1290,20 +1300,16 @@ impl Engine for Workbook {
         pixels: f32,
     ) -> Result<(), EngineError> {
         let row = row_i32(row);
+        // Excel's tallest row is 409.5 points.
+        let height = (if pixels.is_finite() {
+            f64::from(pixels)
+        } else {
+            0.0
+        } / PIXELS_PER_POINT)
+            .clamp(0.0, 409.5)
+            * ROW_HEIGHT_FACTOR;
         self.model
-            .set_rows_height(
-                sheet.0,
-                row,
-                row,
-                // Excel's tallest row is 409.5 points.
-                (if pixels.is_finite() {
-                    f64::from(pixels)
-                } else {
-                    0.0
-                } / PIXELS_PER_POINT)
-                    .clamp(0.0, 409.5)
-                    * ROW_HEIGHT_FACTOR,
-            )
+            .edit_keeping_cells(|model| model.set_rows_height(sheet.0, row, row, height))
             .map_err(rejected)
     }
 
@@ -1319,10 +1325,10 @@ impl Engine for Workbook {
     fn set_frozen(&mut self, sheet: SheetId, rows: u32, cols: u16) -> Result<(), EngineError> {
         let rows = i32::try_from(rows).map_err(|e| rejected(e.to_string()))?;
         self.model
-            .set_frozen_rows_count(sheet.0, rows)
-            .map_err(rejected)?;
-        self.model
-            .set_frozen_columns_count(sheet.0, i32::from(cols))
+            .edit_keeping_cells(|model| {
+                model.set_frozen_rows_count(sheet.0, rows)?;
+                model.set_frozen_columns_count(sheet.0, i32::from(cols))
+            })
             .map_err(rejected)
     }
 

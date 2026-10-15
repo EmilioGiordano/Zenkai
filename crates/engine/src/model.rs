@@ -151,9 +151,9 @@ impl CachedModel {
         extent.last.unwrap_or_default()
     }
 
-    // For edits that write only inside `area` of `sheet` and remove no cell; `edit` must
-    // leave the workbook evaluated. The cached end grows to the cells now there instead of
-    // walking the sheet again.
+    // For edits that write only inside `area` of `sheet` and remove no cell, such as typing
+    // or styling a range. The cached end grows to the cells now there instead of walking
+    // the sheet again.
     pub(crate) fn write_within<T>(
         &mut self,
         sheet: SheetId,
@@ -165,8 +165,9 @@ impl CachedModel {
         result
     }
 
-    // For edits that change the values of existing cells only, adding or removing none.
-    pub(crate) fn rewrite_values<T>(
+    // For edits that add or remove no cell: clearing values, row and column sizes, hidden
+    // lines, frozen panes.
+    pub(crate) fn edit_keeping_cells<T>(
         &mut self,
         edit: impl FnOnce(&mut UserModel<'static>) -> T,
     ) -> T {
@@ -201,8 +202,10 @@ impl CachedModel {
 
     // Evaluation adds or removes cells only on sheets holding a dynamic array, and only in
     // a full recalculation: an incremental one falls back to a full one whenever a spill
-    // could grow, shrink or move. Every other sheet keeps its end however large it is,
-    // unless the edit changed cells of it or, for `rebuilt`, its rows, columns or settings.
+    // could grow, shrink or move. An edit that did not evaluate left spills alone, so the
+    // previous mode is safe to read; no edit may leave evaluation paused. Every other sheet
+    // keeps its end unless the edit changed cells of it or, for `rebuilt`, moved its rows
+    // or columns.
     fn keep_extents(
         &mut self,
         changed: &[(SheetId, Range)],
@@ -485,6 +488,60 @@ mod tests {
         undo(&mut model);
         assert_eq!(last_recalculation(&model), Recalculation::Incremental);
         assert!(model.cache().contains_key(&SheetId(1)));
+        assert_cached_ends_match_a_walk(&model);
+    }
+
+    fn bold(model: &mut CachedModel, sheet: u32, range: &str) {
+        let range = Range::parse_a1(range).unwrap();
+        let area = Area {
+            sheet,
+            row: row_i32(range.start.row),
+            column: col_i32(range.start.col),
+            width: i32::from(range.cols()),
+            height: i32::try_from(range.rows()).unwrap(),
+        };
+        model.write_within(SheetId(sheet), range, |model| {
+            model.update_range_style(&area, "font.b", "true").unwrap();
+        });
+    }
+
+    #[test]
+    fn a_style_grows_its_sheets_end_and_keeps_the_others() {
+        let mut model = two_filled_sheets();
+        bold(&mut model, 0, "C5");
+        assert_eq!(
+            model.cache().get(&SheetId(0)).map(|extent| extent.last),
+            Some(CellPos::parse_a1("C5"))
+        );
+        assert!(model.cache().contains_key(&SheetId(1)));
+        assert_cached_ends_match_a_walk(&model);
+    }
+
+    #[test]
+    fn styling_a_whole_column_reaches_a_row_with_its_own_height() {
+        let mut model = two_filled_sheets();
+        model.edit_keeping_cells(|model| model.set_rows_height(0, 7, 7, 40.0).unwrap());
+        assert_eq!(model.cache().len(), 2);
+        bold(&mut model, 0, "A1:A1048576");
+        assert!(model.cache().contains_key(&SheetId(1)));
+        model.used_end(SheetId(0));
+        assert_cached_ends_match_a_walk(&model);
+    }
+
+    #[test]
+    fn row_heights_hidden_lines_and_panes_keep_every_end() {
+        let mut model = two_filled_sheets();
+        model.edit_keeping_cells(|model| {
+            model.set_rows_height(0, 3, 3, 40.0).unwrap();
+            model.set_columns_width(1, 2, 2, 90.0).unwrap();
+            model.set_rows_hidden(0, 2, 2, true).unwrap();
+            model.set_frozen_rows_count(1, 1).unwrap();
+        });
+        assert_eq!(model.cache().len(), 2);
+        assert_cached_ends_match_a_walk(&model);
+        undo(&mut model);
+        undo(&mut model);
+        assert_eq!(model.cache().len(), 2);
         assert_cached_ends_match_a_walk(&model);
     }
 

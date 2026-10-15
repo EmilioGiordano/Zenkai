@@ -18,6 +18,10 @@ enum Op {
     Clear(u32, i64, i64, i64, i64),
     ClearAll(u32, i64, i64, i64, i64),
     Bold(u32, i64, i64, i64, i64),
+    NumberFormat(u32, i64, i64, i64, i64),
+    BoldColumn(u32, i64),
+    RowHeight(u32, i64),
+    Freeze(u32, i64),
     InsertRow(u32, i64),
     DeleteRow(u32, i64),
     HideRow(u32, i64),
@@ -61,7 +65,11 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(s, r, c, rows)| Op::Block(s, r, c, rows)),
         1 => (sheet.clone(), area.clone()).prop_map(|(s, (a, b, c, d))| Op::Clear(s, a, b, c, d)),
         1 => (sheet.clone(), area.clone()).prop_map(|(s, (a, b, c, d))| Op::ClearAll(s, a, b, c, d)),
-        1 => (sheet.clone(), area).prop_map(|(s, (a, b, c, d))| Op::Bold(s, a, b, c, d)),
+        1 => (sheet.clone(), area.clone()).prop_map(|(s, (a, b, c, d))| Op::Bold(s, a, b, c, d)),
+        1 => (sheet.clone(), area).prop_map(|(s, (a, b, c, d))| Op::NumberFormat(s, a, b, c, d)),
+        1 => (sheet.clone(), col.clone()).prop_map(|(s, c)| Op::BoldColumn(s, c)),
+        1 => (sheet.clone(), row.clone()).prop_map(|(s, r)| Op::RowHeight(s, r)),
+        1 => (sheet.clone(), row.clone()).prop_map(|(s, r)| Op::Freeze(s, r)),
         1 => (sheet.clone(), row.clone()).prop_map(|(s, r)| Op::InsertRow(s, r)),
         1 => (sheet.clone(), row.clone()).prop_map(|(s, r)| Op::DeleteRow(s, r)),
         1 => (sheet.clone(), row).prop_map(|(s, r)| Op::HideRow(s, r)),
@@ -85,6 +93,16 @@ fn apply(book: &mut Workbook, op: &Op) {
         Op::Bold(s, a, b, c, d) => {
             book.apply_style(SheetId(*s), span(*a, *b, *c, *d), StyleChange::Bold(true))
         }
+        Op::NumberFormat(s, a, b, c, d) => {
+            book.set_number_format(SheetId(*s), span(*a, *b, *c, *d), "0.00")
+        }
+        Op::BoldColumn(s, c) => book.apply_style(
+            SheetId(*s),
+            Range::new(pos(0, *c), pos(i64::from(zenkai_types::MAX_ROWS) - 1, *c)),
+            StyleChange::Bold(true),
+        ),
+        Op::RowHeight(s, r) => book.set_row_height(SheetId(*s), RowIdx::clamped(*r), 40.0),
+        Op::Freeze(s, r) => book.set_frozen(SheetId(*s), u32::try_from(*r).unwrap(), 1),
         Op::InsertRow(s, r) => book.insert_rows(SheetId(*s), RowIdx::clamped(*r), 1),
         Op::DeleteRow(s, r) => book.delete_rows(SheetId(*s), RowIdx::clamped(*r), 1),
         Op::HideRow(s, r) => book.set_rows_hidden(SheetId(*s), span(*r, 0, *r, 0), true),
