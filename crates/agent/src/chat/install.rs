@@ -1,10 +1,10 @@
 use std::path::Path;
 
-use async_process::{Command as ProcessCommand, Stdio};
+use async_process::Stdio;
 
 use crate::chat::launch::{self, INSTALLED_MARKER, PackageSpec};
 use crate::chat::process::ProcessTree;
-use crate::chat::session::{SessionError, hide_window};
+use crate::chat::session::{SessionError, agent_command, hide_window};
 use crate::presets::Preset;
 
 const REGISTRY: &str = "https://registry.npmjs.org/";
@@ -36,7 +36,7 @@ pub(super) async fn install(
     );
     std::fs::write(&user_config, "").map_err(failed)?;
     std::fs::write(&global_config, "").map_err(failed)?;
-    let mut command = ProcessCommand::new(node);
+    let mut command = agent_command(node);
     command.arg(launch::npm_cli(node));
     match Preset::for_package(&package.spec()) {
         Some(preset) => {

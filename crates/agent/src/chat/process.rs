@@ -72,6 +72,7 @@ fn kill_tree(pid: u32) -> std::io::Result<()> {
 #[cfg(not(windows))]
 fn kill_tree(pid: u32) -> std::io::Result<()> {
     // A pid outside pid_t wraps to -1 or 0, and `kill -KILL -1` signals every process of the user.
+    // The agent leads its own process group (see agent_command), so -pid reaches its children.
     let pid = match i32::try_from(pid) {
         Ok(pid) if pid > 0 => pid,
         _ => {
@@ -82,7 +83,7 @@ fn kill_tree(pid: u32) -> std::io::Result<()> {
         }
     };
     let output = std::process::Command::new("kill")
-        .args(["-KILL", "--", &pid.to_string()])
+        .args(["-KILL", "--", &format!("-{pid}")])
         .output()?;
     if !output.status.success() {
         // kill fails when the process already ended, which is the goal.
@@ -122,6 +123,8 @@ mod tests {
             command.arg("30");
             command
         };
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -129,6 +132,50 @@ mod tests {
             .spawn()
             .map(KillOnDrop)
             .unwrap()
+    }
+
+    #[cfg(unix)]
+    fn is_alive(pid: u32) -> bool {
+        let output = Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .unwrap();
+        let state = String::from_utf8_lossy(&output.stdout);
+        !state.trim().is_empty() && !state.trim().starts_with('Z')
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn closing_kills_the_children_of_the_agent_too() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::process::CommandExt;
+
+        let mut shell = Command::new("sh");
+        shell
+            .args(["-c", "sleep 30 & echo $!; wait"])
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut shell = shell.spawn().map(KillOnDrop).unwrap();
+        let stdout = shell.0.stdout.take().unwrap();
+        let mut line = String::new();
+        BufReader::new(stdout).read_line(&mut line).unwrap();
+        let sleeper: u32 = line.trim().parse().unwrap();
+        assert!(is_alive(sleeper));
+
+        let tree = ProcessTree::default();
+        tree.register(shell.0.id());
+        tree.close();
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline
+            && (shell.0.try_wait().unwrap().is_none() || is_alive(sleeper))
+        {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(shell.0.try_wait().unwrap().is_some(), "the shell survived");
+        assert!(!is_alive(sleeper), "the child of the shell survived");
     }
 
     #[test]
