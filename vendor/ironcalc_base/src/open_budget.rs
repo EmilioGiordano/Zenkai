@@ -2,21 +2,18 @@
 
 use crate::types::{Cell, Workbook};
 
-// Peak committed memory per cell while opening through the streaming reader. Interim:
-// 132 B was measured before the reader scanned rows straight into the cell store and the
-// first evaluation listed only formula cells (together they remove the roughly 110 B
-// intermediate row vectors and the 12 B per cell evaluation index), so 140 is an upper
-// bound until `measure_open --app` over the generated matrix sets the final value.
-pub const BYTES_PER_CELL: u64 = 140;
-// Extra per formula cell over a value cell.
-pub const BYTES_PER_FORMULA: u64 = 200;
-// Extra per distinct string over its text: the shared Arc, the reader's index entry and list
-// slot, and the copies made when the sheets are assembled. Interim, to be set by the unique
-// string shape in the staging matrix.
-pub const BYTES_PER_UNIQUE_STRING: u64 = 100;
-// A row costs a hash map entry plus two vector headers, about 90 B measured on rows of
-// two cells; kept at the earlier 128 B.
-pub const BYTES_PER_ROW: u64 = 128;
+// Streaming-route costs, fitted on 2026-10-14 to `measure_open --app` (release, allocator
+// peak; committed memory is 3-6% above it) over generated matrix shapes and real files:
+// about 29.5 B per cell, 199 B per row, 90-97 B per formula with repeated text and
+// 390-470 B with distinct text, about 540 B per distinct string at the peak (125 B at
+// rest; the rest is transient assembly) plus its 16 B of text. Each constant is the fit
+// with a margin so every measured shape is charged at least 1.2x its committed peak.
+pub const BYTES_PER_CELL: u64 = 70;
+// Extra per formula cell over a value cell, sized for distinct formula text.
+pub const BYTES_PER_FORMULA: u64 = 650;
+// Extra per distinct string over its text.
+pub const BYTES_PER_UNIQUE_STRING: u64 = 650;
+pub const BYTES_PER_ROW: u64 = 256;
 // The same costs when the file goes through IronCalc's importer, which holds the whole
 // workbook as a DOM and then converts it: measured before the streaming reader built
 // cells in place (583-814 B per cell). Charged by the fallback walk only.
@@ -190,6 +187,35 @@ mod tests {
         });
         assert!(formulas > values);
         assert_eq!(formulas - values, 1000 * BYTES_PER_FORMULA);
+    }
+
+    #[test]
+    fn every_measured_shape_is_charged_at_least_one_and_a_fifth_of_its_peak() {
+        let mebibyte = 1024 * 1024;
+        // (cells, formulas, rows, text and string bytes, committed peak in MiB)
+        let shapes = [
+            (
+                10_000_000,
+                0,
+                1_000_000,
+                8_000_000 * (16 + BYTES_PER_UNIQUE_STRING),
+                4_628,
+            ),
+            (3_000_000, 858_000, 200_000, 0, 602),
+            (10_485_760, 0, 1_048_576, 0, 527),
+        ];
+        for (cells, formulas, rows, bytes, peak) in shapes {
+            let charged = needed_bytes(OpenCost {
+                cells,
+                formulas,
+                rows,
+                bytes,
+            });
+            assert!(
+                charged * 10 >= peak * mebibyte * 12,
+                "{cells} cells: {charged}"
+            );
+        }
     }
 
     #[test]
