@@ -250,7 +250,8 @@ in a staging branch.
    it runs the full gate. It copies the release exe to
    `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`, overwriting; if the file is locked it
    reports it and never kills the process. Staging uses the persistent target dir
-   `D:/More-Code-Projects/Zenkai-compiled/staging`, which is never cleaned. The result is
+   `D:/More-Code-Projects/Zenkai-compiled/staging`, which is never cleaned. When the batch
+   enters staging the lead marks its PRs ready (`gh pr ready <n>`); the result is
    commented on each PR of the batch.
 5. **Failures.** A fix for one branch goes back to the owning branch and is validated in
    a new staging round. A fix caused only by the combination goes in its own `fix/<topic>`
