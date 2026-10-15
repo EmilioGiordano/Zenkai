@@ -298,7 +298,7 @@ impl RowJob {
         let first = self.rows.partition_point(|row| row < range.start());
         let last = self.rows.partition_point(|row| row <= range.end());
         let rows = &self.rows[first..last];
-        let shared = |row, column| {
+        let shared = |row: i32, column: i32| {
             anchors
                 .get(&(row, column))
                 .copied()
