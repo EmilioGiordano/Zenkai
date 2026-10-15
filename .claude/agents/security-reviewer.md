@@ -83,8 +83,8 @@ Severity: `Critical`, `High`, `Medium`, `Low`.
 
 **Code and dependencies**
 - New `unsafe` anywhere (`#![forbid(unsafe_code)]` is required in every crate).
-- `cargo deny check`: security advisories or license violations in new or updated
-  dependencies. Run it and report the result.
+- Cargo.toml and Cargo.lock diff, read statically: new dependencies, version changes,
+  licenses, git or path sources. `cargo deny` runs in staging and CI, never on a branch.
 
 ## Evidence
 
@@ -112,8 +112,8 @@ pattern and why it is fine.
 
 ## Blocking policy
 
-- `FAIL` if any `Critical` or `High` finding is `CONFIRMED`, or if `cargo deny check`
-  fails.
+- `FAIL` if any `Critical` or `High` finding is `CONFIRMED`, or if the dependency
+  diff adds an unvetted git or path source or a disallowed license.
 - Report `CONFIRMED` `Medium` and `Low` findings normally. The lead applies
   `PASS / ACCEPTED-RISK`, never the reviewer.
 - `PLAUSIBLE` findings never fail a review by themselves.
@@ -127,7 +127,7 @@ Use exactly this structure.
 # Security review
 
 Target: <working tree | branch <name> vs main | union> in <directory>
-cargo deny: <pass|fail|not run: reason>
+cargo deny: not run (staging and CI); dependency diff: <clean|findings>
 Files reviewed: <n>
 
 ## Verdict: PASS | PASS / ACCEPTED-RISK | FAIL
