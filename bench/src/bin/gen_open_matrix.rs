@@ -22,6 +22,8 @@ struct Shape {
     styles: usize,
     conditional_rules: u32,
     cycle: bool,
+    cycle_readers: u32,
+    today: bool,
     spills: u32,
 }
 
@@ -44,6 +46,8 @@ fn parse(args: &[String]) -> Result<Shape> {
         styles: 0,
         conditional_rules: 0,
         cycle: false,
+        cycle_readers: 0,
+        today: false,
         spills: 0,
     };
     for pair in args {
@@ -61,6 +65,8 @@ fn parse(args: &[String]) -> Result<Shape> {
             "styles" => shape.styles = value.parse()?,
             "cf" => shape.conditional_rules = value.parse()?,
             "cycle" => shape.cycle = value == "1",
+            "cycle_readers" => shape.cycle_readers = value.parse()?,
+            "today" => shape.today = value == "1",
             "spills" => shape.spills = value.parse()?,
             _ => bail!("unknown key {key}"),
         }
@@ -72,8 +78,8 @@ fn parse(args: &[String]) -> Result<Shape> {
 }
 
 // What an edit has to deal with besides the data, all on the first sheet: rules over the
-// whole data columns, two cells that read each other below the data, and dynamic arrays
-// beside it.
+// whole data columns, two cells that read each other below the data (and optionally formulas
+// that read them, and a TODAY cell), and dynamic arrays beside it.
 fn add_extras(sheet: &mut Worksheet, shape: &Shape) -> Result<()> {
     let last_row = shape.rows.saturating_sub(1);
     for kind in 0..shape.conditional_rules {
@@ -110,6 +116,19 @@ fn add_extras(sheet: &mut Worksheet, shape: &Shape) -> Result<()> {
         sheet.write_formula(shape.rows, 0, Formula::new(format!("=B{line}+1")))?;
         sheet.write_formula(shape.rows, 1, Formula::new(format!("=A{line}+1")))?;
     }
+    // Formulas that read the cycle, in a column of their own beyond the data, as a model
+    // of a large closure of cells downstream of a cycle.
+    for row in 0..shape.cycle_readers {
+        let line = shape.rows + 1;
+        sheet.write_formula(
+            row,
+            shape.columns + 2,
+            Formula::new(format!("=$A${line}*0+{row}")),
+        )?;
+    }
+    if shape.today {
+        sheet.write_formula(shape.rows + 1, 0, Formula::new("=TODAY()"))?;
+    }
     for spill in 0..shape.spills {
         sheet.write_dynamic_formula(spill * 10, shape.columns + 1, "=SEQUENCE(5)")?;
     }
@@ -120,7 +139,7 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some((out, rest)) = args.split_first() else {
         bail!(
-            "usage: gen_open_matrix <out.xlsx> [sheets=1 rows=100000 cols=10 formulas=0 strings=0 distinct=0 unique_strings=0 styles=0 cf=0 cycle=0 spills=0]"
+            "usage: gen_open_matrix <out.xlsx> [sheets=1 rows=100000 cols=10 formulas=0 strings=0 distinct=0 unique_strings=0 styles=0 cf=0 cycle=0 cycle_readers=0 today=0 spills=0]"
         );
     };
     let shape = parse(rest)?;
