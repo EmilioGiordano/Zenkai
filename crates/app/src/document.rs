@@ -170,6 +170,12 @@ impl Document {
         self.edit_count += 1;
         self.last_edited = Some(Instant::now());
         self.autosave_cancel.store(true, Ordering::Relaxed);
+        // Clean work (saved, or a discarded copy) owes no recovery copy, so a stale instant
+        // left from before it must not make the first new edit overdue. Callers mark the
+        // document dirty after queueing.
+        if !self.needs_recovery() {
+            self.recovery_stale_since = None;
+        }
         self.recovery_stale_since.get_or_insert_with(Instant::now);
         self.pending.push(edit);
     }
@@ -687,6 +693,22 @@ mod tests {
         document.queue(noop());
         document.recovery_written(at_start);
         assert!(document.recovery_stale_for().is_some());
+    }
+
+    #[test]
+    fn the_first_edit_after_a_save_restarts_the_staleness_clock() {
+        let mut document = document();
+        document.path = Some(PathBuf::from("book.xlsx"));
+        document.queue(noop());
+        document.dirty = true;
+        document.recovery_stale_since = Instant::now().checked_sub(Duration::from_secs(3600));
+        document.dirty = false;
+        document.queue(noop());
+        document.dirty = true;
+        let stale = document.recovery_stale_for().unwrap();
+        let every = Duration::from_secs(60);
+        let due = crate::autosave::due(Some(Duration::ZERO), every, Some(stale), every);
+        assert_ne!(due, crate::autosave::Due::Overdue);
     }
 
     #[test]
