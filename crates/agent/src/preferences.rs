@@ -15,12 +15,36 @@ pub struct GeneralSettings {
         description = "Reopen the spaces and workbooks of the last session, including unsaved work, when Zenkai starts."
     )]
     pub restore_session: bool,
+    #[serde(default)]
+    #[schemars(
+        description = "What closing Zenkai does with workbooks that have unsaved changes: \"ask\" lists them and asks which to save, \"keep\" saves recovery copies and brings them back next time."
+    )]
+    pub close_with_unsaved: CloseWithUnsaved,
     #[serde(default = "default_autosave", deserialize_with = "clamped_autosave")]
     #[schemars(
         range(min = 10, max = 600),
         description = "Seconds between recovery copies of work that is not saved."
     )]
     pub autosave_seconds: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseWithUnsaved {
+    #[default]
+    Ask,
+    Keep,
+}
+
+impl CloseWithUnsaved {
+    pub const ALL: [CloseWithUnsaved; 2] = [CloseWithUnsaved::Ask, CloseWithUnsaved::Keep];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CloseWithUnsaved::Ask => t!("settings.close_with_unsaved.ask"),
+            CloseWithUnsaved::Keep => t!("settings.close_with_unsaved.keep"),
+        }
+    }
 }
 
 fn restore_by_default() -> bool {
@@ -44,6 +68,7 @@ impl Default for GeneralSettings {
     fn default() -> GeneralSettings {
         GeneralSettings {
             restore_session: restore_by_default(),
+            close_with_unsaved: CloseWithUnsaved::default(),
             autosave_seconds: DEFAULT_AUTOSAVE_SECONDS,
         }
     }
@@ -284,6 +309,7 @@ mod tests {
         assert_eq!(appearance.effective(false), LIGHT);
         let general = GeneralSettings::default();
         assert!(general.restore_session);
+        assert_eq!(general.close_with_unsaved, CloseWithUnsaved::Ask);
         assert_eq!(general.autosave_seconds, 60);
     }
 

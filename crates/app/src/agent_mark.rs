@@ -2,7 +2,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::*;
 use zenkai_agent::settings::AgentId;
 
-use crate::assets::{CLAUDE_MARK, CODEX_AGENT_MARK, GEMINI_MARK, OPENCODE_MARK};
+use crate::assets::{CLAUDE_MARK, CODEX_AGENT_MARK, GEMINI_MARK, GROK_MARK, OPENCODE_MARK};
 
 pub const HEADER_MARK_SIZE: f32 = 20.0;
 pub const SESSION_MARK_SIZE: f32 = 28.0;
@@ -37,6 +37,10 @@ pub fn of_agent(id: &AgentId, name: &str) -> AgentMark {
         },
         "opencode" => AgentMark::Glyph {
             path: OPENCODE_MARK,
+            colour: None,
+        },
+        "grok" => AgentMark::Glyph {
+            path: GROK_MARK,
             colour: None,
         },
         _ => AgentMark::Letter(name.chars().next().unwrap_or('?')),
@@ -96,7 +100,7 @@ mod tests {
     use zenkai_agent::settings::AgentId;
 
     use super::{AgentMark, of_agent};
-    use crate::assets::{CLAUDE_MARK, CODEX_AGENT_MARK, GEMINI_MARK, OPENCODE_MARK};
+    use crate::assets::{CLAUDE_MARK, CODEX_AGENT_MARK, GEMINI_MARK, GROK_MARK, OPENCODE_MARK};
 
     #[test]
     fn claude_and_gemini_keep_their_brand_glyph_and_colour() {
@@ -117,7 +121,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_and_opencode_use_their_glyph_without_a_brand_colour() {
+    fn codex_opencode_and_grok_use_their_glyph_without_a_brand_colour() {
         assert_eq!(
             of_agent(&AgentId::new("codex"), "Codex"),
             AgentMark::Glyph {
@@ -129,6 +133,13 @@ mod tests {
             of_agent(&AgentId::new("opencode"), "opencode"),
             AgentMark::Glyph {
                 path: OPENCODE_MARK,
+                colour: None,
+            }
+        );
+        assert_eq!(
+            of_agent(&AgentId::new("grok"), "Grok"),
+            AgentMark::Glyph {
+                path: GROK_MARK,
                 colour: None,
             }
         );

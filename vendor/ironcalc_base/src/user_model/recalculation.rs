@@ -64,6 +64,20 @@ impl PendingRecalculation {
                         cells.push((*sheet, *row, *column));
                     }
                 }
+                Diff::FillFormula {
+                    sheet,
+                    row,
+                    column,
+                    width,
+                    height,
+                    ..
+                } => self.add_area(&Area {
+                    sheet: *sheet,
+                    row: *row,
+                    column: *column,
+                    width: *width,
+                    height: *height,
+                }),
                 Diff::RangeClearContents {
                     sheet,
                     row,

@@ -15,6 +15,7 @@ mod test_diff_queue;
 mod test_duplicate_sheet;
 mod test_dynamic_arrays;
 mod test_evaluation;
+mod test_fill_formula;
 mod test_fn_formulatext;
 mod test_general;
 mod test_grid_lines;

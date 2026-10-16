@@ -25,6 +25,9 @@ pub struct Session {
     pub space_appearance: SpaceAppearance,
     #[serde(default)]
     pub panel_widths: PanelWidths,
+    // Tabs reopened as last saved because the previous close discarded their changes.
+    #[serde(default)]
+    pub reopened_as_saved: u32,
     pub spaces: Vec<SpaceRecord>,
 }
 
@@ -78,6 +81,7 @@ impl Session {
             sidebar_visible,
             space_appearance: SpaceAppearance::default(),
             panel_widths: PanelWidths::default(),
+            reopened_as_saved: 0,
             spaces,
         }
     }
@@ -85,6 +89,13 @@ impl Session {
     pub fn with_panel_widths(self, panel_widths: PanelWidths) -> Session {
         Session {
             panel_widths,
+            ..self
+        }
+    }
+
+    pub fn with_reopened_as_saved(self, reopened_as_saved: u32) -> Session {
+        Session {
+            reopened_as_saved,
             ..self
         }
     }
@@ -110,6 +121,7 @@ impl Session {
     // What a start with "Restore last session" off keeps: the spaces and the links to files on
     // disk, but nothing to reopen and no unsaved work (its recovery copies are offered instead).
     pub fn without_unsaved_work(mut self) -> Session {
+        self.reopened_as_saved = 0;
         for space in &mut self.spaces {
             space.files.retain(|file| file.path.is_some());
             for file in &mut space.files {

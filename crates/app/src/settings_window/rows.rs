@@ -53,6 +53,7 @@ impl Section {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowId {
     RestoreSession,
+    CloseWithUnsaved,
     Language,
     Autosave,
     ColorMode,
@@ -85,8 +86,9 @@ pub struct RowInfo {
 }
 
 impl RowId {
-    pub const ALL: [RowId; 22] = [
+    pub const ALL: [RowId; 23] = [
         RowId::RestoreSession,
+        RowId::CloseWithUnsaved,
         RowId::Language,
         RowId::Autosave,
         RowId::ColorMode,
@@ -124,7 +126,14 @@ impl RowId {
                 t!("settings.group.startup"),
                 t!("settings.row.restore_session"),
                 t!("settings.row.restore_session.description"),
-                &["start", "reopen", "recover"],
+                &["start", "reopen", "recover", "session", "tabs"],
+            ),
+            RowId::CloseWithUnsaved => row(
+                Section::General,
+                t!("settings.group.closing"),
+                t!("settings.row.close_with_unsaved"),
+                t!("settings.row.close_with_unsaved.description"),
+                &["close", "quit", "exit", "save", "ask"],
             ),
             RowId::Language => row(
                 Section::General,
@@ -198,6 +207,7 @@ impl RowId {
                     "claude",
                     "gemini",
                     "codex",
+                    "grok",
                     "openai",
                     "anthropic",
                     "google",
@@ -299,6 +309,9 @@ impl RowId {
             RowId::RestoreSession => {
                 settings.general.restore_session != default.general.restore_session
             }
+            RowId::CloseWithUnsaved => {
+                settings.general.close_with_unsaved != default.general.close_with_unsaved
+            }
             RowId::Language => settings.language != default.language,
             RowId::Autosave => {
                 settings.general.autosave_seconds != default.general.autosave_seconds
@@ -335,6 +348,9 @@ impl RowId {
         match self {
             RowId::RestoreSession => {
                 settings.general.restore_session = default.general.restore_session
+            }
+            RowId::CloseWithUnsaved => {
+                settings.general.close_with_unsaved = default.general.close_with_unsaved
             }
             RowId::Language => settings.language = default.language,
             RowId::Autosave => settings.general.autosave_seconds = default.general.autosave_seconds,
@@ -523,7 +539,12 @@ mod tests {
         let v = values(&settings, &spaces);
         assert_eq!(
             rows(Section::General, "", false, v),
-            [RowId::RestoreSession, RowId::Language, RowId::Autosave]
+            [
+                RowId::RestoreSession,
+                RowId::CloseWithUnsaved,
+                RowId::Language,
+                RowId::Autosave
+            ]
         );
         assert!(rows(Section::Keyboard, "", false, v).is_empty());
     }

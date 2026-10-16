@@ -215,7 +215,13 @@ pub struct UserModel<'a> {
     history: History,
     send_queue: Vec<QueueDiffs>,
     pause_evaluation: bool,
+    edit_group: Option<EditGroup>,
     pub(crate) pending_recalculation: PendingRecalculation,
+}
+
+struct EditGroup {
+    diffs: DiffList,
+    was_paused: bool,
 }
 
 /// Given the index of the currently selected sheet, returns the index that same
@@ -253,6 +259,7 @@ impl<'a> UserModel<'a> {
             history: History::default(),
             send_queue: vec![],
             pause_evaluation: false,
+            edit_group: None,
             pending_recalculation: PendingRecalculation::Workbook,
         }
     }
@@ -273,6 +280,7 @@ impl<'a> UserModel<'a> {
             history: History::default(),
             send_queue: vec![],
             pause_evaluation: false,
+            edit_group: None,
             pending_recalculation: PendingRecalculation::Workbook,
         })
     }
@@ -288,6 +296,7 @@ impl<'a> UserModel<'a> {
             history: History::default(),
             send_queue: vec![],
             pause_evaluation: false,
+            edit_group: None,
             pending_recalculation: PendingRecalculation::Workbook,
         })
     }
@@ -385,6 +394,41 @@ impl<'a> UserModel<'a> {
             Some(diff_list) => step_cells(diff_list),
             None => Some(StepCells::default()),
         }
+    }
+
+    /// Starts joining the edits that follow into one undo step, evaluating once when the
+    /// group ends.
+    ///
+    /// See also:
+    /// * [UserModel::end_edit_group]
+    pub fn begin_edit_group(&mut self) -> Result<(), String> {
+        if self.edit_group.is_some() {
+            return Err("An edit group is already open".to_string());
+        }
+        self.edit_group = Some(EditGroup {
+            diffs: Vec::new(),
+            was_paused: self.pause_evaluation,
+        });
+        self.pause_evaluation = true;
+        Ok(())
+    }
+
+    /// Ends the group started by [UserModel::begin_edit_group]. What was edited before an
+    /// error is kept, as one undo step.
+    pub fn end_edit_group(&mut self) -> Result<(), String> {
+        let Some(group) = self.edit_group.take() else {
+            return Err("No edit group is open".to_string());
+        };
+        self.pause_evaluation = group.was_paused;
+        if !group.diffs.is_empty() {
+            self.send_queue.push(QueueDiffs {
+                r#type: DiffType::Redo,
+                list: group.diffs.clone(),
+            });
+            self.history.push(group.diffs);
+        }
+        self.evaluate_if_not_paused();
+        Ok(())
     }
 
     /// Pauses automatic evaluation.
@@ -2273,6 +2317,10 @@ impl<'a> UserModel<'a> {
 
     pub(crate) fn push_diff_list(&mut self, diff_list: DiffList) {
         self.pending_recalculation.add(&diff_list, &self.model);
+        if let Some(group) = &mut self.edit_group {
+            group.diffs.extend(diff_list);
+            return;
+        }
         self.send_queue.push(QueueDiffs {
             r#type: DiffType::Redo,
             list: diff_list.clone(),

@@ -9,6 +9,10 @@ mod logisheets_run;
 mod measure;
 mod reader;
 mod save_losses;
+mod scale;
+mod scale_cases;
+mod scale_memory;
+mod scale_stage;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -50,8 +54,11 @@ fn main() -> Result<()> {
             Path::new(current),
             runs.parse()?,
         ),
+        ["scale"] => scale::run(),
+        ["scale-check", baseline, current] => scale::check(Path::new(baseline), Path::new(current)),
+        ["scale-stage", args @ ..] => scale_stage::run(args),
         _ => bail!(
-            "usage: zenkai-bench generate <dir> | measure <engine> <fixture file> <dir> | coverage | run <dir> [runs] | check <dir> <baseline.csv> <current.csv> [runs] | compat-generate <dir> | compat <dir> <report.md> | reader-bench <file.xlsx> [runs] | reader-probe <ironcalc|fast> <file.xlsx> | reader-compare <file or dir>..."
+            "usage: zenkai-bench generate <dir> | measure <engine> <fixture file> <dir> | coverage | run <dir> [runs] | check <dir> <baseline.csv> <current.csv> [runs] | scale | scale-check <baseline.csv> <current.csv> | scale-stage <stage> ... | compat-generate <dir> | compat <dir> <report.md> | reader-bench <file.xlsx> [runs] | reader-probe <ironcalc|fast> <file.xlsx> | reader-compare <file or dir>..."
         ),
     }
 }
