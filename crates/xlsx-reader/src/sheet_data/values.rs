@@ -29,24 +29,16 @@ impl Scanner<'_, '_> {
             "n" => FormulaValue::Number(value.unwrap_or("0").parse::<f64>().unwrap_or(0.0)),
             "e" => {
                 let name = error_name(value, metadata);
-                FormulaValue::Error {
-                    ei: get_error_by_english_name(name).unwrap_or(Error::ERROR),
-                    o: origin(),
-                    m: value.unwrap_or("#ERROR!").to_string(),
-                }
+                FormulaValue::error(
+                    get_error_by_english_name(name).unwrap_or(Error::ERROR),
+                    origin(),
+                    value.unwrap_or("#ERROR!").to_string(),
+                )
             }
-            "s" | "d" => FormulaValue::Error {
-                ei: Error::NIMPL,
-                o: origin(),
-                m: Error::NIMPL.to_string(),
-            },
+            "s" | "d" => FormulaValue::error(Error::NIMPL, origin(), Error::NIMPL.to_string()),
             "str" => FormulaValue::Text(decode_xlsx_escapes(value.unwrap_or(""))),
             "inlineStr" => FormulaValue::Text(inline.unwrap_or_default()),
-            _ => FormulaValue::Error {
-                ei: Error::ERROR,
-                o: origin(),
-                m: Error::ERROR.to_string(),
-            },
+            _ => FormulaValue::error(Error::ERROR, origin(), Error::ERROR.to_string()),
         }
     }
 
@@ -62,20 +54,12 @@ impl Scanner<'_, '_> {
         } = cell;
         let s = style;
         match (cell_type, anchor) {
-            ("b", Some(a)) => Cell::SpillCell {
-                v: SpillValue::Boolean(value == Some("1")),
-                s,
-                a,
-            },
+            ("b", Some(a)) => Cell::new_spill_cell(s, a, SpillValue::Boolean(value == Some("1"))),
             ("b", None) => Cell::BooleanCell {
                 v: value == Some("1"),
                 s,
             },
-            ("n", Some(a)) => Cell::SpillCell {
-                v: SpillValue::Number(number(value)),
-                s,
-                a,
-            },
+            ("n", Some(a)) => Cell::new_spill_cell(s, a, SpillValue::Number(number(value))),
             ("n", None) => Cell::NumberCell {
                 v: number(value),
                 s,
@@ -84,11 +68,7 @@ impl Scanner<'_, '_> {
                 let ei =
                     get_error_by_english_name(error_name(value, metadata)).unwrap_or(Error::ERROR);
                 match anchor {
-                    Some(a) => Cell::SpillCell {
-                        v: SpillValue::Error(ei),
-                        s,
-                        a,
-                    },
+                    Some(a) => Cell::new_spill_cell(s, a, SpillValue::Error(ei)),
                     None => Cell::ErrorCell { ei, s },
                 }
             }
@@ -102,11 +82,7 @@ impl Scanner<'_, '_> {
                 match anchor {
                     Some(a) => {
                         self.intern(text.clone());
-                        Cell::SpillCell {
-                            v: SpillValue::Text(text),
-                            s,
-                            a,
-                        }
+                        Cell::new_spill_cell(s, a, SpillValue::Text(text))
                     }
                     None => self.string_cell(text, s, place),
                 }
@@ -128,20 +104,12 @@ impl Scanner<'_, '_> {
 pub(super) fn formula_cell(f: i32, s: i32, array: CellArray, v: FormulaValue) -> Cell {
     match array {
         CellArray::None => Cell::CellFormula { f, s, v },
-        CellArray::Dynamic(width, height) => Cell::ArrayFormula {
-            f,
-            s,
-            r: (width, height),
-            kind: ArrayKind::Dynamic,
-            v,
-        },
-        CellArray::Cse(width, height) => Cell::ArrayFormula {
-            f,
-            s,
-            r: (width, height),
-            kind: ArrayKind::Cse,
-            v,
-        },
+        CellArray::Dynamic(width, height) => {
+            Cell::new_array_formula(f, s, (width, height), ArrayKind::Dynamic, v)
+        }
+        CellArray::Cse(width, height) => {
+            Cell::new_array_formula(f, s, (width, height), ArrayKind::Cse, v)
+        }
     }
 }
 

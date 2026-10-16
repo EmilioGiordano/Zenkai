@@ -1,12 +1,45 @@
 use std::io::{Read, Seek};
 
+use ironcalc::base::expressions::utils::{
+    is_valid_column_number, is_valid_row, parse_reference_a1,
+};
 use zenkai_types::Range;
 
 use crate::ReadError;
 
+// Worksheets the streaming reader streams skip this cap: their cells charge the
+// memory budget as they are read. Every other part, and every part the IronCalc
+// fallback walks, still has to fit, so a huge file never reaches that reader.
 pub const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
-pub const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+// A real 216 MB workbook holds parts totalling about 1.6 GB, so the total stays
+// far above any single part while still bounding a flood of mid-size parts.
+pub const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+// Parts inflated whole for a DOM parse or copied whole expand several times over
+// in memory, so they are capped far below streamed parts and charged to the
+// memory budget cells share.
+pub const MAX_WHOLE_PART_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 20_000;
+// A part expanding past this ratio is a zip bomb. Repetitive Excel files stay far
+// below it, so the ratio never needs tuning; a legitimate file that trips the gate
+// moves the threshold below, never the ratio.
+pub const MAX_RATIO: u64 = 150;
+// Below this many decompressed bytes a part passes on the cell and total budgets
+// alone; the ratio check only runs past it.
+pub const RATIO_GATE_BYTES: u64 = 64 * 1024 * 1024;
+// The peak open costs live in ironcalc_base::open_budget, measured with the
+// release instrument and shared with Model::from_workbook's guard, so the
+// read refuses files the model build could not hold. The importer route has its
+// own, higher costs: its DOM and conversion peak far above the streaming reader's.
+pub use ironcalc::base::open_budget::BYTES_PER_ROW as ROW_BYTES;
+pub use ironcalc::base::open_budget::{
+    BYTES_PER_CELL, BYTES_PER_FORMULA, BYTES_PER_UNIQUE_STRING, DOM_BYTES_PER_XML_BYTE,
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Route {
+    Streaming,
+    Importer,
+}
 // Excel's own limit; it also bounds how deep any formula's syntax tree can get.
 pub const MAX_FORMULA_CHARS: usize = 8_192;
 pub const MAX_FORMULA_DEPTH: usize = 256;
@@ -15,6 +48,8 @@ pub const MAX_FORMULA_AREA: u64 = 1_000_000;
 // map entry (about 40 bytes), so 4 million is roughly 160 MB.
 pub const MAX_ARRAY_CELLS_PER_SHEET: u64 = 4_000_000;
 
+// Declared sizes can lie, so this only counts entries. Per-part and total sizes are
+// enforced on the bytes really decompressed, as they are read.
 pub fn check_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result<(), ReadError> {
     if archive.len() > MAX_ENTRIES {
         return Err(ReadError::Unsafe(format!(
@@ -22,39 +57,166 @@ pub fn check_archive<R: Read + Seek>(archive: &mut zip::ZipArchive<R>) -> Result
             archive.len()
         )));
     }
-    let mut total = 0u64;
-    for index in 0..archive.len() {
-        let entry = archive
-            .by_index(index)
-            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-        if entry.size() > MAX_ENTRY_BYTES {
-            return Err(ReadError::Unsafe(format!(
-                "part {} expands to {} MB",
-                entry.name(),
-                entry.size() / 1024 / 1024
-            )));
-        }
-        total = total.saturating_add(entry.size());
+    Ok(())
+}
+
+pub use ironcalc::base::open_budget::describe_bytes;
+
+#[derive(Clone, Copy, Debug)]
+pub struct CellBudget {
+    max_cells: u64,
+}
+
+impl CellBudget {
+    pub fn production() -> CellBudget {
+        let budget_mb = ironcalc::base::open_budget::production_budget_bytes() / 1024 / 1024;
+        CellBudget::from_budget_mb(budget_mb)
     }
-    if total > MAX_TOTAL_BYTES {
+
+    pub fn from_budget_mb(megabytes: u64) -> CellBudget {
+        CellBudget {
+            max_cells: megabytes * 1024 * 1024 / BYTES_PER_CELL,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn max_cells_for_test(max_cells: u64) -> CellBudget {
+        CellBudget { max_cells }
+    }
+
+    pub fn max_cells(self) -> u64 {
+        self.max_cells
+    }
+
+    pub fn check(self, usage: Usage) -> Result<(), ReadError> {
+        self.check_route(usage, Route::Streaming, None)
+    }
+
+    // `projection` is the worksheet bytes the file declares and the bytes read so far:
+    // a refusal then reports what the whole file is expected to need, not only the
+    // part counted when the budget ran out. The numbers only shape the message.
+    pub fn check_route(
+        self,
+        usage: Usage,
+        route: Route,
+        projection: Option<(u64, u64)>,
+    ) -> Result<(), ReadError> {
+        let supported = self.max_cells.saturating_mul(BYTES_PER_CELL);
+        if usage.needed_bytes(route) <= supported {
+            return Ok(());
+        }
+        let shown = match projection {
+            Some((declared, read)) if read > 0 && declared > read => usage.scaled(declared, read),
+            _ => usage,
+        };
+        Err(ReadError::Unsafe(ironcalc::base::open_budget::refusal(
+            shown.cost(),
+            shown.needed_bytes(route),
+            supported,
+        )))
+    }
+}
+
+impl CellBudget {
+    // IronCalc's importer holds a worksheet as a DOM about sixteen times its bytes,
+    // so the bytes really inflated, not the declared size, decide whether it fits.
+    pub fn check_dom_part(self, part: &str, inflated: u64) -> Result<(), ReadError> {
+        let supported = self.max_cells.saturating_mul(BYTES_PER_CELL);
+        if inflated.saturating_mul(DOM_BYTES_PER_XML_BYTE) <= supported {
+            return Ok(());
+        }
+        Err(ReadError::Unsafe(
+            ironcalc::base::open_budget::refusal_for_part(
+                part,
+                inflated,
+                DOM_BYTES_PER_XML_BYTE,
+                supported,
+            ),
+        ))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Usage {
+    pub cells: u64,
+    pub formulas: u64,
+    pub bytes: u64,
+    pub rows: u64,
+}
+
+impl Usage {
+    pub fn needed_bytes(self, route: Route) -> u64 {
+        match route {
+            Route::Streaming => ironcalc::base::open_budget::needed_bytes(self.cost()),
+            Route::Importer => ironcalc::base::open_budget::importer_needed_bytes(self.cost()),
+        }
+    }
+
+    fn scaled(self, numerator: u64, denominator: u64) -> Usage {
+        let scale = |value: u64| {
+            let scaled = u128::from(value) * u128::from(numerator) / u128::from(denominator);
+            u64::try_from(scaled).unwrap_or(u64::MAX)
+        };
+        Usage {
+            cells: scale(self.cells),
+            formulas: scale(self.formulas),
+            bytes: scale(self.bytes),
+            rows: scale(self.rows),
+        }
+    }
+
+    fn cost(self) -> ironcalc::base::open_budget::OpenCost {
+        ironcalc::base::open_budget::OpenCost {
+            cells: self.cells,
+            formulas: self.formulas,
+            rows: self.rows,
+            bytes: self.bytes,
+        }
+    }
+}
+
+pub fn check_ratio(part: &str, compressed: u64, expanded: u64) -> Result<(), ReadError> {
+    if expanded > RATIO_GATE_BYTES && expanded > compressed.saturating_mul(MAX_RATIO) {
         return Err(ReadError::Unsafe(format!(
-            "the workbook expands to {} MB",
-            total / 1024 / 1024
+            "part {part} expands past the {MAX_RATIO}:1 compression limit ({} from {} compressed)",
+            describe_bytes(expanded),
+            describe_bytes(compressed),
         )));
     }
     Ok(())
 }
 
-pub fn check_formula(formula: &str, area: Option<&str>) -> Result<(), String> {
-    if let Some(range) = area.and_then(Range::parse_a1)
-        && range.cell_count() > MAX_FORMULA_AREA
-    {
-        return Err(format!(
-            "a formula covers {} cells, more than the {MAX_FORMULA_AREA} supported",
-            range.cell_count()
-        ));
+pub fn check_formula(formula: &str, area: Option<&str>, shared: bool) -> Result<(), String> {
+    if let Some(range) = area {
+        // A shared formula ref may cover a whole column, so it is only checked to
+        // stay inside the sheet; every other formula keeps the area limit.
+        if shared {
+            check_range_bounds(range)?;
+        } else if let Some(parsed) = Range::parse_a1(range)
+            && parsed.cell_count() > MAX_FORMULA_AREA
+        {
+            return Err(format!(
+                "a formula covers {} cells, more than the {MAX_FORMULA_AREA} supported",
+                parsed.cell_count()
+            ));
+        }
     }
     check_formula_text(formula)
+}
+
+fn check_range_bounds(range: &str) -> Result<(), String> {
+    let invalid = || format!("invalid range {range}");
+    let (left, right) = match range.split_once(':') {
+        Some(pair) => pair,
+        None => (range, range),
+    };
+    for end in [left.trim(), right.trim()] {
+        let cell = parse_reference_a1(end).ok_or_else(invalid)?;
+        if !is_valid_row(cell.row) || !is_valid_column_number(cell.column) {
+            return Err(invalid());
+        }
+    }
+    Ok(())
 }
 
 pub fn check_formula_text(formula: &str) -> Result<(), String> {
@@ -87,4 +249,239 @@ fn max_depth(formula: &str) -> usize {
         }
     }
     deepest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn small_parts_pass_on_the_other_budgets_alone() {
+        assert!(check_ratio("xl/worksheets/sheet1.xml", 1, RATIO_GATE_BYTES).is_ok());
+        assert!(check_ratio("xl/worksheets/sheet1.xml", 0, RATIO_GATE_BYTES).is_ok());
+    }
+
+    #[test]
+    fn extreme_ratios_past_the_gate_are_refused() {
+        let expanded = RATIO_GATE_BYTES + 1;
+        assert!(check_ratio("xl/sharedStrings.xml", expanded / MAX_RATIO + 1, expanded).is_ok());
+        let error =
+            check_ratio("xl/sharedStrings.xml", expanded / MAX_RATIO - 1, expanded).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)));
+        assert!(error.to_string().contains("150"), "{error}");
+    }
+
+    #[test]
+    fn the_cell_budget_names_the_memory_the_file_needs() {
+        let budget = CellBudget::max_cells_for_test(10_000);
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 10_000,
+                    formulas: 0,
+                    bytes: 0,
+                    rows: 0
+                })
+                .is_ok()
+        );
+        let error = budget
+            .check(Usage {
+                cells: 10_001,
+                formulas: 0,
+                bytes: 0,
+                rows: 0,
+            })
+            .unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)));
+        let message = error.to_string();
+        assert!(message.contains("needs about"), "{message}");
+        assert!(message.contains("allows"), "{message}");
+        assert!(!message.contains("harm"), "{message}");
+        assert!(message.contains("10001 cells"), "{message}");
+        assert!(message.contains("close other workbooks"), "{message}");
+    }
+
+    #[test]
+    fn formula_cells_trip_the_budget_before_value_cells() {
+        let budget = CellBudget::max_cells_for_test(1000);
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 1000,
+                    formulas: 0,
+                    bytes: 0,
+                    rows: 0,
+                })
+                .is_ok()
+        );
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 1000,
+                    formulas: 1000,
+                    bytes: 0,
+                    rows: 0,
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn string_formula_and_row_bytes_count_against_the_budget() {
+        let budget = CellBudget::max_cells_for_test(100);
+        let supported = 100 * BYTES_PER_CELL;
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 99,
+                    formulas: 0,
+                    bytes: supported - 99 * BYTES_PER_CELL,
+                    rows: 0,
+                })
+                .is_ok()
+        );
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 99,
+                    formulas: 0,
+                    bytes: supported - 99 * BYTES_PER_CELL + 1,
+                    rows: 0,
+                })
+                .is_err()
+        );
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 0,
+                    formulas: 0,
+                    bytes: 0,
+                    rows: supported / ROW_BYTES,
+                })
+                .is_ok()
+        );
+        assert!(
+            budget
+                .check(Usage {
+                    cells: 0,
+                    formulas: 0,
+                    bytes: 0,
+                    rows: supported / ROW_BYTES + 1,
+                })
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn sixty_percent_of_a_16gb_machine_covers_seventeen_million_cells() {
+        assert!(CellBudget::from_budget_mb(9_752).max_cells() > 17_000_000);
+    }
+
+    #[test]
+    fn a_real_nineteen_million_cell_workbook_fits_a_16gb_machine() {
+        let usage = Usage {
+            cells: 19_451_599,
+            formulas: 269_081,
+            bytes: 200 * 1024 * 1024,
+            rows: 500_000,
+        };
+        assert!(CellBudget::from_budget_mb(9_752).check(usage).is_ok());
+    }
+
+    #[test]
+    fn the_importer_route_is_charged_more_than_the_streaming_route() {
+        let budget = CellBudget::from_budget_mb(9_752);
+        let usage = Usage {
+            cells: 21_000_000,
+            formulas: 269_081,
+            bytes: 0,
+            rows: 0,
+        };
+        assert!(budget.check_route(usage, Route::Streaming, None).is_ok());
+        assert!(budget.check_route(usage, Route::Importer, None).is_err());
+    }
+
+    #[test]
+    fn the_importer_route_is_refused_exactly_past_its_own_cost() {
+        let budget = CellBudget::max_cells_for_test(1_000);
+        let supported = 1_000 * BYTES_PER_CELL;
+        let cells = supported / ironcalc::base::open_budget::IMPORTER_BYTES_PER_CELL;
+        let usage = |cells| Usage {
+            cells,
+            formulas: 0,
+            bytes: 0,
+            rows: 0,
+        };
+        assert!(
+            budget
+                .check_route(usage(cells), Route::Importer, None)
+                .is_ok()
+        );
+        assert!(
+            budget
+                .check_route(usage(cells + 1), Route::Importer, None)
+                .is_err()
+        );
+        assert!(
+            budget
+                .check_route(usage(cells + 1), Route::Streaming, None)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_projection_only_applies_while_the_file_has_more_to_read() {
+        let budget = CellBudget::max_cells_for_test(1_000);
+        let usage = Usage {
+            cells: 1_001,
+            formulas: 0,
+            bytes: 0,
+            rows: 0,
+        };
+        for projection in [(10, 10), (5, 10), (40, 0)] {
+            let error = budget
+                .check_route(usage, Route::Streaming, Some(projection))
+                .unwrap_err();
+            assert!(error.to_string().contains("1001 cells"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_projection_past_the_integer_range_saturates_instead_of_overflowing() {
+        let budget = CellBudget::max_cells_for_test(1);
+        let usage = Usage {
+            cells: u64::MAX / 2,
+            formulas: 1,
+            bytes: 1,
+            rows: 1,
+        };
+        assert!(
+            budget
+                .check_route(usage, Route::Importer, Some((u64::MAX, 1)))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_refusal_projects_the_whole_file_from_what_was_read() {
+        let budget = CellBudget::max_cells_for_test(1_000);
+        let usage = Usage {
+            cells: 1_001,
+            formulas: 0,
+            bytes: 0,
+            rows: 0,
+        };
+        let plain = budget.check_route(usage, Route::Streaming, None);
+        let projected = budget.check_route(usage, Route::Streaming, Some((40, 10)));
+        assert!(plain.unwrap_err().to_string().contains("1001 cells"));
+        assert!(projected.unwrap_err().to_string().contains("4004 cells"));
+    }
+
+    #[test]
+    fn a_shared_formula_may_cover_a_whole_column() {
+        assert!(check_formula("B1*2", Some("A1:A1048576"), true).is_ok());
+        assert!(check_formula("B1*2", Some("A1:A1048577"), true).is_err());
+        assert!(check_formula("B1*2", Some("A1:XFE1048576"), true).is_err());
+        assert!(check_formula("1", Some("A1:A1048576"), false).is_err());
+    }
 }

@@ -13,7 +13,7 @@ use crate::agent_mark::{HEADER_MARK_SIZE, agent_mark};
 use crate::agent_settings::{self, AgentConfig};
 
 const AGENT_MENU_WIDTH: f32 = 280.0;
-const ALWAYS_LISTED: [&str; 3] = ["claude", "codex", "opencode"];
+const ALWAYS_LISTED: [&str; 4] = ["claude", "codex", "opencode", "grok"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct AgentOption {
@@ -230,7 +230,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_codex_and_opencode_are_always_listed_and_only_installed_ones_are_marked() {
+    fn claude_codex_opencode_and_grok_are_always_listed_and_only_installed_ones_are_marked() {
         let options = agent_options(&settings(
             r#"{"agents": {"default": "claude", "servers": {
                 "claude": {"name": "Claude", "command": "npx"}}}}"#,
@@ -244,7 +244,8 @@ mod tests {
             [
                 ("Claude", true, true),
                 ("Codex", false, false),
-                ("opencode", false, false)
+                ("opencode", false, false),
+                ("Grok", false, false)
             ]
         );
     }

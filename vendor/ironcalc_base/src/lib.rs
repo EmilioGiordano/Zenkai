@@ -30,6 +30,7 @@
 pub mod builtin_styles;
 pub mod calc_result;
 pub mod cell;
+pub mod cell_store;
 pub mod cf_types;
 pub mod colors;
 pub mod expressions;
@@ -59,6 +60,7 @@ mod functions;
 mod implicit_intersection;
 mod incremental;
 mod model;
+pub mod open_budget;
 mod styles;
 mod tz;
 mod units;

@@ -284,6 +284,7 @@ pub fn remove_redundant_implicit_intersection(node: &mut Node, add: bool) {
 }
 
 /// The result of the static analysis of a node
+#[derive(Clone, Debug, PartialEq)]
 pub enum StaticResult {
     // The result of the evaluation is a single value (number, string, boolean, error)
     Scalar,

@@ -29,6 +29,18 @@ pub(crate) enum Diff {
         new_value: String,
         old_value: Box<Option<Cell>>,
     },
+    // The formula of the cell at `source_row`, `source_column` written over the area; redo
+    // reads it from there again, as the cell is outside the area and unchanged.
+    FillFormula {
+        sheet: u32,
+        source_row: i32,
+        source_column: i32,
+        row: i32,
+        column: i32,
+        width: i32,
+        height: i32,
+        old_values: Vec<Option<Cell>>,
+    },
     SetArrayValue {
         sheet: u32,
         row: i32,

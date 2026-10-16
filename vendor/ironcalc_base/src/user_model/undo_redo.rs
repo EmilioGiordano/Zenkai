@@ -4,7 +4,7 @@ use crate::{
     cf_types::ConditionalFormatting,
     constants::COLUMN_WIDTH_FACTOR,
     expressions::types::Area,
-    types::{ArrayKind, Cell, Style},
+    types::{Cell, Style},
     UserModel,
 };
 
@@ -35,14 +35,7 @@ impl<'a> UserModel<'a> {
                         .worksheet(*sheet)
                         .ok()
                         .and_then(|ws| ws.cell(*row, *column))
-                        .and_then(|cell| match cell {
-                            Cell::ArrayFormula {
-                                kind: ArrayKind::Dynamic,
-                                r,
-                                ..
-                            } => Some(*r),
-                            _ => None,
-                        });
+                        .and_then(Cell::dynamic_range);
                     if let Some((w, h)) = spill_dims {
                         let ws = self.model.workbook.worksheet_mut(*sheet)?;
                         for r in *row..*row + h {
@@ -50,7 +43,8 @@ impl<'a> UserModel<'a> {
                                 if r == *row && c == *column {
                                     continue;
                                 }
-                                if matches!(ws.cell(r, c), Some(Cell::SpillCell { a, .. }) if *a == (*row, *column))
+                                if ws.cell(r, c).and_then(Cell::spill_anchor)
+                                    == Some((*row, *column))
                                 {
                                     let _ = ws.cell_clear_contents(r, c);
                                 }
@@ -85,6 +79,27 @@ impl<'a> UserModel<'a> {
                             }
                         }
                     }
+                }
+                Diff::FillFormula {
+                    sheet,
+                    row,
+                    column,
+                    width,
+                    height,
+                    old_values,
+                    ..
+                } => {
+                    needs_evaluation = true;
+                    self.restore_cells(
+                        &Area {
+                            sheet: *sheet,
+                            row: *row,
+                            column: *column,
+                            width: *width,
+                            height: *height,
+                        },
+                        old_values,
+                    )?;
                 }
                 Diff::SetArrayValue {
                     sheet,
@@ -260,7 +275,10 @@ impl<'a> UserModel<'a> {
                         if let Some(row_style) = row_data.row.clone() {
                             worksheet.rows.push(row_style);
                         }
-                        worksheet.sheet_data.insert(r, row_data.data.clone());
+                        worksheet.sheet_data.insert_row(
+                            r,
+                            row_data.data.iter().map(|(c, cell)| (*c, cell.clone())),
+                        );
                     }
                 }
                 Diff::InsertColumns {
@@ -428,10 +446,8 @@ impl<'a> UserModel<'a> {
                     self.model
                         .insert_sheet(sheet_name, sheet_index, Some(sheet_id))?;
                     let worksheet = self.model.workbook.worksheet_mut(*sheet)?;
-                    for (row, row_data) in &old_data.sheet_data {
-                        for (column, cell) in row_data {
-                            worksheet.update_cell(*row, *column, cell.clone())?;
-                        }
+                    for (row, column, cell) in old_data.sheet_data.iter() {
+                        worksheet.update_cell(row, column, cell.clone())?;
                     }
                     worksheet.rows = old_data.rows.clone();
                     worksheet.cols = old_data.cols.clone();
@@ -648,6 +664,31 @@ impl<'a> UserModel<'a> {
                     needs_evaluation = true;
                     self.model
                         .set_user_input(*sheet, *row, *column, new_value.to_string())?;
+                }
+                Diff::FillFormula {
+                    sheet,
+                    source_row,
+                    source_column,
+                    row,
+                    column,
+                    width,
+                    height,
+                    old_values: _,
+                } => {
+                    needs_evaluation = true;
+                    let area = Area {
+                        sheet: *sheet,
+                        row: *row,
+                        column: *column,
+                        width: *width,
+                        height: *height,
+                    };
+                    if self
+                        .write_filled_formula((*source_row, *source_column), &area)?
+                        .is_none()
+                    {
+                        return Err("Cannot fill the formula again".to_string());
+                    }
                 }
                 Diff::SetArrayValue {
                     sheet,

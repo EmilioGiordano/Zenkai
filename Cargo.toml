@@ -45,4 +45,5 @@ debug = false
 strip = true
 
 [patch.crates-io]
+ironcalc = { path = "vendor/ironcalc" }
 ironcalc_base = { path = "vendor/ironcalc_base" }

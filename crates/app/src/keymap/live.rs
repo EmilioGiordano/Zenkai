@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::rc::Rc;
 
 use gpui_kit::*;
@@ -59,12 +59,47 @@ fn rebuild(cx: &mut App, model: &Model, overrides: &Overrides) {
         .borrow()
         .bindings()
         .filter(|binding| !owned.contains(binding.action().name()))
+        .filter(|binding| !is_dialog_shield(binding))
         .cloned()
         .collect();
-    let ours = model.effective(overrides).into_iter().filter_map(load);
+    let effective = model.effective(overrides);
+    let shields = shield_close_dialog(&effective);
+    let ours = effective.into_iter().chain(shields).filter_map(load);
     let rebuilt: Vec<KeyBinding> = others.into_iter().chain(ours).collect();
     cx.clear_key_bindings();
     cx.bind_keys(rebuilt);
+}
+
+fn is_dialog_shield(binding: &KeyBinding) -> bool {
+    binding.action().as_any().is::<NoAction>()
+        && binding
+            .predicate()
+            .is_some_and(|predicate| mentions(&predicate, "CloseDialog"))
+}
+
+// While a close dialog is open no workspace shortcut may act on the document behind it, so
+// every workspace chord the dialog does not use itself is switched off inside it.
+fn shield_close_dialog(bindings: &[Binding]) -> Vec<Binding> {
+    let used: HashSet<&Chord> = bindings
+        .iter()
+        .filter(|binding| {
+            binding
+                .context
+                .is_some_and(|c| c.starts_with("CloseDialog"))
+        })
+        .map(|binding| &binding.chord)
+        .collect();
+    let mut seen: HashSet<&Chord> = HashSet::new();
+    bindings
+        .iter()
+        .filter(|binding| matches!(binding.context, None | Some("Workspace")))
+        .filter(|binding| !used.contains(&binding.chord) && seen.insert(&binding.chord))
+        .map(|binding| Binding {
+            chord: binding.chord.clone(),
+            action: Box::new(NoAction),
+            context: Some("CloseDialog"),
+        })
+        .collect()
 }
 
 fn load(binding: Binding) -> Option<KeyBinding> {

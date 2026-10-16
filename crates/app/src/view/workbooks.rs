@@ -9,7 +9,6 @@ use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace, file_label};
 use crate::agent_settings;
-use crate::document::Document;
 use crate::documents::{Installed, Intent, Loaded, Step};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::files::{self, FileLoad, LoadFailure};
@@ -221,45 +220,21 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_dialog.is_some()
+            || self.departure.is_some()
+            || self.documents.entry(id).is_none()
+        {
+            return;
+        }
         // Typing in the cell or the formula bar counts as an edit of the document being closed.
         if self.documents.active_id() == Some(id) {
             self.park_active(window, cx);
         }
-        let Some(entry) = self.documents.entry(id) else {
-            return;
-        };
-        if !entry.dirty() {
+        if !self.documents.holds_unsaved_work(id) {
             self.finish_close(id, window, cx);
             return;
         }
-        let edits = entry.loaded().map(Document::edit_count);
-        let detail = t!("discard.detail", name = entry.name());
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            t!("discard.title"),
-            Some(&detail),
-            &[t!("button.cancel"), t!("button.discard")],
-            cx,
-        );
-        cx.spawn_in(window, async move |this, cx| {
-            if answer.await != Ok(1) {
-                return;
-            }
-            let update = this.update_in(cx, |this, window, cx| {
-                match this.documents.entry(id) {
-                    None => {}
-                    // Edited while the question was up: the answer covered older work.
-                    Some(entry) if entry.loaded().map(Document::edit_count) != edits => {
-                        this.close_document(id, window, cx)
-                    }
-                    Some(_) => this.finish_close(id, window, cx),
-                }
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed during discard prompt");
-            }
-        })
-        .detach();
+        self.ask_to_close_tab(id, window, cx);
     }
 
     pub(super) fn finish_close(
@@ -416,6 +391,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(name) = self.documents.entry(id).map(Entry::name) else {
+            self.departure_load_finished(id, window, cx);
             return;
         };
         match load {
@@ -470,6 +446,7 @@ impl Workspace {
                 );
             }
         }
+        self.departure_load_finished(id, window, cx);
     }
 
     // The copy moves under this session's own name only once its workbook is in the list, and
@@ -486,10 +463,17 @@ impl Workspace {
                     async move { recovery::adopt(&copy, &target).map_err(|error| (copy, error)) },
                 )
                 .await;
+            let adopted = moved.is_ok();
             if let Err((copy, error)) = moved {
                 tracing::warn!(?copy, %error, "could not adopt the recovery file");
             }
-            if let Err(error) = this.update(cx, |this, cx| this.persist_session(cx)) {
+            let update = this.update(cx, |this, cx| {
+                if adopted && let Some(document) = this.documents.get_mut(id) {
+                    document.mark_recovery_adopted();
+                }
+                this.persist_session(cx)
+            });
+            if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed while adopting a recovery file");
             }
         })

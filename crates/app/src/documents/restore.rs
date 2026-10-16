@@ -59,6 +59,18 @@ impl Documents {
         space_appearance: SpaceAppearance,
         recovery_file: impl Fn(WorkbookId) -> Option<PathBuf>,
     ) -> Session {
+        self.snapshot_leaving(sidebar_visible, space_appearance, recovery_file, &[])
+    }
+
+    // A discarded workbook is recorded as it was last saved, so the tab still comes back next
+    // time without the work the user chose to lose; one never saved has nothing to come back to.
+    pub fn snapshot_leaving(
+        &self,
+        sidebar_visible: bool,
+        space_appearance: SpaceAppearance,
+        recovery_file: impl Fn(WorkbookId) -> Option<PathBuf>,
+        discarded: &[WorkbookId],
+    ) -> Session {
         let active = self.wanted().or_else(|| self.active_id());
         let spaces = self
             .spaces
@@ -71,9 +83,15 @@ impl Documents {
                 files: self
                     .members(space.id)
                     .filter(|entry| !entry.loaded().is_some_and(Document::is_pristine))
+                    .filter(|entry| entry.path().is_some() || !discarded.contains(&entry.id()))
                     .map(|entry| {
                         let mut link = entry.to_link();
-                        if entry.loaded().is_some_and(Document::needs_recovery) {
+                        if discarded.contains(&link.id) {
+                            link.dirty = false;
+                            link.recovery = None;
+                        } else if entry.loaded().is_some_and(|document| {
+                            document.needs_recovery() && document.has_recovery_copy()
+                        }) {
                             link.recovery = recovery_file(link.id);
                         }
                         session::record_of(&link, Some(link.id) == active)
@@ -81,7 +99,13 @@ impl Documents {
                     .collect(),
             })
             .collect();
-        Session::new(sidebar_visible, spaces).with_space_appearance(space_appearance)
+        let reopened = discarded
+            .iter()
+            .filter(|id| self.entry(**id).is_some_and(|entry| entry.path().is_some()))
+            .count();
+        Session::new(sidebar_visible, spaces)
+            .with_space_appearance(space_appearance)
+            .with_reopened_as_saved(u32::try_from(reopened).unwrap_or(u32::MAX))
     }
 }
 
@@ -228,11 +252,24 @@ mod tests {
     fn the_snapshot_points_unsaved_work_at_its_recovery_copy() {
         let mut documents = documents();
         documents.active_mut().unwrap().dirty = true;
+        documents.active_mut().unwrap().mark_recovery_adopted();
         let snapshot = documents.snapshot(false, SpaceAppearance::default(), |id| {
             Some(PathBuf::from(format!("recovery/{}.xlsx", id.0)))
         });
         let record = &snapshot.spaces[0].files[0];
         assert_eq!(record.recovery.as_deref(), Some("0.xlsx"));
+        assert!(record.dirty);
+    }
+
+    #[test]
+    fn unsaved_work_is_not_pointed_at_a_copy_that_was_never_written() {
+        let mut documents = documents();
+        documents.active_mut().unwrap().dirty = true;
+        let snapshot = documents.snapshot(false, SpaceAppearance::default(), |id| {
+            Some(PathBuf::from(format!("recovery/{}.xlsx", id.0)))
+        });
+        let record = &snapshot.spaces[0].files[0];
+        assert_eq!(record.recovery, None);
         assert!(record.dirty);
     }
 
@@ -348,5 +385,114 @@ mod tests {
         let a = documents.find_by_path(Path::new("a.xlsx")).unwrap();
         documents.close(a);
         assert_eq!(documents.take_reopenable(), Some(PathBuf::from("a.xlsx")));
+    }
+
+    fn snapshot_files(documents: &Documents, discarded: &[WorkbookId]) -> Vec<FileRecord> {
+        documents
+            .snapshot_leaving(
+                true,
+                SpaceAppearance::default(),
+                |_| Some(PathBuf::from("autosave-1-2-3.xlsx")),
+                discarded,
+            )
+            .spaces
+            .into_iter()
+            .flat_map(|space| space.files)
+            .collect()
+    }
+
+    #[test]
+    fn a_discarded_workbook_is_recorded_as_last_saved_and_the_others_keep_their_work() {
+        let mut documents = documents();
+        let saved = open_file(&mut documents, "saved.xlsx");
+        let other = open_file(&mut documents, "other.xlsx");
+        for id in [saved, other] {
+            let document = documents.get_mut(id).unwrap();
+            document.dirty = true;
+            document.mark_recovery_adopted();
+        }
+
+        let kept = snapshot_files(&documents, &[]);
+        assert!(
+            kept.iter()
+                .all(|file| file.dirty && file.recovery.is_some())
+        );
+
+        let files = snapshot_files(&documents, &[saved]);
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path.as_deref(), Some("saved.xlsx"));
+        assert!(!files[0].dirty);
+        assert_eq!(files[0].recovery, None);
+        assert!(files[1].dirty);
+        assert!(files[1].recovery.is_some());
+    }
+
+    #[test]
+    fn a_discarded_workbook_that_was_never_saved_has_nothing_to_come_back_to() {
+        let mut documents = busy();
+        let blank = documents.active_id().unwrap();
+        open_file(&mut documents, "saved.xlsx");
+        assert_eq!(snapshot_files(&documents, &[]).len(), 2);
+        let files = snapshot_files(&documents, &[blank]);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].path.as_deref(), Some("saved.xlsx"));
+    }
+
+    #[test]
+    fn a_discarded_restored_link_drops_the_pointer_to_its_recovery_copy() {
+        let mut record = file(Some("a.xlsx"), false);
+        record.dirty = true;
+        record.recovery = Some("autosave-9-9-9.xlsx".to_string());
+        let session = Session::new(
+            true,
+            vec![SpaceRecord {
+                name: "Q3".to_string(),
+                collapsed: false,
+                color: Default::default(),
+                appearance: Default::default(),
+                files: vec![record],
+            }],
+        );
+        let mut documents = documents();
+        documents.restore(&session, Some(Path::new("recovery")));
+        let link = documents.find_by_path(Path::new("a.xlsx")).unwrap();
+        let files = snapshot_files(&documents, &[link]);
+        assert_eq!(files.len(), 1);
+        assert!(!files[0].dirty);
+        assert_eq!(files[0].recovery, None);
+        assert!(snapshot_files(&documents, &[])[0].recovery.is_some());
+    }
+
+    fn reopened_after(documents: &Documents, discarded: &[WorkbookId]) -> u32 {
+        documents
+            .snapshot_leaving(true, SpaceAppearance::default(), |_| None, discarded)
+            .reopened_as_saved
+    }
+
+    #[test]
+    fn the_reopened_notice_counts_only_discarded_workbooks_that_come_back() {
+        let mut documents = busy();
+        let blank = documents.active_id().unwrap();
+        let saved = open_file(&mut documents, "saved.xlsx");
+        documents.get_mut(saved).unwrap().dirty = true;
+        assert_eq!(reopened_after(&documents, &[]), 0);
+        assert_eq!(reopened_after(&documents, &[blank]), 0);
+        assert_eq!(reopened_after(&documents, &[blank, saved]), 1);
+    }
+
+    #[test]
+    fn starting_empty_or_a_crash_never_carries_the_notice() {
+        let mut documents = documents();
+        let saved = open_file(&mut documents, "saved.xlsx");
+        let session =
+            documents.snapshot_leaving(true, SpaceAppearance::default(), |_| None, &[saved]);
+        assert_eq!(session.reopened_as_saved, 1);
+        assert_eq!(session.without_unsaved_work().reopened_as_saved, 0);
+        assert_eq!(
+            documents
+                .snapshot(true, SpaceAppearance::default(), |_| None)
+                .reopened_as_saved,
+            0
+        );
     }
 }

@@ -2,7 +2,7 @@ use bitcode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Display};
 
-use crate::{cf_types::ConditionalFormatting, expressions::token::Error};
+use crate::{cell_store::CellStore, cf_types::ConditionalFormatting, expressions::token::Error};
 
 fn default_as_false() -> bool {
     false
@@ -186,7 +186,7 @@ pub struct Worksheet {
     pub cols: Vec<Col>,
     pub rows: Vec<Row>,
     pub name: String,
-    pub sheet_data: SheetData,
+    pub sheet_data: CellStore,
     pub shared_formulas: Vec<String>,
     pub sheet_id: u32,
     pub state: SheetState,
@@ -200,10 +200,6 @@ pub struct Worksheet {
     pub show_grid_lines: bool,
     pub conditional_formatting: Vec<ConditionalFormatting>,
 }
-
-/// Internal representation of Excel's sheet_data
-/// It is row first and because of this all of our API's should be row first
-pub type SheetData = HashMap<i32, HashMap<i32, Cell>>;
 
 // ECMA-376-1:2016 section 18.3.1.73
 #[derive(Encode, Decode, Debug, PartialEq, Clone)]
@@ -250,13 +246,23 @@ pub enum FormulaValue {
     Boolean(bool),
     Number(f64),
     Text(String),
-    Error {
-        ei: Error,
-        // Origin cell reference, e.g. "Sheet3!C4"
-        o: String,
-        // Human-readable error message, e.g. "Not implemented function"
-        m: String,
-    },
+    // Boxed so the common variants keep `Cell` small.
+    Error(Box<ErrorValue>),
+}
+
+#[derive(Encode, Decode, Debug, Clone, PartialEq)]
+pub struct ErrorValue {
+    pub ei: Error,
+    // Origin cell reference, e.g. "Sheet3!C4"
+    pub o: String,
+    // Human-readable error message, e.g. "Not implemented function"
+    pub m: String,
+}
+
+impl FormulaValue {
+    pub fn error(ei: Error, o: String, m: String) -> Self {
+        FormulaValue::Error(Box::new(ErrorValue { ei, o, m }))
+    }
 }
 
 /// The value stored in a spill cell (no formula, no origin tracking).
@@ -288,50 +294,39 @@ pub enum ArrayKind {
 // * `a`    — anchor cell (row, column) for spill cells
 #[derive(Encode, Decode, Debug, Clone, PartialEq)]
 pub enum Cell {
-    EmptyCell {
-        s: i32,
-    },
-    BooleanCell {
-        v: bool,
-        s: i32,
-    },
-    NumberCell {
-        v: f64,
-        s: i32,
-    },
+    EmptyCell { s: i32 },
+    BooleanCell { v: bool, s: i32 },
+    NumberCell { v: f64, s: i32 },
     // Maybe we should not have this type. In Excel this is just a string
-    ErrorCell {
-        ei: Error,
-        s: i32,
-    },
+    ErrorCell { ei: Error, s: i32 },
     // Always a shared string
-    SharedString {
-        si: i32,
-        s: i32,
-    },
+    SharedString { si: i32, s: i32 },
     // A regular (non-array) formula cell.
     // `v` is `Unevaluated` transiently during evaluation, then holds the result.
-    CellFormula {
-        f: i32,
-        s: i32,
-        v: FormulaValue,
-    },
-    // The anchor of an array or dynamic formula.
-    // `kind` distinguishes CSE from dynamic; `r` is the spill range (width, height).
-    // `v` is `Unevaluated` transiently during evaluation, then holds the anchor cell result.
-    ArrayFormula {
-        f: i32,
-        s: i32,
-        r: (i32, i32),
-        kind: ArrayKind,
-        v: FormulaValue,
-    },
+    CellFormula { f: i32, s: i32, v: FormulaValue },
+    // The anchor of an array or dynamic formula. Boxed, with the spill cell below, to keep
+    // `Cell` at 32 bytes.
+    ArrayFormula(Box<ArrayFormulaCell>),
     // A spill cell: holds a value produced by an array/dynamic formula at `a` (row, column).
-    SpillCell {
-        s: i32,
-        a: (i32, i32),
-        v: SpillValue,
-    },
+    SpillCell(Box<SpillCellValue>),
+}
+
+// `kind` distinguishes CSE from dynamic; `r` is the spill range (width, height).
+// `v` is `Unevaluated` transiently during evaluation, then holds the anchor cell result.
+#[derive(Encode, Decode, Debug, Clone, PartialEq)]
+pub struct ArrayFormulaCell {
+    pub f: i32,
+    pub s: i32,
+    pub r: (i32, i32),
+    pub kind: ArrayKind,
+    pub v: FormulaValue,
+}
+
+#[derive(Encode, Decode, Debug, Clone, PartialEq)]
+pub struct SpillCellValue {
+    pub s: i32,
+    pub a: (i32, i32),
+    pub v: SpillValue,
 }
 
 impl Default for Cell {
