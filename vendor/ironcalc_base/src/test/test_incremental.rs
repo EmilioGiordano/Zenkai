@@ -144,6 +144,26 @@ fn circular_reference_made_by_an_edit() {
 }
 
 #[test]
+fn full_evaluations_counts_only_full_evaluations() {
+    let mut model = new_empty_model();
+    model._set("A1", "1");
+    model._set("A2", "=A1*2");
+    model.evaluate_indexed();
+    let counted = model.full_evaluations();
+    assert!(counted > 0);
+    let edited = set(&mut model, "A1", "5");
+    model.evaluate_incremental(&[edited]);
+    assert_eq!(model.last_recalculation(), Recalculation::Incremental);
+    assert_eq!(model.full_evaluations(), counted);
+    model.evaluate();
+    assert_eq!(model.full_evaluations(), counted + 1);
+    let edited = set(&mut model, "B1", "=SEQUENCE(2)");
+    model.evaluate_incremental(&[edited]);
+    assert_eq!(model.last_recalculation(), Recalculation::Full);
+    assert_eq!(model.full_evaluations(), counted + 2);
+}
+
+#[test]
 fn spills_fall_back_to_a_full_evaluation() {
     let mut model = new_empty_model();
     model._set("A1", "3");

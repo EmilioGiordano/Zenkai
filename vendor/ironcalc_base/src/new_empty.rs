@@ -704,6 +704,7 @@ impl<'a> Model<'a> {
             last_recalculation: Recalculation::Full,
             criteria_ranges: CriteriaRanges::new(),
             criteria_deltas: 0,
+            full_evaluations: 0,
         };
         model.parse_formulas();
         model.evaluate_conditional_formatting();

@@ -56,6 +56,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/lib.rs`, `src/user_model/{common,undo_redo,clipboard,mod}.rs`. Builds on
   ironcalc/IronCalc#1435. Tests: `src/test/test_incremental.rs`,
   `src/test/test_recalculation_fallbacks.rs`.
+- `Model::full_evaluations` counts the evaluations of every formula, so a caller can tell
+  whether an edit evaluated in full (`src/incremental.rs`, `src/model.rs`,
+  `src/new_empty.rs`). Needs the incremental recalculation. Test:
+  `full_evaluations_counts_only_full_evaluations` in `src/test/test_incremental.rs`.
 - A formula that evaluates to an empty cell reads as 0 the first time too (`src/model.rs`,
   `evaluate_cell`). Tests: `src/test/test_empty_formula_result.rs`.
 - A workbook with circular references keeps its dependency index, and an edit is
