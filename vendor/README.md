@@ -117,13 +117,19 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `UserModel::begin_edit_group` and `end_edit_group` join the edits between them into one
   undo step, evaluating once (`src/user_model/fill_formula.rs`, `common.rs`). Tests:
   `src/test/user_model/test_fill_formula.rs`.
+- The full evaluation lists the cells holding a formula instead of every cell, so a
+  workbook of millions of values no longer builds a 12-byte index of each one first
+  (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
+  `src/test/test_full_evaluation_cells.rs`.
 
 Zenkai-only, not for upstream:
 
-- `src/open_budget.rs` estimates the peak memory of opening a workbook (600 B per
-  stored cell, 200 B extra per formula cell, measured with the `measure_open`
-  instrument) and `Model::from_workbook` refuses with a needs-at-least message
-  past sixty percent of RAM instead of hanging the machine. Tests in the module.
+- `src/open_budget.rs` estimates the peak memory of opening a workbook (per cell,
+  formula and row, measured with the `measure_open` instrument; one set for the
+  streaming reader and a higher one for IronCalc's importer) and
+  `Model::from_workbook` refuses with a needs-about message that also names the
+  allowance, past sixty percent of RAM, instead of hanging the machine. Tests in
+  the module.
 - The `sysinfo` dependency in `Cargo.toml`, used by `open_budget` to read physical RAM.
 - `build.rs` reports the crate version instead of asking `git describe`, which here
   would describe Zenkai's repository.

@@ -219,7 +219,7 @@ fn read_error(error: ironcalc::error::XlsxError) -> EngineError {
         ironcalc::error::XlsxError::Workbook(message)
             if message.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) =>
         {
-            EngineError::Unsafe(message)
+            EngineError::TooLarge(message)
         }
         other => EngineError::InvalidFile(format!("{other:?}")),
     }
@@ -1649,7 +1649,7 @@ pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
 fn engine_model(book: ironcalc::base::types::Workbook) -> Result<Model<'static>, EngineError> {
     Model::from_workbook(book, LANGUAGE).map_err(|error| {
         if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
-            EngineError::Unsafe(error)
+            EngineError::TooLarge(error)
         } else {
             EngineError::InvalidFile(error)
         }
@@ -1696,7 +1696,7 @@ mod tests {
     fn a_budget_refusal_reaches_the_user_as_plain_text() {
         let message = format!("{BUDGET_REFUSAL_PREFIX}12.3 GB to open");
         let error = read_error(XlsxError::Workbook(message.clone()));
-        assert!(matches!(&error, EngineError::Unsafe(text) if *text == message));
+        assert!(matches!(&error, EngineError::TooLarge(text) if *text == message));
     }
 
     #[test]
