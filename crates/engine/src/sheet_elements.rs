@@ -11,7 +11,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, Write};
 use std::sync::Arc;
 
-use roxmltree::{Edge, Node};
+use roxmltree::Node;
 
 use crate::file::Unsupported;
 use crate::preflight::element_kind;
@@ -461,24 +461,27 @@ fn has_content(node: Node) -> bool {
     node.children().any(|n| n.is_element() || n.is_text())
 }
 
-// Walks the tree without recursion, however deep the file nests it, and stops once the
-// text passes `limit`.
+enum Visit<'a, 'input> {
+    Open(Node<'a, 'input>),
+    Close(Node<'a, 'input>),
+}
+
+// Walks the tree with its own stack instead of recursion, however deep the file nests it,
+// and stops once the text passes `limit`.
 fn rebuild(node: Node, limit: usize) -> Result<String, Unbuildable> {
     let mut xml = String::new();
-    let mut skipped = None;
-    for edge in node.traverse() {
-        match edge {
-            Edge::Open(_) if skipped.is_some() => {}
-            Edge::Open(n) if n.is_text() => {
+    let mut pending = vec![Visit::Open(node)];
+    while let Some(visit) = pending.pop() {
+        match visit {
+            Visit::Open(n) if n.is_text() => {
                 push_escaped(&mut xml, n.text().unwrap_or_default(), text_entity, limit)?;
             }
-            Edge::Open(n) if n.is_element() => {
+            Visit::Open(n) if n.is_element() => {
                 if !in_main(n) {
                     return Err(Unbuildable::Foreign);
                 }
                 let name = n.tag_name().name();
                 if name == "extLst" {
-                    skipped = Some(n.id());
                     continue;
                 }
                 xml.push('<');
@@ -500,16 +503,24 @@ fn rebuild(node: Node, limit: usize) -> Result<String, Unbuildable> {
                     push_escaped(&mut xml, attribute.value(), attribute_entity, limit)?;
                     xml.push('"');
                 }
-                xml.push_str(if has_content(n) { ">" } else { "/>" });
+                if has_content(n) {
+                    xml.push('>');
+                    pending.push(Visit::Close(n));
+                    let mut child = n.last_child();
+                    while let Some(next) = child {
+                        pending.push(Visit::Open(next));
+                        child = next.prev_sibling();
+                    }
+                } else {
+                    xml.push_str("/>");
+                }
             }
-            Edge::Open(_) => {}
-            Edge::Close(n) if skipped == Some(n.id()) => skipped = None,
-            Edge::Close(n) if skipped.is_none() && n.is_element() && has_content(n) => {
+            Visit::Open(_) => {}
+            Visit::Close(n) => {
                 xml.push_str("</");
                 xml.push_str(n.tag_name().name());
                 xml.push('>');
             }
-            Edge::Close(_) => {}
         }
         if xml.len() > limit {
             return Err(Unbuildable::TooLarge);
