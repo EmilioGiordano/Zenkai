@@ -629,16 +629,24 @@ impl DependencyIndex {
 
     // None when following the dependents would cost more than evaluating everything.
     pub(crate) fn affected_by(&self, edited: &[CellKey]) -> Option<HashSet<CellKey>> {
-        self.reach(edited.iter().chain(&self.volatile).copied().collect())
+        self.reach(
+            edited.iter().chain(&self.volatile).copied().collect(),
+            usize::MAX,
+        )
     }
 
     // The cells and everything that reads them, directly or not; volatile formulas only
     // when they read one.
-    pub(crate) fn dependents_of(&self, cells: &[CellKey]) -> Option<HashSet<CellKey>> {
-        self.reach(cells.to_vec())
+    // `None` when more than `max_cells` are reached, or the walk is too long.
+    pub(crate) fn dependents_of(
+        &self,
+        cells: &[CellKey],
+        max_cells: usize,
+    ) -> Option<HashSet<CellKey>> {
+        self.reach(cells.to_vec(), max_cells)
     }
 
-    fn reach(&self, mut pending: Vec<CellKey>) -> Option<HashSet<CellKey>> {
+    fn reach(&self, mut pending: Vec<CellKey>, max_cells: usize) -> Option<HashSet<CellKey>> {
         let mut affected = HashSet::new();
         let mut visits = 0usize;
         while let Some(cell) = pending.pop() {
@@ -650,7 +658,7 @@ impl DependencyIndex {
                     pending.push(formula);
                 }
             });
-            if visits > MAX_DEPENDENT_VISITS {
+            if visits > MAX_DEPENDENT_VISITS || affected.len() > max_cells {
                 return None;
             }
         }
@@ -700,6 +708,19 @@ mod tests {
             row2,
             column2: row2,
         }
+    }
+
+    #[test]
+    fn dependents_of_stops_past_the_cells_allowed() {
+        // A2 reads A1, A3 reads A2, and so on: every cell below A1 is a dependent of it.
+        let mut index = DependencyIndex::new();
+        for row in 1..=5 {
+            index.add((0, row, 1), &reference(false, false, -1, 0));
+        }
+        index.sort();
+        let all = index.dependents_of(&[(0, 0, 1)], 6).unwrap();
+        assert_eq!(all.len(), 6);
+        assert!(index.dependents_of(&[(0, 0, 1)], 5).is_none());
     }
 
     #[test]
