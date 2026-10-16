@@ -280,7 +280,7 @@ impl Model<'_> {
     // cells they can change when the rule looks at one cell at a time. The result is the one
     // `evaluate_conditional_formatting` gives, provided nothing but the `changed` cells
     // changed since it ran.
-    pub(crate) fn update_conditional_formatting(&mut self, changed: &HashSet<CellKey>) {
+    pub(crate) fn reevaluate_conditional_formatting(&mut self, changed: &HashSet<CellKey>) {
         let today = self.cf_today();
         let mut all_runs = std::mem::take(&mut self.cf_runs);
         for (sheet, runs) in all_runs.iter_mut().enumerate() {
@@ -629,10 +629,10 @@ mod tests {
             stop_if_true: false,
         };
         let mut model = planted("A1:A10", rule, 9);
-        model.update_conditional_formatting(&HashSet::new());
+        model.reevaluate_conditional_formatting(&HashSet::new());
         assert!(survives(&model, 9));
         model.cf_runs[0][0].day = Some(0);
-        model.update_conditional_formatting(&HashSet::new());
+        model.reevaluate_conditional_formatting(&HashSet::new());
         assert!(!survives(&model, 9));
     }
 
@@ -644,7 +644,7 @@ mod tests {
         let changed: HashSet<_> = (1..=4096).map(|row| (0, row, 1)).collect();
         for (count, kept) in [(4, true), (5, false)] {
             let mut model = planted(&areas(count), text_contains_a(), 5000);
-            model.update_conditional_formatting(&changed);
+            model.reevaluate_conditional_formatting(&changed);
             assert_eq!(survives(&model, 5000), kept, "{count} areas");
         }
     }
@@ -663,7 +663,7 @@ mod tests {
             let changed: HashSet<_> = (1..=i32::try_from(edited).unwrap())
                 .map(|row| (0, row, 1))
                 .collect();
-            model.update_conditional_formatting(&changed);
+            model.reevaluate_conditional_formatting(&changed);
             assert_eq!(survives(&model, last_row), kept, "{edited} cells");
         }
     }
