@@ -1,0 +1,6 @@
+{
+  "name": "zenkai-agent-grok",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": { "@xai-official/grok": "1.0.57" }
+}

@@ -1,0 +1,2 @@
+Review found one unchecked index and a naming nit.
+Index check added in abc1234; nit left as is.

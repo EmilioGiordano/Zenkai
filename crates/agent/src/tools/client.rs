@@ -2,11 +2,12 @@ use crate::tools::approval_text::shown_text;
 
 const VERSION_CHARS: usize = 16;
 
-const KNOWN: [(&str, &str); 4] = [
+const KNOWN: [(&str, &str); 5] = [
     ("claude-code", "Claude Code"),
     ("gemini", "Gemini CLI"),
     ("codex", "Codex"),
     ("opencode", "OpenCode"),
+    ("grok", "Grok"),
 ];
 
 // The client names itself in the MCP handshake, so the text is untrusted: control and

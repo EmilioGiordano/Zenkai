@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -27,6 +28,8 @@ mod agent_chip;
 mod agent_files;
 mod agent_review;
 mod chat_dock;
+mod close_dialog;
+mod closing;
 mod settings_gate;
 mod space_panel;
 
@@ -40,6 +43,7 @@ use crate::agent_settings::{self, AgentConfig, HeldDecision};
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
+use crate::close_prompt::Departure;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, Document, FileJob};
@@ -55,6 +59,7 @@ use crate::panel_width::{Panel, Resize};
 use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
+use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
 use crate::session::Session;
 use crate::space_appearance::SpaceAppearance;
@@ -181,8 +186,12 @@ pub struct Workspace {
     sidebar: SidebarState,
     panels: PanelsState,
     lifecycle: Lifecycle,
+    // Saves ahead of closing a tab or the app; `None` when no close waits on a save.
+    departure: Option<Departure>,
+    close_dialog: Option<close_dialog::CloseDialog>,
     saved_session: Option<Session>,
     cell_refresh: CellRefresh,
+    missed: MissedRefreshes,
     space_panel: Option<space_panel::SpacePanel>,
     agent: AgentLink,
     chat: ChatDock,
@@ -291,8 +300,11 @@ impl Workspace {
             sidebar: SidebarState::new(cx),
             panels: PanelsState::new(cx),
             lifecycle: Lifecycle::Running,
+            departure: None,
+            close_dialog: None,
             saved_session: None,
             cell_refresh: CellRefresh::Idle,
+            missed: MissedRefreshes::default(),
             space_panel: None,
             agent: Self::start_tool_service(window, cx),
             chat: ChatDock::default(),
@@ -388,18 +400,84 @@ impl Workspace {
     }
 
     fn refresh_cells(&mut self, cx: &mut Context<Self>) {
-        // While a recalculation holds the workbook the grid keeps showing the last values;
-        // the recalculation refreshes the cells when it hands the workbook back.
+        self.fetch_cells(CellsRefresh::Merge, cx);
+    }
+
+    fn fetch_cells(&mut self, refresh: CellsRefresh, cx: &mut Context<Self>) {
+        // While the workbook is busy the grid keeps the last values it knows; the refresh
+        // is retried the moment the workbook is free, not only when a batch ends.
         let ranges = self.grid.read(cx).cached_ranges();
         let Some(document) = self.documents.active() else {
             return;
         };
+        let (id, generation) = (document.id, document.generation());
+        let refresh = self.missed.upgraded(generation, refresh);
         let Some(mut cells) = document.cells(&ranges, self.show_formulas) else {
+            self.missed.miss_cells(generation, refresh);
+            self.wait_for_workbook(id, cx);
             return;
         };
         self.previews
-            .apply(document.generation(), document.sheet, &ranges, &mut cells);
-        self.grid.update(cx, |grid, cx| grid.set_cells(cells, cx));
+            .apply(generation, document.sheet, &ranges, &mut cells);
+        self.missed.cells_done(generation);
+        self.grid.update(cx, |grid, cx| match refresh {
+            CellsRefresh::Merge => grid.merge_cells(cells, &ranges, cx),
+            CellsRefresh::Replace => grid.replace_cells(cells, cx),
+        });
+    }
+
+    // A background task waits for the lock, so the UI thread never does, and then hands the
+    // missed refreshes back to the foreground.
+    fn wait_for_workbook(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
+        let Some(document) = self.documents.get(id) else {
+            return;
+        };
+        let generation = document.generation();
+        if !self.missed.start_waiting(generation) {
+            return;
+        }
+        let shared = document.shared_workbook();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move { drop(document::read_shared(&shared)) })
+                .await;
+            let update = this.update(cx, |this, cx| {
+                this.missed.stop_waiting(generation);
+                this.retry_missed(id, cx);
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed while waiting for a workbook");
+            }
+        })
+        .detach();
+    }
+
+    fn retry_missed(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
+        let shown = self.documents.active_id() == Some(id);
+        let Some(document) = self.documents.get_mut(id) else {
+            return;
+        };
+        let generation = document.generation();
+        if document.sheets_stale() {
+            let sheet_before = document.sheet;
+            document.sync_sheets();
+            if document.sheets_stale() {
+                self.wait_for_workbook(id, cx);
+            } else if shown && self.active_sheet() != Some(sheet_before) {
+                self.load_sheet_view(cx);
+            }
+            cx.notify();
+        }
+        if !shown {
+            return;
+        }
+        let missed = self.missed.take(generation);
+        if let Some(refresh) = missed.cells {
+            self.fetch_cells(refresh, cx);
+        }
+        if missed.stats {
+            self.refresh_stats(cx);
+        }
     }
 
     fn refresh_chart(&mut self) {
@@ -771,7 +849,9 @@ impl Workspace {
         if !inline {
             self.stats = None;
         }
+        let (id, generation) = (document.id, document.generation());
         if let Some(wb) = document.workbook() {
+            self.missed.stats_done(generation);
             if inline {
                 self.stats = stats::compute(&wb, sheet, range);
             }
@@ -785,6 +865,9 @@ impl Workspace {
             };
             self.grid
                 .update(cx, |grid, _| grid.set_active_formula(formula));
+        } else {
+            self.missed.miss_stats(generation);
+            self.wait_for_workbook(id, cx);
         }
         if !inline && self.stats_job.request() {
             self.start_stats_job(cx);
@@ -1053,6 +1136,9 @@ impl Workspace {
                 }
                 let sheet_changed =
                     document.sheet != sheet_before || document.sheets.len() != sheets_before;
+                if document.sheets_stale() {
+                    this.wait_for_workbook(id, cx);
+                }
                 this.last_recalc = Some(started.elapsed());
                 if let Some(error) = errors.first() {
                     this.notify(Severity::Error, error.to_string(), cx);
@@ -1433,10 +1519,16 @@ impl Workspace {
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
         // Text typed in the formula bar is entered before saving, as in Excel.
         self.close_formula_bar(true, window, cx);
-        let Some(document) = self.documents.active() else {
+        if let Some(id) = self.documents.active_id() {
+            self.save_document(id, window, cx);
+        }
+    }
+
+    fn save_document(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(document) = self.documents.get(id) else {
+            self.save_ended(id, false, window, cx);
             return;
         };
-        let id = document.id;
         let must_rename =
             !document.unsupported.is_empty() || document.is_macro_enabled() || document.read_only;
         match document.path.clone() {
@@ -1462,10 +1554,15 @@ impl Workspace {
                     cx,
                 );
                 cx.spawn_in(window, async move |this, cx| {
-                    if answer.await == Ok(0)
-                        && let Err(error) = this
-                            .update_in(cx, |this, window, cx| this.save_as_dialog(id, window, cx))
-                    {
+                    let choice = answer.await;
+                    let update = this.update_in(cx, |this, window, cx| {
+                        if choice == Ok(0) {
+                            this.save_as_dialog(id, window, cx)
+                        } else {
+                            this.save_ended(id, false, window, cx)
+                        }
+                    });
+                    if let Err(error) = update {
                         tracing::debug!(%error, "workspace closed during save prompt");
                     }
                 })
@@ -1484,6 +1581,7 @@ impl Workspace {
 
     fn save_as_dialog(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(document) = self.documents.get(id) else {
+            self.save_ended(id, false, window, cx);
             return;
         };
         let directory = document
@@ -1519,11 +1617,11 @@ impl Workspace {
                     None
                 }
             };
-            if let Some(path) = chosen
-                && let Err(error) = this.update_in(cx, |this, window, cx| {
-                    this.confirm_target(id, path, window, cx)
-                })
-            {
+            let update = this.update_in(cx, |this, window, cx| match chosen {
+                Some(path) => this.confirm_target(id, path, window, cx),
+                None => this.save_ended(id, false, window, cx),
+            });
+            if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during save dialog");
             }
         })
@@ -1539,9 +1637,11 @@ impl Workspace {
     ) {
         if files::is_delimited_text(&chosen) {
             self.export_csv(id, chosen, window, cx);
+            self.csv_ended_departure(id, window, cx);
             return;
         }
         let Some(document) = self.documents.get(id) else {
+            self.save_ended(id, false, window, cx);
             return;
         };
         let path = files::xlsx_target(&chosen);
@@ -1555,6 +1655,7 @@ impl Workspace {
         let loses_content = !document.unsupported.is_empty();
         let (title, detail) = if replaces_source && never_overwritten {
             self.notify(Severity::Error, t!("save.original_protected"), cx);
+            self.save_ended(id, false, window, cx);
             return;
         } else if replaces_source && loses_content {
             (
@@ -1578,10 +1679,15 @@ impl Workspace {
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(1)
-                && let Err(error) =
-                    this.update_in(cx, |this, window, cx| this.save_to(id, path, window, cx))
-            {
+            let choice = answer.await;
+            let update = this.update_in(cx, |this, window, cx| {
+                if choice == Ok(1) {
+                    this.save_to(id, path, window, cx)
+                } else {
+                    this.save_ended(id, false, window, cx)
+                }
+            });
+            if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during replace prompt");
             }
         })
@@ -1596,6 +1702,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(document) = self.documents.get_mut(id) else {
+            self.save_ended(id, false, window, cx);
             return;
         };
         let Some(shared) = document.begin_file_job(FileJob::Saving) else {
@@ -1604,6 +1711,7 @@ impl Workspace {
                 FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
             };
             self.notify(Severity::Warning, reason, cx);
+            self.save_ended(id, false, window, cx);
             return;
         };
         let edits_at_start = document.edit_count();
@@ -1639,15 +1747,19 @@ impl Workspace {
                             cx,
                         );
                     }
+                    this.save_ended(id, false, window, cx);
                     return;
                 };
+                let fully_saved;
                 match result {
                     Ok(()) => {
                         if document.path.as_ref() != Some(&path) {
                             document.unsupported.clear();
                         }
                         document.path = Some(path);
-                        document.dirty = document.edit_count() != edits_at_start;
+                        let edited_meanwhile = document.edit_count() != edits_at_start;
+                        document.dirty = edited_meanwhile;
+                        fully_saved = !edited_meanwhile;
                         if shown {
                             window.set_window_title(&document.title());
                         }
@@ -1665,11 +1777,14 @@ impl Workspace {
                         // unless this already was a new location picked in Save As.
                         if asks_again && shown {
                             this.save_as_dialog(id, window, cx);
+                        } else {
+                            this.save_ended(id, false, window, cx);
                         }
                         return;
                     }
                 }
                 this.flush_edits(id, cx);
+                this.save_ended(id, fully_saved, window, cx);
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during save");
@@ -2796,21 +2911,36 @@ impl Workspace {
     fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let access_chip = self.render_access_chip(cx);
         let theme = cx.theme();
-        let mut left = h_flex().gap_3().items_center();
+        let mut left = h_flex()
+            .flex_1()
+            .min_w_0()
+            .overflow_hidden()
+            .gap_3()
+            .items_center();
         if let Some(busy) = &self.busy {
-            left = left.child(div().text_color(theme.primary).child(busy.clone()));
+            left = left.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.primary)
+                    .child(busy.clone()),
+            );
         } else if let Some(notice) = &self.notice {
             let (icon, color) = match notice.severity {
                 Severity::Info => ("ⓘ", theme.muted_foreground),
                 Severity::Warning => ("⚠", theme.warning),
                 Severity::Error => ("✕", theme.danger),
             };
+            let full_text = notice.text.clone();
             left = left.child(
                 h_flex()
+                    .id("status-notice")
+                    .min_w_0()
                     .gap_1()
                     .text_color(color)
-                    .child(icon)
-                    .child(notice.text.clone()),
+                    .tooltip(move |window, cx| Tooltip::new(full_text.clone()).build(window, cx))
+                    .child(div().flex_none().child(icon))
+                    .child(div().min_w_0().truncate().child(notice.text.clone())),
             );
         } else {
             left = left.child(
@@ -2822,6 +2952,8 @@ impl Workspace {
         let automatic =
             cx.global::<AgentConfig>().state.current.agents.permission == PermissionMode::Automatic;
         let mut right = h_flex()
+            .flex_none()
+            .whitespace_nowrap()
             .gap_4()
             .items_center()
             .text_color(theme.muted_foreground)
@@ -2876,6 +3008,7 @@ impl Workspace {
         h_flex()
             .h(px(26.0))
             .px_3()
+            .gap_4()
             .justify_between()
             .items_center()
             .text_xs()
@@ -3088,7 +3221,7 @@ impl Render for Workspace {
                     t!("notice.showing_values")
                 };
                 this.notify(Severity::Info, message, cx);
-                this.refresh_cells(cx);
+                this.fetch_cells(CellsRefresh::Replace, cx);
             }))
             .on_action(
                 cx.listener(|this, _: &PasteValues, window, cx| this.paste_values(window, cx)),
@@ -3106,6 +3239,15 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &CloseFormatDialog, window, cx| {
                 this.close_format_dialog(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ConfirmCloseDialog, window, cx| {
+                this.confirm_close_dialog(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DiscardCloseDialog, window, cx| {
+                this.discard_close_dialog(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CancelCloseDialog, window, cx| {
+                this.cancel_close_dialog(window, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &OpenRecent1, window, cx| this.open_recent(0, window, cx)),
@@ -3433,6 +3575,7 @@ impl Render for Workspace {
             .children(self.render_toast(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
+            .children(self.render_close_dialog(cx))
             .children(self.render_generate())
             .children(self.render_space_panel(window, cx))
     }

@@ -1,0 +1,1 @@
+{"reviewer":"r","verdict":"PASS","summary":"s","findings":[{"path":"crates/x.rs","line":42,"severity":"Low","text":"t","suggestion":"a ```b``` c"}]}

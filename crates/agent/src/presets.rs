@@ -124,7 +124,22 @@ pub const OPENCODE: Preset = Preset {
     ),
 };
 
-pub const PRESETS: [Preset; 4] = [CLAUDE, GEMINI, CODEX, OPENCODE];
+pub const GROK: Preset = Preset {
+    id: "grok",
+    name: "Grok",
+    package: "@xai-official/grok@1.0.57",
+    extra_args: &["agent", "stdio"],
+    entry: Entry::Node,
+    min_node_major: 20,
+    login_command: "grok",
+    provider: "xAI",
+    lock: (
+        include_str!("../lockfiles/grok/package.json"),
+        include_str!("../lockfiles/grok/package-lock.json"),
+    ),
+};
+
+pub const PRESETS: [Preset; 5] = [CLAUDE, GEMINI, CODEX, OPENCODE, GROK];
 
 impl Preset {
     pub fn for_package(package: &str) -> Option<Preset> {
@@ -178,6 +193,12 @@ mod tests {
         let opencode = OPENCODE.server();
         assert_eq!(opencode.command, "npx");
         assert_eq!(opencode.args, ["-y", "opencode-ai@1.18.32", "acp"]);
+        let grok = GROK.server();
+        assert_eq!(grok.command, "npx");
+        assert_eq!(
+            grok.args,
+            ["-y", "@xai-official/grok@1.0.57", "agent", "stdio"]
+        );
         for preset in PRESETS {
             assert!(
                 preset

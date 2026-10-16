@@ -2372,18 +2372,7 @@ impl<'a> Model<'a> {
             if let Some(formula) = self.formula_without_prefix(&value) {
                 let formula_index =
                     self.set_cell_with_formula(sheet, row, column, formula, new_style_index)?;
-                // Update the style if needed
-                let cell = CellReferenceIndex { sheet, row, column };
-                let (parsed_formula, _static_result) =
-                    &self.parsed_formulas[sheet as usize][formula_index as usize];
-                if let Some(units) = self.compute_node_units(parsed_formula, &cell) {
-                    let new_style_index = self
-                        .workbook
-                        .styles
-                        .get_style_with_format(new_style_index, &units.get_num_fmt())?;
-                    let style = self.workbook.styles.get_style(new_style_index)?;
-                    self.set_cell_style(sheet, row, column, &style)?;
-                }
+                self.apply_formula_units(sheet, row, column, formula_index, new_style_index)?;
             } else {
                 // The list of currencies is '$', '€' and the local currency
                 let mut currencies = vec!["$", "€"];
@@ -2433,6 +2422,51 @@ impl<'a> Model<'a> {
             }
         }
         Ok(())
+    }
+
+    // The number format a formula inherits from the cells it reads.
+    fn apply_formula_units(
+        &mut self,
+        sheet: u32,
+        row: i32,
+        column: i32,
+        formula_index: i32,
+        style_index: i32,
+    ) -> Result<(), String> {
+        let cell = CellReferenceIndex { sheet, row, column };
+        let (parsed_formula, _static_result) =
+            &self.parsed_formulas[sheet as usize][formula_index as usize];
+        if let Some(units) = self.compute_node_units(parsed_formula, &cell) {
+            let new_style_index = self
+                .workbook
+                .styles
+                .get_style_with_format(style_index, &units.get_num_fmt())?;
+            let style = self.workbook.styles.get_style(new_style_index)?;
+            self.set_cell_style(sheet, row, column, &style)?;
+        }
+        Ok(())
+    }
+
+    // `set_user_input` for a scalar formula that is already stored, so no text is parsed.
+    pub(crate) fn set_user_formula_index(
+        &mut self,
+        sheet: u32,
+        row: i32,
+        column: i32,
+        formula_index: i32,
+    ) -> Result<(), String> {
+        self.prepare_cell_for_user_input(sheet, row, column)?;
+        let mut style_index = self.get_cell_style_index(sheet, row, column)?;
+        if self.workbook.styles.style_is_quote_prefix(style_index) {
+            style_index = self
+                .workbook
+                .styles
+                .get_style_without_quote_prefix(style_index)?;
+        }
+        self.workbook
+            .worksheet_mut(sheet)?
+            .set_cell_with_formula(row, column, formula_index, style_index)?;
+        self.apply_formula_units(sheet, row, column, formula_index, style_index)
     }
 
     /// Sets an array formula in an area (CSE formula)

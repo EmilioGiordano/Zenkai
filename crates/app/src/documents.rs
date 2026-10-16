@@ -10,6 +10,8 @@ use crate::entry::{Entry, Link, LinkStatus, Slot};
 use crate::files;
 use crate::spaces::{SpaceId, Spaces};
 
+pub use unsaved::Unsaved;
+
 mod restore;
 #[cfg(test)]
 mod session_fuzz;
@@ -18,6 +20,7 @@ mod session_property;
 mod spaces;
 #[cfg(test)]
 mod test_support;
+mod unsaved;
 
 const MAX_CLOSED: usize = 20;
 

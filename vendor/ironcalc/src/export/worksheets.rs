@@ -19,6 +19,8 @@
 //! </c>
 //! ```
 //! Formula in F6 would then be 'A6+C6'
+//! A run of cells down a column that hold the same formula is written this way, so the
+//! text is stringified once for the run instead of once per cell.
 use std::collections::HashMap;
 use std::io::{self, Write};
 
@@ -63,6 +65,53 @@ fn get_formula_attribute(
     };
     let formula = &to_excel_string(parsed_formula, &cell_ref);
     escape_xml(formula).to_string()
+}
+
+#[derive(Clone, Copy)]
+enum Shared {
+    No,
+    Anchor { si: i32, last_row: i32 },
+    Follower { si: i32 },
+}
+
+// Cells down a column that hold the same formula have it shifted by their row, which
+// is what a shared formula stands for. The first cell of a run of two or more writes the
+// text and the range, the rest only point at it.
+fn shared_formula_of(
+    worksheet: &Worksheet,
+    row: i32,
+    column: i32,
+    cell: &Cell,
+    runs: &mut HashMap<i32, i32>,
+    next_si: &mut i32,
+) -> Shared {
+    let Cell::CellFormula { f, .. } = cell else {
+        return Shared::No;
+    };
+    let formulas = &worksheet.shared_formulas;
+    let same_formula = |row: i32| {
+        matches!(
+            worksheet.sheet_data.get(row, column),
+            Some(Cell::CellFormula { f: other, .. })
+                if other == f || formulas.get(*other as usize) == formulas.get(*f as usize)
+        )
+    };
+    if row > 1 && same_formula(row - 1) {
+        if let Some(si) = runs.get(&column) {
+            return Shared::Follower { si: *si };
+        }
+    }
+    let mut last_row = row;
+    while last_row < i32::MAX && same_formula(last_row + 1) {
+        last_row += 1;
+    }
+    if last_row == row {
+        return Shared::No;
+    }
+    let si = *next_si;
+    *next_si += 1;
+    runs.insert(column, si);
+    Shared::Anchor { si, last_row }
 }
 
 /// Writes the worksheet part row by row, so a large sheet is never held whole in memory
@@ -219,6 +268,8 @@ pub fn write_worksheet_xml<W: Write>(
     )?;
 
     let sheet_name = worksheet.get_name();
+    let mut shared_runs = HashMap::new();
+    let mut next_si = 0;
     for row_index in &worksheet.sheet_data.rows_sorted() {
         let row_style_str = match row_style_dict.get(row_index) {
             Some(row_style) => {
@@ -240,6 +291,14 @@ pub fn write_worksheet_xml<W: Write>(
         };
         write!(writer, "<row r=\"{row_index}\"{row_style_str}>")?;
         for (column_index, cell) in worksheet.sheet_data.row_cells_sorted(*row_index) {
+            let shared = shared_formula_of(
+                worksheet,
+                *row_index,
+                column_index,
+                cell,
+                &mut shared_runs,
+                &mut next_si,
+            );
             write_cell(
                 writer,
                 &sheet_name,
@@ -247,6 +306,7 @@ pub fn write_worksheet_xml<W: Write>(
                 column_index,
                 cell,
                 parsed_formulas,
+                shared,
             )?;
         }
         write!(writer, "</row>")?;
@@ -269,6 +329,7 @@ fn write_cell<W: Write>(
     column_index: i32,
     cell: &Cell,
     parsed_formulas: &[(Node, StaticResult)],
+    shared: Shared,
 ) -> io::Result<()> {
     let column_name = number_to_column(column_index).unwrap();
     let cell_name = format!("{column_name}{row_index}");
@@ -279,6 +340,14 @@ fn write_cell<W: Write>(
             column_index,
             &parsed_formulas[*f as usize].0,
         )
+    };
+    let formula_xml = |f: &i32| match shared {
+        Shared::No => format!("<f>{}</f>", formula_of(f)),
+        Shared::Anchor { si, last_row } => format!(
+            "<f t=\"shared\" ref=\"{cell_name}:{column_name}{last_row}\" si=\"{si}\">{}</f>",
+            formula_of(f)
+        ),
+        Shared::Follower { si } => format!("<f t=\"shared\" si=\"{si}\"/>"),
     };
     // The parts of an array formula: its text, style, spill range and dynamic marker,
     // or None for one this writer skips.
@@ -352,11 +421,11 @@ fn write_cell<W: Write>(
             //   <v>1</v>
             // </c>
             let style = get_cell_style_attribute(*s);
-            let formula = formula_of(f);
+            let formula = formula_xml(f);
             let b = i32::from(*v);
             write!(
                 writer,
-                "<c r=\"{cell_name}\" t=\"b\"{style}><f>{formula}</f><v>{b}</v></c>"
+                "<c r=\"{cell_name}\" t=\"b\"{style}>{formula}<v>{b}</v></c>"
             )
         }
         Cell::CellFormula {
@@ -369,11 +438,11 @@ fn write_cell<W: Write>(
             //   <f>A5+C3</f>
             //   <v>123</v>
             // </c>
-            let formula = formula_of(f);
+            let formula = formula_xml(f);
             let style = get_cell_style_attribute(*s);
             write!(
                 writer,
-                "<c r=\"{cell_name}\"{style}><f>{formula}</f><v>{v}</v></c>"
+                "<c r=\"{cell_name}\"{style}>{formula}<v>{v}</v></c>"
             )
         }
         Cell::CellFormula {
@@ -385,12 +454,12 @@ fn write_cell<W: Write>(
             //   <f>CONCATENATE(A1, A2)</f>
             //   <v>Hello world!</v>
             // </c>
-            let formula = formula_of(f);
+            let formula = formula_xml(f);
             let style = get_cell_style_attribute(*s);
             let escaped_v = escape_xml(v);
             write!(
                 writer,
-                "<c r=\"{cell_name}\" t=\"str\"{style}><f>{formula}</f><v>{escaped_v}</v></c>"
+                "<c r=\"{cell_name}\" t=\"str\"{style}>{formula}<v>{escaped_v}</v></c>"
             )
         }
         Cell::CellFormula {
@@ -403,11 +472,11 @@ fn write_cell<W: Write>(
             //   <f>A1/A3<f/>
             //   <v>#DIV/0!</v>
             // </c>
-            let formula = formula_of(f);
+            let formula = formula_xml(f);
             let style = get_cell_style_attribute(*s);
             write!(
                 writer,
-                "<c r=\"{cell_name}\" t=\"e\"{style}><f>{formula}</f><v>{ei}</v></c>"
+                "<c r=\"{cell_name}\" t=\"e\"{style}>{formula}<v>{ei}</v></c>"
             )
         }
         Cell::SpillCell(spill) => {
