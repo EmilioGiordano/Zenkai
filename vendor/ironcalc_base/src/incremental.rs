@@ -45,7 +45,7 @@ pub(crate) fn circular_cells_fit(count: usize) -> bool {
 
 // The most cells kept as tainted by a cycle (12 bytes each, about 6 MB with the set's
 // headroom). Past it, or past the walk limit, every edit that needs the set is evaluated
-// in full without walking again.
+// in full without walking again, as long as the rebuilt index finds the same cycle cells.
 pub(crate) const MAX_TAINTED_CELLS: usize = 250_000;
 
 enum Taint {
@@ -62,8 +62,8 @@ pub(crate) struct Dependencies {
     // The cells and everything that reads them, worked out the first time an edit needs it.
     // An edit that gives a cell a formula may add readers, so it drops a known set; one that
     // only writes a value or clears a cell cannot, and the stale entries left by cleared
-    // formulas only make the check more cautious. `TooMany` stays until the index is rebuilt:
-    // readers are only ever added to the index in between.
+    // formulas only make the check more cautious. `TooMany` stays while the cycle cells are
+    // the same, also across a rebuild: it only forces a full evaluation, so keeping it is safe.
     tainted: Taint,
 }
 
@@ -73,13 +73,21 @@ fn reference((sheet, row, column): CellKey) -> CellReferenceIndex {
 
 impl Model<'_> {
     pub(crate) fn evaluate_indexed(&mut self) {
+        let previous = self.dependencies.take();
         self.evaluate();
         if self.circular_hits != 0 {
             // Totals kept while a cell could read as #CIRC! are not worth trusting.
             self.criteria_ranges = CriteriaRanges::new();
         }
         if circular_cells_fit(self.circular_cells.len()) {
-            self.dependencies = Some(Box::new(self.build_dependencies()));
+            let mut rebuilt = self.build_dependencies();
+            if let Some(previous) = previous {
+                let same_cycles = previous.circular == rebuilt.circular;
+                if same_cycles && matches!(previous.tainted, Taint::TooMany) {
+                    rebuilt.tainted = Taint::TooMany;
+                }
+            }
+            self.dependencies = Some(Box::new(rebuilt));
         }
     }
 
@@ -125,6 +133,7 @@ impl Model<'_> {
             return;
         };
         if self.edits_touch_spills(&dependencies.spills, edited) {
+            self.dependencies = Some(dependencies);
             self.evaluate_indexed();
             return;
         }
@@ -140,6 +149,7 @@ impl Model<'_> {
         dependencies.index.sort();
 
         let Some(affected) = dependencies.index.affected_by(edited) else {
+            self.dependencies = Some(dependencies);
             self.evaluate_indexed();
             return;
         };
@@ -152,6 +162,7 @@ impl Model<'_> {
         if dirty.iter().any(|cell| self.is_array_formula(*cell))
             || Self::edits_reach_cycles(&mut dependencies, edited, &dirty, MAX_TAINTED_CELLS)
         {
+            self.dependencies = Some(dependencies);
             self.evaluate_indexed();
             return;
         }
@@ -174,6 +185,7 @@ impl Model<'_> {
         if self.circular_hits != circular_hits
             || dirty.iter().any(|cell| self.is_array_formula(*cell))
         {
+            self.dependencies = Some(dependencies);
             self.evaluate_indexed();
             return;
         }
@@ -281,6 +293,7 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::{Model, Taint};
+    use crate::test::util::new_empty_model;
     use crate::UserModel;
 
     #[test]
@@ -321,5 +334,31 @@ mod tests {
             usize::MAX
         ));
         assert!(matches!(rebuilt.tainted, Taint::Cells(_)));
+    }
+
+    #[test]
+    fn too_many_tainted_cells_survive_a_rebuild_while_the_cycle_cells_are_the_same() {
+        let mut model = new_empty_model();
+        model._set("A1", "=A2+1");
+        model._set("A2", "=A1+1");
+        model._set("B1", "=1");
+        model.evaluate_indexed();
+        assert!(!model.circular_cells.is_empty());
+        model.dependencies.as_mut().unwrap().tainted = Taint::TooMany;
+
+        model.evaluate_indexed();
+        let dependencies = model.dependencies.as_ref().unwrap();
+        assert!(matches!(dependencies.tainted, Taint::TooMany));
+
+        model._set("B1", "=2");
+        model.evaluate_indexed();
+        let dependencies = model.dependencies.as_ref().unwrap();
+        assert!(matches!(dependencies.tainted, Taint::TooMany));
+
+        model._set("A1", "1");
+        model.evaluate_indexed();
+        let dependencies = model.dependencies.as_ref().unwrap();
+        assert!(dependencies.circular.is_empty());
+        assert!(matches!(dependencies.tainted, Taint::Unknown));
     }
 }
