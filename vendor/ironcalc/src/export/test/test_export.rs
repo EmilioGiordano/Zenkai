@@ -402,3 +402,56 @@ fn a_shared_string_item_is_escaped() {
         "<si><t>a&lt;b &amp; _x0001_</t></si>"
     );
 }
+
+#[test]
+fn a_run_of_the_same_formula_is_written_as_a_shared_formula() {
+    let mut model = new_empty_model();
+    for row in 1..=6 {
+        model.set_user_input(0, row, 1, row.to_string()).unwrap();
+        model
+            .set_user_input(0, row, 2, format!("=A{row}*2"))
+            .unwrap();
+        model
+            .set_user_input(0, row, 3, format!("=SUM(A$1:A{row})"))
+            .unwrap();
+    }
+    model.set_user_input(0, 4, 2, "=A4*3".to_string()).unwrap();
+    model.set_user_input(0, 5, 3, "=B5".to_string()).unwrap();
+    model.evaluate();
+
+    let mut written = Vec::new();
+    crate::export::write_worksheet_xml(
+        &mut written,
+        &model.workbook.worksheets[0],
+        &model.parsed_formulas[0],
+        "A1:C6",
+        true,
+    )
+    .unwrap();
+    let part = String::from_utf8(written).unwrap();
+    assert!(part.contains(r#"<f t="shared" ref="B1:B3" si="0">A1*2</f>"#));
+    assert!(part.contains(r#"<c r="B2"><f t="shared" si="0"/><v>4</v></c>"#));
+    assert!(part.contains(r#"<c r="B4"><f>A4*3</f><v>12</v></c>"#));
+    assert!(part.contains(r#"<f t="shared" ref="B5:B6" si="2">A5*2</f>"#));
+    assert!(part.contains(r#"<f t="shared" ref="C1:C4" si="1">SUM(A$1:A1)</f>"#));
+    assert!(part.contains(r#"<c r="C5"><f>B5</f><v>10</v></c>"#));
+
+    let temp_file_name = "temp_file_test_shared_formulas.xlsx";
+    save_to_xlsx(&model, temp_file_name).unwrap();
+    let reopened = load_from_xlsx(temp_file_name, "en", "UTC", "en").unwrap();
+    fs::remove_file(temp_file_name).unwrap();
+    for row in 1..=6 {
+        for column in 1..=3 {
+            assert_eq!(
+                reopened.get_cell_formula(0, row, column).unwrap(),
+                model.get_cell_formula(0, row, column).unwrap(),
+                "formula at {row},{column}"
+            );
+            assert_eq!(
+                reopened.get_formatted_cell_value(0, row, column).unwrap(),
+                model.get_formatted_cell_value(0, row, column).unwrap(),
+                "value at {row},{column}"
+            );
+        }
+    }
+}

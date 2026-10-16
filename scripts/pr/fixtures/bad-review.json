@@ -1,0 +1,1 @@
+{"reviewer":"quality-reviewer","verdict":"PASS","summary":"a\nb\nc\nd\ne\nf\ng","findings":[{"path":"x.rs","line":0,"severity":"Huge","text":"a\nb\nc\nd"}]}
