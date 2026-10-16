@@ -379,6 +379,14 @@ pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
                 height,
                 ..
             }
+            | Diff::FillFormula {
+                sheet,
+                row,
+                column,
+                width,
+                height,
+                ..
+            }
             | Diff::RangeClearContents {
                 sheet,
                 row,

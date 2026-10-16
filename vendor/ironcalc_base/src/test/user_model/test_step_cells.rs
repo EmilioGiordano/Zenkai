@@ -50,6 +50,21 @@ fn a_cleared_range_reaches_its_area() {
 }
 
 #[test]
+fn a_filled_formula_reaches_its_area() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 2, "=A1+1").unwrap();
+    let target = crate::expressions::types::Area {
+        sheet: 0,
+        row: 2,
+        column: 2,
+        width: 1,
+        height: 5,
+    };
+    assert!(model.fill_formula((1, 2), &target).unwrap());
+    assert_eq!(areas(&model.undo_cells().unwrap()), vec![(0, 2, 2, 1, 5)]);
+}
+
+#[test]
 fn inserted_rows_reach_their_whole_sheet() {
     let mut model = new_empty_user_model();
     model.insert_rows(0, 2, 1).unwrap();
