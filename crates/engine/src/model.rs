@@ -263,25 +263,34 @@ impl CachedModel {
     }
 
     // `None` when the sheet must be walked again: a sheet that had no cells may still hold
-    // empty rows, which the walk counts, and a new dynamic array spills past its area.
+    // empty rows, which the walk counts. A dynamic array written in an area has already
+    // spilled, so its result is read too, and the sheet is marked as holding spills.
     fn grown(&self, sheet: SheetId, areas: &[Range], extent: Extent) -> Option<Extent> {
         let last = extent.last?;
         let ws = self.model.get_model().workbook.worksheet(sheet.0).ok()?;
         let mut end = last;
-        let mut dynamic = false;
+        let mut spilling = Vec::new();
+        let mut grow = |row: i32, col: i32| {
+            let at = position(row, col);
+            end = CellPos::new(end.row.max(at.row), end.col.max(at.col));
+        };
         for area in areas {
             for_each_within(&ws.sheet_data, *area, |row, col, cell| {
-                let at = position(row, col);
-                end = CellPos::new(end.row.max(at.row), end.col.max(at.col));
-                dynamic |= is_dynamic(cell);
+                grow(row, col);
+                if let Some((width, height)) = cell.dynamic_range() {
+                    let last_row = row.saturating_add(height.max(1) - 1);
+                    let last_col = col.saturating_add(width.max(1) - 1);
+                    spilling.push(Range::new(position(row, col), position(last_row, last_col)));
+                }
             });
         }
-        if dynamic && !extent.spills {
-            return None;
+        let dynamic = !spilling.is_empty();
+        for spill in spilling {
+            for_each_within(&ws.sheet_data, spill, |row, col, _| grow(row, col));
         }
         Some(Extent {
             last: Some(end),
-            spills: extent.spills,
+            spills: extent.spills || dynamic,
         })
     }
 
@@ -371,8 +380,10 @@ mod tests {
         let mut model = two_filled_sheets();
         type_at(&mut model, 1, "A1", "=SEQUENCE(3)");
         assert_eq!(last_recalculation(&model), Recalculation::Full);
-        assert!(!model.cache().contains_key(&SheetId(1)));
         assert!(model.cache().contains_key(&SheetId(0)));
+        let extent = model.cache().get(&SheetId(1)).copied().unwrap();
+        assert_eq!(extent.last, CellPos::parse_a1("A3"));
+        assert!(extent.spills);
         assert_eq!(model.used_end(SheetId(1)), CellPos::parse_a1("A3").unwrap());
         model
     }
@@ -384,6 +395,16 @@ mod tests {
         bold(&mut model, 0, "C5");
         model.edit_keeping_cells(|model| model.set_rows_height(1, 2, 2, 40.0).unwrap());
         assert_eq!(model.cache().len(), 2);
+        assert_cached_ends_match_a_walk(&model);
+    }
+
+    #[test]
+    fn a_dynamic_formula_written_below_the_used_area_grows_the_end_to_its_spill() {
+        let mut model = two_filled_sheets();
+        type_at(&mut model, 0, "B6", "=SEQUENCE(2,3)");
+        let extent = model.cache().get(&SheetId(0)).copied().unwrap();
+        assert_eq!(extent.last, CellPos::parse_a1("D7"));
+        assert!(extent.spills);
         assert_cached_ends_match_a_walk(&model);
     }
 
