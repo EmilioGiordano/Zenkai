@@ -56,6 +56,7 @@ use crate::panel_width::{Panel, Resize};
 use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
+use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
 use crate::session::Session;
 use crate::space_appearance::SpaceAppearance;
@@ -184,6 +185,7 @@ pub struct Workspace {
     lifecycle: Lifecycle,
     saved_session: Option<Session>,
     cell_refresh: CellRefresh,
+    missed: MissedRefreshes,
     space_panel: Option<space_panel::SpacePanel>,
     agent: AgentLink,
     chat: ChatDock,
@@ -294,6 +296,7 @@ impl Workspace {
             lifecycle: Lifecycle::Running,
             saved_session: None,
             cell_refresh: CellRefresh::Idle,
+            missed: MissedRefreshes::default(),
             space_panel: None,
             agent: Self::start_tool_service(window, cx),
             chat: ChatDock::default(),
@@ -389,18 +392,84 @@ impl Workspace {
     }
 
     fn refresh_cells(&mut self, cx: &mut Context<Self>) {
-        // While a recalculation holds the workbook the grid keeps showing the last values;
-        // the recalculation refreshes the cells when it hands the workbook back.
+        self.fetch_cells(CellsRefresh::Merge, cx);
+    }
+
+    fn fetch_cells(&mut self, refresh: CellsRefresh, cx: &mut Context<Self>) {
+        // While the workbook is busy the grid keeps the last values it knows; the refresh
+        // is retried the moment the workbook is free, not only when a batch ends.
         let ranges = self.grid.read(cx).cached_ranges();
         let Some(document) = self.documents.active() else {
             return;
         };
+        let (id, generation) = (document.id, document.generation());
+        let refresh = self.missed.upgraded(generation, refresh);
         let Some(mut cells) = document.cells(&ranges, self.show_formulas) else {
+            self.missed.miss_cells(generation, refresh);
+            self.wait_for_workbook(id, cx);
             return;
         };
         self.previews
-            .apply(document.generation(), document.sheet, &ranges, &mut cells);
-        self.grid.update(cx, |grid, cx| grid.set_cells(cells, cx));
+            .apply(generation, document.sheet, &ranges, &mut cells);
+        self.missed.cells_done(generation);
+        self.grid.update(cx, |grid, cx| match refresh {
+            CellsRefresh::Merge => grid.merge_cells(cells, &ranges, cx),
+            CellsRefresh::Replace => grid.replace_cells(cells, cx),
+        });
+    }
+
+    // A background task waits for the lock, so the UI thread never does, and then hands the
+    // missed refreshes back to the foreground.
+    fn wait_for_workbook(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
+        let Some(document) = self.documents.get(id) else {
+            return;
+        };
+        let generation = document.generation();
+        if !self.missed.start_waiting(generation) {
+            return;
+        }
+        let shared = document.shared_workbook();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move { drop(document::read_shared(&shared)) })
+                .await;
+            let update = this.update(cx, |this, cx| {
+                this.missed.stop_waiting(generation);
+                this.retry_missed(id, cx);
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed while waiting for a workbook");
+            }
+        })
+        .detach();
+    }
+
+    fn retry_missed(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
+        let shown = self.documents.active_id() == Some(id);
+        let Some(document) = self.documents.get_mut(id) else {
+            return;
+        };
+        let generation = document.generation();
+        if document.sheets_stale() {
+            let sheet_before = document.sheet;
+            document.sync_sheets();
+            if document.sheets_stale() {
+                self.wait_for_workbook(id, cx);
+            } else if shown && self.active_sheet() != Some(sheet_before) {
+                self.load_sheet_view(cx);
+            }
+            cx.notify();
+        }
+        if !shown {
+            return;
+        }
+        let missed = self.missed.take(generation);
+        if let Some(refresh) = missed.cells {
+            self.fetch_cells(refresh, cx);
+        }
+        if missed.stats {
+            self.refresh_stats(cx);
+        }
     }
 
     fn refresh_chart(&mut self) {
@@ -772,7 +841,9 @@ impl Workspace {
         if !inline {
             self.stats = None;
         }
+        let (id, generation) = (document.id, document.generation());
         if let Some(wb) = document.workbook() {
+            self.missed.stats_done(generation);
             if inline {
                 self.stats = stats::compute(&wb, sheet, range);
             }
@@ -786,6 +857,9 @@ impl Workspace {
             };
             self.grid
                 .update(cx, |grid, _| grid.set_active_formula(formula));
+        } else {
+            self.missed.miss_stats(generation);
+            self.wait_for_workbook(id, cx);
         }
         if !inline && self.stats_job.request() {
             self.start_stats_job(cx);
@@ -1054,6 +1128,9 @@ impl Workspace {
                 }
                 let sheet_changed =
                     document.sheet != sheet_before || document.sheets.len() != sheets_before;
+                if document.sheets_stale() {
+                    this.wait_for_workbook(id, cx);
+                }
                 this.last_recalc = Some(started.elapsed());
                 if let Some(error) = errors.first() {
                     this.notify(Severity::Error, error.to_string(), cx);
@@ -3107,7 +3184,7 @@ impl Render for Workspace {
                     t!("notice.showing_values")
                 };
                 this.notify(Severity::Info, message, cx);
-                this.refresh_cells(cx);
+                this.fetch_cells(CellsRefresh::Replace, cx);
             }))
             .on_action(
                 cx.listener(|this, _: &PasteValues, window, cx| this.paste_values(window, cx)),
