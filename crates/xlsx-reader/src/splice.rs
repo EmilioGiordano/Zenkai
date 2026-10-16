@@ -55,8 +55,23 @@ pub struct ReachingAnchor {
     pub text: String,
 }
 
-fn unusable(message: impl ToString) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.to_string())
+// The part cannot be spliced but may be fine to read: a save writes this sheet whole and
+// keeps copying from the file. Other errors, such as a failed inflate, say the file is bad.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct CannotSplice(String);
+
+pub fn cannot_splice(message: impl ToString) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        CannotSplice(message.to_string()),
+    )
+}
+
+pub fn is_cannot_splice(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<CannotSplice>())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -138,12 +153,12 @@ impl<R: Read> Scanner<R> {
         loop {
             let window = self.input.available(1)?;
             if window.is_empty() {
-                return Err(unusable("the sheet ends inside a formula"));
+                return Err(cannot_splice("the sheet ends inside a formula"));
             }
             let found = window.iter().position(|b| *b == b'<');
             let count = found.unwrap_or(window.len());
             if held.len() + count > MAX_FORMULA_BYTES {
-                return Err(unusable("a formula is longer than Excel allows"));
+                return Err(cannot_splice("a formula is longer than Excel allows"));
             }
             held.extend_from_slice(&window[..count]);
             self.input.consume(count);
@@ -164,13 +179,13 @@ impl<R: Read> Scanner<R> {
         } else if head.starts_with(b"<?") {
             (Markup::Other, b"?>", 2)
         } else if head.starts_with(b"<!") {
-            return Err(unusable("a DTD or CDATA section in a sheet"));
+            return Err(cannot_splice("a DTD or CDATA section in a sheet"));
         } else if head.starts_with(b"</") {
             (Markup::End, b">", 0)
         } else if head.starts_with(b"<") {
             (Markup::Start, b">", 0)
         } else {
-            return Err(unusable("the sheet ends where a tag was expected"));
+            return Err(cannot_splice("the sheet ends where a tag was expected"));
         };
         // Only attribute values are quoted; a comment may hold a lone apostrophe.
         let honor_quotes = kind != Markup::Other;
@@ -178,7 +193,7 @@ impl<R: Read> Scanner<R> {
         loop {
             let window = self.input.available(1)?;
             if window.is_empty() {
-                return Err(unusable("the sheet ends inside a tag"));
+                return Err(cannot_splice("the sheet ends inside a tag"));
             }
             let mut finished = None;
             for (at, &byte) in window.iter().enumerate() {
@@ -198,7 +213,7 @@ impl<R: Read> Scanner<R> {
             }
             let count = finished.unwrap_or(window.len());
             if self.tag.len() + count > MAX_TAG_BYTES {
-                return Err(unusable("a tag is longer than a sheet holds"));
+                return Err(cannot_splice("a tag is longer than a sheet holds"));
             }
             self.tag.extend_from_slice(&window[..count]);
             self.input.consume(count);
@@ -276,25 +291,25 @@ fn attribute<'t>(tag: &'t [u8], name: &[u8]) -> io::Result<Option<&'t str>> {
     let Some((start, end)) = attribute_span(tag, name) else {
         return Ok(None);
     };
-    let value = std::str::from_utf8(&tag[start..end]).map_err(unusable)?;
+    let value = std::str::from_utf8(&tag[start..end]).map_err(cannot_splice)?;
     if value.contains('&') {
-        return Err(unusable("an escaped reference in a sheet"));
+        return Err(cannot_splice("an escaped reference in a sheet"));
     }
     Ok(Some(value))
 }
 
 fn to_row(row: i32) -> io::Result<u32> {
     if !is_valid_row(row) {
-        return Err(unusable("a row outside the sheet"));
+        return Err(cannot_splice("a row outside the sheet"));
     }
-    u32::try_from(row).map_err(unusable)
+    u32::try_from(row).map_err(cannot_splice)
 }
 
 fn to_column(column: i32) -> io::Result<u32> {
     if !is_valid_column_number(column) {
-        return Err(unusable("a column outside the sheet"));
+        return Err(cannot_splice("a column outside the sheet"));
     }
-    u32::try_from(column).map_err(unusable)
+    u32::try_from(column).map_err(cannot_splice)
 }
 
 // What an <f> start tag in a dropped row says about a range it covers.
@@ -311,20 +326,20 @@ fn ranged_formula(tag: &[u8]) -> io::Result<Option<RangedFormula>> {
     let kind = match attribute(tag, b"t")? {
         Some("shared") => {
             let si = attribute(tag, b"si")?
-                .ok_or_else(|| unusable("a shared formula without si"))?
+                .ok_or_else(|| cannot_splice("a shared formula without si"))?
                 .parse::<i32>()
-                .map_err(unusable)?;
+                .map_err(cannot_splice)?;
             AnchorKind::Shared { si }
         }
         Some("array" | "dataTable") => AnchorKind::Ranged,
         _ => return Ok(None),
     };
     let (row1, column1, row2, column2) =
-        parse_range(range).ok_or_else(|| unusable("a formula range that does not read"))?;
+        parse_range(range).ok_or_else(|| cannot_splice("a formula range that does not read"))?;
     let first = (to_row(row1)?, to_column(column1)?);
     let last = (to_row(row2)?, to_column(column2)?);
     if last.0 < first.0 || last.1 < first.1 {
-        return Err(unusable("a formula range that runs backwards"));
+        return Err(cannot_splice("a formula range that runs backwards"));
     }
     Ok(Some(RangedFormula { kind, first, last }))
 }
@@ -338,7 +353,9 @@ struct SeenAnchors {
 impl SeenAnchors {
     fn slot(si: i32) -> io::Result<(usize, u64)> {
         if !(0..MAX_SHARED_INDEX).contains(&si) {
-            return Err(unusable("a shared formula index outside what Excel writes"));
+            return Err(cannot_splice(
+                "a shared formula index outside what Excel writes",
+            ));
         }
         let bit = si as usize;
         Ok((bit / 64, 1 << (bit % 64)))
@@ -437,27 +454,31 @@ impl<F> Splice<'_, F> {
         if self.covered(first.0, last.0) {
             if let AnchorKind::Shared { si } = kind {
                 if self.dropped_groups.len() >= MAX_DROPPED_GROUPS {
-                    return Err(unusable("too many shared formulas in the rows written again"));
+                    return Err(cannot_splice(
+                        "too many shared formulas in the rows written again",
+                    ));
                 }
                 self.dropped_groups.insert(si);
             }
             return Ok(false);
         }
         if cell != Some(first) {
-            return Err(unusable("a formula range that does not start at its cell"));
+            return Err(cannot_splice(
+                "a formula range that does not start at its cell",
+            ));
         }
         if self.reaching.len() >= MAX_REACHING_ANCHORS {
-            return Err(unusable("too many formulas reach the rows kept"));
+            return Err(cannot_splice("too many formulas reach the rows kept"));
         }
         let mut text = Vec::new();
         if !empty {
             scan.text_into(&mut text)?;
             if scan.markup()? != Markup::End || tag_name(&scan.tag) != b"f" {
-                return Err(unusable("a formula holds more than its text"));
+                return Err(cannot_splice("a formula holds more than its text"));
             }
         }
-        let text = std::str::from_utf8(&text).map_err(unusable)?;
-        let text = quick_xml::escape::unescape(text).map_err(unusable)?;
+        let text = std::str::from_utf8(&text).map_err(cannot_splice)?;
+        let text = quick_xml::escape::unescape(text).map_err(cannot_splice)?;
         self.reaching.push(ReachingAnchor {
             row: first.0,
             column: first.1,
@@ -474,15 +495,15 @@ impl<F> Splice<'_, F> {
         let mut cell = None;
         loop {
             if !scan.text(None)? {
-                return Err(unusable("the sheet ends inside a row"));
+                return Err(cannot_splice("the sheet ends inside a row"));
             }
             let kind = scan.markup()?;
             let name = tag_name(&scan.tag);
             let (is_cell, is_formula, is_row) = (name == b"c", name == b"f", name == b"row");
             match kind {
-                Markup::Other => return Err(unusable("a comment inside a row")),
+                Markup::Other => return Err(cannot_splice("a comment inside a row")),
                 Markup::End if depth == 0 && is_row => return Ok(()),
-                Markup::End if depth == 0 => return Err(unusable("a row is not closed")),
+                Markup::End if depth == 0 => return Err(cannot_splice("a row is not closed")),
                 Markup::End => depth -= 1,
                 Markup::Start | Markup::Empty => {
                     if is_cell {
@@ -491,8 +512,8 @@ impl<F> Splice<'_, F> {
                             None => None,
                         };
                     }
-                    let closed = is_formula
-                        && self.dropped_formula(scan, cell, kind == Markup::Empty)?;
+                    let closed =
+                        is_formula && self.dropped_formula(scan, cell, kind == Markup::Empty)?;
                     if kind == Markup::Start && !closed {
                         depth += 1;
                     }
@@ -509,14 +530,14 @@ impl<F> Splice<'_, F> {
         let mut depth = 0usize;
         loop {
             if !scan.text(Some(&mut *out as &mut dyn Write))? {
-                return Err(unusable("the sheet ends inside a row"));
+                return Err(cannot_splice("the sheet ends inside a row"));
             }
             let kind = scan.markup()?;
             match kind {
-                Markup::Other => return Err(unusable("a comment inside a row")),
+                Markup::Other => return Err(cannot_splice("a comment inside a row")),
                 Markup::End if depth == 0 => {
                     if tag_name(&scan.tag) != b"row" {
-                        return Err(unusable("a row is not closed"));
+                        return Err(cannot_splice("a row is not closed"));
                     }
                     out.write_all(&scan.tag)?;
                     return Ok(());
@@ -548,17 +569,17 @@ impl<F> Splice<'_, F> {
         let Some(si) = attribute(tag, b"si")? else {
             return Ok(());
         };
-        let si = si.parse::<i32>().map_err(unusable)?;
+        let si = si.parse::<i32>().map_err(cannot_splice)?;
         if attribute(tag, b"ref")?.is_some() {
             return self.seen_anchors.insert(si);
         }
         if !self.seen_anchors.contains(si)? {
-            return Err(unusable(
+            return Err(cannot_splice(
                 "a kept cell takes a shared formula whose anchor was not read before it",
             ));
         }
         if self.dropped_groups.contains(&si) {
-            return Err(unusable(
+            return Err(cannot_splice(
                 "a kept cell takes a shared formula that is written again",
             ));
         }
@@ -567,12 +588,12 @@ impl<F> Splice<'_, F> {
 
     fn row_number(&mut self, tag: &[u8]) -> io::Result<u32> {
         let row = attribute(tag, b"r")?
-            .ok_or_else(|| unusable("a row without its number"))?
+            .ok_or_else(|| cannot_splice("a row without its number"))?
             .parse::<i32>()
-            .map_err(unusable)?;
+            .map_err(cannot_splice)?;
         let row = to_row(row)?;
         if row <= self.last_row {
-            return Err(unusable("rows out of order"));
+            return Err(cannot_splice("rows out of order"));
         }
         self.last_row = row;
         Ok(row)
@@ -584,19 +605,19 @@ impl<F> Splice<'_, F> {
     {
         loop {
             if !scan.text(Some(&mut *out as &mut dyn Write))? {
-                return Err(unusable("the sheet data is not closed"));
+                return Err(cannot_splice("the sheet data is not closed"));
             }
             let kind = scan.markup()?;
             let name = tag_name(&scan.tag);
             let (is_row, is_sheet_data) = (name == b"row", name == b"sheetData");
             match kind {
-                Markup::Other => return Err(unusable("a comment between rows")),
+                Markup::Other => return Err(cannot_splice("a comment between rows")),
                 Markup::End if is_sheet_data => {
                     self.flush_all(out)?;
                     out.write_all(&scan.tag)?;
                     return Ok(());
                 }
-                Markup::End => return Err(unusable("an unexpected end tag between rows")),
+                Markup::End => return Err(cannot_splice("an unexpected end tag between rows")),
                 Markup::Start | Markup::Empty if is_row => {
                     let row = self.row_number(&scan.tag)?;
                     self.flush_before(row, out)?;
@@ -612,7 +633,9 @@ impl<F> Splice<'_, F> {
                     }
                 }
                 Markup::Start | Markup::Empty => {
-                    return Err(unusable("an element other than a row in the sheet data"));
+                    return Err(cannot_splice(
+                        "an element other than a row in the sheet data",
+                    ));
                 }
             }
         }
@@ -623,7 +646,7 @@ impl<F> Splice<'_, F> {
 fn check_encoding(declaration: &[u8]) -> io::Result<()> {
     match attribute_span(declaration, b"encoding") {
         Some((start, end)) if !declaration[start..end].eq_ignore_ascii_case(b"UTF-8") => {
-            Err(unusable("a sheet that is not encoded as UTF-8"))
+            Err(cannot_splice("a sheet that is not encoded as UTF-8"))
         }
         _ => Ok(()),
     }
@@ -644,7 +667,7 @@ fn head<R: Read>(
     let mut depth = 0usize;
     loop {
         if !scan.text(Some(&mut *out))? {
-            return Err(unusable("the sheet has no sheet data"));
+            return Err(cannot_splice("the sheet has no sheet data"));
         }
         let kind = scan.markup()?;
         let name = tag_name(&scan.tag);
@@ -661,7 +684,7 @@ fn head<R: Read>(
                 }
                 out.write_all(&scan.tag)?;
             }
-            Markup::End if depth <= 1 => return Err(unusable("the sheet has no sheet data")),
+            Markup::End if depth <= 1 => return Err(cannot_splice("the sheet has no sheet data")),
             Markup::End => {
                 out.write_all(&scan.tag)?;
                 depth -= 1;
@@ -670,7 +693,7 @@ fn head<R: Read>(
                 let main = attribute_span(&scan.tag, b"xmlns")
                     .is_some_and(|(start, end)| &scan.tag[start..end] == MAIN_NAMESPACE);
                 if !is_root || !main || kind == Markup::Empty {
-                    return Err(unusable("the sheet's root is not a plain worksheet"));
+                    return Err(cannot_splice("the sheet's root is not a plain worksheet"));
                 }
                 out.write_all(&scan.tag)?;
                 depth = 1;
@@ -678,7 +701,9 @@ fn head<R: Read>(
             Markup::Start | Markup::Empty if is_sheet_data => {
                 let plain = matches!(scan.tag.as_slice(), b"<sheetData>" | b"<sheetData/>");
                 if depth != 1 || !plain {
-                    return Err(unusable("the sheet data is not where a worksheet keeps it"));
+                    return Err(cannot_splice(
+                        "the sheet data is not where a worksheet keeps it",
+                    ));
                 }
                 return Ok(match kind {
                     Markup::Start => SheetData::Open,
@@ -686,7 +711,7 @@ fn head<R: Read>(
                 });
             }
             Markup::Start | Markup::Empty if prefixed_data => {
-                return Err(unusable("prefixed sheet data"));
+                return Err(cannot_splice("prefixed sheet data"));
             }
             Markup::Start | Markup::Empty => {
                 match attribute_span(&scan.tag, b"ref").filter(|_| is_dimension && depth == 1) {
@@ -790,10 +815,16 @@ mod tests {
     ) -> io::Result<(String, Calls)> {
         let mut calls = Vec::new();
         let mut out = Vec::new();
-        splice_rows(part, &mut out, "A1:C12", spans, |span, anchors, out: &mut Vec<u8>| {
-            calls.push((*span, anchors.to_vec()));
-            out.write_all(rows(span).as_bytes())
-        })?;
+        splice_rows(
+            part,
+            &mut out,
+            "A1:C12",
+            spans,
+            |span, anchors, out: &mut Vec<u8>| {
+                calls.push((*span, anchors.to_vec()));
+                out.write_all(rows(span).as_bytes())
+            },
+        )?;
         Ok((String::from_utf8(out).unwrap(), calls))
     }
 
@@ -824,7 +855,10 @@ mod tests {
             row(1, r#"<c r="A1" t="s"><v>0</v></c>"#),
             row(2, r#"<c r="A2"><v>2</v></c>"#),
             r#"<row r="3"/>"#.to_string(),
-            row(5, r#"<c r="A5" t="str"><v>a &gt; b</v></c><c r="B5" s="1"/>"#),
+            row(
+                5,
+                r#"<c r="A5" t="str"><v>a &gt; b</v></c><c r="B5" s="1"/>"#,
+            ),
             row(9, r#"<c r="A9"><v>9</v></c>"#),
         ];
         let xml = sheet(&rows.concat());
@@ -881,7 +915,10 @@ mod tests {
         // The anchor's range says it ends in row 3, yet row 4 takes it: readers resolve
         // a shared formula by si alone.
         let rows = [
-            row(2, r#"<c r="B2"><f t="shared" ref="B2:B3" si="0">A2</f><v>1</v></c>"#),
+            row(
+                2,
+                r#"<c r="B2"><f t="shared" ref="B2:B3" si="0">A2</f><v>1</v></c>"#,
+            ),
             row(4, r#"<c r="B4"><f t="shared" si="0"/><v>1</v></c>"#),
         ];
         let error = spliced(&sheet(&rows.concat()), &[span(2, 3)]).unwrap_err();
@@ -890,11 +927,17 @@ mod tests {
 
     #[test]
     fn a_kept_follower_needs_its_anchor_read_before_it() {
-        let anchor = row(1, r#"<c r="B1"><f t="shared" ref="B1:B3" si="0">A1</f><v>1</v></c>"#);
+        let anchor = row(
+            1,
+            r#"<c r="B1"><f t="shared" ref="B1:B3" si="0">A1</f><v>1</v></c>"#,
+        );
         let follower = row(2, r#"<c r="B2"><f t="shared" si="0"/><v>1</v></c>"#);
         let (out, _) = spliced(&sheet(&format!("{anchor}{follower}")), &[span(5, 5)]).unwrap();
         assert!(out.contains(&follower));
-        let later = row(3, r#"<c r="B3"><f t="shared" ref="B3:B4" si="0">A3</f></c>"#);
+        let later = row(
+            3,
+            r#"<c r="B3"><f t="shared" ref="B3:B4" si="0">A3</f></c>"#,
+        );
         for rows in [
             follower.clone(),
             format!("{follower}{later}"),
@@ -903,7 +946,10 @@ mod tests {
             let error = spliced(&sheet(&rows), &[span(5, 5)]).unwrap_err();
             assert!(error.to_string().contains("anchor"), "{error}");
         }
-        let huge = row(1, r#"<c r="B1"><f t="shared" ref="B1:B3" si="99999999">A1</f></c>"#);
+        let huge = row(
+            1,
+            r#"<c r="B1"><f t="shared" ref="B1:B3" si="99999999">A1</f></c>"#,
+        );
         assert!(spliced(&sheet(&huge), &[span(5, 5)]).is_err());
     }
 
@@ -932,7 +978,11 @@ mod tests {
     #[test]
     fn a_comment_or_instruction_is_not_closed_by_its_own_opener() {
         let row_1 = r#"<row r="1"><c r="A1"><v>0</v></c></row>"#;
-        for hidden in ["<!--> <sheetData/> -->", "<!---> <sheetData/> -->", "<?> <sheetData/> ?>"] {
+        for hidden in [
+            "<!--> <sheetData/> -->",
+            "<!---> <sheetData/> -->",
+            "<?> <sheetData/> ?>",
+        ] {
             let xml = format!(r#"{ROOT}{hidden}<sheetData><row r="1"/></sheetData></worksheet>"#);
             let (out, _) = spliced(&xml, &[span(1, 1)]).unwrap();
             assert_eq!(
@@ -984,7 +1034,10 @@ mod tests {
                 .map(|r| {
                     row(
                         r as u32,
-                        &format!(r#"<c r="A{r}"><f t="array" ref="A{r}:A{}">1</f></c>"#, r + 5000),
+                        &format!(
+                            r#"<c r="A{r}"><f t="array" ref="A{r}:A{}">1</f></c>"#,
+                            r + 5000
+                        ),
                     )
                 })
                 .collect();
@@ -1043,7 +1096,25 @@ mod tests {
     #[test]
     fn spans_out_of_order_are_a_caller_error() {
         let xml = sheet("");
-        assert!(spliced_with(xml.as_bytes(), &[span(3, 4), span(4, 5)], &|_| String::new()).is_err());
+        assert!(
+            spliced_with(xml.as_bytes(), &[span(3, 4), span(4, 5)], &|_| String::new(
+            ))
+            .is_err()
+        );
         assert!(spliced_with(xml.as_bytes(), &[span(5, 4)], &|_| String::new()).is_err());
+    }
+
+    #[test]
+    fn only_a_part_the_copy_refuses_is_marked_as_unspliceable() {
+        let commented = sheet("<!-- kept apart --><row r=\"1\"/>");
+        let refused = spliced_with(commented.as_bytes(), &[span(5, 5)], &|_| String::new());
+        assert!(is_cannot_splice(&refused.unwrap_err()));
+        let unordered = sheet("");
+        let caller = spliced_with(unordered.as_bytes(), &[span(5, 4)], &|_| String::new());
+        assert!(!is_cannot_splice(&caller.unwrap_err()));
+        assert!(!is_cannot_splice(&io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid deflate stream"
+        )));
     }
 }

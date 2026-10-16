@@ -27,7 +27,7 @@ pub use diff::workbook_differences;
 pub use layout::{PackageLayout, PartNames, SharedStrings, StyleCounts};
 pub use limits::CellBudget;
 pub use shared_strings::SHARED_STRINGS_PART;
-pub use splice::{AnchorKind, ReachingAnchor, RowSpan};
+pub use splice::{AnchorKind, ReachingAnchor, RowSpan, cannot_splice, is_cannot_splice};
 pub use verify::{Written, check_written};
 
 use crate::formulas::Names;
