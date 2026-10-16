@@ -65,6 +65,25 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/test/test_recalculation_fallbacks.rs`.
 - A formula that evaluates to an empty cell reads as 0 the first time too (`src/model.rs`,
   `evaluate_cell`). Tests: `src/test/test_empty_formula_result.rs`.
+- A workbook with circular references keeps its dependency index, and an edit is
+  recalculated incrementally unless a cell it changes is, or reads, a cell a cycle was
+  found at, or the workbook has a formula that reads cells found at run time
+  (INDIRECT, OFFSET, CELL, INFO, names) (`src/incremental.rs`,
+  `src/dependency_index.rs`, `Model::circular_cells`). Needs the incremental
+  recalculation. Tests: `src/test/test_incremental_cycles.rs`.
+- Conditional formatting is re-evaluated after an incremental recalculation only for the
+  rules, and for rules that look at one cell at a time only for the cells, that the
+  changed cells can affect; each rule keeps what it gave to its cells and
+  `get_extended_style_for_cell` merges them in priority order, so the results are those of
+  a full evaluation (`src/cf_runs.rs`, `src/conditional_formatting.rs`,
+  `src/dependency_index.rs`, `src/incremental.rs`). Needs the incremental recalculation.
+  Tests: `src/cf_runs.rs`, `src/dependency_index.rs`,
+  `src/test/conditional_formatting/incremental.rs`.
+- Collecting the spill anchors reads each row's cells in column order without allocating
+  a vector per row, and the walks that look for formula cells or dynamic anchors skip a
+  sheet with no formulas (`src/model.rs`, `get_formula_cells`, `collect_spill_cells`,
+  `src/incremental.rs`, `build_dependencies`). Stands on its own. Tests:
+  `src/test/test_full_evaluation_cells.rs`.
 - `Model::support` recorded only when the workbook has spills (`src/model.rs`,
   `record_support`).
 - Hiding or showing rows recalculates what reads them, for SUBTOTAL
@@ -133,6 +152,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   removes or moves sheets, so a caller tracking row moves need not assume the worst on
   every replay (`src/user_model/history.rs`, `common.rs`). Tests:
   `src/test/user_model/test_sheets_moved.rs`.
+- `UserModel::undo_cells` and `UserModel::redo_cells` tell which cells the next undo or
+  redo step can change (`StepCells`: cell areas and the sheets whose rows or columns move,
+  or `None` for the workbook; size, visibility, style, pane and sheet-setting diffs add
+  or remove no cell), so a caller that caches per-sheet facts keeps the ones the step cannot touch
+  (`src/user_model/history.rs`, `src/user_model/common.rs`). Stands on its own. Tests:
+  `src/test/user_model/test_step_cells.rs`.
 
 Zenkai-only, not for upstream:
 

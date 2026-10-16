@@ -927,6 +927,21 @@ line 2"
     }
 
     #[test]
+    fn a_profiled_edit_writes_like_set_input_and_reports_the_recalculation() {
+        let mut book = Workbook::new_empty().unwrap();
+        let (a1, a2) = (
+            CellPos::parse_a1("A1").unwrap(),
+            CellPos::parse_a1("A2").unwrap(),
+        );
+        book.set_input(SheetId(0), a2, "=A1*2").unwrap();
+        let profile = book.set_input_profiled(SheetId(0), a1, "4").unwrap();
+        assert_eq!(profile.mode, crate::RecalcMode::Incremental);
+        assert_eq!(book.input(SheetId(0), a1), "4");
+        assert_eq!(book.cell(SheetId(0), a2).text, "8");
+        assert_eq!(book.used_end(SheetId(0)), a2);
+    }
+
+    #[test]
     fn contents_tell_values_and_formulas_from_styled_blanks() {
         let mut book = Workbook::new_empty().unwrap();
         let at = |text: &str| CellPos::parse_a1(text).unwrap();

@@ -1,15 +1,17 @@
 use std::io::Cursor;
+use std::time::{Duration, Instant};
 
 use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::{
     Cell, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
 };
-use ironcalc::base::{BorderArea, ClipboardData, Model, UserModel};
+use ironcalc::base::{BorderArea, ClipboardData, Model, Recalculation, UserModel};
 use ironcalc::import::load_from_xlsx_bytes;
 
+use crate::edit_profile::{EditProfile, RecalcMode};
 use crate::error::EngineError;
 use crate::file::Unsupported;
-use crate::model::CachedModel;
+use crate::model::{CachedModel, HistoryStep};
 use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
 use crate::saved::{FileOnDisk, SavedSlot};
@@ -250,6 +252,30 @@ fn timezone() -> &'static str {
             .ok()
             .filter(|tz| ironcalc::base::Model::new_empty("probe", LOCALE, tz, LANGUAGE).is_ok())
             .unwrap_or_else(|| "UTC".to_string())
+    })
+}
+
+fn profiled(
+    model: &mut UserModel<'static>,
+    change: impl FnOnce(&mut UserModel<'static>) -> Result<(), String>,
+) -> Result<EditProfile, String> {
+    model.pause_evaluation();
+    let started = Instant::now();
+    let changed = change(model);
+    let edit = started.elapsed();
+    model.resume_evaluation();
+    let started = Instant::now();
+    model.evaluate();
+    let recalculation = started.elapsed();
+    let mode = match model.get_model().last_recalculation() {
+        Recalculation::Full => RecalcMode::Full,
+        Recalculation::Incremental => RecalcMode::Incremental,
+    };
+    changed.map(|()| EditProfile {
+        edit,
+        recalculation,
+        mode,
+        warm_used_areas: Duration::ZERO,
     })
 }
 
@@ -596,6 +622,66 @@ impl Workbook {
         crate::save::snapshot(path, target, model, &self.carried, &self.saved)
     }
 
+    // The one way a single cell is written: `write` gets the model and the cell's row and
+    // column, and decides when the workbook is evaluated.
+    fn write_cell<T>(
+        &mut self,
+        sheet: SheetId,
+        pos: CellPos,
+        text: &str,
+        write: impl FnOnce(&mut UserModel<'static>, i32, i32) -> Result<T, String>,
+    ) -> Result<T, EngineError> {
+        check_input(text)?;
+        self.model
+            .write_within(sheet, Range::new(pos, pos), |model| {
+                write(model, row_i32(pos.row), col_i32(pos.col))
+            })
+            .map_err(rejected)
+    }
+
+    // `set_input` with the edit, the recalculation and the refresh of the used areas timed
+    // apart, for the edit benchmark.
+    pub fn set_input_profiled(
+        &mut self,
+        sheet: SheetId,
+        pos: CellPos,
+        text: &str,
+    ) -> Result<EditProfile, EngineError> {
+        let profile = self.write_cell(sheet, pos, text, |model, row, col| {
+            profiled(model, |model| model.set_user_input(sheet.0, row, col, text))
+        })?;
+        Ok(self.warmed(profile))
+    }
+
+    // `undo` and `redo` timed like `set_input_profiled`, for the edit benchmark.
+    pub fn undo_profiled(&mut self) -> Result<EditProfile, EngineError> {
+        self.step_profiled(HistoryStep::Undo)
+    }
+
+    pub fn redo_profiled(&mut self) -> Result<EditProfile, EngineError> {
+        self.step_profiled(HistoryStep::Redo)
+    }
+
+    fn step_profiled(&mut self, step: HistoryStep) -> Result<EditProfile, EngineError> {
+        let moved = self.replay_moves(match step {
+            HistoryStep::Undo => self.model.sheets_moved_by_undo(),
+            HistoryStep::Redo => self.model.sheets_moved_by_redo(),
+        });
+        let profile = self
+            .model
+            .step(step, |model, take| profiled(model, take))
+            .map_err(rejected);
+        self.history_replayed(moved, profile.is_ok());
+        Ok(self.warmed(profile?))
+    }
+
+    fn warmed(&self, mut profile: EditProfile) -> EditProfile {
+        let started = Instant::now();
+        self.warm_used_areas();
+        profile.warm_used_areas = started.elapsed();
+        profile
+    }
+
     // Call on a background thread after building or editing, so the UI thread never walks a sheet.
     pub fn warm_used_areas(&self) {
         for sheet in self.sheets() {
@@ -727,12 +813,9 @@ impl Engine for Workbook {
     }
 
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError> {
-        check_input(text)?;
-        self.model
-            .write_within(sheet, Range::new(pos, pos), |model| {
-                model.set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
-            })
-            .map_err(rejected)
+        self.write_cell(sheet, pos, text, |model, row, col| {
+            model.set_user_input(sheet.0, row, col, text)
+        })
     }
 
     // One engine paste, so a whole paste, import or fill is a single undo step.
@@ -1173,7 +1256,7 @@ impl Engine for Workbook {
             .map(|rectangle| area(sheet, rectangle))
             .collect();
         self.model
-            .rewrite_values(|model| {
+            .edit_keeping_cells(|model| {
                 model.range_clear_contents_of_areas(&area(sheet, range), &areas)
             })
             .map_err(rejected)
@@ -1212,7 +1295,9 @@ impl Engine for Workbook {
         };
         let target = self.formattable(sheet, range)?;
         self.model
-            .update_range_style(&area(sheet, target), path, &value)
+            .write_within(sheet, target, |model| {
+                model.update_range_style(&area(sheet, target), path, &value)
+            })
             .map_err(rejected)
     }
 
@@ -1225,7 +1310,9 @@ impl Engine for Workbook {
         check_format_code(code)?;
         let target = self.formattable(sheet, range)?;
         self.model
-            .update_range_style(&area(sheet, target), "num_fmt", code)
+            .write_within(sheet, target, |model| {
+                model.update_range_style(&area(sheet, target), "num_fmt", code)
+            })
             .map_err(rejected)
     }
 
@@ -1257,12 +1344,14 @@ impl Engine for Workbook {
         hidden: bool,
     ) -> Result<(), EngineError> {
         self.model
-            .set_rows_hidden(
-                sheet.0,
-                row_i32(range.start.row),
-                row_i32(range.end.row),
-                hidden,
-            )
+            .edit_keeping_cells(|model| {
+                model.set_rows_hidden(
+                    sheet.0,
+                    row_i32(range.start.row),
+                    row_i32(range.end.row),
+                    hidden,
+                )
+            })
             .map_err(rejected)
     }
 
@@ -1273,25 +1362,33 @@ impl Engine for Workbook {
         hidden: bool,
     ) -> Result<(), EngineError> {
         self.model
-            .set_columns_hidden(
-                sheet.0,
-                col_i32(range.start.col),
-                col_i32(range.end.col),
-                hidden,
-            )
+            .edit_keeping_cells(|model| {
+                model.set_columns_hidden(
+                    sheet.0,
+                    col_i32(range.start.col),
+                    col_i32(range.end.col),
+                    hidden,
+                )
+            })
             .map_err(rejected)
     }
 
     fn undo(&mut self) -> Result<(), EngineError> {
         let moved = self.replay_moves(self.model.sheets_moved_by_undo());
-        let undone = self.model.undo().map_err(rejected);
+        let undone = self
+            .model
+            .step(HistoryStep::Undo, |model, take| take(model))
+            .map_err(rejected);
         self.history_replayed(moved, undone.is_ok());
         undone
     }
 
     fn redo(&mut self) -> Result<(), EngineError> {
         let moved = self.replay_moves(self.model.sheets_moved_by_redo());
-        let redone = self.model.redo().map_err(rejected);
+        let redone = self
+            .model
+            .step(HistoryStep::Redo, |model, take| take(model))
+            .map_err(rejected);
         self.history_replayed(moved, redone.is_ok());
         redone
     }
@@ -1344,7 +1441,9 @@ impl Engine for Workbook {
         let chars = ((pixels - CHAR_WIDTH_PADDING) / PIXELS_PER_CHAR).clamp(0.0, 255.0);
         let column = col_i32(col);
         self.model
-            .set_columns_width(sheet.0, column, column, chars * COLUMN_WIDTH_FACTOR)
+            .edit_keeping_cells(|model| {
+                model.set_columns_width(sheet.0, column, column, chars * COLUMN_WIDTH_FACTOR)
+            })
             .map_err(rejected)
     }
 
@@ -1355,20 +1454,16 @@ impl Engine for Workbook {
         pixels: f32,
     ) -> Result<(), EngineError> {
         let row = row_i32(row);
+        // Excel's tallest row is 409.5 points.
+        let height = (if pixels.is_finite() {
+            f64::from(pixels)
+        } else {
+            0.0
+        } / PIXELS_PER_POINT)
+            .clamp(0.0, 409.5)
+            * ROW_HEIGHT_FACTOR;
         self.model
-            .set_rows_height(
-                sheet.0,
-                row,
-                row,
-                // Excel's tallest row is 409.5 points.
-                (if pixels.is_finite() {
-                    f64::from(pixels)
-                } else {
-                    0.0
-                } / PIXELS_PER_POINT)
-                    .clamp(0.0, 409.5)
-                    * ROW_HEIGHT_FACTOR,
-            )
+            .edit_keeping_cells(|model| model.set_rows_height(sheet.0, row, row, height))
             .map_err(rejected)
     }
 
@@ -1384,10 +1479,10 @@ impl Engine for Workbook {
     fn set_frozen(&mut self, sheet: SheetId, rows: u32, cols: u16) -> Result<(), EngineError> {
         let rows = i32::try_from(rows).map_err(|e| rejected(e.to_string()))?;
         self.model
-            .set_frozen_rows_count(sheet.0, rows)
-            .map_err(rejected)?;
-        self.model
-            .set_frozen_columns_count(sheet.0, i32::from(cols))
+            .edit_keeping_cells(|model| {
+                model.set_frozen_rows_count(sheet.0, rows)?;
+                model.set_frozen_columns_count(sheet.0, i32::from(cols))
+            })
             .map_err(rejected)
     }
 

@@ -1,6 +1,6 @@
 #![deny(missing_docs)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::vec::Vec;
 
 use crate::expressions::parser::static_analysis::run_static_analysis_on_node;
@@ -34,8 +34,9 @@ use crate::{
     utils as common,
 };
 
+use crate::cf_runs::CfRun;
 use crate::criteria_ranges::CriteriaRanges;
-use crate::incremental::{Dependencies, Recalculation};
+use crate::incremental::{circular_cells_fit, Dependencies, Recalculation};
 use crate::{cf_types::CfCellResult, tz::Tz};
 
 #[cfg(any(test, feature = "mock_time"))]
@@ -218,13 +219,19 @@ pub struct Model<'a> {
     pub(crate) spill_cells: Vec<CellReferenceIndex>,
     /// A dictionary to keep track of which cells or ranges support a given cell.
     pub(crate) support: HashMap<CellReferenceIndex, Vec<CellOrRange>>,
-    /// Evaluated CF results per cell, keyed by (sheet_index, row, column).
-    /// Rebuilt from scratch on every call to evaluate_conditional_formatting().
-    pub(crate) cf_cache: HashMap<(u32, i32, i32), Vec<CfCellResult>>,
+    /// What each conditional formatting rule gave to its cells, per sheet in priority
+    /// order. Rebuilt by evaluate_conditional_formatting(), and updated for the cells an
+    /// incremental recalculation changed.
+    pub(crate) cf_runs: Vec<Vec<CfRun>>,
+    /// Results of the rule being evaluated: (row, column, result, stops the rules below).
+    pub(crate) cf_sink: Vec<(i32, i32, CfCellResult, bool)>,
     /// Which formulas refer to which cells, for incremental recalculation.
     pub(crate) dependencies: Option<Box<Dependencies>>,
     /// How many times a formula was reached again while it was being evaluated.
     pub(crate) circular_hits: u64,
+    /// The cells that were reached again while being evaluated, since the last full
+    /// evaluation, up to one past `MAX_CIRCULAR_CELLS`.
+    pub(crate) circular_cells: HashSet<(u32, i32, i32)>,
     pub(crate) last_recalculation: Recalculation,
     pub(crate) criteria_ranges: CriteriaRanges,
     /// How many SUMIF(S) and COUNTIF(S) totals were updated by what changed.
@@ -1398,6 +1405,9 @@ impl<'a> Model<'a> {
                     match state {
                         CellState::Evaluating => {
                             self.circular_hits += 1;
+                            if circular_cells_fit(self.circular_cells.len()) {
+                                self.circular_cells.insert(key);
+                            }
                             return CalcResult::new_error(
                                 Error::CIRC,
                                 cell_reference,
@@ -1674,9 +1684,11 @@ impl<'a> Model<'a> {
             last_lambda_id: 0,
             spill_cells: Vec::new(),
             support: HashMap::new(),
-            cf_cache: HashMap::new(),
+            cf_runs: Vec::new(),
+            cf_sink: Vec::new(),
             dependencies: None,
             circular_hits: 0,
+            circular_cells: HashSet::new(),
             last_recalculation: Recalculation::Full,
             criteria_ranges: CriteriaRanges::new(),
             criteria_deltas: 0,
@@ -2915,6 +2927,11 @@ impl<'a> Model<'a> {
     fn get_formula_cells(&self) -> Vec<CellIndex> {
         let mut cells = Vec::new();
         for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
+            // A formula cell holds an index into the sheet's formulas, so a sheet without
+            // any cannot have one.
+            if sheet.shared_formulas.is_empty() {
+                continue;
+            }
             for row in sheet.sheet_data.rows_sorted() {
                 for (column, cell) in sheet.sheet_data.row_cells(row) {
                     if cell.get_formula().is_some() {
@@ -2935,8 +2952,12 @@ impl<'a> Model<'a> {
     fn collect_spill_cells(&mut self) {
         let mut spill_cells = Vec::new();
         for (sheet_index, worksheet) in self.workbook.worksheets.iter().enumerate() {
+            // The anchor of a dynamic formula is a formula cell.
+            if worksheet.shared_formulas.is_empty() {
+                continue;
+            }
             for row in worksheet.sheet_data.rows_sorted() {
-                for (col, cell) in worksheet.sheet_data.row_cells_sorted(row) {
+                for (col, cell) in worksheet.sheet_data.row_cells(row) {
                     if cell.dynamic_range().is_some() {
                         spill_cells.push(CellReferenceIndex {
                             sheet: sheet_index as u32,
@@ -3023,6 +3044,7 @@ impl<'a> Model<'a> {
     pub fn evaluate(&mut self) {
         self.dependencies = None;
         self.circular_hits = 0;
+        self.circular_cells.clear();
         self.last_recalculation = Recalculation::Full;
         self.collect_spill_cells();
 

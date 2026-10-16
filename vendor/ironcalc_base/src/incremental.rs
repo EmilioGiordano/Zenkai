@@ -34,9 +34,25 @@ impl Spill {
     }
 }
 
+// The most cells kept as reached again while being evaluated. A cell takes about 12 bytes
+// in the set and the set at most doubles that, so this is about 3 MB; past it the
+// workbook is evaluated in full after every edit, as when there was no index with cycles.
+pub(crate) const MAX_CIRCULAR_CELLS: usize = 100_000;
+
+pub(crate) fn circular_cells_fit(count: usize) -> bool {
+    count <= MAX_CIRCULAR_CELLS
+}
+
 pub(crate) struct Dependencies {
     index: DependencyIndex,
     spills: Vec<Spill>,
+    // The cells a circular reference was found at when the index was built.
+    circular: Vec<CellKey>,
+    // The cells and everything that reads them, worked out the first time an edit needs it.
+    // An edit that gives a cell a formula may add readers, so it drops this; one that only
+    // writes a value or clears a cell cannot, and the stale entries left by cleared formulas
+    // only make the check more cautious.
+    tainted: Option<HashSet<CellKey>>,
 }
 
 fn reference((sheet, row, column): CellKey) -> CellReferenceIndex {
@@ -46,13 +62,39 @@ fn reference((sheet, row, column): CellKey) -> CellReferenceIndex {
 impl Model<'_> {
     pub(crate) fn evaluate_indexed(&mut self) {
         self.evaluate();
-        // The result of a circular reference depends on the order formulas are visited
-        // in, which only a full evaluation reproduces.
-        if self.circular_hits == 0 {
-            self.dependencies = Some(Box::new(self.build_dependencies()));
-        } else {
+        if self.circular_hits != 0 {
+            // Totals kept while a cell could read as #CIRC! are not worth trusting.
             self.criteria_ranges = CriteriaRanges::new();
         }
+        if circular_cells_fit(self.circular_cells.len()) {
+            self.dependencies = Some(Box::new(self.build_dependencies()));
+        }
+    }
+
+    // The result of a circular reference depends on the order formulas are visited in, so
+    // an edit may only leave it alone if no cell it changes is, or reads, a cell the
+    // cycle was found at, and if it cannot read one through a reference found at run time.
+    fn edits_reach_cycles(
+        dependencies: &mut Dependencies,
+        edited: &[CellKey],
+        dirty: &[CellKey],
+    ) -> bool {
+        if dependencies.circular.is_empty() {
+            return false;
+        }
+        if dependencies.index.has_reads_at_run_time() {
+            return true;
+        }
+        if dependencies.tainted.is_none() {
+            dependencies.tainted = dependencies.index.dependents_of(&dependencies.circular);
+        }
+        let Some(tainted) = &dependencies.tainted else {
+            return true;
+        };
+        edited
+            .iter()
+            .chain(dirty)
+            .any(|cell| tainted.contains(cell))
     }
 
     // Only valid when nothing but the content of the `edited` cells changed since the last
@@ -71,6 +113,7 @@ impl Model<'_> {
             dependencies.index.forget_volatile(cell);
             if let Some(node) = self.formula_node(cell) {
                 dependencies.index.add(cell, node);
+                dependencies.tainted = None;
             }
         }
         dependencies.index.sort();
@@ -85,7 +128,9 @@ impl Model<'_> {
             .collect();
         // The order of a full evaluation, so recursion stays as shallow as there.
         dirty.sort_unstable();
-        if dirty.iter().any(|cell| self.is_array_formula(*cell)) {
+        if dirty.iter().any(|cell| self.is_array_formula(*cell))
+            || Self::edits_reach_cycles(&mut dependencies, edited, &dirty)
+        {
             self.evaluate_indexed();
             return;
         }
@@ -111,7 +156,7 @@ impl Model<'_> {
             self.evaluate_indexed();
             return;
         }
-        self.evaluate_conditional_formatting();
+        self.update_conditional_formatting(&changed);
         self.dependencies = Some(dependencies);
         self.last_recalculation = Recalculation::Incremental;
     }
@@ -131,6 +176,9 @@ impl Model<'_> {
         let mut index = DependencyIndex::new();
         let mut spills = Vec::new();
         for (sheet, worksheet) in (0u32..).zip(&self.workbook.worksheets) {
+            if worksheet.shared_formulas.is_empty() {
+                continue;
+            }
             for (row, column, cell) in worksheet.sheet_data.iter() {
                 let key = (sheet, row, column);
                 if let Some(node) = self.formula_node(key) {
@@ -143,7 +191,14 @@ impl Model<'_> {
         }
         index.sort();
         index.shrink_to_fit();
-        Dependencies { index, spills }
+        let mut circular: Vec<CellKey> = self.circular_cells.iter().copied().collect();
+        circular.sort_unstable();
+        Dependencies {
+            index,
+            spills,
+            circular,
+            tainted: None,
+        }
     }
 
     fn formula_node(&self, (sheet, row, column): CellKey) -> Option<&Node> {

@@ -21,3 +21,4 @@ pub use ui::SelectedView;
 
 pub use clipboard::ClipboardData;
 pub use common::BorderArea;
+pub use history::StepCells;
