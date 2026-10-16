@@ -463,10 +463,17 @@ impl Workspace {
                     async move { recovery::adopt(&copy, &target).map_err(|error| (copy, error)) },
                 )
                 .await;
+            let adopted = moved.is_ok();
             if let Err((copy, error)) = moved {
                 tracing::warn!(?copy, %error, "could not adopt the recovery file");
             }
-            if let Err(error) = this.update(cx, |this, cx| this.persist_session(cx)) {
+            let update = this.update(cx, |this, cx| {
+                if adopted && let Some(document) = this.documents.get_mut(id) {
+                    document.mark_recovery_adopted();
+                }
+                this.persist_session(cx)
+            });
+            if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed while adopting a recovery file");
             }
         })

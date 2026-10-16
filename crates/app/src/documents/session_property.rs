@@ -158,6 +158,11 @@ impl Model {
         let ids: Vec<WorkbookId> = self.unsaved.iter().copied().collect();
         let names: BTreeMap<WorkbookId, String> =
             ids.into_iter().map(|id| (id, self.copy_name(id))).collect();
+        for id in &self.unsaved {
+            if let Some(document) = self.documents.get_mut(*id) {
+                document.mark_recovery_adopted();
+            }
+        }
         let recovery_dir = self.recovery_dir.clone();
         let session = self
             .documents

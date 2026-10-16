@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 use std::time::{Duration, Instant};
 use zenkai_i18n::t;
@@ -56,6 +56,13 @@ pub struct Document {
     pub review: Review,
     pub last_used: Instant,
     last_edited: Option<Instant>,
+    autosave_attempted: Instant,
+    // Since when the recovery copy on disk has missed edits; `None` while it holds them all.
+    recovery_stale_since: Option<Instant>,
+    // Whether a recovery copy of this session exists on disk for the session file to point at.
+    recovery_on_disk: bool,
+    // Set by an edit; the running autosave drops its write and leaves the old copy in place.
+    autosave_cancel: Arc<AtomicBool>,
 }
 
 fn unsupported_label(unsupported: Unsupported) -> &'static str {
@@ -111,6 +118,10 @@ impl Document {
             review: Review::default(),
             last_used: Instant::now(),
             last_edited: None,
+            autosave_attempted: Instant::now(),
+            recovery_stale_since: None,
+            recovery_on_disk: false,
+            autosave_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -158,6 +169,8 @@ impl Document {
     pub fn queue(&mut self, edit: Edit) {
         self.edit_count += 1;
         self.last_edited = Some(Instant::now());
+        self.autosave_cancel.store(true, Ordering::Relaxed);
+        self.recovery_stale_since.get_or_insert_with(Instant::now);
         self.pending.push(edit);
     }
 
@@ -192,6 +205,9 @@ impl Document {
         }
         let shared = self.begin_read()?;
         self.file_job = job;
+        if job == FileJob::Autosaving {
+            self.autosave_cancel = Arc::new(AtomicBool::new(false));
+        }
         Some(shared)
     }
 
@@ -225,12 +241,42 @@ impl Document {
         self.last_edited.map(|edited| edited.elapsed())
     }
 
+    pub fn since_last_autosave_attempt(&self) -> Duration {
+        self.autosave_attempted.elapsed()
+    }
+
+    pub fn mark_autosave_attempt(&mut self) {
+        self.autosave_attempted = Instant::now();
+    }
+
+    pub fn autosave_cancel(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.autosave_cancel)
+    }
+
     pub fn recovery_is_current(&self) -> bool {
         self.autosaved_at == Some(self.edit_count)
     }
 
     pub fn set_autosaved_at(&mut self, edits: Option<u64>) {
         self.autosaved_at = edits;
+        self.recovery_on_disk = edits.is_some();
+    }
+
+    pub fn recovery_written(&mut self, edits: u64) {
+        self.set_autosaved_at(Some(edits));
+        self.recovery_stale_since = (edits != self.edit_count).then(Instant::now);
+    }
+
+    pub fn recovery_stale_for(&self) -> Option<Duration> {
+        self.recovery_stale_since.map(|since| since.elapsed())
+    }
+
+    pub fn has_recovery_copy(&self) -> bool {
+        self.recovery_on_disk
+    }
+
+    pub fn mark_recovery_adopted(&mut self) {
+        self.recovery_on_disk = true;
     }
 
     pub fn is_pristine(&self) -> bool {
@@ -367,10 +413,41 @@ pub fn write_snapshot(
     kind: SaveTarget,
     write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
 ) -> Result<(), EngineError> {
+    write_snapshot_unless(shared, job, target, kind, &AtomicBool::new(false), write).map(|_| ())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapshotOutcome {
+    Written,
+    Abandoned,
+}
+
+// The snapshot is taken regardless, but once the edit that cancelled it is known the write
+// never starts: the writer only renames a finished temp file over the target, so the copy
+// already on disk stays whole and the next idle retries.
+fn write_unless(
+    snapshot: SaveSnapshot,
+    cancelled: &AtomicBool,
+    write: &impl Fn(SaveSnapshot) -> Result<(), EngineError>,
+) -> Result<SnapshotOutcome, EngineError> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Ok(SnapshotOutcome::Abandoned);
+    }
+    write(snapshot).map(|()| SnapshotOutcome::Written)
+}
+
+pub fn write_snapshot_unless(
+    shared: &RwLock<Workbook>,
+    job: FileJob,
+    target: &Path,
+    kind: SaveTarget,
+    cancelled: &AtomicBool,
+    write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
+) -> Result<SnapshotOutcome, EngineError> {
     let started = Instant::now();
     let snapshot = read_shared(shared).save_snapshot(target, kind);
     let locked_ms = started.elapsed().as_millis();
-    let first = snapshot.and_then(&write);
+    let first = snapshot.and_then(|snapshot| write_unless(snapshot, cancelled, &write));
     let retry = match &first {
         // Like Excel, a save never silently replaces a version another program wrote over
         // the file itself; the user saves again, and that save writes it whole.
@@ -384,13 +461,23 @@ pub fn write_snapshot(
             tracing::warn!(?job, %error, "the file copied from changed, writing it whole");
             read_shared(shared)
                 .save_snapshot(target, kind)
-                .and_then(&write)
+                .and_then(|snapshot| write_unless(snapshot, cancelled, &write))
         }
         (_, first) => first,
     };
     let total_ms = started.elapsed().as_millis();
     match &written {
-        Ok(()) => tracing::info!(?job, locked_ms, total_ms, "workbook written"),
+        Ok(SnapshotOutcome::Written) => {
+            tracing::info!(?job, locked_ms, total_ms, "workbook written")
+        }
+        Ok(SnapshotOutcome::Abandoned) => {
+            tracing::info!(
+                ?job,
+                locked_ms,
+                total_ms,
+                "workbook write abandoned after an edit"
+            )
+        }
         Err(error) => {
             tracing::warn!(?job, %error, locked_ms, total_ms, "writing the workbook failed")
         }
@@ -566,6 +653,82 @@ mod tests {
         )
         .unwrap();
         assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
+    }
+
+    #[test]
+    fn an_edit_cancels_the_running_autosave_and_a_new_one_starts_clean() {
+        let mut document = document();
+        let generation = document.generation();
+        assert!(document.begin_file_job(FileJob::Autosaving).is_some());
+        let cancel = document.autosave_cancel();
+        assert!(!cancel.load(Ordering::Relaxed));
+        document.queue(noop());
+        assert!(cancel.load(Ordering::Relaxed));
+        document.end_file_job(generation);
+        let (_, edits) = document.take_batch().unwrap();
+        assert_eq!(edits.len(), 1);
+        let shared = Arc::clone(&document.workbook);
+        assert!(run_batch(&shared, edits).is_empty());
+        document.finish_batch(generation);
+        assert!(document.begin_file_job(FileJob::Autosaving).is_some());
+        assert!(!document.autosave_cancel().load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn the_recovery_copy_is_stale_from_the_first_edit_it_misses() {
+        let mut document = document();
+        assert!(document.recovery_stale_for().is_none());
+        document.queue(noop());
+        assert!(document.recovery_stale_for().is_some());
+        document.recovery_written(document.edit_count());
+        assert!(document.recovery_stale_for().is_none());
+        assert!(document.has_recovery_copy());
+        let at_start = document.edit_count();
+        document.queue(noop());
+        document.recovery_written(at_start);
+        assert!(document.recovery_stale_for().is_some());
+    }
+
+    #[test]
+    fn a_workbook_has_no_recovery_copy_until_one_is_written_or_adopted() {
+        let mut document = document();
+        assert!(!document.has_recovery_copy());
+        document.mark_recovery_adopted();
+        assert!(document.has_recovery_copy());
+        document.set_autosaved_at(None);
+        assert!(!document.has_recovery_copy());
+    }
+
+    #[test]
+    fn a_cancelled_snapshot_skips_the_write() {
+        let document = document();
+        let shared = document.begin_read().unwrap();
+        let cancelled = AtomicBool::new(true);
+        let outcome = write_snapshot_unless(
+            &shared,
+            FileJob::Autosaving,
+            Path::new("unused.xlsx"),
+            SaveTarget::Copy,
+            &cancelled,
+            |_| panic!("the old recovery copy must stay untouched"),
+        );
+        assert_eq!(outcome.unwrap(), SnapshotOutcome::Abandoned);
+    }
+
+    #[test]
+    fn an_uncancelled_snapshot_is_written() {
+        let document = document();
+        let shared = document.begin_read().unwrap();
+        let cancelled = AtomicBool::new(false);
+        let outcome = write_snapshot_unless(
+            &shared,
+            FileJob::Autosaving,
+            Path::new("unused.xlsx"),
+            SaveTarget::Copy,
+            &cancelled,
+            |_| Ok(()),
+        );
+        assert_eq!(outcome.unwrap(), SnapshotOutcome::Written);
     }
 
     #[test]

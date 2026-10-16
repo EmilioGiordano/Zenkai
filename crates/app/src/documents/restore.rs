@@ -89,7 +89,9 @@ impl Documents {
                         if discarded.contains(&link.id) {
                             link.dirty = false;
                             link.recovery = None;
-                        } else if entry.loaded().is_some_and(Document::needs_recovery) {
+                        } else if entry.loaded().is_some_and(|document| {
+                            document.needs_recovery() && document.has_recovery_copy()
+                        }) {
                             link.recovery = recovery_file(link.id);
                         }
                         session::record_of(&link, Some(link.id) == active)
@@ -250,11 +252,24 @@ mod tests {
     fn the_snapshot_points_unsaved_work_at_its_recovery_copy() {
         let mut documents = documents();
         documents.active_mut().unwrap().dirty = true;
+        documents.active_mut().unwrap().mark_recovery_adopted();
         let snapshot = documents.snapshot(false, SpaceAppearance::default(), |id| {
             Some(PathBuf::from(format!("recovery/{}.xlsx", id.0)))
         });
         let record = &snapshot.spaces[0].files[0];
         assert_eq!(record.recovery.as_deref(), Some("0.xlsx"));
+        assert!(record.dirty);
+    }
+
+    #[test]
+    fn unsaved_work_is_not_pointed_at_a_copy_that_was_never_written() {
+        let mut documents = documents();
+        documents.active_mut().unwrap().dirty = true;
+        let snapshot = documents.snapshot(false, SpaceAppearance::default(), |id| {
+            Some(PathBuf::from(format!("recovery/{}.xlsx", id.0)))
+        });
+        let record = &snapshot.spaces[0].files[0];
+        assert_eq!(record.recovery, None);
         assert!(record.dirty);
     }
 
@@ -391,8 +406,11 @@ mod tests {
         let mut documents = documents();
         let saved = open_file(&mut documents, "saved.xlsx");
         let other = open_file(&mut documents, "other.xlsx");
-        documents.get_mut(saved).unwrap().dirty = true;
-        documents.get_mut(other).unwrap().dirty = true;
+        for id in [saved, other] {
+            let document = documents.get_mut(id).unwrap();
+            document.dirty = true;
+            document.mark_recovery_adopted();
+        }
 
         let kept = snapshot_files(&documents, &[]);
         assert!(

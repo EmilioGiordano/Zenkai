@@ -8,6 +8,7 @@ mod agent_review;
 mod agent_routing;
 mod agent_settings;
 mod assets;
+mod autosave;
 mod chart;
 mod chart_panel;
 mod chat;
