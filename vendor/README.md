@@ -62,8 +62,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   recalculated incrementally unless a cell it changes is, or reads, a cell a cycle was
   found at, or the workbook has a formula that reads cells found at run time
   (INDIRECT, OFFSET, CELL, INFO, names) (`src/incremental.rs`,
-  `src/dependency_index.rs`, `Model::circular_cells`). Needs the incremental
-  recalculation. Tests: `src/test/test_incremental_cycles.rs`.
+  `src/dependency_index.rs`, `Model::circular_cells`). The cells a cycle taints are kept
+  up to `MAX_TAINTED_CELLS`; past that, or past the walk limit, the overflow is remembered
+  until the index is rebuilt and such edits are evaluated in full without walking again.
+  Needs the incremental recalculation. Tests: `src/test/test_incremental_cycles.rs`,
+  `dependents_of_stops_past_the_cells_allowed` in `src/dependency_index.rs`.
 - Conditional formatting is re-evaluated after an incremental recalculation only for the
   rules, and for rules that look at one cell at a time only for the cells, that the
   changed cells can affect; each rule keeps what it gave to its cells and

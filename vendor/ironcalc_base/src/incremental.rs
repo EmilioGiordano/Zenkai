@@ -43,16 +43,28 @@ pub(crate) fn circular_cells_fit(count: usize) -> bool {
     count <= MAX_CIRCULAR_CELLS
 }
 
+// The most cells kept as tainted by a cycle (12 bytes each, about 6 MB with the set's
+// headroom). Past it, or past the walk limit, every edit that needs the set is evaluated
+// in full without walking again.
+pub(crate) const MAX_TAINTED_CELLS: usize = 250_000;
+
+enum Taint {
+    Unknown,
+    TooMany,
+    Cells(HashSet<CellKey>),
+}
+
 pub(crate) struct Dependencies {
     index: DependencyIndex,
     spills: Vec<Spill>,
     // The cells a circular reference was found at when the index was built.
     circular: Vec<CellKey>,
     // The cells and everything that reads them, worked out the first time an edit needs it.
-    // An edit that gives a cell a formula may add readers, so it drops this; one that only
-    // writes a value or clears a cell cannot, and the stale entries left by cleared formulas
-    // only make the check more cautious.
-    tainted: Option<HashSet<CellKey>>,
+    // An edit that gives a cell a formula may add readers, so it drops a known set; one that
+    // only writes a value or clears a cell cannot, and the stale entries left by cleared
+    // formulas only make the check more cautious. `TooMany` stays until the index is rebuilt:
+    // readers are only ever added to the index in between.
+    tainted: Taint,
 }
 
 fn reference((sheet, row, column): CellKey) -> CellReferenceIndex {
@@ -85,10 +97,16 @@ impl Model<'_> {
         if dependencies.index.has_reads_at_run_time() {
             return true;
         }
-        if dependencies.tainted.is_none() {
-            dependencies.tainted = dependencies.index.dependents_of(&dependencies.circular);
+        if matches!(dependencies.tainted, Taint::Unknown) {
+            dependencies.tainted = match dependencies
+                .index
+                .dependents_of(&dependencies.circular, MAX_TAINTED_CELLS)
+            {
+                Some(cells) => Taint::Cells(cells),
+                None => Taint::TooMany,
+            };
         }
-        let Some(tainted) = &dependencies.tainted else {
+        let Taint::Cells(tainted) = &dependencies.tainted else {
             return true;
         };
         edited
@@ -113,7 +131,9 @@ impl Model<'_> {
             dependencies.index.forget_volatile(cell);
             if let Some(node) = self.formula_node(cell) {
                 dependencies.index.add(cell, node);
-                dependencies.tainted = None;
+                if matches!(dependencies.tainted, Taint::Cells(_)) {
+                    dependencies.tainted = Taint::Unknown;
+                }
             }
         }
         dependencies.index.sort();
@@ -197,7 +217,7 @@ impl Model<'_> {
             index,
             spills,
             circular,
-            tainted: None,
+            tainted: Taint::Unknown,
         }
     }
 
