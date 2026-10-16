@@ -95,9 +95,9 @@ fn parse_request(args: &[String]) -> Result<Request> {
     })
 }
 
-// The app's own open path, then the app's own edit paths with the phases timed apart. The
-// app warms the used areas once per batch, off the edit: `total_ms` includes that warm,
-// `set_input_ms` does not. Nothing the file holds is read out.
+// The app's own open path, then the app's own edit paths with the phases timed apart.
+// `set_input_ms` is the edit alone; the profiled path also warms the used areas after each
+// edit, timed apart and included in `total_ms`. Nothing the file holds is read out.
 fn measure(request: &Request) -> Result<Report, EngineError> {
     let started = Instant::now();
     let opened = open_xlsx_with(&request.path, XlsxReader::Fast)?;
