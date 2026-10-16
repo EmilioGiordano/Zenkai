@@ -143,6 +143,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   workbook of millions of values no longer builds a 12-byte index of each one first
   (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
   `src/test/test_full_evaluation_cells.rs`.
+- NOW and TODAY read the clock once per evaluation, as Excel does, so `=NOW()-NOW()` is
+  always 0 (`src/model.rs` `evaluation_milliseconds`, `src/incremental.rs`, `src/tz/`).
+  Tests: `src/test/test_now.rs`. Stands on its own.
 
 Zenkai-only, not for upstream:
 

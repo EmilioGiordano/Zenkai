@@ -236,6 +236,8 @@ pub struct Model<'a> {
     pub(crate) criteria_ranges: CriteriaRanges,
     /// How many SUMIF(S) and COUNTIF(S) totals were updated by what changed.
     pub(crate) criteria_deltas: u64,
+    /// The clock NOW and TODAY read, taken once at the start of each evaluation as Excel does
+    pub(crate) evaluation_milliseconds: i64,
 }
 
 // FIXME: Maybe this should be the same as CellReference
@@ -1692,6 +1694,7 @@ impl<'a> Model<'a> {
             last_recalculation: Recalculation::Full,
             criteria_ranges: CriteriaRanges::new(),
             criteria_deltas: 0,
+            evaluation_milliseconds: get_milliseconds_since_epoch(),
         };
 
         model.parse_formulas();
@@ -3042,6 +3045,7 @@ impl<'a> Model<'a> {
     /// Phase 2 evaluates every remaining cell in natural order.  Because all spill areas have
     /// already been written, regular cells always read the correct spill values.
     pub fn evaluate(&mut self) {
+        self.evaluation_milliseconds = get_milliseconds_since_epoch();
         self.dependencies = None;
         self.circular_hits = 0;
         self.circular_cells.clear();

@@ -388,7 +388,8 @@ impl Model<'_> {
     }
 
     pub(crate) fn cf_today(&self) -> Option<i64> {
-        crate::tz::excel_serial_for_now(&self.tz).map(|serial| serial.floor() as i64)
+        crate::tz::excel_serial_for_now(&self.tz, self.evaluation_milliseconds)
+            .map(|serial| serial.floor() as i64)
     }
 
     // The results of the rules of a sheet at a cell in priority order, where a rule that
