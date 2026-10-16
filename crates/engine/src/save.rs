@@ -271,10 +271,11 @@ fn write_temp(
     plan: Plan,
     file: BufWriter<File>,
     temp: &Path,
+    refused: &mut Option<String>,
 ) -> Result<Vec<(String, Written)>, EngineError> {
     let (file, written) = match plan {
         Plan::Full(plan) => write_full(plan, file)?,
-        Plan::Patch(plan) => write_patch(plan, file)?,
+        Plan::Patch(plan) => write_patch(plan, file, refused)?,
     };
     let file = file
         .into_inner()
@@ -307,6 +308,7 @@ fn adopt(slot: &SavedSlot, path: &Path, contents: Contents) {
             path: path.to_path_buf(),
             stamp,
             contents,
+            unspliceable: Vec::new(),
         })),
         Err(error) => {
             tracing::warn!(?path, %error, "the next save writes the whole file");
@@ -341,13 +343,14 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
             return Err(write_error(&temp)(source));
         }
     };
-    let base = match &plan {
+    let held = match &plan {
         Plan::Patch(plan) => Some(plan.base.clone()),
         Plan::Full(_) => None,
     };
-    let base = base.as_deref();
+    let base = held.as_deref();
+    let mut refused = None;
     let checked = unchanged(base)
-        .and_then(|()| run_with_engine_stack(|| write_temp(plan, file, &temp)))
+        .and_then(|()| run_with_engine_stack(|| write_temp(plan, file, &temp, &mut refused)))
         .and_then(|written| verify(&temp, base, &written))
         .and_then(|()| unchanged(base));
     if let Err(error) = checked {
@@ -361,7 +364,10 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
                 | EngineError::BaseUnusable { .. }
                 | EngineError::VerifyFailed(_)
         );
-        if base.is_some() && base_failed {
+        if let (Some(held), Some(part)) = (&held, refused) {
+            tracing::warn!(%error, %part, "a sheet cannot be spliced; the next save writes it whole");
+            slot.refuse_splice(held, part);
+        } else if base.is_some() && base_failed {
             tracing::warn!(%error, "copying from the saved file failed; the next save writes it whole");
             slot.set(None);
         }

@@ -62,6 +62,9 @@ pub(crate) struct SavedFile {
     pub(crate) path: PathBuf,
     pub(crate) stamp: Stamp,
     pub(crate) contents: Contents,
+    // Worksheet parts a row-level save found it cannot splice, so the next save writes them
+    // whole instead of finding out again after the work is done.
+    pub(crate) unspliceable: Vec<String>,
 }
 
 impl SavedFile {
@@ -89,6 +92,23 @@ impl SavedSlot {
 
     pub(crate) fn set(&self, file: Option<SavedFile>) {
         *self.0.lock().unwrap_or_else(PoisonError::into_inner) = file.map(Arc::new);
+    }
+
+    // Keeps the file `base` for later saves, minus the splice of `part`. A slot that holds
+    // another file by now is left alone.
+    pub(crate) fn refuse_splice(&self, base: &Arc<SavedFile>, part: String) {
+        let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if !held.as_ref().is_some_and(|held| Arc::ptr_eq(held, base)) {
+            return;
+        }
+        let mut unspliceable = base.unspliceable.clone();
+        unspliceable.push(part);
+        *held = Some(Arc::new(SavedFile {
+            path: base.path.clone(),
+            stamp: base.stamp,
+            contents: base.contents.clone(),
+            unspliceable,
+        }));
     }
 }
 
@@ -164,6 +184,7 @@ pub(crate) fn opened(
                 selected: selected_sheet(data.book),
                 metadata: Metadata::Unknown,
             },
+            unspliceable: Vec::new(),
         }),
         Err(error) => {
             tracing::warn!(%error, "the first save writes the whole file");

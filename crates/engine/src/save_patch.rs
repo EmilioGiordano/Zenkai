@@ -7,7 +7,7 @@ use std::io::{BufWriter, Seek, Write};
 use std::sync::Arc;
 
 use ironcalc::export::get_shared_string_item_xml;
-use zenkai_xlsx_reader::{BasePackage, SHARED_STRINGS_PART, Written};
+use zenkai_xlsx_reader::{BasePackage, SHARED_STRINGS_PART, Written, is_cannot_splice};
 use zip::ZipWriter;
 
 use crate::error::EngineError;
@@ -93,7 +93,12 @@ pub(crate) fn patch_plan(
         .iter()
         .map(|&index| -> Result<SheetPatch, EngineError> {
             let part = saved.worksheets[index].clone();
-            Ok(match dirty_blocks(&saved.sheets[index], &prints[index]) {
+            let blocks = if base.unspliceable.contains(&part) {
+                None
+            } else {
+                dirty_blocks(&saved.sheets[index], &prints[index])
+            };
+            Ok(match blocks {
                 Some(blocks) => SheetPatch::Rows(row_job(
                     data,
                     carried,
@@ -182,10 +187,12 @@ fn check_strings(
     Ok(())
 }
 
-// Returns what was written, part by part, for the verification.
+// Returns what was written, part by part, for the verification. A sheet that cannot be
+// spliced leaves its part in `refused`.
 pub(crate) fn write_patch<W: Write + Seek>(
     plan: PatchPlan,
     writer: W,
+    refused: &mut Option<String>,
 ) -> Result<(W, Vec<(String, Written)>), EngineError> {
     let saved = plan.base.as_ref();
     let read_failed = base_unusable(saved);
@@ -234,7 +241,12 @@ pub(crate) fn write_patch<W: Write + Seek>(
                 SheetPatch::Rows(job) => {
                     zip.start_file(name.as_str(), deflated())
                         .map_err(rejected)?;
-                    write_rows(&mut base, &mut zip, &job).map_err(copy_failed)?;
+                    if let Err(error) = write_rows(&mut base, &mut zip, &job) {
+                        if is_cannot_splice(&error) {
+                            *refused = Some(name);
+                        }
+                        return Err(copy_failed(error));
+                    }
                 }
             }
         } else if rels.contains(&name) || dropped.iter().any(|d| d.eq_ignore_ascii_case(&name)) {

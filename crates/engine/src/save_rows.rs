@@ -1,7 +1,7 @@
 // A changed sheet whose frame did not change is written by copying the rows of its file
 // part that did not change and writing only the blocks of rows that did. The result
-// means what a whole rewrite would; anything the copy cannot vouch for fails the save
-// with `BaseUnusable`, after which the whole file is written.
+// means what a whole rewrite would; a part the copy cannot vouch for fails the save with
+// `BaseUnusable` and is written whole by the next save, which still copies the other parts.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, BufWriter, Seek, Write};
@@ -14,7 +14,7 @@ use ironcalc::base::expressions::parser::stringify::to_excel_string;
 use ironcalc::base::expressions::types::CellReferenceRC;
 use ironcalc::base::types::{Cell, Row, Worksheet};
 use ironcalc::export::{SharedFormula, row_styles, write_rows_xml};
-use zenkai_xlsx_reader::{AnchorKind, BasePackage, ReachingAnchor, RowSpan};
+use zenkai_xlsx_reader::{AnchorKind, BasePackage, ReachingAnchor, RowSpan, cannot_splice};
 use zip::ZipWriter;
 
 use crate::error::EngineError;
@@ -219,7 +219,10 @@ pub(crate) fn row_job(
                 .sheet_data
                 .row_cells(row)
                 .map(|(column, cell)| {
-                    Ok((column, renumbered(cell, parsed, &mut formulas, &mut numbers)?))
+                    Ok((
+                        column,
+                        renumbered(cell, parsed, &mut formulas, &mut numbers)?,
+                    ))
                 })
                 .collect::<Result<Vec<_>, EngineError>>()?;
             small.sheet_data.insert_row(row, cells);
@@ -237,10 +240,6 @@ pub(crate) fn row_job(
     })
 }
 
-fn unusable(message: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, message.to_string())
-}
-
 impl RowJob {
     // A shared formula from a dropped row whose range reaches copied rows is written again
     // with its `si` and range, so the copied cells that take it keep their formula; it
@@ -252,14 +251,16 @@ impl RowJob {
         let mut anchors = HashMap::with_capacity(reaching.len());
         for anchor in reaching {
             let AnchorKind::Shared { si } = anchor.kind else {
-                return Err(unusable("an array formula reaches rows copied from the file"));
+                return Err(cannot_splice(
+                    "an array formula reaches rows copied from the file",
+                ));
             };
             let number = |value: u32| i32::try_from(value).map_err(io::Error::other);
             let (row, column) = (number(anchor.row)?, number(anchor.column)?);
             let formula = match self.sheet.sheet_data.get(row, column) {
-                Some(Cell::CellFormula { f, .. }) => usize::try_from(*f)
-                    .ok()
-                    .and_then(|f| self.formulas.get(f)),
+                Some(Cell::CellFormula { f, .. }) => {
+                    usize::try_from(*f).ok().and_then(|f| self.formulas.get(f))
+                }
                 _ => None,
             };
             let context = CellReferenceRC {
@@ -270,7 +271,7 @@ impl RowJob {
             let same =
                 formula.is_some_and(|(node, _)| to_excel_string(node, &context) == anchor.text);
             if !same {
-                return Err(unusable(
+                return Err(cannot_splice(
                     "a shared formula that rows copied from the file take has changed",
                 ));
             }
@@ -308,7 +309,14 @@ impl RowJob {
             return write_rows_xml(out, &self.sheet, &self.formulas, styles, rows, shared);
         }
         let mut written = Vec::new();
-        write_rows_xml(&mut written, &self.sheet, &self.formulas, styles, rows, shared)?;
+        write_rows_xml(
+            &mut written,
+            &self.sheet,
+            &self.formulas,
+            styles,
+            rows,
+            shared,
+        )?;
         out.write_all(&with_row_outline(&written, &self.outline)?)
     }
 }

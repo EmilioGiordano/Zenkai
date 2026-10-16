@@ -182,7 +182,11 @@ fn rows_outside_the_edited_blocks_are_copied_byte_for_byte() {
     assert_eq!(copied, expected);
     let written = row_elements(&part(&document, ROWS_PART));
     assert!(written[&50].contains("<v>2000</v>"), "{}", written[&50]);
-    assert!(written[&105].contains("outlineLevel=\"1\""), "{}", written[&105]);
+    assert!(
+        written[&105].contains("outlineLevel=\"1\""),
+        "{}",
+        written[&105]
+    );
     assert!(written[&150].contains("<f>A150*5</f>"), "{}", written[&150]);
     let whole = Workbook::from_xlsx_bytes(&book.to_xlsx().unwrap(), "book").unwrap();
     let expected = cells(&whole);
@@ -226,7 +230,8 @@ fn a_row_deleted_near_the_end_rewrites_the_sheet_whole() {
     with_validation_below(&document);
     let base = copy_of(&document);
     let mut book = open_xlsx(&document).unwrap().workbook;
-    book.delete_rows(SheetId(0), RowIdx::clamped(189), 1).unwrap();
+    book.delete_rows(SheetId(0), RowIdx::clamped(189), 1)
+        .unwrap();
     save(&book, &document);
     assert!(copied_rows(&base, &document).is_empty());
     assert!(!part(&document, ROWS_PART).contains("sqref=\"A195\""));
@@ -245,7 +250,8 @@ fn a_move_redone_after_a_save_rewrites_the_sheet_whole() {
     with_validation_below(&document);
     let base = copy_of(&document);
     let mut book = open_xlsx(&document).unwrap().workbook;
-    book.delete_rows(SheetId(0), RowIdx::clamped(189), 1).unwrap();
+    book.delete_rows(SheetId(0), RowIdx::clamped(189), 1)
+        .unwrap();
     book.undo().unwrap();
     save(&book, &document);
     assert!(part(&document, ROWS_PART).contains("sqref=\"A195\""));
@@ -396,6 +402,57 @@ fn rows_the_copy_cannot_read_fail_once_then_are_written_whole() {
     let reopened = open_xlsx(&document).unwrap().workbook;
     assert_eq!(reopened.cell(SheetId(0), pos(49, 2)).text, "2000");
     assert_eq!(reopened.cell(SheetId(0), pos(150, 2)).text, "302");
+}
+
+fn add_part(file: &Path, name: &str, body: &str) {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        writer
+            .raw_copy_file(archive.by_index_raw(index).unwrap())
+            .unwrap();
+    }
+    writer
+        .start_file(name, zip::write::FileOptions::default())
+        .unwrap();
+    std::io::Write::write_all(&mut writer, body.as_bytes()).unwrap();
+    let bytes = writer.finish().unwrap().into_inner();
+    drop(archive);
+    std::fs::write(file, bytes).unwrap();
+}
+
+const EXTRA_PART: &str = "customXml/item1.xml";
+
+fn has_part(file: &Path, name: &str) -> bool {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
+    archive.by_name(name).is_ok()
+}
+
+// Only a save that copies from the file keeps a part Zenkai does not write itself.
+#[test]
+fn a_sheet_the_copy_refuses_is_the_only_one_written_whole_afterwards() {
+    let dir = tempfile::tempdir().unwrap();
+    let document = dir.path().join("book.xlsx");
+    excel_base(&document);
+    replace_part(&document, ROWS_PART, |sheet| {
+        sheet.replacen("<row r=\"100\"", "<!-- kept apart --><row r=\"100\"", 1)
+    });
+    add_part(&document, EXTRA_PART, "<x/>");
+    let mut book = open_xlsx(&document).unwrap().workbook;
+    book.set_input(SheetId(0), pos(49, 0), "1000").unwrap();
+    let refused = save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap());
+    assert!(
+        matches!(refused, Err(EngineError::BaseUnusable { .. })),
+        "{refused:?}"
+    );
+    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    assert!(has_part(&document, EXTRA_PART));
+    book.set_input(SheetId(0), pos(60, 0), "5").unwrap();
+    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    assert!(has_part(&document, EXTRA_PART));
+    let reopened = open_xlsx(&document).unwrap().workbook;
+    assert_eq!(reopened.cell(SheetId(0), pos(49, 2)).text, "2000");
+    assert_eq!(reopened.cell(SheetId(0), pos(60, 2)).text, "10");
 }
 
 #[derive(Clone, Debug)]
