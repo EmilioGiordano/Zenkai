@@ -207,6 +207,7 @@ impl RowId {
                     "claude",
                     "gemini",
                     "codex",
+                    "grok",
                     "openai",
                     "anthropic",
                     "google",

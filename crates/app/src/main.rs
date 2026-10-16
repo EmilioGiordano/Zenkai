@@ -33,6 +33,7 @@ mod panel_width;
 mod previews;
 mod recent;
 mod recovery;
+mod refresh;
 mod region;
 mod session;
 mod settings_window;

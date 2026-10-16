@@ -1,0 +1,1 @@
+[{"filename":"crates/x.rs","status":"modified","patch":"@@ -40,3 +40,4 @@ fn a() {\n context\n context\n+added\n context\n@@ -90,2 +91,2 @@\n-old\n+new\n context"},{"filename":"image.png","status":"added"}]

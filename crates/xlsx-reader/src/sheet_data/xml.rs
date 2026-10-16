@@ -81,6 +81,11 @@ impl<'a> Scanner<'a, '_> {
         Ok(())
     }
 
+    pub(super) fn is_blank(text: &[u8]) -> bool {
+        text.iter()
+            .all(|byte| matches!(byte, b' ' | b'\t' | b'\n' | b'\r'))
+    }
+
     pub(super) fn cell_content(&mut self) -> Result<CellXml<'a>, ReadError> {
         let mut content = CellXml {
             values: 0,
@@ -156,8 +161,12 @@ impl<'a> Scanner<'a, '_> {
     ) -> Result<FormulaXml<'a>, ReadError> {
         let [t, reference, si, ca] = self.attributes(start, [b"t", b"ref", b"si", b"ca"])?;
         let text = if empty { None } else { self.text()? };
-        limits::check_formula(text.as_deref().unwrap_or(""), reference.as_deref())
-            .map_err(ReadError::Unsafe)?;
+        limits::check_formula(
+            text.as_deref().unwrap_or(""),
+            reference.as_deref(),
+            t.as_deref() == Some("shared"),
+        )
+        .map_err(ReadError::Unsafe)?;
         Ok(FormulaXml {
             kind: t.map(Cow::into_owned),
             reference: reference.map(Cow::into_owned),

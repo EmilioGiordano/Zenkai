@@ -80,18 +80,12 @@ impl<'a> Model<'a> {
 
     // FIXME(TD): This is too much
     fn cell_is_subtotal(&self, sheet_index: u32, row: i32, column: i32) -> bool {
-        let row_data = match self.workbook.worksheets[sheet_index as usize]
+        let cell = match self.workbook.worksheets[sheet_index as usize]
             .sheet_data
-            .get(&row)
+            .get(row, column)
         {
-            Some(r) => r,
-            None => return false,
-        };
-        let cell = match row_data.get(&column) {
             Some(c) => c,
-            None => {
-                return false;
-            }
+            None => return false,
         };
 
         match cell.get_formula() {

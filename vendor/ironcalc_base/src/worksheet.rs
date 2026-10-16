@@ -4,8 +4,6 @@ use crate::expressions::utils::{is_valid_column_number, is_valid_row};
 use crate::model::CellStructure;
 use crate::{expressions::token::Error, types::*};
 
-use std::collections::HashMap;
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct WorksheetDimension {
     pub min_row: i32,
@@ -36,11 +34,11 @@ impl Worksheet {
     }
 
     pub fn cell(&self, row: i32, column: i32) -> Option<&Cell> {
-        self.sheet_data.get(&row)?.get(&column)
+        self.sheet_data.get(row, column)
     }
 
     pub(crate) fn cell_mut(&mut self, row: i32, column: i32) -> Option<&mut Cell> {
-        self.sheet_data.get_mut(&row)?.get_mut(&column)
+        self.sheet_data.get_mut(row, column)
     }
 
     pub(crate) fn update_cell(
@@ -54,21 +52,7 @@ impl Worksheet {
             return Err("Incorrect row or column".to_string());
         }
 
-        match self.sheet_data.get_mut(&row) {
-            Some(column_data) => match column_data.get(&column) {
-                Some(_cell) => {
-                    column_data.insert(column, new_cell);
-                }
-                None => {
-                    column_data.insert(column, new_cell);
-                }
-            },
-            None => {
-                let mut column_data = HashMap::new();
-                column_data.insert(column, new_cell);
-                self.sheet_data.insert(row, column_data);
-            }
-        }
+        self.sheet_data.insert(row, column, new_cell);
         Ok(())
     }
 
@@ -95,11 +79,8 @@ impl Worksheet {
     }
 
     pub fn get_style(&self, row: i32, column: i32) -> i32 {
-        match self.sheet_data.get(&row) {
-            Some(column_data) => match column_data.get(&column) {
-                Some(cell) => cell.get_style(),
-                None => self.get_row_column_style(row, column),
-            },
+        match self.sheet_data.get(row, column) {
+            Some(cell) => cell.get_style(),
             None => self.get_row_column_style(row, column),
         }
     }
@@ -266,13 +247,13 @@ impl Worksheet {
         width: i32,
         height: i32,
     ) -> Result<(), String> {
-        let cell = Cell::ArrayFormula {
-            f: index,
-            s: style,
-            r: (width, height),
-            kind: ArrayKind::Dynamic,
-            v: FormulaValue::Unevaluated,
-        };
+        let cell = Cell::new_array_formula(
+            index,
+            style,
+            (width, height),
+            ArrayKind::Dynamic,
+            FormulaValue::Unevaluated,
+        );
         self.update_cell(row, column, cell)
     }
 
@@ -285,13 +266,13 @@ impl Worksheet {
         width: i32,
         height: i32,
     ) -> Result<(), String> {
-        let cell = Cell::ArrayFormula {
-            f: index,
-            s: style,
-            r: (width, height),
-            kind: ArrayKind::Cse,
-            v: FormulaValue::Unevaluated,
-        };
+        let cell = Cell::new_array_formula(
+            index,
+            style,
+            (width, height),
+            ArrayKind::Cse,
+            FormulaValue::Unevaluated,
+        );
         self.update_cell(row, column, cell)
     }
 
@@ -631,11 +612,11 @@ impl Worksheet {
             return Err(format!("Column number '{column}' is not valid."));
         }
 
-        for row in self.sheet_data.keys() {
-            if self.cell(*row, column).is_some() {
+        for row in self.sheet_data.rows() {
+            if self.cell(row, column).is_some() {
                 column_cell_references.push(CellReferenceIndex {
                     sheet: self.sheet_id,
-                    row: *row,
+                    row,
                     column,
                 });
             }
@@ -644,12 +625,7 @@ impl Worksheet {
     }
 
     pub(crate) fn remove_cell(&mut self, row: i32, column: i32) -> Result<(), String> {
-        if let Some(row_data) = self.sheet_data.get_mut(&row) {
-            row_data.remove(&column);
-            if row_data.is_empty() {
-                self.sheet_data.remove(&row);
-            }
-        }
+        self.sheet_data.remove(row, column);
         Ok(())
     }
 
@@ -686,21 +662,18 @@ impl Worksheet {
         let mut row_range: Option<(i32, i32)> = None;
         let mut column_range: Option<(i32, i32)> = None;
 
-        for (row_index, columns) in &self.sheet_data {
+        for row_index in self.sheet_data.rows() {
             row_range = if let Some((current_min, current_max)) = row_range {
-                Some((current_min.min(*row_index), current_max.max(*row_index)))
+                Some((current_min.min(row_index), current_max.max(row_index)))
             } else {
-                Some((*row_index, *row_index))
+                Some((row_index, row_index))
             };
 
-            for column_index in columns.keys() {
+            for column_index in self.sheet_data.row_columns(row_index) {
                 column_range = if let Some((current_min, current_max)) = column_range {
-                    Some((
-                        current_min.min(*column_index),
-                        current_max.max(*column_index),
-                    ))
+                    Some((current_min.min(column_index), current_max.max(column_index)))
                 } else {
-                    Some((*column_index, *column_index))
+                    Some((column_index, column_index))
                 }
             }
         }
@@ -735,14 +708,9 @@ impl Worksheet {
             return Err("Row or column is outside valid range.".to_string());
         }
 
-        let is_empty = if let Some(data_row) = self.sheet_data.get(&row) {
-            if let Some(cell) = data_row.get(&column) {
-                matches!(cell, Cell::EmptyCell { .. })
-            } else {
-                true
-            }
-        } else {
-            true
+        let is_empty = match self.sheet_data.get(row, column) {
+            Some(cell) => matches!(cell, Cell::EmptyCell { .. }),
+            None => true,
         };
 
         Ok(is_empty)
@@ -765,7 +733,7 @@ impl Worksheet {
             None => return Err("Cell does not exist.".to_string()),
         };
         match cell {
-            Cell::ArrayFormula { r, .. } => Ok((r.0, r.1)),
+            Cell::ArrayFormula(array) => Ok((array.r.0, array.r.1)),
             Cell::CellFormula { .. } => Ok((1, 1)),
             _ => Err("Cell does not contain a formula.".to_string()),
         }
@@ -786,37 +754,26 @@ impl Worksheet {
             None => return Ok(CellStructure::SingleCell),
         };
         match cell {
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Cse,
-                ..
-            } => Ok(CellStructure::ArrayFormula { range: *r }),
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Dynamic,
-                ..
-            } => Ok(CellStructure::DynamicFormula { range: *r }),
-            Cell::SpillCell { a, .. } => {
+            Cell::ArrayFormula(array) => Ok(match array.kind {
+                ArrayKind::Cse => CellStructure::ArrayFormula { range: array.r },
+                ArrayKind::Dynamic => CellStructure::DynamicFormula { range: array.r },
+            }),
+            Cell::SpillCell(spill) => {
+                let a = spill.a;
                 let anchor_cell = match self.cell(a.0, a.1) {
                     Some(c) => c,
                     None => return Err("Invalid spill reference".to_string()),
                 };
                 match anchor_cell {
-                    Cell::ArrayFormula {
-                        r,
-                        kind: ArrayKind::Cse,
-                        ..
-                    } => Ok(CellStructure::SpillArray {
-                        anchor: (a.0, a.1),
-                        range: *r,
-                    }),
-                    Cell::ArrayFormula {
-                        r,
-                        kind: ArrayKind::Dynamic,
-                        ..
-                    } => Ok(CellStructure::SpillDynamic {
-                        anchor: (a.0, a.1),
-                        range: *r,
+                    Cell::ArrayFormula(array) => Ok(match array.kind {
+                        ArrayKind::Cse => CellStructure::SpillArray {
+                            anchor: (a.0, a.1),
+                            range: array.r,
+                        },
+                        ArrayKind::Dynamic => CellStructure::SpillDynamic {
+                            anchor: (a.0, a.1),
+                            range: array.r,
+                        },
                     }),
                     _ => Err("Spill cell does not reference an array formula".to_string()),
                 }

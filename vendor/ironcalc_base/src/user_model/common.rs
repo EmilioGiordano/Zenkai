@@ -215,7 +215,13 @@ pub struct UserModel<'a> {
     history: History,
     send_queue: Vec<QueueDiffs>,
     pause_evaluation: bool,
+    edit_group: Option<EditGroup>,
     pub(crate) pending_recalculation: PendingRecalculation,
+}
+
+struct EditGroup {
+    diffs: DiffList,
+    was_paused: bool,
 }
 
 /// Given the index of the currently selected sheet, returns the index that same
@@ -253,6 +259,7 @@ impl<'a> UserModel<'a> {
             history: History::default(),
             send_queue: vec![],
             pause_evaluation: false,
+            edit_group: None,
             pending_recalculation: PendingRecalculation::Workbook,
         }
     }
@@ -273,6 +280,7 @@ impl<'a> UserModel<'a> {
             history: History::default(),
             send_queue: vec![],
             pause_evaluation: false,
+            edit_group: None,
             pending_recalculation: PendingRecalculation::Workbook,
         })
     }
@@ -288,6 +296,7 @@ impl<'a> UserModel<'a> {
             history: History::default(),
             send_queue: vec![],
             pause_evaluation: false,
+            edit_group: None,
             pending_recalculation: PendingRecalculation::Workbook,
         })
     }
@@ -361,6 +370,41 @@ impl<'a> UserModel<'a> {
     /// Returns true if there are items to be redone
     pub fn can_redo(&self) -> bool {
         !self.history.redo_stack.is_empty()
+    }
+
+    /// Starts joining the edits that follow into one undo step, evaluating once when the
+    /// group ends.
+    ///
+    /// See also:
+    /// * [UserModel::end_edit_group]
+    pub fn begin_edit_group(&mut self) -> Result<(), String> {
+        if self.edit_group.is_some() {
+            return Err("An edit group is already open".to_string());
+        }
+        self.edit_group = Some(EditGroup {
+            diffs: Vec::new(),
+            was_paused: self.pause_evaluation,
+        });
+        self.pause_evaluation = true;
+        Ok(())
+    }
+
+    /// Ends the group started by [UserModel::begin_edit_group]. What was edited before an
+    /// error is kept, as one undo step.
+    pub fn end_edit_group(&mut self) -> Result<(), String> {
+        let Some(group) = self.edit_group.take() else {
+            return Err("No edit group is open".to_string());
+        };
+        self.pause_evaluation = group.was_paused;
+        if !group.diffs.is_empty() {
+            self.send_queue.push(QueueDiffs {
+                r#type: DiffType::Redo,
+                list: group.diffs.clone(),
+            });
+            self.history.push(group.diffs);
+        }
+        self.evaluate_if_not_paused();
+        Ok(())
     }
 
     /// Pauses automatic evaluation.
@@ -879,8 +923,7 @@ impl<'a> UserModel<'a> {
             .workbook
             .worksheet(sheet)?
             .sheet_data
-            .keys()
-            .copied()
+            .rows()
             .collect();
         let styled_rows = &self.model.workbook.worksheet(sheet)?.rows.clone();
 
@@ -967,9 +1010,8 @@ impl<'a> UserModel<'a> {
             .workbook
             .worksheet(sheet)?
             .sheet_data
-            .get(&row)
-            .map(|row_data| row_data.keys().copied().collect())
-            .unwrap_or_default();
+            .row_columns(row)
+            .collect();
         for column in columns {
             if let Some(old_style) = self.model.get_cell_style_or_none(sheet, row, column)? {
                 // We can always assume that style with style_index 0 exists and it is the default
@@ -1136,20 +1178,18 @@ impl<'a> UserModel<'a> {
             }
             // SpillCells are transient; save their style as EmptyCell so undo can
             // restore the style index, letting evaluate() recreate the SpillCell correctly.
-            let data = match worksheet.sheet_data.get(&r) {
-                Some(s) => s
-                    .iter()
-                    .map(|(k, v)| {
-                        let cell = if let Cell::SpillCell { s, .. } = v {
-                            Cell::EmptyCell { s: *s }
-                        } else {
-                            v.clone()
-                        };
-                        (*k, cell)
-                    })
-                    .collect(),
-                None => HashMap::new(),
-            };
+            let data = worksheet
+                .sheet_data
+                .row_cells(r)
+                .map(|(k, v)| {
+                    let cell = if let Cell::SpillCell(spill) = v {
+                        Cell::EmptyCell { s: spill.s }
+                    } else {
+                        v.clone()
+                    };
+                    (k, cell)
+                })
+                .collect();
             old_data.push(RowData {
                 row: row_data,
                 data,
@@ -1204,14 +1244,14 @@ impl<'a> UserModel<'a> {
             // SpillCells are transient; save their style as EmptyCell so undo can
             // restore the style index, letting evaluate() recreate the SpillCell correctly.
             let mut data = HashMap::new();
-            for (row_idx, row_data) in &worksheet.sheet_data {
-                if let Some(cell) = row_data.get(&c) {
-                    let saved = if let Cell::SpillCell { s, .. } = cell {
-                        Cell::EmptyCell { s: *s }
+            for row_idx in worksheet.sheet_data.rows() {
+                if let Some(cell) = worksheet.sheet_data.get(row_idx, c) {
+                    let saved = if let Cell::SpillCell(spill) = cell {
+                        Cell::EmptyCell { s: spill.s }
                     } else {
                         cell.clone()
                     };
-                    data.insert(*row_idx, saved);
+                    data.insert(row_idx, saved);
                 }
             }
 
@@ -1661,8 +1701,7 @@ impl<'a> UserModel<'a> {
                 .workbook
                 .worksheet(sheet)?
                 .sheet_data
-                .keys()
-                .copied()
+                .rows()
                 .collect();
             for column in range.column..range.column + range.width {
                 // we set the style of the full column
@@ -1696,20 +1735,23 @@ impl<'a> UserModel<'a> {
                 // Update style in all cells that have different styles
                 // FIXME: We need a better way to transverse of cells in a column
                 for &row in &data_rows {
-                    if let Some(data_row) =
-                        self.model.workbook.worksheet(sheet)?.sheet_data.get(&row)
+                    if self
+                        .model
+                        .workbook
+                        .worksheet(sheet)?
+                        .sheet_data
+                        .get(row, column)
+                        .is_some()
                     {
-                        if data_row.get(&column).is_some() {
-                            // If the cell has non empty content it will always have some style
-                            self.update_single_cell_style(
-                                sheet,
-                                row,
-                                column,
-                                style_path,
-                                value,
-                                &mut diff_list,
-                            )?;
-                        }
+                        // If the cell has non empty content it will always have some style
+                        self.update_single_cell_style(
+                            sheet,
+                            row,
+                            column,
+                            style_path,
+                            value,
+                            &mut diff_list,
+                        )?;
                     }
                 }
             }
@@ -1723,9 +1765,8 @@ impl<'a> UserModel<'a> {
                     .workbook
                     .worksheet(sheet)?
                     .sheet_data
-                    .get(&row)
-                    .map(|row_data| row_data.keys().copied().collect())
-                    .unwrap_or_default();
+                    .row_columns(row)
+                    .collect();
                 for column in columns {
                     self.update_single_cell_style(
                         sheet,
@@ -1980,12 +2021,9 @@ impl<'a> UserModel<'a> {
         column: i32,
     ) -> Result<Option<i32>, String> {
         let worksheet = self.model.workbook.worksheet(sheet)?;
-        let data = worksheet.sheet_data.get(&row);
-        if let Some(row_data) = data {
+        if worksheet.sheet_data.has_row(row) {
             let mut last_column = None;
-            let mut columns: Vec<i32> = row_data.keys().copied().collect();
-            columns.sort_unstable();
-            for col in columns {
+            for col in worksheet.sheet_data.row_columns_sorted(row) {
                 if col < column {
                     if let Some(cell) = worksheet.cell(row, col) {
                         if matches!(cell, Cell::EmptyCell { .. }) {
@@ -2011,12 +2049,9 @@ impl<'a> UserModel<'a> {
         column: i32,
     ) -> Result<Option<i32>, String> {
         let worksheet = self.model.workbook.worksheet(sheet)?;
-        let data = worksheet.sheet_data.get(&row);
-        if let Some(row_data) = data {
-            let mut columns: Vec<i32> = row_data.keys().copied().collect();
+        if worksheet.sheet_data.has_row(row) {
             // We sort the keys to ensure we are going from left to right
-            columns.sort_unstable();
-            for col in columns {
+            for col in worksheet.sheet_data.row_columns_sorted(row) {
                 if col > column {
                     if let Some(cell) = worksheet.cell(row, col) {
                         if matches!(cell, Cell::EmptyCell { .. }) {
@@ -2051,8 +2086,8 @@ impl<'a> UserModel<'a> {
             | Cell::ErrorCell { .. }
             | Cell::SharedString { .. }
             | Cell::CellFormula { .. } => Ok(CellArrayStructure::SingleCell),
-            Cell::SpillCell { a, .. } => {
-                let (m_row, m_column) = a;
+            Cell::SpillCell(spill) => {
+                let (m_row, m_column) = spill.a;
                 let m_cell = self
                     .model
                     .workbook
@@ -2061,16 +2096,9 @@ impl<'a> UserModel<'a> {
                     .cloned()
                     .unwrap_or_default();
                 let (width, height, is_dynamic) = match m_cell {
-                    Cell::ArrayFormula {
-                        r,
-                        kind: ArrayKind::Dynamic,
-                        ..
-                    } => (r.0, r.1, true),
-                    Cell::ArrayFormula {
-                        r,
-                        kind: ArrayKind::Cse,
-                        ..
-                    } => (r.0, r.1, false),
+                    Cell::ArrayFormula(array) => {
+                        (array.r.0, array.r.1, array.kind == ArrayKind::Dynamic)
+                    }
                     _ => return Err("Invalid structure".to_string()),
                 };
                 if is_dynamic {
@@ -2083,16 +2111,10 @@ impl<'a> UserModel<'a> {
                     ))
                 }
             }
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Dynamic,
-                ..
-            } => Ok(CellArrayStructure::DynamicAnchor(r.0, r.1)),
-            Cell::ArrayFormula {
-                r,
-                kind: ArrayKind::Cse,
-                ..
-            } => Ok(CellArrayStructure::ArrayAnchor(r.0, r.1)),
+            Cell::ArrayFormula(array) => Ok(match array.kind {
+                ArrayKind::Dynamic => CellArrayStructure::DynamicAnchor(array.r.0, array.r.1),
+                ArrayKind::Cse => CellArrayStructure::ArrayAnchor(array.r.0, array.r.1),
+            }),
         }
     }
 
@@ -2271,6 +2293,10 @@ impl<'a> UserModel<'a> {
 
     pub(crate) fn push_diff_list(&mut self, diff_list: DiffList) {
         self.pending_recalculation.add(&diff_list, &self.model);
+        if let Some(group) = &mut self.edit_group {
+            group.diffs.extend(diff_list);
+            return;
+        }
         self.send_queue.push(QueueDiffs {
             r#type: DiffType::Redo,
             list: diff_list.clone(),

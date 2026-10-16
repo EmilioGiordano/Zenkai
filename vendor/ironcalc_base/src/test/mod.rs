@@ -117,6 +117,7 @@ mod test_fn_tocol_torow;
 mod test_fn_transpose;
 mod test_fn_type;
 mod test_frozen_rows_and_columns;
+mod test_full_evaluation_cells;
 mod test_geomean;
 mod test_get_cell_content;
 mod test_implicit_intersection;

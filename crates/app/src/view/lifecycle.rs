@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::*;
 use zenkai_agent::preferences::CloseWithUnsaved;
-use zenkai_engine::{EngineError, open_xlsx};
+use zenkai_engine::{EngineError, SaveTarget, open_xlsx};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
@@ -240,9 +240,13 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    document::write_snapshot(&shared, FileJob::Autosaving, |bytes| {
-                        recovery::write(bytes, &target)
-                    })
+                    document::write_snapshot(
+                        &shared,
+                        FileJob::Autosaving,
+                        &target,
+                        SaveTarget::Copy,
+                        recovery::write,
+                    )
                 })
                 .await;
             let update = this.update(cx, |this, cx| {
@@ -416,7 +420,9 @@ impl Workspace {
                             document::write_snapshot(
                                 &write.workbook,
                                 FileJob::Autosaving,
-                                |bytes| recovery::write(bytes, &write.target),
+                                &write.target,
+                                SaveTarget::Copy,
+                                recovery::write,
                             )
                         })
                         .collect::<Vec<Result<(), EngineError>>>()

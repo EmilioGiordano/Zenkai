@@ -1,13 +1,11 @@
 use std::fs;
-use std::io::{Cursor, Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-
-use zenkai_xlsx_reader::ReadError;
 
 use crate::error::EngineError;
 use crate::preflight;
-use crate::sheet_settings::{self, SheetSettings};
-use crate::workbook::{Engine, Workbook};
+use crate::saved::{FileOnDisk, Stamp};
+use crate::workbook::Workbook;
 use crate::xlsx_read::{self, XlsxReader};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -54,7 +52,7 @@ pub struct Opened {
 }
 
 pub fn open_xlsx(path: &Path) -> Result<Opened, EngineError> {
-    open_xlsx_with(path, XlsxReader::IronCalc)
+    open_xlsx_with(path, XlsxReader::Fast)
 }
 
 pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineError> {
@@ -70,24 +68,31 @@ pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineE
             preflight::MAX_FILE_BYTES / 1024 / 1024
         )));
     }
-    let bytes = fs::read(path).map_err(read_error)?;
     let name = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "Book".to_string());
-    // Settings are read beside the reader, whichever one runs: the fast reader's worksheet
-    // stubs drop the rows, and a save must keep page layout, view and outline either way.
-    let (read, settings) = std::thread::scope(|scope| {
-        let settings = scope.spawn(|| read_sheet_settings(&bytes));
-        let read = xlsx_read::read_xlsx_bytes(&bytes, &name, reader);
-        let settings = settings
-            .join()
-            .unwrap_or_else(|_| Err(EngineError::InvalidFile("sheet settings unreadable".into())));
-        (read, settings)
-    });
-    let read = read?;
-    let mut workbook = preflight::run_with_engine_stack(|| Workbook::from_book(read.book))?;
-    workbook.carry(settings?);
+    // The streaming reader parses the file straight from disk and brings the sheet
+    // settings back from the same pass; the other readers read the file whole first.
+    let before = Stamp::of(path);
+    let xlsx_read::FileRead {
+        read,
+        settings,
+        layout,
+    } = xlsx_read::read_xlsx_file(path, &name, reader)?;
+    // A file that changed while it was read is never copied from.
+    let file = match (layout, before) {
+        (Some(layout), Ok(stamp)) if Stamp::of(path).is_ok_and(|after| after == stamp) => {
+            Some(FileOnDisk {
+                path,
+                stamp,
+                layout,
+            })
+        }
+        _ => None,
+    };
+    let workbook =
+        preflight::run_with_engine_stack(|| Workbook::from_file(read.book, settings, file))?;
     Ok(Opened {
         workbook,
         unsupported: read.unsupported,
@@ -95,108 +100,33 @@ pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineE
     })
 }
 
-// The engine's importer can panic on malformed parts; a broken file must
-// become an error message, never take the application down.
-fn load_guarded(bytes: &[u8], name: &str) -> Result<Workbook, EngineError> {
-    preflight::run_with_engine_stack(|| Workbook::from_xlsx_bytes(bytes, name))
-}
-
-fn read_sheet_settings(bytes: &[u8]) -> Result<Vec<SheetSettings>, EngineError> {
-    let invalid = |e: zip::result::ZipError| EngineError::InvalidFile(e.to_string());
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(invalid)?;
-    check_limits(&mut archive)?;
-    let mut settings = Vec::new();
-    for part in worksheet_parts(&mut archive) {
-        let mut text = String::new();
-        let entry = archive.by_name(&part).map_err(invalid)?;
-        let read = entry
-            .take(zenkai_xlsx_reader::limits::MAX_ENTRY_BYTES)
-            .read_to_string(&mut text);
-        settings.push(match read {
-            Ok(_) => sheet_settings::read(&text),
-            Err(_) => SheetSettings::default(),
-        });
-    }
-    Ok(settings)
-}
-
-fn check_limits(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<(), EngineError> {
-    zenkai_xlsx_reader::limits::check_archive(archive).map_err(|error| match error {
-        ReadError::Unsafe(reason) => EngineError::Unsafe(reason),
-        other => EngineError::InvalidFile(other.to_string()),
-    })
-}
-
 pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
-    let invalid = |e: zip::result::ZipError| EngineError::InvalidFile(e.to_string());
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(invalid)?;
-    check_limits(&mut archive)?;
-    let mut found = Vec::new();
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(invalid)?;
-        let name = entry.name().to_string();
-        let mut part = Vec::new();
-        if !entry.is_dir() {
-            (&mut entry)
-                .take(zenkai_xlsx_reader::limits::MAX_ENTRY_BYTES)
-                .read_to_end(&mut part)
-                .map_err(|e| EngineError::InvalidFile(e.to_string()))?;
-        }
-        found.extend(part_unsupported(&name, &part)?);
-    }
+    let found = std::sync::Mutex::new(Vec::new());
+    zenkai_xlsx_reader::scan_parts(bytes, &|name, part| inspect_part(&found, name, part))
+        .map_err(crate::xlsx_read::engine_error)?;
+    let mut found = found
+        .into_inner()
+        .map_err(|_| EngineError::InvalidFile("a part check stopped".to_string()))?;
     found.sort();
     found.dedup();
     Ok(found)
 }
 
-// The worksheet parts in the order IronCalc loads them: the sheets of xl/workbook.xml
-// whose relationship is a worksheet. A file IronCalc cannot read this way fails to open.
-fn worksheet_parts(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Vec<String> {
-    let mut read = |name: &str| {
-        let mut text = String::new();
-        let entry = archive.by_name(name).ok()?;
-        entry
-            .take(zenkai_xlsx_reader::limits::MAX_ENTRY_BYTES)
-            .read_to_string(&mut text)
-            .ok()?;
-        Some(text)
-    };
-    let (Some(workbook), Some(relationships)) =
-        (read("xl/workbook.xml"), read("xl/_rels/workbook.xml.rels"))
-    else {
-        return Vec::new();
-    };
-    let (Ok(workbook), Ok(relationships)) = (
-        roxmltree::Document::parse(&workbook),
-        roxmltree::Document::parse(&relationships),
-    ) else {
-        return Vec::new();
-    };
-    let by_id: std::collections::HashMap<&str, roxmltree::Node> = relationships
-        .descendants()
-        .filter(|n| n.has_tag_name("Relationship"))
-        .filter_map(|n| Some((n.attribute("Id")?, n)))
-        .collect();
-    const RELATIONSHIPS: &str =
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
-    workbook
-        .descendants()
-        .filter(|n| n.has_tag_name("sheet"))
-        .filter_map(|sheet| by_id.get(sheet.attribute((RELATIONSHIPS, "id"))?))
-        .filter(|rel| {
-            rel.attribute("Type")
-                .is_some_and(|t| t.ends_with("worksheet"))
-        })
-        .filter_map(|rel| rel.attribute("Target"))
-        .map(|target| match target.strip_prefix('/') {
-            Some(absolute) => absolute.to_string(),
-            None => format!("xl/{target}"),
-        })
-        .collect()
-}
-
-pub fn xlsx_bytes(workbook: &Workbook) -> Result<Vec<u8>, EngineError> {
-    preflight::run_with_engine_stack(|| workbook.to_xlsx())
+pub(crate) fn inspect_part(
+    found: &std::sync::Mutex<Vec<Unsupported>>,
+    name: &str,
+    part: &[u8],
+) -> Result<(), zenkai_xlsx_reader::ReadError> {
+    use zenkai_xlsx_reader::ReadError;
+    let kinds = part_unsupported(name, part).map_err(|error| match error {
+        EngineError::Unsafe(reason) => ReadError::Unsafe(reason),
+        other => ReadError::Unsupported(other.to_string()),
+    })?;
+    found
+        .lock()
+        .map_err(|_| ReadError::Unsupported("a part check stopped".to_string()))?
+        .extend(kinds);
+    Ok(())
 }
 
 pub(crate) fn part_unsupported(name: &str, part: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
@@ -205,6 +135,7 @@ pub(crate) fn part_unsupported(name: &str, part: &[u8]) -> Result<Vec<Unsupporte
         ("xl/charts/", Unsupported::Charts),
         ("xl/media/", Unsupported::Images),
         ("xl/drawings/", Unsupported::Images),
+        ("xl/pivotcache/", Unsupported::PivotTables),
         ("xl/pivottables/", Unsupported::PivotTables),
         ("xl/vbaproject", Unsupported::Macros),
         ("xl/comments", Unsupported::Comments),
@@ -229,14 +160,6 @@ pub(crate) fn part_unsupported(name: &str, part: &[u8]) -> Result<Vec<Unsupporte
         }
     }
     Ok(found)
-}
-
-// Write to a sibling temp file, prove it reopens, then replace: the original is
-// never truncated and survives any failure before the final rename.
-pub fn save_xlsx_atomic(bytes: &[u8], path: &Path) -> Result<(), EngineError> {
-    write_atomic(path, bytes, |written| {
-        load_guarded(written, "verify").map(|_| ())
-    })
 }
 
 // Every write over a user file goes through here: sibling temp file, read back
@@ -286,13 +209,13 @@ fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     file.sync_all()
 }
 
-fn remove_temp(temp: &Path) {
+pub(crate) fn remove_temp(temp: &Path) {
     if let Err(error) = fs::remove_file(temp) {
         tracing::warn!(?temp, %error, "could not remove temp file after failed save");
     }
 }
 
-fn temp_path(path: &Path) -> PathBuf {
+pub(crate) fn temp_path(path: &Path) -> PathBuf {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -302,7 +225,10 @@ fn temp_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Cursor, Read};
+
     use super::*;
+    use crate::workbook::Engine;
     use zenkai_types::{CellPos, Contents, Range, SheetId};
 
     fn number_at(book: &Workbook, pos: CellPos) -> Option<f64> {
@@ -337,7 +263,13 @@ mod tests {
             .workbook
             .set_input(SheetId(0), CellPos::parse_a1("A1").unwrap(), "3")
             .unwrap();
-        save_xlsx_atomic(&xlsx_bytes(&opened.workbook).unwrap(), &path).unwrap();
+        crate::save_xlsx(
+            opened
+                .workbook
+                .save_snapshot(&path, crate::SaveTarget::Document)
+                .unwrap(),
+        )
+        .unwrap();
 
         let reopened = open_xlsx(&path).unwrap();
         assert_eq!(reopened.workbook.cell(SheetId(0), a2).text, "63");
@@ -359,7 +291,15 @@ mod tests {
         ] {
             let path = dir.path().join(name);
             fs::write(&path, bytes).unwrap();
-            assert!(open_xlsx(&path).is_err(), "{name}");
+            let error = open_xlsx(&path)
+                .err()
+                .expect("{name} must fail")
+                .to_string();
+            assert!(
+                error.contains("not a valid xlsx workbook"),
+                "{name}: {error}"
+            );
+            assert!(!error.contains("harm"), "{name}: {error}");
         }
     }
 
