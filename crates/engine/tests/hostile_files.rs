@@ -4,7 +4,10 @@
 use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 
-use zenkai_engine::{Engine, Unsupported, XlsxReader, open_xlsx, open_xlsx_with};
+use zenkai_engine::{
+    Engine, SaveTarget, Unsupported, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
+};
+use zenkai_types::{CellPos, SheetId};
 
 fn workbook_with_sheet(sheet_xml: &str) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -290,6 +293,34 @@ fn deeply_nested_formula_is_rejected_not_a_stack_overflow() {
     );
     let error = open_bytes(workbook_with_sheet(&sheet(&cell))).unwrap_err();
     assert!(error.contains("a formula"), "{error}");
+}
+
+// A sheet element written back on save, nested deeper than a stack holds or larger than
+// the budget for them: the file opens, saves after an edit and opens again.
+#[test]
+fn deep_or_large_sheet_elements_save_and_reopen() {
+    let deep = format!(
+        r#"<autoFilter ref="A1:B2">{}{}</autoFilter>"#,
+        r#"<filterColumn colId="0">"#.repeat(100_000),
+        "</filterColumn>".repeat(100_000)
+    );
+    let large = format!(
+        r#"<hyperlinks><hyperlink ref="A1" location="{}"/></hyperlinks>"#,
+        "X".repeat(17 * 1024 * 1024)
+    );
+    for element in [deep, large] {
+        let sheet_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>{element}</worksheet>"#
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("elements.xlsx");
+        std::fs::write(&path, workbook_with_sheet(&sheet_xml)).unwrap();
+        let mut book = open_xlsx(&path).unwrap().workbook;
+        book.set_input(SheetId(0), CellPos::parse_a1("B2").unwrap(), "2")
+            .unwrap();
+        save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
+        open_xlsx(&path).unwrap();
+    }
 }
 
 #[test]

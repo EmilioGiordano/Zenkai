@@ -68,3 +68,8 @@ local computation); Zenkai's edge is being native: faster start, less memory, lo
 9. **Localized function names** (=SUMA, =SI, =BUSCARV). IronCalc can parse and print
    function names in other languages. It would be a separate option from the interface
    language, and files would always be saved with the English names.
+
+10. **Shift sheet parts on row and column moves.** Inserting or deleting rows drops a
+    sheet's filter, tables, drawings, comments and pivots on the next save. Excel shifts
+    their ranges and anchors instead; doing it means rewriting table, drawing, VML and pivot
+    parts. Also keep controls and OLE objects wrapped in mc:AlternateContent.

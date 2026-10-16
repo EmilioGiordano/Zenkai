@@ -2,20 +2,26 @@
 // copied without inflating it, and only the changed sheets, or their changed rows, are
 // written again.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{BufWriter, Seek, Write};
 use std::sync::Arc;
 
 use ironcalc::export::get_shared_string_item_xml;
-use zenkai_xlsx_reader::{BasePackage, SHARED_STRINGS_PART, Written, is_cannot_splice};
+use zenkai_xlsx_reader::{
+    BasePackage, SHARED_STRINGS_PART, Written, is_cannot_splice, relationships_part,
+};
 use zip::ZipWriter;
 
 use crate::error::EngineError;
+use crate::file::Unsupported;
 use crate::fingerprint::{DynamicArrays, SheetPrint};
+use crate::held::Held;
 use crate::save::{ModelData, SheetJob, deflated, rejected, sheet_job, write_sheet};
 use crate::save_rows::{RowJob, dirty_blocks, row_job, write_rows};
 use crate::saved::{Contents, Metadata, SavedFile, Strings};
+use crate::sheet_elements::Relationships;
 use crate::sheet_settings::Carried;
+use crate::table_headers::{headers_match, tables_on};
 
 enum SheetPatch {
     Whole(SheetJob),
@@ -44,6 +50,8 @@ pub(crate) struct PatchPlan {
 pub(crate) struct Patched {
     pub(crate) plan: PatchPlan,
     pub(crate) contents: Contents,
+    // What the rewritten sheets held in the file and are written without.
+    pub(crate) dropped: BTreeSet<Unsupported>,
 }
 
 // None when the workbook changed in a way only a full save writes: the sheet list, the
@@ -89,34 +97,52 @@ pub(crate) fn patch_plan(
         Strings::Absent if all_strings.is_empty() => (Vec::new(), Strings::Absent),
         Strings::Absent => return Ok(None),
     };
-    let sheets = changed
-        .iter()
-        .map(|&index| -> Result<SheetPatch, EngineError> {
-            let part = saved.worksheets[index].clone();
-            let blocks = if base.unspliceable.contains(&part) {
-                None
-            } else {
-                dirty_blocks(&saved.sheets[index], &prints[index])
-            };
-            Ok(match blocks {
-                Some(blocks) => SheetPatch::Rows(row_job(
-                    data,
-                    carried,
-                    index,
-                    part,
-                    blocks,
-                    &prints[index].bounds(),
-                )?),
-                None => SheetPatch::Whole(sheet_job(
-                    data,
-                    carried,
-                    index,
-                    part,
-                    index == saved.selected,
-                )?),
-            })
-        })
-        .collect::<Result<_, _>>()?;
+    let mut held = saved.held.clone();
+    let mut remains = saved.remains.clone();
+    let mut dropped = BTreeSet::new();
+    let mut sheets = Vec::with_capacity(changed.len());
+    for index in changed {
+        let (Some(part), Some(&in_file)) = (saved.worksheets.get(index), remains.get(index)) else {
+            return Err(rejected("a changed sheet is not in the saved file"));
+        };
+        let part = part.clone();
+        let intact = tables_intact(data, &held, index);
+        // A sheet written row by row keeps everything the file holds around its rows, which
+        // is only right while its tables still match their headers.
+        let blocks = if intact && !base.unspliceable.contains(&part) {
+            dirty_blocks(&saved.sheets[index], &prints[index])
+        } else {
+            None
+        };
+        if let Some(blocks) = blocks {
+            sheets.push(SheetPatch::Rows(row_job(
+                data,
+                carried,
+                index,
+                part,
+                blocks,
+                &prints[index].bounds(),
+            )?));
+            continue;
+        }
+        let in_file = match intact {
+            true => in_file,
+            false => in_file.unlinked(),
+        };
+        let job = sheet_job(data, carried, index, part, index == saved.selected, in_file)?;
+        let written = job
+            .settings
+            .as_ref()
+            .map(|settings| settings.elements.kinds())
+            .unwrap_or_default();
+        let relationships = job.relationships();
+        dropped.extend(held.rewrite(index, written, relationships)?);
+        *remains
+            .get_mut(index)
+            .ok_or_else(|| rejected("a changed sheet is not in the saved file"))? =
+            in_file.rewritten(relationships);
+        sheets.push(SheetPatch::Whole(job));
+    }
     let contents = Contents {
         worksheets: saved.worksheets.clone(),
         strings: written_strings,
@@ -125,6 +151,9 @@ pub(crate) fn patch_plan(
         sheets: prints.to_vec(),
         selected: saved.selected,
         metadata: saved.metadata,
+        held,
+        remains,
+        losses_through: carried.losses(),
     };
     Ok(Some(Patched {
         plan: PatchPlan {
@@ -134,15 +163,21 @@ pub(crate) fn patch_plan(
             strings_in_file,
         },
         contents,
+        dropped,
     }))
 }
 
-// The relationships of a rewritten sheet point at parts its new XML no longer refers to.
-fn sheet_rels(part: &str) -> String {
-    match part.rsplit_once('/') {
-        Some((folder, file)) => format!("{folder}/_rels/{file}.rels"),
-        None => format!("_rels/{part}.rels"),
+// A sheet keeps its relationships only while each of its tables can be checked and its
+// header cells still hold the column names the table part holds.
+fn tables_intact(data: ModelData<'_>, held: &Held, index: usize) -> bool {
+    let Some(sheet) = data.book.worksheets.get(index) else {
+        return false;
+    };
+    // A table part IronCalc did not read cannot be checked.
+    if held.links_to(index, Unsupported::Tables) && tables_on(data.book, sheet).is_empty() {
+        return false;
     }
+    headers_match(data.book, sheet)
 }
 
 fn base_unusable(base: &SavedFile) -> impl Fn(&dyn std::fmt::Display) -> EngineError + '_ {
@@ -207,14 +242,17 @@ pub(crate) fn write_patch<W: Write + Seek>(
     if !plan.sheets.is_empty() && plan.strings.is_empty() {
         check_strings(saved, &mut base, &names)?;
     }
-    // A sheet written row by row keeps the part around its rows, and with it what its
-    // relationships point at.
+    // A rewritten sheet written without the elements that point into its relationships
+    // part leaves the part out; the parts it pointed at stay, unreferenced. A sheet written
+    // row by row keeps the part around its rows, and with it its relationships.
     let rels: HashSet<String> = plan
         .sheets
         .iter()
         .filter_map(|job| match job {
-            SheetPatch::Whole(job) => Some(sheet_rels(&job.part)),
-            SheetPatch::Rows(_) => None,
+            SheetPatch::Whole(job) if job.relationships() == Relationships::Dropped => {
+                Some(relationships_part(&job.part))
+            }
+            _ => None,
         })
         .collect();
     let chain = if plan.sheets.is_empty() {
@@ -281,13 +319,55 @@ pub(crate) fn write_patch<W: Write + Seek>(
 
 #[cfg(test)]
 mod tests {
-    use super::sheet_rels;
+    use std::sync::Arc;
+
+    use ironcalc::base::Model;
+
+    use super::patch_plan;
+    use crate::error::EngineError;
+    use crate::fingerprint::book_print;
+    use crate::held::Held;
+    use crate::save::ModelData;
+    use crate::saved::{
+        Contents, Metadata, Remains, SavedFile, Stamp, Strings, sheet_prints, style_counts,
+    };
+    use crate::sheet_settings::Carried;
 
     #[test]
-    fn a_sheet_s_relationships_sit_beside_it() {
-        assert_eq!(
-            sheet_rels("xl/worksheets/sheet3.xml"),
-            "xl/worksheets/_rels/sheet3.xml.rels"
-        );
+    fn a_changed_sheet_missing_from_the_saved_parts_fails_the_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        std::fs::write(&path, b"").unwrap();
+        let carried = Carried::default();
+        let mut model = Model::new_empty("b", "en", "UTC", "en").unwrap();
+        let sheets = sheet_prints(ModelData::of(&model), &carried).unwrap();
+        model.set_user_input(0, 1, 1, "5".to_string()).unwrap();
+        model.evaluate();
+        let data = ModelData::of(&model);
+        let book = book_print(data.book).unwrap();
+        let base = SavedFile {
+            path: path.clone(),
+            stamp: Stamp::of(&path).unwrap(),
+            contents: Contents {
+                worksheets: Vec::new(),
+                strings: Strings::Aligned(data.book.shared_strings.len()),
+                styles: style_counts(data.book),
+                book,
+                sheets,
+                selected: 0,
+                metadata: Metadata::Written,
+                held: Held::written_whole(1),
+                remains: vec![Remains::All],
+                losses_through: 0,
+            },
+            unspliceable: Vec::new(),
+        };
+        let prints = sheet_prints(data, &carried).unwrap();
+        let Err(EngineError::Rejected(reason)) =
+            patch_plan(Arc::new(base), book, &prints, data, &carried)
+        else {
+            panic!("a plan for a sheet the saved file lacks was not rejected");
+        };
+        assert!(reason.contains("not in the saved file"), "{reason}");
     }
 }

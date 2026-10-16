@@ -12,6 +12,7 @@ use ironcalc::base::expressions::utils::number_to_column;
 use ironcalc::base::types::Worksheet;
 
 use crate::fingerprint::UsedBounds;
+use crate::sheet_elements::Place;
 use crate::sheet_settings::{Outline, SheetSettings, attribute};
 
 const MAX_ROW: i32 = 1_048_576;
@@ -118,11 +119,10 @@ impl<'a, W: Write> SheetWriter<'a, W> {
             return Err(other("the written sheet has no </sheetData>"));
         };
         let tail = String::from_utf8(tail).map_err(other_utf8)?;
-        let tail = match self.settings {
-            Some(settings) => with_trailing_elements(tail, settings)?,
-            None => tail,
-        };
-        self.inner.write_all(tail.as_bytes())?;
+        match self.settings {
+            Some(settings) => write_tail(&mut self.inner, &tail, settings)?,
+            None => self.inner.write_all(tail.as_bytes())?,
+        }
         Ok(self.inner)
     }
 
@@ -265,14 +265,22 @@ fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<Stri
     outline_columns(&head, &settings.columns.outline).map_err(other)
 }
 
-fn with_trailing_elements(tail: String, settings: &SheetSettings) -> io::Result<String> {
-    let mut tail = tail;
-    let at = tail
+// `tail` starts with </sheetData>; IronCalc writes <mergeCells>, <conditionalFormatting>
+// and its own <extLst> after it.
+fn write_tail(out: &mut impl Write, tail: &str, settings: &SheetSettings) -> io::Result<()> {
+    let rest = tail
+        .strip_prefix(SHEET_DATA_END)
+        .ok_or_else(|| other("the written sheet data is not closed"))?;
+    let at = rest
         .find("<extLst")
-        .or_else(|| tail.rfind("</worksheet>"))
+        .or_else(|| rest.rfind("</worksheet>"))
         .ok_or_else(|| other("the written sheet is not closed"))?;
-    tail.insert_str(at, &settings.trailing_elements());
-    Ok(tail)
+    let (ironcalc_elements, closing) = rest.split_at(at);
+    out.write_all(SHEET_DATA_END.as_bytes())?;
+    settings.elements.write_at(out, Place::AfterCellData)?;
+    out.write_all(ironcalc_elements.as_bytes())?;
+    settings.write_trailing_elements(out)?;
+    out.write_all(closing.as_bytes())
 }
 
 // Each exported <col min max .../> is split where the outline changes inside its range.
@@ -369,6 +377,44 @@ mod tests {
         let mut writer = SheetWriter::new(Vec::new(), None);
         std::io::Write::write_all(&mut writer, b"<worksheet><sheetData><row r=\"1\">").unwrap();
         assert!(writer.finish().is_err());
+    }
+
+    #[test]
+    fn carried_elements_go_around_what_ironcalc_writes_in_schema_order() {
+        let source = concat!(
+            r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" "#,
+            r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+            r#"<sheetData/><sheetProtection sheet="1"/><autoFilter ref="A1:B2"/>"#,
+            r#"<hyperlinks><hyperlink ref="A1" r:id="rId2"/></hyperlinks><pageMargins left="0.7" "#,
+            r#"right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><rowBreaks "#,
+            r#"count="1" manualBreakCount="1"><brk id="5" max="16383" man="1"/></rowBreaks>"#,
+            r#"<drawing r:id="rId1"/></worksheet>"#
+        );
+        let mut budget = crate::sheet_elements::ElementBudget::workbook();
+        let settings = crate::sheet_settings::read(source, &mut budget);
+        let xml = concat!(
+            "<worksheet><sheetData><row r=\"1\"/></sheetData><mergeCells/>",
+            "<conditionalFormatting/><extLst/></worksheet>"
+        );
+        let order = [
+            "</sheetData>",
+            "<sheetProtection",
+            "<autoFilter",
+            "<mergeCells",
+            "<conditionalFormatting",
+            "<hyperlinks",
+            "<pageMargins",
+            "<rowBreaks",
+            "<drawing",
+            "<extLst",
+            "</worksheet>",
+        ];
+        for piece in [1, 5, xml.len()] {
+            let written = streamed(xml, Some(&settings), piece);
+            let positions: Vec<Option<usize>> = order.iter().map(|tag| written.find(tag)).collect();
+            assert!(positions.iter().all(Option::is_some), "{written}");
+            assert!(positions.is_sorted(), "{written}");
+        }
     }
 
     #[test]

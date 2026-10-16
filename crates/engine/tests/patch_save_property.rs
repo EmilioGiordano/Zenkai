@@ -1,23 +1,29 @@
 // Spec: a save after a small edit rewrites only what changed and copies the rest of the
 // file. A file saved that way must reopen exactly as one written whole from the same
-// workbook, whatever the edits, and a part no edit touched must stay byte for byte.
+// workbook, whatever the edits, and a part no edit touched must stay byte for byte. What
+// each save says it keeps is what the file holds, and every relationship a rewritten
+// sheet names is still there.
 #![allow(clippy::unwrap_used)]
 
+use std::collections::BTreeSet;
 use std::io::Read;
 use std::path::Path;
 
 use proptest::prelude::*;
 use rust_xlsxwriter::{
-    ConditionalFormatCell, ConditionalFormatCellRule, Format, Formula, Workbook as Source,
+    Chart, ChartType, ConditionalFormatCell, ConditionalFormatCellRule, Format, Formula, Table,
+    Workbook as Source,
 };
 use zenkai_engine::{
     Engine, EngineError, SaveTarget, Workbook, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
+    scan_unsupported,
 };
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId, StyleChange};
 
 const SIDE: i64 = 7;
 const SHEETS: [&str; 4] = ["Data", "Calc", "Notes", "Untouched"];
 const UNTOUCHED_PART: &str = "xl/worksheets/sheet4.xml";
+const RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
 fn pos(row: i64, col: i64) -> CellPos {
     CellPos::new(RowIdx::clamped(row), ColIdx::clamped(col))
@@ -42,6 +48,7 @@ fn base_file(path: &Path) {
         .set_rule(ConditionalFormatCellRule::GreaterThan(3))
         .set_format(&red);
     data.add_conditional_format(0, 0, 5, 0, &rule).unwrap();
+    data.autofilter(0, 1, 5, 1).unwrap();
     let calc = book.add_worksheet().set_name("Calc").unwrap();
     // Cached results as Excel would store them, so a copied sheet's values are right.
     calc.write_formula(0, 0, Formula::new("=Data!A2*2").set_result("3"))
@@ -51,9 +58,14 @@ fn base_file(path: &Path) {
     calc.write_formula(2, 0, Formula::new("=Data!B3&\"!\"").set_result("fig!"))
         .unwrap();
     calc.write_string_with_format(0, 1, "total", &bold).unwrap();
+    let mut chart = Chart::new(ChartType::Column);
+    chart.add_series().set_values("Data!$A$1:$A$6");
+    calc.insert_chart(8, 4, &chart).unwrap();
     let notes = book.add_worksheet().set_name("Notes").unwrap();
     notes.write_string(0, 0, "pear").unwrap();
     notes.write_number_with_format(1, 0, 9.25, &money).unwrap();
+    // Inside the edited range, so edits reach its header and body.
+    notes.add_table(0, 3, 3, 4, &Table::new()).unwrap();
     let untouched = book.add_worksheet().set_name("Untouched").unwrap();
     untouched.write_string(0, 0, "never edited").unwrap();
     untouched.write_number(1, 1, 3.0).unwrap();
@@ -109,7 +121,14 @@ fn apply(book: &mut Workbook, op: &Op, document: &Path) {
         Op::DeleteRow(s, r) => book.delete_rows(SheetId(*s), RowIdx::clamped(*r), 1),
         Op::Undo => book.undo(),
         Op::Save => {
-            save_xlsx(book.save_snapshot(document, SaveTarget::Document).unwrap()).unwrap();
+            let snapshot = book.save_snapshot(document, SaveTarget::Document).unwrap();
+            let kept = snapshot.kept().to_vec();
+            save_xlsx(snapshot).unwrap();
+            assert_eq!(
+                kept,
+                scan_unsupported(&std::fs::read(document).unwrap()).unwrap()
+            );
+            assert_relationships_resolve(document);
             Ok(())
         }
     };
@@ -207,6 +226,40 @@ fn stored_values(file: &Path) -> Vec<String> {
     lines
 }
 
+fn relationship_ids(xml: &str) -> BTreeSet<String> {
+    roxmltree::Document::parse(xml)
+        .unwrap()
+        .descendants()
+        .filter(|n| n.has_tag_name("Relationship"))
+        .map(|n| n.attribute("Id").unwrap().to_string())
+        .collect()
+}
+
+fn assert_relationships_resolve(file: &Path) {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
+    for sheet in 1..=SHEETS.len() {
+        let xml = inflated(&mut archive, &format!("xl/worksheets/sheet{sheet}.xml")).unwrap();
+        let declared = inflated(
+            &mut archive,
+            &format!("xl/worksheets/_rels/sheet{sheet}.xml.rels"),
+        )
+        .map(|rels| relationship_ids(&rels))
+        .unwrap_or_default();
+        let document = roxmltree::Document::parse(&xml).unwrap();
+        for attribute in document
+            .descendants()
+            .flat_map(|n| n.attributes())
+            .filter(|a| a.namespace() == Some(RELATIONSHIPS))
+        {
+            assert!(
+                declared.contains(attribute.value()),
+                "sheet{sheet} names {} outside {declared:?}",
+                attribute.value()
+            );
+        }
+    }
+}
+
 fn part_names(file: &Path) -> Vec<String> {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
     (0..archive.len())
@@ -244,6 +297,7 @@ proptest! {
             }
             let values = stored_values(file);
             prop_assert!(values == expected_values, "{}", first_difference(&expected_values, &values));
+            assert_relationships_resolve(file);
         }
         prop_assert!(cells(&book) == expected, "{}", first_difference(&expected, &cells(&book)));
         let base = dir.path().join("base.xlsx");

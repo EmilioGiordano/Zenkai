@@ -4,6 +4,7 @@ mod edit_profile;
 mod error;
 mod file;
 mod fingerprint;
+mod held;
 mod model;
 mod preflight;
 mod rectangles;
@@ -14,7 +15,9 @@ mod save_rows;
 mod save_sheet;
 mod saved;
 mod sheet_copy;
+mod sheet_elements;
 mod sheet_settings;
+mod table_headers;
 #[cfg(test)]
 mod used_end_property;
 mod workbook;

@@ -78,21 +78,18 @@ pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineE
     let xlsx_read::FileRead {
         read,
         settings,
-        layout,
+        parts,
     } = xlsx_read::read_xlsx_file(path, &name, reader)?;
     // A file that changed while it was read is never copied from.
-    let file = match (layout, before) {
-        (Some(layout), Ok(stamp)) if Stamp::of(path).is_ok_and(|after| after == stamp) => {
-            Some(FileOnDisk {
-                path,
-                stamp,
-                layout,
-            })
+    let file = match (parts, before) {
+        (Some(parts), Ok(stamp)) if Stamp::of(path).is_ok_and(|after| after == stamp) => {
+            Some(FileOnDisk { path, stamp, parts })
         }
         _ => None,
     };
+    let held = &read.unsupported;
     let workbook =
-        preflight::run_with_engine_stack(|| Workbook::from_file(read.book, settings, file))?;
+        preflight::run_with_engine_stack(|| Workbook::from_file(read.book, settings, file, held))?;
     Ok(Opened {
         workbook,
         unsupported: read.unsupported,
@@ -104,16 +101,24 @@ pub fn scan_unsupported(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
     let found = std::sync::Mutex::new(Vec::new());
     zenkai_xlsx_reader::scan_parts(bytes, &|name, part| inspect_part(&found, name, part))
         .map_err(crate::xlsx_read::engine_error)?;
-    let mut found = found
+    let found = found
         .into_inner()
         .map_err(|_| EngineError::InvalidFile("a part check stopped".to_string()))?;
-    found.sort();
-    found.dedup();
-    Ok(found)
+    Ok(kinds(&found))
+}
+
+// Each kind found, by the name of the part it was found in.
+pub(crate) type Found = std::sync::Mutex<Vec<(String, Unsupported)>>;
+
+pub(crate) fn kinds(found: &[(String, Unsupported)]) -> Vec<Unsupported> {
+    let mut kinds: Vec<Unsupported> = found.iter().map(|(_, kind)| *kind).collect();
+    kinds.sort();
+    kinds.dedup();
+    kinds
 }
 
 pub(crate) fn inspect_part(
-    found: &std::sync::Mutex<Vec<Unsupported>>,
+    found: &Found,
     name: &str,
     part: &[u8],
 ) -> Result<(), zenkai_xlsx_reader::ReadError> {
@@ -125,7 +130,7 @@ pub(crate) fn inspect_part(
     found
         .lock()
         .map_err(|_| ReadError::Unsupported("a part check stopped".to_string()))?
-        .extend(kinds);
+        .extend(kinds.into_iter().map(|kind| (name.to_string(), kind)));
     Ok(())
 }
 
@@ -148,17 +153,7 @@ pub(crate) fn part_unsupported(name: &str, part: &[u8]) -> Result<Vec<Unsupporte
         .filter(|(prefix, _)| name.starts_with(prefix))
         .map(|(_, kind)| kind)
         .collect();
-    let features = preflight::check_part(part)?;
-    for (present, kind) in [
-        (features.hyperlinks, Unsupported::Hyperlinks),
-        (features.data_validation, Unsupported::DataValidation),
-        (features.auto_filter, Unsupported::AutoFilter),
-        (features.protection, Unsupported::SheetProtection),
-    ] {
-        if present {
-            found.push(kind);
-        }
-    }
+    found.extend(preflight::check_part(part)?);
     Ok(found)
 }
 

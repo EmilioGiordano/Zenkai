@@ -95,6 +95,7 @@ impl Loaded {
             link.path.clone(),
             unsupported,
         );
+        document.restored = self.from_recovery;
         document.read_only = self.read_only || (self.from_recovery && link.read_only);
         document.dirty = self.from_recovery && link.dirty;
         document.origin = link.origin.unwrap_or(self.origin);

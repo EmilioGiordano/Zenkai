@@ -11,7 +11,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use zenkai_agent::settings::SettingsError;
-use zenkai_engine::{Copied, Engine, EngineError, SaveTarget, Workbook, save_xlsx};
+use zenkai_engine::{Copied, Engine, EngineError, Unsupported, Workbook, save_xlsx};
 use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
@@ -46,7 +46,7 @@ use crate::clipboard;
 use crate::close_prompt::Departure;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
-use crate::document::{self, Document, FileJob};
+use crate::document::{self, Document, DocumentSave, FileJob};
 use crate::documents::{Documents, Step};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
@@ -208,6 +208,37 @@ pub struct Workspace {
 enum CellRefresh {
     Idle,
     Scheduled,
+}
+
+// A save over the document's own file, which stops before dropping anything not accepted.
+enum Overwrite {
+    InPlace,
+    Original,
+    Confirmed(Vec<Unsupported>),
+}
+
+impl Overwrite {
+    fn accepted(&self) -> &[Unsupported] {
+        match self {
+            Overwrite::InPlace | Overwrite::Original => &[],
+            Overwrite::Confirmed(lost) => lost,
+        }
+    }
+}
+
+enum Saved {
+    Written {
+        kept: Vec<Unsupported>,
+    },
+    Refused {
+        dropped: Vec<Unsupported>,
+        overwrite: Overwrite,
+    },
+}
+
+enum Replacing {
+    Existing,
+    Original(Vec<Unsupported>),
 }
 
 impl Workspace {
@@ -1530,46 +1561,59 @@ impl Workspace {
             return;
         };
         let must_rename =
-            !document.unsupported.is_empty() || document.is_macro_enabled() || document.read_only;
+            document.may_lose_unseen_content() || document.is_macro_enabled() || document.read_only;
         match document.path.clone() {
-            Some(path) if !must_rename => self.save_to(id, path, window, cx),
+            Some(path) if !must_rename => {
+                self.save_to(id, path, Some(Overwrite::InPlace), window, cx)
+            }
             Some(_) => {
+                let held = document::labels(&document.unsupported);
                 let detail = if document.read_only {
                     t!("save.read_only_detail").to_string()
                 } else if document.is_macro_enabled() {
                     let mut text = t!("save.macros_detail").to_string();
                     if !document.unsupported.is_empty() {
                         text.push(' ');
-                        text.push_str(&t!("save.also_lost", list = document.unsupported_labels()));
+                        text.push_str(&t!("save.also_lost", list = held));
                     }
                     text
                 } else {
-                    t!("save.loses_detail", list = document.unsupported_labels())
+                    t!("save.loses_detail", list = held)
                 };
-                let answer = window.prompt(
-                    PromptLevel::Warning,
-                    t!("save.cannot_save_title"),
-                    Some(&detail),
-                    &[t!("button.save_as"), t!("button.cancel")],
-                    cx,
-                );
-                cx.spawn_in(window, async move |this, cx| {
-                    let choice = answer.await;
-                    let update = this.update_in(cx, |this, window, cx| {
-                        if choice == Ok(0) {
-                            this.save_as_dialog(id, window, cx)
-                        } else {
-                            this.save_ended(id, false, window, cx)
-                        }
-                    });
-                    if let Err(error) = update {
-                        tracing::debug!(%error, "workspace closed during save prompt");
-                    }
-                })
-                .detach();
+                self.offer_save_as(id, &detail, window, cx);
             }
             None => self.save_as_dialog(id, window, cx),
         }
+    }
+
+    fn offer_save_as(
+        &mut self,
+        id: WorkbookId,
+        detail: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            t!("save.cannot_save_title"),
+            Some(detail),
+            &[t!("button.save_as"), t!("button.cancel")],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let choice = answer.await;
+            let update = this.update_in(cx, |this, window, cx| {
+                if choice == Ok(0) {
+                    this.save_as_dialog(id, window, cx)
+                } else {
+                    this.save_ended(id, false, window, cx)
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during save prompt");
+            }
+        })
+        .detach();
     }
 
     fn save_as(&mut self, _: &SaveAs, window: &mut Window, cx: &mut Context<Self>) {
@@ -1601,7 +1645,7 @@ impl Workspace {
                         .trim_start_matches("• ")
                         .to_string()
                 },
-                |s| format!("{} (Zenkai)", s.to_string_lossy()),
+                |stem| files::copy_stem(&stem.to_string_lossy()),
             );
         let path = cx.prompt_for_new_path(&directory, Some(&format!("{suggested}.xlsx")));
         cx.spawn_in(window, async move |this, cx| {
@@ -1651,25 +1695,43 @@ impl Workspace {
             .as_ref()
             .is_some_and(|source| files::same_file(source, &path));
         let never_overwritten = document.is_macro_enabled() || document.read_only;
-        let lost = document.unsupported_labels();
-        let loses_content = !document.unsupported.is_empty();
-        let (title, detail) = if replaces_source && never_overwritten {
+        if replaces_source && never_overwritten {
             self.notify(Severity::Error, t!("save.original_protected"), cx);
             self.save_ended(id, false, window, cx);
-            return;
-        } else if replaces_source && loses_content {
-            (
-                t!("save.replace_original_title"),
-                t!("save.replace_original_detail", list = lost),
-            )
+        } else if replaces_source && document.may_lose_unseen_content() {
+            let lost = document.unsupported.clone();
+            self.confirm_replace(id, path, Replacing::Original(lost), window, cx);
+        } else if replaces_source {
+            self.save_to(id, path, Some(Overwrite::Original), window, cx);
         } else if renamed && path.exists() {
-            (
+            self.confirm_replace(id, path, Replacing::Existing, window, cx);
+        } else {
+            self.save_to(id, path, None, window, cx);
+        }
+    }
+
+    fn confirm_replace(
+        &mut self,
+        id: WorkbookId,
+        path: PathBuf,
+        replacing: Replacing,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (title, detail, overwrite) = match replacing {
+            Replacing::Existing => (
                 t!("save.replace_existing_title"),
                 t!("save.replace_existing_detail", path = path.display()),
-            )
-        } else {
-            self.save_to(id, path, window, cx);
-            return;
+                None,
+            ),
+            Replacing::Original(lost) => (
+                t!("save.replace_original_title"),
+                t!(
+                    "save.replace_original_detail",
+                    list = document::labels(&lost)
+                ),
+                Some(Overwrite::Confirmed(lost)),
+            ),
         };
         let answer = window.prompt(
             PromptLevel::Critical,
@@ -1682,7 +1744,7 @@ impl Workspace {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| {
                 if choice == Ok(1) {
-                    this.save_to(id, path, window, cx)
+                    this.save_to(id, path, overwrite, window, cx)
                 } else {
                     this.save_ended(id, false, window, cx)
                 }
@@ -1698,6 +1760,8 @@ impl Workspace {
         &mut self,
         id: WorkbookId,
         path: PathBuf,
+        // None for a file Save As gave a name of its own.
+        overwrite: Option<Overwrite>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1723,13 +1787,17 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    document::write_snapshot(
-                        &shared,
-                        FileJob::Saving,
-                        &target,
-                        SaveTarget::Document,
-                        save_xlsx,
-                    )
+                    let Some(overwrite) = overwrite else {
+                        return document::write_document_copy(&shared, &target, save_xlsx)
+                            .map(|kept| Saved::Written { kept });
+                    };
+                    document::save_document_file(&shared, &target, overwrite.accepted(), save_xlsx)
+                        .map(|saved| match saved {
+                            DocumentSave::Written { kept } => Saved::Written { kept },
+                            DocumentSave::Refused { dropped } => {
+                                Saved::Refused { dropped, overwrite }
+                            }
+                        })
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
@@ -1752,10 +1820,8 @@ impl Workspace {
                 };
                 let fully_saved;
                 match result {
-                    Ok(()) => {
-                        if document.path.as_ref() != Some(&path) {
-                            document.unsupported.clear();
-                        }
+                    Ok(Saved::Written { kept }) => {
+                        document.saved_over_file(kept);
                         document.path = Some(path);
                         let edited_meanwhile = document.edit_count() != edits_at_start;
                         document.dirty = edited_meanwhile;
@@ -1764,6 +1830,22 @@ impl Workspace {
                             window.set_window_title(&document.title());
                         }
                         this.notify(Severity::Info, t!("notice.saved"), cx);
+                    }
+                    // Nothing was written; the file on disk is as it was.
+                    Ok(Saved::Refused { dropped, overwrite }) => {
+                        this.flush_edits(id, cx);
+                        match overwrite {
+                            Overwrite::InPlace => {
+                                let list = document::labels(&dropped);
+                                let detail = t!("save.loses_detail", list = list);
+                                this.offer_save_as(id, &detail, window, cx);
+                            }
+                            Overwrite::Original | Overwrite::Confirmed(_) => {
+                                let replacing = Replacing::Original(dropped);
+                                this.confirm_replace(id, path, replacing, window, cx);
+                            }
+                        }
+                        return;
                     }
                     Err(error) => {
                         let asks_again = document.path.as_ref() == Some(&path);
