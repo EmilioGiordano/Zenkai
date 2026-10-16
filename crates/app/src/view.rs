@@ -3908,6 +3908,15 @@ mod tests {
     }
 
     #[test]
+    fn a_range_past_the_autofit_cap_keeps_its_row_heights() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), &"word ".repeat(40)).unwrap();
+        let whole_sheet = Range::parse_a1("A1:XFD1048576").unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, whole_sheet).unwrap();
+        assert_eq!(row_height(&wb, a1().row), None);
+    }
+
+    #[test]
     fn only_the_rows_of_the_range_grow() {
         let mut wb = Workbook::new_empty().unwrap();
         let a3 = CellPos::parse_a1("A3").unwrap();
