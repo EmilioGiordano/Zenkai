@@ -9,7 +9,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use proptest::prelude::*;
-use rust_xlsxwriter::{Format, Formula, Workbook as Source};
+use rust_xlsxwriter::{Format, Formula, Table, TableColumn, Workbook as Source};
 use zenkai_engine::{
     Engine, EngineError, SaveTarget, Workbook, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
 };
@@ -426,6 +426,60 @@ const EXTRA_PART: &str = "customXml/item1.xml";
 fn has_part(file: &Path, name: &str) -> bool {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
     archive.by_name(name).is_ok()
+}
+
+const TABLE_PART: &str = "xl/tables/table1.xml";
+
+// A table over A1:B100 on a sheet that goes on for 200 rows, written by another application.
+fn table_base(path: &Path) {
+    let mut book = Source::new();
+    let sheet = book.add_worksheet().set_name("Rows").unwrap();
+    sheet.write_string(0, 0, "Name").unwrap();
+    sheet.write_string(0, 1, "Qty").unwrap();
+    for row in 1..ROWS {
+        sheet
+            .write_string(row, 0, FRUITS[row as usize % 3])
+            .unwrap();
+        sheet.write_number(row, 1, f64::from(row)).unwrap();
+    }
+    let columns = [
+        TableColumn::new().set_header("Name"),
+        TableColumn::new().set_header("Qty"),
+    ];
+    let table = Table::new().set_columns(&columns);
+    sheet.add_table(0, 0, 99, 1, &table).unwrap();
+    book.save(path).unwrap();
+}
+
+// Excel repairs a table whose header cells differ from its part, so a header edit must not
+// take the row-level patch, which keeps the table relationship; an edit below the table does.
+#[test]
+fn a_table_header_edit_is_written_whole_and_a_cell_below_the_table_row_by_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let document = dir.path().join("book.xlsx");
+    table_base(&document);
+    let base = copy_of(&document);
+    let mut book = open_xlsx(&document).unwrap().workbook;
+
+    book.set_input(SheetId(0), pos(149, 1), "1000").unwrap();
+    save(&book, &document);
+    let edited = block_of(150);
+    let expected: Vec<u32> = (1..=ROWS).filter(|row| block_of(*row) != edited).collect();
+    assert_eq!(copied_rows(&base, &document), expected);
+    assert!(has_part(&document, TABLE_PART));
+
+    let second_base = copy_of(&document);
+    book.set_input(SheetId(0), pos(0, 0), "Renamed").unwrap();
+    save(&book, &document);
+    assert!(copied_rows(&second_base, &document).is_empty());
+    let reopened = open_xlsx(&document).unwrap().workbook;
+    assert_eq!(reopened.input(SheetId(0), pos(0, 0)), "Renamed");
+    assert_eq!(reopened.input(SheetId(0), pos(149, 1)), "1000");
+    if has_part(&document, TABLE_PART) {
+        let table = part(&document, TABLE_PART);
+        assert!(table.contains("name=\"Renamed\""), "{table}");
+        assert!(!table.contains("name=\"Name\""), "{table}");
+    }
 }
 
 // Only a save that copies from the file keeps a part Zenkai does not write itself.
