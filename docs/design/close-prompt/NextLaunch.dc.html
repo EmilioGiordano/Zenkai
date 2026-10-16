@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Next launch after Don't Save</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7fb894}a:hover{color:#a6d3b5}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 880px; height: 560px; overflow: hidden; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; background: #18191b; color: #e4e4e6; display: flex; flex-direction: column">
+  <div style="height: 40px; flex-shrink: 0; display: flex; align-items: flex-end; gap: 2px; padding: 0 12px; background: #1f2023">
+    <div style="height: 32px; display: flex; align-items: center; padding: 0 14px; border-radius: 8px 8px 0 0; background: #18191b">Sales 2026.xlsx</div>
+    <div style="height: 32px; display: flex; align-items: center; padding: 0 14px; color: #767880">Budget.xlsx</div>
+  </div>
+
+  <div style="flex-grow: 1; display: grid; grid-template-columns: 44px repeat(6, minmax(0, 1fr)); grid-auto-rows: 26px; font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #a3a5ab; align-content: start">
+    <span></span><span style="padding: 5px 8px; color: #767880">A</span><span style="padding: 5px 8px; color: #767880">B</span><span style="padding: 5px 8px; color: #767880">C</span><span style="padding: 5px 8px; color: #767880">D</span><span style="padding: 5px 8px; color: #767880">E</span><span style="padding: 5px 8px; color: #767880">F</span>
+    <span style="padding: 5px 8px; color: #767880">1</span><span style="padding: 5px 8px; color: #e4e4e6">Region</span><span style="padding: 5px 8px; color: #e4e4e6">Q1</span><span style="padding: 5px 8px; color: #e4e4e6">Q2</span><span style="padding: 5px 8px; color: #e4e4e6">Q3</span><span></span><span></span>
+    <span style="padding: 5px 8px; color: #767880">2</span><span style="padding: 5px 8px">North</span><span style="padding: 5px 8px; text-align: right">12,400</span><span style="padding: 5px 8px; text-align: right">13,150</span><span style="padding: 5px 8px; text-align: right">11,980</span><span></span><span></span>
+    <span style="padding: 5px 8px; color: #767880">3</span><span style="padding: 5px 8px">South</span><span style="padding: 5px 8px; text-align: right">9,870</span><span style="padding: 5px 8px; text-align: right">10,020</span><span style="padding: 5px 8px; text-align: right">10,640</span><span></span><span></span>
+  </div>
+
+  <div style="height: 28px; flex-shrink: 0; display: flex; align-items: center; gap: 16px; padding: 0 12px; background: #1f2023; font-size: 12px; color: #a3a5ab">
+    <span>Reopened 2 tabs as last saved</span>
+    <span style="flex-grow: 1"></span>
+    <span style="color: #767880">Sheet1</span>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":880,"height":560}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

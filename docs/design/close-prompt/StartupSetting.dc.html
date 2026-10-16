@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Startup setting</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7fb894}a:hover{color:#a6d3b5}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 880px; height: 560px; overflow: hidden; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; background: #18191b; color: #e4e4e6; display: flex">
+  <nav aria-label="Settings sections" style="width: 200px; flex-shrink: 0; box-sizing: border-box; padding: 20px 10px; background: #1f2023; display: flex; flex-direction: column; gap: 2px">
+    <a href="#" style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 7px; background: #2a2b2f; color: #e4e4e6; text-decoration: none">General</a>
+    <a href="#" style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 7px; color: #a3a5ab; text-decoration: none">Appearance</a>
+    <a href="#" style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 7px; color: #a3a5ab; text-decoration: none">Agents</a>
+  </nav>
+  <div style="flex-grow: 1; box-sizing: border-box; padding: 28px 36px; display: flex; flex-direction: column; gap: 22px">
+    <h1 style="margin: 0; font-size: 18px; font-weight: 600">General</h1>
+
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <div style="display: flex; align-items: center; gap: 16px; min-height: 44px">
+        <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px">
+          <span>On startup</span>
+          <span style="font-size: 12px; color: #767880">Applies when Zenkai opens normally. After a crash, unsaved work is always offered for recovery.</span>
+        </span>
+        <div role="radiogroup" aria-label="On startup" style="display: flex; padding: 3px; border-radius: 8px; background: #1f2023">
+          <button role="radio" aria-checked="true" style="height: 30px; padding: 0 14px; border-radius: 6px; background: #34353a">Reopen last tabs</button>
+          <button role="radio" aria-checked="false" style="height: 30px; padding: 0 14px; border-radius: 6px; color: #a3a5ab">Start empty</button>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 4px">
+      <div style="display: flex; align-items: center; gap: 16px; min-height: 44px">
+        <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px">
+          <span>When closing with unsaved changes</span>
+          <span style="font-size: 12px; color: #767880">Tabs always ask before closing.</span>
+        </span>
+        <div role="radiogroup" aria-label="When closing with unsaved changes" style="display: flex; padding: 3px; border-radius: 8px; background: #1f2023">
+          <button role="radio" aria-checked="true" style="height: 30px; padding: 0 14px; border-radius: 6px; background: #34353a">Ask</button>
+          <button role="radio" aria-checked="false" style="height: 30px; padding: 0 14px; border-radius: 6px; color: #a3a5ab">Keep changes for next time</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":880,"height":560}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

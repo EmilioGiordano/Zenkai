@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Close tab with unsaved changes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7fb894}a:hover{color:#a6d3b5}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 880px; height: 560px; overflow: hidden; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; background: #18191b; color: #e4e4e6">
+  <div style="height: 40px; display: flex; align-items: flex-end; gap: 2px; padding: 0 12px; background: #1f2023">
+    <div style="height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-radius: 8px 8px 0 0; background: #18191b">
+      <span>Sales 2026.xlsx</span>
+      <span style="width: 7px; height: 7px; border-radius: 4px; background: #d9a679" aria-label="Unsaved changes"></span>
+    </div>
+    <div style="height: 32px; display: flex; align-items: center; padding: 0 14px; color: #767880">Budget.xlsx</div>
+  </div>
+  <div style="position: absolute; top: 40px; left: 0; right: 0; bottom: 0; background-image: linear-gradient(#26272a 1px, transparent 1px), linear-gradient(90deg, #26272a 1px, transparent 1px); background-size: 96px 26px"></div>
+  <div style="position: absolute; inset: 0; background: rgba(8, 8, 10, 0.55)"></div>
+
+  <div role="dialog" aria-labelledby="t1" style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 440px; box-sizing: border-box; padding: 22px 24px 20px; border-radius: 12px; background: #222326; box-shadow: 0 18px 50px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 18px">
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <h2 id="t1" style="margin: 0; font-size: 15px; font-weight: 600">Save changes to Sales 2026.xlsx?</h2>
+      <p style="margin: 0; color: #a3a5ab; line-height: 1.5">If you don't save, your changes since the last save are lost.</p>
+    </div>
+    <div style="display: flex; gap: 8px; justify-content: flex-end">
+      <button style="height: 34px; padding: 0 16px; border-radius: 8px; background: #2a2b2f">Don't Save</button>
+      <button style="height: 34px; padding: 0 16px; border-radius: 8px; background: #2a2b2f">Cancel</button>
+      <button style="height: 34px; padding: 0 18px; border-radius: 8px; background: #4caf7a; color: #0f1a13; font-weight: 600; outline: 2px solid #5b8def; outline-offset: 2px">Save</button>
+    </div>
+    <div style="display: flex; gap: 16px; color: #767880; font-size: 12px">
+      <span>Enter: Save</span>
+      <span>N: Don't Save</span>
+      <span>Esc: Cancel</span>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":880,"height":560}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

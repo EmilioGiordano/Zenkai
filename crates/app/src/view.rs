@@ -28,6 +28,8 @@ mod agent_chip;
 mod agent_files;
 mod agent_review;
 mod chat_dock;
+mod close_dialog;
+mod closing;
 mod settings_gate;
 mod space_panel;
 
@@ -41,6 +43,7 @@ use crate::agent_settings::{self, AgentConfig, HeldDecision};
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::clipboard;
+use crate::close_prompt::Departure;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, Document, FileJob};
@@ -183,6 +186,9 @@ pub struct Workspace {
     sidebar: SidebarState,
     panels: PanelsState,
     lifecycle: Lifecycle,
+    // Saves ahead of closing a tab or the app; `None` when no close waits on a save.
+    departure: Option<Departure>,
+    close_dialog: Option<close_dialog::CloseDialog>,
     saved_session: Option<Session>,
     cell_refresh: CellRefresh,
     missed: MissedRefreshes,
@@ -294,6 +300,8 @@ impl Workspace {
             sidebar: SidebarState::new(cx),
             panels: PanelsState::new(cx),
             lifecycle: Lifecycle::Running,
+            departure: None,
+            close_dialog: None,
             saved_session: None,
             cell_refresh: CellRefresh::Idle,
             missed: MissedRefreshes::default(),
@@ -1511,10 +1519,16 @@ impl Workspace {
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
         // Text typed in the formula bar is entered before saving, as in Excel.
         self.close_formula_bar(true, window, cx);
-        let Some(document) = self.documents.active() else {
+        if let Some(id) = self.documents.active_id() {
+            self.save_document(id, window, cx);
+        }
+    }
+
+    fn save_document(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(document) = self.documents.get(id) else {
+            self.save_ended(id, false, window, cx);
             return;
         };
-        let id = document.id;
         let must_rename =
             !document.unsupported.is_empty() || document.is_macro_enabled() || document.read_only;
         match document.path.clone() {
@@ -1540,10 +1554,15 @@ impl Workspace {
                     cx,
                 );
                 cx.spawn_in(window, async move |this, cx| {
-                    if answer.await == Ok(0)
-                        && let Err(error) = this
-                            .update_in(cx, |this, window, cx| this.save_as_dialog(id, window, cx))
-                    {
+                    let choice = answer.await;
+                    let update = this.update_in(cx, |this, window, cx| {
+                        if choice == Ok(0) {
+                            this.save_as_dialog(id, window, cx)
+                        } else {
+                            this.save_ended(id, false, window, cx)
+                        }
+                    });
+                    if let Err(error) = update {
                         tracing::debug!(%error, "workspace closed during save prompt");
                     }
                 })
@@ -1562,6 +1581,7 @@ impl Workspace {
 
     fn save_as_dialog(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(document) = self.documents.get(id) else {
+            self.save_ended(id, false, window, cx);
             return;
         };
         let directory = document
@@ -1597,11 +1617,11 @@ impl Workspace {
                     None
                 }
             };
-            if let Some(path) = chosen
-                && let Err(error) = this.update_in(cx, |this, window, cx| {
-                    this.confirm_target(id, path, window, cx)
-                })
-            {
+            let update = this.update_in(cx, |this, window, cx| match chosen {
+                Some(path) => this.confirm_target(id, path, window, cx),
+                None => this.save_ended(id, false, window, cx),
+            });
+            if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during save dialog");
             }
         })
@@ -1617,9 +1637,11 @@ impl Workspace {
     ) {
         if files::is_delimited_text(&chosen) {
             self.export_csv(id, chosen, window, cx);
+            self.csv_ended_departure(id, window, cx);
             return;
         }
         let Some(document) = self.documents.get(id) else {
+            self.save_ended(id, false, window, cx);
             return;
         };
         let path = files::xlsx_target(&chosen);
@@ -1633,6 +1655,7 @@ impl Workspace {
         let loses_content = !document.unsupported.is_empty();
         let (title, detail) = if replaces_source && never_overwritten {
             self.notify(Severity::Error, t!("save.original_protected"), cx);
+            self.save_ended(id, false, window, cx);
             return;
         } else if replaces_source && loses_content {
             (
@@ -1656,10 +1679,15 @@ impl Workspace {
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(1)
-                && let Err(error) =
-                    this.update_in(cx, |this, window, cx| this.save_to(id, path, window, cx))
-            {
+            let choice = answer.await;
+            let update = this.update_in(cx, |this, window, cx| {
+                if choice == Ok(1) {
+                    this.save_to(id, path, window, cx)
+                } else {
+                    this.save_ended(id, false, window, cx)
+                }
+            });
+            if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during replace prompt");
             }
         })
@@ -1674,6 +1702,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(document) = self.documents.get_mut(id) else {
+            self.save_ended(id, false, window, cx);
             return;
         };
         let Some(shared) = document.begin_file_job(FileJob::Saving) else {
@@ -1682,6 +1711,7 @@ impl Workspace {
                 FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
             };
             self.notify(Severity::Warning, reason, cx);
+            self.save_ended(id, false, window, cx);
             return;
         };
         let edits_at_start = document.edit_count();
@@ -1717,15 +1747,19 @@ impl Workspace {
                             cx,
                         );
                     }
+                    this.save_ended(id, false, window, cx);
                     return;
                 };
+                let fully_saved;
                 match result {
                     Ok(()) => {
                         if document.path.as_ref() != Some(&path) {
                             document.unsupported.clear();
                         }
                         document.path = Some(path);
-                        document.dirty = document.edit_count() != edits_at_start;
+                        let edited_meanwhile = document.edit_count() != edits_at_start;
+                        document.dirty = edited_meanwhile;
+                        fully_saved = !edited_meanwhile;
                         if shown {
                             window.set_window_title(&document.title());
                         }
@@ -1743,11 +1777,14 @@ impl Workspace {
                         // unless this already was a new location picked in Save As.
                         if asks_again && shown {
                             this.save_as_dialog(id, window, cx);
+                        } else {
+                            this.save_ended(id, false, window, cx);
                         }
                         return;
                     }
                 }
                 this.flush_edits(id, cx);
+                this.save_ended(id, fully_saved, window, cx);
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during save");
@@ -3203,6 +3240,15 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CloseFormatDialog, window, cx| {
                 this.close_format_dialog(window, cx)
             }))
+            .on_action(cx.listener(|this, _: &ConfirmCloseDialog, window, cx| {
+                this.confirm_close_dialog(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DiscardCloseDialog, window, cx| {
+                this.discard_close_dialog(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CancelCloseDialog, window, cx| {
+                this.cancel_close_dialog(window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &OpenRecent1, window, cx| this.open_recent(0, window, cx)),
             )
@@ -3529,6 +3575,7 @@ impl Render for Workspace {
             .children(self.render_toast(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
+            .children(self.render_close_dialog(cx))
             .children(self.render_generate())
             .children(self.render_space_panel(window, cx))
     }

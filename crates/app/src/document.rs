@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use zenkai_i18n::t;
 
 use zenkai_agent::protected_view::FileOrigin;
@@ -55,6 +55,7 @@ pub struct Document {
     pub find: Option<FindBar>,
     pub review: Review,
     pub last_used: Instant,
+    last_edited: Option<Instant>,
 }
 
 fn unsupported_label(unsupported: Unsupported) -> &'static str {
@@ -109,6 +110,7 @@ impl Document {
             find: None,
             review: Review::default(),
             last_used: Instant::now(),
+            last_edited: None,
         }
     }
 
@@ -155,6 +157,7 @@ impl Document {
 
     pub fn queue(&mut self, edit: Edit) {
         self.edit_count += 1;
+        self.last_edited = Some(Instant::now());
         self.pending.push(edit);
     }
 
@@ -215,6 +218,11 @@ impl Document {
 
     pub fn edit_count(&self) -> u64 {
         self.edit_count
+    }
+
+    // `None` for work restored from a previous run, whose edits this run never saw.
+    pub fn since_last_edit(&self) -> Option<Duration> {
+        self.last_edited.map(|edited| edited.elapsed())
     }
 
     pub fn recovery_is_current(&self) -> bool {
