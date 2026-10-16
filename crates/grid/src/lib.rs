@@ -2,6 +2,7 @@
 
 mod actions;
 mod autocomplete;
+mod cell_cache;
 mod formula_refs;
 mod general;
 mod grid;
