@@ -90,6 +90,7 @@ impl Model<'_> {
         dependencies: &mut Dependencies,
         edited: &[CellKey],
         dirty: &[CellKey],
+        max_tainted: usize,
     ) -> bool {
         if dependencies.circular.is_empty() {
             return false;
@@ -100,7 +101,7 @@ impl Model<'_> {
         if matches!(dependencies.tainted, Taint::Unknown) {
             dependencies.tainted = match dependencies
                 .index
-                .dependents_of(&dependencies.circular, MAX_TAINTED_CELLS)
+                .dependents_of(&dependencies.circular, max_tainted)
             {
                 Some(cells) => Taint::Cells(cells),
                 None => Taint::TooMany,
@@ -149,7 +150,7 @@ impl Model<'_> {
         // The order of a full evaluation, so recursion stays as shallow as there.
         dirty.sort_unstable();
         if dirty.iter().any(|cell| self.is_array_formula(*cell))
-            || Self::edits_reach_cycles(&mut dependencies, edited, &dirty)
+            || Self::edits_reach_cycles(&mut dependencies, edited, &dirty, MAX_TAINTED_CELLS)
         {
             self.evaluate_indexed();
             return;
@@ -272,5 +273,53 @@ impl Model<'_> {
                 || self.spill_size(spill.anchor) != Some(spill.size)
                 || edited.iter().any(|cell| spill.covers(*cell))
         }) || edited.iter().any(|cell| self.is_array_formula(*cell))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::{Model, Taint};
+    use crate::UserModel;
+
+    #[test]
+    fn too_many_tainted_cells_stay_remembered_until_the_index_is_rebuilt() {
+        let mut user_model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
+        user_model.set_user_input(0, 1, 1, "1").unwrap();
+        user_model.set_user_input(0, 1, 4, "=C1*2").unwrap();
+        user_model.set_user_input(0, 1, 3, "=C2+1").unwrap();
+        user_model.set_user_input(0, 2, 3, "=C1+1").unwrap();
+        let model = user_model.get_model();
+        let mut dependencies = model.build_dependencies();
+        assert!(!dependencies.circular.is_empty());
+        let away_from_the_cycle = [(0, 1, 1)];
+
+        // The cycle and D1 are 3 cells or more, so a cap of 1 overflows.
+        assert!(Model::edits_reach_cycles(
+            &mut dependencies,
+            &away_from_the_cycle,
+            &[],
+            1
+        ));
+        assert!(matches!(dependencies.tainted, Taint::TooMany));
+
+        // Remembered: an edit away from the cycle is still evaluated in full, even with room.
+        assert!(Model::edits_reach_cycles(
+            &mut dependencies,
+            &away_from_the_cycle,
+            &[],
+            usize::MAX
+        ));
+        assert!(matches!(dependencies.tainted, Taint::TooMany));
+
+        let mut rebuilt = model.build_dependencies();
+        assert!(!Model::edits_reach_cycles(
+            &mut rebuilt,
+            &away_from_the_cycle,
+            &[],
+            usize::MAX
+        ));
+        assert!(matches!(rebuilt.tainted, Taint::Cells(_)));
     }
 }
