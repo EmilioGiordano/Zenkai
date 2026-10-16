@@ -212,9 +212,13 @@ mod tests {
             "XL/Worksheets/Sheet1.xml".to_string(),
             Unsupported::AutoFilter,
         )];
-        let held = Held::of(&found, &layout(vec![SheetLinks::Known(BTreeSet::new())]));
-        assert_eq!(held.owned_by(&[0]), set(&[Unsupported::AutoFilter]));
-        assert_eq!(held.without(&[0]).all(), BTreeSet::new());
+        let mut held = Held::of(&found, &layout(vec![SheetLinks::Known(BTreeSet::new())]));
+        assert_eq!(
+            held.rewrite(0, BTreeSet::new(), Relationships::Kept)
+                .unwrap(),
+            set(&[Unsupported::AutoFilter])
+        );
+        assert_eq!(held.all(), BTreeSet::new());
     }
 
     #[test]
