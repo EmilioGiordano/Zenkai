@@ -37,8 +37,10 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
 - Live chart of the selection (Alt+F1): column, line or pie, export as SVG or copy as
   Mermaid.
 - Unsupported content (charts, images, pivots, macros, comments, Excel tables, hyperlinks,
-  validation, external links) is detected on open; saving asks for a new name instead of
-  silently dropping it. `.xlsm` originals are never overwritten.
+  validation, external links) is detected on open and kept by saves that do not rewrite
+  the sheet holding it; a save that would drop any of it asks for a new name first. Content
+  of a kind Zenkai does not detect may be dropped when its sheet is rewritten. `.xlsm`
+  originals are never overwritten.
 - Files the engine cannot open (`.xls`, `.ods`, `.xlsb`, broken `.xlsx`) open read-only
   with their values through calamine, with a clear notice.
 - CSV/TSV import with a preview: detected encoding and separator, decimal comma
@@ -210,3 +212,8 @@ artifact of any `bench.yml` run (the artifact is uploaded even when the check fa
 `bench\baseline.csv` and commit it.
 
 License: Apache-2.0.
+
+## Pull requests
+
+The scripts in `scripts/pr` (bash, `gh`, `jq`) open draft PRs, post reviews and reply in
+threads; the standards are in `AGENTS.md`. `scripts/pr/test.sh` checks them in dry-run.

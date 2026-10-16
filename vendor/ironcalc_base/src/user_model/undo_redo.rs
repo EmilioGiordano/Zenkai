@@ -80,6 +80,27 @@ impl<'a> UserModel<'a> {
                         }
                     }
                 }
+                Diff::FillFormula {
+                    sheet,
+                    row,
+                    column,
+                    width,
+                    height,
+                    old_values,
+                    ..
+                } => {
+                    needs_evaluation = true;
+                    self.restore_cells(
+                        &Area {
+                            sheet: *sheet,
+                            row: *row,
+                            column: *column,
+                            width: *width,
+                            height: *height,
+                        },
+                        old_values,
+                    )?;
+                }
                 Diff::SetArrayValue {
                     sheet,
                     row,
@@ -643,6 +664,31 @@ impl<'a> UserModel<'a> {
                     needs_evaluation = true;
                     self.model
                         .set_user_input(*sheet, *row, *column, new_value.to_string())?;
+                }
+                Diff::FillFormula {
+                    sheet,
+                    source_row,
+                    source_column,
+                    row,
+                    column,
+                    width,
+                    height,
+                    old_values: _,
+                } => {
+                    needs_evaluation = true;
+                    let area = Area {
+                        sheet: *sheet,
+                        row: *row,
+                        column: *column,
+                        width: *width,
+                        height: *height,
+                    };
+                    if self
+                        .write_filled_formula((*source_row, *source_column), &area)?
+                        .is_none()
+                    {
+                        return Err("Cannot fill the formula again".to_string());
+                    }
                 }
                 Diff::SetArrayValue {
                     sheet,

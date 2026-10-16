@@ -2360,18 +2360,7 @@ impl<'a> Model<'a> {
             if let Some(formula) = self.formula_without_prefix(&value) {
                 let formula_index =
                     self.set_cell_with_formula(sheet, row, column, formula, new_style_index)?;
-                // Update the style if needed
-                let cell = CellReferenceIndex { sheet, row, column };
-                let (parsed_formula, _static_result) =
-                    &self.parsed_formulas[sheet as usize][formula_index as usize];
-                if let Some(units) = self.compute_node_units(parsed_formula, &cell) {
-                    let new_style_index = self
-                        .workbook
-                        .styles
-                        .get_style_with_format(new_style_index, &units.get_num_fmt())?;
-                    let style = self.workbook.styles.get_style(new_style_index)?;
-                    self.set_cell_style(sheet, row, column, &style)?;
-                }
+                self.apply_formula_units(sheet, row, column, formula_index, new_style_index)?;
             } else {
                 // The list of currencies is '$', '€' and the local currency
                 let mut currencies = vec!["$", "€"];
@@ -2421,6 +2410,51 @@ impl<'a> Model<'a> {
             }
         }
         Ok(())
+    }
+
+    // The number format a formula inherits from the cells it reads.
+    fn apply_formula_units(
+        &mut self,
+        sheet: u32,
+        row: i32,
+        column: i32,
+        formula_index: i32,
+        style_index: i32,
+    ) -> Result<(), String> {
+        let cell = CellReferenceIndex { sheet, row, column };
+        let (parsed_formula, _static_result) =
+            &self.parsed_formulas[sheet as usize][formula_index as usize];
+        if let Some(units) = self.compute_node_units(parsed_formula, &cell) {
+            let new_style_index = self
+                .workbook
+                .styles
+                .get_style_with_format(style_index, &units.get_num_fmt())?;
+            let style = self.workbook.styles.get_style(new_style_index)?;
+            self.set_cell_style(sheet, row, column, &style)?;
+        }
+        Ok(())
+    }
+
+    // `set_user_input` for a scalar formula that is already stored, so no text is parsed.
+    pub(crate) fn set_user_formula_index(
+        &mut self,
+        sheet: u32,
+        row: i32,
+        column: i32,
+        formula_index: i32,
+    ) -> Result<(), String> {
+        self.prepare_cell_for_user_input(sheet, row, column)?;
+        let mut style_index = self.get_cell_style_index(sheet, row, column)?;
+        if self.workbook.styles.style_is_quote_prefix(style_index) {
+            style_index = self
+                .workbook
+                .styles
+                .get_style_without_quote_prefix(style_index)?;
+        }
+        self.workbook
+            .worksheet_mut(sheet)?
+            .set_cell_with_formula(row, column, formula_index, style_index)?;
+        self.apply_formula_units(sheet, row, column, formula_index, style_index)
     }
 
     /// Sets an array formula in an area (CSE formula)
@@ -2877,6 +2911,25 @@ impl<'a> Model<'a> {
         cells
     }
 
+    /// Returns the cells holding a formula, in natural (sheet, row, column) order.
+    fn get_formula_cells(&self) -> Vec<CellIndex> {
+        let mut cells = Vec::new();
+        for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
+            for row in sheet.sheet_data.rows_sorted() {
+                for (column, cell) in sheet.sheet_data.row_cells(row) {
+                    if cell.get_formula().is_some() {
+                        cells.push(CellIndex {
+                            index: index as u32,
+                            row,
+                            column,
+                        });
+                    }
+                }
+            }
+        }
+        cells
+    }
+
     /// Collects all dynamic-formula anchor cells in natural (sheet, row, column) order
     /// and stores them in `self.spill_cells`.
     fn collect_spill_cells(&mut self) {
@@ -3015,8 +3068,11 @@ impl<'a> Model<'a> {
 
         // Phase 2: evaluate everything else; spill cells are already Evaluated and skipped.
         // Fallback when max restarts is exceeded (circular spill dependency).
-        let all_cells = self.get_all_cells();
-        for cell in all_cells {
+        // Only formula cells do work here: reading any other cell changes nothing, and the
+        // anchor of an array or spill sits before the cells it covers in this order. Listing
+        // every cell would cost 12 bytes each and double while it grew.
+        let formula_cells = self.get_formula_cells();
+        for cell in formula_cells {
             self.evaluate_cell(CellReferenceIndex {
                 sheet: cell.index,
                 row: cell.row,

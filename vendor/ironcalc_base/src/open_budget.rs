@@ -2,20 +2,24 @@
 
 use crate::types::{Cell, Workbook};
 
-// Peak committed memory per stored cell while opening. Measured with the release
-// instrument before the compact cell store (committed MB): 2M plain cells peak 583 B/cell,
-// styled and shared-string cells 639, short formulas 788-814, zenkai-pesado (2.93M cells,
-// a third formulas) 665. The compact store cut a stored cell from 122-147 B to 40-42 B
-// (a row of cells is two vectors, Cell is 32 bytes), so 600 became 520: the 80 B saved,
-// rounded down so the estimate stays a lower bound on what the file needs. The importer's
-// DOM peak is charged separately and did not change.
-pub const BYTES_PER_CELL: u64 = 520;
-// Extra per formula cell over a value cell: the formula synthetics peak
-// 205-231 B/cell above the value ones.
-pub const BYTES_PER_FORMULA: u64 = 200;
-// A row costs a hash map entry plus two vector headers, about 90 B measured on rows of
-// two cells; kept at the earlier 128 B.
-pub const BYTES_PER_ROW: u64 = 128;
+// Streaming-route costs, fitted on 2026-10-14 to `measure_open --app` (release, allocator
+// peak; committed memory is 3-6% above it) over generated matrix shapes and real files:
+// about 29.5 B per cell, 199 B per row, 90-97 B per formula with repeated text and
+// 390-470 B with distinct text, about 540 B per distinct string at the peak (125 B at
+// rest; the rest is transient assembly) plus its 16 B of text. Each constant is the fit
+// with a margin so every measured shape is charged at least 1.2x its committed peak.
+pub const BYTES_PER_CELL: u64 = 70;
+// Extra per formula cell over a value cell, sized for distinct formula text.
+pub const BYTES_PER_FORMULA: u64 = 650;
+// Extra per distinct string over its text.
+pub const BYTES_PER_UNIQUE_STRING: u64 = 650;
+pub const BYTES_PER_ROW: u64 = 256;
+// The same costs when the file goes through IronCalc's importer, which holds the whole
+// workbook as a DOM and then converts it: measured before the streaming reader built
+// cells in place (583-814 B per cell). Charged by the fallback walk only.
+pub const IMPORTER_BYTES_PER_CELL: u64 = 520;
+pub const IMPORTER_BYTES_PER_FORMULA: u64 = 200;
+pub const IMPORTER_BYTES_PER_ROW: u64 = 128;
 // IronCalc's importer parses each worksheet into a DOM holding about sixteen
 // times its bytes: an 827 MB sheet peaks past 14 GB committed while parsing.
 pub const DOM_BYTES_PER_XML_BYTE: u64 = 16;
@@ -25,7 +29,7 @@ pub const SST_BYTES_PER_XML_BYTE: u64 = 2;
 pub const RAM_SHARE_PERCENT: u64 = 60;
 pub const FALLBACK_BUDGET_MB: u64 = 4096;
 pub const BUDGET_VARIABLE: &str = "ZENKAI_MEMORY_BUDGET_MB";
-pub const BUDGET_REFUSAL_PREFIX: &str = "this file needs at least ";
+pub const BUDGET_REFUSAL_PREFIX: &str = "this file needs about ";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OpenCost {
@@ -50,7 +54,7 @@ pub fn open_cost(book: &Workbook) -> OpenCost {
         }
     }
     for string in &book.shared_strings {
-        cost.bytes += string.len() as u64;
+        cost.bytes += string.len() as u64 + BYTES_PER_UNIQUE_STRING;
     }
     cost
 }
@@ -63,6 +67,14 @@ pub fn needed_bytes(cost: OpenCost) -> u64 {
         .saturating_add(cost.rows.saturating_mul(BYTES_PER_ROW))
 }
 
+pub fn importer_needed_bytes(cost: OpenCost) -> u64 {
+    cost.cells
+        .saturating_mul(IMPORTER_BYTES_PER_CELL)
+        .saturating_add(cost.formulas.saturating_mul(IMPORTER_BYTES_PER_FORMULA))
+        .saturating_add(cost.bytes)
+        .saturating_add(cost.rows.saturating_mul(IMPORTER_BYTES_PER_ROW))
+}
+
 pub fn describe_bytes(bytes: u64) -> String {
     if bytes >= 1024 * 1024 * 1024 {
         format!("{:.1} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
@@ -71,22 +83,45 @@ pub fn describe_bytes(bytes: u64) -> String {
     }
 }
 
-pub fn refusal(cost: OpenCost, budget_bytes: u64) -> String {
+// A need is shown rounded up and the allowance rounded down, so a refusal never reads
+// "needs 9.5 GB, allows 9.5 GB".
+fn describe_need(bytes: u64) -> String {
+    const GIGABYTE: u128 = 1024 * 1024 * 1024;
+    if u128::from(bytes) >= GIGABYTE {
+        let tenths = (u128::from(bytes) * 10).div_ceil(GIGABYTE);
+        format!("{}.{} GB", tenths / 10, tenths % 10)
+    } else {
+        format!("{} MB", bytes.div_ceil(1024 * 1024))
+    }
+}
+
+fn describe_allowance(bytes: u64) -> String {
+    const GIGABYTE: u128 = 1024 * 1024 * 1024;
+    if u128::from(bytes) >= GIGABYTE {
+        let tenths = u128::from(bytes) * 10 / GIGABYTE;
+        format!("{}.{} GB", tenths / 10, tenths % 10)
+    } else {
+        format!("{} MB", bytes / 1024 / 1024)
+    }
+}
+
+// `needed` is the estimate for `cost` on the route the caller reads the file by.
+pub fn refusal(cost: OpenCost, needed: u64, budget_bytes: u64) -> String {
     format!(
-        "{BUDGET_REFUSAL_PREFIX}{} to open ({} cells, {} formulas), more than the {} supported; close other workbooks, or use a machine with more memory",
-        describe_bytes(needed_bytes(cost)),
+        "{BUDGET_REFUSAL_PREFIX}{} to open ({} cells, {} formulas), this computer allows {} for it; close other workbooks, or use a machine with more memory",
+        describe_need(needed),
         cost.cells,
         cost.formulas,
-        describe_bytes(budget_bytes),
+        describe_allowance(budget_bytes),
     )
 }
 
 pub fn refusal_for_part(part: &str, size: u64, factor: u64, budget_bytes: u64) -> String {
     format!(
-        "{BUDGET_REFUSAL_PREFIX}{} to open (part {part} is {}, about {factor}x in memory), more than the {} supported; close other workbooks, or use a machine with more memory",
-        describe_bytes(size.saturating_mul(factor)),
+        "{BUDGET_REFUSAL_PREFIX}{} to open (part {part} is {}, about {factor}x in memory), this computer allows {} for it; close other workbooks, or use a machine with more memory",
+        describe_need(size.saturating_mul(factor)),
         describe_bytes(size),
-        describe_bytes(budget_bytes),
+        describe_allowance(budget_bytes),
     )
 }
 
@@ -110,7 +145,7 @@ pub fn check_cost(cost: OpenCost, budget_bytes: u64) -> Result<(), String> {
     if needed_bytes(cost) <= budget_bytes {
         return Ok(());
     }
-    Err(refusal(cost, budget_bytes))
+    Err(refusal(cost, needed_bytes(cost), budget_bytes))
 }
 
 pub fn check_with_budget(book: &Workbook, budget_bytes: u64) -> Result<(), String> {
@@ -152,6 +187,62 @@ mod tests {
         });
         assert!(formulas > values);
         assert_eq!(formulas - values, 1000 * BYTES_PER_FORMULA);
+    }
+
+    #[test]
+    fn every_measured_shape_is_charged_at_least_one_and_a_fifth_of_its_peak() {
+        let mebibyte = 1024 * 1024;
+        // (cells, formulas, rows, text and string bytes, committed peak in MiB)
+        let shapes = [
+            (
+                10_000_000,
+                0,
+                1_000_000,
+                8_000_000 * (16 + BYTES_PER_UNIQUE_STRING),
+                4_628,
+            ),
+            (3_000_000, 858_000, 200_000, 0, 602),
+            (10_485_760, 0, 1_048_576, 0, 527),
+        ];
+        for (cells, formulas, rows, bytes, peak) in shapes {
+            let charged = needed_bytes(OpenCost {
+                cells,
+                formulas,
+                rows,
+                bytes,
+            });
+            assert!(
+                charged * 10 >= peak * mebibyte * 12,
+                "{cells} cells: {charged}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_importer_route_costs_more_than_the_streaming_route() {
+        let cost = OpenCost {
+            cells: 1000,
+            formulas: 100,
+            rows: 10,
+            bytes: 0,
+        };
+        assert!(importer_needed_bytes(cost) > needed_bytes(cost));
+    }
+
+    #[test]
+    fn a_refusal_never_shows_the_need_at_or_below_the_allowance() {
+        let gigabyte = 1024 * 1024 * 1024;
+        let budget = 9 * gigabyte + gigabyte / 2 - 1;
+        let cost = OpenCost {
+            cells: 1,
+            formulas: 0,
+            rows: 0,
+            bytes: 0,
+        };
+        let error = refusal(cost, budget + 1, budget);
+        assert!(error.contains("needs about 9.5 GB"), "{error}");
+        assert!(error.contains("allows 9.4 GB"), "{error}");
+        assert!(!error.contains("harm"), "{error}");
     }
 
     #[test]

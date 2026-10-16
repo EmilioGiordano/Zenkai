@@ -35,6 +35,7 @@ pub struct Document {
     untitled: u32,
     workbook: SharedWorkbook,
     batch_running: bool,
+    sheets_stale: bool,
     file_job: FileJob,
     pub path: Option<PathBuf>,
     pub dirty: bool,
@@ -108,6 +109,7 @@ impl Document {
             untitled,
             workbook: Arc::new(RwLock::new(workbook)),
             batch_running: false,
+            sheets_stale: false,
             file_job: FileJob::Idle,
             path,
             dirty: false,
@@ -181,6 +183,10 @@ impl Document {
         self.autosave_cancel.store(true, Ordering::Relaxed);
         self.recovery_stale_since.get_or_insert_with(Instant::now);
         self.pending.push(edit);
+    }
+
+    pub fn shared_workbook(&self) -> SharedWorkbook {
+        Arc::clone(&self.workbook)
     }
 
     pub fn workbook_mut(&self) -> Option<RwLockWriteGuard<'_, Workbook>> {
@@ -293,14 +299,16 @@ impl Document {
     }
 
     // A copy that lacks some of the file's content keeps it listed, so a restored session
-    // still warns before saving over the file.
-    pub fn recovery_lacks(&mut self, lacks: &[Unsupported]) {
+    // still warns before saving over the file. Returns whether the list grew.
+    pub fn recovery_lacks(&mut self, lacks: &[Unsupported]) -> bool {
+        let before = self.unsupported.len();
         for kind in lacks {
             if !self.unsupported.contains(kind) {
                 self.unsupported.push(*kind);
             }
         }
         self.unsupported.sort();
+        self.unsupported.len() != before
     }
 
     pub fn saved_over_file(&mut self, kept: Vec<Unsupported>) {
@@ -331,14 +339,26 @@ impl Document {
             return false;
         }
         self.batch_running = false;
-        if let Some(sheets) = self.workbook().map(|workbook| workbook.sheets()) {
-            self.sheets = sheets;
-        }
+        self.sync_sheets();
+        true
+    }
+
+    pub fn sheets_stale(&self) -> bool {
+        self.sheets_stale
+    }
+
+    // A busy workbook leaves the sheet list as it was and marks it stale for a retry.
+    pub fn sync_sheets(&mut self) {
+        let Some(sheets) = self.workbook().map(|workbook| workbook.sheets()) else {
+            self.sheets_stale = true;
+            return;
+        };
+        self.sheets_stale = false;
+        self.sheets = sheets;
         let last = u32::try_from(self.sheets.len().saturating_sub(1)).unwrap_or(0);
         if self.sheet.0 > last {
             self.sheet = SheetId(last);
         }
-        true
     }
 
     // With `formulas`, cells holding a formula show it instead of its value (Ctrl+`).
@@ -480,19 +500,8 @@ pub fn write_snapshot_unless(
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Accepted {
-    Anything,
-    Only(Vec<Unsupported>),
-}
-
-impl Accepted {
-    fn allows(&self, dropped: &[Unsupported]) -> bool {
-        match self {
-            Accepted::Anything => true,
-            Accepted::Only(accepted) => dropped.iter().all(|kind| accepted.contains(kind)),
-        }
-    }
+fn allows(accepted: &[Unsupported], dropped: &[Unsupported]) -> bool {
+    dropped.iter().all(|kind| accepted.contains(kind))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -505,7 +514,7 @@ pub enum DocumentSave {
 pub fn save_document_file(
     shared: &RwLock<Workbook>,
     target: &Path,
-    accepted: &Accepted,
+    accepted: &[Unsupported],
     write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
 ) -> Result<DocumentSave, EngineError> {
     with_snapshot(
@@ -514,13 +523,32 @@ pub fn save_document_file(
         target,
         SaveTarget::Document,
         |snapshot| {
-            if !accepted.allows(snapshot.dropped()) {
+            if !allows(accepted, snapshot.dropped()) {
                 return Ok(DocumentSave::Refused {
                     dropped: snapshot.dropped().to_vec(),
                 });
             }
             let kept = snapshot.kept().to_vec();
             write(snapshot).map(|()| DocumentSave::Written { kept })
+        },
+    )
+}
+
+// For a file Save As gave a name of its own, which nothing is lost from. Returns what the
+// written file holds that Zenkai does not show.
+pub fn write_document_copy(
+    shared: &RwLock<Workbook>,
+    target: &Path,
+    write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
+) -> Result<Vec<Unsupported>, EngineError> {
+    with_snapshot(
+        shared,
+        FileJob::Saving,
+        target,
+        SaveTarget::Document,
+        |snapshot| {
+            let kept = snapshot.kept().to_vec();
+            write(snapshot).map(|()| kept)
         },
     )
 }
@@ -599,6 +627,20 @@ mod tests {
         let mut current = document();
         assert!(!current.is_current(generation));
         assert!(!current.finish_batch(generation));
+    }
+
+    #[test]
+    fn a_busy_workbook_marks_the_sheet_list_stale_until_it_is_synced() {
+        let mut document = document();
+        document.queue(noop());
+        let generation = document.generation();
+        let (shared, _) = document.take_batch().unwrap();
+        let guard = shared.write().unwrap();
+        assert!(document.finish_batch(generation));
+        assert!(document.sheets_stale());
+        drop(guard);
+        document.sync_sheets();
+        assert!(!document.sheets_stale());
     }
 
     #[test]
@@ -836,11 +878,11 @@ mod tests {
     fn a_save_goes_ahead_only_when_it_drops_nothing_unaccepted() {
         let filter = [Unsupported::AutoFilter];
         let both = [Unsupported::Charts, Unsupported::AutoFilter];
-        assert!(Accepted::Only(Vec::new()).allows(&[]));
-        assert!(!Accepted::Only(Vec::new()).allows(&filter));
-        assert!(Accepted::Only(filter.to_vec()).allows(&filter));
-        assert!(!Accepted::Only(filter.to_vec()).allows(&both));
-        assert!(Accepted::Anything.allows(&both));
+        assert!(allows(&[], &[]));
+        assert!(!allows(&[], &filter));
+        assert!(allows(&filter, &filter));
+        assert!(!allows(&filter, &both));
+        assert!(allows(&both, &filter));
     }
 
     #[test]
@@ -848,12 +890,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("book.xlsx");
         let shared = RwLock::new(Workbook::new_empty().unwrap());
-        let saved = save_document_file(
-            &shared,
-            &target,
-            &Accepted::Only(Vec::new()),
-            zenkai_engine::save_xlsx,
-        );
+        let saved = save_document_file(&shared, &target, &[], zenkai_engine::save_xlsx);
         assert_eq!(saved.unwrap(), DocumentSave::Written { kept: Vec::new() });
         assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
     }
@@ -863,8 +900,8 @@ mod tests {
         let mut document = document();
         document.restored = true;
         assert!(!document.may_lose_unseen_content());
-        document.recovery_lacks(&[Unsupported::Outline, Unsupported::Charts]);
-        document.recovery_lacks(&[Unsupported::Charts]);
+        assert!(document.recovery_lacks(&[Unsupported::Outline, Unsupported::Charts]));
+        assert!(!document.recovery_lacks(&[Unsupported::Charts]));
         assert_eq!(
             document.unsupported,
             [Unsupported::Charts, Unsupported::Outline]

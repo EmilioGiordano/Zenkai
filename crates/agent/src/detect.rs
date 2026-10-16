@@ -12,14 +12,16 @@ pub enum Program {
     Npx,
     Claude,
     Gemini,
+    Grok,
 }
 
 impl Program {
-    pub const ALL: [Program; 4] = [
+    pub const ALL: [Program; 5] = [
         Program::Node,
         Program::Npx,
         Program::Claude,
         Program::Gemini,
+        Program::Grok,
     ];
 
     pub fn executable(self) -> &'static str {
@@ -28,6 +30,7 @@ impl Program {
             Program::Npx => "npx",
             Program::Claude => "claude",
             Program::Gemini => "gemini",
+            Program::Grok => "grok",
         }
     }
 
@@ -37,6 +40,7 @@ impl Program {
             Program::Npx => "npx",
             Program::Claude => "Claude Code",
             Program::Gemini => "Gemini CLI",
+            Program::Grok => "Grok",
         }
     }
 }

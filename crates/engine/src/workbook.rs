@@ -221,7 +221,7 @@ fn read_error(error: ironcalc::error::XlsxError) -> EngineError {
         ironcalc::error::XlsxError::Workbook(message)
             if message.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) =>
         {
-            EngineError::Unsafe(message)
+            EngineError::TooLarge(message)
         }
         other => EngineError::InvalidFile(format!("{other:?}")),
     }
@@ -296,6 +296,74 @@ fn area(sheet: SheetId, range: Range) -> Area {
 }
 
 impl Workbook {
+    // Fills each line of `rest` as one undo step. A line whose source holds a plain formula
+    // is filled by sharing it, so no text is built or parsed per cell; any other line gets
+    // the text `text_at` gives for each of its cells.
+    fn fill_lines(
+        &mut self,
+        sheet: SheetId,
+        rest: Range,
+        lines: Vec<(Option<CellPos>, Range)>,
+        text_at: impl Fn(&Model, CellPos) -> Result<String, EngineError>,
+    ) -> Result<(), EngineError> {
+        self.model.rewrite_values(|model| {
+            select(model, sheet, rest)?;
+            model.begin_edit_group().map_err(rejected)
+        })?;
+        let filled = self.fill_lines_in_group(sheet, lines, text_at);
+        let ended = self
+            .model
+            .rewrite_values(|model| model.end_edit_group())
+            .map_err(rejected);
+        filled?;
+        ended?;
+        self.model
+            .select_without_invalidation(|model| select(model, sheet, rest))
+    }
+
+    fn fill_lines_in_group(
+        &mut self,
+        sheet: SheetId,
+        lines: Vec<(Option<CellPos>, Range)>,
+        text_at: impl Fn(&Model, CellPos) -> Result<String, EngineError>,
+    ) -> Result<(), EngineError> {
+        for (source, line) in lines {
+            if let Some(source) = source {
+                let shared = self
+                    .model
+                    .write_within(sheet, line, |model| {
+                        model.fill_formula(
+                            (row_i32(source.row), col_i32(source.col)),
+                            &area(sheet, line),
+                        )
+                    })
+                    .map_err(rejected)?;
+                if shared {
+                    continue;
+                }
+            }
+            let model = self.model.get_model();
+            let texts = (line.start.row.get()..=line.end.row.get())
+                .flat_map(|row| {
+                    (line.start.col.get()..=line.end.col.get()).map(move |col| {
+                        CellPos::new(
+                            RowIdx::clamped(i64::from(row)),
+                            ColIdx::clamped(i64::from(col)),
+                        )
+                    })
+                })
+                .map(|pos| text_at(model, pos))
+                .collect::<Result<Vec<_>, _>>()?;
+            let rows: Vec<Vec<String>> = if line.cols() == 1 {
+                texts.into_iter().map(|text| vec![text]).collect()
+            } else {
+                vec![texts]
+            };
+            self.set_inputs(sheet, line.start, &rows)?;
+        }
+        Ok(())
+    }
+
     // Up to MAX_STYLED_CELLS the range is styled as selected, so a cell typed into later
     // keeps the format as in Excel. A bigger one is cut to the used area, which holds
     // every cell that exists; `None` means the range lies wholly beyond it.
@@ -860,45 +928,72 @@ impl Engine for Workbook {
                 })
                 .collect()
         };
-        let model = self.model.get_model();
         let (source_rows, source_cols) = (source.rows(), u32::from(source.cols()));
-        let rows = (rest.start.row.get()..=rest.end.row.get())
-            .map(|row| {
-                (rest.start.col.get()..=rest.end.col.get())
-                    .map(|col| {
-                        let (line, step) = if down {
-                            (col - source.start.col.get(), row - source.start.row.get())
-                        } else {
-                            (
-                                u16::try_from(row - source.start.row.get()).unwrap_or(0),
-                                u32::from(col - source.start.col.get()),
-                            )
-                        };
-                        if let Some(Some(series)) = lines.get(usize::from(line)) {
-                            return Ok(series.at(f64::from(step)));
-                        }
-                        let (from_row, from_col) = if down {
-                            let offset = (row - source.start.row.get()) % source_rows;
-                            (source.start.row.get() + offset, u32::from(col))
-                        } else {
-                            let offset =
-                                (u32::from(col) - u32::from(source.start.col.get())) % source_cols;
-                            (row, u32::from(source.start.col.get()) + offset)
-                        };
-                        model
-                            .extend_to(
-                                sheet.0,
-                                from_row as i32 + 1,
-                                from_col as i32 + 1,
-                                row as i32 + 1,
-                                i32::from(col) + 1,
-                            )
-                            .map_err(rejected)
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        self.set_inputs(sheet, rest.start, &rows)
+        let lines_to_fill = if down {
+            (rest.start.col.get()..=rest.end.col.get())
+                .map(|col| {
+                    let col = ColIdx::clamped(i64::from(col));
+                    let shared = (source_rows == 1
+                        && matches!(
+                            lines.get(usize::from(col.get() - source.start.col.get())),
+                            Some(None)
+                        ))
+                    .then(|| CellPos::new(source.start.row, col));
+                    let line = Range::new(
+                        CellPos::new(rest.start.row, col),
+                        CellPos::new(rest.end.row, col),
+                    );
+                    (shared, line)
+                })
+                .collect()
+        } else {
+            (rest.start.row.get()..=rest.end.row.get())
+                .map(|row| {
+                    let row = RowIdx::clamped(i64::from(row));
+                    let shared = (source_cols == 1
+                        && matches!(
+                            lines.get((row.get() - source.start.row.get()) as usize),
+                            Some(None)
+                        ))
+                    .then(|| CellPos::new(row, source.start.col));
+                    let line = Range::new(
+                        CellPos::new(row, rest.start.col),
+                        CellPos::new(row, rest.end.col),
+                    );
+                    (shared, line)
+                })
+                .collect()
+        };
+        self.fill_lines(sheet, rest, lines_to_fill, |model, pos| {
+            let (row, col) = (pos.row.get(), pos.col.get());
+            let (line, step) = if down {
+                (col - source.start.col.get(), row - source.start.row.get())
+            } else {
+                (
+                    u16::try_from(row - source.start.row.get()).unwrap_or(0),
+                    u32::from(col - source.start.col.get()),
+                )
+            };
+            if let Some(Some(series)) = lines.get(usize::from(line)) {
+                return Ok(series.at(f64::from(step)));
+            }
+            let (from_row, from_col) = if down {
+                let offset = (row - source.start.row.get()) % source_rows;
+                (source.start.row.get() + offset, u32::from(col))
+            } else {
+                let offset = (u32::from(col) - u32::from(source.start.col.get())) % source_cols;
+                (row, u32::from(source.start.col.get()) + offset)
+            };
+            model
+                .extend_to(
+                    sheet.0,
+                    from_row as i32 + 1,
+                    from_col as i32 + 1,
+                    row_i32(pos.row),
+                    col_i32(pos.col),
+                )
+                .map_err(rejected)
+        })
     }
 
     fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError> {
@@ -974,30 +1069,47 @@ impl Engine for Workbook {
                 rest.cell_count()
             )));
         }
-        let model = self.model.get_model();
-        let rows = (rest.start.row.get()..=rest.end.row.get())
-            .map(|row| {
-                (rest.start.col.get()..=rest.end.col.get())
-                    .map(|col| {
-                        let (from_row, from_col) = if down {
-                            (source_line, u32::from(col))
-                        } else {
-                            (row, source_line)
-                        };
-                        model
-                            .extend_to(
-                                sheet.0,
-                                from_row as i32 + 1,
-                                from_col as i32 + 1,
-                                row as i32 + 1,
-                                i32::from(col) + 1,
-                            )
-                            .map_err(rejected)
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        self.set_inputs(sheet, rest.start, &rows)
+        let lines = if down {
+            (rest.start.col.get()..=rest.end.col.get())
+                .map(|col| {
+                    let col = ColIdx::clamped(i64::from(col));
+                    let source = CellPos::new(RowIdx::clamped(i64::from(source_line)), col);
+                    let line = Range::new(
+                        CellPos::new(rest.start.row, col),
+                        CellPos::new(rest.end.row, col),
+                    );
+                    (Some(source), line)
+                })
+                .collect()
+        } else {
+            (rest.start.row.get()..=rest.end.row.get())
+                .map(|row| {
+                    let row = RowIdx::clamped(i64::from(row));
+                    let source = CellPos::new(row, ColIdx::clamped(i64::from(source_line)));
+                    let line = Range::new(
+                        CellPos::new(row, rest.start.col),
+                        CellPos::new(row, rest.end.col),
+                    );
+                    (Some(source), line)
+                })
+                .collect()
+        };
+        self.fill_lines(sheet, rest, lines, |model, pos| {
+            let (from_row, from_col) = if down {
+                (source_line, u32::from(pos.col.get()))
+            } else {
+                (pos.row.get(), source_line)
+            };
+            model
+                .extend_to(
+                    sheet.0,
+                    from_row as i32 + 1,
+                    from_col as i32 + 1,
+                    row_i32(pos.row),
+                    col_i32(pos.col),
+                )
+                .map_err(rejected)
+        })
     }
 
     fn clear_formats(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
@@ -1547,7 +1659,7 @@ pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
 fn engine_model(book: ironcalc::base::types::Workbook) -> Result<Model<'static>, EngineError> {
     Model::from_workbook(book, LANGUAGE).map_err(|error| {
         if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
-            EngineError::Unsafe(error)
+            EngineError::TooLarge(error)
         } else {
             EngineError::InvalidFile(error)
         }
@@ -1600,7 +1712,7 @@ mod tests {
     fn a_budget_refusal_reaches_the_user_as_plain_text() {
         let message = format!("{BUDGET_REFUSAL_PREFIX}12.3 GB to open");
         let error = read_error(XlsxError::Workbook(message.clone()));
-        assert!(matches!(&error, EngineError::Unsafe(text) if *text == message));
+        assert!(matches!(&error, EngineError::TooLarge(text) if *text == message));
     }
 
     #[test]

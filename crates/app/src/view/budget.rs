@@ -12,17 +12,17 @@ impl Workspace {
     pub(super) fn start_memory_sampler(&mut self, cx: &mut Context<Self>) {
         self.memory_sampler = Some(cx.spawn(async move |this, cx| {
             loop {
-                let memory =
-                    memory_stats::memory_stats().map_or(0, |m| m.physical_mem / 1024 / 1024);
-                let update = this.update(cx, |this, cx| {
-                    this.memory_mb = u64::try_from(memory).unwrap_or(u64::MAX);
-                    if this.sidebar.visible || this.diagnostics {
-                        cx.notify();
+                if let Some(memory_mb) = memory::current_committed_mb() {
+                    let update = this.update(cx, |this, cx| {
+                        this.memory_mb = memory_mb;
+                        if this.sidebar.visible || this.diagnostics {
+                            cx.notify();
+                        }
+                        this.enforce_memory_budget(cx);
+                    });
+                    if update.is_err() {
+                        break;
                     }
-                    this.enforce_memory_budget(cx);
-                });
-                if update.is_err() {
-                    break;
                 }
                 cx.background_executor().timer(SAMPLE_EVERY).await;
             }

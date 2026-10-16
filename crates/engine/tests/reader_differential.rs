@@ -385,3 +385,97 @@ proptest! {
         assert_agree(&format!("{damages:?}"), &bytes, true);
     }
 }
+
+struct Shape {
+    sheets: u32,
+    rows: u32,
+    columns: u16,
+    formula_percent: u64,
+    string_percent: u64,
+    distinct_formulas: bool,
+    styles: usize,
+}
+
+fn generated(shape: &Shape) -> Vec<u8> {
+    use rust_xlsxwriter::{Format, Formula, Workbook};
+    let formats: Vec<Format> = (0..shape.styles)
+        .map(|n| Format::new().set_num_format(format!("0.{}", "0".repeat(n % 4 + 1)).as_str()))
+        .collect();
+    let mut book = Workbook::new();
+    let mut state = 11u64;
+    let mut next = || {
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        state >> 33
+    };
+    for _ in 0..shape.sheets {
+        let sheet = book.add_worksheet();
+        for row in 0..shape.rows {
+            for column in 0..shape.columns {
+                let roll = next() % 100;
+                let format = formats.get(next() as usize % formats.len().max(1));
+                let line = row + 1;
+                if column >= 2 && roll < shape.formula_percent {
+                    let text = if shape.distinct_formulas {
+                        format!("=A{line}*{}+B{line}", next() % 1_000)
+                    } else {
+                        format!("=A{line}*2+B{line}")
+                    };
+                    let written = match format {
+                        Some(f) => {
+                            sheet.write_formula_with_format(row, column, Formula::new(text), f)
+                        }
+                        None => sheet.write_formula(row, column, Formula::new(text)),
+                    };
+                    written.unwrap();
+                } else if column >= 2 && roll >= 100 - shape.string_percent {
+                    let text = format!("item {}", next() % 50);
+                    let written = match format {
+                        Some(f) => sheet.write_string_with_format(row, column, text, f),
+                        None => sheet.write_string(row, column, text),
+                    };
+                    written.unwrap();
+                } else {
+                    let value = (next() % 100_000) as f64 / 100.0;
+                    let written = match format {
+                        Some(f) => sheet.write_number_with_format(row, column, value, f),
+                        None => sheet.write_number(row, column, value),
+                    };
+                    written.unwrap();
+                }
+            }
+        }
+    }
+    book.save_to_buffer().unwrap()
+}
+
+#[test]
+fn generated_shapes_read_the_same_with_both_readers() {
+    for (sheets, rows, columns, formula_percent, string_percent, distinct_formulas, styles) in [
+        (1, 400, 3, 0, 0, false, 0),
+        (1, 300, 12, 30, 0, false, 0),
+        (1, 300, 12, 30, 0, true, 0),
+        (1, 300, 8, 0, 60, false, 0),
+        (1, 300, 8, 20, 30, true, 5),
+        (3, 150, 6, 50, 20, false, 3),
+        (2, 1, 40, 80, 10, true, 0),
+    ] {
+        let shape = Shape {
+            sheets,
+            rows,
+            columns,
+            formula_percent,
+            string_percent,
+            distinct_formulas,
+            styles,
+        };
+        assert_agree(
+            &format!(
+                "sheets {sheets} rows {rows} columns {columns} formulas {formula_percent} strings {string_percent} distinct {distinct_formulas} styles {styles}"
+            ),
+            &generated(&shape),
+            false,
+        );
+    }
+}
