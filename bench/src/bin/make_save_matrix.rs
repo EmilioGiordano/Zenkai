@@ -74,9 +74,7 @@ fn fill(sheet: &mut Worksheet, shape: Shape, rows: u32) -> Result<()> {
         sheet.write_number(row, 2, price)?;
         let result = match shape {
             Shape::DistinctFormulas => id * price + id,
-            Shape::OneSheet | Shape::BigPlusSmall | Shape::Even | Shape::FormulaHeavy => {
-                id * price
-            }
+            Shape::OneSheet | Shape::BigPlusSmall | Shape::Even | Shape::FormulaHeavy => id * price,
         };
         sheet.write_formula(
             row,

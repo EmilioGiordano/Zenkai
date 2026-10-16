@@ -557,7 +557,11 @@ impl Workbook {
         let worksheets = &self.model.get_model().workbook.worksheets;
         moved?
             .into_iter()
-            .map(|index| worksheets.get(usize::try_from(index).ok()?).map(|ws| ws.sheet_id))
+            .map(|index| {
+                worksheets
+                    .get(usize::try_from(index).ok()?)
+                    .map(|ws| ws.sheet_id)
+            })
             .collect()
     }
 

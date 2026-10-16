@@ -160,7 +160,9 @@ fn floor(target: &Path) -> Result<()> {
     let mut largest: Option<(String, u64)> = None;
     for index in 0..archive.len() {
         let entry = archive.by_index_raw(index)?;
-        let bigger = largest.as_ref().is_none_or(|(_, size)| entry.size() > *size);
+        let bigger = largest
+            .as_ref()
+            .is_none_or(|(_, size)| entry.size() > *size);
         if entry.name().starts_with("xl/worksheets/") && bigger {
             largest = Some((entry.name().to_string(), entry.size()));
         }
@@ -175,8 +177,8 @@ fn floor(target: &Path) -> Result<()> {
     let inflate_ms = ms(start);
     let deflated = Instant::now();
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let options = zip::write::FileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
+    let options =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     zip.start_file(name.as_str(), options)?;
     zip.write_all(&xml)?;
     let compressed = zip.finish()?.into_inner().len();
@@ -242,9 +244,17 @@ fn main() -> Result<()> {
 
     let cells = scattered(&workbook, sheet, pos, edits);
     let shared = RwLock::new(workbook);
-    println!("save=first sheet={} cell={cell} edits={}", sheet.0, cells.len());
+    println!(
+        "save=first sheet={} cell={cell} edits={}",
+        sheet.0,
+        cells.len()
+    );
     edit_and_save(&shared, sheet, &cells, &target)?;
-    println!("save=again sheet={} cell={cell} edits={}", sheet.0, cells.len());
+    println!(
+        "save=again sheet={} cell={cell} edits={}",
+        sheet.0,
+        cells.len()
+    );
     edit_and_save(&shared, sheet, &cells, &target)?;
     floor(&target)
 }

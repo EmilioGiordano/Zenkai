@@ -431,8 +431,8 @@ mod tests {
     use ironcalc::base::types::Row;
 
     use super::{
-        MAX_ROW, ROW_PRINT_BUDGET_BYTES, ROWS_PER_BLOCK, RowBlocks, SheetPrint, UsedBounds, book_print,
-        formula_hashes, row_blocks, rows_print, sheet_print,
+        MAX_ROW, ROW_PRINT_BUDGET_BYTES, ROWS_PER_BLOCK, RowBlocks, SheetPrint, UsedBounds,
+        book_print, formula_hashes, row_blocks, rows_print, sheet_print,
     };
 
     fn model() -> Model<'static> {
@@ -517,9 +517,7 @@ mod tests {
     #[test]
     fn a_recalculated_value_dirties_the_block_of_its_formula() {
         let mut model = model();
-        model
-            .set_user_input(0, 70, 2, "=A1+1".to_string())
-            .unwrap();
+        model.set_user_input(0, 70, 2, "=A1+1".to_string()).unwrap();
         model.evaluate();
         let before = print(&model, 0);
         model.set_user_input(0, 1, 1, "5".to_string()).unwrap();
@@ -640,7 +638,11 @@ mod tests {
         let carried = crate::sheet_settings::Carried::default();
         let prints =
             crate::saved::sheet_prints(crate::save::ModelData::of(&model), &carried).unwrap();
-        assert!(prints[..64].iter().all(|print| print.row_blocks().is_some()));
+        assert!(
+            prints[..64]
+                .iter()
+                .all(|print| print.row_blocks().is_some())
+        );
         assert!(prints[64].row_blocks().is_none());
     }
 
