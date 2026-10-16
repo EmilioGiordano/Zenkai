@@ -58,8 +58,9 @@ fn parse_request(args: &[String]) -> Result<Request> {
     })
 }
 
-// The app's own open path, then the app's own edit path (`Workbook::set_input`) with the
-// phases timed apart. Nothing the file holds is read out, so private files can be measured.
+// The app's own open path, then the edit of `Workbook::set_input` with the phases timed
+// apart. The app warms the used areas once per batch, off the edit: `total_ms` includes
+// that warm, `set_input_ms` does not. Nothing the file holds is read out.
 fn measure(request: &Request) -> Result<Report, EngineError> {
     let started = Instant::now();
     let opened = open_xlsx_with(&request.path, XlsxReader::Fast)?;
@@ -122,10 +123,11 @@ fn main() -> Result<()> {
             RecalcMode::Incremental => "incremental",
         };
         println!(
-            "run={run} edit_ms={:.1} recalc_mode={mode} recalc_ms={:.1} warm_used_areas_ms={:.1} total_ms={:.1}",
+            "run={run} edit_ms={:.1} recalc_mode={mode} recalc_ms={:.1} warm_used_areas_ms={:.1} set_input_ms={:.1} total_ms={:.1}",
             ms(edit.profile.edit),
             ms(edit.profile.recalculation),
             ms(edit.profile.warm_used_areas),
+            ms(edit.total.saturating_sub(edit.profile.warm_used_areas)),
             ms(edit.total)
         );
     }
