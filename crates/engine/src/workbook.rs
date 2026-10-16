@@ -330,14 +330,14 @@ impl Workbook {
         lines: Vec<(Option<CellPos>, Range)>,
         text_at: impl Fn(&Model, CellPos) -> Result<String, EngineError>,
     ) -> Result<(), EngineError> {
-        self.model.rewrite_values(|model| {
+        self.model.edit_keeping_cells(|model| {
             select(model, sheet, rest)?;
             model.begin_edit_group().map_err(rejected)
         })?;
         let filled = self.fill_lines_in_group(sheet, lines, text_at);
         let ended = self
             .model
-            .rewrite_values(|model| model.end_edit_group())
+            .edit_keeping_cells(|model| model.end_edit_group())
             .map_err(rejected);
         filled?;
         ended?;
