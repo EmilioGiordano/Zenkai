@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ReadError;
-use crate::limits::{self, CellBudget, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES, Usage};
+use crate::limits::{self, CellBudget, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES, Route, Usage};
 
 pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
 
@@ -336,6 +336,10 @@ pub(crate) struct Budgets {
     used_formulas: AtomicU64,
     used_bytes: AtomicU64,
     used_rows: AtomicU64,
+    // The worksheet bytes the archive declares and the bytes read from them so far,
+    // only to report what a refused file would have needed.
+    sheet_declared: AtomicU64,
+    sheet_read: AtomicU64,
     entry_cap: u64,
 }
 
@@ -345,19 +349,15 @@ impl Budgets {
     }
 
     pub(crate) fn with_cells(cells: CellBudget) -> Budgets {
-        Budgets {
-            total: AtomicU64::new(MAX_TOTAL_BYTES),
-            cells,
-            used_cells: AtomicU64::new(0),
-            used_formulas: AtomicU64::new(0),
-            used_bytes: AtomicU64::new(0),
-            used_rows: AtomicU64::new(0),
-            entry_cap: MAX_ENTRY_BYTES,
-        }
+        Self::with_limits(cells, MAX_ENTRY_BYTES)
     }
 
     #[cfg(test)]
     pub(crate) fn with_entry_cap(cells: CellBudget, entry_cap: u64) -> Budgets {
+        Self::with_limits(cells, entry_cap)
+    }
+
+    fn with_limits(cells: CellBudget, entry_cap: u64) -> Budgets {
         Budgets {
             total: AtomicU64::new(MAX_TOTAL_BYTES),
             cells,
@@ -365,11 +365,28 @@ impl Budgets {
             used_formulas: AtomicU64::new(0),
             used_bytes: AtomicU64::new(0),
             used_rows: AtomicU64::new(0),
+            sheet_declared: AtomicU64::new(0),
+            sheet_read: AtomicU64::new(0),
             entry_cap,
         }
     }
 
+    pub(crate) fn expect_sheet_bytes(&self, declared: u64) {
+        self.sheet_declared
+            .store(declared.min(MAX_TOTAL_BYTES), Ordering::Relaxed);
+    }
+
     pub(crate) fn check_usage(&self, additional: Usage) -> Result<(), ReadError> {
+        self.charge_usage(additional, Route::Streaming)
+    }
+
+    // The fallback walk counts cells without keeping them, but IronCalc's importer
+    // will hold them far less compactly than the streaming reader.
+    pub(crate) fn check_importer_usage(&self, additional: Usage) -> Result<(), ReadError> {
+        self.charge_usage(additional, Route::Importer)
+    }
+
+    fn charge_usage(&self, additional: Usage, route: Route) -> Result<(), ReadError> {
         let cells = self
             .used_cells
             .fetch_add(additional.cells, Ordering::Relaxed)
@@ -386,12 +403,18 @@ impl Budgets {
             .used_rows
             .fetch_add(additional.rows, Ordering::Relaxed)
             .saturating_add(additional.rows);
-        self.cells.check(Usage {
-            cells,
-            formulas,
-            bytes,
-            rows,
-        })
+        let declared = self.sheet_declared.load(Ordering::Relaxed);
+        let read = self.sheet_read.load(Ordering::Relaxed);
+        self.cells.check_route(
+            Usage {
+                cells,
+                formulas,
+                bytes,
+                rows,
+            },
+            route,
+            (declared > 0).then_some((declared, read)),
+        )
     }
 
     fn charge(&self, bytes: u64) -> Result<(), ReadError> {
@@ -515,6 +538,9 @@ impl<R: Read> Guard<'_, R> {
             self.budgets.charge(read)?;
         }
         self.expanded = self.expanded.saturating_add(read);
+        if !self.cap_entry {
+            self.budgets.sheet_read.fetch_add(read, Ordering::Relaxed);
+        }
         if self.cap_entry && self.expanded > self.budgets.entry_cap {
             return Err(ReadError::Unsafe(format!(
                 "part {} expands past the {} per-part limit",
@@ -699,7 +725,39 @@ mod tests {
         let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(0));
         let error = read(b"<workbook/>", "xl/workbook.xml", &budgets).unwrap_err();
         assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
+    }
+
+    #[test]
+    fn the_fallback_walk_is_charged_at_the_importer_cost() {
+        let usage = Usage {
+            cells: 300,
+            formulas: 0,
+            bytes: 0,
+            rows: 0,
+        };
+        let streaming = Budgets::with_cells(CellBudget::max_cells_for_test(1_000));
+        assert!(streaming.check_usage(usage).is_ok());
+        let importer = Budgets::with_cells(CellBudget::max_cells_for_test(1_000));
+        let error = importer.check_importer_usage(usage).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
+    }
+
+    #[test]
+    fn declared_worksheet_sizes_only_shape_the_refusal_message() {
+        let usage = Usage {
+            cells: 1_001,
+            formulas: 0,
+            bytes: 0,
+            rows: 0,
+        };
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1_000));
+        budgets.expect_sheet_bytes(u64::MAX);
+        assert!(budgets.check_usage(usage).is_err());
+        let roomy = Budgets::with_cells(CellBudget::max_cells_for_test(2_000));
+        roomy.expect_sheet_bytes(u64::MAX);
+        assert!(roomy.check_usage(usage).is_ok());
     }
 
     #[test]

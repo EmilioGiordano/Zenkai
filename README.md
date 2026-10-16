@@ -212,3 +212,8 @@ artifact of any `bench.yml` run (the artifact is uploaded even when the check fa
 `bench\baseline.csv` and commit it.
 
 License: Apache-2.0.
+
+## Pull requests
+
+The scripts in `scripts/pr` (bash, `gh`, `jq`) open draft PRs, post reviews and reply in
+threads; the standards are in `AGENTS.md`. `scripts/pr/test.sh` checks them in dry-run.

@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ironcalc::base::cell_store::CellStore;
 use ironcalc::base::expressions::utils::{
     column_to_number, is_valid_column_number, is_valid_row, parse_reference_a1,
 };
@@ -13,7 +14,7 @@ mod values;
 mod xml;
 
 use crate::ReadError;
-use crate::limits;
+use crate::limits::{self, BYTES_PER_UNIQUE_STRING};
 use crate::text::parse_bool_false;
 use values::{ValueCell, formula_cell};
 
@@ -32,64 +33,58 @@ const CHECKED_ELEMENTS: [&[u8]; 8] = [
 
 const DEFAULT_ROW_HEIGHT: f64 = 14.5;
 
-// Cells in document order. Cells listed in `string_cells` hold a sheet-local string index
-// and every formula cell holds an index into `events`; both are resolved once all sheets
-// are read, because IronCalc numbers strings and formulas in document order. Formula
-// texts are owned so row pieces can be dropped as the worksheet streams in.
+// The cells of a sheet in document order, built straight into the model's cell store as
+// the pieces of its XML are read. Cells listed in `string_cells` hold a sheet-local string
+// index and every formula cell, listed in `formula_cells` in the order of `events`, holds
+// an index into `events`; both are resolved once all sheets are read, because IronCalc
+// numbers strings and formulas in document order. Formula texts are owned so row pieces
+// can be dropped as the worksheet streams in.
 #[derive(Default)]
 pub(crate) struct SheetCells {
     pub(crate) rows: Vec<Row>,
-    pub(crate) data: Vec<(i32, Vec<(i32, Cell)>)>,
+    pub(crate) data: CellStore,
     pub(crate) strings: Vec<Arc<str>>,
     pub(crate) string_cells: Vec<Slot>,
+    pub(crate) formula_cells: Vec<Slot>,
     pub(crate) events: Vec<FormulaEvent>,
     pub(crate) jobs: Vec<FormulaJob>,
+    string_index: HashMap<Arc<str>, usize>,
+    last_row: i32,
+    cell_count: u64,
+    string_bytes: u64,
+    job_bytes: u64,
+}
+
+// What the memory budget is charged for, so a piece pays for the difference it added.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Totals {
+    pub(crate) cells: u64,
+    pub(crate) formulas: u64,
+    pub(crate) rows: u64,
+    pub(crate) bytes: u64,
+}
+
+impl SheetCells {
+    pub(crate) fn totals(&self) -> Totals {
+        Totals {
+            cells: self.cell_count,
+            formulas: self.events.len() as u64,
+            rows: self.data.row_count() as u64,
+            bytes: self.string_bytes.saturating_add(self.job_bytes),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct Slot {
-    pub(crate) row: usize,
-    pub(crate) cell: usize,
-}
-
-// Points each shared-string cell at `table[its local index]`.
-pub(crate) fn remap_strings(
-    data: &mut [(i32, Vec<(i32, Cell)>)],
-    slots: &[Slot],
-    table: &[i32],
-) -> Result<(), ReadError> {
-    for slot in slots {
-        let Some((_, Cell::SharedString { si, .. })) = data
-            .get_mut(slot.row)
-            .and_then(|(_, row)| row.get_mut(slot.cell))
-        else {
-            return Err(unsupported("a lost string"));
-        };
-        *si = *usize::try_from(*si)
-            .ok()
-            .and_then(|local| table.get(local))
-            .ok_or_else(|| unsupported("a lost string"))?;
-    }
-    Ok(())
+    pub(crate) row: i32,
+    pub(crate) column: i32,
 }
 
 pub(crate) enum FormulaEvent {
     Convert { job: usize },
     SharedAnchor { si: i32, job: usize },
     SharedChild { si: i32 },
-}
-
-impl FormulaEvent {
-    pub(crate) fn after_jobs(self, offset: usize) -> FormulaEvent {
-        match self {
-            FormulaEvent::Convert { job } => FormulaEvent::Convert { job: job + offset },
-            FormulaEvent::SharedAnchor { si, job } => FormulaEvent::SharedAnchor {
-                si,
-                job: job + offset,
-            },
-            child @ FormulaEvent::SharedChild { .. } => child,
-        }
-    }
 }
 
 pub(crate) struct FormulaJob {
@@ -107,12 +102,15 @@ fn unsupported(what: &str) -> ReadError {
     ReadError::Unsupported(what.to_string())
 }
 
-// Reads a run of whole <row> elements, the content of <sheetData> or a piece of it.
-pub(crate) fn scan_rows(
+// Reads a run of whole <row> elements, the content of <sheetData> or a piece of it, into
+// `cells`. True when an array formula claims rows past the last one read: a later piece
+// would read those cells without knowing their anchor.
+pub(crate) fn scan_rows_into(
+    cells: &mut SheetCells,
     rows: &str,
     prefixes: &[Vec<u8>],
     sheet_name: &str,
-) -> Result<SheetCells, ReadError> {
+) -> Result<bool, ReadError> {
     let mut reader = Reader::from_str(rows);
     let config = reader.config_mut();
     config.check_end_names = true;
@@ -121,16 +119,24 @@ pub(crate) fn scan_rows(
         reader,
         prefixes,
         sheet_name,
-        strings: HashMap::new(),
         array_cells: HashMap::new(),
         array_cells_claimed: 0,
-        cells: SheetCells::default(),
+        spill_end: 0,
+        row_buffer: Vec::new(),
+        cells,
     };
     scanner.rows()?;
-    let mut cells = scanner.cells;
-    let mut strings: Vec<(Arc<str>, usize)> = scanner.strings.into_iter().collect();
-    strings.sort_unstable_by_key(|(_, index)| *index);
-    cells.strings = strings.into_iter().map(|(text, _)| text).collect();
+    Ok(scanner.spill_end > scanner.cells.last_row)
+}
+
+#[cfg(test)]
+pub(crate) fn scan_rows(
+    rows: &str,
+    prefixes: &[Vec<u8>],
+    sheet_name: &str,
+) -> Result<SheetCells, ReadError> {
+    let mut cells = SheetCells::default();
+    scan_rows_into(&mut cells, rows, prefixes, sheet_name)?;
     Ok(cells)
 }
 
@@ -138,10 +144,12 @@ struct Scanner<'a, 's> {
     reader: Reader<&'a [u8]>,
     prefixes: &'s [Vec<u8>],
     sheet_name: &'s str,
-    strings: HashMap<Arc<str>, usize>,
     array_cells: HashMap<(i32, i32), (i32, i32)>,
     array_cells_claimed: u64,
-    cells: SheetCells,
+    // The last row an array formula of this piece reaches.
+    spill_end: i32,
+    row_buffer: Vec<(i32, Cell)>,
+    cells: &'s mut SheetCells,
 }
 
 struct CellXml<'a> {
@@ -226,16 +234,16 @@ impl<'a> Scanner<'a, '_> {
                 hidden,
             });
         }
-        let slot = self.cells.data.len();
-        let mut cells: Vec<(i32, Cell)> = Vec::new();
+        let mut cells = std::mem::take(&mut self.row_buffer);
+        cells.clear();
         if !empty {
             loop {
                 match self.next()? {
                     Event::Start(start) if start.local_name().as_ref() == b"c" => {
-                        self.cell(&start, false, slot, &mut row_index, &mut cells)?;
+                        self.cell(&start, false, &mut row_index, &mut cells)?;
                     }
                     Event::Empty(start) if start.local_name().as_ref() == b"c" => {
-                        self.cell(&start, true, slot, &mut row_index, &mut cells)?;
+                        self.cell(&start, true, &mut row_index, &mut cells)?;
                     }
                     Event::End(_) => break,
                     _ => return Err(unsupported("something other than a cell in a row")),
@@ -243,12 +251,13 @@ impl<'a> Scanner<'a, '_> {
             }
         }
         let row_index = row_index.ok_or_else(|| unreadable("a row without a row index"))?;
-        if let Some((last, _)) = self.cells.data.last()
-            && *last >= row_index
-        {
+        if self.cells.last_row >= row_index {
             return Err(unsupported("rows out of order"));
         }
-        self.cells.data.push((row_index, cells));
+        self.cells.last_row = row_index;
+        self.cells.cell_count += cells.len() as u64;
+        self.cells.data.insert_row(row_index, cells.drain(..));
+        self.row_buffer = cells;
         Ok(())
     }
 
@@ -256,7 +265,6 @@ impl<'a> Scanner<'a, '_> {
         &mut self,
         start: &BytesStart<'_>,
         empty: bool,
-        slot: usize,
         row_index: &mut Option<i32>,
         cells: &mut Vec<(i32, Cell)>,
     ) -> Result<(), ReadError> {
@@ -267,6 +275,7 @@ impl<'a> Scanner<'a, '_> {
         if row_index.is_none() {
             *row_index = Some(r_index);
         }
+        let stored_row = row_index.unwrap_or(r_index);
         if let Some((last, _)) = cells.last()
             && *last >= column_index
         {
@@ -354,6 +363,7 @@ impl<'a> Scanner<'a, '_> {
                         }
                     }
                     let (width, height) = (column2 - column1 + 1, row2 - row1 + 1);
+                    self.spill_end = self.spill_end.max(stored_row.saturating_add(height - 1));
                     array = if cm.as_deref() == Some("1") {
                         CellArray::Dynamic(width, height)
                     } else {
@@ -378,13 +388,14 @@ impl<'a> Scanner<'a, '_> {
             self.array_cells.get(&(r_index, column_index)).copied()
         };
         let place = Slot {
-            row: slot,
-            cell: cells.len(),
+            row: stored_row,
+            column: column_index,
         };
         let cell = match formula_event {
             Some(event) => {
                 let f = i32::try_from(self.cells.events.len()).map_err(unreadable)?;
                 self.cells.events.push(event);
+                self.cells.formula_cells.push(place);
                 formula_cell(
                     f,
                     style,
@@ -418,6 +429,7 @@ impl<'a> Scanner<'a, '_> {
         // the same refusal instead of a fallback.
         limits::check_formula_text(&text).map_err(ReadError::Unsafe)?;
         let (row, column) = formula_context(cell_ref)?;
+        self.cells.job_bytes += text.len() as u64;
         self.cells.jobs.push(FormulaJob {
             text: text.into_owned(),
             row,
@@ -428,8 +440,17 @@ impl<'a> Scanner<'a, '_> {
     }
 
     fn intern(&mut self, text: String) -> i32 {
-        let next = self.strings.len();
-        let index = *self.strings.entry(Arc::from(text)).or_insert(next);
+        let index = match self.cells.string_index.get(text.as_str()) {
+            Some(index) => *index,
+            None => {
+                let next = self.cells.strings.len();
+                let shared: Arc<str> = Arc::from(text);
+                self.cells.string_bytes += shared.len() as u64 + BYTES_PER_UNIQUE_STRING;
+                self.cells.string_index.insert(shared.clone(), next);
+                self.cells.strings.push(shared);
+                next
+            }
+        };
         i32::try_from(index).unwrap_or(i32::MAX)
     }
 
@@ -501,6 +522,13 @@ mod tests {
     }
 
     #[test]
+    fn each_distinct_string_is_charged_once_beyond_its_text() {
+        let rows = r#"<row r="1"><c r="A1" t="inlineStr"><is><t>ab</t></is></c><c r="B1" t="inlineStr"><is><t>ab</t></is></c><c r="C1" t="inlineStr"><is><t>cde</t></is></c></row>"#;
+        let cells = scan(rows).unwrap();
+        assert_eq!(cells.totals().bytes, 2 + 3 + 2 * BYTES_PER_UNIQUE_STRING);
+    }
+
+    #[test]
     fn many_array_formulas_together_are_refused() {
         let rows: String = (1..=5)
             .map(|n| array_row(n, &format!("A{n}:A{}", n + 900_000)))
@@ -534,7 +562,7 @@ mod tests {
     fn blank_text_between_rows_is_ignored() {
         let rows = "<row r=\"1\"><c r=\"A1\"><v>1</v></c></row>\n  \r\n <row r=\"2\"><c r=\"A2\"><v>2</v></c></row>\r\n";
         let cells = scan(rows).unwrap();
-        assert_eq!(cells.data.len(), 2);
+        assert_eq!(cells.data.row_count(), 2);
     }
 
     #[test]

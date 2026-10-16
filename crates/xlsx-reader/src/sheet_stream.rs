@@ -1,14 +1,11 @@
 use std::io::Read;
 
-use ironcalc::base::types::Cell;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
-use std::sync::Arc;
-
 use crate::ReadError;
 use crate::limits::Usage;
-use crate::sheet_data::{SheetCells, Slot, remap_strings, scan_rows};
+use crate::sheet_data::{SheetCells, scan_rows_into};
 use crate::stream::{Budgets, CharacterCheck, CompressedMeter, Guard};
 
 // Rows are parsed in pieces of about this size, the same size the buffered reader
@@ -66,7 +63,6 @@ pub(crate) fn stream_worksheet<R: Read>(
         prefixes: &prefixes,
         budgets,
         merged: SheetCells::default(),
-        strings: std::collections::HashMap::new(),
     };
     let mut rowtags: Vec<u8> = Vec::new();
     let cut = match pump.peek()? {
@@ -285,35 +281,26 @@ fn parse_unit(
     }
     let rowtags_bytes = rowtags_from_unit(rowtags, cut, unit);
     let text = std::str::from_utf8(unit).map_err(unreadable)?;
-    let scanned = scan_rows(text, driver.prefixes, driver.sheet_name)?;
+    let before = driver.merged.totals();
+    let spills = scan_rows_into(&mut driver.merged, text, driver.prefixes, driver.sheet_name)?;
     // An array formula spills into later rows; when its range runs past the rows
     // read so far a later piece would miss the cover, so the file goes to IronCalc.
-    if spill_past_piece(&scanned) {
+    if spills {
         return Err(unsupported("an array formula spilling past one piece"));
     }
+    let after = driver.merged.totals();
     let usage = Usage {
-        cells: scanned.data.iter().map(|(_, row)| row.len() as u64).sum(),
+        cells: after.cells.saturating_sub(before.cells),
         // One event per formula cell: plain and array formulas convert, shared
         // anchors convert once, shared children point at their anchor.
-        formulas: scanned.events.len() as u64,
-        bytes: scanned
-            .strings
-            .iter()
-            .map(|text| text.len() as u64)
-            .sum::<u64>()
-            .saturating_add(
-                scanned
-                    .jobs
-                    .iter()
-                    .map(|job| job.text.len() as u64)
-                    .sum::<u64>(),
-            )
+        formulas: after.formulas.saturating_sub(before.formulas),
+        bytes: after
+            .bytes
+            .saturating_sub(before.bytes)
             .saturating_add(rowtags_bytes),
-        rows: scanned.data.len() as u64,
+        rows: after.rows.saturating_sub(before.rows),
     };
-    driver.budgets.check_usage(usage)?;
-    merge(&mut driver.merged, &mut driver.strings, scanned)?;
-    Ok(())
+    driver.budgets.check_usage(usage)
 }
 
 // The outline row tags of one unit, found by the same pattern the pieces cut by;
@@ -570,7 +557,6 @@ struct Driver<'d> {
     prefixes: &'d [Vec<u8>],
     budgets: &'d Budgets,
     merged: SheetCells,
-    strings: std::collections::HashMap<Arc<str>, i32>,
 }
 
 // The row start tags the settings reader needs: rows with an outline level travel
@@ -635,75 +621,6 @@ fn first_cell_tag(after: &[u8]) -> Option<&[u8]> {
         }
     }
     None
-}
-
-// Whether an array formula in the piece claims rows past its last row: a later piece
-// would read those cells without knowing their anchor, so only IronCalc's
-// whole-sheet read stays correct there. Rows and array ranges are validated against
-// the sheet limits when read, so the addition below cannot overflow.
-fn spill_past_piece(piece: &SheetCells) -> bool {
-    let Some((last, _)) = piece.data.last() else {
-        return false;
-    };
-    piece.data.iter().any(|(row, cells)| {
-        cells.iter().any(
-            |(_, cell)| matches!(cell, Cell::ArrayFormula(array) if row + array.r.1 - 1 > *last),
-        )
-    })
-}
-
-// Puts the pieces back in document order: rows, strings numbered by first appearance,
-// formula events and jobs renumbered after the pieces before them.
-fn merge(
-    merged: &mut SheetCells,
-    strings: &mut std::collections::HashMap<Arc<str>, i32>,
-    piece: SheetCells,
-) -> Result<(), ReadError> {
-    if let (Some((last, _)), Some((first, _))) = (merged.data.last(), piece.data.first())
-        && last >= first
-    {
-        return Err(unsupported("rows out of order"));
-    }
-    let row_offset = merged.data.len();
-    let event_offset = i32::try_from(merged.events.len()).map_err(unreadable)?;
-    let job_offset = merged.jobs.len();
-    let mut table = Vec::with_capacity(piece.strings.len());
-    for text in piece.strings {
-        let found: &str = &text;
-        if let Some(&index) = strings.get(found) {
-            table.push(index);
-            continue;
-        }
-        let next = i32::try_from(merged.strings.len()).map_err(unreadable)?;
-        strings.insert(text.clone(), next);
-        merged.strings.push(text);
-        table.push(next);
-    }
-    let mut data = piece.data;
-    remap_strings(&mut data, &piece.string_cells, &table)?;
-    for (_, row) in &mut data {
-        for (_, cell) in row {
-            if let Some(f) = cell.formula_mut() {
-                *f += event_offset;
-            }
-        }
-    }
-    merged
-        .string_cells
-        .extend(piece.string_cells.into_iter().map(|slot| Slot {
-            row: slot.row + row_offset,
-            cell: slot.cell,
-        }));
-    merged.data.extend(data);
-    merged.rows.extend(piece.rows);
-    merged.events.extend(
-        piece
-            .events
-            .into_iter()
-            .map(|event| event.after_jobs(job_offset)),
-    );
-    merged.jobs.extend(piece.jobs);
-    Ok(())
 }
 
 #[derive(Debug)]
@@ -1273,19 +1190,26 @@ mod tests {
     }
 
     #[test]
-    fn merged_strings_share_one_copy_with_the_index() {
-        use std::collections::HashMap;
-        let piece = |row| SheetCells {
-            data: vec![(row, Vec::new())],
-            strings: vec![Arc::from("same")],
-            ..SheetCells::default()
-        };
-        let mut merged = SheetCells::default();
-        let mut strings = HashMap::new();
-        merge(&mut merged, &mut strings, piece(1)).unwrap();
-        merge(&mut merged, &mut strings, piece(2)).unwrap();
-        assert_eq!(merged.strings.len(), 1);
-        assert_eq!(Arc::strong_count(&merged.strings[0]), 2);
+    fn pieces_scanned_into_one_sheet_share_their_strings() {
+        let mut cells = SheetCells::default();
+        for row in 1..=2 {
+            let xml = format!(
+                r#"<row r="{row}"><c r="A{row}" t="inlineStr"><is><t>same</t></is></c></row>"#
+            );
+            scan_rows_into(&mut cells, &xml, &[Vec::new()], "Sheet1").unwrap();
+        }
+        assert_eq!(cells.strings.len(), 1);
+        assert_eq!(cells.data.row_count(), 2);
+        assert_eq!(cells.string_cells.len(), 2);
+    }
+
+    #[test]
+    fn rows_out_of_order_across_pieces_are_left_to_ironcalc() {
+        let mut cells = SheetCells::default();
+        let piece = |row: u32| format!(r#"<row r="{row}"><c r="A{row}"><v>1</v></c></row>"#);
+        scan_rows_into(&mut cells, &piece(5), &[Vec::new()], "Sheet1").unwrap();
+        let error = scan_rows_into(&mut cells, &piece(5), &[Vec::new()], "Sheet1").unwrap_err();
+        assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
     }
 
     fn stream_with(xml: &str, budgets: &Budgets) -> Result<StreamedSheet, ReadError> {
@@ -1582,7 +1506,7 @@ mod tests {
             r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><!-- note --><sheetData><row r="1"><c r="A1"><v>7</v></c></row>{TAIL}"#
         );
         let streamed = stream(&xml);
-        assert_eq!(streamed.cells.data.len(), 1);
+        assert_eq!(streamed.cells.data.row_count(), 1);
     }
 
     #[test]
@@ -1591,7 +1515,7 @@ mod tests {
             r#"{HEAD}<row r="1"><c r="A1"><v>7</v></c><c r="B1"><f>A1*6</f></c></row>{TAIL}"#
         );
         let streamed = stream(&xml);
-        assert_eq!(streamed.cells.data.len(), 1);
+        assert_eq!(streamed.cells.data.row_count(), 1);
         assert_eq!(streamed.cells.jobs.len(), 1);
         let stub = String::from_utf8(streamed.stub).unwrap();
         assert!(stub.contains("<sheetView"), "{stub}");
@@ -1631,7 +1555,7 @@ mod tests {
         let error = stream_with(&xml, &budgets)
             .err()
             .expect("ten cells with huge strings must trip the budget");
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
     }
 
     #[test]
@@ -1657,7 +1581,7 @@ mod tests {
             .err()
             .expect("a growing sheet must stop");
         let message = error.to_string();
-        assert!(message.contains("needs at least"), "{message}");
+        assert!(message.contains("needs about"), "{message}");
     }
 
     #[test]
@@ -1674,7 +1598,7 @@ mod tests {
         let error = stream_with(&xml, &budgets)
             .err()
             .expect("outline tags with kilobytes of attributes must trip the budget");
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
     }
 
     #[test]
@@ -1689,7 +1613,7 @@ mod tests {
         let xml = format!(r#"{HEAD}{rows}{TAIL}"#);
         let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(500));
         let error = config_with(&xml, &budgets).expect_err("outline tags must trip the budget");
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
     }
 
     #[test]
@@ -1705,6 +1629,6 @@ mod tests {
             .err()
             .expect("a sheet over budget must stop");
         let message = error.to_string();
-        assert!(message.contains("needs at least"), "{message}");
+        assert!(message.contains("needs about"), "{message}");
     }
 }

@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ironcalc::base::types::Workbook;
+use ironcalc::base::types::{Cell, Workbook};
 
 use crate::ReadError;
 use crate::formulas::Converted;
-use crate::sheet_data::{FormulaEvent, SheetCells, remap_strings, unreadable};
+use crate::sheet_data::{FormulaEvent, SheetCells, unreadable};
 
 fn unsupported(what: &str) -> ReadError {
     ReadError::Unsupported(what.to_string())
@@ -67,20 +67,28 @@ pub(crate) fn fill(
             resolve_formulas(&cells.events, ids, &converted.distinct)?;
 
         let mut data = cells.data;
-        remap_strings(&mut data, &cells.string_cells, &local)?;
-        for (_, row) in &mut data {
-            for (_, cell) in row {
-                if let Some(f) = cell.formula_mut() {
-                    *f = *usize::try_from(*f)
-                        .ok()
-                        .and_then(|event| resolved.get(event))
-                        .ok_or_else(|| unsupported("a lost formula"))?;
-                }
-            }
+        for slot in &cells.string_cells {
+            let Some(Cell::SharedString { si, .. }) = data.get_mut(slot.row, slot.column) else {
+                return Err(unsupported("a lost string"));
+            };
+            *si = *usize::try_from(*si)
+                .ok()
+                .and_then(|index| local.get(index))
+                .ok_or_else(|| unsupported("a lost string"))?;
         }
-        for (row, cells) in data {
-            worksheet.sheet_data.insert_row(row, cells);
+        for slot in &cells.formula_cells {
+            let Some(f) = data
+                .get_mut(slot.row, slot.column)
+                .and_then(Cell::formula_mut)
+            else {
+                return Err(unsupported("a lost formula"));
+            };
+            *f = *usize::try_from(*f)
+                .ok()
+                .and_then(|event| resolved.get(event))
+                .ok_or_else(|| unsupported("a lost formula"))?;
         }
+        worksheet.sheet_data = data;
         worksheet.rows = cells.rows;
         worksheet.shared_formulas = shared_formulas;
     }

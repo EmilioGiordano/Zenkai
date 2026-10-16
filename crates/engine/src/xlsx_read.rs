@@ -11,7 +11,7 @@ use crate::held::Held;
 // Only a refused file reports harm; a corrupt or non-zip file is not a valid workbook.
 pub(crate) fn engine_error(error: ReadError) -> EngineError {
     match error {
-        ReadError::Unsafe(reason) => EngineError::Unsafe(reason),
+        ReadError::Unsafe(reason) => EngineError::refused(reason),
         ReadError::Unreadable(reason) | ReadError::Unsupported(reason) => {
             EngineError::InvalidFile(reason)
         }
@@ -67,7 +67,7 @@ pub fn read_xlsx_bytes(
         }
         XlsxReader::Fast => match read_fast(bytes, name) {
             Ok((book, unsupported)) => (book, unsupported, None),
-            Err(ReadError::Unsafe(reason)) => return Err(EngineError::Unsafe(reason)),
+            Err(ReadError::Unsafe(reason)) => return Err(EngineError::refused(reason)),
             Err(error) => {
                 let (book, unsupported) = fallback_to_ironcalc(bytes, name, &error)?;
                 (book, unsupported, Some(error.to_string()))
@@ -114,7 +114,7 @@ pub(crate) fn read_xlsx_file(
         }
         XlsxReader::Fast => match read_streaming(path, name) {
             Ok(read) => Ok(read),
-            Err(ReadError::Unsafe(reason)) => Err(EngineError::Unsafe(reason)),
+            Err(ReadError::Unsafe(reason)) => Err(EngineError::refused(reason)),
             Err(error) => {
                 let bytes = std::fs::read(path).map_err(read_error)?;
                 let (book, unsupported) = fallback_to_ironcalc(&bytes, name, &error)?;
@@ -147,6 +147,11 @@ fn fallback_to_ironcalc(bytes: &[u8], name: &str, declined: &ReadError) -> Outco
     let found: Found = Mutex::new(Vec::new());
     let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
     if let Err(limited) = zenkai_xlsx_reader::scan_with_caps(bytes, &inspect) {
+        if let ReadError::Unsafe(reason) = &limited
+            && reason.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX)
+        {
+            return Err(EngineError::TooLarge(reason.clone()));
+        }
         let message = format!(
             "the streaming reader does not support this file ({declined}), and it cannot fall back to IronCalc's reader ({limited})"
         );

@@ -292,7 +292,7 @@ mod tests {
             16 * 999,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("needs at least"), "{error}");
+        assert!(error.to_string().contains("needs about"), "{error}");
         oversized_part(
             &mut archived(&bytes),
             "xl/worksheets/sheet1.xml",

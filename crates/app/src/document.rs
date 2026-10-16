@@ -35,6 +35,7 @@ pub struct Document {
     untitled: u32,
     workbook: SharedWorkbook,
     batch_running: bool,
+    sheets_stale: bool,
     file_job: FileJob,
     pub path: Option<PathBuf>,
     pub dirty: bool,
@@ -108,6 +109,7 @@ impl Document {
             untitled,
             workbook: Arc::new(RwLock::new(workbook)),
             batch_running: false,
+            sheets_stale: false,
             file_job: FileJob::Idle,
             path,
             dirty: false,
@@ -181,6 +183,10 @@ impl Document {
         self.autosave_cancel.store(true, Ordering::Relaxed);
         self.recovery_stale_since.get_or_insert_with(Instant::now);
         self.pending.push(edit);
+    }
+
+    pub fn shared_workbook(&self) -> SharedWorkbook {
+        Arc::clone(&self.workbook)
     }
 
     pub fn workbook_mut(&self) -> Option<RwLockWriteGuard<'_, Workbook>> {
@@ -333,14 +339,26 @@ impl Document {
             return false;
         }
         self.batch_running = false;
-        if let Some(sheets) = self.workbook().map(|workbook| workbook.sheets()) {
-            self.sheets = sheets;
-        }
+        self.sync_sheets();
+        true
+    }
+
+    pub fn sheets_stale(&self) -> bool {
+        self.sheets_stale
+    }
+
+    // A busy workbook leaves the sheet list as it was and marks it stale for a retry.
+    pub fn sync_sheets(&mut self) {
+        let Some(sheets) = self.workbook().map(|workbook| workbook.sheets()) else {
+            self.sheets_stale = true;
+            return;
+        };
+        self.sheets_stale = false;
+        self.sheets = sheets;
         let last = u32::try_from(self.sheets.len().saturating_sub(1)).unwrap_or(0);
         if self.sheet.0 > last {
             self.sheet = SheetId(last);
         }
-        true
     }
 
     // With `formulas`, cells holding a formula show it instead of its value (Ctrl+`).
@@ -609,6 +627,20 @@ mod tests {
         let mut current = document();
         assert!(!current.is_current(generation));
         assert!(!current.finish_batch(generation));
+    }
+
+    #[test]
+    fn a_busy_workbook_marks_the_sheet_list_stale_until_it_is_synced() {
+        let mut document = document();
+        document.queue(noop());
+        let generation = document.generation();
+        let (shared, _) = document.take_batch().unwrap();
+        let guard = shared.write().unwrap();
+        assert!(document.finish_batch(generation));
+        assert!(document.sheets_stale());
+        drop(guard);
+        document.sync_sheets();
+        assert!(!document.sheets_stale());
     }
 
     #[test]
