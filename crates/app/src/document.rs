@@ -511,10 +511,6 @@ pub fn write_snapshot_unless(
     written
 }
 
-pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError> {
-    run_batch_serving(shared, edits, None)
-}
-
 // The engine recalculates in place and cannot yield, so the write lock is held for the whole
 // batch. The grid's reads meanwhile come from a copy of its surroundings taken just before.
 pub fn run_batch_serving(
@@ -638,7 +634,7 @@ mod tests {
         assert!(document.workbook().is_none());
         assert!(document.workbook_mut().is_none());
         drop(guard);
-        assert!(run_batch(&shared, edits).is_empty());
+        assert!(run_batch_serving(&shared, edits, None).is_empty());
         assert!(document.workbook().is_some());
     }
 
@@ -712,7 +708,7 @@ mod tests {
         let (_, edits) = document.take_batch().unwrap();
         assert_eq!(edits.len(), 1);
         let shared = Arc::clone(&document.workbook);
-        assert!(run_batch(&shared, edits).is_empty());
+        assert!(run_batch_serving(&shared, edits, None).is_empty());
         document.finish_batch(generation);
         assert!(document.begin_file_job(FileJob::Autosaving).is_some());
         assert!(!document.autosave_cancel().load(Ordering::Relaxed));
@@ -873,7 +869,7 @@ mod tests {
             }));
         }
         let (shared, edits) = document.take_batch().unwrap();
-        assert!(run_batch(&shared, edits).is_empty());
+        assert!(run_batch_serving(&shared, edits, None).is_empty());
         assert_eq!(*order.lock().unwrap(), vec![0, 1, 2]);
     }
 
