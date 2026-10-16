@@ -636,8 +636,7 @@ impl DependencyIndex {
     }
 
     // The cells and everything that reads them, directly or not; volatile formulas only
-    // when they read one.
-    // `None` when more than `max_cells` are reached, or the walk is too long.
+    // when they read one. `None` when more than `max_cells` are reached or the walk is too long.
     pub(crate) fn dependents_of(
         &self,
         cells: &[CellKey],
