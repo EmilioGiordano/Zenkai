@@ -430,7 +430,9 @@ mod tests {
         assert!(grown.spills);
         type_at(&mut model, 0, "B1", "=SEQUENCE(2)");
         assert_eq!(last_recalculation(&model), Recalculation::Full);
-        assert!(!model.cache().contains_key(&SheetId(0)));
+        let written = model.cache().get(&SheetId(0)).copied().unwrap();
+        assert_eq!(written.last, CellPos::parse_a1("B2"));
+        assert!(written.spills);
         assert!(!model.cache().contains_key(&SheetId(1)));
         assert_eq!(
             Some(model.used_end(SheetId(0))),
