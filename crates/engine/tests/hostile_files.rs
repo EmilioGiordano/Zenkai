@@ -250,7 +250,11 @@ fn incompressible(len: usize) -> Vec<u8> {
             .wrapping_mul(6364136223846793005)
             .wrapping_add(1442695040888963407);
         for byte in state.to_le_bytes() {
-            bytes.push(b' ' + byte % 95);
+            // No angle brackets: garbage that opens elements would hit the nesting cap first.
+            bytes.push(match b' ' + byte % 95 {
+                b'<' | b'>' => b'.',
+                printable => printable,
+            });
             if bytes.len() == len {
                 break;
             }
@@ -295,31 +299,70 @@ fn deeply_nested_formula_is_rejected_not_a_stack_overflow() {
     assert!(error.contains("a formula"), "{error}");
 }
 
-// A sheet element written back on save, nested deeper than a stack holds or larger than
-// the budget for them: the file opens, saves after an edit and opens again.
+// A sheet element written back on save, larger than the budget for them: the file opens,
+// saves after an edit and opens again.
 #[test]
-fn deep_or_large_sheet_elements_save_and_reopen() {
+fn large_sheet_elements_save_and_reopen() {
+    let mut source = rust_xlsxwriter::Workbook::new();
+    source
+        .add_worksheet()
+        .write_number(0, 0, 1.0)
+        .unwrap();
+    let bytes = source.save_to_buffer().unwrap();
+    let mut sheet_xml = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(bytes.clone()))
+        .unwrap()
+        .by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut sheet_xml)
+        .unwrap();
+    let large = format!(
+        r#"<hyperlinks><hyperlink ref="A1" location="{}"/></hyperlinks><pageMargins"#,
+        "X".repeat(17 * 1024 * 1024)
+    );
+    let sheet_xml = sheet_xml.replacen("<pageMargins", &large, 1);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("elements.xlsx");
+    let bytes = with_replaced_part(bytes, "xl/worksheets/sheet1.xml", sheet_xml.as_bytes());
+    std::fs::write(&path, bytes).unwrap();
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.set_input(SheetId(0), CellPos::parse_a1("B2").unwrap(), "2")
+        .unwrap();
+    save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
+    open_xlsx(&path).unwrap();
+}
+
+// The parsers recurse once per open element, so a part nested past the cap is refused
+// before any of them runs, by every reader; 100,000 levels overflowed the engine stack.
+#[test]
+fn deeply_nested_elements_are_refused_not_a_stack_overflow() {
     let deep = format!(
         r#"<autoFilter ref="A1:B2">{}{}</autoFilter>"#,
         r#"<filterColumn colId="0">"#.repeat(100_000),
         "</filterColumn>".repeat(100_000)
     );
-    let large = format!(
-        r#"<hyperlinks><hyperlink ref="A1" location="{}"/></hyperlinks>"#,
-        "X".repeat(17 * 1024 * 1024)
+    let sheet_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>{deep}</worksheet>"#
     );
-    for element in [deep, large] {
-        let sheet_xml = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>{element}</worksheet>"#
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("elements.xlsx");
-        std::fs::write(&path, workbook_with_sheet(&sheet_xml)).unwrap();
-        let mut book = open_xlsx(&path).unwrap().workbook;
-        book.set_input(SheetId(0), CellPos::parse_a1("B2").unwrap(), "2")
-            .unwrap();
-        save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
-        open_xlsx(&path).unwrap();
+    let styles = format!(
+        r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">{}{}</styleSheet>"#,
+        "<x>".repeat(100_000),
+        "</x>".repeat(100_000)
+    );
+    let with_deep_sheet = workbook_with_sheet(&sheet_xml);
+    let with_deep_styles = with_replaced_part(
+        workbook_with_sheet(&sheet(r#"<c r="A1"><v>1</v></c>"#)),
+        "xl/styles.xml",
+        styles.as_bytes(),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("deep.xlsx");
+    for bytes in [with_deep_sheet, with_deep_styles] {
+        std::fs::write(&path, bytes).unwrap();
+        for reader in [XlsxReader::Fast, XlsxReader::IronCalc, XlsxReader::Shadow] {
+            let error = open_xlsx_with(&path, reader).err().unwrap().to_string();
+            assert!(error.contains("nests elements deeper"), "{reader:?}: {error}");
+        }
     }
 }
 
