@@ -7,6 +7,7 @@ mod formulas;
 mod layout;
 pub mod limits;
 mod links;
+mod nesting;
 mod package;
 mod shared_strings;
 mod sheet_data;
@@ -149,6 +150,7 @@ fn read_from<R: Read + Seek>(
             let streamed = stream_worksheet(entry, meter, &entry_name, &sheet_name, &budgets)?;
             // The rows were checked while streaming; the configuration carries the
             // same feature flags and validation limits as a whole part would.
+            nesting::check_nesting(&entry_name, &streamed.stub)?;
             inspect(&entry_name, &streamed.stub)?;
             sheets[position] = Some(streamed);
             continue;
@@ -352,8 +354,12 @@ fn sheet_configs_from<R: Read + Seek>(
             .by_name(&part.path)
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
         match stream_config(entry, meter, &part.path, &budgets) {
-            Ok(config) => configs
-                .push(String::from_utf8(config).map_err(|e| ReadError::Unreadable(e.to_string()))?),
+            Ok(config) => {
+                nesting::check_nesting(&part.path, &config)?;
+                configs.push(
+                    String::from_utf8(config).map_err(|e| ReadError::Unreadable(e.to_string()))?,
+                );
+            }
             Err(ReadError::Unsafe(reason)) => return Err(ReadError::Unsafe(reason)),
             Err(error) => {
                 return Err(ReadError::Unsupported(format!(
