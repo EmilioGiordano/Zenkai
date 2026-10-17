@@ -229,7 +229,13 @@ mod tests {
             .map(|n| n.ancestors().count() - 1)
             .max()
             .unwrap();
-        assert!(!refused(&format!("{}{xml}", "<a>".repeat(MAX_XML_DEPTH - depth))));
-        assert!(refused(&format!("{}{xml}", "<a>".repeat(MAX_XML_DEPTH - depth + 1))));
+        assert!(!refused(&format!(
+            "{}{xml}",
+            "<a>".repeat(MAX_XML_DEPTH - depth)
+        )));
+        assert!(refused(&format!(
+            "{}{xml}",
+            "<a>".repeat(MAX_XML_DEPTH - depth + 1)
+        )));
     }
 }

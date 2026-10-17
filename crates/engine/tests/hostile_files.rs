@@ -304,10 +304,7 @@ fn deeply_nested_formula_is_rejected_not_a_stack_overflow() {
 #[test]
 fn large_sheet_elements_save_and_reopen() {
     let mut source = rust_xlsxwriter::Workbook::new();
-    source
-        .add_worksheet()
-        .write_number(0, 0, 1.0)
-        .unwrap();
+    source.add_worksheet().write_number(0, 0, 1.0).unwrap();
     let bytes = source.save_to_buffer().unwrap();
     let mut sheet_xml = String::new();
     zip::ZipArchive::new(std::io::Cursor::new(bytes.clone()))
@@ -361,7 +358,10 @@ fn deeply_nested_elements_are_refused_not_a_stack_overflow() {
         std::fs::write(&path, bytes).unwrap();
         for reader in [XlsxReader::Fast, XlsxReader::IronCalc, XlsxReader::Shadow] {
             let error = open_xlsx_with(&path, reader).err().unwrap().to_string();
-            assert!(error.contains("nests elements deeper"), "{reader:?}: {error}");
+            assert!(
+                error.contains("nests elements deeper"),
+                "{reader:?}: {error}"
+            );
         }
     }
 }
