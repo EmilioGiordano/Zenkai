@@ -476,11 +476,10 @@ fn a_table_header_edit_is_written_whole_and_a_cell_below_the_table_row_by_row() 
     let reopened = open_xlsx(&document).unwrap().workbook;
     assert_eq!(reopened.input(SheetId(0), pos(0, 0)), "Renamed");
     assert_eq!(reopened.input(SheetId(0), pos(149, 1)), "1000");
-    if has_part(&document, TABLE_PART) {
-        let table = part(&document, TABLE_PART);
-        assert!(table.contains("name=\"Renamed\""), "{table}");
-        assert!(!table.contains("name=\"Name\""), "{table}");
-    }
+    // The stale table part stays in the file but nothing points at it, so Excel never
+    // checks its columns against the renamed header.
+    assert!(!part(&document, ROWS_PART).contains("tableParts"));
+    assert!(!has_part(&document, "xl/worksheets/_rels/sheet1.xml.rels"));
 }
 
 // Only a save that copies from the file keeps a part Zenkai does not write itself.
