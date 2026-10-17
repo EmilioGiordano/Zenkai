@@ -316,6 +316,25 @@ fn opened(dir: &Path) -> (std::path::PathBuf, Workbook) {
     (document, book)
 }
 
+// Rows inserted on one sheet drop the links of the others, which may name cells there; a
+// sheet that has none is not rewritten for it.
+#[test]
+fn rows_moved_on_one_sheet_leave_a_sheet_without_links_as_it_was() {
+    let dir = tempfile::tempdir().unwrap();
+    let (document, mut book) = opened(dir.path());
+    let base = dir.path().join("base.xlsx");
+    std::fs::copy(&document, &base).unwrap();
+    book.insert_rows(SheetId(0), RowIdx::clamped(0), 1).unwrap();
+    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    assert_eq!(
+        raw_part(&document, UNTOUCHED_PART),
+        raw_part(&base, UNTOUCHED_PART)
+    );
+    for name in ["xl/charts/chart1.xml", "xl/tables/table1.xml"] {
+        assert_eq!(raw_part(&document, name), raw_part(&base, name), "{name}");
+    }
+}
+
 #[test]
 fn an_edit_rewrites_its_sheet_and_copies_every_other_part() {
     let dir = tempfile::tempdir().unwrap();
