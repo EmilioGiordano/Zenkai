@@ -35,6 +35,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   it shares. The caller builds the row styles once with `row_styles` and passes them to every
   call, so a caller writing many spans does not rebuild the map per span. Tests:
   `src/export/test/test_export.rs`.
+- The xlsx import skips comments and whitespace between the `<row>` elements of a sheet
+  instead of failing on them as rows without an index (`src/import/worksheets.rs`). Test:
+  `test_comment_and_whitespace_between_rows` in `tests/test.rs`.
 - `get_shared_string_item_xml` writes one `<si>` element of the shared
   strings part, so a caller can append strings to an existing part
   (`src/export/shared_strings.rs`). Tests: `src/export/test/test_export.rs`.
