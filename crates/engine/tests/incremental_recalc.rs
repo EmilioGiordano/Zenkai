@@ -193,7 +193,7 @@ fn rule(kind: u8) -> (&'static str, CfRuleInput) {
         formula: formula.to_string(),
         formula2: formula2.map(str::to_string),
         format: red_format(),
-        stop_if_true: kind % 2 == 0,
+        stop_if_true: kind.is_multiple_of(2),
     };
     match kind % 10 {
         0 => (
