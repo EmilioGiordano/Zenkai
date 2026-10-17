@@ -383,13 +383,14 @@ fn replace_part(file: &Path, name: &str, edit: impl Fn(String) -> String) {
     std::fs::write(file, bytes).unwrap();
 }
 
+// The reader takes a row numbered only by its cells; the copy, which cannot place it, refuses.
 #[test]
 fn rows_the_copy_cannot_read_fail_once_then_are_written_whole() {
     let dir = tempfile::tempdir().unwrap();
     let document = dir.path().join("book.xlsx");
     excel_base(&document);
     replace_part(&document, ROWS_PART, |sheet| {
-        sheet.replacen("<row r=\"100\"", "<!-- kept apart --><row r=\"100\"", 1)
+        sheet.replacen("<row r=\"100\"", "<row", 1)
     });
     let mut book = open_xlsx(&document).unwrap().workbook;
     book.set_input(SheetId(0), pos(49, 0), "1000").unwrap();
@@ -489,7 +490,7 @@ fn a_sheet_the_copy_refuses_is_the_only_one_written_whole_afterwards() {
     let document = dir.path().join("book.xlsx");
     excel_base(&document);
     replace_part(&document, ROWS_PART, |sheet| {
-        sheet.replacen("<row r=\"100\"", "<!-- kept apart --><row r=\"100\"", 1)
+        sheet.replacen("<row r=\"100\"", "<row", 1)
     });
     add_part(&document, EXTRA_PART, "<x/>");
     let mut book = open_xlsx(&document).unwrap().workbook;
