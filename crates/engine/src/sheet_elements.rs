@@ -167,6 +167,9 @@ enum Linked {
     // stay in the file, unreferenced.
     #[default]
     Dropped,
+    // The file's relationships hold nothing for this sheet, so there is nothing for a move
+    // on another sheet to drop and the sheet is left as it is.
+    Nothing,
 }
 
 // What is left of the element bytes a workbook may hold, spent sheet by sheet as they are
@@ -270,7 +273,7 @@ impl Elements {
     fn all(&self) -> impl Iterator<Item = &Element> {
         let linked = match &self.linked {
             Linked::Kept(linked) => linked.as_slice(),
-            Linked::Dropped => &[],
+            Linked::Dropped | Linked::Nothing => &[],
         };
         linked.iter().chain(&self.standalone)
     }
@@ -290,7 +293,7 @@ impl Elements {
 
     pub fn relationships(&self) -> Relationships {
         match self.linked {
-            Linked::Kept(_) => Relationships::Kept,
+            Linked::Kept(_) | Linked::Nothing => Relationships::Kept,
             Linked::Dropped => Relationships::Dropped,
         }
     }
@@ -307,6 +310,13 @@ impl Elements {
         }
     }
 
+    // The file's relationships hold nothing for this sheet, as the package was read.
+    pub fn nothing_linked(&mut self) {
+        if self.linked == Linked::Kept(Vec::new()) {
+            self.linked = Linked::Nothing;
+        }
+    }
+
     // Rows or columns from `from` (1-based) on were inserted or deleted on this sheet. The
     // parts the relationships point at (drawing anchors, table ranges, pivot locations,
     // comment cells) name rows and columns Zenkai cannot shift, so they all go.
@@ -319,7 +329,9 @@ impl Elements {
     // relationships point at (chart series, table formulas, pivot tables) may name cells
     // there and are never read, so they all go, even those that name none.
     pub fn moved_elsewhere(&mut self) {
-        self.linked = Linked::Dropped;
+        if self.linked != Linked::Nothing {
+            self.linked = Linked::Dropped;
+        }
         self.standalone.retain(|e| e.reach != Reach::Workbook);
     }
 }
@@ -786,6 +798,23 @@ mod tests {
         unpointed.moved_elsewhere();
         assert_eq!(unpointed.relationships(), Relationships::Dropped);
         assert_eq!(unpointed.kinds().len(), 1);
+    }
+
+    #[test]
+    fn a_sheet_the_file_links_nothing_to_is_left_alone_by_a_move_elsewhere() {
+        let mut sheet = elements(r#"<sheetProtection sheet="1"/>"#);
+        sheet.nothing_linked();
+        let before = sheet.clone();
+        sheet.moved_elsewhere();
+        assert_eq!(sheet, before);
+        assert_eq!(sheet.relationships(), Relationships::Kept);
+        sheet.moved(Axis::Rows, 1);
+        assert_eq!(sheet.relationships(), Relationships::Dropped);
+        // An element pointing into the relationships part means the sheet does link.
+        let mut linked = elements(r#"<drawing r:id="rId1"/>"#);
+        linked.nothing_linked();
+        linked.moved_elsewhere();
+        assert_eq!(linked.relationships(), Relationships::Dropped);
     }
 
     #[test]

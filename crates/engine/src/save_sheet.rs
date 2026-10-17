@@ -393,7 +393,8 @@ mod tests {
         let mut budget = crate::sheet_elements::ElementBudget::workbook();
         let settings = crate::sheet_settings::read(source, &mut budget);
         let xml = concat!(
-            "<worksheet><sheetData><row r=\"1\"/></sheetData><mergeCells/>",
+            "<worksheet><sheetViews><sheetView workbookViewId=\"0\"></sheetView></sheetViews>",
+            "<sheetData><row r=\"1\"/></sheetData><mergeCells/>",
             "<conditionalFormatting/><extLst/></worksheet>"
         );
         let order = [

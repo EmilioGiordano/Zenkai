@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use ironcalc::base::types::Workbook as Book;
-use zenkai_xlsx_reader::{ReadError, workbook_differences};
+use zenkai_xlsx_reader::{ReadError, SheetLinks, workbook_differences};
 
 use crate::error::EngineError;
 use crate::file::{Found, Unsupported, inspect_part, kinds};
@@ -214,12 +214,16 @@ fn read_streaming(path: &Path, name: &str) -> Result<FileRead, ReadError> {
     let settings = opened
         .sheet_configs
         .iter()
-        .map(|config| {
+        .zip(&opened.layout.sheet_links)
+        .map(|(config, links)| {
             if config.is_empty() {
-                SheetSettings::default()
-            } else {
-                sheet_settings::read(config, &mut budget)
+                return SheetSettings::default();
             }
+            let mut settings = sheet_settings::read(config, &mut budget);
+            if matches!(links, SheetLinks::Known(known) if known.is_empty()) {
+                settings.elements.nothing_linked();
+            }
+            settings
         })
         .collect();
     Ok(FileRead {

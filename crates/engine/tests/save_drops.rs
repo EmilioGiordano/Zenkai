@@ -445,6 +445,23 @@ fn a_chart_is_kept_when_its_sheet_is_edited() {
     kept_by_each_path(&path, Some("drawing"));
 }
 
+// A file with no shared strings part cannot take a patch that adds text, so that edit is a
+// whole save and has to say what it drops.
+#[test]
+fn the_first_text_in_a_file_without_shared_strings_is_a_whole_save_that_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = source(dir.path(), |held| {
+        let mut chart = Chart::new(ChartType::Column);
+        chart.add_series().set_values("Held!$A$1:$A$3");
+        held.insert_chart(8, 4, &chart).unwrap();
+    });
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.set_input(SheetId(1), pos("B1"), "text").unwrap();
+    let saved = save(&book, &path);
+    assert!(saved.dropped.contains(&Unsupported::Charts));
+    assert_eq!(saved.kept, scan(&saved.bytes));
+}
+
 const PIVOT_TABLE: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="Pivot1" cacheId="1" dataCaption="Values"><location ref="E1:F3" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/></pivotTableDefinition>"#;
 const PIVOT_CACHE: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -865,7 +882,7 @@ fn saving_in_place_names_each_loss_once() {
     assert_eq!(set(&scan(&std::fs::read(&path).unwrap())), set(&all));
 
     let mut book = open_xlsx(&path).unwrap().workbook;
-    book.set_input(SheetId(3), pos("A1"), "plain").unwrap();
+    book.set_input(SheetId(3), pos("A1"), "5").unwrap();
     let plain = save(&book, &path);
     assert!(plain.dropped.is_empty(), "{:?}", plain.dropped);
     assert_eq!(set(&plain.kept), set(&all));
