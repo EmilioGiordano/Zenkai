@@ -763,10 +763,14 @@ pub(crate) fn splice_rows<R: Read, W: Write>(
         last_row: 0,
         write_span,
     };
-    out.write_all(b"<sheetData>")?;
     match form {
-        SheetData::Open => splice.rows(&mut scan, out)?,
+        SheetData::Open => {
+            out.write_all(b"<sheetData>")?;
+            splice.rows(&mut scan, out)?;
+        }
+        SheetData::Empty if spans.is_empty() => out.write_all(b"<sheetData/>")?,
         SheetData::Empty => {
+            out.write_all(b"<sheetData>")?;
             splice.flush_all(out)?;
             out.write_all(b"</sheetData>")?;
         }
