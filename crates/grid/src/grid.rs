@@ -651,37 +651,41 @@ impl Grid {
     }
 
     // Frozen rows and columns are always on screen, so only the scrolled pane moves.
+    // The new origin is found by the sizes of the lines up to the target, not by how many
+    // lines are shown now: wide or tall lines near the target fit fewer than the current ones.
     fn scroll_into_view(&mut self, pos: CellPos, cx: &mut Context<Self>) {
-        let origin = self.scroll_origin();
-        let mut top = origin.row;
-        let mut left = origin.col;
-        if pos.row.get() >= self.frozen_rows {
-            if pos.row < top {
-                top = pos.row;
-            } else if self
-                .fully_shown_rows()
-                .last()
-                .is_none_or(|last| pos.row > *last)
-            {
-                let above = self.visible_rows().saturating_sub(2);
-                let rows = self.layout.rows_before(pos.row, above, RowIdx::default());
-                top = rows.first().copied().unwrap_or(pos.row);
+        for _ in 0..2 {
+            let (width, height) = self.viewport_extent();
+            let origin = self.scroll_origin();
+            let mut top = origin.row;
+            let mut left = origin.col;
+            if pos.row.get() >= self.frozen_rows {
+                if pos.row < top {
+                    top = pos.row;
+                } else if self
+                    .fully_shown_rows()
+                    .last()
+                    .is_none_or(|last| pos.row > *last)
+                {
+                    let floor = RowIdx::clamped(i64::from(self.frozen_rows));
+                    top = self.layout.row_ending_at(pos.row, height, floor);
+                }
             }
-        }
-        if pos.col.get() >= self.frozen_cols {
-            if pos.col < left {
-                left = pos.col;
-            } else if self
-                .fully_shown_cols()
-                .last()
-                .is_none_or(|last| pos.col > *last)
-            {
-                let before = u32::from(self.visible_cols().saturating_sub(2));
-                let cols = self.layout.cols_before(pos.col, before, ColIdx::default());
-                left = cols.first().copied().unwrap_or(pos.col);
+            if pos.col.get() >= self.frozen_cols {
+                if pos.col < left {
+                    left = pos.col;
+                } else if self
+                    .fully_shown_cols()
+                    .last()
+                    .is_none_or(|last| pos.col > *last)
+                {
+                    let floor = ColIdx::clamped(i64::from(self.frozen_cols));
+                    left = self.layout.col_ending_at(pos.col, width, floor);
+                }
             }
-        }
-        if (top, left) != (self.top, self.left) {
+            if (top, left) == (self.top, self.left) {
+                return;
+            }
             self.top = top;
             self.left = left;
             self.viewport_changed(cx);
@@ -694,9 +698,8 @@ impl Grid {
         cx.notify();
     }
 
-    fn recompute_viewport(&mut self, _cx: &mut Context<Self>) {
+    fn viewport_extent(&self) -> (f32, f32) {
         let (frozen_w, frozen_h) = self.frozen_size();
-        let origin = self.scroll_origin();
         let bar = THICKNESS / self.zoom;
         let width =
             (f32::from(self.bounds.size.width) / self.zoom - self.row_header() - frozen_w - bar)
@@ -704,6 +707,12 @@ impl Grid {
         let height =
             (f32::from(self.bounds.size.height) / self.zoom - HEADER_HEIGHT - frozen_h - bar)
                 .max(0.0);
+        (width, height)
+    }
+
+    fn recompute_viewport(&mut self, _cx: &mut Context<Self>) {
+        let (width, height) = self.viewport_extent();
+        let origin = self.scroll_origin();
         self.shown_cols = self.layout.shown_cols(origin.col, width);
         self.shown_rows = self.layout.shown_rows(origin.row, height);
     }
