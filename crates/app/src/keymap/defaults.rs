@@ -223,6 +223,12 @@ pub fn defaults() -> Vec<Binding> {
         bind("ctrl-shift-h", ShowChatSessions, CONTEXT),
         bind("alt-m", PickChatModel, Some("AgentChat")),
         bind("alt-o", PickChatPermission, Some("AgentChat")),
+        bind("alt-t", CycleToolCallDisplay, Some("AgentChat")),
+        bind("enter", ToggleToolCall, Some("ToolRow")),
+        bind("space", ToggleToolCall, Some("ToolRow")),
+        bind("ctrl-c", CopyToolResult, Some("ToolRow")),
+        bind("down", FocusNextToolCall, Some("ToolRow")),
+        bind("up", FocusPreviousToolCall, Some("ToolRow")),
         bind(
             "shift-tab",
             CycleChatPermission,

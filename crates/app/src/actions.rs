@@ -206,6 +206,11 @@ actions!(
         SlashPrevious,
         SlashAccept,
         SlashClose,
+        ToggleToolCall,
+        CopyToolResult,
+        FocusNextToolCall,
+        FocusPreviousToolCall,
+        CycleToolCallDisplay,
         RecordShortcutKeys,
         ResetAllShortcuts,
     ]
