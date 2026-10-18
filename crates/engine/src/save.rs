@@ -262,7 +262,12 @@ fn choose(
         return Ok(Choice {
             chosen: Chosen::Full(full_sheets(data, carried)?),
             adoption: None,
-            fate: Fate::full(held, lost),
+            fate: Fate::full(
+                held,
+                lost.union(&unwritable_restored(data, carried))
+                    .copied()
+                    .collect(),
+            ),
         });
     }
     let book = book_print(data.book)?;
