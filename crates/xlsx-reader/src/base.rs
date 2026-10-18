@@ -4,14 +4,13 @@ use std::ops::Range;
 use std::path::Path;
 
 use crate::ReadError;
-use crate::layout::{
-    PartNames, StringScan, StyleCounts, names_in_order, part_names_of, style_counts,
-};
+use crate::layout::{PartNames, StringScan, names_in_order, part_names_of};
 use crate::limits;
 use crate::package::{part_path, read_entry, read_package};
 use crate::shared_strings::{GuardRead, SHARED_STRINGS_PART, copy_appended};
 use crate::splice::{ReachingAnchor, RowSpan, splice_rows};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted};
+use crate::styles_part::{STYLES_PART, StyleAppendix, StyleCounts, appended, style_counts};
 
 const CONTENT_TYPES_PART: &str = "[Content_Types].xml";
 const WORKBOOK_RELS_PART: &str = "xl/_rels/workbook.xml.rels";
@@ -149,6 +148,19 @@ impl BasePackage {
             .map_err(io::Error::other)?;
         let mut guard = self.budgets.stream(entry, &self.meter, SHARED_STRINGS_PART);
         copy_appended(&mut guard, expected, appended, out)
+    }
+
+    // The styles part with the elements of `appendix` added to the lists they belong to.
+    // `expected` is what the part held when it was read; a part that changed since, or
+    // cannot take the elements, is refused.
+    pub fn copy_styles(
+        &mut self,
+        expected: StyleCounts,
+        appendix: &StyleAppendix,
+        out: &mut impl Write,
+    ) -> io::Result<()> {
+        let text = self.read_text(STYLES_PART).map_err(io::Error::other)?;
+        out.write_all(appended(&text, expected, appendix)?.as_bytes())
     }
 
     // The worksheet `part` with the rows of `spans` replaced by what `write_span` writes and
