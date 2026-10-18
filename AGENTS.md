@@ -39,8 +39,8 @@ Design principle: reinvent nothing. Shortcuts, menu names, selection, formula er
 - A decision the spec does not cover: choose the option closest to how Excel behaves and
   record it in `DECISIONS.md`.
 - No functionality outside the spec, even if it is easy. Propose it in `docs/IDEAS.md`.
-- Before closing a phase: `cargo fmt`, `cargo clippy` with no warnings, every test green,
-  benchmark without regressions.
+- Before closing a phase, in staging, run: `cargo fmt`, `cargo clippy` with no warnings,
+  every test green, benchmark without regressions.
 - If an engine or GPUI limitation blocks a requirement: stop and report it with
   alternatives. Never work around it silently.
 - Keep `README.md` current with how to build, test and run the benchmark on Windows.
@@ -192,19 +192,21 @@ Agents write the content; `scripts/pr` (bash, `gh`, `jq`) does the GitHub mechan
 
 ## Validation
 
-Builds are expensive, so they are batched: branches get cheap checks, the full gate runs
-once per batch. Never run workspace-wide clippy or test, a release build or the
-benchmark on a feature branch except for the single-branch case below.
+The development machine cannot build several branches at once, so work branches are never
+compiled locally: no `cargo` (build, check, test, clippy, fmt), no benchmark.
 
-Per branch, in its own worktree, for the crates it touches (`<crates>`):
+- Branches are validated statically: self-review of every changed signature, call site,
+  import and `match` against the code rules, tests written for the change, and the
+  reviewers' static passes.
+- Implementers may run `rustfmt --check` on the touched files only.
+- The per-branch build is the PR's GitHub CI (`ci.yml`). The implementer's report lists
+  what could not be verified without compiling and the commands staging must run.
+- No PR merges with a CI red caused by its own diff. A red unrelated to the diff is noted on
+  the PR in one line, naming the branch that fixes it, and is never fixed inside that PR.
+- One branch and one PR per concrete task; never mix tasks.
 
-```
-cargo fmt
-cargo check -p <crates> --all-targets
-cargo test -p <crates>
-```
-
-Debug builds only. Parallel `cargo` invocations use at most `-j 8` in total.
+Local builds happen only in staging, once per batch: one `cargo` process at a time, `-j 4`,
+and no heavy measurement alongside a build.
 
 A batch with a single branch runs the full gate directly in that branch's worktree and
 copies the release exe from there; no staging branch is created.
@@ -222,7 +224,11 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo deny check
 cargo build --release
+cargo test --manifest-path vendor/<crate>/Cargo.toml
 ```
+
+The workspace excludes the vendor crates, so the last line runs once for each one present
+under `vendor/`: `ironcalc_base`, and `ironcalc` once it exists.
 
 Plus the benchmark in `bench/` (release build) when the batch touches `crates/engine`,
 `crates/grid`, `crates/formats` or `bench/`. Never draw performance conclusions from a
@@ -234,8 +240,8 @@ Branches are developed in parallel, one agent and one worktree each, and validat
 in a staging branch.
 
 1. **Design.** A UI task gets a design artifact approved before implementation.
-2. **Branch.** The implementer works per the code rules and runs the per-branch checks above.
-   It commits in logical commits and never pushes.
+2. **Branch.** The implementer works per the code rules and validates statically per
+   Validation above, without building. It commits in logical commits and never pushes.
    When the branch is ready for review, the lead pushes it and opens a draft PR with
    `scripts/pr/open.sh`.
 3. **Static review, in parallel, no builds.** `quality-reviewer`, `security-reviewer` and
@@ -248,7 +254,7 @@ in a staging branch.
    Validation above: one branch is gated in its own worktree, several branches are merged
    one at a time with `--no-ff` into a fresh staging branch. After each merge it runs
    `cargo check --workspace --all-targets` to attribute breakage to a branch. Then, once,
-   it runs the full gate. It copies the release exe to
+   it runs the full gate, vendor suites included. It copies the release exe to
    `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`, overwriting; if the file is locked it
    reports it and never kills the process. Staging uses the persistent target dir
    `D:/More-Code-Projects/Zenkai-compiled/staging`, which is never cleaned. When the batch
@@ -280,7 +286,7 @@ grow them with every bug found:
   open/edit/save/reopen, session close and restore, incremental versus full recalculation.
 - Fuzz targets for every parser of untrusted input: xlsx, csv, session.json,
   settings.json, MCP messages.
-- Mutation testing (`cargo mutants`) on changed modules, to check the tests would notice a
+- Mutation testing (`cargo mutants`, in staging) on changed modules, to check the tests would notice a
   broken implementation.
 - Values computed by Excel and cached in the corpus files, compared with the engine.
 - For changes to the engine, file I/O or the agent security boundary, a second review by a
@@ -309,7 +315,7 @@ session's model.
 - `.claude/skills/review-changes/SKILL.md`: runs the reviewers in parallel and combines
   the verdict. It never fixes anything.
 - `.agents/skills/zk-task/SKILL.md`: Muse workflow (`/zk-task`) turning a plain-words request into a TASK file on a fresh branch worktree, then stopping for approval.
-- `.agents/skills/zk-branch/SKILL.md`: Muse workflow (`/zk-branch`) running a TASK file end to end: implement, branch checks, parallel reviews, fixes, REPORT.
+- `.agents/skills/zk-branch/SKILL.md`: Muse workflow (`/zk-branch`) running a TASK file end to end: implement, static checks, parallel reviews, fixes, REPORT.
 - `.agents/skills/zk-staging/SKILL.md`: Muse workflow (`/zk-staging`) merging ready branches into `staging/<date>`, running the full gate and benchmark once, delivering the exe and report.
 
 Each reviewer has a "Known false positives" section. It starts empty and grows with every

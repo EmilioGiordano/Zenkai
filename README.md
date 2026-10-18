@@ -88,12 +88,12 @@ Requirements: Windows 10/11, the MSVC build tools (Visual Studio Build Tools wit
 `rust-toolchain.toml` and installs itself on the first build.
 
 ```powershell
-cargo build --release -p zenkai -p zenkai-mcp -j 6
+cargo build --release -p zenkai -p zenkai-mcp -j 4
 .\target\release\zenkai.exe                    # empty workbook
 .\target\release\zenkai.exe path\to\book.xlsx  # open a file
 ```
 
-`-j 6` keeps the first build (GPUI is large) from saturating the machine; drop it on a
+`-j 4` keeps the first build (GPUI is large) from saturating the machine; drop it on a
 dedicated build box. The release binary is `target\release\zenkai.exe`.
 
 ## Agents over MCP
@@ -140,25 +140,28 @@ placeholder. Release builds have no console window and log to
 
 ```powershell
 cargo fmt --check
-cargo clippy --all-targets -j 6 -- -D warnings
-cargo test -j 6
+cargo clippy --all-targets -j 4 -- -D warnings
+cargo test -j 4
 cargo deny check            # cargo install cargo-deny --locked
 ```
+
+These run in staging and in CI, not on work branches (see `AGENTS.md`, Validation).
 
 The calculation engine is IronCalc's `ironcalc_base` 0.8.3, vendored in
 `vendor/ironcalc_base` with Zenkai's changes (incremental recalculation) and built in
 place of the crates.io release through `[patch.crates-io]`. It sits outside the
 workspace, so the commands above do not cover it; after changing it, also run its own
-test suite:
+test suite, together with `vendor\ironcalc` once it exists, which is also outside the
+workspace; staging runs every vendor crate present:
 
 ```powershell
-cargo test -j 6 --manifest-path vendor\ironcalc_base\Cargo.toml --target-dir target\vendor
+cargo test -j 4 --manifest-path vendor\ironcalc_base\Cargo.toml --target-dir target\vendor
 ```
 
 ## Benchmark
 
 ```powershell
-cargo build --release -p zenkai-bench -j 6
+cargo build --release -p zenkai-bench -j 4
 .\target\release\zenkai-bench.exe run bench\fixtures 1   # generates fixtures on first run
 .\target\release\zenkai-bench.exe coverage               # function coverage table
 ```
