@@ -47,7 +47,7 @@ fn shortcut_row(label: &'static str, keys: String, muted: Hsla) -> impl IntoElem
 }
 
 fn keys_of(cx: &App, action: &dyn Action) -> String {
-    keymap::shortcut(cx, action).unwrap_or_default()
+    keymap::shortcut(cx, action).unwrap_or_else(|| t!("settings.no_shortcut").to_string())
 }
 
 // Shown only while the interface is not at 100%, so the state is visible and one click away

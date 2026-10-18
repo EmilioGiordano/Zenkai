@@ -55,10 +55,12 @@ pub fn reset(cx: &mut App) {
 }
 
 fn set(scale: InterfaceScale, cx: &mut App) {
-    show(scale, cx);
     agent_settings::change(cx, move |settings| {
         settings.appearance.interface_scale = scale;
     });
+    if agent_settings::can_write(cx) {
+        show(scale, cx);
+    }
 }
 
 fn show(scale: InterfaceScale, cx: &mut App) {

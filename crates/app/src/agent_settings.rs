@@ -196,9 +196,14 @@ fn secret_states(names: &[SecretName]) -> BTreeMap<SecretName, SecretState> {
 
 // What the user clicked on the Settings page is their own choice, so a change that
 // gives agents more power is approved here and never held like a file edit.
+// Without a settings folder nothing is written and the failure is recorded.
 pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
     let config = cx.global::<AgentConfig>();
     let Some(paths) = config.paths.clone() else {
+        let error = SettingsFileError::NoFolder;
+        cx.update_global::<AgentConfig, _>(|config, _| {
+            config.failure = Some(t!("settings.not_changed", error = error));
+        });
         return;
     };
     let current = config.state.current.clone();
@@ -229,6 +234,10 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
         refresh_secrets(cx);
     })
     .detach();
+}
+
+pub fn can_write(cx: &App) -> bool {
+    cx.global::<AgentConfig>().paths.is_some()
 }
 
 pub fn store_secret(cx: &mut App, name: SecretName, value: String) {
