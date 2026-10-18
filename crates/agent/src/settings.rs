@@ -82,6 +82,11 @@ pub struct AgentSettings {
         description = "Ask again at every start before agents may write without asking or outside MCP clients may connect. Turning it off from this file waits for your confirmation in Zenkai."
     )]
     pub confirm_elevated_at_start: bool,
+    #[serde(default)]
+    #[schemars(
+        description = "How the chat shows the tools an agent calls: \"collapsed\" is one line per call, \"expanded\" shows input and result, \"hidden\" keeps one summary line per turn. Calls waiting for your answer always show."
+    )]
+    pub tool_calls: ToolCallDisplay,
 }
 
 fn confirm_by_default() -> bool {
@@ -96,6 +101,7 @@ impl Default for AgentSettings {
             permission: PermissionMode::default(),
             external_agents: ExternalAgents::default(),
             confirm_elevated_at_start: confirm_by_default(),
+            tool_calls: ToolCallDisplay::default(),
         }
     }
 }
@@ -212,6 +218,39 @@ impl PermissionMode {
             PermissionMode::ReadOnly => t!("settings.permission.read_only"),
             PermissionMode::AskBeforeWrite => t!("settings.permission.ask_before_write"),
             PermissionMode::Automatic => t!("settings.permission.automatic"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallDisplay {
+    #[default]
+    Collapsed,
+    Expanded,
+    Hidden,
+}
+
+impl ToolCallDisplay {
+    pub const ALL: [ToolCallDisplay; 3] = [
+        ToolCallDisplay::Collapsed,
+        ToolCallDisplay::Expanded,
+        ToolCallDisplay::Hidden,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ToolCallDisplay::Collapsed => t!("settings.tool_calls.collapsed"),
+            ToolCallDisplay::Expanded => t!("settings.tool_calls.expanded"),
+            ToolCallDisplay::Hidden => t!("settings.tool_calls.hidden"),
+        }
+    }
+
+    pub fn next(self) -> ToolCallDisplay {
+        match self {
+            ToolCallDisplay::Collapsed => ToolCallDisplay::Expanded,
+            ToolCallDisplay::Expanded => ToolCallDisplay::Hidden,
+            ToolCallDisplay::Hidden => ToolCallDisplay::Collapsed,
         }
     }
 }
@@ -511,6 +550,33 @@ mod tests {
         assert_eq!(settings, Settings::default());
         assert_eq!(settings.agents.permission, PermissionMode::AskBeforeWrite);
         assert_eq!(settings.agents.external_agents, ExternalAgents::Blocked);
+    }
+
+    #[test]
+    fn tool_calls_default_to_collapsed_and_round_trip() {
+        let settings = Settings::parse("{}").unwrap();
+        assert_eq!(settings.agents.tool_calls, ToolCallDisplay::Collapsed);
+        for display in ToolCallDisplay::ALL {
+            let mut changed = settings.clone();
+            changed.agents.tool_calls = display;
+            let text = serde_json::to_string(&changed).unwrap();
+            assert_eq!(Settings::parse(&text).unwrap().agents.tool_calls, display);
+        }
+        let hidden = Settings::parse(r#"{ "agents": { "tool_calls": "hidden" } }"#).unwrap();
+        assert_eq!(hidden.agents.tool_calls, ToolCallDisplay::Hidden);
+        assert!(Settings::parse(r#"{ "agents": { "tool_calls": "all" } }"#).is_err());
+    }
+
+    #[test]
+    fn cycling_the_display_visits_every_choice_and_returns() {
+        let mut display = ToolCallDisplay::Collapsed;
+        let mut seen = Vec::new();
+        for _ in 0..ToolCallDisplay::ALL.len() {
+            seen.push(display);
+            display = display.next();
+        }
+        assert_eq!(display, ToolCallDisplay::Collapsed);
+        assert_eq!(seen, ToolCallDisplay::ALL);
     }
 
     #[test]
