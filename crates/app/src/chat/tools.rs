@@ -18,15 +18,30 @@ use crate::actions::*;
 
 const SHORTEST_DURATION_SHOWN: std::time::Duration = std::time::Duration::from_millis(100);
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum RowKey {
+    Call(ToolCallId),
+    Group(ToolCallId),
+}
+
+impl RowKey {
+    fn element_id(&self) -> SharedString {
+        match self {
+            RowKey::Call(id) => SharedString::from(format!("tool-call-{}", id.as_str())),
+            RowKey::Group(id) => SharedString::from(format!("tool-group-{}", id.as_str())),
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct ToolViews {
-    toggled: HashSet<ToolCallId>,
-    focus: HashMap<ToolCallId, FocusHandle>,
+    toggled: HashSet<RowKey>,
+    focus: HashMap<RowKey, FocusHandle>,
     inputs: HashSet<ToolCallId>,
 }
 
 impl ToolViews {
-    fn is_open(&self, display: ToolCallDisplay, id: &ToolCallId) -> bool {
+    fn is_open(&self, display: ToolCallDisplay, id: &RowKey) -> bool {
         (display == ToolCallDisplay::Expanded) != self.toggled.contains(id)
     }
 
@@ -40,13 +55,13 @@ impl ToolViews {
         }
     }
 
-    fn toggle(&mut self, id: &ToolCallId) {
+    fn toggle(&mut self, id: &RowKey) {
         if !self.toggled.remove(id) {
             self.toggled.insert(id.clone());
         }
     }
 
-    fn handle(&mut self, id: &ToolCallId, cx: &Context<ChatPanel>) -> FocusHandle {
+    fn handle(&mut self, id: &RowKey, cx: &Context<ChatPanel>) -> FocusHandle {
         self.focus
             .entry(id.clone())
             .or_insert_with(|| cx.focus_handle())
@@ -54,13 +69,17 @@ impl ToolViews {
     }
 
     fn existing(&self, id: &ToolCallId) -> Option<&FocusHandle> {
-        self.focus.get(id)
+        self.focus.get(&RowKey::Call(id.clone()))
     }
 
-    pub(super) fn keep_only(&mut self, live: &HashSet<ToolCallId>) {
-        self.toggled.retain(|id| live.contains(id));
-        self.focus.retain(|id, _| live.contains(id));
-        self.inputs.retain(|id| live.contains(id));
+    pub(super) fn keep_only(&mut self, calls: &HashSet<ToolCallId>, groups: &HashSet<ToolCallId>) {
+        let live = |key: &RowKey| match key {
+            RowKey::Call(id) => calls.contains(id),
+            RowKey::Group(id) => groups.contains(id),
+        };
+        self.toggled.retain(|key| live(key));
+        self.focus.retain(|key, _| live(key));
+        self.inputs.retain(|id| calls.contains(id));
     }
 }
 
@@ -100,10 +119,6 @@ fn status_mark(status: ToolStatus, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-pub(super) fn group_key(first: &ToolCard) -> ToolCallId {
-    ToolCallId::new(format!("group:{}", first.id.as_str()))
-}
-
 fn meta_text(card: &ToolCard) -> String {
     match card.status {
         ToolStatus::Completed => card
@@ -116,7 +131,7 @@ fn meta_text(card: &ToolCard) -> String {
 }
 
 struct Row<'a> {
-    key: &'a ToolCallId,
+    key: &'a RowKey,
     mark: AnyElement,
     text: &'a RowText,
     meta: String,
@@ -125,7 +140,7 @@ struct Row<'a> {
 }
 
 impl ChatPanel {
-    pub(super) fn toggle_tool(&mut self, id: &ToolCallId, cx: &mut Context<Self>) {
+    pub(super) fn toggle_tool(&mut self, id: &RowKey, cx: &mut Context<Self>) {
         self.tools.toggle(id);
         cx.notify();
     }
@@ -174,7 +189,7 @@ impl ChatPanel {
         let (on_click, on_toggle, on_copy) = (row.key.clone(), row.key.clone(), row.key.clone());
         let clicked_focus = focus.clone();
         h_flex()
-            .id(SharedString::from(format!("tool-row-{}", row.key.as_str())))
+            .id(row.key.element_id())
             .key_context("ToolRow")
             .track_focus(&focus)
             .tab_stop(true)
@@ -238,7 +253,9 @@ impl ChatPanel {
                 }),
             )
             .on_action(cx.listener(move |this, _: &CopyToolResult, _, cx| {
-                this.copy_tool_result(&on_copy, cx)
+                if let RowKey::Call(id) = &on_copy {
+                    this.copy_tool_result(id, cx)
+                }
             }))
             .on_action(|_: &FocusNextToolCall, window, cx| window.focus_next(cx))
             .on_action(|_: &FocusPreviousToolCall, window, cx| window.focus_prev(cx))
@@ -255,14 +272,15 @@ impl ChatPanel {
             return self.render_ask(views, card, cx);
         }
         let text = tool_rows::row_text(card);
-        let open = views.is_open(display, &card.id);
+        let key = RowKey::Call(card.id.clone());
+        let open = views.is_open(display, &key);
         let aria = format!("{}: {} {}", card.status.label(), text.label, text.target);
         let mark = status_mark(card.status, cx);
         let meta = meta_text(card);
         let row = self.render_row(
             views,
             Row {
-                key: &card.id,
+                key: &key,
                 mark,
                 text: &text,
                 meta,
@@ -287,7 +305,7 @@ impl ChatPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let text = tool_rows::group_text(cards);
-        let key = group_key(first);
+        let key = RowKey::Group(first.id.clone());
         let open = views.is_open(ToolCallDisplay::Collapsed, &key);
         let aria = format!("{} {}", text.label, text.target);
         let mark = status_mark(ToolStatus::Completed, cx);
@@ -451,5 +469,23 @@ impl ChatPanel {
                     ),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use zenkai_agent::chat::thread::ToolCallId;
+
+    use super::RowKey;
+
+    #[test]
+    fn a_call_and_a_group_row_never_share_a_key() {
+        let call = RowKey::Call(ToolCallId::new("x"));
+        let group = RowKey::Group(ToolCallId::new("x"));
+        let lookalike = RowKey::Call(ToolCallId::new("group:x"));
+        assert_ne!(call, group);
+        assert_ne!(group, lookalike);
+        assert_ne!(group.element_id(), lookalike.element_id());
+        assert_ne!(group.element_id(), call.element_id());
     }
 }

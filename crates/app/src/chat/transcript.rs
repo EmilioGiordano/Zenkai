@@ -12,7 +12,6 @@ use zenkai_i18n::t;
 
 use super::ChatPanel;
 use super::badge::{self, ReferencePlugin};
-use super::tools::group_key;
 use crate::agent_settings::AgentConfig;
 
 fn user_bubble(text: &str, panel: &WeakEntity<ChatPanel>, cx: &App) -> impl IntoElement {
@@ -71,23 +70,24 @@ impl ChatPanel {
             _ => None,
         };
         let plan = tool_rows::plan(entries, display);
-        let mut live: HashSet<ToolCallId> = entries
+        let calls: HashSet<ToolCallId> = entries
             .iter()
             .filter_map(|entry| match entry {
                 Entry::Tool(card) => Some(card.id.clone()),
                 _ => None,
             })
             .collect();
-        live.extend(plan.iter().filter_map(|item| {
-            match item {
+        let groups: HashSet<ToolCallId> = plan
+            .iter()
+            .filter_map(|item| match item {
                 Item::Group(indices) => indices
                     .first()
                     .and_then(|index| card_at(*index))
-                    .map(group_key),
+                    .map(|first| first.id.clone()),
                 _ => None,
-            }
-        }));
-        views.keep_only(&live);
+            })
+            .collect();
+        views.keep_only(&calls, &groups);
         let rendered = plan
             .into_iter()
             .filter_map(|item| match item {
