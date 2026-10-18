@@ -178,6 +178,7 @@ fn full_part(index: usize) -> String {
 }
 
 fn full_sheets(data: ModelData<'_>, carried: &Carried) -> Result<Vec<SheetJob>, EngineError> {
+    let _span = tracing::info_span!("save_full_sheets").entered();
     let selected = selected_sheet(data.book);
     (0..data.book.worksheets.len())
         .map(|index| {
@@ -227,13 +228,6 @@ fn full_contents(
     })
 }
 
-fn traced_full_sheets(
-    data: ModelData<'_>,
-    carried: &Carried,
-) -> Result<Vec<SheetJob>, EngineError> {
-    tracing::info_span!("save_full_sheets").in_scope(|| full_sheets(data, carried))
-}
-
 enum Chosen {
     Full(Vec<SheetJob>),
     Patch(PatchPlan),
@@ -267,7 +261,7 @@ fn choose(
     let base = source.filter(|base| base.same_kind(path));
     if base.is_none() && target == SaveTarget::Copy {
         return Ok(Choice {
-            chosen: Chosen::Full(traced_full_sheets(data, carried)?),
+            chosen: Chosen::Full(full_sheets(data, carried)?),
             adoption: None,
             fate: Fate::full(
                 held,
@@ -301,7 +295,7 @@ fn choose(
             (Chosen::Patch(plan), contents, fate)
         }
         None => (
-            Chosen::Full(traced_full_sheets(data, carried)?),
+            Chosen::Full(full_sheets(data, carried)?),
             full_contents(data, carried, book, prints)?,
             Fate::full(
                 held,
