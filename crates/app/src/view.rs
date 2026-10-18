@@ -33,7 +33,7 @@ mod closing;
 mod settings_gate;
 mod space_panel;
 
-use crate::prompt_gate::PromptGate;
+use crate::prompt_gate::{PROMPT_OPEN_CONTEXT, PromptGate};
 use agent_calls::{AgentLink, Decision};
 use chat_dock::ChatDock;
 use zenkai_agent::protected_view::file_origin;
@@ -3204,10 +3204,13 @@ impl Render for Workspace {
         let theme = cx.theme();
         v_flex()
             .relative()
-            .key_context(if self.prompts.blocks_input() {
-                "Workspace PromptOpen"
-            } else {
-                "Workspace"
+            .key_context({
+                let mut context = KeyContext::default();
+                context.add("Workspace");
+                if self.prompts.blocks_input() {
+                    context.add(PROMPT_OPEN_CONTEXT);
+                }
+                context
             })
             // A file dropped on the window opens like File > Open.
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {

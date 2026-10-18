@@ -1,6 +1,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+pub const PROMPT_OPEN_CONTEXT: &str = "PromptOpen";
+
 #[derive(Default)]
 pub struct PromptGate {
     open: Rc<Cell<usize>>,
