@@ -104,7 +104,7 @@ impl ChatPanel {
             SessionEvent::Permission(ask) => {
                 self.thread.waiting_for_permission(&ask.tool, &ask.title);
                 self.permissions.push(ask);
-                self.view = View::Chat;
+                self.set_view(View::Chat, cx);
                 cx.emit(ChatEvent::NeedsAnswer);
                 self.scroll_to_end();
             }

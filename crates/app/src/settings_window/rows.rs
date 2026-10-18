@@ -66,6 +66,7 @@ pub enum RowId {
     Agents,
     Permission,
     ConfirmElevated,
+    ToolCalls,
     ExternalAgents,
     ConnectionCommand,
     WhatLeaves,
@@ -86,7 +87,7 @@ pub struct RowInfo {
 }
 
 impl RowId {
-    pub const ALL: [RowId; 23] = [
+    pub const ALL: [RowId; 24] = [
         RowId::RestoreSession,
         RowId::CloseWithUnsaved,
         RowId::Language,
@@ -101,6 +102,7 @@ impl RowId {
         RowId::Agents,
         RowId::Permission,
         RowId::ConfirmElevated,
+        RowId::ToolCalls,
         RowId::ExternalAgents,
         RowId::ConnectionCommand,
         RowId::WhatLeaves,
@@ -229,6 +231,13 @@ impl RowId {
                 t!("settings.row.confirm_elevated.description"),
                 &["safety", "startup", "automatic"],
             ),
+            RowId::ToolCalls => row(
+                Section::Ai,
+                t!("settings.group.chat"),
+                t!("settings.row.tool_calls"),
+                t!("settings.row.tool_calls.description"),
+                &["chat", "tools", "calls", "collapsed", "expanded", "hidden"],
+            ),
             RowId::ExternalAgents => row(
                 Section::Ai,
                 t!("settings.group.external_agents"),
@@ -328,6 +337,7 @@ impl RowId {
                 settings.agents.confirm_elevated_at_start
                     != default.agents.confirm_elevated_at_start
             }
+            RowId::ToolCalls => settings.agents.tool_calls != default.agents.tool_calls,
             RowId::ExternalAgents => {
                 settings.agents.external_agents != default.agents.external_agents
             }
@@ -361,6 +371,7 @@ impl RowId {
             RowId::ConfirmElevated => {
                 settings.agents.confirm_elevated_at_start = default.agents.confirm_elevated_at_start
             }
+            RowId::ToolCalls => settings.agents.tool_calls = default.agents.tool_calls,
             RowId::ExternalAgents => {
                 settings.agents.external_agents = default.agents.external_agents
             }

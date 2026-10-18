@@ -15,8 +15,8 @@ mod request;
 mod tests;
 mod write;
 
-pub use approval_text::{shown_entry, shown_text};
-pub use channel::{ToolCall, ToolEndpoint, ToolResult, channel};
+pub use approval_text::{escaped_multiline, escaped_text, shown_entry, shown_path, shown_text};
+pub use channel::{CallOrigin, ToolCall, ToolEndpoint, ToolResult, channel};
 pub use client::client_label;
 pub use create::{
     MAX_NEW_SHEETS, NewWorkbook, OPENABLE_EXTENSIONS, check_openable, create_workbook_file,

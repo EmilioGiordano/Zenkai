@@ -46,6 +46,33 @@ fn escaped(c: char) -> String {
     }
 }
 
+pub fn escaped_multiline(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if matches!(c, '\n' | '\t') {
+                c.to_string()
+            } else {
+                escaped(c)
+            }
+        })
+        .collect()
+}
+
+const SHOWN_PATH_CHARS: usize = 200;
+
+// A path the agent chose, escaped and cut long enough to read in an approval.
+pub fn shown_path(text: &str) -> String {
+    let mut shown: String = text.chars().take(SHOWN_PATH_CHARS).map(escaped).collect();
+    if text.chars().count() > SHOWN_PATH_CHARS {
+        shown.push('…');
+    }
+    shown
+}
+
+pub fn escaped_text(text: &str) -> String {
+    text.chars().map(escaped).collect()
+}
+
 // The first characters of `text`, escaped, with an ellipsis when cut.
 pub fn shown_text(text: &str) -> String {
     let mut shown: String = text.chars().take(SHOWN_CHARS).map(escaped).collect();
@@ -107,6 +134,14 @@ pub fn shown_entry(entry: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_agent_path_is_escaped_and_capped() {
+        assert_eq!(shown_path("a\u{202E}b.xlsx"), "a\\u{202E}b.xlsx");
+        let long = "x".repeat(300);
+        assert_eq!(shown_path(&long).chars().count(), SHOWN_PATH_CHARS + 1);
+        assert_eq!(shown_path("sales/q1.xlsx"), "sales/q1.xlsx");
+    }
 
     #[test]
     fn breaks_and_direction_overrides_are_shown_escaped() {

@@ -8,12 +8,19 @@ use crate::tools::request::ToolRequest;
 // agent cannot queue unbounded work.
 const QUEUED_CALLS: usize = 16;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallOrigin {
+    Chat,
+    External,
+}
+
 pub type ToolResult = Result<ToolReply, ToolError>;
 
 pub struct ToolCall {
     pub request: ToolRequest,
     // How the client named itself in the handshake, already escaped for display.
     pub client: Option<String>,
+    pub origin: CallOrigin,
     reply: Sender<ToolResult>,
 }
 
@@ -37,15 +44,21 @@ pub struct ToolEndpoint {
 
 impl ToolEndpoint {
     pub async fn call(&self, request: ToolRequest) -> ToolResult {
-        self.call_from(request, None).await
+        self.call_from(request, None, CallOrigin::External).await
     }
 
-    pub async fn call_from(&self, request: ToolRequest, client: Option<String>) -> ToolResult {
+    pub async fn call_from(
+        &self,
+        request: ToolRequest,
+        client: Option<String>,
+        origin: CallOrigin,
+    ) -> ToolResult {
         let (reply, response) = async_channel::bounded(1);
         self.calls
             .send(ToolCall {
                 request,
                 client,
+                origin,
                 reply,
             })
             .await
@@ -71,6 +84,7 @@ mod tests {
         let mut waiting = Box::pin(endpoint.call(ToolRequest::ListWorkbooks));
         assert!(block_on(poll_once(&mut waiting)).is_none());
         let call = calls.try_recv().unwrap();
+        assert_eq!(call.origin, CallOrigin::External);
         assert!(!call.is_abandoned());
         drop(waiting);
         assert!(call.is_abandoned());

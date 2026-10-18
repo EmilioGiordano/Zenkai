@@ -8,7 +8,9 @@ use rmcp::model::{
 use rmcp::service::RequestContext;
 
 use crate::bridge::catalog;
-use crate::tools::{Nonce, ToolEndpoint, UNTRUSTED_NOTICE, WorkingFolder, client_label};
+use crate::tools::{
+    CallOrigin, Nonce, ToolEndpoint, UNTRUSTED_NOTICE, WorkingFolder, client_label,
+};
 
 const CLIENT_CHECK: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -70,7 +72,12 @@ impl ServerHandler for ZenkaiServer {
         });
         // rmcp keeps this handler running after the client leaves; dropping the pending call
         // is what tells Zenkai nobody waits for the user's answer any more.
-        let call = self.endpoint.call_from(call, client);
+        let origin = if self.chat_agent.is_some() {
+            CallOrigin::Chat
+        } else {
+            CallOrigin::External
+        };
+        let call = self.endpoint.call_from(call, client, origin);
         tokio::pin!(call);
         let outcome = loop {
             tokio::select! {

@@ -1,5 +1,6 @@
 use std::fmt;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use zenkai_i18n::t;
 
@@ -85,6 +86,23 @@ pub struct ToolCard {
     pub detail: String,
     // The raw input or command the agent gave for the call, when it gave one.
     pub input: String,
+    // Set while the call runs, not while it waits for the user; replayed calls never get one.
+    pub started: Option<Instant>,
+    pub took: Option<Duration>,
+}
+
+impl ToolCard {
+    fn track(&mut self, now: Instant) {
+        if self.status.is_finished() {
+            if let Some(started) = self.started.take() {
+                self.took = Some(now.saturating_duration_since(started));
+            }
+        } else if self.status == ToolStatus::WaitingForPermission {
+            self.started = None;
+        } else if self.started.is_none() {
+            self.started = Some(now);
+        }
+    }
 }
 
 // A file the agent made in its working folder, shown with a button that opens it.
@@ -204,6 +222,14 @@ impl Thread {
         })
     }
 
+    pub fn tool(&self, id: &ToolCallId) -> Option<&ToolCard> {
+        self.tool_index(id)
+            .and_then(|index| match &self.entries[index] {
+                Entry::Tool(card) => Some(card),
+                _ => None,
+            })
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -226,6 +252,10 @@ impl Thread {
     }
 
     pub fn apply(&mut self, update: AgentUpdate) -> Effect {
+        self.apply_at(update, Instant::now())
+    }
+
+    fn apply_at(&mut self, update: AgentUpdate, now: Instant) -> Effect {
         if !matches!(update, AgentUpdate::UserText(_)) {
             self.open_user = false;
         }
@@ -247,8 +277,20 @@ impl Thread {
                 card.detail = capped(card.detail, MAX_DETAIL_CHARS);
                 card.input = capped(card.input, MAX_DETAIL_CHARS);
                 match self.tool_index(&card.id) {
-                    Some(index) => self.entries[index] = Entry::Tool(card),
-                    None => self.push_entry(Entry::Tool(card)),
+                    Some(index) => {
+                        if let Entry::Tool(previous) = &self.entries[index] {
+                            card.started = previous.started;
+                            card.took = previous.took;
+                        }
+                        card.track(now);
+                        self.entries[index] = Entry::Tool(card);
+                    }
+                    None => {
+                        if !card.status.is_finished() {
+                            card.track(now);
+                        }
+                        self.push_entry(Entry::Tool(card));
+                    }
                 }
                 Effect::Changed
             }
@@ -273,6 +315,7 @@ impl Thread {
                     && card.status != ToolStatus::WaitingForPermission
                 {
                     card.status = status;
+                    card.track(now);
                 }
                 if let Some(detail) = detail {
                     card.detail = capped(detail, MAX_DETAIL_CHARS);
@@ -354,6 +397,7 @@ impl Thread {
             Some(index) => {
                 if let Entry::Tool(card) = &mut self.entries[index] {
                     card.status = ToolStatus::WaitingForPermission;
+                    card.started = None;
                 }
             }
             None => {
@@ -365,6 +409,8 @@ impl Thread {
                     status: ToolStatus::WaitingForPermission,
                     detail: String::new(),
                     input: String::new(),
+                    started: None,
+                    took: None,
                 }));
             }
         }
@@ -380,6 +426,7 @@ impl Thread {
             } else {
                 ToolStatus::Rejected
             };
+            card.track(Instant::now());
         }
     }
 
@@ -395,6 +442,7 @@ impl Thread {
                     && !card.status.is_finished()
                 {
                     card.status = status;
+                    card.started = None;
                 }
             }
         }
@@ -478,6 +526,8 @@ mod tests {
             status,
             detail: String::new(),
             input: String::new(),
+            started: None,
+            took: None,
         }
     }
 
@@ -485,6 +535,62 @@ mod tests {
         let mut thread = Thread::default();
         assert!(thread.submit("hello".to_string()));
         thread
+    }
+
+    #[test]
+    fn a_call_is_timed_from_when_it_runs_not_from_when_it_waited() {
+        let mut thread = running();
+        let start = Instant::now();
+        let change = |status| AgentUpdate::ToolChanged {
+            id: ToolCallId::new("a"),
+            title: None,
+            status: Some(status),
+            detail: None,
+            input: None,
+        };
+        thread.apply_at(
+            AgentUpdate::ToolStarted(card("a", ToolStatus::Pending)),
+            start,
+        );
+        thread.waiting_for_permission(&ToolCallId::new("a"), "call a");
+        thread.permission_answered(&ToolCallId::new("a"), true);
+        thread.apply_at(
+            change(ToolStatus::Completed),
+            start + Duration::from_secs(3),
+        );
+        let Some(Entry::Tool(done)) = thread.entries().last() else {
+            panic!("no tool entry");
+        };
+        assert!(done.took.is_some());
+        assert_eq!(done.started, None);
+    }
+
+    #[test]
+    fn a_replayed_finished_call_has_no_duration() {
+        let mut thread = Thread::default();
+        thread.apply(AgentUpdate::ToolStarted(card("a", ToolStatus::Completed)));
+        let Some(Entry::Tool(done)) = thread.entries().last() else {
+            panic!("no tool entry");
+        };
+        assert_eq!((done.started, done.took), (None, None));
+    }
+
+    #[test]
+    fn a_running_call_keeps_its_start_across_updates() {
+        let mut thread = running();
+        let start = Instant::now();
+        thread.apply_at(
+            AgentUpdate::ToolStarted(card("a", ToolStatus::InProgress)),
+            start,
+        );
+        thread.apply_at(
+            AgentUpdate::ToolStarted(card("a", ToolStatus::Completed)),
+            start + Duration::from_millis(500),
+        );
+        let Some(Entry::Tool(done)) = thread.entries().last() else {
+            panic!("no tool entry");
+        };
+        assert_eq!(done.took, Some(Duration::from_millis(500)));
     }
 
     #[test]

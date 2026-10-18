@@ -19,8 +19,9 @@ use crate::panel_width::Panel;
 
 #[derive(Default)]
 pub(super) struct ChatDock {
-    panel: Option<Entity<ChatPanel>>,
-    open: bool,
+    pub(super) panel: Option<Entity<ChatPanel>>,
+    pub(super) open: bool,
+    pub(super) synced_change: Option<(u64, bool)>,
     events: Option<Subscription>,
 }
 
@@ -85,6 +86,7 @@ impl Workspace {
                     window.focus(&focus, cx);
                 }
                 // Shown without taking the focus: the user may be typing in the grid.
+                ChatEvent::ViewChanged => cx.notify(),
                 ChatEvent::NeedsAnswer => {
                     this.chat.open = true;
                     cx.notify();
@@ -132,6 +134,7 @@ impl Workspace {
     fn open_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ChatPanel> {
         let panel = self.chat_panel(window, cx);
         self.chat.open = true;
+        self.sync_chat_change(cx);
         panel.update(cx, |panel, cx| {
             panel.focus_composer(window, cx);
             panel.warm_up(window, cx);
@@ -238,6 +241,12 @@ impl Workspace {
                 panel.deny_permission(cx);
             }
         });
+    }
+
+    pub(super) fn tell_chat_editing_is_blocked(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = self.chat.panel.clone() {
+            panel.update(cx, |panel, cx| panel.note_editing_blocked(cx));
+        }
     }
 
     pub(super) fn chat_open(&self) -> bool {

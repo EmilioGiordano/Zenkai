@@ -113,10 +113,11 @@ impl ChatPanel {
 
     pub(crate) fn toggle_sessions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
-        self.view = match self.view {
+        let next = match self.view {
             View::Chat => View::Sessions,
             View::Sessions => View::Chat,
         };
+        self.set_view(next, cx);
         if self.view == View::Sessions {
             self.menu_index = 0;
             self.hidden_agents.clear();
@@ -169,7 +170,7 @@ impl ChatPanel {
                 if self.busy() {
                     self.thread
                         .notice(NoticeKind::Info, t!("chat.stop_before_switching"));
-                    self.view = View::Chat;
+                    self.set_view(View::Chat, cx);
                     cx.notify();
                     return;
                 }
@@ -196,7 +197,7 @@ impl ChatPanel {
                     .notice(NoticeKind::Info, t!("chat.started_fresh"));
             }
         }
-        self.view = View::Chat;
+        self.set_view(View::Chat, cx);
         self.focus_composer(window, cx);
         cx.notify();
     }

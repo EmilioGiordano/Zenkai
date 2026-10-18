@@ -1,18 +1,18 @@
+use std::collections::HashSet;
+
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::button::Button;
 use gpui_kit::component::text::{MarkdownExtensions, TextView};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use zenkai_agent::chat::session::ChoiceKind;
-use zenkai_agent::chat::thread::{Entry, FileCard, NoticeKind, ToolCard, ToolStatus, worked_label};
-use zenkai_agent::tools::is_protected_view_refusal;
+use zenkai_agent::chat::thread::{Entry, FileCard, NoticeKind, ToolCallId, ToolCard, worked_label};
+use zenkai_agent::chat::tool_rows::{self, Item};
 use zenkai_i18n::t;
 
+use super::ChatPanel;
 use super::badge::{self, ReferencePlugin};
-use super::{ChatPanel, MONO};
+use crate::agent_settings::AgentConfig;
 
 fn user_bubble(text: &str, panel: &WeakEntity<ChatPanel>, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
@@ -59,57 +59,77 @@ fn notice(kind: NoticeKind, text: &str, cx: &App) -> impl IntoElement {
         .child(div().flex_1().min_w_0().child(text.to_string()))
 }
 
-fn status_mark(status: ToolStatus, cx: &App) -> AnyElement {
-    let theme = cx.theme();
-    match status {
-        ToolStatus::Pending | ToolStatus::InProgress => Spinner::new()
-            .color(theme.muted_foreground)
-            .into_any_element(),
-        ToolStatus::WaitingForPermission => Icon::new(IconName::Info)
-            .size_4()
-            .text_color(theme.foreground)
-            .into_any_element(),
-        ToolStatus::Completed => Icon::new(IconName::CircleCheck)
-            .size_4()
-            .text_color(theme.muted_foreground)
-            .into_any_element(),
-        ToolStatus::Failed | ToolStatus::Rejected | ToolStatus::Canceled => {
-            Icon::new(IconName::CircleX)
-                .size_4()
-                .text_color(theme.danger)
-                .into_any_element()
-        }
-    }
-}
-
 impl ChatPanel {
-    pub(super) fn render_entries(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    pub(super) fn render_entries(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let panel = cx.weak_entity();
-        self.thread
-            .entries()
+        let display = cx.global::<AgentConfig>().state.current.agents.tool_calls;
+        let mut views = std::mem::take(&mut self.tools);
+        let entries = self.thread.entries();
+        let card_at = |index: usize| match &entries[index] {
+            Entry::Tool(card) => Some(card),
+            _ => None,
+        };
+        let plan = tool_rows::plan(entries, display);
+        let calls: HashSet<ToolCallId> = entries
             .iter()
-            .enumerate()
-            .map(|(index, entry)| match entry {
-                Entry::User(text) => user_bubble(text, &panel, cx).into_any_element(),
-                Entry::Worked { seconds } => worked_divider(*seconds, cx).into_any_element(),
-                Entry::Notice { kind, text } => notice(*kind, text, cx).into_any_element(),
-                Entry::Assistant { id, text } => match self.texts.get(id) {
-                    Some(state) => TextView::new(state)
-                        .markdown_extensions(
-                            MarkdownExtensions::default()
-                                .parser_revision(1)
-                                .plugin(ReferencePlugin::new(panel.clone())),
-                        )
-                        .selectable(true)
-                        .stream_fade(true)
-                        .line_height(relative(1.6))
-                        .into_any_element(),
-                    None => div().child(text.clone()).into_any_element(),
-                },
-                Entry::Tool(card) => self.render_tool_card(card, cx).into_any_element(),
-                Entry::File(card) => self.render_file_card(index, card, cx).into_any_element(),
+            .filter_map(|entry| match entry {
+                Entry::Tool(card) => Some(card.id.clone()),
+                _ => None,
             })
-            .collect()
+            .collect();
+        let groups: HashSet<ToolCallId> = plan
+            .iter()
+            .filter_map(|item| match item {
+                Item::Group(indices) => indices
+                    .first()
+                    .and_then(|index| card_at(*index))
+                    .map(|first| first.id.clone()),
+                _ => None,
+            })
+            .collect();
+        views.keep_only(&calls, &groups);
+        let rendered = plan
+            .into_iter()
+            .filter_map(|item| match item {
+                Item::Call(index) => {
+                    card_at(index).map(|card| self.render_call(&mut views, display, card, cx))
+                }
+                Item::Group(indices) => {
+                    let cards: Vec<&ToolCard> = indices.into_iter().filter_map(card_at).collect();
+                    let first = *cards.first()?;
+                    Some(self.render_group(&mut views, first, &cards, cx))
+                }
+                Item::Used { count } => Some(self.render_used(count, cx)),
+                Item::Entry(index) => match &entries[index] {
+                    Entry::User(text) => Some(user_bubble(text, &panel, cx).into_any_element()),
+                    Entry::Worked { seconds } => {
+                        Some(worked_divider(*seconds, cx).into_any_element())
+                    }
+                    Entry::Notice { kind, text } => {
+                        Some(notice(*kind, text, cx).into_any_element())
+                    }
+                    Entry::Assistant { id, text } => Some(match self.texts.get(id) {
+                        Some(state) => TextView::new(state)
+                            .markdown_extensions(
+                                MarkdownExtensions::default()
+                                    .parser_revision(1)
+                                    .plugin(ReferencePlugin::new(panel.clone())),
+                            )
+                            .selectable(true)
+                            .stream_fade(true)
+                            .line_height(relative(1.6))
+                            .into_any_element(),
+                        None => div().child(text.clone()).into_any_element(),
+                    }),
+                    Entry::File(card) => {
+                        Some(self.render_file_card(index, card, cx).into_any_element())
+                    }
+                    Entry::Tool(_) => None,
+                },
+            })
+            .collect();
+        self.tools = views;
+        rendered
     }
 
     fn render_file_card(
@@ -159,118 +179,5 @@ impl ChatPanel {
                         this.open_created(path.clone(), window, cx)
                     })),
             )
-    }
-
-    fn render_tool_card(&self, card: &ToolCard, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let ask = self.permissions.iter().find(|ask| ask.tool == card.id);
-        let buttons: Vec<Button> = ask
-            .map(|ask| {
-                ask.choices
-                    .iter()
-                    .enumerate()
-                    .map(|(index, choice)| {
-                        let tool = card.id.clone();
-                        let button = Button::new(SharedString::from(format!(
-                            "permission-{}-{index}",
-                            card.id.as_str()
-                        )))
-                        .small()
-                        .w_full()
-                        .label(choice.label.clone())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.answer(&tool, index, cx);
-                        }));
-                        match choice.kind {
-                            ChoiceKind::AllowOnce => button.primary(),
-                            ChoiceKind::AllowAlways => button.outline(),
-                            ChoiceKind::RejectOnce | ChoiceKind::RejectAlways => button.ghost(),
-                        }
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        v_flex()
-            .gap_2p5()
-            .p_3()
-            .rounded_lg()
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.background)
-            .child(
-                h_flex()
-                    .gap_2()
-                    .items_center()
-                    .child(status_mark(card.status, cx))
-                    .child(
-                        div()
-                            .font_family(MONO)
-                            .text_xs()
-                            .truncate()
-                            .child(card.title.clone()),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(card.status.label()),
-                    ),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(t!("chat.tool.kind", kind = card.kind)),
-            )
-            .when(!card.input.is_empty(), |card_view| {
-                card_view.child(
-                    div()
-                        .font_family(MONO)
-                        .text_xs()
-                        .p_2()
-                        .rounded_md()
-                        .bg(theme.muted)
-                        .child(card.input.clone()),
-                )
-            })
-            .when(!card.detail.is_empty(), |card_view| {
-                card_view.child(
-                    div()
-                        .font_family(MONO)
-                        .text_xs()
-                        .line_height(relative(1.6))
-                        .text_color(theme.muted_foreground)
-                        .child(card.detail.clone()),
-                )
-            })
-            .when(
-                card.status == ToolStatus::Failed && is_protected_view_refusal(&card.detail),
-                |card_view| {
-                    card_view.child(
-                        h_flex().child(
-                            Button::new(SharedString::from(format!(
-                                "let-agents-edit-{}",
-                                card.id.as_str()
-                            )))
-                            .outline()
-                            .small()
-                            .label(t!("chat.tool.let_agents_edit"))
-                            .on_click(cx.listener(|this, _, _, cx| this.allow_agent_editing(cx))),
-                        ),
-                    )
-                },
-            )
-            .when(!buttons.is_empty(), |card_view| {
-                card_view
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(t!("chat.permission.options")),
-                    )
-                    .child(v_flex().gap_1().children(buttons))
-            })
     }
 }

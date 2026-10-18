@@ -1,5 +1,6 @@
 mod access;
 mod agent_menu;
+pub(crate) mod approval;
 mod badge;
 mod cards;
 mod composer;
@@ -18,6 +19,7 @@ mod session_rows;
 mod sessions;
 mod slash;
 mod startup;
+mod tools;
 mod transcript;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,7 +31,7 @@ use gpui_kit::*;
 use zenkai_agent::chat::history::{History, RecordId};
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
 use zenkai_agent::chat::state::{AgentState, Select};
-use zenkai_agent::chat::thread::{MessageId, Thread, TurnEnd, TurnState};
+use zenkai_agent::chat::thread::{Entry, MessageId, Thread, ToolCallId, TurnEnd, TurnState};
 use zenkai_agent::settings::AgentId;
 use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
@@ -48,6 +50,7 @@ const MONO: &str = "IBM Plex Mono";
 
 pub enum ChatEvent {
     Leave,
+    ViewChanged,
     NeedsAnswer,
     ResumeSession,
 }
@@ -111,6 +114,10 @@ pub struct ChatPanel {
     live: Option<Live>,
     queued: Option<(String, Option<String>)>,
     permissions: Vec<PermissionAsk>,
+    tools: tools::ToolViews,
+    agent_change: Option<approval::AgentChange>,
+    change_cells_open: bool,
+    editing_blocked: Option<ToolCallId>,
     gate: Option<Gate>,
     problem: Option<Problem>,
     turn_started: Option<Instant>,
@@ -270,6 +277,10 @@ impl ChatPanel {
             live: None,
             queued: None,
             permissions: Vec::new(),
+            tools: tools::ToolViews::default(),
+            agent_change: None,
+            change_cells_open: false,
+            editing_blocked: None,
             gate: None,
             problem: None,
             turn_started: None,
@@ -404,7 +415,7 @@ impl ChatPanel {
         self.turn_started = Some(Instant::now());
         self.turn_began = Some(SystemTime::now());
         self.problem = None;
-        self.view = View::Chat;
+        self.set_view(View::Chat, cx);
         self.menu = None;
         self.remember_conversation(&text, cx);
         let context = self.prompt_context(cx);
@@ -452,6 +463,8 @@ impl ChatPanel {
             ask.cancel();
         }
         self.thread.clear();
+        self.tools = tools::ToolViews::default();
+        self.editing_blocked = None;
         self.texts.clear();
         self.linked_messages.clear();
         self.references.clear();
@@ -465,7 +478,7 @@ impl ChatPanel {
             ..AgentState::default()
         };
         self.mode_synced = false;
-        self.view = View::Chat;
+        self.set_view(View::Chat, cx);
         self.menu = None;
         self.title = None;
         self.focus_composer(window, cx);
@@ -483,6 +496,40 @@ impl ChatPanel {
             self.workspace
                 .update(cx, |workspace, cx| workspace.toggle_agent_editing(cx)),
         );
+    }
+
+    fn set_view(&mut self, view: View, cx: &mut Context<Self>) {
+        if self.view != view {
+            self.view = view;
+            cx.emit(ChatEvent::ViewChanged);
+        }
+    }
+
+    // The refusal arrives for a call that is still running, so it belongs to the latest unfinished
+    // card, or else to the latest one.
+    pub(crate) fn note_editing_blocked(&mut self, cx: &mut Context<Self>) {
+        let cards = self
+            .thread
+            .entries()
+            .iter()
+            .rev()
+            .filter_map(|entry| match entry {
+                Entry::Tool(card) => Some(card),
+                _ => None,
+            });
+        let mut cards = cards.peekable();
+        let latest = cards.peek().map(|card| card.id.clone());
+        let running = cards
+            .find(|card| !card.status.is_finished())
+            .map(|card| card.id.clone());
+        self.editing_blocked = running.or(latest);
+        cx.notify();
+    }
+
+    pub(crate) fn clear_editing_blocked(&mut self, cx: &mut Context<Self>) {
+        if self.editing_blocked.take().is_some() {
+            cx.notify();
+        }
     }
 
     pub(super) fn allow_agent_editing(&mut self, cx: &mut Context<Self>) {
