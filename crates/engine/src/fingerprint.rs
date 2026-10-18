@@ -136,7 +136,10 @@ impl fmt::Write for HashWriter<'_> {
 }
 
 // For the values IronCalc derives no Hash for, without building their text.
-fn hash_debug(hasher: &mut DefaultHasher, value: &impl fmt::Debug) -> Result<(), EngineError> {
+pub(crate) fn hash_debug(
+    hasher: &mut DefaultHasher,
+    value: &impl fmt::Debug,
+) -> Result<(), EngineError> {
     write!(HashWriter(hasher), "{value:?}")
         .map_err(|_| EngineError::Rejected("a value could not be fingerprinted".to_string()))
 }
@@ -394,15 +397,17 @@ pub(crate) fn sheet_print(
     })
 }
 
-// What the parts shared by every sheet depend on: the sheet list, the names, the styles
-// and the rest of the workbook a save writes outside the sheets. The shared strings are
+// What the parts shared by every sheet depend on: the sheet list, the names and the rest
+// of the workbook a save writes outside the sheets. The styles are compared apart
+// (`style_growth`): a patch save appends to them. The shared strings are
 // left out; they only grow, and a save appends them.
 pub(crate) fn book_print(book: &Workbook) -> Result<u64, EngineError> {
     let Workbook {
         shared_strings: _,
         defined_names,
         worksheets,
-        styles,
+        // Compared apart, see above.
+        styles: _,
         name,
         settings,
         metadata,
@@ -417,10 +422,7 @@ pub(crate) fn book_print(book: &Workbook) -> Result<u64, EngineError> {
         .map(|sheet| (&sheet.name, sheet.sheet_id, &sheet.state))
         .collect();
     let tables: BTreeMap<_, _> = tables.iter().collect();
-    hash_debug(
-        &mut hasher,
-        &(&sheets, defined_names, styles, &tables, name),
-    )?;
+    hash_debug(&mut hasher, &(&sheets, defined_names, &tables, name))?;
     hash_debug(&mut hasher, &(settings, metadata, theme))?;
     Ok(hasher.finish())
 }
