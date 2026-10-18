@@ -11,7 +11,7 @@ use ironcalc::import::load_from_xlsx_bytes;
 use crate::edit_profile::{EditProfile, RecalcMode};
 use crate::error::EngineError;
 use crate::file::Unsupported;
-use crate::model::{CachedModel, HistoryStep};
+use crate::model::{CachedModel, HistoryStep, content_cells_within};
 use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
 use crate::saved::{FileOnDisk, SavedSlot};
@@ -451,21 +451,7 @@ impl Workbook {
             .workbook
             .worksheet(sheet.0)
             .map_err(|_| EngineError::UnknownSheet(sheet))?;
-        let rows = row_i32(range.start.row)..=row_i32(range.end.row);
-        let cols = col_i32(range.start.col)..=col_i32(range.end.col);
-        Ok(ws
-            .sheet_data
-            .iter()
-            .filter(|(row, col, cell)| {
-                rows.contains(row) && cols.contains(col) && !matches!(cell, Cell::EmptyCell { .. })
-            })
-            .map(|(row, col, _)| {
-                CellPos::new(
-                    RowIdx::clamped(i64::from(row) - 1),
-                    ColIdx::clamped(i64::from(col) - 1),
-                )
-            })
-            .collect())
+        Ok(content_cells_within(&ws.sheet_data, range))
     }
 
     // What Excel's AutoFill continues along one source line: numbers (two or more),
