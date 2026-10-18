@@ -178,6 +178,7 @@ fn full_part(index: usize) -> String {
 }
 
 fn full_sheets(data: ModelData<'_>, carried: &Carried) -> Result<Vec<SheetJob>, EngineError> {
+    let _span = tracing::info_span!("save_full_sheets").entered();
     let selected = selected_sheet(data.book);
     (0..data.book.worksheets.len())
         .map(|index| {
@@ -270,11 +271,16 @@ fn choose(
             ),
         });
     }
-    let book = book_print(data.book)?;
-    let prints = sheet_prints(data, carried)?;
+    let book = tracing::info_span!("save_book_print").in_scope(|| book_print(data.book))?;
+    let prints =
+        tracing::info_span!("save_sheet_prints").in_scope(|| sheet_prints(data, carried))?;
     let patched = match base {
-        Some(base) => patch_plan(base, book, &prints, data, carried)?,
-        None => None,
+        Some(base) => tracing::info_span!("save_patch_plan")
+            .in_scope(|| patch_plan(base, book, &prints, data, carried))?,
+        None => {
+            tracing::info!("no file of the same kind to copy from; the save writes everything");
+            None
+        }
     };
     let (chosen, contents, fate) = match patched {
         Some(Patched {
@@ -316,6 +322,7 @@ pub(crate) fn snapshot(
     slot: &SavedSlot,
     opened: &[Unsupported],
 ) -> Result<SaveSnapshot, EngineError> {
+    let _span = tracing::info_span!("save_snapshot").entered();
     let data = ModelData::of(model);
     let Choice {
         chosen,
@@ -325,7 +332,7 @@ pub(crate) fn snapshot(
     let plan = match chosen {
         Chosen::Patch(plan) => Plan::Patch(plan),
         Chosen::Full(sheets) => Plan::Full(FullPlan {
-            parts: package_parts(model)?,
+            parts: tracing::info_span!("save_package_parts").in_scope(|| package_parts(model))?,
             sheets,
         }),
     };
@@ -375,12 +382,14 @@ pub(crate) fn write_full<W: Write + Seek>(
     let mut zip = ZipWriter::new(writer);
     let mut written = Vec::with_capacity(plan.parts.len() + plan.sheets.len());
     for (name, content) in plan.parts {
+        let _span = tracing::debug_span!("save_part", kind = "package", part = %name).entered();
         zip.start_file(name.as_str(), deflated())
             .map_err(rejected)?;
         zip.write_all(content.as_bytes()).map_err(rejected)?;
         written.push((name, Written::Generated));
     }
     for job in plan.sheets {
+        let _span = tracing::debug_span!("save_part", kind = "whole", part = %job.part).entered();
         written.push((job.part.clone(), Written::Generated));
         write_sheet(&mut zip, job)?;
     }
@@ -394,20 +403,30 @@ fn write_error(path: &Path) -> impl Fn(io::Error) -> EngineError + '_ {
     }
 }
 
+fn write_plan<W: Write + Seek>(
+    plan: Plan,
+    writer: W,
+    refused: &mut Option<String>,
+) -> Result<(W, Vec<(String, Written)>), EngineError> {
+    tracing::info_span!("save_write").in_scope(|| match plan {
+        Plan::Full(plan) => write_full(plan, writer),
+        Plan::Patch(plan) => write_patch(plan, writer, refused),
+    })
+}
+
 fn write_temp(
     plan: Plan,
     file: BufWriter<File>,
     temp: &Path,
     refused: &mut Option<String>,
 ) -> Result<Vec<(String, Written)>, EngineError> {
-    let (file, written) = match plan {
-        Plan::Full(plan) => write_full(plan, file)?,
-        Plan::Patch(plan) => write_patch(plan, file, refused)?,
-    };
+    let (file, written) = write_plan(plan, file, refused)?;
     let file = file
         .into_inner()
         .map_err(|error| write_error(temp)(error.into_error()))?;
-    file.sync_all().map_err(write_error(temp))?;
+    tracing::info_span!("save_sync")
+        .in_scope(|| file.sync_all())
+        .map_err(write_error(temp))?;
     Ok(written)
 }
 
@@ -442,6 +461,20 @@ fn adopt(slot: &SavedSlot, path: &Path, contents: Contents) {
             slot.set(None);
         }
     }
+}
+
+// Writes what `save_xlsx` would into `writer`, for measuring a save without touching the
+// disk: no temp file, no verification, no rename, and the next save copies from the same file.
+pub fn write_xlsx_unverified<W: Write + Seek + Send>(
+    snapshot: SaveSnapshot,
+    writer: W,
+) -> Result<W, EngineError> {
+    let plan = snapshot.plan;
+    if let Plan::Patch(plan) = &plan {
+        unchanged(Some(&plan.base))?;
+    }
+    let (writer, _) = run_with_engine_stack(|| write_plan(plan, writer, &mut None))?;
+    Ok(writer)
 }
 
 // Written to a sibling temp file, read back, then renamed over the target: the original
@@ -481,7 +514,9 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
     let mut refused = None;
     let checked = unchanged(base)
         .and_then(|()| run_with_engine_stack(|| write_temp(plan, file, &temp, &mut refused)))
-        .and_then(|written| verify(&temp, base, &written))
+        .and_then(|written| {
+            tracing::info_span!("save_verify").in_scope(|| verify(&temp, base, &written))
+        })
         .and_then(|()| unchanged(base));
     if let Err(error) = checked {
         remove_temp(&temp);
@@ -503,7 +538,8 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
         }
         return Err(error);
     }
-    if let Err(source) = fs::rename(&temp, &path) {
+    let renamed = tracing::info_span!("save_rename").in_scope(|| fs::rename(&temp, &path));
+    if let Err(source) = renamed {
         remove_temp(&temp);
         return Err(EngineError::Write { path, source });
     }
@@ -549,6 +585,35 @@ mod tests {
         assert_eq!(reopened.input(SheetId(0), b1), "=A1*3");
         let leftovers: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
         assert_eq!(leftovers.len(), 1, "the temp file is gone");
+    }
+
+    #[test]
+    fn a_save_written_to_memory_reopens_and_leaves_the_file_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        super::save_xlsx(
+            book()
+                .save_snapshot(&path, super::SaveTarget::Document)
+                .unwrap(),
+        )
+        .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut reopened = crate::file::open_xlsx(&path).unwrap().workbook;
+        reopened
+            .set_input(SheetId(0), CellPos::default(), "5")
+            .unwrap();
+        let snapshot = reopened
+            .save_snapshot(&path, super::SaveTarget::Document)
+            .unwrap();
+        let bytes = super::write_xlsx_unverified(snapshot, std::io::Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let copy = dir.path().join("copy.xlsx");
+        std::fs::write(&copy, bytes).unwrap();
+        let written = crate::file::open_xlsx(&copy).unwrap().workbook;
+        let b1 = CellPos::parse_a1("B1").unwrap();
+        assert_eq!(written.cell(SheetId(0), b1).text, "15");
     }
 
     #[test]

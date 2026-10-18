@@ -31,6 +31,6 @@ pub use edit_profile::{EditProfile, RecalcMode};
 pub use error::EngineError;
 pub use file::{Opened, Unsupported, open_xlsx, open_xlsx_with, scan_unsupported, write_atomic};
 pub use preflight::run_with_engine_stack;
-pub use save::{SaveSnapshot, SaveTarget, save_xlsx};
+pub use save::{SaveSnapshot, SaveTarget, save_xlsx, write_xlsx_unverified};
 pub use workbook::{Copied, Engine, Workbook, format_preview};
 pub use xlsx_read::{ReadBook, ReaderComparison, XlsxReader, compare_readers, read_xlsx_bytes};

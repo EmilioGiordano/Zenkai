@@ -54,7 +54,8 @@ pub fn check_written(
         ));
     }
     let budgets = Budgets::production();
-    let package = read_package(&mut archive, &meter, &budgets)?;
+    let package = tracing::debug_span!("verify_package")
+        .in_scope(|| read_package(&mut archive, &meter, &budgets))?;
     if let Some(missing) = package
         .worksheets
         .iter()
@@ -81,6 +82,7 @@ pub fn check_written(
     for (index, (name, kind)) in parts.iter().enumerate() {
         match kind {
             Written::Copied => {
+                let _span = tracing::debug_span!("verify_part", kind = "copied").entered();
                 let (base, indexes) = base
                     .as_mut()
                     .ok_or_else(|| unreadable("a copied part has no base file"))?;
@@ -91,6 +93,8 @@ pub fn check_written(
                     .map_err(|e| unreadable(format!("{name}: {e}")))?;
             }
             Written::Generated => {
+                let _span =
+                    tracing::debug_span!("verify_part", kind = "generated", part = %name).entered();
                 let entry = archive.by_index(index).map_err(unreadable)?;
                 let guard = if package.worksheets.iter().any(|sheet| &sheet.path == name) {
                     budgets.stream_worksheet(entry, &meter, name)
