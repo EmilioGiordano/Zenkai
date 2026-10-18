@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use proptest::prelude::*;
 use rust_xlsxwriter::{DataValidation, DataValidationRule, Workbook as Source};
-use zenkai_engine::{Engine, SaveTarget, Workbook, open_xlsx, save_xlsx};
+use zenkai_engine::{Engine, SaveTarget, Unsupported, Workbook, open_xlsx, save_xlsx};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
 const SHEET: SheetId = SheetId(0);
@@ -227,6 +227,41 @@ fn a_save_between_a_move_and_its_undo_never_leaves_a_dangling_relationship() {
         assert_eq!(dangling_ids(&undone, sheet), Vec::<String>::new());
     }
     open_xlsx(&undone).unwrap();
+}
+
+fn dropped_by_saving(book: &Workbook, target: &Path) -> Vec<Unsupported> {
+    let snapshot = book.save_snapshot(target, SaveTarget::Document).unwrap();
+    let dropped = snapshot.dropped().to_vec();
+    save_xlsx(snapshot).unwrap();
+    dropped
+}
+
+// The undo brings the hyperlink back into the model, but the file written after the move
+// has no relationships part for it, so the next save says it cannot be written, once.
+#[test]
+fn a_save_after_an_undo_warns_once_about_the_hyperlink_it_cannot_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, _) = baseline(dir.path());
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    let target = dir.path().join("saved.xlsx");
+    book.delete_rows(SHEET, row(1), 1).unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+    book.undo().unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+    book.set_input(SHEET, CellPos::new(row(0), column(3)), "7")
+        .unwrap();
+    assert_eq!(dropped_by_saving(&book, &target), []);
+}
+
+#[test]
+fn an_undo_that_leaves_nothing_unwritable_warns_about_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, _) = baseline(dir.path());
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.delete_rows(SHEET, row(1), 1).unwrap();
+    book.undo().unwrap();
+    let target = dir.path().join("saved.xlsx");
+    assert_eq!(dropped_by_saving(&book, &target), []);
 }
 
 #[derive(Clone, Copy, Debug)]
