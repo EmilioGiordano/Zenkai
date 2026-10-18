@@ -64,10 +64,8 @@ impl Colors {
 pub struct Frame {
     pub layout: Rc<Layout>,
     pub cells: Rc<HashMap<CellPos, GridCell>>,
-    pub top: RowIdx,
-    pub left: ColIdx,
-    pub rows: u32,
-    pub cols: u16,
+    pub shown_rows: Vec<RowIdx>,
+    pub shown_cols: Vec<ColIdx>,
     pub selection: Range,
     pub active: CellPos,
     pub editor: Option<Editor>,
@@ -105,6 +103,22 @@ impl Columns {
             .find(|(c, _, _)| *c == col)
             .map(|(_, x, w)| (*x, *w))
     }
+
+    fn starting_at(&self, col: ColIdx) -> Option<(f32, f32)> {
+        if col < self.xs.first()?.0 {
+            return None;
+        }
+        let at = self.xs.partition_point(|(c, _, _)| *c < col);
+        self.xs.get(at).map(|(_, x, w)| (*x, *w))
+    }
+
+    fn ending_at(&self, col: ColIdx) -> Option<(f32, f32)> {
+        if col > self.xs.last()?.0 {
+            return None;
+        }
+        let at = self.xs.partition_point(|(c, _, _)| *c <= col);
+        self.xs.get(at.checked_sub(1)?).map(|(_, x, w)| (*x, *w))
+    }
 }
 
 struct Rows {
@@ -117,6 +131,22 @@ impl Rows {
             .iter()
             .find(|(r, _, _)| *r == row)
             .map(|(_, y, h)| (*y, *h))
+    }
+
+    fn starting_at(&self, row: RowIdx) -> Option<(f32, f32)> {
+        if row < self.ys.first()?.0 {
+            return None;
+        }
+        let at = self.ys.partition_point(|(r, _, _)| *r < row);
+        self.ys.get(at).map(|(_, y, h)| (*y, *h))
+    }
+
+    fn ending_at(&self, row: RowIdx) -> Option<(f32, f32)> {
+        if row > self.ys.last()?.0 {
+            return None;
+        }
+        let at = self.ys.partition_point(|(r, _, _)| *r <= row);
+        self.ys.get(at.checked_sub(1)?).map(|(_, y, h)| (*y, *h))
     }
 }
 
@@ -134,13 +164,9 @@ fn rect(origin: Point<Pixels>, x: f32, y: f32, w: f32, h: f32) -> Bounds<Pixels>
 fn columns(frame: &Frame, width: f32) -> Columns {
     let z = frame.zoom;
     let mut x = frame.row_header * z;
-    let mut xs = Vec::with_capacity(usize::from(frame.cols) + 1);
+    let mut xs = Vec::with_capacity(usize::from(frame.frozen_cols) + frame.shown_cols.len());
     let frozen = (0..frame.frozen_cols).map(|c| ColIdx::clamped(i64::from(c)));
-    let start = frame
-        .left
-        .max(ColIdx::clamped(i64::from(frame.frozen_cols)));
-    let scrolled = (start.get()..=ColIdx::LAST.get()).map(|c| ColIdx::clamped(i64::from(c)));
-    for col in frozen.chain(scrolled) {
+    for col in frozen.chain(frame.shown_cols.iter().copied()) {
         if x >= width {
             break;
         }
@@ -154,11 +180,9 @@ fn columns(frame: &Frame, width: f32) -> Columns {
 fn rows(frame: &Frame, height: f32) -> Rows {
     let z = frame.zoom;
     let mut y = HEADER_HEIGHT * z;
-    let mut ys = Vec::with_capacity(frame.rows as usize + 1);
+    let mut ys = Vec::with_capacity(frame.frozen_rows as usize + frame.shown_rows.len());
     let frozen = (0..frame.frozen_rows).map(|r| RowIdx::clamped(i64::from(r)));
-    let start = frame.top.max(RowIdx::clamped(i64::from(frame.frozen_rows)));
-    let scrolled = (start.get()..=RowIdx::LAST.get()).map(|r| RowIdx::clamped(i64::from(r)));
-    for row in frozen.chain(scrolled) {
+    for row in frozen.chain(frame.shown_rows.iter().copied()) {
         if y >= height {
             break;
         }
@@ -577,16 +601,16 @@ fn range_rect(
         return None;
     }
     let x0 = columns
-        .find(range.start.col)
+        .starting_at(range.start.col)
         .map_or(first_col.1 - 2.0, |(x, _)| x);
     let x1 = columns
-        .find(range.end.col)
+        .ending_at(range.end.col)
         .map_or(last_col.1 + last_col.2 + 2.0, |(x, w)| x + w);
     let y0 = rows
-        .find(range.start.row)
+        .starting_at(range.start.row)
         .map_or(HEADER_HEIGHT * z - 2.0, |(y, _)| y);
     let y1 = rows
-        .find(range.end.row)
+        .ending_at(range.end.row)
         .map_or(last_row.1 + last_row.2 + 2.0, |(y, h)| y + h);
     Some(rect(origin, x0, y0, x1 - x0, y1 - y0))
 }
