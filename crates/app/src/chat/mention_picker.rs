@@ -3,6 +3,7 @@ use std::time::UNIX_EPOCH;
 
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
+use gpui_kit::component::input::InlineToken;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_engine::{Engine, Workbook};
@@ -257,8 +258,16 @@ impl ChatPanel {
         let insert = chosen.insert.clone();
         self.close_mentions();
         self.composer.update(cx, |state, cx| {
-            state.set_selected_range(query.start..query.end, cx);
-            state.replace(insert, window, cx);
+            let text = insert.trim_end().to_string();
+            let token = InlineToken::new(text.clone(), text);
+            match state.replace_range_with_token(query.start..query.end, token, window, cx) {
+                Ok(()) => state.replace(" ", window, cx),
+                Err(error) => {
+                    tracing::debug!(%error, "the mention went in as plain text");
+                    state.set_selected_range(query.start..query.end, cx);
+                    state.replace(insert, window, cx);
+                }
+            }
         });
         self.focus_composer(window, cx);
         cx.notify();

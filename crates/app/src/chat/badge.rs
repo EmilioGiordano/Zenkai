@@ -2,6 +2,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::InlineTokenContext;
 use gpui_kit::component::text::{
     InlineElement, InlineRenderContext, MarkdownNode, MarkdownPlugin, markdown_ast,
 };
@@ -57,6 +58,33 @@ fn frame(id: impl Into<ElementId>, label: &Label, clickable: bool, cx: &App) -> 
         frame.hover(|style| style.underline())
     } else {
         frame
+    }
+}
+
+// A mention inserted from the picker is one editing unit of the composer, drawn like a sent one.
+pub(super) fn composer_token(
+    context: &InlineTokenContext,
+    book: Option<&str>,
+    cx: &App,
+) -> AnyElement {
+    let text = context.token().text();
+    let mention = text
+        .strip_prefix('@')
+        .and_then(|body| mention_parse::parse(body, None).ok());
+    let Some(mention) = mention else {
+        return div().child(text.clone()).into_any_element();
+    };
+    let label = Label::of_mention(&mention, book);
+    let theme = cx.theme();
+    let selection = theme.selection;
+    let token = frame(("composer-token", context.range().start), &label, false, cx)
+        .h(context.line_height())
+        .max_w(context.available_width())
+        .rounded_sm();
+    if context.is_selected() {
+        token.bg(selection).into_any_element()
+    } else {
+        token.into_any_element()
     }
 }
 

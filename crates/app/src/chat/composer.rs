@@ -217,6 +217,7 @@ impl ChatPanel {
         let focused = self.composer.focus_handle(cx).contains_focused(window, cx);
         let agent = self.agent_name(cx);
         let busy = self.busy();
+        let token_book = self.active_workbook(cx).map(|(_, name)| name);
         let send = if busy {
             icon_button(
                 "chat-stop",
@@ -278,6 +279,9 @@ impl ChatPanel {
             .children(slash)
             .child(
                 Textarea::new(&self.composer)
+                    .token(move |context, _, cx| {
+                        badge::composer_token(context, token_book.as_deref(), cx)
+                    })
                     .appearance(false)
                     .bordered(false)
                     .aria_label(t!("chat.composer.label")),
