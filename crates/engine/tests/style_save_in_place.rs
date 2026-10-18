@@ -7,8 +7,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use rust_xlsxwriter::{Color, Format, FormatPattern, Table, TableColumn, Workbook as Source};
-use zenkai_engine::{Engine, SaveTarget, Workbook, open_xlsx, save_xlsx};
+use zenkai_engine::{
+    Engine, SaveTarget, Workbook, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
+};
 use zenkai_types::{CellPos, NumberFormat, Range, SheetId, StyleChange};
+
+mod support;
+use support::{assert_counts_match, cell_xfs};
 
 const TABLE_SHEET_PART: &str = "xl/worksheets/sheet1.xml";
 const OTHER_SHEET_PART: &str = "xl/worksheets/sheet2.xml";
@@ -85,34 +90,6 @@ fn part_names(file: &Path) -> Vec<String> {
         .collect()
 }
 
-// The `<xf>` elements of cellXfs as written, in order.
-fn cell_xfs(styles: &str) -> Vec<String> {
-    let document = roxmltree::Document::parse(styles).unwrap();
-    let list = document
-        .root_element()
-        .children()
-        .find(|node| node.has_tag_name("cellXfs"))
-        .unwrap();
-    list.children()
-        .filter(roxmltree::Node::is_element)
-        .map(|node| styles[node.range()].to_string())
-        .collect()
-}
-
-// Every list's count attribute says how many items it holds.
-fn assert_counts_match(styles: &str) {
-    let document = roxmltree::Document::parse(styles).unwrap();
-    for list in document.root_element().children().filter(|node| {
-        ["numFmts", "fonts", "fills", "borders", "cellXfs"]
-            .iter()
-            .any(|name| node.has_tag_name(*name))
-    }) {
-        let items = list.children().filter(roxmltree::Node::is_element).count();
-        let declared: usize = list.attribute("count").unwrap().parse().unwrap();
-        assert_eq!(declared, items, "{}", list.tag_name().name());
-    }
-}
-
 struct Base {
     _dir: tempfile::TempDir,
     document: PathBuf,
@@ -143,6 +120,12 @@ fn save_in_place(base: &Base) {
         .unwrap();
     assert!(snapshot.dropped().is_empty(), "{:?}", snapshot.dropped());
     save_xlsx(snapshot).unwrap();
+}
+
+// The file as each reader sees it: the fast one, and IronCalc's own.
+fn reopened(file: &Path) -> [Workbook; 2] {
+    [XlsxReader::Fast, XlsxReader::IronCalc]
+        .map(|reader| open_xlsx_with(file, reader).unwrap().workbook)
 }
 
 fn assert_styles_only_grew(base: &Base) {
@@ -183,18 +166,19 @@ fn a_bold_cell_in_a_table_saves_in_place_and_keeps_the_table() {
     assert!(text(&base.document, "xl/worksheets/_rels/sheet1.xml.rels").contains("table1.xml"));
     assert_styles_only_grew(&base);
 
-    let reopened = open_xlsx(&base.document).unwrap().workbook;
-    assert!(reopened.cell(SheetId(0), pos("B3")).style.bold);
-    assert!(!reopened.cell(SheetId(0), pos("B2")).style.bold);
-    assert_eq!(
-        reopened.cell(SheetId(0), pos("B3")).style.num_fmt,
-        CUSTOM_FORMAT,
-        "the cell keeps its number format"
-    );
-    let other_after: Vec<_> = ["A1", "A2", "A3"]
-        .map(|a1| reopened.cell(SheetId(1), pos(a1)).style)
-        .into();
-    assert_eq!(other_after, other_before);
+    for reopened in reopened(&base.document) {
+        assert!(reopened.cell(SheetId(0), pos("B3")).style.bold);
+        assert!(!reopened.cell(SheetId(0), pos("B2")).style.bold);
+        assert_eq!(
+            reopened.cell(SheetId(0), pos("B3")).style.num_fmt,
+            CUSTOM_FORMAT,
+            "the cell keeps its number format"
+        );
+        let other_after: Vec<_> = ["A1", "A2", "A3"]
+            .map(|a1| reopened.cell(SheetId(1), pos(a1)).style)
+            .into();
+        assert_eq!(other_after, other_before);
+    }
 }
 
 #[test]
@@ -210,8 +194,9 @@ fn a_bold_cell_outside_the_table_saves_in_place_too() {
         part(&base.original, "xl/tables/table1.xml")
     );
     assert_styles_only_grew(&base);
-    let reopened = open_xlsx(&base.document).unwrap().workbook;
-    assert!(reopened.cell(SheetId(0), pos("D10")).style.bold);
+    for reopened in reopened(&base.document) {
+        assert!(reopened.cell(SheetId(0), pos("D10")).style.bold);
+    }
 }
 
 #[test]
@@ -233,15 +218,16 @@ fn a_new_number_format_is_added_to_a_file_without_custom_formats() {
     assert!(styles.contains("<numFmts"), "{styles}");
     assert!(styles.contains(r#"formatCode="dd/mm/yyyy""#), "{styles}");
 
-    let reopened = open_xlsx(&base.document).unwrap().workbook;
-    assert_eq!(
-        reopened.cell(SheetId(0), pos("A3")).style.num_fmt,
-        NumberFormat::Date.code()
-    );
-    assert_eq!(
-        reopened.cell(SheetId(0), pos("A2")).style,
-        base.book.cell(SheetId(0), pos("A2")).style
-    );
+    for reopened in reopened(&base.document) {
+        assert_eq!(
+            reopened.cell(SheetId(0), pos("A3")).style.num_fmt,
+            NumberFormat::Date.code()
+        );
+        assert_eq!(
+            reopened.cell(SheetId(0), pos("A2")).style,
+            base.book.cell(SheetId(0), pos("A2")).style
+        );
+    }
 }
 
 #[test]
@@ -261,15 +247,16 @@ fn a_number_format_is_appended_to_the_custom_formats_the_file_has() {
         r#"formatCode="{}""#,
         CUSTOM_FORMAT.replace('"', "&quot;")
     )));
-    let reopened = open_xlsx(&base.document).unwrap().workbook;
-    assert_eq!(
-        reopened.cell(SheetId(0), pos("B2")).style.num_fmt,
-        NumberFormat::Date.code()
-    );
-    assert_eq!(
-        reopened.cell(SheetId(0), pos("B3")).style.num_fmt,
-        CUSTOM_FORMAT
-    );
+    for reopened in reopened(&base.document) {
+        assert_eq!(
+            reopened.cell(SheetId(0), pos("B2")).style.num_fmt,
+            NumberFormat::Date.code()
+        );
+        assert_eq!(
+            reopened.cell(SheetId(0), pos("B3")).style.num_fmt,
+            CUSTOM_FORMAT
+        );
+    }
 }
 
 #[test]
@@ -290,8 +277,49 @@ fn style_edits_in_a_row_keep_appending() {
     base.book.set_input(SheetId(1), pos("A3"), "9").unwrap();
     save_in_place(&base);
     assert_counts_match(&text(&base.document, STYLES_PART));
-    let reopened = open_xlsx(&base.document).unwrap().workbook;
-    let style = reopened.cell(SheetId(0), pos("A3")).style;
-    assert!(style.bold && style.italic && style.fill.is_some());
-    assert_eq!(reopened.cell(SheetId(1), pos("A3")).text, "9");
+    for reopened in reopened(&base.document) {
+        let style = reopened.cell(SheetId(0), pos("A3")).style;
+        assert!(style.bold && style.italic && style.fill.is_some());
+        assert_eq!(reopened.cell(SheetId(1), pos("A3")).text, "9");
+    }
+}
+
+// The file Zenkai wrote whole is the base of the next save, with no retry to hide a base
+// the save cannot use.
+#[test]
+fn a_style_edit_on_a_file_written_whole_saves_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.xlsx");
+    table_workbook(&source);
+    let mut book = Workbook::from_xlsx_bytes(&std::fs::read(&source).unwrap(), "book").unwrap();
+    let document = dir.path().join("book.xlsx");
+    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    let written = dir.path().join("written.xlsx");
+    std::fs::copy(&document, &written).unwrap();
+    book.apply_style(SheetId(0), range("A3"), StyleChange::Bold(true))
+        .unwrap();
+    book.apply_style(
+        SheetId(0),
+        range("B3"),
+        StyleChange::NumberFormat(NumberFormat::Date),
+    )
+    .unwrap();
+    let snapshot = book.save_snapshot(&document, SaveTarget::Document).unwrap();
+    assert!(snapshot.dropped().is_empty(), "{:?}", snapshot.dropped());
+    save_xlsx(snapshot).unwrap();
+
+    assert_eq!(
+        part(&document, OTHER_SHEET_PART),
+        part(&written, OTHER_SHEET_PART)
+    );
+    let (old, new) = (
+        cell_xfs(&text(&written, STYLES_PART)),
+        cell_xfs(&text(&document, STYLES_PART)),
+    );
+    assert!(new.len() > old.len());
+    assert_eq!(new[..old.len()], old[..]);
+    assert_counts_match(&text(&document, STYLES_PART));
+    for reopened in reopened(&document) {
+        assert!(reopened.cell(SheetId(0), pos("A3")).style.bold);
+    }
 }

@@ -20,6 +20,9 @@ use zenkai_engine::{
 };
 use zenkai_types::{CellPos, ColIdx, NumberFormat, Range, Rgb, RowIdx, SheetId, StyleChange};
 
+mod support;
+use support::cell_xfs;
+
 const SIDE: i64 = 7;
 const SHEETS: [&str; 4] = ["Data", "Calc", "Notes", "Untouched"];
 const UNTOUCHED_PART: &str = "xl/worksheets/sheet4.xml";
@@ -318,10 +321,12 @@ proptest! {
         prop_assert!(cells(&book) == expected, "{}", first_difference(&expected, &cells(&book)));
         let base = dir.path().join("base.xlsx");
         std::fs::write(&base, original).unwrap();
-        // A copying save keeps the other application's part as it was.
-        if raw_part(&document, "xl/styles.xml") == raw_part(&base, "xl/styles.xml") {
-            prop_assert_eq!(raw_part(&document, UNTOUCHED_PART), raw_part(&base, UNTOUCHED_PART));
-        }
+        // The saves above copy from the other application's file: a sheet no op touched
+        // is as it was, and the styles it points at are the same, new ones at the end.
+        prop_assert_eq!(raw_part(&document, UNTOUCHED_PART), raw_part(&base, UNTOUCHED_PART));
+        let styles_of = |file: &Path| cell_xfs(&inflated(&mut zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap(), "xl/styles.xml").unwrap());
+        let (old, new) = (styles_of(&base), styles_of(&document));
+        prop_assert!(new.starts_with(&old), "an existing style changed");
     }
 }
 
