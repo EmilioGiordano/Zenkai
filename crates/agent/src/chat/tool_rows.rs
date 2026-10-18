@@ -44,10 +44,13 @@ impl KnownTool {
     // whole name counts, so "Finding files" is not the find tool.
     fn of(title: &str) -> Option<KnownTool> {
         let normalized = title.trim().to_lowercase().replace([' ', '-'], "_");
-        let mut parts = normalized.split("__").flat_map(|part| part.split([':', '.', '/']));
+        let parts: Vec<&str> = normalized
+            .split("__")
+            .flat_map(|part| part.split([':', '.', '/']))
+            .collect();
         KNOWN
             .iter()
-            .find(|(name, _)| parts.any(|part| part == *name))
+            .find(|(name, _)| parts.contains(name))
             .map(|(_, tool)| *tool)
     }
 
@@ -75,6 +78,16 @@ impl KnownTool {
                 | KnownTool::GetSelection
                 | KnownTool::ReadRange
                 | KnownTool::Find
+        )
+    }
+
+    fn changes_cells(self) -> bool {
+        matches!(
+            self,
+            KnownTool::WriteCells
+                | KnownTool::SetFormula
+                | KnownTool::FormatRange
+                | KnownTool::GenerateData
         )
     }
 
@@ -167,6 +180,36 @@ pub fn group_text(cards: &[&ToolCard]) -> RowText {
         label,
         target: targets.join(", "),
     }
+}
+
+pub fn cell_count(card: &ToolCard) -> Option<usize> {
+    if KnownTool::of(&card.title) != Some(KnownTool::WriteCells) {
+        return None;
+    }
+    let input = parsed(&card.input)?;
+    let rows = input.get("rows")?.as_array()?;
+    Some(rows.iter().filter_map(Value::as_array).map(Vec::len).sum())
+}
+
+// What the user reads before allowing the call: the change in one line.
+pub fn approval_summary(card: &ToolCard) -> String {
+    let text = row_text(card);
+    match cell_count(card) {
+        Some(count) if !text.target.is_empty() => t!(
+            "chat.approval.write_cells",
+            count = count,
+            target = text.target
+        ),
+        _ if text.target.is_empty() => text.label,
+        _ => format!("{} {}", text.label, text.target),
+    }
+}
+
+// Only for the tools that change cells in the open workbook, where Ctrl+Z is true.
+pub fn consequence(card: &ToolCard) -> Option<&'static str> {
+    KnownTool::of(&card.title)
+        .filter(|tool| tool.changes_cells())
+        .map(|_| t!("chat.approval.not_saved"))
 }
 
 pub fn used_label(count: usize) -> String {
@@ -299,7 +342,12 @@ mod tests {
     }
 
     fn write(id: &str, status: ToolStatus) -> Entry {
-        Entry::Tool(card(id, "write_cells", status, r#"{"sheet":"S","start":"A1"}"#))
+        Entry::Tool(card(
+            id,
+            "write_cells",
+            status,
+            r#"{"sheet":"S","start":"A1"}"#,
+        ))
     }
 
     #[test]
@@ -366,13 +414,12 @@ mod tests {
         ];
         assert_eq!(
             plan(&entries, ToolCallDisplay::Collapsed),
-            vec![
-                Item::Entry(0),
-                Item::Group(vec![1, 2]),
-                Item::Call(3)
-            ]
+            vec![Item::Entry(0), Item::Group(vec![1, 2]), Item::Call(3)]
         );
-        let cards: Vec<&ToolCard> = [1, 2].iter().filter_map(|i| tool_at(&entries, *i)).collect();
+        let cards: Vec<&ToolCard> = [1, 2]
+            .iter()
+            .filter_map(|i| tool_at(&entries, *i))
+            .collect();
         let text = group_text(&cards);
         assert_eq!(text.label, "Read 2 ranges");
         assert_eq!(text.target, "Sales!A1:F9, Sales!A1:F9");
@@ -381,10 +428,17 @@ mod tests {
     #[test]
     fn a_lone_read_a_running_read_and_an_interrupted_run_do_not_group() {
         let running = Entry::Tool(card("r", "read_range", ToolStatus::InProgress, ""));
-        let entries = vec![read("1"), running, read("2"), Entry::Notice {
-            kind: crate::chat::thread::NoticeKind::Info,
-            text: String::new(),
-        }, read("3"), read("4")];
+        let entries = vec![
+            read("1"),
+            running,
+            read("2"),
+            Entry::Notice {
+                kind: crate::chat::thread::NoticeKind::Info,
+                text: String::new(),
+            },
+            read("3"),
+            read("4"),
+        ];
         assert_eq!(
             plan(&entries, ToolCallDisplay::Collapsed),
             vec![
@@ -434,9 +488,15 @@ mod tests {
     fn a_protected_view_refusal_is_never_hidden() {
         let mut refused = card("1", "write_cells", ToolStatus::Failed, "");
         refused.detail =
-            "the file came from the internet (Protected View), so agents may only read it".to_string();
+            "the file came from the internet (Protected View), so agents may only read it"
+                .to_string();
         assert!(needs_attention(&refused));
-        assert!(!needs_attention(&card("2", "write_cells", ToolStatus::Failed, "")));
+        assert!(!needs_attention(&card(
+            "2",
+            "write_cells",
+            ToolStatus::Failed,
+            ""
+        )));
         assert!(needs_attention(&card(
             "3",
             "x",
@@ -447,11 +507,44 @@ mod tests {
 
     #[test]
     fn long_results_are_cut_with_a_count_of_what_is_left() {
-        let detail = (1..=10).map(|n| n.to_string()).collect::<Vec<_>>().join("\n");
+        let detail = (1..=10)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         let preview = result_preview(&detail);
         assert_eq!(preview.shown.lines().count(), RESULT_LINES);
         assert_eq!(preview.more_lines, 4);
         assert_eq!(result_preview("one line").more_lines, 0);
+    }
+
+    #[test]
+    fn a_cell_write_is_summed_up_with_its_cell_count_and_consequence() {
+        let write = card(
+            "1",
+            "write_cells",
+            ToolStatus::WaitingForPermission,
+            r#"{"sheet":"Summary","start":"A1","rows":[["a","b"],["c","d"],["e"]]}"#,
+        );
+        assert_eq!(cell_count(&write), Some(5));
+        assert_eq!(approval_summary(&write), "Write 5 cells at Summary!A1");
+        assert_eq!(
+            consequence(&write),
+            Some("Nothing is saved to disk; Ctrl+Z undoes it.")
+        );
+    }
+
+    #[test]
+    fn other_calls_are_summed_up_by_label_and_target_without_a_consequence() {
+        let read = card(
+            "1",
+            "read_range",
+            ToolStatus::WaitingForPermission,
+            r#"{"sheet":"S","range":"A1:B2"}"#,
+        );
+        assert_eq!(approval_summary(&read), "Read range S!A1:B2");
+        assert_eq!(consequence(&read), None);
+        let command = card("2", "Run tests", ToolStatus::WaitingForPermission, "");
+        assert_eq!(approval_summary(&command), "Run tests");
     }
 
     #[test]

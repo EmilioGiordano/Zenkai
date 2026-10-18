@@ -222,6 +222,14 @@ impl Thread {
         })
     }
 
+    pub fn tool(&self, id: &ToolCallId) -> Option<&ToolCard> {
+        self.tool_index(id)
+            .and_then(|index| match &self.entries[index] {
+                Entry::Tool(card) => Some(card),
+                _ => None,
+            })
+    }
+
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -540,10 +548,16 @@ mod tests {
             detail: None,
             input: None,
         };
-        thread.apply_at(AgentUpdate::ToolStarted(card("a", ToolStatus::Pending)), start);
+        thread.apply_at(
+            AgentUpdate::ToolStarted(card("a", ToolStatus::Pending)),
+            start,
+        );
         thread.waiting_for_permission(&ToolCallId::new("a"), "call a");
         thread.permission_answered(&ToolCallId::new("a"), true);
-        thread.apply_at(change(ToolStatus::Completed), start + Duration::from_secs(3));
+        thread.apply_at(
+            change(ToolStatus::Completed),
+            start + Duration::from_secs(3),
+        );
         let Some(Entry::Tool(done)) = thread.entries().last() else {
             panic!("no tool entry");
         };
@@ -565,7 +579,10 @@ mod tests {
     fn a_running_call_keeps_its_start_across_updates() {
         let mut thread = running();
         let start = Instant::now();
-        thread.apply_at(AgentUpdate::ToolStarted(card("a", ToolStatus::InProgress)), start);
+        thread.apply_at(
+            AgentUpdate::ToolStarted(card("a", ToolStatus::InProgress)),
+            start,
+        );
         thread.apply_at(
             AgentUpdate::ToolStarted(card("a", ToolStatus::Completed)),
             start + Duration::from_millis(500),
