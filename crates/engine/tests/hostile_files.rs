@@ -276,6 +276,44 @@ fn dom_part_past_the_whole_cap_is_refused() {
 }
 
 #[test]
+fn non_sheet_part_without_checked_elements_past_the_whole_cap_is_refused() {
+    let cell = r#"<c r="A1"><v>1</v></c>"#;
+    let bytes = workbook_with_sheet(&sheet(cell));
+    let bytes = with_replaced_part(bytes, "xl/styles.xml", &incompressible(70_000_000));
+    let started = Instant::now();
+    let error = open_fast(bytes).unwrap_err();
+    assert!(error.contains("kept whole"), "{error}");
+    assert!(error.contains("harm"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
+#[test]
+fn shared_strings_with_a_forged_small_size_are_capped_on_their_real_size() {
+    let cell = r#"<c r="A1" t="s"><v>0</v></c>"#;
+    let bytes = workbook_with_strings(&sheet(cell), &shared_strings(1, 1));
+    let mut bytes = with_replaced_part(bytes, "xl/sharedStrings.xml", &incompressible(70_000_000));
+    patch_declared_size(&mut bytes, "xl/sharedStrings.xml", 1_000);
+    let started = Instant::now();
+    let error = open_fast(bytes).unwrap_err();
+    assert!(error.contains("kept whole"), "{error}");
+    assert!(error.contains("harm"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
+#[test]
+fn a_normal_file_with_ordinary_styles_still_opens() {
+    let mut source = rust_xlsxwriter::Workbook::new();
+    let bold = rust_xlsxwriter::Format::new().set_bold();
+    let sheet = source.add_worksheet();
+    sheet
+        .write_string_with_format(0, 0, "title", &bold)
+        .unwrap();
+    sheet.write_number(1, 0, 7.0).unwrap();
+    let bytes = source.save_to_buffer().unwrap();
+    open_fast(bytes).expect("ordinary styles and strings are far below every cap");
+}
+
+#[test]
 fn worksheet_tail_past_the_whole_cap_is_refused() {
     let tail = String::from_utf8(incompressible(70_000_000)).unwrap();
     let sheet_xml = format!(
