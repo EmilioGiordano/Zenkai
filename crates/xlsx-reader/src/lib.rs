@@ -15,6 +15,8 @@ mod sheet_stream;
 mod splice;
 mod stream;
 mod styles_part;
+#[cfg(test)]
+mod test_sheets;
 mod text;
 mod verify;
 
