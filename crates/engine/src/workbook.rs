@@ -1,12 +1,14 @@
 use std::io::Cursor;
+use std::time::{Duration, Instant};
 
 use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::{
     Cell, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
 };
-use ironcalc::base::{BorderArea, ClipboardData, Model, UserModel};
+use ironcalc::base::{BorderArea, ClipboardData, Model, Recalculation, UserModel};
 use ironcalc::import::load_from_xlsx_bytes;
 
+use crate::edit_profile::{EditProfile, RecalcMode};
 use crate::error::EngineError;
 use crate::file::Unsupported;
 use crate::model::CachedModel;
@@ -567,6 +569,57 @@ impl Workbook {
         crate::save::snapshot(path, target, model, &self.carried, &self.saved)
     }
 
+    // The one way a single cell is written: `write` gets the model and the cell's row and
+    // column, and decides when the workbook is evaluated.
+    fn write_cell<T>(
+        &mut self,
+        sheet: SheetId,
+        pos: CellPos,
+        text: &str,
+        write: impl FnOnce(&mut UserModel<'static>, i32, i32) -> Result<T, String>,
+    ) -> Result<T, EngineError> {
+        check_input(text)?;
+        self.model
+            .write_within(sheet, Range::new(pos, pos), |model| {
+                write(model, row_i32(pos.row), col_i32(pos.col))
+            })
+            .map_err(rejected)
+    }
+
+    // `set_input` with the edit, the recalculation and the refresh of the used areas timed
+    // apart, for the edit benchmark.
+    pub fn set_input_profiled(
+        &mut self,
+        sheet: SheetId,
+        pos: CellPos,
+        text: &str,
+    ) -> Result<EditProfile, EngineError> {
+        let mut profile = self.write_cell(sheet, pos, text, |model, row, col| {
+            model.pause_evaluation();
+            let started = Instant::now();
+            let written = model.set_user_input(sheet.0, row, col, text);
+            let edit = started.elapsed();
+            model.resume_evaluation();
+            let started = Instant::now();
+            model.evaluate();
+            let recalculation = started.elapsed();
+            let mode = match model.get_model().last_recalculation() {
+                Recalculation::Full => RecalcMode::Full,
+                Recalculation::Incremental => RecalcMode::Incremental,
+            };
+            written.map(|()| EditProfile {
+                edit,
+                recalculation,
+                mode,
+                warm_used_areas: Duration::ZERO,
+            })
+        })?;
+        let started = Instant::now();
+        self.warm_used_areas();
+        profile.warm_used_areas = started.elapsed();
+        Ok(profile)
+    }
+
     // Call on a background thread after building or editing, so the UI thread never walks a sheet.
     pub fn warm_used_areas(&self) {
         for sheet in self.sheets() {
@@ -698,12 +751,9 @@ impl Engine for Workbook {
     }
 
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError> {
-        check_input(text)?;
-        self.model
-            .write_within(sheet, Range::new(pos, pos), |model| {
-                model.set_user_input(sheet.0, row_i32(pos.row), col_i32(pos.col), text)
-            })
-            .map_err(rejected)
+        self.write_cell(sheet, pos, text, |model, row, col| {
+            model.set_user_input(sheet.0, row, col, text)
+        })
     }
 
     // One engine paste, so a whole paste, import or fill is a single undo step.

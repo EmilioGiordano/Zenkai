@@ -46,3 +46,20 @@ fn evaluating_twice_gives_the_same_values() {
     assert_eq!(first, "10");
     assert_eq!(model._get_text("D1"), first);
 }
+
+#[test]
+fn a_sheet_without_formulas_is_skipped_until_it_gets_one() {
+    let mut model = new_empty_model();
+    model.new_sheet();
+    model.set_user_input(1, 1, 1, "5".to_string()).unwrap();
+    model._set("A1", "=Sheet2!A1+1");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "6");
+    model.set_user_input(1, 2, 1, "=A1*2".to_string()).unwrap();
+    model
+        .set_user_input(1, 3, 1, "=SEQUENCE(2)".to_string())
+        .unwrap();
+    model.evaluate();
+    assert_eq!(model._get_text_at(1, 2, 1), "10");
+    assert_eq!(model._get_text_at(1, 4, 1), "2");
+}

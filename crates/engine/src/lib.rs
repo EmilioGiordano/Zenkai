@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod edit_profile;
 mod error;
 mod file;
 mod fingerprint;
@@ -18,6 +19,7 @@ mod used_end_property;
 mod workbook;
 mod xlsx_read;
 
+pub use edit_profile::{EditProfile, RecalcMode};
 pub use error::EngineError;
 pub use file::{Opened, Unsupported, open_xlsx, open_xlsx_with, scan_unsupported, write_atomic};
 pub use preflight::run_with_engine_stack;
