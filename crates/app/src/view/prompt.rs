@@ -18,14 +18,18 @@ impl Workspace {
         T: Clone + Into<PromptButton>,
     {
         let answer = window.prompt(level, message, detail, answers, cx);
-        self.prompts.opened();
+        let guard = self.prompts.open();
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
-            let choice = answer.await.ok();
-            if let Err(error) = this.update(cx, |this, cx| {
-                this.prompts.answered();
-                cx.notify();
-            }) {
+            let choice = match answer.await {
+                Ok(choice) => Some(choice),
+                Err(error) => {
+                    tracing::warn!(%error, "a prompt closed without an answer");
+                    None
+                }
+            };
+            drop(guard);
+            if let Err(error) = this.update(cx, |_, cx| cx.notify()) {
                 tracing::debug!(%error, "workspace closed during a prompt");
             }
             choice

@@ -1,19 +1,33 @@
+use std::cell::Cell;
+use std::rc::Rc;
+
 #[derive(Default)]
 pub struct PromptGate {
-    open: usize,
+    open: Rc<Cell<usize>>,
+}
+
+// Dropping the guard reopens the gate, so a prompt task that is cancelled cannot leave the
+// workspace blocked.
+pub struct PromptGuard {
+    open: Rc<Cell<usize>>,
 }
 
 impl PromptGate {
-    pub fn opened(&mut self) {
-        self.open += 1;
-    }
-
-    pub fn answered(&mut self) {
-        self.open = self.open.saturating_sub(1);
+    pub fn open(&self) -> PromptGuard {
+        self.open.set(self.open.get() + 1);
+        PromptGuard {
+            open: self.open.clone(),
+        }
     }
 
     pub fn blocks_input(&self) -> bool {
-        self.open > 0
+        self.open.get() > 0
+    }
+}
+
+impl Drop for PromptGuard {
+    fn drop(&mut self) {
+        self.open.set(self.open.get().saturating_sub(1));
     }
 }
 
@@ -28,20 +42,22 @@ mod tests {
 
     #[test]
     fn input_is_blocked_until_every_open_prompt_is_answered() {
-        let mut gate = PromptGate::default();
-        gate.opened();
-        gate.opened();
-        gate.answered();
+        let gate = PromptGate::default();
+        let first = gate.open();
+        let second = gate.open();
+        drop(first);
         assert!(gate.blocks_input());
-        gate.answered();
+        drop(second);
         assert!(!gate.blocks_input());
     }
 
     #[test]
-    fn answering_without_a_prompt_keeps_the_gate_open_for_the_next_one() {
-        let mut gate = PromptGate::default();
-        gate.answered();
-        gate.opened();
-        assert!(gate.blocks_input());
+    fn a_dropped_guard_reopens_the_gate() {
+        let gate = PromptGate::default();
+        {
+            let _guard = gate.open();
+            assert!(gate.blocks_input());
+        }
+        assert!(!gate.blocks_input());
     }
 }
