@@ -147,6 +147,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   inline fields); the encoding of a `CellStore` changed, so `.ic` files written by earlier
   builds do not load. Tests: `src/cell_store.rs` (random operations against the nested
   maps, size, encoding).
+- `CellStore::append` moves the rows of another store into the first, so a caller that
+  reads a sheet in pieces can build each piece in its own store and join them
+  (`src/cell_store.rs`). Stands on its own. Test in the module.
 - `StaticResult` derives `Clone`, `Debug` and `PartialEq`, so a caller can copy a
   sheet's parsed formulas, for instance to save them away from the model
   (`src/expressions/parser/static_analysis.rs`).
