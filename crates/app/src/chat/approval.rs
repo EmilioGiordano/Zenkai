@@ -7,7 +7,6 @@ use gpui_kit::*;
 use zenkai_agent::chat::session::ChoiceKind;
 use zenkai_agent::chat::thread::ToolCard;
 use zenkai_agent::chat::tool_rows;
-use zenkai_agent::tools::escaped_text;
 use zenkai_i18n::t;
 
 use super::tools::ToolViews;
@@ -219,8 +218,7 @@ impl ChatPanel {
                 open,
                 body: Some(if input.more_chars > 0 {
                     format!(
-                        "{}
-{}",
+                        "{}\n{}",
                         input.shown,
                         t!("chat.tool.more_chars", count = input.more_chars)
                     )
@@ -249,8 +247,11 @@ impl ChatPanel {
                     ChoiceKind::RejectOnce => answers.push(button.secondary().label(
                         keymap::labeled(cx, t!("chat.approval.deny"), &DenyChatPermission),
                     )),
-                    ChoiceKind::AllowAlways | ChoiceKind::RejectAlways => {
-                        standing.push(button.ghost().label(escaped_text(&choice.label)))
+                    ChoiceKind::AllowAlways => {
+                        standing.push(button.ghost().label(t!("chat.approval.always_allow")))
+                    }
+                    ChoiceKind::RejectAlways => {
+                        standing.push(button.ghost().label(t!("chat.approval.always_deny")))
                     }
                 }
             }
