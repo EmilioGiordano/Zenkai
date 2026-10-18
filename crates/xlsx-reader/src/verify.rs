@@ -46,8 +46,8 @@ fn open(
 // Proves a file just written reads back without building a model: the archive holds
 // exactly the planned parts in order, every copied part is byte for byte the base
 // file's, and every generated part's compressed bytes, checksum and sizes on disk are
-// the ones its writer recorded, within the reader's caps. The workbook and its
-// relationships parse, so the sheets resolve.
+// the ones its writer recorded and inflate to the XML it checked, within the reader's
+// caps. The workbook and its relationships parse, so the sheets resolve.
 pub fn check_written(
     written: &Path,
     base: Option<&Path>,
@@ -116,8 +116,6 @@ pub fn check_written(
     Ok(())
 }
 
-// Reads the compressed bytes back without inflating them: equal to what the writer
-// recorded, they inflate to the XML it checked.
 fn as_recorded<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     index: usize,
@@ -154,6 +152,31 @@ fn as_recorded<R: Read + Seek>(
     }
     if read != digest.compressed_size || hasher.finalize() != digest.compressed_crc32 {
         return Err("its bytes on disk are not the ones written".to_string());
+    }
+    drop(entry);
+    let entry = archive.by_index(index).map_err(|e| e.to_string())?;
+    inflates_to(entry, digest).map_err(|e| format!("it does not inflate to the XML written: {e}"))
+}
+
+// The encoder is not trusted: the compressed bytes must inflate to exactly the XML the
+// writer was fed and checked.
+fn inflates_to(mut entry: impl Read, digest: &PartDigest) -> Result<(), String> {
+    let mut hasher = crc32fast::Hasher::new();
+    let mut inflated = 0u64;
+    let mut chunk = vec![0u8; CHUNK_BYTES];
+    loop {
+        let bytes = entry.read(&mut chunk).map_err(|e| e.to_string())?;
+        if bytes == 0 {
+            break;
+        }
+        hasher.update(&chunk[..bytes]);
+        inflated += bytes as u64;
+        if inflated > digest.size {
+            return Err("it is longer".to_string());
+        }
+    }
+    if inflated != digest.size || hasher.finalize() != digest.crc32 {
+        return Err("its checksum or length differs".to_string());
     }
     Ok(())
 }
@@ -317,6 +340,40 @@ mod tests {
         let error = check_written(&path, None, &parts).unwrap_err();
         assert!(
             error.to_string().contains("not the ones written"),
+            "{error}"
+        );
+    }
+
+    // Stands for an encoder bug: the compressed bytes on disk are the ones written and
+    // inflate cleanly, to XML other than the one the writer was fed.
+    #[test]
+    fn compressed_bytes_of_other_xml_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("other.xlsx");
+        let other = String::from_utf8(SHEET.to_vec())
+            .unwrap()
+            .replace("<v>1</v>", "<v>2</v>");
+        write_zip(&path, &[SOUND[0], SOUND[1], (SOUND[2].0, other.as_bytes())]);
+        let mut parts = recorded(&path, &[]);
+        let fed = crc32fast::hash(SHEET);
+        let Written::Generated(sheet) = &mut parts[2].1 else {
+            panic!("the sheet was generated");
+        };
+        sheet.crc32 = fed;
+        let mut bytes = std::fs::read(&path).unwrap();
+        let (local, central) = {
+            let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+            let entry = archive.by_name(SOUND[2].0).unwrap();
+            (entry.header_start(), entry.central_header_start())
+        };
+        for at in [local + 14, central + 16] {
+            let at = usize::try_from(at).unwrap();
+            bytes[at..at + 4].copy_from_slice(&fed.to_le_bytes());
+        }
+        std::fs::write(&path, &bytes).unwrap();
+        let error = check_written(&path, None, &parts).unwrap_err();
+        assert!(
+            error.to_string().contains("inflate to the XML written"),
             "{error}"
         );
     }

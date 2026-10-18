@@ -1,7 +1,7 @@
 // Every part a save writes goes through `PartWriter`, which records what each generated
 // part is: its XML, checked as it is produced on a thread of its own so the parse
-// overlaps deflate, and the compressed bytes handed to the file. The verification reads
-// those bytes back raw instead of inflating and parsing the part again.
+// overlaps deflate, and the compressed bytes handed to the file. The verification compares
+// those bytes and inflates them against the XML's checksum, without parsing it again.
 
 use std::cell::RefCell;
 use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
