@@ -12,7 +12,7 @@ use peak_alloc::PeakAlloc;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use zenkai_engine::{
-    Engine, EngineError, SaveTarget, Workbook, open_xlsx, save_xlsx, write_xlsx_to,
+    Engine, EngineError, SaveTarget, Workbook, open_xlsx, save_xlsx, write_xlsx_unverified,
 };
 use zenkai_types::{CellPos, RowIdx, SheetId};
 
@@ -209,7 +209,7 @@ fn edit_and_write_in_memory(
     let start = Instant::now();
     let snapshot = workbook.save_snapshot(source, SaveTarget::Document)?;
     let locked_ms = ms(start);
-    let written = write_xlsx_to(snapshot, Discard::default())?;
+    let written = write_xlsx_unverified(snapshot, Discard::default())?;
     done(
         "save",
         start,

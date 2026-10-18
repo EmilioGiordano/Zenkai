@@ -465,7 +465,7 @@ fn adopt(slot: &SavedSlot, path: &Path, contents: Contents) {
 
 // Writes what `save_xlsx` would into `writer`, for measuring a save without touching the
 // disk: no temp file, no verification, no rename, and the next save copies from the same file.
-pub fn write_xlsx_to<W: Write + Seek + Send>(
+pub fn write_xlsx_unverified<W: Write + Seek + Send>(
     snapshot: SaveSnapshot,
     writer: W,
 ) -> Result<W, EngineError> {
@@ -605,7 +605,7 @@ mod tests {
         let snapshot = reopened
             .save_snapshot(&path, super::SaveTarget::Document)
             .unwrap();
-        let bytes = super::write_xlsx_to(snapshot, std::io::Cursor::new(Vec::new()))
+        let bytes = super::write_xlsx_unverified(snapshot, std::io::Cursor::new(Vec::new()))
             .unwrap()
             .into_inner();
         assert_eq!(std::fs::read(&path).unwrap(), before);
