@@ -318,19 +318,22 @@ fn inserting_above_the_outline_drops_it_and_says_so() {
         [Unsupported::Outline, Unsupported::PageBreaks]
     );
     book.undo().unwrap();
+    assert!(dropped(&book).is_empty());
     let saved = settings(&part(&book.to_xlsx().unwrap(), "xl/worksheets/sheet2.xml"));
     assert!(
-        !saved
-            .keys()
-            .any(|k| (k.starts_with("row") && !k.ends_with("@hidden"))
-                || k == "sheetFormatPr@outlineLevelRow"),
-        "{saved:?}"
+        saved.contains_key("row8@outlineLevel") && saved.contains_key("rowBreaks/6@id"),
+        "the undo brought back what the move dropped: {saved:?}"
     );
     assert!(
         saved.contains_key("col2@outlineLevel"),
         "columns were not moved: {saved:?}"
     );
     assert!(saved.contains_key("pageMargins@left"));
+    book.redo().unwrap();
+    assert_eq!(
+        dropped(&book),
+        [Unsupported::Outline, Unsupported::PageBreaks]
+    );
     // The file written after the loss lacks it, so the next save loses nothing more.
     save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
     assert!(dropped(&book).is_empty());
