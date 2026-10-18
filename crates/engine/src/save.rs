@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -12,6 +12,7 @@ use zenkai_xlsx_reader::Written;
 use zip::ZipWriter;
 use zip::write::FileOptions;
 
+use crate::carried_moves::Restored;
 use crate::error::EngineError;
 use crate::file::{Unsupported, remove_temp, temp_path};
 use crate::fingerprint::{SheetPrint, book_print};
@@ -76,6 +77,9 @@ pub struct SaveSnapshot {
     // For a save to the workbook's own file, what the file will hold, so the next save
     // compares against what was written and never against edits made after the snapshot.
     adoption: Option<Contents>,
+    // What the save warns about that an undo or redo put back; forgotten once it succeeds.
+    restored: Restored,
+    seen: BTreeMap<u32, BTreeSet<Unsupported>>,
     fate: Fate,
 }
 
@@ -158,6 +162,15 @@ pub(crate) fn sheet_job(
         settings,
         selected,
     })
+}
+
+// The kinds an undo or redo put back that a whole save does not write.
+fn unwritable_restored(data: ModelData<'_>, carried: &Carried) -> BTreeSet<Unsupported> {
+    data.book
+        .worksheets
+        .iter()
+        .flat_map(|sheet| carried.unwritable_restored(sheet, Remains::Nothing))
+        .collect()
 }
 
 fn full_part(index: usize) -> String {
@@ -273,7 +286,12 @@ fn choose(
         None => (
             Chosen::Full(full_sheets(data, carried)?),
             full_contents(data, carried, book, prints),
-            Fate::full(held, lost),
+            Fate::full(
+                held,
+                lost.union(&unwritable_restored(data, carried))
+                    .copied()
+                    .collect(),
+            ),
         ),
     };
     Ok(Choice {
@@ -311,6 +329,8 @@ pub(crate) fn snapshot(
         plan,
         slot: slot.clone(),
         adoption,
+        restored: carried.restored().clone(),
+        seen: carried.restored().seen(),
         fate,
     })
 }
@@ -428,6 +448,8 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
         plan,
         slot,
         adoption,
+        restored,
+        seen,
         fate: _,
     } = snapshot;
     let temp = temp_path(&path);
@@ -482,6 +504,7 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
     }
     if let Some(contents) = adoption {
         adopt(&slot, &path, contents);
+        restored.forget(&seen);
     }
     Ok(())
 }

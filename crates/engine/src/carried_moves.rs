@@ -1,3 +1,6 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
 use crate::file::Unsupported;
 use crate::model::HistoryStep;
 use crate::sheet_elements::Elements;
@@ -79,5 +82,41 @@ impl Moves {
         if self.pop(step).is_some() {
             self.push_inverse(step, MoveTaken::default());
         }
+    }
+}
+
+// The kinds of elements an undo or redo put back into each sheet (by sheet id) since the
+// last save that succeeded into the workbook's own file. A save warns about those among
+// them that it cannot write, once. Shared with the snapshot so a save that succeeds can
+// forget what it warned about, without the workbook's lock.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Restored(Arc<Mutex<BTreeMap<u32, BTreeSet<Unsupported>>>>);
+
+impl Restored {
+    fn kinds(&self) -> MutexGuard<'_, BTreeMap<u32, BTreeSet<Unsupported>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    pub(crate) fn add(&self, sheet_id: u32, kinds: BTreeSet<Unsupported>) {
+        self.kinds().entry(sheet_id).or_default().extend(kinds);
+    }
+
+    pub(crate) fn of(&self, sheet_id: u32) -> BTreeSet<Unsupported> {
+        self.kinds().get(&sheet_id).cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn seen(&self) -> BTreeMap<u32, BTreeSet<Unsupported>> {
+        self.kinds().clone()
+    }
+
+    // Forgets `seen`, keeping what was added after it was taken.
+    pub(crate) fn forget(&self, seen: &BTreeMap<u32, BTreeSet<Unsupported>>) {
+        let mut kinds = self.kinds();
+        for (sheet_id, gone) in seen {
+            if let Some(left) = kinds.get_mut(sheet_id) {
+                left.retain(|kind| !gone.contains(kind));
+            }
+        }
+        kinds.retain(|_, left| !left.is_empty());
     }
 }

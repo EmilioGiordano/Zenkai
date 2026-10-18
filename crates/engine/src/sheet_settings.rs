@@ -5,12 +5,12 @@
 // output declares only the main and relationship namespaces. The elements written back
 // only into the file they were read from are `sheet_elements`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 
 use roxmltree::Node;
 
-use crate::carried_moves::{MoveTaken, Moves, Taken};
+use crate::carried_moves::{MoveTaken, Moves, Restored, Taken};
 use crate::file::Unsupported;
 use crate::model::HistoryStep;
 use crate::saved::Remains;
@@ -263,6 +263,17 @@ impl SheetSettings {
         self.elements.write_at(out, Place::AfterBreaks)
     }
 
+    // The kinds of elements the model holds that a save into a file holding `remains` of the
+    // sheet cannot write, such as hyperlinks whose relationships part an earlier save left out.
+    pub(crate) fn unwritable(&self, remains: Remains) -> BTreeSet<Unsupported> {
+        let written = self.elements.left_in(remains).kinds();
+        self.elements
+            .kinds()
+            .difference(&written)
+            .copied()
+            .collect()
+    }
+
     // What a save writes into a file that holds `remains` of the sheet.
     pub(crate) fn left_in(&self, remains: Remains) -> SheetSettings {
         SheetSettings {
@@ -283,6 +294,7 @@ impl SheetSettings {
 pub struct Carried {
     sheets: HashMap<u32, SheetSettings>,
     taken: Moves,
+    restored: Restored,
     // Each kind lost by an edit, with the count of losses when it last was. A sheet that
     // lost one is always written again, so a file written after the loss lacks it too.
     dropped: BTreeMap<Unsupported, u64>,
@@ -295,6 +307,7 @@ impl Carried {
         Carried {
             sheets,
             taken: Moves::default(),
+            restored: Restored::default(),
             dropped: BTreeMap::new(),
             losses: 0,
             moves: HashMap::new(),
@@ -396,7 +409,14 @@ impl Carried {
             .sheets
             .into_iter()
             .filter_map(|(id, taken)| match self.sheets.get_mut(&id) {
-                Some(settings) => Some((id, taken.exchange(settings))),
+                Some(settings) => {
+                    let put_back = taken.elements.is_some();
+                    let inverse = taken.exchange(settings);
+                    if put_back {
+                        self.restored.add(id, settings.elements.kinds());
+                    }
+                    Some((id, inverse))
+                }
                 None => {
                     tracing::warn!(sheet_id = id, "a move took settings of a missing sheet");
                     None
@@ -426,6 +446,28 @@ impl Carried {
     // stack, so a later replay of it restores nothing the failed step never dropped.
     pub(crate) fn move_replay_failed(&mut self, step: HistoryStep) {
         self.taken.forgo(step);
+    }
+
+    pub(crate) fn restored(&self) -> &Restored {
+        &self.restored
+    }
+
+    // The kinds an undo or redo put back into the sheet that a save into a file holding
+    // `remains` of it cannot write; reported by the next save only.
+    pub(crate) fn unwritable_restored(
+        &self,
+        sheet: &ironcalc::base::types::Worksheet,
+        remains: Remains,
+    ) -> BTreeSet<Unsupported> {
+        let pending = self.restored.of(sheet.sheet_id);
+        match self.written(sheet) {
+            Some(settings) => settings
+                .unwritable(remains)
+                .intersection(&pending)
+                .copied()
+                .collect(),
+            None => BTreeSet::new(),
+        }
     }
 
     // The model's history has nothing to redo, so the moves kept for redoing are stale.
