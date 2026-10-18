@@ -227,6 +227,13 @@ fn full_contents(
     })
 }
 
+fn traced_full_sheets(
+    data: ModelData<'_>,
+    carried: &Carried,
+) -> Result<Vec<SheetJob>, EngineError> {
+    tracing::info_span!("save_full_sheets").in_scope(|| full_sheets(data, carried))
+}
+
 enum Chosen {
     Full(Vec<SheetJob>),
     Patch(PatchPlan),
@@ -260,7 +267,7 @@ fn choose(
     let base = source.filter(|base| base.same_kind(path));
     if base.is_none() && target == SaveTarget::Copy {
         return Ok(Choice {
-            chosen: Chosen::Full(full_sheets(data, carried)?),
+            chosen: Chosen::Full(traced_full_sheets(data, carried)?),
             adoption: None,
             fate: Fate::full(
                 held,
@@ -270,11 +277,16 @@ fn choose(
             ),
         });
     }
-    let book = book_print(data.book)?;
-    let prints = sheet_prints(data, carried)?;
+    let book = tracing::info_span!("save_book_print").in_scope(|| book_print(data.book))?;
+    let prints =
+        tracing::info_span!("save_sheet_prints").in_scope(|| sheet_prints(data, carried))?;
     let patched = match base {
-        Some(base) => patch_plan(base, book, &prints, data, carried)?,
-        None => None,
+        Some(base) => tracing::info_span!("save_patch_plan")
+            .in_scope(|| patch_plan(base, book, &prints, data, carried))?,
+        None => {
+            tracing::info!("no file of the same kind to copy from; the save writes everything");
+            None
+        }
     };
     let (chosen, contents, fate) = match patched {
         Some(Patched {
@@ -289,7 +301,7 @@ fn choose(
             (Chosen::Patch(plan), contents, fate)
         }
         None => (
-            Chosen::Full(full_sheets(data, carried)?),
+            Chosen::Full(traced_full_sheets(data, carried)?),
             full_contents(data, carried, book, prints)?,
             Fate::full(
                 held,
@@ -316,6 +328,7 @@ pub(crate) fn snapshot(
     slot: &SavedSlot,
     opened: &[Unsupported],
 ) -> Result<SaveSnapshot, EngineError> {
+    let _span = tracing::info_span!("save_snapshot").entered();
     let data = ModelData::of(model);
     let Choice {
         chosen,
@@ -325,7 +338,7 @@ pub(crate) fn snapshot(
     let plan = match chosen {
         Chosen::Patch(plan) => Plan::Patch(plan),
         Chosen::Full(sheets) => Plan::Full(FullPlan {
-            parts: package_parts(model)?,
+            parts: tracing::info_span!("save_package_parts").in_scope(|| package_parts(model))?,
             sheets,
         }),
     };
@@ -375,12 +388,14 @@ pub(crate) fn write_full<W: Write + Seek>(
     let mut zip = ZipWriter::new(writer);
     let mut written = Vec::with_capacity(plan.parts.len() + plan.sheets.len());
     for (name, content) in plan.parts {
+        let _span = tracing::debug_span!("save_part", kind = "package", part = %name).entered();
         zip.start_file(name.as_str(), deflated())
             .map_err(rejected)?;
         zip.write_all(content.as_bytes()).map_err(rejected)?;
         written.push((name, Written::Generated));
     }
     for job in plan.sheets {
+        let _span = tracing::debug_span!("save_part", kind = "whole", part = %job.part).entered();
         written.push((job.part.clone(), Written::Generated));
         write_sheet(&mut zip, job)?;
     }
@@ -400,14 +415,16 @@ fn write_temp(
     temp: &Path,
     refused: &mut Option<String>,
 ) -> Result<Vec<(String, Written)>, EngineError> {
-    let (file, written) = match plan {
-        Plan::Full(plan) => write_full(plan, file)?,
-        Plan::Patch(plan) => write_patch(plan, file, refused)?,
-    };
+    let (file, written) = tracing::info_span!("save_write").in_scope(|| match plan {
+        Plan::Full(plan) => write_full(plan, file),
+        Plan::Patch(plan) => write_patch(plan, file, refused),
+    })?;
     let file = file
         .into_inner()
         .map_err(|error| write_error(temp)(error.into_error()))?;
-    file.sync_all().map_err(write_error(temp))?;
+    tracing::info_span!("save_sync")
+        .in_scope(|| file.sync_all())
+        .map_err(write_error(temp))?;
     Ok(written)
 }
 
@@ -481,7 +498,9 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
     let mut refused = None;
     let checked = unchanged(base)
         .and_then(|()| run_with_engine_stack(|| write_temp(plan, file, &temp, &mut refused)))
-        .and_then(|written| verify(&temp, base, &written))
+        .and_then(|written| {
+            tracing::info_span!("save_verify").in_scope(|| verify(&temp, base, &written))
+        })
         .and_then(|()| unchanged(base));
     if let Err(error) = checked {
         remove_temp(&temp);
@@ -503,7 +522,8 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
         }
         return Err(error);
     }
-    if let Err(source) = fs::rename(&temp, &path) {
+    let renamed = tracing::info_span!("save_rename").in_scope(|| fs::rename(&temp, &path));
+    if let Err(source) = renamed {
         remove_temp(&temp);
         return Err(EngineError::Write { path, source });
     }
