@@ -605,13 +605,14 @@ impl Workbook {
     // replayed move would leave in the wrong place. Only the sheets that step moved
     // count; a failed replay may have stopped anywhere, so it counts every sheet.
     fn history_replayed(&mut self, moved: Option<Vec<u32>>, replayed: bool, step: HistoryStep) {
-        let sheet_ids = match moved.filter(|_| replayed) {
-            Some(ids) => {
-                if !ids.is_empty() {
-                    self.carried.move_replayed(step);
-                }
-                ids
+        if moved.as_ref().is_some_and(|ids| !ids.is_empty()) {
+            match replayed {
+                true => self.carried.move_replayed(step),
+                false => self.carried.move_replay_failed(step),
             }
+        }
+        let sheet_ids = match moved.filter(|_| replayed) {
+            Some(ids) => ids,
             None => {
                 let worksheets = &self.model.get_model().workbook.worksheets;
                 worksheets.iter().map(|ws| ws.sheet_id).collect()

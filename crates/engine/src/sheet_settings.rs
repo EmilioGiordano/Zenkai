@@ -10,7 +10,7 @@ use std::io::{self, Write};
 
 use roxmltree::Node;
 
-use crate::carried_moves::{MoveTaken, Taken};
+use crate::carried_moves::{MoveTaken, Moves, Taken};
 use crate::file::Unsupported;
 use crate::model::HistoryStep;
 use crate::saved::Remains;
@@ -282,10 +282,7 @@ impl SheetSettings {
 #[derive(Debug, Default)]
 pub struct Carried {
     sheets: HashMap<u32, SheetSettings>,
-    // What each row or column move took, for the undo and redo of that move. They line up
-    // with the moves in the model's own history, which only a new edit empties.
-    undone_moves: Vec<MoveTaken>,
-    redone_moves: Vec<MoveTaken>,
+    taken: Moves,
     // Each kind lost by an edit, with the count of losses when it last was. A sheet that
     // lost one is always written again, so a file written after the loss lacks it too.
     dropped: BTreeMap<Unsupported, u64>,
@@ -297,8 +294,7 @@ impl Carried {
     pub fn new(sheets: HashMap<u32, SheetSettings>) -> Carried {
         Carried {
             sheets,
-            undone_moves: Vec::new(),
-            redone_moves: Vec::new(),
+            taken: Moves::default(),
             dropped: BTreeMap::new(),
             losses: 0,
             moves: HashMap::new(),
@@ -352,9 +348,8 @@ impl Carried {
         let mut taken = Vec::new();
         for (id, settings) in &mut self.sheets {
             let mut gone = Taken::default();
-            let elements = settings.elements.clone();
             if *id != sheet_id {
-                settings.elements.moved_elsewhere();
+                gone.elements = settings.elements.moved_elsewhere();
             } else {
                 let indexed = match axis {
                     Axis::Rows => &mut settings.rows,
@@ -367,10 +362,7 @@ impl Carried {
                         Axis::Columns => gone.columns = Some(old),
                     }
                 }
-                settings.elements.moved(axis, from);
-            }
-            if settings.elements != elements {
-                gone.elements = Some(elements);
+                gone.elements = settings.elements.moved(axis, from);
             }
             if !gone.is_empty() {
                 taken.push((*id, gone));
@@ -380,8 +372,7 @@ impl Carried {
             .iter()
             .map(|kind| (*kind, self.dropped.get(kind).copied()))
             .collect();
-        self.redone_moves.clear();
-        self.undone_moves.push(MoveTaken {
+        self.taken.push(MoveTaken {
             sheets: taken,
             kinds,
         });
@@ -392,11 +383,7 @@ impl Carried {
     // takes again what that move took. Deliberately restores the lost-kind counts too, so
     // a save after an undo does not warn about what the undo brought back.
     pub(crate) fn move_replayed(&mut self, step: HistoryStep) {
-        let (from, to) = match step {
-            HistoryStep::Undo => (&mut self.undone_moves, HistoryStep::Redo),
-            HistoryStep::Redo => (&mut self.redone_moves, HistoryStep::Undo),
-        };
-        let Some(replayed) = from.pop() else {
+        let Some(replayed) = self.taken.pop(step) else {
             return;
         };
         let now = replayed
@@ -422,16 +409,19 @@ impl Carried {
                 self.record(replayed.kinds.iter().map(|(kind, _)| *kind).collect())
             }
         }
-        let inverse = MoveTaken { sheets, kinds: now };
-        match to {
-            HistoryStep::Redo => self.redone_moves.push(inverse),
-            HistoryStep::Undo => self.undone_moves.push(inverse),
-        }
+        self.taken
+            .push_inverse(step, MoveTaken { sheets, kinds: now });
+    }
+
+    // The model moved a move's history entry between its stacks and then failed to replay
+    // it; the entry moves the same way, with nothing exchanged.
+    pub(crate) fn move_replay_failed(&mut self, step: HistoryStep) {
+        self.taken.requeue(step);
     }
 
     // The model's history has nothing to redo, so the moves kept for redoing are stale.
     pub(crate) fn redo_emptied(&mut self) {
-        self.redone_moves.clear();
+        self.taken.redo_emptied();
     }
 
     fn record(&mut self, lost: Vec<Unsupported>) {

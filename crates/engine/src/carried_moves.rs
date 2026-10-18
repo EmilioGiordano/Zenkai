@@ -1,4 +1,5 @@
 use crate::file::Unsupported;
+use crate::model::HistoryStep;
 use crate::sheet_elements::Elements;
 use crate::sheet_settings::{Indexed, SheetSettings};
 
@@ -37,4 +38,46 @@ impl Taken {
 pub(crate) struct MoveTaken {
     pub(crate) sheets: Vec<(u32, Taken)>,
     pub(crate) kinds: Vec<(Unsupported, Option<u64>)>,
+}
+
+// What each row or column move took, for the undo and redo of that move. The entries line
+// up with the moves in the model's own history, so every move must be its own undo step
+// (the workbook never groups them) and only a new edit empties the redo side.
+#[derive(Debug, Default)]
+pub(crate) struct Moves {
+    undone: Vec<MoveTaken>,
+    redone: Vec<MoveTaken>,
+}
+
+impl Moves {
+    pub(crate) fn push(&mut self, taken: MoveTaken) {
+        self.redone.clear();
+        self.undone.push(taken);
+    }
+
+    pub(crate) fn redo_emptied(&mut self) {
+        self.redone.clear();
+    }
+
+    // The entry of the move `step` replays.
+    pub(crate) fn pop(&mut self, step: HistoryStep) -> Option<MoveTaken> {
+        match step {
+            HistoryStep::Undo => self.undone.pop(),
+            HistoryStep::Redo => self.redone.pop(),
+        }
+    }
+
+    // What a replayed `step` leaves to replay the other way.
+    pub(crate) fn push_inverse(&mut self, step: HistoryStep, inverse: MoveTaken) {
+        match step {
+            HistoryStep::Undo => self.redone.push(inverse),
+            HistoryStep::Redo => self.undone.push(inverse),
+        }
+    }
+
+    pub(crate) fn requeue(&mut self, step: HistoryStep) {
+        if let Some(entry) = self.pop(step) {
+            self.push_inverse(step, entry);
+        }
+    }
 }
