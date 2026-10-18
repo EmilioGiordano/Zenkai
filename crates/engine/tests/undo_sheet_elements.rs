@@ -264,6 +264,38 @@ fn an_undo_that_leaves_nothing_unwritable_warns_about_nothing() {
     assert_eq!(dropped_by_saving(&book, &target), []);
 }
 
+// A restore made while an earlier snapshot is still being written is not the one that
+// snapshot warned about, even when it brings back the same kind.
+#[test]
+fn a_restore_during_a_write_keeps_its_warning_for_the_next_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, _) = baseline(dir.path());
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    let target = dir.path().join("saved.xlsx");
+    book.delete_rows(SHEET, row(1), 1).unwrap();
+    dropped_by_saving(&book, &target);
+    book.undo().unwrap();
+    let in_flight = book.save_snapshot(&target, SaveTarget::Document).unwrap();
+    book.set_input(SHEET, CellPos::new(row(0), column(3)), "7")
+        .unwrap();
+    book.delete_rows(SHEET, row(1), 1).unwrap();
+    book.undo().unwrap();
+    save_xlsx(in_flight).unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+}
+
+#[test]
+fn a_move_the_model_refuses_leaves_the_undo_history_aligned() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, held) = baseline(dir.path());
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.delete_rows(SHEET, row(1), 1).unwrap();
+    assert!(book.insert_rows(SHEET, row(0), 0).is_err());
+    assert!(book.delete_rows(SHEET, row(0), 0).is_err());
+    book.undo().unwrap();
+    assert_eq!(saved_elements(&book, &dir.path().join("undone.xlsx")), held);
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Move {
     InsertRows(i64, u32),

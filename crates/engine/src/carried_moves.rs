@@ -85,38 +85,54 @@ impl Moves {
     }
 }
 
-// The kinds of elements an undo or redo put back into each sheet (by sheet id) since the
-// last save that succeeded into the workbook's own file. A save warns about those among
-// them that it cannot write, once. Shared with the snapshot so a save that succeeds can
-// forget what it warned about, without the workbook's lock.
+// How many times an undo or redo put each kind of element back into each sheet (by sheet
+// id) since the last save into the workbook's own file that succeeded. A save warns about
+// those among them that it cannot write, once. Shared with the snapshot so that save can
+// forget what it saw without the workbook's lock.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Restored(Arc<Mutex<BTreeMap<u32, BTreeSet<Unsupported>>>>);
+pub(crate) struct Restored(Arc<Mutex<Counts>>);
+
+pub(crate) type Counts = BTreeMap<u32, BTreeMap<Unsupported, u64>>;
 
 impl Restored {
-    fn kinds(&self) -> MutexGuard<'_, BTreeMap<u32, BTreeSet<Unsupported>>> {
+    fn counts(&self) -> MutexGuard<'_, Counts> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     pub(crate) fn add(&self, sheet_id: u32, kinds: BTreeSet<Unsupported>) {
-        self.kinds().entry(sheet_id).or_default().extend(kinds);
+        let mut counts = self.counts();
+        let sheet = counts.entry(sheet_id).or_default();
+        for kind in kinds {
+            *sheet.entry(kind).or_default() += 1;
+        }
     }
 
     pub(crate) fn of(&self, sheet_id: u32) -> BTreeSet<Unsupported> {
-        self.kinds().get(&sheet_id).cloned().unwrap_or_default()
+        self.counts()
+            .get(&sheet_id)
+            .map(|sheet| sheet.keys().copied().collect())
+            .unwrap_or_default()
     }
 
-    pub(crate) fn seen(&self) -> BTreeMap<u32, BTreeSet<Unsupported>> {
-        self.kinds().clone()
+    pub(crate) fn seen(&self) -> Counts {
+        self.counts().clone()
     }
 
-    // Forgets `seen`, keeping what was added after it was taken.
-    pub(crate) fn forget(&self, seen: &BTreeMap<u32, BTreeSet<Unsupported>>) {
-        let mut kinds = self.kinds();
+    // Takes back only the counts `seen` holds, so a restore made after the snapshot keeps
+    // its warning even when its kind was already there.
+    pub(crate) fn forget(&self, seen: &Counts) {
+        let mut counts = self.counts();
         for (sheet_id, gone) in seen {
-            if let Some(left) = kinds.get_mut(sheet_id) {
-                left.retain(|kind| !gone.contains(kind));
+            let Some(sheet) = counts.get_mut(sheet_id) else {
+                continue;
+            };
+            for (kind, seen_count) in gone {
+                if let Some(count) = sheet.get_mut(kind) {
+                    *count = count.saturating_sub(*seen_count);
+                }
             }
+            sheet.retain(|_, count| *count > 0);
         }
-        kinds.retain(|_, left| !left.is_empty());
+        counts.retain(|_, sheet| !sheet.is_empty());
     }
 }

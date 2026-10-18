@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use zenkai_xlsx_reader::Written;
 use zip::ZipWriter;
 use zip::write::FileOptions;
 
-use crate::carried_moves::Restored;
+use crate::carried_moves::{Counts, Restored};
 use crate::error::EngineError;
 use crate::file::{Unsupported, remove_temp, temp_path};
 use crate::fingerprint::{SheetPrint, book_print};
@@ -79,7 +79,7 @@ pub struct SaveSnapshot {
     adoption: Option<Contents>,
     // What the save warns about that an undo or redo put back; forgotten once it succeeds.
     restored: Restored,
-    seen: BTreeMap<u32, BTreeSet<Unsupported>>,
+    seen: Counts,
     fate: Fate,
 }
 
