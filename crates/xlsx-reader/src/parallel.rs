@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek};
 use std::num::NonZero;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -24,6 +24,12 @@ pub(crate) struct ReadPlan {
     pub(crate) cells: CellBudget,
     pub(crate) tuning: Tuning,
 }
+
+// Parsing runs at 72 MB/s and inflating at 860 MB/s in the generated-sheet measurement, so
+// about twelve parsers saturate one inflater; six give half that rate and bound what a
+// sheet holds uncharged: the workers plus IN_FLIGHT_EXTRA pieces of PIECE_BYTES each,
+// parsed or being parsed, 7 * 4.25 MB of text before the cells they become. Serial holds one.
+const MAX_WORKERS_PER_SHEET: usize = 6;
 
 // Threads that stream sheets, and for each of them the threads that scan its rows. A sheet
 // thread inflates and merges while its workers parse, so a sheet thread and its workers
@@ -70,7 +76,7 @@ impl ReadPlan {
         let sheet_threads = sheets.min((self.threads / 3).max(1));
         Some(Layout {
             sheet_threads,
-            workers: (self.threads - sheet_threads) / sheet_threads,
+            workers: ((self.threads - sheet_threads) / sheet_threads).min(MAX_WORKERS_PER_SHEET),
         })
     }
 }
@@ -102,7 +108,7 @@ pub(crate) struct Job<'j, R> {
 pub(crate) struct SheetStreams<'scope> {
     arrived: Receiver<(usize, Streamed)>,
     held: HashMap<usize, Streamed>,
-    positions: Vec<usize>,
+    indexes: HashSet<usize>,
     handles: Vec<ScopedJoinHandle<'scope, ()>>,
 }
 
@@ -136,19 +142,20 @@ impl<'scope> SheetStreams<'scope> {
         Some(SheetStreams {
             arrived,
             held: HashMap::new(),
-            positions: job.tasks.iter().map(|task| task.position).collect(),
+            indexes: job.tasks.iter().map(|task| task.index).collect(),
             handles,
         })
     }
 
-    // The streamed sheet of the worksheet at `position`, waiting for its thread; None
-    // when that sheet is not streamed on a thread.
-    pub(crate) fn take(&mut self, position: usize) -> Option<Streamed> {
-        if !self.positions.contains(&position) {
+    // The streamed sheet of the archive entry at `index`, waiting for its thread; None
+    // when that entry is not streamed on a thread. Keyed by entry, not worksheet, since an
+    // archive may hold a worksheet path twice and each is read, as on one thread.
+    pub(crate) fn take(&mut self, index: usize) -> Option<Streamed> {
+        if !self.indexes.contains(&index) {
             return None;
         }
         loop {
-            if let Some(streamed) = self.held.remove(&position) {
+            if let Some(streamed) = self.held.remove(&index) {
                 return Some(streamed);
             }
             match self.arrived.recv() {
@@ -212,7 +219,7 @@ fn run<R: Read + Seek>(
             return;
         }
         let streamed = parent.in_scope(|| stream_task(job, &mut opened, *task));
-        if sender.send((task.position, streamed)).is_err() {
+        if sender.send((task.index, streamed)).is_err() {
             return;
         }
     }
@@ -252,7 +259,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::test_sheets::{SheetShape, sheet_xml, workbook_with_sheets};
+    use crate::test_sheets::{SheetShape, sheet_xml, workbook_with_entries, workbook_with_sheets};
     use crate::{OpenedBook, workbook_differences};
 
     fn generated(seed: u64) -> Vec<u8> {
@@ -293,9 +300,12 @@ mod tests {
     }
 
     fn assert_same_read(sheets: &[Vec<u8>], plan: &ReadPlan, reject: Option<&str>) -> bool {
-        let bytes = workbook_with_sheets(sheets);
-        let (alone, alone_seen) = read(&bytes, &ReadPlan::with_threads(0), reject);
-        let (together, together_seen) = read(&bytes, plan, reject);
+        assert_same_bytes(&workbook_with_sheets(sheets), plan, reject)
+    }
+
+    fn assert_same_bytes(bytes: &[u8], plan: &ReadPlan, reject: Option<&str>) -> bool {
+        let (alone, alone_seen) = read(bytes, &ReadPlan::with_threads(0), reject);
+        let (together, together_seen) = read(bytes, plan, reject);
         assert_eq!(alone_seen, together_seen);
         match (alone, together) {
             (Ok(alone), Ok(together)) => {
@@ -320,6 +330,14 @@ mod tests {
     fn sheets_on_threads_build_the_workbook_of_one_thread() {
         let sheets: Vec<Vec<u8>> = (1..=5).map(generated).collect();
         assert!(assert_same_read(&sheets, &threaded(), None));
+    }
+
+    #[test]
+    fn a_worksheet_path_twice_in_the_archive_reads_as_on_one_thread() {
+        let sheets = [generated(1), generated(2)];
+        let again = generated(3);
+        let bytes = workbook_with_entries(&sheets, &[("xl/worksheets/sheet1.xml", &again)]);
+        assert_same_bytes(&bytes, &threaded(), None);
     }
 
     #[test]
@@ -389,5 +407,9 @@ mod tests {
             }
         }
         assert_eq!(ReadPlan::with_threads(1).layout(3), None);
+        assert_eq!(
+            ReadPlan::with_threads(64).layout(1).unwrap().workers,
+            MAX_WORKERS_PER_SHEET
+        );
     }
 }

@@ -329,7 +329,7 @@ fn stream_entries<R: Read + Seek>(
             entry.name().to_string()
         };
         if let Some(&position) = positions.get(entry_name.as_str()) {
-            let streamed = match streams.as_mut().and_then(|streams| streams.take(position)) {
+            let streamed = match streams.as_mut().and_then(|streams| streams.take(index)) {
                 Some(streamed) => streamed?,
                 None => {
                     let entry = archive

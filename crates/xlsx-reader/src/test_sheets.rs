@@ -212,6 +212,12 @@ fn text_of(rng: &mut Rng) -> String {
 // A workbook of as many sheets as given, each holding the XML of its entry; the strings
 // the sheets may point at are the three of the first.
 pub(crate) fn workbook_with_sheets(sheets: &[Vec<u8>]) -> Vec<u8> {
+    workbook_with_entries(sheets, &[])
+}
+
+// The same, followed by more archive entries under the names given, which may repeat a
+// worksheet path.
+pub(crate) fn workbook_with_entries(sheets: &[Vec<u8>], extra: &[(&str, &[u8])]) -> Vec<u8> {
     let mut model = ironcalc::base::Model::new_empty("b", "en", "UTC", "en").unwrap();
     for (row, text) in (1..).zip(["one", "two", "three"]) {
         model.set_user_input(0, row, 1, text.to_string()).unwrap();
@@ -242,6 +248,10 @@ pub(crate) fn workbook_with_sheets(sheets: &[Vec<u8>]) -> Vec<u8> {
                 writer.write_all(&body).unwrap();
             }
         }
+    }
+    for (name, body) in extra {
+        writer.start_file(*name, options).unwrap();
+        writer.write_all(body).unwrap();
     }
     writer.finish().unwrap().into_inner()
 }

@@ -792,13 +792,17 @@ fn classify(window: &[u8]) -> Result<Option<(Next, usize)>, ReadError> {
             Ok(tag_end(window).map(|end| (Next::Row, skipped + end)))
         }
         Event::Empty(start) if start.local_name().as_ref() == b"row" => {
-            Ok(Some((Next::Row, skipped + position(&reader))))
+            Ok(Some((Next::Row, skipped.saturating_add(position(&reader)))))
         }
-        Event::End(end) if end.local_name().as_ref() == b"sheetData" => {
-            Ok(Some((Next::SheetDataEnd, skipped + position(&reader))))
-        }
+        Event::End(end) if end.local_name().as_ref() == b"sheetData" => Ok(Some((
+            Next::SheetDataEnd,
+            skipped.saturating_add(position(&reader)),
+        ))),
         Event::Eof => Ok(None),
-        _ => Ok(Some((Next::Other, skipped + position(&reader)))),
+        _ => Ok(Some((
+            Next::Other,
+            skipped.saturating_add(position(&reader)),
+        ))),
     }
 }
 
@@ -1436,6 +1440,31 @@ mod tests {
 
     fn serial_again(xml: &str, piece_bytes: usize) -> Result<StreamedSheet, ReadError> {
         stream_tuned(xml, small_pieces(piece_bytes, 0))
+    }
+
+    #[test]
+    fn a_hostile_sheet_is_refused_as_the_serial_scan_refuses_it() {
+        use crate::test_sheets::{SheetShape, sheet_xml};
+        let xml = sheet_xml(&SheetShape::plain(3_000, 5));
+        for workers in [1, 6] {
+            let tuning = |workers| small_pieces(500, workers);
+            let run = |tuning| {
+                let meter = CompressedMeter::new();
+                let tight = Budgets::with_cells(CellBudget::max_cells_for_test(400));
+                stream_worksheet(
+                    meter.wrap(xml.as_bytes()),
+                    &meter,
+                    "xl/worksheets/sheet1.xml",
+                    "Sheet1",
+                    &tight,
+                    tuning,
+                )
+            };
+            let serial = run(tuning(0));
+            let threaded = run(tuning(workers));
+            assert!(matches!(serial, Err(ReadError::Unsafe(_))));
+            assert!(matches!(threaded, Err(ReadError::Unsafe(_))));
+        }
     }
 
     #[test]
