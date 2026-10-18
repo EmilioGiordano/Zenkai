@@ -1,5 +1,5 @@
 use std::fmt::Write as _;
-use std::io::Write;
+use std::io::{Cursor, Read, Write};
 
 pub(crate) const SHEET_HEAD: &str = r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetData>"#;
 pub(crate) const SHEET_TAIL: &str = "</sheetData></worksheet>";
@@ -207,6 +207,43 @@ fn text_of(rng: &mut Rng) -> String {
     } else {
         TEXTS[rng.below(TEXTS.len() as u32) as usize].to_string()
     }
+}
+
+// A workbook of as many sheets as given, each holding the XML of its entry; the strings
+// the sheets may point at are the three of the first.
+pub(crate) fn workbook_with_sheets(sheets: &[Vec<u8>]) -> Vec<u8> {
+    let mut model = ironcalc::base::Model::new_empty("b", "en", "UTC", "en").unwrap();
+    for (row, text) in (1..).zip(["one", "two", "three"]) {
+        model.set_user_input(0, row, 1, text.to_string()).unwrap();
+    }
+    for _ in 1..sheets.len() {
+        model.new_sheet();
+    }
+    model.evaluate();
+    let saved = ironcalc::export::save_xlsx_to_writer(&model, Cursor::new(Vec::new()))
+        .unwrap()
+        .into_inner();
+    let mut archive = zip::ZipArchive::new(Cursor::new(saved)).unwrap();
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let replaced = (1..=sheets.len())
+            .find(|number| name == format!("xl/worksheets/sheet{number}.xml"))
+            .map(|number| &sheets[number - 1]);
+        writer.start_file(name, options).unwrap();
+        match replaced {
+            Some(xml) => writer.write_all(xml).unwrap(),
+            None => {
+                let mut body = Vec::new();
+                entry.read_to_end(&mut body).unwrap();
+                writer.write_all(&body).unwrap();
+            }
+        }
+    }
+    writer.finish().unwrap().into_inner()
 }
 
 #[cfg(test)]

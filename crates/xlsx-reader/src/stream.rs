@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::io::{Read, Seek};
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::ReadError;
 use crate::limits::{self, CellBudget, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES, Route, Usage};
@@ -342,6 +342,8 @@ pub(crate) struct Budgets {
     sheet_declared: AtomicU64,
     sheet_read: AtomicU64,
     entry_cap: u64,
+    // Set once the open has failed, so worksheets still streaming on other threads stop.
+    cancelled: AtomicBool,
 }
 
 impl Budgets {
@@ -369,7 +371,16 @@ impl Budgets {
             sheet_declared: AtomicU64::new(0),
             sheet_read: AtomicU64::new(0),
             entry_cap,
+            cancelled: AtomicBool::new(false),
         }
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Relaxed)
     }
 
     pub(crate) fn expect_sheet_bytes(&self, declared: u64) {
@@ -548,6 +559,11 @@ impl<R: Read> Guard<'_, R> {
     }
 
     pub(crate) fn read_chunk(&mut self, buf: &mut [u8]) -> Result<usize, ReadError> {
+        if self.budgets.cancelled() {
+            return Err(ReadError::Unreadable(
+                "the file is no longer being read".to_string(),
+            ));
+        }
         let read = self
             .inner
             .read(buf)
