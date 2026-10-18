@@ -16,6 +16,7 @@ use crate::actions::{
     AddGenerateColumn, CancelGenerate, ConfirmGenerate, FocusNextControl, FocusPreviousControl,
     SaveGenerateHeaders,
 };
+use crate::interface_scale::rem_px;
 
 mod column;
 
@@ -59,7 +60,7 @@ fn menu_surface(width: f32, cx: &Context<GenerateDialog>) -> Div {
     v_flex()
         .occlude()
         .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_panel(cx)))
-        .w(px(width))
+        .w(rem_px(width))
         .p_2()
         .gap_2()
         .bg(theme.popover)
@@ -97,7 +98,7 @@ impl Render for GenerateDialog {
             )
             .on_action(|_: &FocusNextControl, window, cx| window.focus_next(cx))
             .on_action(|_: &FocusPreviousControl, window, cx| window.focus_prev(cx))
-            .w(px(PANEL_WIDTH))
+            .w(rem_px(PANEL_WIDTH))
             .max_w_full()
             .max_h(height)
             .bg(theme.background)
@@ -128,7 +129,7 @@ impl Render for GenerateDialog {
             .flex()
             .justify_center()
             .items_start()
-            .pt(px(24.0))
+            .pt(rem_px(24.0))
             .bg(cx.theme().overlay)
             .occlude()
             .on_mouse_down(
@@ -176,7 +177,7 @@ impl GenerateDialog {
                             .child(caption(t!("gen.range"), cx))
                             .child(
                                 div()
-                                    .w(px(150.0))
+                                    .w(rem_px(150.0))
                                     .child(Input::new(&self.range).aria_label(t!("gen.range"))),
                             )
                             .child(caption(t!("gen.on_sheet", sheet = self.sheet_name), cx))
@@ -219,7 +220,7 @@ impl GenerateDialog {
             .gap_4()
             .child(labelled(
                 t!("gen.rows"),
-                div().w(px(110.0)).child(
+                div().w(rem_px(110.0)).child(
                     Input::new(&self.rows)
                         .aria_label(t!("gen.rows"))
                         .disabled(self.draft.rows_locked()),
@@ -239,7 +240,7 @@ impl GenerateDialog {
             .child(labelled(
                 t!("gen.seed_caption"),
                 div()
-                    .w(px(110.0))
+                    .w(rem_px(110.0))
                     .child(Input::new(&self.seed).aria_label(t!("gen.seed"))),
                 cx,
             ))
@@ -253,11 +254,11 @@ impl GenerateDialog {
                 h_flex()
                     .gap_3()
                     .px_2()
-                    .child(div().w(px(176.0)).child(caption(t!("gen.column"), cx)))
-                    .child(div().w(px(220.0)).child(caption(t!("gen.type"), cx)))
+                    .child(div().w(rem_px(176.0)).child(caption(t!("gen.column"), cx)))
+                    .child(div().w(rem_px(220.0)).child(caption(t!("gen.type"), cx)))
                     .child(div().flex_1().child(caption(t!("gen.options"), cx)))
-                    .child(div().w(px(84.0)).child(caption(t!("gen.blanks"), cx)))
-                    .child(div().w(px(64.0)).child(caption(t!("gen.unique"), cx))),
+                    .child(div().w(rem_px(84.0)).child(caption(t!("gen.blanks"), cx)))
+                    .child(div().w(rem_px(64.0)).child(caption(t!("gen.unique"), cx))),
             )
             .children(rows)
             .child(

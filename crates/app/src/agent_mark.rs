@@ -3,6 +3,7 @@ use gpui_kit::*;
 use zenkai_agent::settings::AgentId;
 
 use crate::assets::{CLAUDE_MARK, CODEX_AGENT_MARK, GEMINI_MARK, GROK_MARK, OPENCODE_MARK};
+use crate::interface_scale::rem_px;
 
 pub const HEADER_MARK_SIZE: f32 = 20.0;
 pub const SESSION_MARK_SIZE: f32 = 28.0;
@@ -49,7 +50,7 @@ pub fn of_agent(id: &AgentId, name: &str) -> AgentMark {
 
 fn glyph_tile(path: &'static str, color: Hsla, size: f32) -> AnyElement {
     div()
-        .size(px(size))
+        .size(rem_px(size))
         .flex_shrink_0()
         .flex()
         .items_center()
@@ -59,7 +60,7 @@ fn glyph_tile(path: &'static str, color: Hsla, size: f32) -> AnyElement {
         .child(
             svg()
                 .path(path)
-                .size(px(size * GLYPH_RATIO))
+                .size(rem_px(size * GLYPH_RATIO))
                 .text_color(color),
         )
         .into_any_element()
@@ -68,7 +69,7 @@ fn glyph_tile(path: &'static str, color: Hsla, size: f32) -> AnyElement {
 fn letter_tile(letter: char, size: f32, cx: &App) -> AnyElement {
     let theme = cx.theme();
     div()
-        .size(px(size))
+        .size(rem_px(size))
         .flex_shrink_0()
         .flex()
         .items_center()
