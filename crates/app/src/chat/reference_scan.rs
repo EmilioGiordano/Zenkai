@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use zenkai_types::Range;
 
+use super::name_guard::is_safe_name;
 use super::reference::Reference;
 
 const MAX_SHEET_NAME_CHARS: usize = 31;
@@ -95,7 +96,7 @@ fn parse_sheet(chars: &[char], at: usize) -> Option<(String, usize)> {
     let valid = !name.is_empty()
         && name.chars().count() <= MAX_SHEET_NAME_CHARS
         && !name.contains(FORBIDDEN_IN_SHEET_NAME)
-        && !name.contains(char::is_control);
+        && is_safe_name(&name);
     (valid && chars.get(index) == Some(&'!')).then_some((name, index + 1))
 }
 
@@ -354,6 +355,12 @@ mod tests {
         assert!(references("'a:b'!A1").is_empty());
         assert!(references("2024!A1").is_empty());
         assert_eq!(references("Año.2024!A1"), ["'Año.2024'!A1"]);
+    }
+
+    #[test]
+    fn invisible_format_characters_in_a_sheet_name_are_not_linked() {
+        assert!(references("'a\u{202E}b'!A1").is_empty());
+        assert!(references("'a\u{200B}b'!A1").is_empty());
     }
 
     #[test]
