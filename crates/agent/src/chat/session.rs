@@ -261,6 +261,20 @@ fn notify(events: &Sender<SessionEvent>, event: SessionEvent) {
     }
 }
 
+// Every process registered in a ProcessTree is built here: on Unix kill_tree signals the
+// process group, which only exists when the child leads its own group.
+pub(super) fn agent_command(program: impl AsRef<std::ffi::OsStr>) -> ProcessCommand {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new(program);
+        command.process_group(0);
+        command.into()
+    }
+    #[cfg(not(unix))]
+    ProcessCommand::new(program)
+}
+
 #[cfg(windows)]
 pub(super) fn hide_window(command: &mut ProcessCommand) {
     use async_process::windows::CommandExt;
@@ -332,7 +346,7 @@ async fn drive(
         return Ok(());
     }
     notify(events, SessionEvent::Connection(Connection::Starting));
-    let mut command = ProcessCommand::new(&program);
+    let mut command = agent_command(&program);
     command
         .args(&arguments)
         .envs(config.env.iter().map(|(name, value)| (name, value)))
@@ -350,6 +364,7 @@ async fn drive(
     let (Some(stdin), Some(stdout), Some(stderr)) =
         (child.stdin.take(), child.stdout.take(), child.stderr.take())
     else {
+        tree.forget();
         return Err(SessionError::Spawn(
             "the agent has no standard streams".into(),
         ));
