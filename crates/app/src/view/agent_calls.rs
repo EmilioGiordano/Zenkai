@@ -498,7 +498,7 @@ impl Workspace {
                 let title = t!(
                     "approval.wants_to_create",
                     who = who,
-                    name = tools::relative_text(&new.path)
+                    name = tools::shown_path(&tools::relative_text(&new.path))
                 );
                 let detail = t!(
                     "approval.create_detail",
