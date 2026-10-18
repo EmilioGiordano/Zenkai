@@ -135,6 +135,24 @@ impl Lines {
         shown
     }
 
+    // The first line to scroll to so that `last` ends inside `extent`, never before `floor`.
+    fn first_ending_at(&self, last: u32, extent: f32, floor: u32) -> u32 {
+        let mut first = last;
+        let mut filled = self.size(last);
+        let mut steps = 0;
+        while steps < MAX_SHOWN_LINES
+            && let Some(before) = first.checked_sub(1)
+            && let Some(index) = self.prev_shown(before)
+            && index >= floor
+            && filled + self.size(index) <= extent
+        {
+            filled += self.size(index);
+            first = index;
+            steps += 1;
+        }
+        first
+    }
+
     fn index_at(&self, first: u32, offset: f32) -> u32 {
         let mut edge = 0.0;
         let mut index = first;
@@ -208,6 +226,17 @@ impl Layout {
     pub fn rows_before(&self, row: RowIdx, count: u32, floor: RowIdx) -> Vec<RowIdx> {
         let shown = self.rows.shown_before(row.get(), count, floor.get());
         shown.into_iter().map(row_of).collect()
+    }
+
+    pub fn col_ending_at(&self, last: ColIdx, width: f32, floor: ColIdx) -> ColIdx {
+        let first =
+            self.columns
+                .first_ending_at(u32::from(last.get()), width, u32::from(floor.get()));
+        col_of(first)
+    }
+
+    pub fn row_ending_at(&self, last: RowIdx, height: f32, floor: RowIdx) -> RowIdx {
+        row_of(self.rows.first_ending_at(last.get(), height, floor.get()))
     }
 
     pub fn cols_after(&self, col: ColIdx, count: u32) -> Vec<ColIdx> {
@@ -389,5 +418,54 @@ mod tests {
         assert_eq!(before, [0, 1, 1_000_001].map(row_of));
         let floored = layout.rows_before(row_of(1_000_002), 3, row_of(1));
         assert_eq!(floored, [1, 1_000_001].map(row_of));
+    }
+
+    #[test]
+    fn scrolling_to_a_far_column_fits_wide_columns_and_skips_hidden_ones() {
+        let mut layout = Layout::default();
+        for col in 10..=30 {
+            layout.set_col_width(col_of(col), 120.0);
+        }
+        for col in 12..=14 {
+            layout.set_col_width(col_of(col), 0.0);
+        }
+        let width = 500.0;
+        let target = col_of(31);
+        let left = layout.col_ending_at(target, width, ColIdx::default());
+        let shown = layout.shown_cols(left, width);
+        assert!(shown.contains(&target));
+        assert!(!shown.contains(&col_of(13)));
+        let fitted: f32 = (left.get()..=target.get())
+            .map(|col| layout.col_width(col_of(u32::from(col))))
+            .sum();
+        assert!(fitted <= width);
+        let wider = layout.col_ending_at(target, width + 120.0, ColIdx::default());
+        assert!(wider < left);
+    }
+
+    #[test]
+    fn scrolling_to_a_column_never_passes_the_floor() {
+        let layout = Layout::default();
+        let floor = col_of(3);
+        assert_eq!(layout.col_ending_at(col_of(5), 10_000.0, floor), floor);
+        assert_eq!(layout.col_ending_at(col_of(5), 1.0, floor), col_of(5));
+    }
+
+    #[test]
+    fn scrolling_to_a_far_row_fits_tall_rows_and_skips_hidden_ones() {
+        let mut layout = rows_hidden(40, 60);
+        for row in 30..=70 {
+            if !(40..=60).contains(&row) {
+                layout.set_row_height(row_of(row), 50.0);
+            }
+        }
+        let height = 300.0;
+        let target = row_of(70);
+        let top = layout.row_ending_at(target, height, RowIdx::default());
+        let shown = layout.shown_rows(top, height);
+        assert!(shown.contains(&target));
+        assert!(!shown.contains(&row_of(45)));
+        let fitted: f32 = shown.iter().map(|row| layout.row_height(*row)).sum();
+        assert!(fitted <= height);
     }
 }
