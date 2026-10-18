@@ -66,7 +66,8 @@ pub fn check_written(
         ));
     }
     let budgets = Budgets::production();
-    let package = read_package(&mut archive, &meter, &budgets)?;
+    let package = tracing::debug_span!("verify_package")
+        .in_scope(|| read_package(&mut archive, &meter, &budgets))?;
     if let Some(missing) = package
         .worksheets
         .iter()
@@ -93,6 +94,7 @@ pub fn check_written(
     for (index, (name, kind)) in parts.iter().enumerate() {
         match kind {
             Written::Copied => {
+                let _span = tracing::debug_span!("verify_part", kind = "copied").entered();
                 let (base, indexes) = base
                     .as_mut()
                     .ok_or_else(|| unreadable("a copied part has no base file"))?;
@@ -103,6 +105,8 @@ pub fn check_written(
                     .map_err(|e| unreadable(format!("{name}: {e}")))?;
             }
             Written::Generated(digest) => {
+                let _span =
+                    tracing::debug_span!("verify_part", kind = "generated", part = %name).entered();
                 if package.worksheets.iter().any(|sheet| &sheet.path == name) {
                     budgets.admit_written_worksheet(digest.size)?;
                 } else {
@@ -154,6 +158,7 @@ fn as_recorded<R: Read + Seek>(
         return Err("its bytes on disk are not the ones written".to_string());
     }
     drop(entry);
+    let _span = tracing::debug_span!("verify_inflate").entered();
     let entry = archive.by_index(index).map_err(|e| e.to_string())?;
     inflates_to(entry, digest).map_err(|e| format!("it does not inflate to the XML written: {e}"))
 }

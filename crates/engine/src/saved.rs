@@ -200,11 +200,15 @@ pub(crate) fn opened(
     let strings = match layout.shared_strings {
         SharedStrings::Absent => Strings::Absent,
         SharedStrings::Aligned(count) => Strings::Aligned(count),
-        SharedStrings::Unaligned => return None,
+        SharedStrings::Unaligned => {
+            tracing::info!("the shared strings do not line up; the first save writes everything");
+            return None;
+        }
     };
     let aligned = layout.worksheets.len() == data.book.worksheets.len()
         && layout.part_names == PartNames::Unique;
     if !aligned {
+        tracing::info!("the sheet parts do not line up; the first save writes everything");
         return None;
     }
     let prints = StylesBase::opened(layout.styles, &data.book.styles).and_then(|styles| {
@@ -212,7 +216,10 @@ pub(crate) fn opened(
         Ok((styles, book, sheet_prints(data, carried)?))
     });
     match prints {
-        Ok((None, ..)) => None,
+        Ok((None, ..)) => {
+            tracing::info!("the styles do not line up; the first save writes everything");
+            None
+        }
         Ok((Some(styles), book, sheets)) => Some(SavedFile {
             path: path.to_path_buf(),
             stamp,
