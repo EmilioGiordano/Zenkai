@@ -54,6 +54,19 @@ pub fn open_to_find_shortcut(cx: &mut App) {
     }
 }
 
+pub fn open_to_ai(cx: &mut App) {
+    let Some((handle, window)) = show(cx) else {
+        return;
+    };
+    if let Err(error) = handle.update(cx, |_, native, cx| {
+        window.update(cx, |this, cx| {
+            this.select_section(rows::Section::Ai, native, cx)
+        })
+    }) {
+        tracing::debug!(%error, "the settings window is already being updated");
+    }
+}
+
 pub fn open_to_keyboard(cx: &mut App) {
     let Some((handle, window)) = show(cx) else {
         return;

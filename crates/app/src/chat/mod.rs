@@ -1,4 +1,5 @@
 mod access;
+mod access_summary;
 mod agent_menu;
 pub(crate) mod approval;
 mod badge;
