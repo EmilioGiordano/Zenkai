@@ -2371,8 +2371,7 @@ impl Workspace {
                 } else {
                     (0, 0)
                 };
-                let (visible_rows, visible_cols) = self.grid.read(cx).visible_counts();
-                if rows >= visible_rows || cols >= visible_cols {
+                if (rows, cols) != (0, 0) && !self.grid.read(cx).is_on_screen(active) {
                     self.notify(
                         Severity::Warning,
                         t!("notice.freeze_needs_visible_cell"),
