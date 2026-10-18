@@ -9,8 +9,6 @@ use ironcalc::base::expressions::parser::static_analysis::StaticResult;
 use ironcalc::base::types::Worksheet;
 use ironcalc::export::{get_package_parts, write_worksheet_xml};
 use zenkai_xlsx_reader::Written;
-use zip::ZipWriter;
-use zip::write::FileOptions;
 
 use crate::carried_moves::{Counts, Restored};
 use crate::error::EngineError;
@@ -18,6 +16,7 @@ use crate::file::{Unsupported, remove_temp, temp_path};
 use crate::fingerprint::{SheetPrint, book_print};
 use crate::held::Held;
 use crate::preflight::run_with_engine_stack;
+use crate::save_parts::PartWriter;
 use crate::save_patch::{PatchPlan, Patched, patch_plan, write_patch};
 use crate::save_sheet::{SheetWriter, prepare};
 use crate::saved::{
@@ -347,24 +346,13 @@ pub(crate) fn snapshot(
     })
 }
 
-// Measured on a 729 MB sheet: level 6 took 6.46 s (87 MB), level 3 took 2.6 s (105 MB, near the
-// original file's size), level 1 took 1.0 s (148 MB).
-const DEFLATE_LEVEL: i32 = 3;
-
-pub(crate) fn deflated() -> FileOptions {
-    FileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated)
-        .compression_level(Some(DEFLATE_LEVEL))
-}
-
 pub(crate) fn write_sheet<W: Write + Seek>(
-    zip: &mut ZipWriter<W>,
+    parts: &mut PartWriter<W>,
     mut job: SheetJob,
 ) -> Result<(), EngineError> {
-    zip.start_file(job.part.as_str(), deflated())
-        .map_err(rejected)?;
+    parts.start_generated(&job.part)?;
     let dimension = prepare(&mut job.sheet, job.settings.as_ref());
-    let mut sheet_writer = SheetWriter::new(&mut *zip, job.settings.as_ref());
+    let mut sheet_writer = SheetWriter::new(&mut *parts, job.settings.as_ref());
     let mut buffered = BufWriter::with_capacity(SHEET_BUFFER_BYTES, &mut sheet_writer);
     write_worksheet_xml(
         &mut buffered,
@@ -385,21 +373,17 @@ pub(crate) fn write_full<W: Write + Seek>(
     plan: FullPlan,
     writer: W,
 ) -> Result<(W, Vec<(String, Written)>), EngineError> {
-    let mut zip = ZipWriter::new(writer);
-    let mut written = Vec::with_capacity(plan.parts.len() + plan.sheets.len());
+    let mut parts = PartWriter::new(writer)?;
     for (name, content) in plan.parts {
         let _span = tracing::debug_span!("save_part", kind = "package", part = %name).entered();
-        zip.start_file(name.as_str(), deflated())
-            .map_err(rejected)?;
-        zip.write_all(content.as_bytes()).map_err(rejected)?;
-        written.push((name, Written::Generated));
+        parts.start_generated(&name)?;
+        parts.write_all(content.as_bytes()).map_err(rejected)?;
     }
     for job in plan.sheets {
         let _span = tracing::debug_span!("save_part", kind = "whole", part = %job.part).entered();
-        written.push((job.part.clone(), Written::Generated));
-        write_sheet(&mut zip, job)?;
+        write_sheet(&mut parts, job)?;
     }
-    Ok((zip.finish().map_err(rejected)?, written))
+    parts.finish()
 }
 
 fn write_error(path: &Path) -> impl Fn(io::Error) -> EngineError + '_ {
@@ -555,6 +539,9 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod corruption;
 
 #[cfg(test)]
 mod tests {

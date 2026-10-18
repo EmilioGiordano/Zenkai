@@ -431,6 +431,20 @@ impl Budgets {
             })
     }
 
+    // A part a save just wrote is charged as reading it back would charge it. Its
+    // compression ratio was checked as it was written.
+    pub(crate) fn admit_written(&self, part: &str, expanded: u64) -> Result<(), ReadError> {
+        self.charge(expanded)?;
+        if expanded > self.entry_cap {
+            return Err(past_entry_cap(part, self.entry_cap));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn admit_written_worksheet(&self, expanded: u64) -> Result<(), ReadError> {
+        self.charge(expanded)
+    }
+
     pub(crate) fn stream<R: Read>(
         &self,
         inner: R,
@@ -493,6 +507,13 @@ pub(crate) struct Guard<'b, R> {
     part: String,
 }
 
+fn past_entry_cap(part: &str, cap: u64) -> ReadError {
+    ReadError::Unsafe(format!(
+        "part {part} expands past the {} per-part limit",
+        limits::describe_bytes(cap),
+    ))
+}
+
 fn whole_too_big(part: &str) -> ReadError {
     ReadError::Unsafe(format!(
         "part {part} is larger than the {} kept whole",
@@ -543,11 +564,7 @@ impl<R: Read> Guard<'_, R> {
             self.budgets.sheet_read.fetch_add(read, Ordering::Relaxed);
         }
         if self.cap_entry && self.expanded > self.budgets.entry_cap {
-            return Err(ReadError::Unsafe(format!(
-                "part {} expands past the {} per-part limit",
-                self.part,
-                limits::describe_bytes(self.budgets.entry_cap),
-            )));
+            return Err(past_entry_cap(&self.part, self.budgets.entry_cap));
         }
         limits::check_ratio(&self.part, self.compressed_used(), self.expanded)?;
         Ok(read as usize)
@@ -793,6 +810,19 @@ mod tests {
             read(&data, "xl/sharedStrings.xml", &roomy).unwrap().len(),
             2048
         );
+    }
+
+    #[test]
+    fn written_parts_are_capped_like_parts_read_back() {
+        let budgets = Budgets::with_entry_cap(CellBudget::max_cells_for_test(u64::MAX), 1024);
+        budgets.admit_written("xl/styles.xml", 1024).unwrap();
+        let error = budgets.admit_written("xl/styles.xml", 1025).unwrap_err();
+        assert!(error.to_string().contains("per-part limit"), "{error}");
+        budgets.admit_written_worksheet(1025).unwrap();
+        let left = MAX_TOTAL_BYTES - 1024 - 1025 - 1025;
+        budgets.admit_written_worksheet(left).unwrap();
+        let error = budgets.admit_written_worksheet(1).unwrap_err();
+        assert!(error.to_string().contains("expands past"), "{error}");
     }
 
     #[test]

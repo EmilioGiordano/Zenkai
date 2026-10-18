@@ -13,6 +13,7 @@ mod preflight;
 mod rectangles;
 mod row_split;
 mod save;
+mod save_parts;
 mod save_patch;
 mod save_rows;
 mod save_sheet;

@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+crc32fast = "1"
 ironcalc = "=0.8.3"
 quick-xml = "=0.41.0"
 roxmltree = "0.19"

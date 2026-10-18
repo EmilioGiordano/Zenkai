@@ -33,7 +33,7 @@ pub use links::{SheetLink, SheetLinks, relationships_part};
 pub use shared_strings::SHARED_STRINGS_PART;
 pub use splice::{AnchorKind, ReachingAnchor, RowSpan, cannot_splice, is_cannot_splice};
 pub use styles_part::{STYLES_PART, StyleAppendix, StyleCounts, StylesShape};
-pub use verify::{Written, check_written};
+pub use verify::{PartDigest, Written, check_written, check_xml};
 
 use crate::formulas::Names;
 use crate::package::{read_package, stub_archive};
