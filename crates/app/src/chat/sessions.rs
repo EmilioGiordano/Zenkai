@@ -18,6 +18,7 @@ use super::{ChatPanel, View, closed, launch};
 use crate::actions::*;
 use crate::agent_mark::{HEADER_MARK_SIZE, SESSION_MARK_SIZE, agent_mark};
 use crate::agent_settings::AgentConfig;
+use crate::interface_scale::rem_px;
 use crate::keymap;
 
 fn agent_name(servers: &BTreeMap<AgentId, AgentServer>, id: &AgentId) -> String {
@@ -191,15 +192,15 @@ impl ChatPanel {
                             meta = meta
                                 .child(
                                     div()
-                                        .w(px(46.0))
-                                        .h(px(6.0))
+                                        .w(rem_px(46.0))
+                                        .h(rem_px(6.0))
                                         .rounded_full()
                                         .bg(theme.muted)
                                         .flex()
                                         .items_center()
                                         .child(
                                             div()
-                                                .w(px(46.0 * fraction))
+                                                .w(rem_px(46.0 * fraction))
                                                 .h_full()
                                                 .rounded_full()
                                                 .bg(

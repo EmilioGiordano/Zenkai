@@ -11,6 +11,7 @@ use zenkai_i18n::t;
 use super::access::Access;
 use super::model_search;
 use super::{ChatPanel, Link, Menu};
+use crate::interface_scale::rem_px;
 
 const MODEL_MENU_WIDTH: f32 = 300.0;
 const MODEL_MENU_MAX_HEIGHT: f32 = 360.0;
@@ -62,7 +63,7 @@ pub(super) fn popover(
         .role(Role::Menu)
         .aria_label(label)
         .occlude()
-        .w(px(width))
+        .w(rem_px(width))
         .p_1p5()
         .rounded_lg()
         .border_1()
@@ -113,7 +114,7 @@ pub(super) fn item(item: Item, cx: &App) -> Stateful<Div> {
         )
         .child(
             div()
-                .w(px(14.0))
+                .w(rem_px(14.0))
                 .flex_shrink_0()
                 .when(item.checked, |slot| {
                     slot.child(Icon::new(IconName::Check).size_3p5())
@@ -500,7 +501,7 @@ impl ChatPanel {
         )
         .flex()
         .flex_col()
-        .max_h(px(MODEL_MENU_MAX_HEIGHT))
+        .max_h(rem_px(MODEL_MENU_MAX_HEIGHT))
         .child(heading(t!("chat.model.heading"), cx));
         let muted = cx.theme().muted_foreground;
         match &models {

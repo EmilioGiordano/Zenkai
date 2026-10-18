@@ -11,6 +11,7 @@ use super::badge;
 use super::slash::{Entry, Target};
 use super::{ChatPanel, MONO, Menu};
 use crate::actions::*;
+use crate::interface_scale::rem_px;
 use crate::keymap;
 
 const PICKER_LABEL_WIDTH: f32 = 150.0;
@@ -46,7 +47,7 @@ fn picker(
                 .items_center()
                 .child(
                     div()
-                        .max_w(px(PICKER_LABEL_WIDTH))
+                        .max_w(rem_px(PICKER_LABEL_WIDTH))
                         .truncate()
                         .child(label.into()),
                 )
@@ -129,7 +130,7 @@ impl ChatPanel {
         h_flex()
             .id(SharedString::from(format!("slash-{index}")))
             .role(Role::ListBoxOption)
-            .h(px(32.0))
+            .h(rem_px(32.0))
             .px_2p5()
             .gap_2p5()
             .items_center()
@@ -144,7 +145,7 @@ impl ChatPanel {
             }))
             .child(
                 div()
-                    .min_w(px(110.0))
+                    .min_w(rem_px(110.0))
                     .font_family(MONO)
                     .text_xs()
                     .child(entry.name.clone()),

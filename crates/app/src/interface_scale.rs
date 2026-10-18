@@ -7,6 +7,8 @@ use zenkai_agent::settings_file::SettingsPaths;
 
 use crate::agent_settings;
 
+const REM_BASE_PIXELS: f32 = 16.0;
+
 // What is on screen now and the value the settings file last had. A step changes the first
 // at once while the write is in flight, so a reload of the older file never undoes it.
 #[derive(Default)]
@@ -33,6 +35,11 @@ pub fn shown(cx: &App) -> InterfaceScale {
 // Settings and chat, while the grid is drawn in pixels and keeps its own zoom.
 pub fn apply(window: &mut Window, cx: &App) {
     window.set_rem_size(cx.theme().font_size * shown(cx).factor());
+}
+
+// Sizes written in pixels for the interface, kept proportional to the interface scale.
+pub fn rem_px(pixels: f32) -> Rems {
+    rems(pixels / REM_BASE_PIXELS)
 }
 
 pub fn larger(cx: &mut App) {
