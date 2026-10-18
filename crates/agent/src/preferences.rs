@@ -259,6 +259,80 @@ pub struct AppearanceSettings {
     #[serde(default, deserialize_with = "light_theme_or_default")]
     #[schemars(description = "Theme used when the appearance is light.")]
     pub light_theme: LightTheme,
+    #[serde(default, deserialize_with = "clamped_interface_scale")]
+    #[schemars(
+        range(min = 75, max = 200),
+        description = "Size of the interface around the sheet (bars, tabs, dialogs, Settings, chat) in percent. The sheet has its own zoom."
+    )]
+    pub interface_scale: InterfaceScale,
+}
+
+pub const MIN_INTERFACE_PERCENT: u32 = 75;
+pub const MAX_INTERFACE_PERCENT: u32 = 200;
+const DEFAULT_INTERFACE_PERCENT: u32 = 100;
+const INTERFACE_STEPS: [u32; 8] = [75, 90, 100, 110, 125, 150, 175, 200];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct InterfaceScale(u32);
+
+impl Default for InterfaceScale {
+    fn default() -> InterfaceScale {
+        InterfaceScale(DEFAULT_INTERFACE_PERCENT)
+    }
+}
+
+impl InterfaceScale {
+    pub fn from_percent(percent: i64) -> InterfaceScale {
+        let clamped = percent.clamp(
+            i64::from(MIN_INTERFACE_PERCENT),
+            i64::from(MAX_INTERFACE_PERCENT),
+        );
+        InterfaceScale(clamped as u32)
+    }
+
+    pub fn percent(self) -> u32 {
+        self.0
+    }
+
+    pub fn factor(self) -> f32 {
+        self.0 as f32 / 100.0
+    }
+
+    pub fn larger(self) -> InterfaceScale {
+        INTERFACE_STEPS
+            .iter()
+            .find(|step| **step > self.0)
+            .map_or(self, |step| InterfaceScale(*step))
+    }
+
+    pub fn smaller(self) -> InterfaceScale {
+        INTERFACE_STEPS
+            .iter()
+            .rev()
+            .find(|step| **step < self.0)
+            .map_or(self, |step| InterfaceScale(*step))
+    }
+}
+
+// Whatever the file holds lands inside the range; a value that is not a number lands on 100%.
+fn clamped_interface_scale<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<InterfaceScale, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Written {
+        Whole(i64),
+        Fraction(f64),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match Written::deserialize(deserializer)? {
+        Written::Whole(percent) => InterfaceScale::from_percent(percent),
+        Written::Fraction(percent) if percent.is_finite() => {
+            InterfaceScale::from_percent(percent.round() as i64)
+        }
+        Written::Fraction(_) | Written::Other(_) => InterfaceScale::default(),
+    })
 }
 
 impl AppearanceSettings {
@@ -380,6 +454,54 @@ mod tests {
     }
 
     #[test]
+    fn the_interface_scale_steps_between_75_and_200_percent() {
+        let mut scale = InterfaceScale::from_percent(75);
+        assert_eq!(scale.smaller(), scale);
+        let mut seen = vec![scale.percent()];
+        while scale.larger() != scale {
+            scale = scale.larger();
+            seen.push(scale.percent());
+        }
+        assert_eq!(seen, [75, 90, 100, 110, 125, 150, 175, 200]);
+        assert_eq!(scale.smaller().percent(), 175);
+        assert_eq!(InterfaceScale::default().percent(), 100);
+    }
+
+    #[test]
+    fn stepping_from_a_value_between_steps_lands_on_the_next_step() {
+        let scale = InterfaceScale::from_percent(120);
+        assert_eq!(scale.larger().percent(), 125);
+        assert_eq!(scale.smaller().percent(), 110);
+    }
+
+    #[test]
+    fn an_interface_scale_out_of_range_is_clamped_and_junk_is_the_default() {
+        let read = |text: &str| -> u32 {
+            let appearance: AppearanceSettings = serde_json::from_str(text).unwrap();
+            appearance.interface_scale.percent()
+        };
+        assert_eq!(read(r#"{ "interface_scale": 10 }"#), 75);
+        assert_eq!(read(r#"{ "interface_scale": 9000 }"#), 200);
+        assert_eq!(read(r#"{ "interface_scale": -40 }"#), 75);
+        assert_eq!(read(r#"{ "interface_scale": 112.6 }"#), 113);
+        assert_eq!(read(r#"{ "interface_scale": 1e300 }"#), 200);
+        assert_eq!(read(r#"{ "interface_scale": "big" }"#), 100);
+        assert_eq!(read(r#"{ "interface_scale": null }"#), 100);
+        assert_eq!(read("{}"), 100);
+    }
+
+    #[test]
+    fn the_interface_scale_survives_a_round_trip() {
+        let appearance = AppearanceSettings {
+            interface_scale: InterfaceScale::from_percent(150),
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&appearance).unwrap();
+        let back: AppearanceSettings = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.interface_scale.percent(), 150);
+    }
+
+    #[test]
     fn the_autosave_interval_steps_inside_its_limits() {
         let mut general = GeneralSettings::default();
         assert_eq!(general.autosave_stepped(true), 70);
@@ -405,11 +527,12 @@ mod tests {
             mode: ColorMode::Dark,
             dark_theme: DarkTheme::HighContrast,
             light_theme: LightTheme::ZenkaiLight,
+            interface_scale: InterfaceScale::default(),
         };
         let json = serde_json::to_string(&appearance).unwrap();
         assert_eq!(
             json,
-            r#"{"mode":"dark","dark_theme":"high_contrast","light_theme":"zenkai_light"}"#
+            r#"{"mode":"dark","dark_theme":"high_contrast","light_theme":"zenkai_light","interface_scale":100}"#
         );
         assert_eq!(
             serde_json::from_str::<AppearanceSettings>(&json).unwrap(),
