@@ -30,7 +30,7 @@ struct Extent {
     spills: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum HistoryStep {
     Undo,
     Redo,

@@ -384,6 +384,7 @@ impl Carried {
     // a save after an undo does not warn about what the undo brought back.
     pub(crate) fn move_replayed(&mut self, step: HistoryStep) {
         let Some(replayed) = self.taken.pop(step) else {
+            tracing::warn!(?step, "a replayed move has no entry of what it took");
             return;
         };
         let now = replayed
@@ -394,7 +395,13 @@ impl Carried {
         let sheets = replayed
             .sheets
             .into_iter()
-            .filter_map(|(id, taken)| Some((id, taken.exchange(self.sheets.get_mut(&id)?))))
+            .filter_map(|(id, taken)| match self.sheets.get_mut(&id) {
+                Some(settings) => Some((id, taken.exchange(settings))),
+                None => {
+                    tracing::warn!(sheet_id = id, "a move took settings of a missing sheet");
+                    None
+                }
+            })
             .collect();
         match step {
             HistoryStep::Undo => {
