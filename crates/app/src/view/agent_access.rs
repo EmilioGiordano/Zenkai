@@ -56,6 +56,12 @@ impl Workspace {
         let Some(document) = self.documents.active() else {
             return;
         };
+        if agents_can_edit(document.origin)
+            && let Some(panel) = self.chat.panel.clone()
+        {
+            // The chat can be the one asking, and an entity cannot be updated inside itself.
+            cx.defer(move |cx| panel.update(cx, |panel, cx| panel.clear_editing_blocked(cx)));
+        }
         self.toast_generation += 1;
         let generation = self.toast_generation;
         self.toast = Some(Toast {

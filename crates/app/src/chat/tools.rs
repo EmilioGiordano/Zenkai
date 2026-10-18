@@ -10,6 +10,7 @@ use gpui_kit::*;
 use zenkai_agent::chat::thread::{Entry, ToolCallId, ToolCard, ToolStatus};
 use zenkai_agent::chat::tool_rows::{self, RowText};
 use zenkai_agent::settings::ToolCallDisplay;
+use zenkai_agent::tools::escaped_multiline;
 use zenkai_i18n::t;
 
 use super::{ChatPanel, MONO};
@@ -131,7 +132,7 @@ impl ChatPanel {
 
     pub(super) fn copy_tool_result(&self, id: &ToolCallId, cx: &mut Context<Self>) {
         if let Some(card) = self.thread.tool(id).filter(|card| !card.detail.is_empty()) {
-            cx.write_to_clipboard(ClipboardItem::new_string(card.detail.clone()));
+            cx.write_to_clipboard(ClipboardItem::new_string(escaped_multiline(&card.detail)));
         }
     }
 
@@ -360,7 +361,7 @@ impl ChatPanel {
                 .child(t!("chat.tool.more_chars", count = count))
         };
         let can_allow_editing = failed
-            && self.editing_blocked
+            && self.editing_blocked.as_ref() == Some(&card.id)
             && zenkai_agent::tools::is_protected_view_refusal(&card.detail);
         let copy_id = card.id.clone();
         v_flex()

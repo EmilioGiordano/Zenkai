@@ -31,7 +31,7 @@ use gpui_kit::*;
 use zenkai_agent::chat::history::{History, RecordId};
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
 use zenkai_agent::chat::state::{AgentState, Select};
-use zenkai_agent::chat::thread::{MessageId, Thread, TurnEnd, TurnState};
+use zenkai_agent::chat::thread::{Entry, MessageId, Thread, ToolCallId, TurnEnd, TurnState};
 use zenkai_agent::settings::AgentId;
 use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
@@ -117,7 +117,7 @@ pub struct ChatPanel {
     tools: tools::ToolViews,
     agent_change: Option<approval::AgentChange>,
     change_cells_open: bool,
-    editing_blocked: bool,
+    editing_blocked: Option<ToolCallId>,
     gate: Option<Gate>,
     problem: Option<Problem>,
     turn_started: Option<Instant>,
@@ -280,7 +280,7 @@ impl ChatPanel {
             tools: tools::ToolViews::default(),
             agent_change: None,
             change_cells_open: false,
-            editing_blocked: false,
+            editing_blocked: None,
             gate: None,
             problem: None,
             turn_started: None,
@@ -464,7 +464,7 @@ impl ChatPanel {
         }
         self.thread.clear();
         self.tools = tools::ToolViews::default();
-        self.editing_blocked = false;
+        self.editing_blocked = None;
         self.texts.clear();
         self.linked_messages.clear();
         self.references.clear();
@@ -505,13 +505,34 @@ impl ChatPanel {
         }
     }
 
+    // The refusal arrives for a call that is still running, so it belongs to the latest unfinished
+    // card, or else to the latest one.
     pub(crate) fn note_editing_blocked(&mut self, cx: &mut Context<Self>) {
-        self.editing_blocked = true;
+        let cards = self
+            .thread
+            .entries()
+            .iter()
+            .rev()
+            .filter_map(|entry| match entry {
+                Entry::Tool(card) => Some(card),
+                _ => None,
+            });
+        let mut cards = cards.peekable();
+        let latest = cards.peek().map(|card| card.id.clone());
+        let running = cards
+            .find(|card| !card.status.is_finished())
+            .map(|card| card.id.clone());
+        self.editing_blocked = running.or(latest);
         cx.notify();
     }
 
+    pub(crate) fn clear_editing_blocked(&mut self, cx: &mut Context<Self>) {
+        if self.editing_blocked.take().is_some() {
+            cx.notify();
+        }
+    }
+
     pub(super) fn allow_agent_editing(&mut self, cx: &mut Context<Self>) {
-        self.editing_blocked = false;
         closed(
             self.workspace
                 .update(cx, |workspace, cx| workspace.allow_agent_editing(cx)),
