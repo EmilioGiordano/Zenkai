@@ -515,6 +515,9 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
 }
 
 #[cfg(test)]
+mod corruption;
+
+#[cfg(test)]
 mod tests {
     use zenkai_types::{CellPos, SheetId};
 
