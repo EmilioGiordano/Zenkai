@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Selectable;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::chat::thread::FileCard;
 use zenkai_i18n::t;
@@ -13,6 +14,7 @@ use crate::actions::ToggleAgentChat;
 use crate::agent_folder::FolderHint;
 use crate::chat::reference::Reference;
 use crate::chat::{ChatEvent, ChatPanel, reference};
+use crate::chat_layout::{ChatLayout, ChatLayoutState};
 use crate::document::Document;
 use crate::keymap;
 use crate::panel_width::Panel;
@@ -21,6 +23,7 @@ use crate::panel_width::Panel;
 pub(super) struct ChatDock {
     pub(super) panel: Option<Entity<ChatPanel>>,
     pub(super) open: bool,
+    layout: ChatLayoutState,
     pub(super) synced_change: Option<(u64, bool)>,
     events: Option<Subscription>,
 }
@@ -81,6 +84,7 @@ impl Workspace {
             &panel,
             window,
             |this, _, event: &ChatEvent, window, cx| match event {
+                ChatEvent::Leave if this.chat_fills_window() => {}
                 ChatEvent::Leave => {
                     let focus = this.grid.focus_handle(cx);
                     window.focus(&focus, cx);
@@ -253,21 +257,53 @@ impl Workspace {
         self.chat.open
     }
 
+    pub(crate) fn chat_layout(&self) -> ChatLayout {
+        self.chat.layout.current()
+    }
+
+    pub(super) fn chat_fills_window(&self) -> bool {
+        self.chat.open && self.chat_layout() == ChatLayout::FullWindow
+    }
+
+    pub(super) fn change_chat_layout(
+        &mut self,
+        change: impl FnOnce(ChatLayoutState) -> ChatLayoutState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_open = self.chat.open;
+        self.chat.layout = change(self.chat.layout);
+        if !was_open {
+            self.open_chat(window, cx);
+            return;
+        }
+        // The sheet is not drawn in full window, so the focus cannot stay on it.
+        if self.chat_fills_window()
+            && let Some(panel) = self.chat.panel.clone()
+        {
+            panel.update(cx, |panel, cx| panel.focus_composer(window, cx));
+        }
+        cx.notify();
+    }
+
     pub(super) fn render_chat(
         &self,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         let panel = self.chat.panel.clone().filter(|_| self.chat.open)?;
+        let fills_window = self.chat_fills_window();
         let width = self.panel_width(Panel::Chat, window);
         Some(
             div()
                 .relative()
-                .flex_shrink_0()
                 .h_full()
-                .w(px(width))
+                .when(fills_window, |dock| dock.flex_1().min_w_0())
+                .when(!fills_window, |dock| dock.flex_shrink_0().w(px(width)))
                 .child(panel)
-                .child(self.panel_edge(Panel::Chat, window, cx)),
+                .when(!fills_window, |dock| {
+                    dock.child(self.panel_edge(Panel::Chat, window, cx))
+                }),
         )
     }
 

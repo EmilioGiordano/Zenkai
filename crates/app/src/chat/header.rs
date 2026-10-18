@@ -1,6 +1,7 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{Selectable, h_flex};
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::component::progress::ProgressCircle;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Icon};
@@ -11,6 +12,7 @@ use zenkai_i18n::t;
 use super::{ChatPanel, View};
 use crate::actions::*;
 use crate::agent_mark::{HEADER_MARK_SIZE, agent_mark};
+use crate::chat_layout::ChatLayout;
 use crate::interface_scale::rem_px;
 use crate::keymap;
 
@@ -23,6 +25,19 @@ fn token_count(tokens: u64) -> String {
 }
 
 impl ChatPanel {
+    fn layout(&self, cx: &App) -> ChatLayout {
+        self.workspace
+            .read_with(cx, |workspace, _| workspace.chat_layout())
+            .unwrap_or_default()
+    }
+
+    fn selected_range(&self, cx: &App) -> Option<String> {
+        self.workspace
+            .read_with(cx, |workspace, cx| workspace.selection_for_chat(cx))
+            .ok()
+            .flatten()
+    }
+
     pub(super) fn render_header(&self, cx: &App) -> impl IntoElement {
         let theme = cx.theme();
         let workbook = self.active_workbook(cx).map(|(_, name)| name);
@@ -38,6 +53,10 @@ impl ChatPanel {
                 .clone()
                 .unwrap_or_else(|| t!("chat.new_conversation").to_string()),
         };
+        let layout = self.layout(cx);
+        let range = self
+            .selected_range(cx)
+            .filter(|_| layout == ChatLayout::FullWindow);
         let usage = self.state.usage;
         let percent = usage.and_then(|usage| usage.fraction());
         let title_button = Button::new("chat-title")
@@ -85,6 +104,17 @@ impl ChatPanel {
                     .text_xs()
                     .child(workbook.unwrap_or_default()),
             )
+            .when_some(range, |row, range| {
+                row.child(
+                    div()
+                        .id("chat-selected-range")
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .font_family(super::MONO)
+                        .child(t!("chat.full_window.selection", range = range)),
+                )
+            })
             .child(div().flex_1())
             .when_some(usage.zip(percent), |row, (usage, fraction)| {
                 let percent = (fraction * 100.0).round();
@@ -147,6 +177,59 @@ impl ChatPanel {
                     ))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(NewAgentConversation), cx)
+                    }),
+            )
+            .child(
+                Button::new("chat-layout")
+                    .ghost()
+                    .compact()
+                    .icon(IconName::LayoutPanelLeft)
+                    .tooltip(keymap::labeled(
+                        cx,
+                        t!("chat.layout.tooltip"),
+                        &CycleChatLayout,
+                    ))
+                    .dropdown_menu(move |menu, _, _| {
+                        menu.menu_with_check(
+                            t!("chat.layout.docked"),
+                            layout == ChatLayout::Docked,
+                            Box::new(DockChat),
+                        )
+                        .menu_with_check(
+                            t!("chat.layout.side_by_side"),
+                            layout == ChatLayout::SideBySide,
+                            Box::new(SplitChatBesideSheet),
+                        )
+                        .menu_with_check(
+                            t!("chat.layout.full_window"),
+                            layout == ChatLayout::FullWindow,
+                            Box::new(FillWindowWithChat),
+                        )
+                        .separator()
+                        .menu(t!("chat.layout.cycle"), Box::new(CycleChatLayout))
+                    }),
+            )
+            .child(
+                Button::new("chat-full-window")
+                    .ghost()
+                    .compact()
+                    .icon(if layout == ChatLayout::FullWindow {
+                        IconName::Minimize
+                    } else {
+                        IconName::Maximize
+                    })
+                    .selected(layout == ChatLayout::FullWindow)
+                    .tooltip(keymap::labeled(
+                        cx,
+                        if layout == ChatLayout::FullWindow {
+                            t!("chat.full_window.leave")
+                        } else {
+                            t!("chat.full_window.enter")
+                        },
+                        &ToggleChatFullWindow,
+                    ))
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(ToggleChatFullWindow), cx)
                     }),
             )
     }
