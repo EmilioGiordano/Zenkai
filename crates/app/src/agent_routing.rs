@@ -98,7 +98,7 @@ mod tests {
         let document = documents.get_mut(id).unwrap();
         document.queue(Box::new(move |workbook| plan.apply(workbook)));
         let (shared, edits) = document.take_batch().unwrap();
-        assert!(document::run_batch(&shared, edits).is_empty());
+        assert!(document::run_batch_serving(&shared, edits, None).is_empty());
         let generation = document.generation();
         assert!(document.finish_batch(generation));
     }
