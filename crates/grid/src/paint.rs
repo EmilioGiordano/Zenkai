@@ -612,7 +612,7 @@ fn range_rect(
     let y1 = rows
         .ending_at(range.end.row)
         .map_or(last_row.1 + last_row.2 + 2.0, |(y, h)| y + h);
-    Some(rect(origin, x0, y0, x1 - x0, y1 - y0))
+    (x1 > x0 && y1 > y0).then(|| rect(origin, x0, y0, x1 - x0, y1 - y0))
 }
 
 fn paint_selection(
@@ -929,4 +929,38 @@ fn paint_editor(
         Bounds::new(point(caret_x, text_origin.y), size(px(1.5), line_height)),
         caret_color,
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Columns, Rows, range_rect};
+    use gpui_kit::{point, px};
+    use zenkai_types::{CellPos, ColIdx, Range, RowIdx};
+
+    fn row(index: u32) -> RowIdx {
+        RowIdx::clamped(i64::from(index))
+    }
+
+    #[test]
+    fn a_range_inside_a_hidden_gap_has_no_rectangle() {
+        let columns = Columns {
+            xs: vec![(ColIdx::default(), 40.0, 64.0)],
+        };
+        let rows = Rows {
+            ys: vec![
+                (row(0), 24.0, 20.0),
+                (row(1), 44.0, 20.0),
+                (row(1_000_001), 64.0, 20.0),
+            ],
+        };
+        let origin = point(px(0.0), px(0.0));
+        let corner = |first, last| {
+            Range::new(
+                CellPos::new(row(first), ColIdx::default()),
+                CellPos::new(row(last), ColIdx::default()),
+            )
+        };
+        assert!(range_rect(corner(2, 1_000_000), &columns, &rows, origin, 1.0).is_none());
+        assert!(range_rect(corner(1, 1_000_001), &columns, &rows, origin, 1.0).is_some());
+    }
 }
