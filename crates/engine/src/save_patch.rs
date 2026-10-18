@@ -6,7 +6,7 @@ use std::io::{BufWriter, Seek, Write};
 use std::sync::Arc;
 
 use ironcalc::export::get_shared_string_item_xml;
-use zenkai_xlsx_reader::{BasePackage, SHARED_STRINGS_PART, Written};
+use zenkai_xlsx_reader::{BasePackage, SHARED_STRINGS_PART, Written, relationships_part};
 use zip::ZipWriter;
 
 use crate::error::EngineError;
@@ -28,6 +28,8 @@ pub(crate) struct PatchPlan {
 pub(crate) struct Patched {
     pub(crate) plan: PatchPlan,
     pub(crate) contents: Contents,
+    // The positions of the sheets written again; every other part is copied.
+    pub(crate) rewritten: Vec<usize>,
 }
 
 // None when the workbook changed in a way only a full save writes: the sheet list, the
@@ -88,6 +90,8 @@ pub(crate) fn patch_plan(
         sheets: prints.to_vec(),
         selected: saved.selected,
         metadata: saved.metadata,
+        held: saved.held.without(&changed),
+        losses_through: carried.losses(),
     };
     Ok(Some(Patched {
         plan: PatchPlan {
@@ -97,15 +101,8 @@ pub(crate) fn patch_plan(
             strings_in_file,
         },
         contents,
+        rewritten: changed,
     }))
-}
-
-// The relationships of a rewritten sheet point at parts its new XML no longer refers to.
-fn sheet_rels(part: &str) -> String {
-    match part.rsplit_once('/') {
-        Some((folder, file)) => format!("{folder}/_rels/{file}.rels"),
-        None => format!("_rels/{part}.rels"),
-    }
 }
 
 fn base_unusable(base: &SavedFile) -> impl Fn(&dyn std::fmt::Display) -> EngineError + '_ {
@@ -168,10 +165,11 @@ pub(crate) fn write_patch<W: Write + Seek>(
     if !plan.sheets.is_empty() && plan.strings.is_empty() {
         check_strings(saved, &mut base, &names)?;
     }
+    // The relationships of a rewritten sheet point at parts its new XML no longer refers to.
     let rels: HashSet<String> = plan
         .sheets
         .iter()
-        .map(|job| sheet_rels(&job.part))
+        .map(|job| relationships_part(&job.part))
         .collect();
     let chain = if plan.sheets.is_empty() {
         None
@@ -221,17 +219,4 @@ pub(crate) fn write_patch<W: Write + Seek>(
         return Err(base_unusable(saved)(&"a part is missing from it"));
     }
     Ok((zip.finish().map_err(rejected)?, written))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::sheet_rels;
-
-    #[test]
-    fn a_sheet_s_relationships_sit_beside_it() {
-        assert_eq!(
-            sheet_rels("xl/worksheets/sheet3.xml"),
-            "xl/worksheets/_rels/sheet3.xml.rels"
-        );
-    }
 }

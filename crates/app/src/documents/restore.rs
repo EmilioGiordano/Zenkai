@@ -375,6 +375,7 @@ mod tests {
         let document = documents.active().unwrap();
         assert!(document.dirty);
         assert_eq!(document.unsupported, [Unsupported::Charts]);
+        assert!(document.may_lose_unseen_content());
         assert_eq!(document.path.as_deref(), Some(Path::new("a.xlsx")));
     }
 

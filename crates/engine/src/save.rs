@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
@@ -12,8 +13,9 @@ use zip::ZipWriter;
 use zip::write::FileOptions;
 
 use crate::error::EngineError;
-use crate::file::{remove_temp, temp_path};
+use crate::file::{Unsupported, remove_temp, temp_path};
 use crate::fingerprint::{SheetPrint, book_print};
+use crate::held::Held;
 use crate::preflight::run_with_engine_stack;
 use crate::save_patch::{PatchPlan, Patched, patch_plan, write_patch};
 use crate::save_sheet::{SheetWriter, prepare};
@@ -63,11 +65,35 @@ pub struct SaveSnapshot {
     // For a save to the workbook's own file, what the file will hold, so the next save
     // compares against what was written and never against edits made after the snapshot.
     adoption: Option<Contents>,
+    fate: Fate,
 }
 
 impl SaveSnapshot {
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    // Relative to the workbook's own file, so a copy elsewhere reports what it lacks too.
+    pub fn dropped(&self) -> &[Unsupported] {
+        &self.fate.dropped
+    }
+
+    pub fn kept(&self) -> &[Unsupported] {
+        &self.fate.kept
+    }
+}
+
+struct Fate {
+    dropped: Vec<Unsupported>,
+    kept: Vec<Unsupported>,
+}
+
+impl Fate {
+    fn full(held: BTreeSet<Unsupported>, lost: BTreeSet<Unsupported>) -> Fate {
+        Fate {
+            dropped: held.union(&lost).copied().collect(),
+            kept: Vec::new(),
+        }
     }
 }
 
@@ -143,7 +169,12 @@ pub(crate) fn full_plan(model: &Model<'_>, carried: &Carried) -> Result<FullPlan
     })
 }
 
-fn full_contents(data: ModelData<'_>, book: u64, sheets: Vec<SheetPrint>) -> Contents {
+fn full_contents(
+    data: ModelData<'_>,
+    carried: &Carried,
+    book: u64,
+    sheets: Vec<SheetPrint>,
+) -> Contents {
     Contents {
         worksheets: (0..sheets.len()).map(full_part).collect(),
         strings: Strings::Aligned(data.book.shared_strings.len()),
@@ -152,6 +183,8 @@ fn full_contents(data: ModelData<'_>, book: u64, sheets: Vec<SheetPrint>) -> Con
         sheets,
         selected: selected_sheet(data.book),
         metadata: Metadata::Written,
+        held: Held::default(),
+        losses_through: carried.losses(),
     }
 }
 
@@ -160,16 +193,38 @@ enum Chosen {
     Patch(PatchPlan),
 }
 
+struct Choice {
+    chosen: Chosen,
+    adoption: Option<Contents>,
+    fate: Fate,
+}
+
+// `opened` is what the workbook's file held when it was opened, for when the engine knows
+// nothing newer about it.
 fn choose(
     path: &Path,
     target: SaveTarget,
     data: ModelData<'_>,
     carried: &Carried,
     slot: &SavedSlot,
-) -> Result<(Chosen, Option<Contents>), EngineError> {
-    let base = slot.current().filter(|base| base.same_kind(path));
+    opened: &[Unsupported],
+) -> Result<Choice, EngineError> {
+    let source = slot.current();
+    let through = source
+        .as_ref()
+        .map_or(0, |file| file.contents.losses_through);
+    let lost: BTreeSet<Unsupported> = carried.dropped_after(through).collect();
+    let held = match &source {
+        Some(file) => file.contents.held.all(),
+        None => opened.iter().copied().collect(),
+    };
+    let base = source.filter(|base| base.same_kind(path));
     if base.is_none() && target == SaveTarget::Copy {
-        return Ok((Chosen::Full(full_sheets(data, carried)?), None));
+        return Ok(Choice {
+            chosen: Chosen::Full(full_sheets(data, carried)?),
+            adoption: None,
+            fate: Fate::full(held, lost),
+        });
     }
     let book = book_print(data.book)?;
     let prints = sheet_prints(data, carried)?;
@@ -177,14 +232,30 @@ fn choose(
         Some(base) => patch_plan(base, book, &prints, data, carried)?,
         None => None,
     };
-    let (chosen, contents) = match patched {
-        Some(Patched { plan, contents }) => (Chosen::Patch(plan), contents),
+    let (chosen, contents, fate) = match patched {
+        Some(Patched {
+            plan,
+            contents,
+            rewritten,
+        }) => {
+            let owned = plan.base.contents.held.owned_by(&rewritten);
+            let fate = Fate {
+                dropped: owned.union(&lost).copied().collect(),
+                kept: contents.held.all().into_iter().collect(),
+            };
+            (Chosen::Patch(plan), contents, fate)
+        }
         None => (
             Chosen::Full(full_sheets(data, carried)?),
-            full_contents(data, book, prints),
+            full_contents(data, carried, book, prints),
+            Fate::full(held, lost),
         ),
     };
-    Ok((chosen, (target == SaveTarget::Document).then_some(contents)))
+    Ok(Choice {
+        chosen,
+        adoption: (target == SaveTarget::Document).then_some(contents),
+        fate,
+    })
 }
 
 // Runs under the workbook's read lock; everything here is proportional to the
@@ -195,9 +266,14 @@ pub(crate) fn snapshot(
     model: &Model<'_>,
     carried: &Carried,
     slot: &SavedSlot,
+    opened: &[Unsupported],
 ) -> Result<SaveSnapshot, EngineError> {
     let data = ModelData::of(model);
-    let (chosen, adoption) = run_with_engine_stack(|| choose(path, target, data, carried, slot))?;
+    let Choice {
+        chosen,
+        adoption,
+        fate,
+    } = run_with_engine_stack(|| choose(path, target, data, carried, slot, opened))?;
     let plan = match chosen {
         Chosen::Patch(plan) => Plan::Patch(plan),
         Chosen::Full(sheets) => Plan::Full(FullPlan {
@@ -210,6 +286,7 @@ pub(crate) fn snapshot(
         plan,
         slot: slot.clone(),
         adoption,
+        fate,
     })
 }
 
@@ -324,6 +401,7 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
         plan,
         slot,
         adoption,
+        fate: _,
     } = snapshot;
     let temp = temp_path(&path);
     let created = fs::OpenOptions::new()

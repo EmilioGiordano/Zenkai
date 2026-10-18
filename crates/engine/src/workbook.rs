@@ -174,6 +174,8 @@ pub struct Workbook {
     model: CachedModel,
     carried: Carried,
     saved: SavedSlot,
+    // What the file held when it was opened, for a save that knows nothing newer.
+    opened: Vec<Unsupported>,
 }
 
 // What a copy produced: the text Excel and other apps understand, plus the engine's
@@ -527,6 +529,7 @@ impl Workbook {
             model: CachedModel::new(model),
             carried: Carried::default(),
             saved: SavedSlot::default(),
+            opened: Vec::new(),
         })
     }
 
@@ -538,7 +541,12 @@ impl Workbook {
         book: ironcalc::base::types::Workbook,
     ) -> Result<Workbook, EngineError> {
         let model = engine_model(book)?;
-        Ok(evaluated(model, Carried::default(), SavedSlot::default()))
+        Ok(evaluated(
+            model,
+            Carried::default(),
+            SavedSlot::default(),
+            Vec::new(),
+        ))
     }
 
     // `settings` are by position among the file's worksheets, the order IronCalc loads them
@@ -548,6 +556,7 @@ impl Workbook {
         book: ironcalc::base::types::Workbook,
         settings: Vec<SheetSettings>,
         file: Option<FileOnDisk<'_>>,
+        opened: &[Unsupported],
     ) -> Result<Workbook, EngineError> {
         let model = engine_model(book)?;
         let carried = carried_by_position(&model, settings);
@@ -555,13 +564,7 @@ impl Workbook {
         if let Some(file) = file {
             saved.set(crate::saved::opened(file, ModelData::of(&model), &carried));
         }
-        Ok(evaluated(model, carried, saved))
-    }
-
-    // What a save will leave out because an edit made it wrong, such as grouping after
-    // rows were inserted above it.
-    pub fn dropped_on_save(&self) -> Vec<Unsupported> {
-        self.carried.dropped()
+        Ok(evaluated(model, carried, saved, opened.to_vec()))
     }
 
     fn sheet_id(&self, sheet: SheetId) -> Option<u32> {
@@ -590,7 +593,14 @@ impl Workbook {
         target: SaveTarget,
     ) -> Result<SaveSnapshot, EngineError> {
         let model = self.model.get_model();
-        crate::save::snapshot(path, target, model, &self.carried, &self.saved)
+        crate::save::snapshot(
+            path,
+            target,
+            model,
+            &self.carried,
+            &self.saved,
+            &self.opened,
+        )
     }
 
     // The one way a single cell is written: `write` gets the model and the cell's row and
@@ -1744,13 +1754,19 @@ fn engine_model(book: ironcalc::base::types::Workbook) -> Result<Model<'static>,
     })
 }
 
-fn evaluated(model: Model<'static>, carried: Carried, saved: SavedSlot) -> Workbook {
+fn evaluated(
+    model: Model<'static>,
+    carried: Carried,
+    saved: SavedSlot,
+    opened: Vec<Unsupported>,
+) -> Workbook {
     let mut model = UserModel::from_model(model);
     model.evaluate();
     let workbook = Workbook {
         model: CachedModel::new(model),
         carried,
         saved,
+        opened,
     };
     workbook.warm_used_areas();
     workbook

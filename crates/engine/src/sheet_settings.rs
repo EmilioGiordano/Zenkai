@@ -4,7 +4,7 @@
 // from validated values, never copied as text: the file is hostile input and IronCalc's
 // output declares only the main and relationship namespaces.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 
 use roxmltree::Node;
 
@@ -262,14 +262,18 @@ impl SheetSettings {
 #[derive(Debug, Default)]
 pub struct Carried {
     sheets: HashMap<u32, SheetSettings>,
-    dropped: BTreeSet<Unsupported>,
+    // Each kind lost by an edit, with the count of losses when it last was. A sheet that
+    // lost one is always written again, so a file written after the loss lacks it too.
+    dropped: BTreeMap<Unsupported, u64>,
+    losses: u64,
 }
 
 impl Carried {
     pub fn new(sheets: HashMap<u32, SheetSettings>) -> Carried {
         Carried {
             sheets,
-            dropped: BTreeSet::new(),
+            dropped: BTreeMap::new(),
+            losses: 0,
         }
     }
 
@@ -288,18 +292,35 @@ impl Carried {
 
     pub fn rows_moved(&mut self, sheet_id: u32, from: u32) {
         if let Some(settings) = self.sheets.get_mut(&sheet_id) {
-            self.dropped.extend(settings.rows.moved_from(from));
+            let lost = settings.rows.moved_from(from);
+            self.record(lost);
         }
     }
 
     pub fn columns_moved(&mut self, sheet_id: u32, from: u32) {
         if let Some(settings) = self.sheets.get_mut(&sheet_id) {
-            self.dropped.extend(settings.columns.moved_from(from));
+            let lost = settings.columns.moved_from(from);
+            self.record(lost);
         }
     }
 
-    pub fn dropped(&self) -> Vec<Unsupported> {
-        self.dropped.iter().copied().collect()
+    fn record(&mut self, lost: Vec<Unsupported>) {
+        for kind in lost {
+            self.losses += 1;
+            self.dropped.insert(kind, self.losses);
+        }
+    }
+
+    pub(crate) fn losses(&self) -> u64 {
+        self.losses
+    }
+
+    // The kinds lost since the file that counted `through` losses was written.
+    pub(crate) fn dropped_after(&self, through: u64) -> impl Iterator<Item = Unsupported> + '_ {
+        self.dropped
+            .iter()
+            .filter(move |(_, last)| **last > through)
+            .map(|(kind, _)| *kind)
     }
 }
 
@@ -719,12 +740,15 @@ mod tests {
             },
         );
         let mut carried = Carried::new(HashMap::from([(1, settings)]));
+        let dropped =
+            |carried: &Carried, through| carried.dropped_after(through).collect::<Vec<_>>();
         carried.rows_moved(1, 6);
-        assert!(carried.dropped().is_empty());
+        assert!(dropped(&carried, 0).is_empty());
         carried.columns_moved(1, 1);
-        assert!(carried.dropped().is_empty());
+        assert!(dropped(&carried, 0).is_empty());
         carried.rows_moved(1, 5);
-        assert_eq!(carried.dropped(), [Unsupported::Outline]);
+        assert_eq!(dropped(&carried, 0), [Unsupported::Outline]);
+        assert!(dropped(&carried, carried.losses()).is_empty());
         assert!(carried.get(1).is_some_and(|s| s.rows.outline.is_empty()));
     }
 

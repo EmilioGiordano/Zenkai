@@ -4,6 +4,7 @@ mod edit_profile;
 mod error;
 mod file;
 mod fingerprint;
+mod held;
 mod model;
 mod preflight;
 mod rectangles;

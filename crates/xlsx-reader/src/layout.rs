@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::io::{Read, Seek};
 
 use crate::ReadError;
+use crate::links::SheetLinks;
 use crate::package::{Package, read_entry};
 use crate::shared_strings::{SHARED_STRINGS_PART, SST_HEAD_BYTES, sst_root};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter};
@@ -17,6 +18,8 @@ pub struct PackageLayout {
     pub shared_strings: SharedStrings,
     pub styles: StyleCounts,
     pub part_names: PartNames,
+    // By position, as `worksheets`.
+    pub sheet_links: Vec<SheetLinks>,
 }
 
 // A zip may hold two entries of one name. Readers look a name up and get one of them, so
@@ -291,6 +294,8 @@ mod read_tests {
             ["xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml"]
         );
         assert_eq!(opened.layout.shared_strings, SharedStrings::Aligned(2));
+        let nothing = crate::SheetLinks::Known(Default::default());
+        assert_eq!(opened.layout.sheet_links, [nothing.clone(), nothing]);
         let styles = &opened.book.styles;
         assert_eq!(
             opened.layout.styles,

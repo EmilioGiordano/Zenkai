@@ -9,6 +9,7 @@ use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace, file_label};
 use crate::agent_settings;
+use crate::document;
 use crate::documents::{Installed, Intent, Loaded, Step};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::files::{self, FileLoad, LoadFailure};
@@ -346,7 +347,7 @@ impl Workspace {
         } else if !document.unsupported.is_empty() {
             let text = t!(
                 "notice.opened_unsupported",
-                list = document.unsupported_labels()
+                list = document::labels(&document.unsupported)
             );
             self.notify(Severity::Warning, text, cx);
         } else if document.origin == FileOrigin::Internet && started.is_some() {
