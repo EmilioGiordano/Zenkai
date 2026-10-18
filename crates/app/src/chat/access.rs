@@ -13,9 +13,9 @@ pub(super) enum Access {
 
 impl Access {
     pub const ALL: [Access; 3] = [
+        Access::Plan,
         Access::AskBeforeWriting,
         Access::EditAutomatically,
-        Access::Plan,
     ];
 
     pub fn label(self) -> &'static str {

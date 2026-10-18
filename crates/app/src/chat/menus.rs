@@ -15,7 +15,8 @@ use crate::interface_scale::rem_px;
 
 const MODEL_MENU_WIDTH: f32 = 300.0;
 const MODEL_MENU_MAX_HEIGHT: f32 = 360.0;
-const ACCESS_MENU_WIDTH: f32 = 300.0;
+const ACCESS_MENU_WIDTH: f32 = 340.0;
+const ACCESS_MENU_MAX_HEIGHT: f32 = 560.0;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Row {
@@ -26,7 +27,7 @@ enum Row {
     Access(Access),
 }
 
-fn heading(text: impl AsRef<str>, cx: &App) -> Div {
+pub(super) fn heading(text: impl AsRef<str>, cx: &App) -> Div {
     div()
         .px_2p5()
         .pt_1p5()
@@ -168,6 +169,7 @@ impl ChatPanel {
                 .available_access()
                 .into_iter()
                 .map(Row::Access)
+                .chain([Row::Manage])
                 .collect(),
             None => Vec::new(),
         }
@@ -241,6 +243,7 @@ impl ChatPanel {
         };
         match row {
             Row::Agent(id) => self.pick_agent(id.clone(), cx),
+            Row::Manage if self.menu == Some(Menu::Access) => self.open_ai_settings(cx),
             Row::Manage => self.open_agent_settings(cx),
             Row::Model(value) => self.pick(ConfigKind::Model, value, cx),
             Row::Effort => self.step_effort(cx),
@@ -598,6 +601,8 @@ impl ChatPanel {
             ACCESS_MENU_WIDTH,
             cx,
         )
+        .max_h(rem_px(ACCESS_MENU_MAX_HEIGHT))
+        .overflow_y_scroll()
         .child(heading(t!("chat.access.heading"), cx));
         for (index, access) in self.available_access().into_iter().enumerate() {
             menu = menu.child(
@@ -618,12 +623,29 @@ impl ChatPanel {
                 })),
             );
         }
+        let manage_index = self.available_access().len();
         menu = menu
             .child(rule(cx))
             .child(note(t!("chat.access.footer"), cx));
         if self.state.select(ConfigKind::Mode).is_none() {
             menu = menu.child(note(self.absent_note(ConfigKind::Mode, cx), cx));
         }
+        menu = menu
+            .children(self.access_summary(cx))
+            .child(self.server_summary(cx))
+            .child(
+                item(
+                    Item {
+                        id: "access-manage".into(),
+                        name: t!("chat.access.manage").into(),
+                        note: None,
+                        checked: false,
+                        highlighted: self.menu_index == manage_index,
+                    },
+                    cx,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.open_ai_settings(cx))),
+            );
         Some(menu.into_any_element())
     }
 }
