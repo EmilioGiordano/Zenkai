@@ -22,6 +22,9 @@ use crate::save::{SHEET_BUFFER_BYTES, rejected};
 const CHECK_QUEUE_CHUNKS: usize = 4;
 
 const GENERATED_COMPRESSION: CompressionMethod = CompressionMethod::Deflated;
+// Measured on a 729 MB sheet: level 6 took 6.46 s (87 MB), level 3 took 2.6 s (105 MB, near the
+// original file's size), level 1 took 1.0 s (148 MB).
+const DEFLATE_LEVEL: i32 = 3;
 
 pub(crate) struct PartWriter<W: Write + Seek> {
     zip: ZipWriter<Recorder<W>>,
@@ -50,7 +53,9 @@ impl<W: Write + Seek> PartWriter<W> {
     }
 
     pub(crate) fn start_generated(&mut self, name: &str) -> Result<(), EngineError> {
-        let options = FileOptions::default().compression_method(GENERATED_COMPRESSION);
+        let options = FileOptions::default()
+            .compression_method(GENERATED_COMPRESSION)
+            .compression_level(Some(DEFLATE_LEVEL));
         self.next_entry(|zip| zip.start_file(name, options).map_err(rejected))?;
         self.ledger.borrow_mut().record();
         self.open = Some(OpenPart::new(name)?);

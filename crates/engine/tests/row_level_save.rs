@@ -195,6 +195,36 @@ fn rows_outside_the_edited_blocks_are_copied_byte_for_byte() {
     }
 }
 
+fn compression_of(file: &Path, name: &str) -> zip::CompressionMethod {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
+    archive.by_name(name).unwrap().compression()
+}
+
+#[test]
+fn a_rewritten_sheet_part_is_deflated_and_reopens_with_the_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let document = dir.path().join("book.xlsx");
+    excel_base(&document);
+    let mut book = open_xlsx(&document).unwrap().workbook;
+    book.set_input(SheetId(0), pos(49, 0), "1000").unwrap();
+    save(&book, &document);
+    assert_eq!(
+        compression_of(&document, ROWS_PART),
+        zip::CompressionMethod::Deflated
+    );
+    let reopened = open_xlsx(&document).unwrap().workbook;
+    assert_eq!(reopened.input(SheetId(0), pos(49, 0)), "1000");
+
+    book.insert_rows(SheetId(0), RowIdx::clamped(2), 1).unwrap();
+    save(&book, &document);
+    assert_eq!(
+        compression_of(&document, ROWS_PART),
+        zip::CompressionMethod::Deflated
+    );
+    let reopened = open_xlsx(&document).unwrap().workbook;
+    assert_eq!(reopened.input(SheetId(0), pos(50, 0)), "1000");
+}
+
 #[test]
 fn rows_inserted_near_the_top_rewrite_the_sheet_whole() {
     let dir = tempfile::tempdir().unwrap();
