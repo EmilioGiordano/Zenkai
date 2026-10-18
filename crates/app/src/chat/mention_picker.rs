@@ -18,6 +18,7 @@ use crate::agent_folder;
 use crate::interface_scale::rem_px;
 
 const ROW_HEIGHT: f32 = 28.0;
+const BOOK_PREFIX_WIDTH: f32 = 220.0;
 
 #[derive(Default)]
 pub(super) struct Mentions {
@@ -310,13 +311,24 @@ impl ChatPanel {
                         this.mention_accept(window, cx);
                     }))
                     .child(
-                        div()
+                        h_flex()
                             .flex_1()
                             .min_w_0()
-                            .truncate()
+                            .gap_1()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
                             .font_family(MONO)
                             .text_xs()
-                            .child(candidate.label.clone()),
+                            .children(candidate.book.as_ref().map(|book| {
+                                h_flex()
+                                    .gap_1()
+                                    .flex_shrink_0()
+                                    .max_w(rem_px(BOOK_PREFIX_WIDTH))
+                                    .text_color(muted)
+                                    .child(div().truncate().child(book.clone()))
+                                    .child("/")
+                            }))
+                            .child(div().min_w_0().truncate().child(candidate.label.clone())),
                     )
                     .children(hint_text(&candidate.hint).map(|hint| {
                         div()

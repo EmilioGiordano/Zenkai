@@ -1,5 +1,9 @@
 use super::mention_catalog::{Catalog, Used};
 use super::mention_parse::{SELECTION, sheet_text, workbook_text};
+use super::reference::external_sheet;
+
+const MAX_CANDIDATES: usize = 40;
+const MAX_SHEETS_PER_BOOK: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
@@ -21,6 +25,7 @@ pub enum Hint {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Candidate {
     pub group: Group,
+    pub book: Option<String>,
     pub label: String,
     pub hint: Hint,
     pub insert: String,
@@ -35,6 +40,7 @@ pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
         if let Some(selection) = book.selection.as_ref().filter(|_| matches(SELECTION)) {
             found.push(Candidate {
                 group: Group::Selection,
+                book: None,
                 label: format!("@{SELECTION}"),
                 hint: Hint::Address(selection.text()),
                 insert: format!("@{SELECTION} "),
@@ -43,6 +49,7 @@ pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
         for sheet in book.sheets.iter().filter(|sheet| matches(&sheet.name)) {
             found.push(Candidate {
                 group: Group::Sheets,
+                book: None,
                 label: format!("@{}", sheet.name),
                 hint: match sheet.used {
                     Used::Unknown => Hint::Pending,
@@ -53,28 +60,54 @@ pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
             });
         }
     }
-    let open = catalog.open.iter().filter(|book| matches(&book.name));
-    for book in open {
-        found.push(Candidate {
-            group: Group::Workbooks,
-            label: format!("@{}", book.name),
-            hint: Hint::Open,
-            insert: format!("@{} ", workbook_text(&book.name)),
-        });
+    let active_id = catalog.active.as_ref().map(|active| active.book.id);
+    for book in &catalog.open {
+        let book_hit = matches(&book.name);
+        if book_hit {
+            found.push(Candidate {
+                group: Group::Workbooks,
+                book: None,
+                label: format!("@{}", book.name),
+                hint: Hint::Open,
+                insert: format!("@{} ", workbook_text(&book.name)),
+            });
+        }
+        // The active workbook's sheets are listed above; its name cannot sit inside the brackets.
+        if Some(book.id) == active_id || book.name.contains([']', '\n']) {
+            continue;
+        }
+        let sheets = book
+            .sheets
+            .iter()
+            .filter(|sheet| matches(sheet) || (book_hit && !wanted.is_empty()));
+        for sheet in sheets.take(MAX_SHEETS_PER_BOOK) {
+            found.push(Candidate {
+                group: Group::Workbooks,
+                book: Some(book.name.clone()),
+                label: format!("@{sheet}"),
+                hint: Hint::Pending,
+                insert: format!("@{} ", external_sheet(&book.name, sheet)),
+            });
+        }
     }
     for file in catalog.folder_only().filter(|file| matches(file)) {
         found.push(Candidate {
             group: Group::Workbooks,
+            book: None,
             label: format!("@{file}"),
             hint: Hint::WorkingFolder,
             insert: format!("@{} ", workbook_text(file)),
         });
     }
+    found.truncate(MAX_CANDIDATES);
     found
 }
 
 #[cfg(test)]
 mod tests {
+    use zenkai_types::WorkbookId;
+
+    use super::super::mention_catalog::OpenBook;
     use super::super::mention_catalog::sample::*;
     use super::*;
 
@@ -143,6 +176,81 @@ mod tests {
                 .iter()
                 .all(|l| !l.contains("evil") && !l.contains("bad"))
         );
+    }
+
+    fn with_budget_book() -> Catalog {
+        let mut catalog = catalog();
+        catalog.open.push(OpenBook {
+            id: WorkbookId(4),
+            name: "Budget_vs_Actual_FY2026.xlsx".to_string(),
+            sheets: vec!["monthly".to_string(), "Summary".to_string()],
+        });
+        catalog
+    }
+
+    #[test]
+    fn a_workbook_that_matches_is_listed_with_its_sheets() {
+        let found = candidates("budget_vs", &with_budget_book());
+        let rows: Vec<(Option<&str>, &str)> = found
+            .iter()
+            .map(|c| (c.book.as_deref(), c.label.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (None, "@Budget_vs_Actual_FY2026.xlsx"),
+                (Some("Budget_vs_Actual_FY2026.xlsx"), "@monthly"),
+                (Some("Budget_vs_Actual_FY2026.xlsx"), "@Summary"),
+            ]
+        );
+        assert_eq!(found[2].insert, "@'[Budget_vs_Actual_FY2026.xlsx]Summary' ");
+    }
+
+    #[test]
+    fn a_sheet_name_matches_in_any_open_workbook_without_listing_its_siblings() {
+        let found = candidates("summ", &with_budget_book());
+        let rows: Vec<(Option<&str>, &str)> = found
+            .iter()
+            .map(|c| (c.book.as_deref(), c.label.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (None, "@Sales summary"),
+                (Some("Budget_vs_Actual_FY2026.xlsx"), "@Summary"),
+            ]
+        );
+    }
+
+    #[test]
+    fn working_folder_files_stay_workbook_only_and_the_list_is_bounded() {
+        let mut catalog = with_budget_book();
+        catalog.open[1].sheets = (0..100).map(|n| format!("sheet {n}")).collect();
+        let found = candidates("", &catalog);
+        assert!(found.len() <= MAX_CANDIDATES);
+        let book_sheets = found.iter().filter(|c| c.book.is_some()).count();
+        assert_eq!(book_sheets, MAX_SHEETS_PER_BOOK);
+        assert!(found.iter().any(|c| c.hint == Hint::WorkingFolder));
+        assert!(
+            found
+                .iter()
+                .filter(|c| c.hint == Hint::WorkingFolder)
+                .all(|c| c.book.is_none())
+        );
+    }
+
+    #[test]
+    fn sheets_of_a_workbook_with_control_characters_or_brackets_are_not_offered() {
+        let mut catalog = with_budget_book();
+        catalog.open[1].name = "odd]name.xlsx".to_string();
+        assert!(
+            candidates("summary", &catalog)
+                .iter()
+                .all(|c| c.book.is_none())
+        );
+        catalog.open[1].name = "fine.xlsx".to_string();
+        catalog.open[1].sheets.push("evil\nsheet".to_string());
+        assert!(candidates("evil", &catalog).is_empty());
     }
 
     #[test]
