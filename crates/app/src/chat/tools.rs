@@ -10,7 +10,6 @@ use gpui_kit::*;
 use zenkai_agent::chat::thread::{Entry, ToolCallId, ToolCard, ToolStatus};
 use zenkai_agent::chat::tool_rows::{self, RowText};
 use zenkai_agent::settings::ToolCallDisplay;
-use zenkai_agent::tools::is_protected_view_refusal;
 use zenkai_i18n::t;
 
 use super::{ChatPanel, MONO};
@@ -22,7 +21,7 @@ const SHORTEST_DURATION_SHOWN: std::time::Duration = std::time::Duration::from_m
 pub(super) struct ToolViews {
     toggled: HashSet<ToolCallId>,
     focus: HashMap<ToolCallId, FocusHandle>,
-    cells: HashSet<ToolCallId>,
+    inputs: HashSet<ToolCallId>,
 }
 
 impl ToolViews {
@@ -30,13 +29,13 @@ impl ToolViews {
         (display == ToolCallDisplay::Expanded) != self.toggled.contains(id)
     }
 
-    pub(super) fn cells_open(&self, id: &ToolCallId) -> bool {
-        self.cells.contains(id)
+    pub(super) fn input_open(&self, id: &ToolCallId) -> bool {
+        self.inputs.contains(id)
     }
 
-    pub(super) fn toggle_cells(&mut self, id: &ToolCallId) {
-        if !self.cells.remove(id) {
-            self.cells.insert(id.clone());
+    pub(super) fn toggle_input(&mut self, id: &ToolCallId) {
+        if !self.inputs.remove(id) {
+            self.inputs.insert(id.clone());
         }
     }
 
@@ -60,7 +59,7 @@ impl ToolViews {
     pub(super) fn keep_only(&mut self, live: &HashSet<ToolCallId>) {
         self.toggled.retain(|id| live.contains(id));
         self.focus.retain(|id, _| live.contains(id));
-        self.cells.retain(|id| live.contains(id));
+        self.inputs.retain(|id| live.contains(id));
     }
 }
 
@@ -98,6 +97,10 @@ fn status_mark(status: ToolStatus, cx: &App) -> AnyElement {
         .justify_center()
         .child(mark)
         .into_any_element()
+}
+
+pub(super) fn group_key(first: &ToolCard) -> ToolCallId {
+    ToolCallId::new(format!("group:{}", first.id.as_str()))
 }
 
 fn meta_text(card: &ToolCard) -> String {
@@ -283,13 +286,14 @@ impl ChatPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let text = tool_rows::group_text(cards);
-        let open = views.is_open(ToolCallDisplay::Collapsed, &first.id);
+        let key = group_key(first);
+        let open = views.is_open(ToolCallDisplay::Collapsed, &key);
         let aria = format!("{} {}", text.label, text.target);
         let mark = status_mark(ToolStatus::Completed, cx);
         let row = self.render_row(
             views,
             Row {
-                key: &first.id,
+                key: &key,
                 mark,
                 text: &text,
                 meta: String::new(),
@@ -347,6 +351,17 @@ impl ChatPanel {
                 )
         };
         let preview = tool_rows::result_preview(&card.detail);
+        let reason = tool_rows::body_preview(&card.detail);
+        let input = tool_rows::body_preview(&tool_rows::pretty_input(&card.input));
+        let more_chars = move |count: usize| {
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child(t!("chat.tool.more_chars", count = count))
+        };
+        let can_allow_editing = failed
+            && self.editing_blocked
+            && zenkai_agent::tools::is_protected_view_refusal(&card.detail);
         let copy_id = card.id.clone();
         v_flex()
             .gap_2()
@@ -374,20 +389,25 @@ impl ChatPanel {
                                         .child(text.target.clone()),
                                 ),
                         )
-                        .child(div().line_height(relative(1.45)).child(
-                            if card.detail.is_empty() {
-                                t!("chat.tool.no_reason").to_string()
-                            } else {
-                                card.detail.clone()
-                            },
-                        )),
+                        .child(
+                            div()
+                                .line_height(relative(1.45))
+                                .child(if card.detail.is_empty() {
+                                    t!("chat.tool.no_reason").to_string()
+                                } else {
+                                    reason.shown.clone()
+                                }),
+                        )
+                        .when(reason.more_chars > 0, |reason_view| {
+                            reason_view.child(more_chars(reason.more_chars))
+                        }),
                 )
             })
             .when(!card.input.is_empty(), |body| {
-                body.child(section(
-                    t!("chat.tool.input"),
-                    tool_rows::pretty_input(&card.input),
-                ))
+                body.child(section(t!("chat.tool.input"), input.shown.clone()))
+                    .when(input.more_chars > 0, |body| {
+                        body.child(more_chars(input.more_chars))
+                    })
             })
             .when(!failed && !card.detail.is_empty(), |body| {
                 body.child(section(t!("chat.tool.result"), preview.shown.clone()))
@@ -416,7 +436,7 @@ impl ChatPanel {
                     ),
                 )
             })
-            .when(failed && is_protected_view_refusal(&card.detail), |body| {
+            .when(can_allow_editing, |body| {
                 body.child(
                     h_flex().child(
                         Button::new(SharedString::from(format!(
