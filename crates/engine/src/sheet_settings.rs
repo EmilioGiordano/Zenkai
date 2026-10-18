@@ -11,6 +11,7 @@ use std::io::{self, Write};
 use roxmltree::Node;
 
 use crate::file::Unsupported;
+use crate::model::HistoryStep;
 use crate::saved::Remains;
 use crate::sheet_elements::{Axis, ElementBudget, Elements, Place};
 
@@ -206,14 +207,14 @@ impl Indexed {
         lost
     }
 
-    // `from` is the 1-based first row or column that moved.
-    fn moved_from(&mut self, from: u32) -> Vec<Unsupported> {
+    // `from` is the 1-based first row or column that moved. Returns what the move took,
+    // with the kinds of it a save reports as lost.
+    fn moved_from(&mut self, from: u32) -> Option<(Vec<Unsupported>, Indexed)> {
         if from > self.reach {
-            return Vec::new();
+            return None;
         }
         let lost = self.lost();
-        *self = Indexed::default();
-        lost
+        Some((lost, std::mem::take(self)))
     }
 }
 
@@ -275,11 +276,52 @@ impl SheetSettings {
     }
 }
 
+// What a row or column move took from one sheet. Exchanged with the sheet's settings by
+// every undo and redo of the move, so the other side of the exchange is what it took next.
+#[derive(Debug, Default)]
+struct Taken {
+    rows: Option<Indexed>,
+    columns: Option<Indexed>,
+    elements: Option<Elements>,
+}
+
+impl Taken {
+    fn is_empty(&self) -> bool {
+        self.rows.is_none() && self.columns.is_none() && self.elements.is_none()
+    }
+
+    fn exchange(self, settings: &mut SheetSettings) -> Taken {
+        Taken {
+            rows: self
+                .rows
+                .map(|rows| std::mem::replace(&mut settings.rows, rows)),
+            columns: self
+                .columns
+                .map(|columns| std::mem::replace(&mut settings.columns, columns)),
+            elements: self
+                .elements
+                .map(|elements| std::mem::replace(&mut settings.elements, elements)),
+        }
+    }
+}
+
+// The sheets a move changed, and the kinds it recorded as lost with the count each had
+// before, so undoing it can forget them.
+#[derive(Debug, Default)]
+struct MoveTaken {
+    sheets: Vec<(u32, Taken)>,
+    kinds: Vec<(Unsupported, Option<u64>)>,
+}
+
 // The settings carried for every sheet, by IronCalc's sheet id so they follow a sheet
 // that is renamed or moved.
 #[derive(Debug, Default)]
 pub struct Carried {
     sheets: HashMap<u32, SheetSettings>,
+    // What each row or column move took, for the undo and redo of that move. They line up
+    // with the moves in the model's own history, which only a new edit empties.
+    undone_moves: Vec<MoveTaken>,
+    redone_moves: Vec<MoveTaken>,
     // Each kind lost by an edit, with the count of losses when it last was. A sheet that
     // lost one is always written again, so a file written after the loss lacks it too.
     dropped: BTreeMap<Unsupported, u64>,
@@ -291,6 +333,8 @@ impl Carried {
     pub fn new(sheets: HashMap<u32, SheetSettings>) -> Carried {
         Carried {
             sheets,
+            undone_moves: Vec::new(),
+            redone_moves: Vec::new(),
             dropped: BTreeMap::new(),
             losses: 0,
             moves: HashMap::new(),
@@ -341,18 +385,89 @@ impl Carried {
     // them, against what the file it copies from holds (`Held`).
     fn moved(&mut self, sheet_id: u32, axis: Axis, from: u32) {
         let mut lost = Vec::new();
+        let mut taken = Vec::new();
         for (id, settings) in &mut self.sheets {
+            let mut gone = Taken::default();
+            let elements = settings.elements.clone();
             if *id != sheet_id {
                 settings.elements.moved_elsewhere();
-                continue;
+            } else {
+                let indexed = match axis {
+                    Axis::Rows => &mut settings.rows,
+                    Axis::Columns => &mut settings.columns,
+                };
+                if let Some((kinds, old)) = indexed.moved_from(from) {
+                    lost = kinds;
+                    match axis {
+                        Axis::Rows => gone.rows = Some(old),
+                        Axis::Columns => gone.columns = Some(old),
+                    }
+                }
+                settings.elements.moved(axis, from);
             }
-            lost = match axis {
-                Axis::Rows => settings.rows.moved_from(from),
-                Axis::Columns => settings.columns.moved_from(from),
-            };
-            settings.elements.moved(axis, from);
+            if settings.elements != elements {
+                gone.elements = Some(elements);
+            }
+            if !gone.is_empty() {
+                taken.push((*id, gone));
+            }
         }
+        let kinds = lost
+            .iter()
+            .map(|kind| (*kind, self.dropped.get(kind).copied()))
+            .collect();
+        self.redone_moves.clear();
+        self.undone_moves.push(MoveTaken {
+            sheets: taken,
+            kinds,
+        });
         self.record(lost);
+    }
+
+    // The model replayed a step that undid or redid a row or column move; gives back or
+    // takes again what that move took. Deliberately restores the lost-kind counts too, so
+    // a save after an undo does not warn about what the undo brought back.
+    pub(crate) fn move_replayed(&mut self, step: HistoryStep) {
+        let (from, to) = match step {
+            HistoryStep::Undo => (&mut self.undone_moves, HistoryStep::Redo),
+            HistoryStep::Redo => (&mut self.redone_moves, HistoryStep::Undo),
+        };
+        let Some(replayed) = from.pop() else {
+            return;
+        };
+        let now = replayed
+            .kinds
+            .iter()
+            .map(|(kind, _)| (*kind, self.dropped.get(kind).copied()))
+            .collect();
+        let sheets = replayed
+            .sheets
+            .into_iter()
+            .filter_map(|(id, taken)| Some((id, taken.exchange(self.sheets.get_mut(&id)?))))
+            .collect();
+        match step {
+            HistoryStep::Undo => {
+                for (kind, count) in &replayed.kinds {
+                    match count {
+                        Some(count) => self.dropped.insert(*kind, *count),
+                        None => self.dropped.remove(kind),
+                    };
+                }
+            }
+            HistoryStep::Redo => {
+                self.record(replayed.kinds.iter().map(|(kind, _)| *kind).collect())
+            }
+        }
+        let inverse = MoveTaken { sheets, kinds: now };
+        match to {
+            HistoryStep::Redo => self.redone_moves.push(inverse),
+            HistoryStep::Undo => self.undone_moves.push(inverse),
+        }
+    }
+
+    // The model's history has nothing to redo, so the moves kept for redoing are stale.
+    pub(crate) fn redo_emptied(&mut self) {
+        self.redone_moves.clear();
     }
 
     fn record(&mut self, lost: Vec<Unsupported>) {
