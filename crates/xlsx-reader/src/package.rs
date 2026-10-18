@@ -17,6 +17,7 @@ pub(crate) struct WorksheetPart {
 // their raw formulas, scoped by sheet position.
 pub(crate) struct Package {
     pub(crate) sheet_names: Vec<String>,
+    pub(crate) hidden: Vec<bool>,
     pub(crate) defined_names: Vec<DefinedNameS>,
     pub(crate) worksheets: Vec<WorksheetPart>,
     pub(crate) shared_strings: Option<String>,
@@ -33,6 +34,7 @@ struct SheetEntry {
     name: String,
     sheet_id: u32,
     rel_id: String,
+    hidden: bool,
 }
 
 fn unreadable(error: impl ToString) -> ReadError {
@@ -73,6 +75,7 @@ pub(crate) fn read_package<R: Read + Seek>(
         };
         sheets.push(SheetEntry {
             name: attribute("name")?.to_string(),
+            hidden: matches!(node.attribute("state"), Some("hidden" | "veryHidden")),
             sheet_id: attribute("sheetId")?.parse::<u32>().map_err(unreadable)?,
             rel_id: node
                 .attribute((
@@ -152,6 +155,7 @@ pub(crate) fn read_package<R: Read + Seek>(
         .find(|(kind, _)| kind.ends_with("/sharedStrings"))
         .map(|(_, target)| part_path(target));
     Ok(Package {
+        hidden: sheets.iter().map(|s| s.hidden).collect(),
         sheet_names: sheets.into_iter().map(|s| s.name).collect(),
         defined_names,
         worksheets,
