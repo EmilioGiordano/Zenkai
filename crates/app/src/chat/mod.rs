@@ -22,6 +22,7 @@ mod permissions;
 pub(crate) mod reference;
 mod reference_scan;
 mod render;
+mod sent_books;
 mod session_rows;
 mod sessions;
 mod slash;
@@ -29,7 +30,7 @@ mod startup;
 mod tools;
 mod transcript;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Instant, SystemTime};
 
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
@@ -49,6 +50,7 @@ use crate::view::Workspace;
 use access::Access;
 use launch::{Live, Prepared};
 use reference::Reference;
+use sent_books::SentBooks;
 use zenkai_i18n::t;
 
 const SCROLL_FOLLOW_SLACK: f32 = 48.0;
@@ -117,7 +119,7 @@ pub struct ChatPanel {
     thread: Thread,
     texts: BTreeMap<MessageId, Entity<TextViewState>>,
     linked_messages: BTreeSet<MessageId>,
-    sent_books: HashMap<String, String>,
+    sent_books: SentBooks,
     references: Vec<Reference>,
     link: Link,
     live: Option<Live>,
@@ -285,7 +287,7 @@ impl ChatPanel {
             thread: Thread::default(),
             texts: BTreeMap::new(),
             linked_messages: BTreeSet::new(),
-            sent_books: HashMap::new(),
+            sent_books: SentBooks::default(),
             references: Vec::new(),
             link: Link::Idle,
             live: None,
@@ -427,9 +429,8 @@ impl ChatPanel {
         if !self.thread.submit(text.clone()) {
             return;
         }
-        if let Some((_, book)) = self.active_workbook(cx) {
-            self.sent_books.insert(text.clone(), book);
-        }
+        let book = self.active_workbook(cx).map(|(_, name)| name);
+        self.sent_books.record(book);
         self.references.clear();
         self.forget_mentions();
         self.composer

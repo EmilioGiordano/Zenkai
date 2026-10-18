@@ -127,12 +127,11 @@ fn plain_text(children: &[markdown_ast::Node]) -> String {
 
 pub(super) struct ReferencePlugin {
     panel: WeakEntity<ChatPanel>,
-    book: Option<String>,
 }
 
 impl ReferencePlugin {
-    pub(super) fn new(panel: WeakEntity<ChatPanel>, book: Option<String>) -> ReferencePlugin {
-        ReferencePlugin { panel, book }
+    pub(super) fn new(panel: WeakEntity<ChatPanel>) -> ReferencePlugin {
+        ReferencePlugin { panel }
     }
 }
 
@@ -167,7 +166,7 @@ impl MarkdownPlugin for ReferencePlugin {
         let reference = node.data::<Reference>()?;
         Some(InlineElement::new(badge(
             reference,
-            self.book.as_deref(),
+            None,
             self.panel.clone(),
             cx,
         )))

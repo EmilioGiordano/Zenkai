@@ -67,7 +67,6 @@ fn notice(kind: NoticeKind, text: &str, cx: &App) -> impl IntoElement {
 impl ChatPanel {
     pub(super) fn render_entries(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let panel = cx.weak_entity();
-        let active_book = self.active_workbook(cx).map(|(_, name)| name);
         let display = cx.global::<AgentConfig>().state.current.agents.tool_calls;
         let mut views = std::mem::take(&mut self.tools);
         let entries = self.thread.entries();
@@ -75,6 +74,15 @@ impl ChatPanel {
             Entry::Tool(card) => Some(card),
             _ => None,
         };
+        let mut user_total = 0;
+        let user_ranks: Vec<usize> = entries
+            .iter()
+            .map(|entry| {
+                let rank = user_total;
+                user_total += usize::from(matches!(entry, Entry::User(_)));
+                rank
+            })
+            .collect();
         let plan = tool_rows::plan(entries, display);
         let calls: HashSet<ToolCallId> = entries
             .iter()
@@ -108,11 +116,9 @@ impl ChatPanel {
                 Item::Used { count } => Some(self.render_used(count, cx)),
                 Item::Entry(index) => match &entries[index] {
                     Entry::User(text) => {
-                        let book = self.sent_books.get(text).or(active_book.as_ref());
-                        Some(
-                            user_bubble(text, book.map(String::as_str), &panel, cx)
-                                .into_any_element(),
-                        )
+                        let rank = user_ranks[index];
+                        let book = self.sent_books.of(rank, user_total);
+                        Some(user_bubble(text, book, &panel, cx).into_any_element())
                     }
                     Entry::Worked { seconds } => {
                         Some(worked_divider(*seconds, cx).into_any_element())
@@ -123,9 +129,9 @@ impl ChatPanel {
                     Entry::Assistant { id, text } => Some(match self.texts.get(id) {
                         Some(state) => TextView::new(state)
                             .markdown_extensions(
-                                MarkdownExtensions::default().parser_revision(1).plugin(
-                                    ReferencePlugin::new(panel.clone(), active_book.clone()),
-                                ),
+                                MarkdownExtensions::default()
+                                    .parser_revision(1)
+                                    .plugin(ReferencePlugin::new(panel.clone())),
                             )
                             .selectable(true)
                             .stream_fade(true)
