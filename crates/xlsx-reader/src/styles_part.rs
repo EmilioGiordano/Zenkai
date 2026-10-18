@@ -137,22 +137,41 @@ fn start_tag_end(element: &str) -> Option<usize> {
     None
 }
 
-// The start tag with its count attribute set, when it has one.
+// The start tag with its count attribute set, when it has one. The attributes are walked
+// one by one, so a `count=` inside another attribute's value is not taken for it.
 fn with_count(start_tag: &str, total: usize) -> String {
-    for quote in ['"', '\''] {
-        let marker = format!("count={quote}");
-        let Some(at) = start_tag.find(&marker) else {
-            continue;
+    let bytes = start_tag.as_bytes();
+    let mut at = start_tag
+        .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
+        .unwrap_or(bytes.len());
+    while at < bytes.len() {
+        while at < bytes.len() && bytes[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        let name_start = at;
+        while at < bytes.len() && !matches!(bytes[at], b'=' | b'>' | b'/') {
+            at += 1;
+        }
+        let name = start_tag[name_start..at].trim();
+        if bytes.get(at) != Some(&b'=') {
+            break;
+        }
+        at += 1;
+        let Some(&quote) = bytes.get(at).filter(|q| matches!(q, b'"' | b'\'')) else {
+            break;
         };
-        let value = at + marker.len();
-        let preceded = start_tag[..at].ends_with(|c: char| c.is_whitespace());
-        if let (true, Some(length)) = (preceded, start_tag[value..].find(quote)) {
+        let value = at + 1;
+        let Some(length) = start_tag[value..].find(char::from(quote)) else {
+            break;
+        };
+        if name == "count" {
             return format!(
                 "{}{total}{}",
                 &start_tag[..value],
                 &start_tag[value + length..]
             );
         }
+        at = value + length + 1;
     }
     start_tag.to_string()
 }
@@ -324,5 +343,13 @@ mod tests {
             r#"<fonts a="count=1" count="9">"#
         );
         assert_eq!(with_count("<fonts>", 9), "<fonts>");
+        assert_eq!(
+            with_count(r#"<fonts note=' count="1" ' count='3'>"#, 9),
+            r#"<fonts note=' count="1" ' count='9'>"#
+        );
+        assert_eq!(
+            with_count(r#"<fonts x:count="1" count="3">"#, 9),
+            r#"<fonts x:count="1" count="9">"#
+        );
     }
 }
