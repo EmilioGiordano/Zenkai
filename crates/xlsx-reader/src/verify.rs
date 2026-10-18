@@ -192,17 +192,14 @@ fn same_raw_entry<A: Read + Seek, B: Read + Seek>(
     }
 }
 
-pub fn check_xml<R: BufRead>(source: R) -> Result<(), String> {
+pub fn check_xml<R: BufRead>(source: R) -> Result<(), ReadError> {
     let mut reader = Reader::from_reader(source);
     reader.config_mut().check_end_names = true;
     let mut buf = Vec::new();
     let mut depth = 0usize;
     let mut roots = 0usize;
     loop {
-        match reader
-            .read_event_into(&mut buf)
-            .map_err(|e| e.to_string())?
-        {
+        match reader.read_event_into(&mut buf).map_err(unreadable)? {
             Event::Start(_) => {
                 if depth == 0 {
                     roots += 1;
@@ -218,7 +215,7 @@ pub fn check_xml<R: BufRead>(source: R) -> Result<(), String> {
     }
     match (depth, roots) {
         (0, 1) => Ok(()),
-        _ => Err("the XML is not one closed element".to_string()),
+        _ => Err(unreadable("the XML is not one closed element")),
     }
 }
 

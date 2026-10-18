@@ -205,7 +205,7 @@ struct OpenPart {
     // None once the check stopped reading: it found the part malformed, and says so
     // when joined.
     sender: Option<SyncSender<Vec<u8>>>,
-    check: JoinHandle<Result<(), String>>,
+    check: JoinHandle<Result<(), ReadError>>,
 }
 
 impl OpenPart {
