@@ -88,6 +88,8 @@ pub enum ToolError {
     ReadOnly(ReadOnlyReason),
     #[error("the user is editing a cell in Zenkai; try again when they finish")]
     UserEditing,
+    #[error("a dialog is open in Zenkai; try again after it is answered")]
+    DialogOpen,
     #[error("the user declined this change")]
     Declined,
     #[error("the user did not answer in time; the change was not made")]
@@ -127,6 +129,13 @@ pub enum ToolError {
 #[cfg(test)]
 mod tests {
     use super::{ReadOnlyReason, ToolError, is_protected_view_refusal};
+
+    #[test]
+    fn an_open_dialog_tells_the_agent_to_retry_after_it_is_answered() {
+        let text = ToolError::DialogOpen.to_string();
+        assert!(text.contains("dialog is open"), "{text}");
+        assert!(text.contains("try again after it is answered"), "{text}");
+    }
 
     #[test]
     fn the_protected_view_refusal_tells_the_agent_how_the_user_unlocks_it() {

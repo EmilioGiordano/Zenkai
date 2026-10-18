@@ -303,15 +303,16 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let detail = t!("recovery.detail", count = leftovers.len());
-        let answer = window.prompt(
+        let answer = self.ask(
             PromptLevel::Warning,
             t!("recovery.title"),
             Some(&detail),
             &[t!("recovery.open"), t!("button.discard")],
+            window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            let Ok(choice) = answer.await else {
+            let Some(choice) = answer.await else {
                 return;
             };
             if choice == 1 {
@@ -380,6 +381,7 @@ impl Workspace {
         if self.lifecycle == Lifecycle::Closing
             || self.close_dialog.is_some()
             || self.departure.is_some()
+            || self.prompts.blocks_input()
         {
             return;
         }
@@ -668,15 +670,16 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let detail = t!("quit.detail", reason = reason);
-        let answer = window.prompt(
+        let answer = self.ask(
             PromptLevel::Critical,
             t!("quit.title"),
             Some(&detail),
             &[t!("button.cancel"), t!("quit.anyway")],
+            window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            let quit = answer.await == Ok(1);
+            let quit = answer.await == Some(1);
             let update = this.update(cx, |this, cx| {
                 if quit {
                     this.write_session_and_quit(plan, cx);

@@ -33,6 +33,7 @@ mod closing;
 mod settings_gate;
 mod space_panel;
 
+use crate::prompt_gate::{PROMPT_OPEN_CONTEXT, PromptGate};
 use agent_calls::{AgentLink, Decision};
 use chat_dock::ChatDock;
 use zenkai_agent::protected_view::file_origin;
@@ -75,6 +76,7 @@ mod budget;
 mod generate;
 mod lifecycle;
 mod panels;
+mod prompt;
 mod search;
 mod sidebar;
 mod theme_picker;
@@ -188,6 +190,7 @@ pub struct Workspace {
     // Saves ahead of closing a tab or the app; `None` when no close waits on a save.
     departure: Option<Departure>,
     close_dialog: Option<close_dialog::CloseDialog>,
+    prompts: PromptGate,
     saved_session: Option<Session>,
     cell_refresh: CellRefresh,
     missed: MissedRefreshes,
@@ -331,6 +334,7 @@ impl Workspace {
             lifecycle: Lifecycle::Running,
             departure: None,
             close_dialog: None,
+            prompts: PromptGate::default(),
             saved_session: None,
             cell_refresh: CellRefresh::Idle,
             missed: MissedRefreshes::default(),
@@ -1100,6 +1104,9 @@ impl Workspace {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Workbook) -> Result<(), EngineError> + Send + 'static,
     ) {
+        if self.prompts.blocks_input() {
+            return;
+        }
         // Any edit ends copy mode, as in Excel, so a later paste never reads cells or
         // sheets that changed since the copy.
         if self.clipboard_source.take().is_some() {
@@ -1604,17 +1611,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let answer = window.prompt(
+        let answer = self.ask(
             PromptLevel::Warning,
             t!("save.cannot_save_title"),
             Some(detail),
             &[t!("button.save_as"), t!("button.cancel")],
+            window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| {
-                if choice == Ok(0) {
+                if choice == Some(0) {
                     this.save_as_dialog(id, window, cx)
                 } else {
                     this.save_ended(id, false, window, cx)
@@ -1743,17 +1751,18 @@ impl Workspace {
                 Some(Overwrite::Confirmed(lost)),
             ),
         };
-        let answer = window.prompt(
+        let answer = self.ask(
             PromptLevel::Critical,
             title,
             Some(&detail),
             &[t!("button.cancel"), t!("button.replace")],
+            window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| {
-                if choice == Ok(1) {
+                if choice == Some(1) {
                     this.save_to(id, path, overwrite, window, cx)
                 } else {
                     this.save_ended(id, false, window, cx)
@@ -2913,15 +2922,16 @@ impl Workspace {
             .get(sheet.0 as usize)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        let answer = window.prompt(
+        let answer = self.ask(
             PromptLevel::Warning,
             &t!("sheet.delete_title", name = name),
             Some(t!("sheet.delete_detail")),
             &[t!("button.cancel"), t!("button.delete")],
+            window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(1)
+            if answer.await == Some(1)
                 && let Err(error) = this.update_in(cx, |this, window, cx| {
                     // Excel shows the sheet that takes the deleted one's place.
                     let Some(document) = this.documents.active_mut() else {
@@ -3188,7 +3198,14 @@ impl Render for Workspace {
         let theme = cx.theme();
         v_flex()
             .relative()
-            .key_context("Workspace")
+            .key_context({
+                let mut context = KeyContext::default();
+                context.add("Workspace");
+                if self.prompts.blocks_input() {
+                    context.add(PROMPT_OPEN_CONTEXT);
+                }
+                context
+            })
             // A file dropped on the window opens like File > Open.
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 if let Some(path) = paths.paths().first().cloned() {
