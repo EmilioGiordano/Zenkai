@@ -8,6 +8,12 @@ version = 2
 yanked = "warn"
 # Unmaintained crates deep in the GPUI tree are tracked upstream; direct ones must be replaced.
 unmaintained = "workspace"
+# Only ZipArchive::extract() is affected and no code path calls it; zip 9 is unsupported upstream.
+ignore = [
+    { id = "RUSTSEC-2026-0367", reason = "extract() is never called; zip 9 not supported by ironcalc, calamine, rust_xlsxwriter" },
+    { id = "RUSTSEC-2026-0368", reason = "extract() is never called; zip 9 not supported by ironcalc, calamine, rust_xlsxwriter" },
+    { id = "RUSTSEC-2026-0369", reason = "extract() is never called; zip 9 not supported by ironcalc, calamine, rust_xlsxwriter" },
+]
 
 [licenses]
 version = 2
