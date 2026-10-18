@@ -4,40 +4,93 @@ use zenkai_types::{
     ColIdx, DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, MAX_COLS, MAX_ROWS, RowIdx, SheetSizes,
 };
 
+// Enough for any real window; a size that is tiny but positive must not make a viewport
+// fill with millions of lines.
+const MAX_SHOWN_LINES: usize = 4096;
+
+// Hidden lines are stored as maximal runs (start to end), so skipping one is a lookup
+// instead of a walk over every hidden index.
 #[derive(Clone, Debug)]
 struct Lines {
     sizes: BTreeMap<u32, f32>,
+    hidden: BTreeMap<u32, u32>,
     default: f32,
     count: u32,
 }
 
 impl Lines {
+    fn new(default: f32, count: u32) -> Lines {
+        Lines {
+            sizes: BTreeMap::new(),
+            hidden: BTreeMap::new(),
+            default,
+            count,
+        }
+    }
+
+    fn run_containing(&self, index: u32) -> Option<(u32, u32)> {
+        let (&start, &end) = self.hidden.range(..=index).next_back()?;
+        (end >= index).then_some((start, end))
+    }
+
     fn size(&self, index: u32) -> f32 {
+        if self.run_containing(index).is_some() {
+            return 0.0;
+        }
         self.sizes.get(&index).copied().unwrap_or(self.default)
     }
 
-    // Hidden lines are consecutive zero-size entries, so skipping them walks the map keys
-    // instead of probing every index.
-    fn next_shown(&self, from: u32) -> Option<u32> {
-        let mut index = from;
-        for (&key, &size) in self.sizes.range(from..) {
-            if key != index || size != 0.0 {
-                break;
-            }
-            index += 1;
+    // A file can carry negative or non-finite sizes; they hide the line like a zero does.
+    fn set(&mut self, index: u32, size: f32) {
+        if size.is_finite() && size > 0.0 {
+            self.show(index);
+            self.sizes.insert(index, size);
+        } else {
+            self.sizes.remove(&index);
+            self.hide(index);
         }
+    }
+
+    fn hide(&mut self, index: u32) {
+        if self.run_containing(index).is_some() {
+            return;
+        }
+        let mut start = index;
+        let mut end = index;
+        if let Some(before) = index.checked_sub(1)
+            && let Some((run_start, _)) = self.run_containing(before)
+        {
+            start = run_start;
+        }
+        if let Some(run_end) = self.hidden.remove(&(index + 1)) {
+            end = run_end;
+        }
+        self.hidden.insert(start, end);
+    }
+
+    fn show(&mut self, index: u32) {
+        let Some((start, end)) = self.run_containing(index) else {
+            return;
+        };
+        self.hidden.remove(&start);
+        if start < index {
+            self.hidden.insert(start, index - 1);
+        }
+        if index < end {
+            self.hidden.insert(index + 1, end);
+        }
+    }
+
+    fn next_shown(&self, from: u32) -> Option<u32> {
+        let index = self.run_containing(from).map_or(from, |(_, end)| end + 1);
         (index < self.count).then_some(index)
     }
 
     fn prev_shown(&self, from: u32) -> Option<u32> {
-        let mut index = from;
-        for (&key, &size) in self.sizes.range(..=from).rev() {
-            if key != index || size != 0.0 {
-                break;
-            }
-            index = index.checked_sub(1)?;
+        match self.run_containing(from) {
+            Some((start, _)) => start.checked_sub(1),
+            None => Some(from),
         }
-        Some(index)
     }
 
     fn shown_filling(&self, first: u32, extent: f32) -> Vec<u32> {
@@ -45,6 +98,7 @@ impl Lines {
         let mut filled = 0.0;
         let mut next = first;
         while filled < extent
+            && shown.len() < MAX_SHOWN_LINES
             && let Some(index) = self.next_shown(next)
         {
             filled += self.size(index);
@@ -106,16 +160,8 @@ pub struct Layout {
 impl Default for Layout {
     fn default() -> Layout {
         Layout {
-            columns: Lines {
-                sizes: BTreeMap::new(),
-                default: DEFAULT_COL_WIDTH,
-                count: u32::from(MAX_COLS),
-            },
-            rows: Lines {
-                sizes: BTreeMap::new(),
-                default: DEFAULT_ROW_HEIGHT,
-                count: MAX_ROWS,
-            },
+            columns: Lines::new(DEFAULT_COL_WIDTH, u32::from(MAX_COLS)),
+            rows: Lines::new(DEFAULT_ROW_HEIGHT, MAX_ROWS),
         }
     }
 }
@@ -125,10 +171,12 @@ impl Layout {
         let mut layout = Layout::default();
         for span in &sizes.columns {
             for col in span.first.get()..=span.last.get() {
-                layout.columns.sizes.insert(u32::from(col), span.width);
+                layout.columns.set(u32::from(col), span.width);
             }
         }
-        layout.rows.sizes = sizes.rows.iter().map(|(row, h)| (row.get(), *h)).collect();
+        for (row, height) in &sizes.rows {
+            layout.rows.set(row.get(), *height);
+        }
         layout
     }
 
@@ -162,6 +210,23 @@ impl Layout {
         shown.into_iter().map(row_of).collect()
     }
 
+    pub fn cols_after(&self, col: ColIdx, count: u32) -> Vec<ColIdx> {
+        let shown = self.columns.shown_after(u32::from(col.get()), count);
+        shown.into_iter().map(col_of).collect()
+    }
+
+    // The first line that takes space at or after the given one, so a scroll origin never
+    // rests inside a hidden run.
+    pub fn row_from(&self, row: RowIdx) -> RowIdx {
+        self.rows.next_shown(row.get()).map_or(row, row_of)
+    }
+
+    pub fn col_from(&self, col: ColIdx) -> ColIdx {
+        self.columns
+            .next_shown(u32::from(col.get()))
+            .map_or(col, col_of)
+    }
+
     pub fn rows_after(&self, row: RowIdx, count: u32) -> Vec<RowIdx> {
         let shown = self.rows.shown_after(row.get(), count);
         shown.into_iter().map(row_of).collect()
@@ -176,11 +241,11 @@ impl Layout {
     }
 
     pub fn set_col_width(&mut self, col: ColIdx, width: f32) {
-        self.columns.sizes.insert(u32::from(col.get()), width);
+        self.columns.set(u32::from(col.get()), width);
     }
 
     pub fn set_row_height(&mut self, row: RowIdx, height: f32) {
-        self.rows.sizes.insert(row.get(), height);
+        self.rows.set(row.get(), height);
     }
 }
 
@@ -244,6 +309,58 @@ mod tests {
         let shown = layout.shown_cols(ColIdx::default(), 1000.0);
         assert!(shown.len() <= 1000 / DEFAULT_COL_WIDTH as usize + 1);
         assert_eq!(shown[..2], [0, 16_000].map(col_of));
+    }
+
+    #[test]
+    fn negative_and_non_finite_sizes_hide_the_line() {
+        let mut layout = Layout::default();
+        layout.set_row_height(row_of(3), -5.0);
+        layout.set_row_height(row_of(4), f32::NAN);
+        layout.set_col_width(col_of(1), f32::NEG_INFINITY);
+        assert_eq!(layout.row_height(row_of(3)), 0.0);
+        assert_eq!(layout.row_height(row_of(4)), 0.0);
+        let rows = layout.shown_rows(RowIdx::default(), 1.0e9);
+        assert!(rows.len() <= MAX_SHOWN_LINES);
+        assert!(!rows.contains(&row_of(3)) && !rows.contains(&row_of(4)));
+        assert!(
+            !layout
+                .shown_cols(ColIdx::default(), 100.0)
+                .contains(&col_of(1))
+        );
+    }
+
+    #[test]
+    fn tiny_positive_sizes_cannot_fill_the_sheet() {
+        let mut layout = Layout::default();
+        for row in 0..10_000 {
+            layout.set_row_height(row_of(row), 1.0e-30);
+        }
+        let rows = layout.shown_rows(RowIdx::default(), 800.0);
+        assert_eq!(rows.len(), MAX_SHOWN_LINES);
+    }
+
+    #[test]
+    fn a_hidden_run_is_one_entry_and_skipping_it_is_a_lookup() {
+        let layout = rows_hidden(2, 1_000_000);
+        assert_eq!(layout.rows.hidden.len(), 1);
+        let mut total = 0u64;
+        for from in 2..20_000 {
+            total += u64::from(layout.rows.next_shown(from).unwrap());
+            total += u64::from(layout.rows.prev_shown(from).unwrap());
+        }
+        assert_eq!(total, 19_998 * 1_000_002);
+    }
+
+    #[test]
+    fn showing_a_line_splits_its_hidden_run() {
+        let mut layout = rows_hidden(2, 10);
+        layout.set_row_height(row_of(5), 30.0);
+        assert_eq!(layout.rows.hidden.len(), 2);
+        assert_eq!(layout.row_height(row_of(5)), 30.0);
+        assert_eq!(layout.row_height(row_of(4)), 0.0);
+        assert_eq!(layout.row_height(row_of(6)), 0.0);
+        layout.set_row_height(row_of(5), 0.0);
+        assert_eq!(layout.rows.hidden.len(), 1);
     }
 
     #[test]
