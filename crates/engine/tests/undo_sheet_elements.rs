@@ -253,6 +253,55 @@ fn a_save_after_an_undo_warns_once_about_the_hyperlink_it_cannot_write() {
     assert_eq!(dropped_by_saving(&book, &target), []);
 }
 
+// The save after the first undo adopts a print that holds the hyperlink the file lacks, so
+// a redo and undo leave the sheet as that save saw it and the next save copies it.
+#[test]
+fn a_restore_onto_a_sheet_the_save_copies_still_warns_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, _) = baseline(dir.path());
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    let target = dir.path().join("saved.xlsx");
+    book.delete_rows(SHEET, row(1), 1).unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+    book.undo().unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+    book.redo().unwrap();
+    book.undo().unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+    assert_eq!(dropped_by_saving(&book, &target), []);
+}
+
+fn spread_source(dir: &Path) -> PathBuf {
+    let path = dir.join("spread.xlsx");
+    let mut book = Source::new();
+    let sheet = book.add_worksheet();
+    for row in [0, 1, 2, 40, 80] {
+        sheet.write_number(row, 0, f64::from(row)).unwrap();
+    }
+    sheet.write_url(2, 1, "https://example.com").unwrap();
+    book.add_worksheet().write_number(0, 0, 1.0).unwrap();
+    book.save(&path).unwrap();
+    path
+}
+
+// A move on the second sheet takes the first sheet's hyperlink without moving its rows,
+// so after a redo and undo a cell edit there is saved row by row.
+#[test]
+fn a_restore_onto_a_sheet_saved_row_by_row_still_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut book = open_xlsx(&spread_source(dir.path())).unwrap().workbook;
+    let target = dir.path().join("saved.xlsx");
+    book.insert_rows(SheetId(1), row(100), 1).unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+    book.undo().unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+    book.redo().unwrap();
+    book.undo().unwrap();
+    book.set_input(SHEET, CellPos::new(row(80), column(0)), "7")
+        .unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+}
+
 #[test]
 fn an_undo_that_leaves_nothing_unwritable_warns_about_nothing() {
     let dir = tempfile::tempdir().unwrap();

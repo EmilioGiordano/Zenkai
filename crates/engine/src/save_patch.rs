@@ -111,6 +111,18 @@ pub(crate) fn patch_plan(
     let mut held = saved.held.clone();
     let mut remains = saved.remains.clone();
     let mut dropped = BTreeSet::new();
+    // A sheet copied from the file holds what its remains say, which an undo since may
+    // have put back into the model without the file holding it.
+    let copied = data
+        .book
+        .worksheets
+        .iter()
+        .zip(&remains)
+        .enumerate()
+        .filter(|(index, _)| changed.binary_search(index).is_err());
+    for (_, (sheet, &in_file)) in copied {
+        dropped.extend(carried.unwritable_restored(sheet, in_file));
+    }
     let mut sheets = Vec::with_capacity(changed.len());
     for index in changed {
         let (Some(part), Some(&in_file)) = (saved.worksheets.get(index), remains.get(index)) else {
@@ -126,6 +138,9 @@ pub(crate) fn patch_plan(
             None
         };
         if let Some(blocks) = blocks {
+            if let Some(sheet) = data.book.worksheets.get(index) {
+                dropped.extend(carried.unwritable_restored(sheet, in_file));
+            }
             sheets.push(SheetPatch::Rows(row_job(
                 data,
                 carried,
