@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufRead, BufReader, Read, Seek};
 use std::path::Path;
 
 use quick_xml::Reader;
@@ -97,7 +97,8 @@ pub fn check_written(
                 } else {
                     budgets.stream(entry, &meter, name)
                 };
-                well_formed(guard).map_err(|e| unreadable(format!("{name}: {e}")))?;
+                check_xml(BufReader::with_capacity(CHUNK_BYTES, GuardRead(guard)))
+                    .map_err(|e| unreadable(format!("{name}: {e}")))?;
             }
         }
     }
@@ -146,8 +147,8 @@ impl<R: Read> Read for GuardRead<'_, R> {
     }
 }
 
-fn well_formed<R: Read>(guard: Guard<'_, R>) -> Result<(), String> {
-    let mut reader = Reader::from_reader(BufReader::with_capacity(CHUNK_BYTES, GuardRead(guard)));
+pub fn check_xml<R: BufRead>(source: R) -> Result<(), String> {
+    let mut reader = Reader::from_reader(source);
     reader.config_mut().check_end_names = true;
     let mut buf = Vec::new();
     let mut depth = 0usize;
