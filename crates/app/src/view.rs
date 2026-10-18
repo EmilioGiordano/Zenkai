@@ -1811,7 +1811,7 @@ impl Workspace {
         let answer = self.ask(
             PromptLevel::Critical,
             &t!("save.changed_on_disk_title", name = name),
-            Some(&t!("save.changed_on_disk_detail")),
+            Some(t!("save.changed_on_disk_detail")),
             &[
                 t!("button.replace"),
                 t!("button.save_as"),

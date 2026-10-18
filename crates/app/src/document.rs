@@ -1213,7 +1213,7 @@ mod tests {
             FileJob::Autosaving,
             &recovery,
             SaveTarget::Copy,
-            |s| zenkai_engine::save_xlsx(s),
+            zenkai_engine::save_xlsx,
         );
         assert!(written.is_ok(), "{written:?}");
         assert_eq!(saved_text(&recovery), "mine");
