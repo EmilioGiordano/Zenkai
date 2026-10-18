@@ -35,12 +35,18 @@ impl Taken {
     }
 }
 
-// The sheets a move changed, and the kinds it recorded as lost with the count each had
-// before, so undoing it can forget them.
+// A kind a move recorded as lost, with the loss count it had before (`None` if it had
+// none), so undoing the move can put that back.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LostKind {
+    pub(crate) kind: Unsupported,
+    pub(crate) before: Option<u64>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct MoveTaken {
     pub(crate) sheets: Vec<(u32, Taken)>,
-    pub(crate) kinds: Vec<(Unsupported, Option<u64>)>,
+    pub(crate) kinds: Vec<LostKind>,
 }
 
 // What each row or column move took, for the undo and redo of that move. The entries line
@@ -62,7 +68,6 @@ impl Moves {
         self.redone.clear();
     }
 
-    // The entry of the move `step` replays.
     pub(crate) fn pop(&mut self, step: HistoryStep) -> Option<MoveTaken> {
         match step {
             HistoryStep::Undo => self.undone.pop(),
@@ -70,7 +75,6 @@ impl Moves {
         }
     }
 
-    // What a replayed `step` leaves to replay the other way.
     pub(crate) fn push_inverse(&mut self, step: HistoryStep, inverse: MoveTaken) {
         match step {
             HistoryStep::Undo => self.redone.push(inverse),

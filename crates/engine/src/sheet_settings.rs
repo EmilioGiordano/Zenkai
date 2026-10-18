@@ -10,7 +10,7 @@ use std::io::{self, Write};
 
 use roxmltree::Node;
 
-use crate::carried_moves::{MoveTaken, Moves, Restored, Taken};
+use crate::carried_moves::{LostKind, MoveTaken, Moves, Restored, Taken};
 use crate::file::Unsupported;
 use crate::model::HistoryStep;
 use crate::saved::Remains;
@@ -383,7 +383,10 @@ impl Carried {
         }
         let kinds = lost
             .iter()
-            .map(|kind| (*kind, self.dropped.get(kind).copied()))
+            .map(|kind| LostKind {
+                kind: *kind,
+                before: self.dropped.get(kind).copied(),
+            })
             .collect();
         self.taken.push(MoveTaken {
             sheets: taken,
@@ -403,7 +406,10 @@ impl Carried {
         let now = replayed
             .kinds
             .iter()
-            .map(|(kind, _)| (*kind, self.dropped.get(kind).copied()))
+            .map(|lost| LostKind {
+                kind: lost.kind,
+                before: self.dropped.get(&lost.kind).copied(),
+            })
             .collect();
         let sheets = replayed
             .sheets
@@ -425,16 +431,14 @@ impl Carried {
             .collect();
         match step {
             HistoryStep::Undo => {
-                for (kind, count) in &replayed.kinds {
-                    match count {
-                        Some(count) => self.dropped.insert(*kind, *count),
-                        None => self.dropped.remove(kind),
+                for lost in &replayed.kinds {
+                    match lost.before {
+                        Some(count) => self.dropped.insert(lost.kind, count),
+                        None => self.dropped.remove(&lost.kind),
                     };
                 }
             }
-            HistoryStep::Redo => {
-                self.record(replayed.kinds.iter().map(|(kind, _)| *kind).collect())
-            }
+            HistoryStep::Redo => self.record(replayed.kinds.iter().map(|lost| lost.kind).collect()),
         }
         self.taken
             .push_inverse(step, MoveTaken { sheets, kinds: now });
@@ -452,8 +456,6 @@ impl Carried {
         &self.restored
     }
 
-    // The kinds an undo or redo put back into the sheet that a save into a file holding
-    // `remains` of it cannot write; reported by the next save only.
     pub(crate) fn unwritable_restored(
         &self,
         sheet: &ironcalc::base::types::Worksheet,

@@ -320,7 +320,6 @@ impl Elements {
     // Rows or columns from `from` (1-based) on were inserted or deleted on this sheet. The
     // parts the relationships point at (drawing anchors, table ranges, pivot locations,
     // comment cells) name rows and columns Zenkai cannot shift, so they all go.
-    // Returns what the move took, or `None` when it took nothing.
     pub fn moved(&mut self, axis: Axis, from: u32) -> Option<Elements> {
         let changed = self.linked != Linked::Dropped
             || self
@@ -336,7 +335,6 @@ impl Elements {
     // Rows or columns were inserted or deleted on another sheet. The parts the
     // relationships point at (chart series, table formulas, pivot tables) may name cells
     // there and are never read, so they all go, even those that name none.
-    // Returns what the move took, or `None` when it took nothing.
     pub fn moved_elsewhere(&mut self) -> Option<Elements> {
         let changed = matches!(self.linked, Linked::Kept(_))
             || self.standalone.iter().any(|e| e.reach == Reach::Workbook);
