@@ -828,6 +828,8 @@ fn agent_update(update: SessionUpdate) -> Option<AgentUpdate> {
                 .as_ref()
                 .map(|input| input.to_string())
                 .unwrap_or_default(),
+            started: None,
+            took: None,
         })),
         SessionUpdate::ToolCallUpdate(update) => Some(AgentUpdate::ToolChanged {
             id: ToolCallId::new(update.tool_call_id.to_string()),
