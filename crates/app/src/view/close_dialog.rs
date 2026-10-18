@@ -11,6 +11,7 @@ use crate::actions::{
 };
 use crate::close_prompt::{Choices, ClosePlan, Departure, Purpose};
 use crate::document::Document;
+use crate::interface_scale::rem_px;
 
 mod app;
 mod tab;
@@ -198,7 +199,7 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &FocusPreviousControl, window, cx| {
                 this.cycle_close_focus(false, window, cx)
             }))
-            .w(px(PANEL_WIDTH))
+            .w(rem_px(PANEL_WIDTH))
             .max_w_full()
             .p_5()
             .gap_4()

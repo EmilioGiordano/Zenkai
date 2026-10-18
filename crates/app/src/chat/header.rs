@@ -11,6 +11,7 @@ use zenkai_i18n::t;
 use super::{ChatPanel, View};
 use crate::actions::*;
 use crate::agent_mark::{HEADER_MARK_SIZE, agent_mark};
+use crate::interface_scale::rem_px;
 use crate::keymap;
 
 fn token_count(tokens: u64) -> String {
@@ -57,7 +58,7 @@ impl ChatPanel {
                     })
                     .child(
                         div()
-                            .max_w(px(170.0))
+                            .max_w(rem_px(170.0))
                             .truncate()
                             .font_weight(FontWeight::MEDIUM)
                             .child(title),
@@ -69,7 +70,7 @@ impl ChatPanel {
                     ),
             );
         h_flex()
-            .h(px(48.0))
+            .h(rem_px(48.0))
             .flex_shrink_0()
             .pl_3p5()
             .pr_3()
@@ -102,7 +103,7 @@ impl ChatPanel {
                             .build(window, cx)
                         })
                         .child(
-                            div().size(px(18.0)).child(
+                            div().size(rem_px(18.0)).child(
                                 ProgressCircle::new("chat-context-ring")
                                     .value(percent)
                                     .accessibility_label(t!(

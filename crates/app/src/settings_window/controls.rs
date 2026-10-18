@@ -10,6 +10,7 @@ use zenkai_grid::HighContrast;
 use zenkai_i18n::t;
 
 use super::rows::RowInfo;
+use crate::interface_scale::rem_px;
 
 const NARROW_CONTROL: f32 = 170.0;
 
@@ -58,7 +59,7 @@ pub fn row(
         .when(parts.modified, |this| {
             this.child(
                 div()
-                    .size(px(6.0))
+                    .size(rem_px(6.0))
                     .rounded_full()
                     .bg(theme.warning)
                     .flex_shrink_0(),
@@ -114,9 +115,9 @@ pub fn row(
             deferred(
                 div()
                     .absolute()
-                    .top(px(52.0))
-                    .right(px(16.0))
-                    .w(px(380.0))
+                    .top(rem_px(52.0))
+                    .right(rem_px(16.0))
+                    .w(rem_px(380.0))
                     .occlude()
                     .shadow_lg()
                     .child(overlay),
@@ -147,7 +148,7 @@ pub fn select(
     on_click: impl Fn(&mut Window, &mut App) + 'static,
 ) -> AnyElement {
     Button::new(id)
-        .w(px(NARROW_CONTROL))
+        .w(rem_px(NARROW_CONTROL))
         .selected(open)
         .accessibility_label(t!("settings.choose", label = label))
         .on_click(move |_, window, cx| on_click(window, cx))
@@ -186,7 +187,7 @@ pub fn stepper(
         )
         .child(
             div()
-                .min_w(px(52.0))
+                .min_w(rem_px(52.0))
                 .text_center()
                 .font_family("monospace")
                 .text_sm()
@@ -272,29 +273,29 @@ fn half(shade: &Half) -> Div {
         .child(
             v_flex()
                 .flex_1()
-                .gap(px(6.0))
-                .px(px(8.0))
-                .py(px(10.0))
+                .gap(rem_px(6.0))
+                .px(rem_px(8.0))
+                .py(rem_px(10.0))
                 .child(
                     div()
-                        .h(px(5.0))
+                        .h(rem_px(5.0))
                         .w(relative(0.7))
-                        .rounded(px(3.0))
+                        .rounded(rem_px(3.0))
                         .bg(rgb(shade.line)),
                 )
                 .child(
                     div()
-                        .h(px(5.0))
+                        .h(rem_px(5.0))
                         .w(relative(0.45))
-                        .rounded(px(3.0))
+                        .rounded(rem_px(3.0))
                         .bg(rgb(shade.line))
                         .opacity(0.6),
                 )
                 .child(
                     div()
-                        .h(px(10.0))
+                        .h(rem_px(10.0))
                         .w(relative(0.36))
-                        .rounded(px(3.0))
+                        .rounded(rem_px(3.0))
                         .border_2()
                         .border_color(rgb(0x4c_af_7a)),
                 ),
@@ -311,8 +312,8 @@ pub fn mode_cards(
         let on_pick = on_pick.clone();
         let chosen = selected == mode;
         let thumbnail = h_flex()
-            .w(px(124.0))
-            .h(px(78.0))
+            .w(rem_px(124.0))
+            .h(rem_px(78.0))
             .rounded_lg()
             .overflow_hidden()
             .border_2()

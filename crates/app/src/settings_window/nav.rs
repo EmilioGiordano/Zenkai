@@ -9,6 +9,7 @@ use zenkai_i18n::t;
 
 use super::rows::{Section, Values};
 use super::{SettingsWindow, update};
+use crate::interface_scale::rem_px;
 
 const WIDTH: f32 = 232.0;
 
@@ -27,8 +28,8 @@ fn icon_of(section: Section) -> IconName {
 fn badge(count: usize, cx: &App) -> Div {
     let theme = cx.theme();
     div()
-        .min_w(px(18.0))
-        .h(px(18.0))
+        .min_w(rem_px(18.0))
+        .h(rem_px(18.0))
         .px_1p5()
         .rounded_full()
         .flex()
@@ -86,7 +87,7 @@ impl SettingsWindow {
                     )
             });
         v_flex()
-            .w(px(WIDTH))
+            .w(rem_px(WIDTH))
             .flex_shrink_0()
             .h_full()
             .gap_0p5()
@@ -112,7 +113,7 @@ impl SettingsWindow {
             .child(div().flex_1())
             .child(
                 h_flex()
-                    .h(px(40.0))
+                    .h(rem_px(40.0))
                     .px_2p5()
                     .gap_2p5()
                     .items_center()

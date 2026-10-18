@@ -7,6 +7,7 @@ use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::*;
 use zenkai_i18n::t;
 
+use crate::interface_scale::rem_px;
 use crate::space_appearance::{
     ApplyTo, Intensity, Look, MAX_INTENSITY, Opacity, Resolved, Rgba, SpaceStyle,
 };
@@ -41,33 +42,39 @@ fn preview(look: Look, contrast: Contrast, cx: &App) -> Div {
     let clear = gpui_kit::transparent_black();
     let row = move || {
         div()
-            .h(px(12.0))
-            .rounded(px(4.0))
+            .h(rem_px(12.0))
+            .rounded(rem_px(4.0))
             .bg(paint_or(shape.row_fill, idle))
     };
     v_flex()
-        .h(px(60.0))
+        .h(rem_px(60.0))
         .p(px(5.0))
-        .gap(px(4.0))
-        .rounded(px(7.0))
+        .gap(rem_px(4.0))
+        .rounded(rem_px(7.0))
         .border_1()
         .border_color(paint_or(shape.outline, clear))
         .bg(paint_or(shape.container_fill, surface))
         .child(
             h_flex()
-                .h(px(14.0))
-                .px(px(5.0))
-                .gap(px(5.0))
+                .h(rem_px(14.0))
+                .px(rem_px(5.0))
+                .gap(rem_px(5.0))
                 .items_center()
-                .rounded(px(4.0))
+                .rounded(rem_px(4.0))
                 .bg(paint_or(shape.header_fill, clear))
                 .children(shape.dot.map(|dot| {
                     div()
-                        .size(px(6.0))
+                        .size(rem_px(6.0))
                         .rounded_full()
                         .bg(space_settings::paint(dot))
                 }))
-                .child(div().h(px(4.0)).w(px(28.0)).rounded(px(2.0)).bg(ink)),
+                .child(
+                    div()
+                        .h(rem_px(4.0))
+                        .w(rem_px(28.0))
+                        .rounded(rem_px(2.0))
+                        .bg(ink),
+                ),
         )
         .child(row())
         .child(row())
@@ -94,7 +101,7 @@ pub fn style_cards(
             .flex_1()
             .min_w_0()
             .overflow_hidden()
-            .h(px(150.0))
+            .h(rem_px(150.0))
             .p_2()
             .on_click(move |_, window, cx| on_select(style, window, cx))
             .child(
@@ -127,7 +134,7 @@ pub fn swatch_dot(color: SpaceColor, selected: bool, cx: &App) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .size(px(16.0))
+        .size(rem_px(16.0))
         .rounded_full()
         .border_1()
         .border_color(ink);

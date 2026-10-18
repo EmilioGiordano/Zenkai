@@ -12,6 +12,7 @@ use crate::actions::{
     ChartColumn, ChartLine, ChartPie, CloseChart, CopyChartMermaid, ExportChartSvg,
 };
 use crate::chart::{self, ChartData, ChartKind, MAX_POINTS};
+use crate::interface_scale::rem_px;
 
 const PIE_COLORS: [u32; 8] = [
     0x217346, 0x2F6FB3, 0xC4502B, 0x8E5CC2, 0xD19A22, 0x2A9D8F, 0xB5476F, 0x5B6B7A,
@@ -129,14 +130,14 @@ pub fn render(panel: &ChartPanel, cx: &App) -> impl IntoElement {
         }
     };
     v_flex()
-        .w(px(460.0))
+        .w(rem_px(460.0))
         .h_full()
         .border_l_1()
         .border_color(theme.border)
         .bg(theme.background)
         .child(
             h_flex()
-                .h(px(36.0))
+                .h(rem_px(36.0))
                 .px_2()
                 .gap_1()
                 .items_center()

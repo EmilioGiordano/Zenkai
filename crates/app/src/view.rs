@@ -51,6 +51,7 @@ use crate::documents::{Documents, Step};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
+use crate::interface_scale::{self, rem_px};
 use crate::jump::jump_target;
 use crate::keymap;
 use crate::memory;
@@ -123,7 +124,6 @@ const MAX_AUTOSUM_SCAN: usize = 10_000;
 const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 
-const UI_SCALE_STEP: f32 = 0.125;
 const MAX_REPLACE_CELLS: usize = 100_000;
 const FONT_SIZES: [u16; 16] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 
@@ -162,8 +162,6 @@ pub struct Workspace {
     // Bumped by every CSV read, re-parse, import and cancel; a background result is
     // applied only if no newer request started meanwhile.
     csv_request: u64,
-    // Interface scale, independent of the grid zoom: everything sized in rems.
-    ui_scale: f32,
     show_formulas: bool,
     formula_bar: Option<FormulaBarEdit>,
     // The last formatting change, which F4 repeats on the selection as in Excel.
@@ -309,7 +307,6 @@ impl Workspace {
             theme_picker: None,
             csv_preview: None,
             csv_request: 0,
-            ui_scale: 1.0,
             show_formulas: false,
             formula_bar: None,
             last_style: None,
@@ -766,19 +763,19 @@ impl Workspace {
         Some(
             h_flex()
                 .key_context("FindBar")
-                .h(px(36.0))
+                .h(rem_px(36.0))
                 .px_2()
                 .gap_2()
                 .items_center()
                 .border_b_1()
                 .border_color(theme.border)
                 .bg(theme.background)
-                .child(div().w(px(260.0)).child(Input::new(&bar.input)))
+                .child(div().w(rem_px(260.0)).child(Input::new(&bar.input)))
                 .children(bar.replace.as_ref().map(|replace| {
                     h_flex()
                         .gap_2()
                         .items_center()
-                        .child(div().w(px(220.0)).child(Input::new(replace)))
+                        .child(div().w(rem_px(220.0)).child(Input::new(replace)))
                         .child(
                             Button::new("replace-all")
                                 .small()
@@ -1389,17 +1386,15 @@ impl Workspace {
         .detach();
     }
 
-    fn set_ui_scale(&mut self, scale: f32, cx: &mut Context<Self>) {
-        self.ui_scale = scale.clamp(0.75, 2.0);
+    fn announce_interface_size(&mut self, cx: &mut Context<Self>) {
         self.notify(
             Severity::Info,
             t!(
                 "notice.interface_size",
-                percent = format!("{:.0}", self.ui_scale * 100.0)
+                percent = interface_scale::shown(cx).percent()
             ),
             cx,
         );
-        cx.notify();
     }
 
     fn next_csv_request(&mut self) -> u64 {
@@ -1433,7 +1428,7 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(96.0))
+                .top(rem_px(96.0))
                 .left_0()
                 .right_0()
                 .flex()
@@ -2098,14 +2093,14 @@ impl Workspace {
 
     fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
-        TitleBar::new().child(
+        TitleBar::new().h(rem_px(34.0)).child(
             h_flex()
                 .size_full()
                 .items_center()
                 .text_sm()
                 .child(
                     h_flex()
-                        .w(px(160.0))
+                        .w(rem_px(160.0))
                         .items_center()
                         .gap_2()
                         .text_color(muted)
@@ -2153,7 +2148,7 @@ impl Workspace {
                 )
                 .child(
                     h_flex()
-                        .w(px(160.0))
+                        .w(rem_px(160.0))
                         .items_center()
                         .justify_end()
                         .text_color(muted)
@@ -2172,7 +2167,7 @@ impl Workspace {
             None => self.active_input.clone(),
         };
         h_flex()
-            .h(px(32.0))
+            .h(rem_px(32.0))
             .px_2()
             .gap_2()
             .items_center()
@@ -2182,15 +2177,15 @@ impl Workspace {
             .child(match &self.go_to {
                 Some((input, _)) => div()
                     .key_context("NameBox")
-                    .w(px(120.0))
+                    .w(rem_px(120.0))
                     .child(Input::new(input))
                     .into_any_element(),
                 None => div()
                     .id("name-box")
                     .role(Role::Button)
                     .aria_label(t!("grid.name_box_label", name = name))
-                    .w(px(96.0))
-                    .h(px(24.0))
+                    .w(rem_px(96.0))
+                    .h(rem_px(24.0))
                     .px_2()
                     .flex()
                     .items_center()
@@ -2228,7 +2223,7 @@ impl Workspace {
                         .aria_label(t!("grid.formula_bar_label"))
                         .aria_value(content.clone())
                         .flex_1()
-                        .h(px(24.0))
+                        .h(rem_px(24.0))
                         .px_2()
                         .flex()
                         .items_center()
@@ -2274,7 +2269,7 @@ impl Workspace {
             )
         });
         h_flex()
-            .h(px(32.0))
+            .h(rem_px(32.0))
             .items_center()
             .border_t_1()
             .border_color(theme.border)
@@ -2574,7 +2569,7 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(96.0))
+                .top(rem_px(96.0))
                 .left_0()
                 .right_0()
                 .flex()
@@ -2884,7 +2879,7 @@ impl Workspace {
         Some(
             h_flex()
                 .key_context("RenameBar")
-                .h(px(36.0))
+                .h(rem_px(36.0))
                 .px_2()
                 .gap_2()
                 .items_center()
@@ -2892,7 +2887,7 @@ impl Workspace {
                 .border_color(theme.border)
                 .bg(theme.background)
                 .child(div().text_sm().child(t!("rename.label")))
-                .child(div().w(px(260.0)).child(Input::new(input)))
+                .child(div().w(rem_px(260.0)).child(Input::new(input)))
                 .child(
                     div()
                         .text_xs()
@@ -2981,7 +2976,7 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(96.0))
+                .top(rem_px(96.0))
                 .left_0()
                 .right_0()
                 .flex()
@@ -3102,7 +3097,7 @@ impl Workspace {
                 .child(t!("status.last_recalc", value = recalc));
         }
         h_flex()
-            .h(px(26.0))
+            .h(rem_px(26.0))
             .px_3()
             .gap_4()
             .justify_between()
@@ -3189,7 +3184,7 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        window.set_rem_size(cx.theme().font_size * self.ui_scale);
+        interface_scale::apply(window, cx);
         let theme = cx.theme();
         v_flex()
             .relative()
@@ -3408,12 +3403,17 @@ impl Render for Workspace {
                 this.style(StyleChange::NumberFormat(NumberFormat::Date), window, cx)
             }))
             .on_action(cx.listener(|this, _: &InterfaceLarger, _, cx| {
-                this.set_ui_scale(this.ui_scale + UI_SCALE_STEP, cx);
+                interface_scale::larger(cx);
+                this.announce_interface_size(cx);
             }))
             .on_action(cx.listener(|this, _: &InterfaceSmaller, _, cx| {
-                this.set_ui_scale(this.ui_scale - UI_SCALE_STEP, cx);
+                interface_scale::smaller(cx);
+                this.announce_interface_size(cx);
             }))
-            .on_action(cx.listener(|this, _: &InterfaceReset, _, cx| this.set_ui_scale(1.0, cx)))
+            .on_action(cx.listener(|this, _: &InterfaceReset, _, cx| {
+                interface_scale::reset(cx);
+                this.announce_interface_size(cx);
+            }))
             .on_action(cx.listener(|this, _: &ToggleReduceMotion, _, cx| {
                 let reduce = !cx.reduce_motion();
                 cx.set_reduce_motion(reduce);
@@ -3696,17 +3696,17 @@ fn command_overlay(
         .child(
             div()
                 .absolute()
-                .top(px(72.0))
+                .top(rem_px(72.0))
                 .left_0()
                 .right_0()
                 .flex()
                 .justify_center()
                 .child(
                     div()
-                        .w(px(560.0))
+                        .w(rem_px(560.0))
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(command.bordered(true).max_h(px(420.0))),
+                        .child(command.bordered(true).max_h(rem_px(420.0))),
                 ),
         )
 }

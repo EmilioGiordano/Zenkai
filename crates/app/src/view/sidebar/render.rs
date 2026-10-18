@@ -12,6 +12,7 @@ use zenkai_types::WorkbookId;
 
 use super::super::Workspace;
 use crate::actions::*;
+use crate::interface_scale::rem_px;
 use crate::panel_width::Panel;
 use crate::sidebar_item::{self, FileItem, FileState};
 use crate::sidebar_rows::{Move, Row};
@@ -187,10 +188,10 @@ impl Workspace {
                     }),
                 )
                 .relative()
-                .w(px(self.panel_width(Panel::Sidebar, window)))
+                .w(rem_px(self.panel_width(Panel::Sidebar, window)))
                 .flex_shrink_0()
                 .h_full()
-                .px(px(10.0))
+                .px(rem_px(10.0))
                 .py_3()
                 .bg(background)
                 .text_color(foreground)
@@ -213,7 +214,7 @@ impl Workspace {
                 )
                 .child(
                     h_flex()
-                        .h(px(32.0))
+                        .h(rem_px(32.0))
                         .items_center()
                         .justify_end()
                         .text_xs()
@@ -237,7 +238,7 @@ impl Workspace {
             .id(id)
             .flex()
             .w_full()
-            .rounded(px(8.0))
+            .rounded(rem_px(8.0))
             .cursor_pointer()
             .border_1()
             .border_color(if on_cursor {
@@ -252,10 +253,10 @@ impl Workspace {
         let muted = cx.theme().muted_foreground;
         let row = nav.row;
         self.row_frame(nav.id, row, paint, cx)
-            .h(px(32.0))
-            .px(px(8.0))
+            .h(rem_px(32.0))
+            .px(rem_px(8.0))
             .items_center()
-            .gap(px(10.0))
+            .gap(rem_px(10.0))
             .child(Icon::new(nav.icon).small().text_color(muted))
             .child(div().flex_1().child(nav.label))
             .child(div().text_xs().text_color(muted).child(nav.keys))
@@ -301,10 +302,10 @@ impl Workspace {
         };
         let header = self
             .row_frame(("space", id.0), Row::Space(id), paint, cx)
-            .h(px(28.0))
-            .px(px(8.0))
+            .h(rem_px(28.0))
+            .px(rem_px(8.0))
             .items_center()
-            .gap(px(6.0))
+            .gap(rem_px(6.0))
             .text_color(match shape.header_text {
                 HeaderText::Muted => muted,
                 HeaderText::Strong => strong,
@@ -322,7 +323,7 @@ impl Workspace {
             .children(shape.dot.map(|dot| {
                 div()
                     .flex_shrink_0()
-                    .size(px(8.0))
+                    .size(rem_px(8.0))
                     .rounded_full()
                     .bg(space_settings::paint(dot))
             }))
@@ -397,7 +398,7 @@ impl Workspace {
         v_flex()
             .id(("section", id.0))
             .gap_0p5()
-            .rounded(px(10.0))
+            .rounded(rem_px(10.0))
             .p(px(shape.inset))
             .border_1()
             .border_color(tint(shape.outline).unwrap_or_else(gpui_kit::transparent_black))
@@ -433,9 +434,9 @@ impl Workspace {
         let entity = paint.entity.clone();
         self.row_frame(("file", id.0), Row::File(id), paint, cx)
             .flex_col()
-            .gap(px(3.0))
-            .px(px(10.0))
-            .py(px(8.0))
+            .gap(rem_px(3.0))
+            .px(rem_px(10.0))
+            .py(rem_px(8.0))
             .when_some(tint, |frame, fill| frame.bg(fill))
             .when(file.active, |frame| frame.bg(active_background))
             .child(
@@ -540,10 +541,10 @@ impl Workspace {
         let open = self.sidebar.recent_open;
         let header = self
             .row_frame("recent-header", Row::RecentHeader, paint, cx)
-            .h(px(28.0))
-            .px(px(8.0))
+            .h(rem_px(28.0))
+            .px(rem_px(8.0))
             .items_center()
-            .gap(px(6.0))
+            .gap(rem_px(6.0))
             .text_color(muted)
             .font_weight(FontWeight::MEDIUM)
             .child(
@@ -568,9 +569,9 @@ impl Workspace {
             .map(|(index, (name, folder))| {
                 self.row_frame(("recent", index as u64), Row::Recent(index), paint, cx)
                     .flex_col()
-                    .gap(px(3.0))
-                    .px(px(10.0))
-                    .py(px(8.0))
+                    .gap(rem_px(3.0))
+                    .px(rem_px(10.0))
+                    .py(rem_px(8.0))
                     .child(
                         div()
                             .overflow_hidden()
