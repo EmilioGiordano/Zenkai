@@ -7,4 +7,5 @@ pub mod process;
 pub mod session;
 pub mod state;
 pub mod thread;
+pub mod tool_rows;
 mod wire;
