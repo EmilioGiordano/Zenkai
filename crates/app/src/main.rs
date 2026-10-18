@@ -12,6 +12,7 @@ mod autosave;
 mod chart;
 mod chart_panel;
 mod chat;
+mod chat_layout;
 mod clipboard;
 mod close_prompt;
 mod csv_preview;
