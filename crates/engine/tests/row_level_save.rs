@@ -254,8 +254,8 @@ fn a_move_redone_after_a_save_rewrites_the_sheet_whole() {
         .unwrap();
     book.undo().unwrap();
     save(&book, &document);
-    // The delete dropped the validation below it, and an undo does not bring it back.
-    assert!(!part(&document, ROWS_PART).contains("sqref=\"A195\""));
+    // The undo brought back the validation the delete dropped.
+    assert!(part(&document, ROWS_PART).contains("sqref=\"A195\""));
     book.redo().unwrap();
     book.set_input(SheetId(0), pos(49, 0), "1000").unwrap();
     save(&book, &document);
