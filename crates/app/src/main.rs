@@ -32,6 +32,7 @@ mod memory;
 mod palette;
 mod panel_width;
 mod previews;
+mod prompt_gate;
 mod recent;
 mod recovery;
 mod refresh;
