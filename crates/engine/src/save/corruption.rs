@@ -82,6 +82,16 @@ fn a_flipped_byte_in_a_generated_sheet_fails() {
     }));
 }
 
+// Inflating did not notice this one: the last byte of a deflate stream can carry
+// padding bits.
+#[test]
+fn a_flipped_last_byte_of_a_generated_sheet_fails() {
+    rejected_on_verify(written_then_verified(plan(), |bytes| {
+        let data = sheet_data(bytes);
+        bytes[data.end - 1] ^= 0x80;
+    }));
+}
+
 #[test]
 fn a_zeroed_tail_of_a_generated_sheet_fails() {
     rejected_on_verify(written_then_verified(plan(), |bytes| {
@@ -119,6 +129,15 @@ fn a_wrong_checksum_in_the_central_directory_fails() {
     rejected_on_verify(written_then_verified(plan(), |bytes| {
         let header = central_header(bytes, SHEET);
         bytes[header + 16] ^= 0x01;
+    }));
+}
+
+// Inflating did not notice this one either: nothing read the uncompressed size.
+#[test]
+fn a_wrong_size_in_the_central_directory_fails() {
+    rejected_on_verify(written_then_verified(plan(), |bytes| {
+        let header = central_header(bytes, SHEET);
+        bytes[header + 24] ^= 0x01;
     }));
 }
 
