@@ -1395,9 +1395,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(document) = self.documents.get(id) else {
+            self.save_ended(id, false, window, cx);
             return;
         };
         let Some(workbook) = document.workbook() else {
+            self.save_ended(id, false, window, cx);
             self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
             return;
         };
@@ -1409,18 +1411,8 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move { files::write_csv_file(&target, &rows) })
                 .await;
-            let update = this.update(cx, |this, cx| match written {
-                Ok(()) if sheets > 1 => this.notify(
-                    Severity::Warning,
-                    t!("notice.saved_active_sheet_only", path = path.display()),
-                    cx,
-                ),
-                Ok(()) => this.notify(
-                    Severity::Info,
-                    t!("notice.saved_to", path = path.display()),
-                    cx,
-                ),
-                Err(error) => this.notify(Severity::Error, error, cx),
+            let update = this.update_in(cx, |this, window, cx| {
+                this.csv_export_ended(id, &path, sheets, written, window, cx)
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during export");
@@ -1637,7 +1629,6 @@ impl Workspace {
     ) {
         if files::is_delimited_text(&chosen) {
             self.export_csv(id, chosen, window, cx);
-            self.csv_ended_departure(id, window, cx);
             return;
         }
         let Some(document) = self.documents.get(id) else {
