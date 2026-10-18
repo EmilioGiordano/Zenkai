@@ -6,7 +6,7 @@ impl Workspace {
     // Every blocking question goes through here so the gate stays shut for exactly as long as
     // the dialog is open, whatever the platform does with the owner window.
     pub(super) fn ask<T>(
-        &mut self,
+        &self,
         level: PromptLevel,
         message: &str,
         detail: Option<&str>,
