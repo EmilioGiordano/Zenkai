@@ -14,6 +14,7 @@ use crate::agent_review::Review;
 use crate::entry::display_name;
 use crate::files;
 use crate::find::FindBar;
+use crate::pending_save::{AfterJob, JobEnd, PendingSave};
 use crate::spaces::SpaceId;
 use crate::stale_view::{StaleRequest, StaleSlot};
 
@@ -40,6 +41,7 @@ pub struct Document {
     batch_running: bool,
     sheets_stale: bool,
     file_job: FileJob,
+    pending_save: PendingSave,
     pub path: Option<PathBuf>,
     pub dirty: bool,
     pub sheet: SheetId,
@@ -115,6 +117,7 @@ impl Document {
             batch_running: false,
             sheets_stale: false,
             file_job: FileJob::Idle,
+            pending_save: PendingSave::None,
             path,
             dirty: false,
             sheet: SheetId(0),
@@ -232,6 +235,14 @@ impl Document {
 
     pub fn file_job(&self) -> FileJob {
         self.file_job
+    }
+
+    pub fn request_save(&mut self) {
+        self.pending_save.request();
+    }
+
+    pub fn settle_save(&mut self, end: JobEnd) -> AfterJob {
+        self.pending_save.settle(end)
     }
 
     pub fn begin_file_job(&mut self, job: FileJob) -> Option<SharedWorkbook> {

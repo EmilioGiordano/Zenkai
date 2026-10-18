@@ -15,6 +15,7 @@ use crate::close_prompt::ClosePlan;
 use crate::document::{self, FileJob, SharedWorkbook, SnapshotOutcome};
 use crate::documents::Intent;
 use crate::entry::Entry;
+use crate::pending_save::{AfterJob, JobEnd};
 use crate::recovery;
 use zenkai_agent::settings_file::{self, SettingsPaths};
 
@@ -121,11 +122,11 @@ impl Workspace {
             let mut persisted = Instant::now();
             loop {
                 cx.background_executor().timer(AUTOSAVE_TICK).await;
-                let update = this.update(cx, |this, cx| {
+                let update = this.update_in(cx, |this, window, cx| {
                     let every = Duration::from_secs(u64::from(
                         agent_settings::settings(cx).general.autosave_seconds,
                     ));
-                    this.autosave_all(every, cx);
+                    this.autosave_all(every, window, cx);
                     if persisted.elapsed() >= every {
                         persisted = Instant::now();
                         this.persist_session(cx);
@@ -200,18 +201,24 @@ impl Workspace {
         cx.notify();
     }
 
-    fn autosave_all(&mut self, every: Duration, cx: &mut Context<Self>) {
+    fn autosave_all(&mut self, every: Duration, window: &mut Window, cx: &mut Context<Self>) {
         // Closing writes its own copies; a stray autosave could outlive a discarded workbook.
         if self.lifecycle == Lifecycle::Closing {
             return;
         }
         let ids: Vec<WorkbookId> = self.documents.iter().map(|document| document.id).collect();
         for id in ids {
-            self.autosave(id, every, cx);
+            self.autosave(id, every, window, cx);
         }
     }
 
-    fn autosave(&mut self, id: WorkbookId, every: Duration, cx: &mut Context<Self>) {
+    fn autosave(
+        &mut self,
+        id: WorkbookId,
+        every: Duration,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(directory) = self.recovery_dir.clone() else {
             return;
         };
@@ -251,7 +258,7 @@ impl Workspace {
         };
         let edits = document.edit_count();
         let generation = document.generation();
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
@@ -265,7 +272,7 @@ impl Workspace {
                     )
                 })
                 .await;
-            let update = this.update(cx, |this, cx| {
+            let update = this.update_in(cx, |this, window, cx| {
                 let Some(document) = this.documents.get_mut(id) else {
                     return;
                 };
@@ -273,6 +280,7 @@ impl Workspace {
                 if !document.is_current(generation) {
                     return;
                 }
+                let follow_up = document.settle_save(JobEnd::Autosaved);
                 match result {
                     Ok(SnapshotOutcome::Written { lacks }) => {
                         document.recovery_written(edits);
@@ -287,6 +295,9 @@ impl Workspace {
                         t!("notice.autosave_failed", error = error),
                         cx,
                     ),
+                }
+                if follow_up == AfterJob::SaveAgain {
+                    this.save_again(id, window, cx);
                 }
             });
             if let Err(error) = update {
