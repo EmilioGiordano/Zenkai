@@ -21,6 +21,7 @@ use crate::panel_width::Panel;
 pub(super) struct ChatDock {
     pub(super) panel: Option<Entity<ChatPanel>>,
     pub(super) open: bool,
+    pub(super) synced_change: Option<(u64, bool)>,
     events: Option<Subscription>,
 }
 
@@ -239,15 +240,6 @@ impl Workspace {
                 panel.deny_permission(cx);
             }
         });
-    }
-
-    pub(super) fn chat_question_waiting(&self, cx: &App) -> bool {
-        self.chat.open
-            && self
-                .chat
-                .panel
-                .as_ref()
-                .is_some_and(|panel| panel.read(cx).permission_visible())
     }
 
     pub(super) fn chat_open(&self) -> bool {

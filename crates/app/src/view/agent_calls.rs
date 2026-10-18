@@ -10,8 +10,8 @@ use gpui_kit::*;
 use zenkai_agent::bridge::{Bridge, ENDPOINT_FILE};
 use zenkai_agent::settings::{ExternalAgents, PermissionMode, Settings};
 use zenkai_agent::tools::{
-    self, NewWorkbook, PlannedWrite, ReadRequest, ToolCall, ToolEndpoint, ToolError, ToolReply,
-    ToolRequest, WorkbookId, WriteRequest,
+    self, CallOrigin, NewWorkbook, PlannedWrite, ReadRequest, ToolCall, ToolEndpoint, ToolError,
+    ToolReply, ToolRequest, WorkbookId, WriteRequest,
 };
 
 use super::agent_review::AgentWrite;
@@ -438,9 +438,6 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(pending) = self.agent.pending.take() else {
-            if self.chat_question_waiting(cx) {
-                self.answer_chat_permission(decision == Decision::Allow, cx);
-            }
             return;
         };
         self.release_focus_from_bar(&pending.focus, pending.return_focus.clone(), window, cx);
@@ -521,13 +518,22 @@ impl Workspace {
                 .is_some_and(|panel| panel.read(cx).shows_agent_change())
     }
 
-    // The chat shows the question in the transcript, so the bar over the workbook only appears
-    // when the chat does not.
+    // The bar only shows when the chat does not carry the question itself.
     pub(super) fn sync_chat_change(&mut self, cx: &mut Context<Self>) {
         let Some(panel) = self.chat.panel.clone() else {
             return;
         };
-        let change = self.agent.pending.as_ref().map(|pending| {
+        let inline = self
+            .agent
+            .pending
+            .as_ref()
+            .filter(|pending| pending.call.origin == CallOrigin::Chat);
+        let key = inline.map(|pending| (pending.serial, self.pending_text(pending).on_screen));
+        if key == self.chat.synced_change {
+            return;
+        }
+        self.chat.synced_change = key;
+        let change = inline.map(|pending| {
             let text = self.pending_text(pending);
             AgentChange {
                 caption: matches!(pending.change, Change::Write { .. }).then_some(text.title),
@@ -538,12 +544,13 @@ impl Workspace {
                 focus: pending.focus.clone(),
             }
         });
-        panel.update(cx, |panel, cx| panel.set_agent_change(change, cx));
+        // The chat may be mid-update when it leads here, and an entity cannot be updated twice.
+        cx.defer(move |cx| panel.update(cx, |panel, cx| panel.set_agent_change(change, cx)));
     }
 
     pub(super) fn render_agent_approval(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let pending = self.agent.pending.as_ref()?;
-        if self.chat_shows_agent_change(cx) {
+        if pending.call.origin == CallOrigin::Chat && self.chat_shows_agent_change(cx) {
             return None;
         }
         let theme = cx.theme();
