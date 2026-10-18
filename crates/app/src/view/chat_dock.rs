@@ -5,12 +5,15 @@ use gpui_kit::base::Selectable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
 use zenkai_agent::chat::thread::FileCard;
+use zenkai_agent::settings::PermissionMode;
+use zenkai_agent::tools::AgentAccess;
 use zenkai_i18n::t;
 use zenkai_types::{SheetId, WorkbookId};
 
 use super::{Severity, Workspace, sidebar};
 use crate::actions::ToggleAgentChat;
 use crate::agent_folder::FolderHint;
+use crate::agent_routing;
 use crate::chat::reference::Reference;
 use crate::chat::{ChatEvent, ChatPanel, reference};
 use crate::document::Document;
@@ -29,6 +32,14 @@ impl Workspace {
     pub(crate) fn active_workbook_for_chat(&self) -> Option<(WorkbookId, String)> {
         let document = self.documents.active()?;
         Some((document.id, document.name()))
+    }
+
+    pub(crate) fn agent_access_for_chat(&self, permission: PermissionMode) -> AgentAccess {
+        self.documents
+            .active()
+            .map_or(AgentAccess::Editable, |document| {
+                agent_routing::access(document, permission)
+            })
     }
 
     pub(crate) fn add_chat_card(&mut self, card: FileCard, cx: &mut Context<Self>) {
