@@ -18,7 +18,7 @@ use crate::error::EngineError;
 use crate::save::{SHEET_BUFFER_BYTES, rejected};
 
 // The check trails the writer by at most this many chunks of `SHEET_BUFFER_BYTES`: with
-// the chunk the checker reads and the one being sent, 1.5 MB per part being written.
+// the chunk the checker reads and the one being filled, 1.5 MB per part being written.
 const CHECK_QUEUE_CHUNKS: usize = 4;
 
 const GENERATED_COMPRESSION: CompressionMethod = CompressionMethod::Deflated;
@@ -202,6 +202,8 @@ struct OpenPart {
     // Checked as written: the compressed bytes lag the XML, so the ratio is never lower
     // than a reader of the finished part measures.
     ratio: Result<(), ReadError>,
+    // Sent whole, so the cost of the check follows the bytes, never the number of writes.
+    filling: Vec<u8>,
     // None once the check stopped reading: it found the part malformed, and says so
     // when joined.
     sender: Option<SyncSender<Vec<u8>>>,
@@ -220,6 +222,7 @@ impl OpenPart {
             hasher: crc32fast::Hasher::new(),
             size: 0,
             ratio: Ok(()),
+            filling: Vec::with_capacity(SHEET_BUFFER_BYTES),
             sender: Some(sender),
             check,
         })
@@ -231,19 +234,36 @@ impl OpenPart {
         if self.ratio.is_ok() {
             self.ratio = check_ratio(&self.name, compressed, self.size);
         }
-        for chunk in bytes.chunks(SHEET_BUFFER_BYTES) {
-            let Some(sender) = &self.sender else {
-                return;
-            };
-            if sender.send(chunk.to_vec()).is_err() {
-                self.sender = None;
+        if self.sender.is_none() {
+            return;
+        }
+        let mut rest = bytes;
+        while !rest.is_empty() {
+            let room = SHEET_BUFFER_BYTES - self.filling.len();
+            let (now, later) = rest.split_at(room.min(rest.len()));
+            self.filling.extend_from_slice(now);
+            rest = later;
+            if self.filling.len() == SHEET_BUFFER_BYTES {
+                self.send();
             }
+        }
+    }
+
+    fn send(&mut self) {
+        let chunk = std::mem::replace(&mut self.filling, Vec::with_capacity(SHEET_BUFFER_BYTES));
+        if let Some(sender) = &self.sender
+            && sender.send(chunk).is_err()
+        {
+            self.sender = None;
         }
     }
 
     // A part that fails here fails as the verification would have, so the next save
     // still writes the whole file.
-    fn finish(self) -> Result<CheckedXml, EngineError> {
+    fn finish(mut self) -> Result<CheckedXml, EngineError> {
+        if !self.filling.is_empty() {
+            self.send();
+        }
         let OpenPart {
             name,
             hasher,
@@ -251,6 +271,7 @@ impl OpenPart {
             ratio,
             sender,
             check,
+            ..
         } = self;
         drop(sender);
         match check.join() {
@@ -356,6 +377,27 @@ mod tests {
         assert_eq!(digest.crc32, crc32fast::hash(&xml));
         assert!(digest.compressed_size > 0);
         assert_eq!(written.len(), 2);
+    }
+
+    #[test]
+    fn a_part_written_in_small_pieces_is_checked_whole() {
+        let xml = row_xml(2 * SHEET_BUFFER_BYTES + 3);
+        let mut writer = PartWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer.start_generated("a.xml").unwrap();
+        for piece in xml.chunks(1000) {
+            writer.write_all(piece).unwrap();
+        }
+        let (_, written) = writer.finish().unwrap();
+        let Written::Generated(digest) = written[0].1 else {
+            panic!("the part was generated");
+        };
+        assert_eq!(digest.crc32, crc32fast::hash(&xml));
+        let mut writer = PartWriter::new(Cursor::new(Vec::new())).unwrap();
+        writer.start_generated("a.xml").unwrap();
+        for piece in xml[..xml.len() - 1].chunks(1000) {
+            writer.write_all(piece).unwrap();
+        }
+        assert!(writer.finish().is_err());
     }
 
     #[test]
