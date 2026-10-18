@@ -16,6 +16,7 @@ use super::{SettingsWindow, agents, info, update};
 use crate::actions::DetectAgents;
 use crate::agent_mark::{self, SETTINGS_MARK_SIZE};
 use crate::agent_settings::{self, AgentConfig, SecretState};
+use crate::interface_scale::rem_px;
 
 enum Status {
     Ready,
@@ -274,7 +275,7 @@ impl SettingsWindow {
                             .items_center()
                             .text_xs()
                             .flex_shrink_0()
-                            .child(div().size(px(8.0)).rounded_full().bg(dot))
+                            .child(div().size(rem_px(8.0)).rounded_full().bg(dot))
                             .child(status_text),
                     )
                     .child(action)
@@ -324,10 +325,10 @@ impl SettingsWindow {
                 h_flex()
                     .gap_3()
                     .items_center()
-                    .child(div().w(px(170.0)).child(name.to_string()))
+                    .child(div().w(rem_px(170.0)).child(name.to_string()))
                     .child(
                         div()
-                            .w(px(90.0))
+                            .w(rem_px(90.0))
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(status),

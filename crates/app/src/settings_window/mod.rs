@@ -20,7 +20,7 @@ use zenkai_i18n::t;
 
 use crate::actions::*;
 use crate::agent_settings::{self, HeldDecision};
-use crate::interface_scale;
+use crate::interface_scale::{self, rem_px};
 use crate::keymap::KeymapState;
 use crate::space_settings;
 use keyboard::{KeyboardState, Shortcut};
@@ -298,7 +298,7 @@ impl Render for SettingsWindow {
                 }),
             )
             .child(
-                TitleBar::new().child(
+                TitleBar::new().h(rem_px(34.0)).child(
                     div()
                         .text_sm()
                         .text_color(theme.muted_foreground)
