@@ -25,17 +25,17 @@ fn token_count(tokens: u64) -> String {
 }
 
 impl ChatPanel {
-    fn layout(&self, cx: &App) -> ChatLayout {
-        self.workspace
-            .read_with(cx, |workspace, _| workspace.chat_layout())
-            .unwrap_or_default()
-    }
-
-    fn selected_range(&self, cx: &App) -> Option<String> {
-        self.workspace
-            .read_with(cx, |workspace, cx| workspace.selection_for_chat(cx))
-            .ok()
-            .flatten()
+    pub(crate) fn show_workspace_view(
+        &mut self,
+        layout: ChatLayout,
+        selected_range: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.layout != layout || self.selected_range != selected_range {
+            self.layout = layout;
+            self.selected_range = selected_range;
+            cx.notify();
+        }
     }
 
     pub(super) fn render_header(&self, cx: &App) -> impl IntoElement {
@@ -53,9 +53,10 @@ impl ChatPanel {
                 .clone()
                 .unwrap_or_else(|| t!("chat.new_conversation").to_string()),
         };
-        let layout = self.layout(cx);
+        let layout = self.layout;
         let range = self
-            .selected_range(cx)
+            .selected_range
+            .clone()
             .filter(|_| layout == ChatLayout::FullWindow);
         let usage = self.state.usage;
         let percent = usage.and_then(|usage| usage.fraction());

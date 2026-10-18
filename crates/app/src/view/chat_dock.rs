@@ -12,7 +12,7 @@ use zenkai_i18n::t;
 use zenkai_types::{SheetId, WorkbookId};
 
 use super::{Severity, Workspace, sidebar};
-use crate::actions::ToggleAgentChat;
+use crate::actions::*;
 use crate::agent_folder::FolderHint;
 use crate::agent_routing;
 use crate::chat::reference::Reference;
@@ -31,7 +31,40 @@ pub(super) struct ChatDock {
     events: Option<Subscription>,
 }
 
+macro_rules! leave_full_window_before {
+    ($root:expr, $cx:expr; $($action:ty),+ $(,)?) => {{
+        let mut root = $root;
+        $(
+            root = root.capture_action($cx.listener(|this, _: &$action, _, cx| {
+                this.show_sheet_beside_chat(cx)
+            }));
+        )+
+        root
+    }};
+}
+
 impl Workspace {
+    // Commands the composer does not swallow and that act on the sheet or the open workbooks.
+    pub(super) fn leave_full_window_for_sheet_commands<E: InteractiveElement>(
+        root: E,
+        cx: &mut Context<Self>,
+    ) -> E {
+        leave_full_window_before!(
+            root, cx;
+            Open, NewWorkbook, NextDocument, PreviousDocument, ReopenClosedDocument,
+            NextSheet, PreviousSheet, NewSheet, DuplicateSheet, DeleteSheet, RenameSheet,
+            MoveSheetLeft, MoveSheetRight, Find, Replace, GoTo, GenerateData, InsertChart,
+            ToggleFormulas, ZoomIn, ZoomOut, ZoomReset, Undo, Redo, PasteValues,
+            SortAscending, SortDescending, FreezeTopRow, FreezeFirstColumn, FreezePanes,
+            InsertRows, DeleteRows, InsertColumns, DeleteColumns, HideRows, UnhideRows,
+            HideColumns, UnhideColumns, AlignLeft, AlignCenter, AlignRight, BordersAll,
+            BordersOutside, BorderBottom, BordersNone, ToggleWrapText, IncreaseDecimal,
+            DecreaseDecimal, FormatNumber, FormatCurrency, FormatPercent, FormatDate,
+            FormatGeneral, ClearFormats, ClearAll, NoFill, AutomaticFontColor, GrowFont,
+            ShrinkFont,
+        )
+    }
+
     pub(crate) fn active_workbook_for_chat(&self) -> Option<(WorkbookId, String)> {
         let document = self.documents.active()?;
         Some((document.id, document.name()))
@@ -312,6 +345,11 @@ impl Workspace {
     ) -> Option<impl IntoElement> {
         let panel = self.chat.panel.clone().filter(|_| self.chat.open)?;
         let fills_window = self.chat_fills_window();
+        let layout = self.chat_layout();
+        let range = self
+            .selection_for_chat(cx)
+            .filter(|_| layout == ChatLayout::FullWindow);
+        panel.update(cx, |panel, cx| panel.show_workspace_view(layout, range, cx));
         let width = self.panel_width(Panel::Chat, window);
         Some(
             div()

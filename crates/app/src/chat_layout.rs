@@ -70,7 +70,6 @@ impl ChatLayoutState {
     }
 }
 
-// The share of the width beside the sidebar that the chat takes when it sits next to the sheet.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SideSplit(f32);
 

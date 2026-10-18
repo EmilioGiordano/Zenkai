@@ -2869,7 +2869,6 @@ impl Workspace {
     }
 
     fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.show_sheet_beside_chat(cx);
         self.palette = None;
         self.revert_theme_preview(cx);
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("goto.placeholder")));
@@ -3264,9 +3263,9 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         interface_scale::apply(window, cx);
+        let root = Self::leave_full_window_for_sheet_commands(v_flex(), cx);
         let theme = cx.theme();
-        v_flex()
-            .relative()
+        root.relative()
             .key_context({
                 let mut context = KeyContext::default();
                 context.add("Workspace");
