@@ -467,7 +467,7 @@ fn retries_whole(error: &EngineError, target: &Path, changed: ChangedFile) -> bo
         // the file itself; the user saves again, and that save writes it whole.
         EngineError::ChangedOnDisk(base) => base != target,
         EngineError::BaseUnusable { path, .. } => {
-            changed == ChangedFile::Replace || !files::same_file(path, target)
+            changed == ChangedFile::Replace || !files::may_be_same_file(path, target)
         }
         _ => false,
     }
@@ -1087,6 +1087,14 @@ mod tests {
         assert!(!retries_whole(&unusable(&base), &base, ChangedFile::Ask));
         assert!(retries_whole(&unusable(&base), &base, ChangedFile::Replace));
         assert!(retries_whole(&unusable(&base), &other, ChangedFile::Ask));
+    }
+
+    #[test]
+    fn a_base_that_cannot_be_resolved_counts_as_the_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("gone.xlsx");
+        let spelled = dir.path().join("sub").join("..").join("gone.xlsx");
+        assert!(!retries_whole(&unusable(&missing), &spelled, ChangedFile::Ask));
     }
 
     #[test]

@@ -46,6 +46,14 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+// Errs toward true: a path that cannot be resolved may still be the same file spelled differently.
+pub fn may_be_same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => true,
+    }
+}
+
 pub fn is_remote_or_device(path: &Path) -> bool {
     matches!(
         path.components().next(),
