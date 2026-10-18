@@ -1,7 +1,3 @@
-// The cells a Delete clears, found by walking the rows of the range, are exactly those
-// a scan of every stored cell finds: over sheets with empty rows and style-only cells,
-// and ranges past the used area or spanning whole rows, columns or the sheet.
-
 use ironcalc::base::cell_store::CellStore;
 use ironcalc::base::types::Cell;
 use proptest::prelude::*;
