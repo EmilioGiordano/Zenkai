@@ -253,6 +253,24 @@ fn a_save_after_an_undo_warns_once_about_the_hyperlink_it_cannot_write() {
     assert_eq!(dropped_by_saving(&book, &target), []);
 }
 
+// The save after the first undo adopts a print that holds the hyperlink the file lacks, so
+// a redo and undo leave the sheet as that save saw it and the next save copies it.
+#[test]
+fn a_restore_onto_a_sheet_the_save_copies_still_warns_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, _) = baseline(dir.path());
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    let target = dir.path().join("saved.xlsx");
+    book.delete_rows(SHEET, row(1), 1).unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+    book.undo().unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+    book.redo().unwrap();
+    book.undo().unwrap();
+    assert!(dropped_by_saving(&book, &target).contains(&Unsupported::Hyperlinks));
+    assert_eq!(dropped_by_saving(&book, &target), []);
+}
+
 #[test]
 fn an_undo_that_leaves_nothing_unwritable_warns_about_nothing() {
     let dir = tempfile::tempdir().unwrap();
