@@ -3,7 +3,7 @@ use std::time::Duration;
 use serde_json::Value;
 use zenkai_i18n::t;
 
-use crate::chat::thread::{Entry, ToolCard, ToolKind, ToolStatus};
+use crate::chat::thread::{Entry, ToolCard, ToolStatus};
 use crate::settings::ToolCallDisplay;
 use crate::tools::{escaped_multiline, escaped_text, shown_text};
 
@@ -26,33 +26,56 @@ enum KnownTool {
     OpenWorkbook,
 }
 
-const KNOWN: [(&str, KnownTool); 11] = [
-    ("list_workbooks", KnownTool::ListWorkbooks),
-    ("list_sheets", KnownTool::ListSheets),
-    ("get_selection", KnownTool::GetSelection),
-    ("read_range", KnownTool::ReadRange),
-    ("find", KnownTool::Find),
-    ("write_cells", KnownTool::WriteCells),
-    ("set_formula", KnownTool::SetFormula),
-    ("format_range", KnownTool::FormatRange),
-    ("generate_data", KnownTool::GenerateData),
-    ("create_workbook", KnownTool::CreateWorkbook),
-    ("open_workbook", KnownTool::OpenWorkbook),
-];
-
 impl KnownTool {
-    // Agents name the same tool "read_range", "mcp__zenkai__read_range" or "Read range"; only a
-    // whole name counts, so "Finding files" is not the find tool.
+    const ALL: [KnownTool; 11] = [
+        KnownTool::ListWorkbooks,
+        KnownTool::ListSheets,
+        KnownTool::GetSelection,
+        KnownTool::ReadRange,
+        KnownTool::Find,
+        KnownTool::WriteCells,
+        KnownTool::SetFormula,
+        KnownTool::FormatRange,
+        KnownTool::GenerateData,
+        KnownTool::CreateWorkbook,
+        KnownTool::OpenWorkbook,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            KnownTool::ListWorkbooks => "list_workbooks",
+            KnownTool::ListSheets => "list_sheets",
+            KnownTool::GetSelection => "get_selection",
+            KnownTool::ReadRange => "read_range",
+            KnownTool::Find => "find",
+            KnownTool::WriteCells => "write_cells",
+            KnownTool::SetFormula => "set_formula",
+            KnownTool::FormatRange => "format_range",
+            KnownTool::GenerateData => "generate_data",
+            KnownTool::CreateWorkbook => "create_workbook",
+            KnownTool::OpenWorkbook => "open_workbook",
+        }
+    }
+
+    fn is_read_only(self) -> bool {
+        matches!(
+            self,
+            KnownTool::ListWorkbooks
+                | KnownTool::ListSheets
+                | KnownTool::GetSelection
+                | KnownTool::ReadRange
+                | KnownTool::Find
+        )
+    }
+
+    // Agents name the same tool "read_range", "Read range" or "mcp__zenkai__read_range"; the
+    // whole title must be one of these, so "Finding files" or "x__read_range" are not it.
     fn of(title: &str) -> Option<KnownTool> {
         let normalized = title.trim().to_lowercase().replace([' ', '-'], "_");
-        let parts: Vec<&str> = normalized
-            .split("__")
-            .flat_map(|part| part.split([':', '.', '/']))
-            .collect();
-        KNOWN
-            .iter()
-            .find(|(name, _)| parts.contains(name))
-            .map(|(_, tool)| *tool)
+        let name = normalized
+            .strip_prefix("mcp__zenkai__")
+            .unwrap_or(&normalized);
+        KnownTool::ALL.into_iter().find(|tool| tool.name() == name)
     }
 
     fn label(self) -> &'static str {
@@ -127,9 +150,8 @@ pub fn row_text(card: &ToolCard) -> RowText {
     }
 }
 
-// The kind and the title are whatever the agent reported, so nothing here may hide a call.
-pub fn is_read_only(card: &ToolCard) -> bool {
-    matches!(card.kind, ToolKind::Read | ToolKind::Search)
+pub fn is_known_read(card: &ToolCard) -> bool {
+    KnownTool::of(&card.title).is_some_and(KnownTool::is_read_only)
 }
 
 pub fn needs_attention(card: &ToolCard) -> bool {
@@ -137,7 +159,7 @@ pub fn needs_attention(card: &ToolCard) -> bool {
 }
 
 fn groupable(card: &ToolCard) -> bool {
-    card.status == ToolStatus::Completed && is_read_only(card)
+    card.status == ToolStatus::Completed && is_known_read(card)
 }
 
 pub fn group_text(cards: &[&ToolCard]) -> RowText {
@@ -291,7 +313,7 @@ pub fn plan(entries: &[Entry], display: ToolCallDisplay) -> Vec<Item> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chat::thread::ToolCallId;
+    use crate::chat::thread::{ToolCallId, ToolKind};
 
     fn card(id: &str, title: &str, status: ToolStatus, input: &str) -> ToolCard {
         ToolCard {
@@ -307,14 +329,12 @@ mod tests {
     }
 
     fn read(id: &str) -> Entry {
-        let mut read = card(
+        Entry::Tool(card(
             id,
             "mcp__zenkai__read_range",
             ToolStatus::Completed,
             r#"{"sheet":"Sales","range":"A1:F9"}"#,
-        );
-        read.kind = ToolKind::Read;
-        Entry::Tool(read)
+        ))
     }
 
     fn write(id: &str, status: ToolStatus) -> Entry {
@@ -483,8 +503,23 @@ mod tests {
             ToolStatus::Failed,
             ""
         )));
-        let forged = card("3", "read_range", ToolStatus::Completed, "");
-        assert!(!is_read_only(&forged));
+        assert!(is_known_read(&card(
+            "3",
+            "read_range",
+            ToolStatus::Completed,
+            ""
+        )));
+        for title in [
+            "x__read_range",
+            "evil:read_range",
+            "Read range of /etc",
+            "write_cells",
+        ] {
+            assert!(
+                !is_known_read(&card("4", title, ToolStatus::Completed, "")),
+                "{title}"
+            );
+        }
     }
 
     #[test]
