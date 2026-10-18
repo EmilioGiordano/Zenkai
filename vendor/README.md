@@ -56,6 +56,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/lib.rs`, `src/user_model/{common,undo_redo,clipboard,mod}.rs`. Builds on
   ironcalc/IronCalc#1435. Tests: `src/test/test_incremental.rs`,
   `src/test/test_recalculation_fallbacks.rs`.
+- `Model::full_evaluations` counts the evaluations of every formula, so a caller can tell
+  whether an edit evaluated in full (`src/incremental.rs`, `src/model.rs`,
+  `src/new_empty.rs`). Needs the incremental recalculation. Test:
+  `full_evaluations_counts_only_full_evaluations` in `src/test/test_incremental.rs`.
 - A formula that evaluates to an empty cell reads as 0 the first time too (`src/model.rs`,
   `evaluate_cell`). Tests: `src/test/test_empty_formula_result.rs`.
 - A workbook with circular references keeps its dependency index, and an edit is
@@ -143,6 +147,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   workbook of millions of values no longer builds a 12-byte index of each one first
   (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
   `src/test/test_full_evaluation_cells.rs`.
+- `UserModel::undo_cells` and `UserModel::redo_cells` tell which cells the next undo or
+  redo step can change (`StepCells`: cell areas and the sheets whose rows or columns move,
+  or `None` for the workbook; size, visibility, style, pane and sheet-setting diffs add
+  or remove no cell), so a caller that caches per-sheet facts keeps the ones the step cannot touch
+  (`src/user_model/history.rs`, `src/user_model/common.rs`). Stands on its own. Tests:
+  `src/test/user_model/test_step_cells.rs`.
 - NOW and TODAY read the clock once per evaluation, as Excel does, so `=NOW()-NOW()` is
   always 0 (`src/model.rs` `evaluation_milliseconds`, `src/incremental.rs`, `src/tz/`).
   Tests: `src/test/test_now.rs`. Stands on its own.

@@ -188,6 +188,12 @@ impl Model<'_> {
         self.last_recalculation
     }
 
+    /// How many times every formula was evaluated, since the model was created. An edit that
+    /// leaves it alone did not evaluate in full, so it did not add or remove a spilled cell.
+    pub fn full_evaluations(&self) -> u64 {
+        self.full_evaluations
+    }
+
     /// How many SUMIF, SUMIFS, COUNTIF and COUNTIFS results were updated by what changed
     /// instead of reading their whole ranges again, since the model was created.
     pub fn criteria_deltas(&self) -> u64 {

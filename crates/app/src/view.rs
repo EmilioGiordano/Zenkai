@@ -2347,7 +2347,7 @@ impl Workspace {
         let wrap = !wrapped;
         self.edit(window, cx, move |wb| {
             wb.apply_style(sheet, range, StyleChange::Wrap(wrap))?;
-            if !wrap || range.cell_count() > MAX_AUTOFIT_CELLS as u64 {
+            if !wrap {
                 return Ok(());
             }
             grow_wrapped_rows(wb, sheet, range)
@@ -3664,15 +3664,24 @@ fn rgb_of(color: Hsla) -> Rgb {
 fn widen_for_numbers(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<(), EngineError> {
     let sizes = wb.sizes(sheet);
     let mut needed: std::collections::BTreeMap<ColIdx, f32> = Default::default();
-    // Small ranges are read cell by cell; large ones only where the sheet has content.
+    // Small ranges are read cell by cell, and so is the used part of a large one when it
+    // is small; otherwise only where the sheet has content.
     let cells: Vec<CellPos> = if range.cell_count() <= MAX_AUTOFIT_CELLS as u64 {
         range.positions().collect()
     } else {
-        wb.filled_cells(sheet)
-            .into_iter()
-            .filter(|pos| range.contains(*pos))
-            .take(MAX_AUTOFIT_CELLS)
-            .collect()
+        match range.clip_to(wb.used_end(sheet)) {
+            None => Vec::new(),
+            Some(used) if used.cell_count() <= MAX_AUTOFIT_CELLS as u64 => used
+                .positions()
+                .filter(|pos| !wb.input(sheet, *pos).is_empty())
+                .collect(),
+            Some(_) => wb
+                .filled_cells(sheet)
+                .into_iter()
+                .filter(|pos| range.contains(*pos))
+                .take(MAX_AUTOFIT_CELLS)
+                .collect(),
+        }
     };
     for pos in cells {
         let custom = sizes
@@ -3697,8 +3706,14 @@ fn widen_for_numbers(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 
 // Excel grows default-height rows to show every wrapped line; the line count is
 // estimated from the text length and column width, like the column autofit.
+// A range past MAX_AUTOFIT_CELLS keeps its row heights, as every cell of it would be read.
 fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+    if range.cell_count() > MAX_AUTOFIT_CELLS as u64 {
+        return Ok(());
+    }
     let sizes = wb.sizes(sheet);
+    let custom_rows: std::collections::HashSet<zenkai_types::RowIdx> =
+        sizes.rows.iter().map(|(row, _)| *row).collect();
     let width = |col: ColIdx| {
         sizes
             .columns
@@ -3709,12 +3724,8 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
     // The tallest wrapped cell sets each row, once.
     let mut lines_per_row: std::collections::BTreeMap<zenkai_types::RowIdx, f32> =
         Default::default();
-    for pos in wb
-        .filled_cells(sheet)
-        .into_iter()
-        .filter(|pos| range.contains(*pos))
-    {
-        if sizes.rows.iter().any(|(row, _)| *row == pos.row) {
+    for pos in range.positions() {
+        if wb.input(sheet, pos).is_empty() || custom_rows.contains(&pos.row) {
             continue;
         }
         let view = wb.cell(sheet, pos);
@@ -3819,6 +3830,14 @@ mod tests {
     }
 
     #[test]
+    fn a_whole_column_widens_for_the_numbers_in_its_used_part() {
+        let mut wb = Workbook::new_empty().unwrap();
+        priced_number(&mut wb, "$#,##0.00");
+        widen_for_numbers(&mut wb, SHEET, Range::parse_a1("A1:A1048576").unwrap()).unwrap();
+        assert!(column_is_widened(&wb));
+    }
+
+    #[test]
     fn cells_outside_the_range_do_not_widen_their_column() {
         let mut wb = Workbook::new_empty().unwrap();
         priced_number(&mut wb, "$#,##0.00");
@@ -3877,6 +3896,26 @@ mod tests {
         wb.set_input(SHEET, a1(), &"word ".repeat(40)).unwrap();
         grow_wrapped_rows(&mut wb, SHEET, Range::parse_a1("C3:D4").unwrap()).unwrap();
         assert_eq!(row_height(&wb, a1().row), None);
+    }
+
+    #[test]
+    fn a_range_past_the_autofit_cap_keeps_its_row_heights() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_input(SHEET, a1(), &"word ".repeat(40)).unwrap();
+        let whole_sheet = Range::parse_a1("A1:XFD1048576").unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, whole_sheet).unwrap();
+        assert_eq!(row_height(&wb, a1().row), None);
+    }
+
+    #[test]
+    fn only_the_rows_of_the_range_grow() {
+        let mut wb = Workbook::new_empty().unwrap();
+        let a3 = CellPos::parse_a1("A3").unwrap();
+        wb.set_input(SHEET, a1(), &"word ".repeat(40)).unwrap();
+        wb.set_input(SHEET, a3, &"word ".repeat(40)).unwrap();
+        grow_wrapped_rows(&mut wb, SHEET, Range::parse_a1("A1:XFD1").unwrap()).unwrap();
+        assert!(row_height(&wb, a1().row).is_some());
+        assert_eq!(row_height(&wb, a3.row), None);
     }
 
     #[test]

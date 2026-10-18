@@ -7,10 +7,20 @@ use anyhow::{Result, anyhow, bail};
 use zenkai_engine::{
     EditProfile, Engine, EngineError, RecalcMode, XlsxReader, open_xlsx_with, run_with_engine_stack,
 };
-use zenkai_types::CellPos;
+use zenkai_types::{CellPos, Range, StyleChange};
 
-const USAGE: &str =
-    "usage: measure_edit <file.xlsx> <sheet name or index> <cell A1> <text> [--repeat N]";
+const USAGE: &str = concat!(
+    "usage: measure_edit <file.xlsx> <sheet name or index> <cell A1> <text> ",
+    "[--repeat N] [--style] [--undo]"
+);
+
+#[derive(Clone, Copy)]
+enum Step {
+    Edit,
+    Style,
+    Undo,
+    Redo,
+}
 
 struct Request {
     path: PathBuf,
@@ -18,11 +28,29 @@ struct Request {
     cell: CellPos,
     text: String,
     repeat: u32,
+    steps: Vec<Step>,
 }
 
 struct Edit {
-    profile: EditProfile,
+    run: u32,
+    step: Step,
+    edit: Duration,
+    recalculation: Option<(Duration, RecalcMode)>,
+    warm_used_areas: Duration,
     total: Duration,
+}
+
+impl Edit {
+    fn profiled(run: u32, step: Step, profile: EditProfile, started: Instant) -> Edit {
+        Edit {
+            run,
+            step,
+            edit: profile.edit,
+            recalculation: Some((profile.recalculation, profile.mode)),
+            warm_used_areas: profile.warm_used_areas,
+            total: started.elapsed(),
+        }
+    }
 }
 
 struct Report {
@@ -36,15 +64,23 @@ fn ms(duration: Duration) -> f64 {
 }
 
 fn parse_request(args: &[String]) -> Result<Request> {
-    let (positional, repeat) = match args {
-        [file, sheet, cell, text] => ([file, sheet, cell, text], 1),
-        [file, sheet, cell, text, flag, count] if flag == "--repeat" => {
-            let count: u32 = count.parse().map_err(|_| anyhow!(USAGE))?;
-            ([file, sheet, cell, text], count)
-        }
-        _ => bail!(USAGE),
+    let [file, sheet, cell, text, flags @ ..] = args else {
+        bail!(USAGE);
     };
-    let [file, sheet, cell, text] = positional;
+    let mut repeat = 1;
+    let mut steps = vec![Step::Edit];
+    let mut flags = flags.iter();
+    while let Some(flag) = flags.next() {
+        match flag.as_str() {
+            "--repeat" => {
+                let count = flags.next().ok_or_else(|| anyhow!(USAGE))?;
+                repeat = count.parse().map_err(|_| anyhow!(USAGE))?;
+            }
+            "--style" => steps.push(Step::Style),
+            "--undo" => steps.extend([Step::Undo, Step::Redo]),
+            _ => bail!(USAGE),
+        }
+    }
     let cell = CellPos::parse_a1(cell).ok_or_else(|| anyhow!("the cell is not an A1 address"))?;
     if repeat == 0 {
         bail!("--repeat must be at least 1");
@@ -55,12 +91,13 @@ fn parse_request(args: &[String]) -> Result<Request> {
         cell,
         text: text.clone(),
         repeat,
+        steps,
     })
 }
 
-// The app's own open path, then the edit of `Workbook::set_input` with the phases timed
-// apart. `set_input_ms` is the edit alone; `total_ms` adds the warm of the used areas, which
-// the app runs once per edit batch and this probe after each edit. Nothing is read out.
+// The app's own open path, then the app's own edit paths with the phases timed apart.
+// `set_input_ms` is the edit alone; `total_ms` adds the warm of the used areas, which the app
+// runs once per edit batch and this probe after each edit. Nothing the file holds is read out.
 fn measure(request: &Request) -> Result<Report, EngineError> {
     let started = Instant::now();
     let opened = open_xlsx_with(&request.path, XlsxReader::Fast)?;
@@ -77,13 +114,36 @@ fn measure(request: &Request) -> Result<Report, EngineError> {
         .map(|sheet| sheet.id)
         .ok_or_else(|| EngineError::Rejected("no sheet has that name or index".to_string()))?;
     let mut edits = Vec::new();
-    for _ in 0..request.repeat {
-        let started = Instant::now();
-        let profile = workbook.set_input_profiled(sheet, request.cell, &request.text)?;
-        edits.push(Edit {
-            profile,
-            total: started.elapsed(),
-        });
+    for run in 1..=request.repeat {
+        for &step in &request.steps {
+            let started = Instant::now();
+            let edit = match step {
+                Step::Edit => Edit::profiled(
+                    run,
+                    step,
+                    workbook.set_input_profiled(sheet, request.cell, &request.text)?,
+                    started,
+                ),
+                Step::Undo => Edit::profiled(run, step, workbook.undo_profiled()?, started),
+                Step::Redo => Edit::profiled(run, step, workbook.redo_profiled()?, started),
+                Step::Style => {
+                    let bold = StyleChange::Bold(true);
+                    workbook.apply_style(sheet, Range::single(request.cell), bold)?;
+                    let edit = started.elapsed();
+                    let warming = Instant::now();
+                    workbook.warm_used_areas();
+                    Edit {
+                        run,
+                        step,
+                        edit,
+                        recalculation: None,
+                        warm_used_areas: warming.elapsed(),
+                        total: started.elapsed(),
+                    }
+                }
+            };
+            edits.push(edit);
+        }
     }
     Ok(Report {
         sheet_index: sheet.0,
@@ -117,17 +177,25 @@ fn main() -> Result<()> {
         request.repeat
     );
     println!("open_ms={:.0}", ms(report.open));
-    for (run, edit) in (1..).zip(&report.edits) {
-        let mode = match edit.profile.mode {
-            RecalcMode::Full => "full",
-            RecalcMode::Incremental => "incremental",
+    for edit in &report.edits {
+        let (recalculation, mode) = match edit.recalculation {
+            Some((duration, RecalcMode::Full)) => (duration, "full"),
+            Some((duration, RecalcMode::Incremental)) => (duration, "incremental"),
+            None => (Duration::ZERO, "none"),
+        };
+        let step = match edit.step {
+            Step::Edit => "edit",
+            Step::Style => "style",
+            Step::Undo => "undo",
+            Step::Redo => "redo",
         };
         println!(
-            "run={run} edit_ms={:.1} recalc_mode={mode} recalc_ms={:.1} warm_used_areas_ms={:.1} set_input_ms={:.1} total_ms={:.1}",
-            ms(edit.profile.edit),
-            ms(edit.profile.recalculation),
-            ms(edit.profile.warm_used_areas),
-            ms(edit.total.saturating_sub(edit.profile.warm_used_areas)),
+            "run={} step={step} edit_ms={:.1} recalc_mode={mode} recalc_ms={:.1} warm_used_areas_ms={:.1} set_input_ms={:.1} total_ms={:.1}",
+            edit.run,
+            ms(edit.edit),
+            ms(recalculation),
+            ms(edit.warm_used_areas),
+            ms(edit.total.saturating_sub(edit.warm_used_areas)),
             ms(edit.total)
         );
     }

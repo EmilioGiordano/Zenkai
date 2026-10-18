@@ -82,5 +82,6 @@ pub use model::FmtSettings;
 pub use model::Model;
 pub use user_model::BorderArea;
 pub use user_model::ClipboardData;
+pub use user_model::StepCells;
 pub use user_model::UserModel;
 pub use utils::get_all_timezones;

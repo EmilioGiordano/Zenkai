@@ -236,6 +236,8 @@ pub struct Model<'a> {
     pub(crate) criteria_ranges: CriteriaRanges,
     /// How many SUMIF(S) and COUNTIF(S) totals were updated by what changed.
     pub(crate) criteria_deltas: u64,
+    /// How many times every formula was evaluated, since the model was created.
+    pub(crate) full_evaluations: u64,
     /// The clock NOW and TODAY read, taken once at the start of each evaluation as Excel does
     pub(crate) evaluation_milliseconds: i64,
 }
@@ -1694,6 +1696,7 @@ impl<'a> Model<'a> {
             last_recalculation: Recalculation::Full,
             criteria_ranges: CriteriaRanges::new(),
             criteria_deltas: 0,
+            full_evaluations: 0,
             evaluation_milliseconds: get_milliseconds_since_epoch(),
         };
 
@@ -3050,6 +3053,7 @@ impl<'a> Model<'a> {
         self.circular_hits = 0;
         self.circular_cells.clear();
         self.last_recalculation = Recalculation::Full;
+        self.full_evaluations += 1;
         self.collect_spill_cells();
 
         let n = self.spill_cells.len();
