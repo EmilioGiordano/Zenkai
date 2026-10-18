@@ -39,10 +39,20 @@ pub fn copy_stem(stem: &str) -> String {
     }
 }
 
-pub fn same_file(a: &Path, b: &Path) -> bool {
+#[derive(Clone, Copy)]
+pub enum Unresolved {
+    ComparePaths,
+    // For callers that must not act on a file unless they are sure it is another one.
+    AssumeSame,
+}
+
+pub fn same_file(a: &Path, b: &Path, unresolved: Unresolved) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
-        _ => a == b,
+        _ => match unresolved {
+            Unresolved::ComparePaths => a == b,
+            Unresolved::AssumeSame => true,
+        },
     }
 }
 
@@ -377,7 +387,11 @@ mod tests {
         let file = dir.path().join("Book.xlsx");
         std::fs::write(&file, b"x").unwrap();
         let other = dir.path().join(".").join("Book.xlsx");
-        assert!(same_file(&file, &other));
-        assert!(!same_file(&file, &dir.path().join("Other.xlsx")));
+        assert!(same_file(&file, &other, Unresolved::ComparePaths));
+        assert!(!same_file(
+            &file,
+            &dir.path().join("Other.xlsx"),
+            Unresolved::ComparePaths
+        ));
     }
 }

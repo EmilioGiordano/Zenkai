@@ -47,7 +47,7 @@ use crate::clipboard;
 use crate::close_prompt::Departure;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
-use crate::document::{self, Document, DocumentSave, FileJob};
+use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
 use crate::documents::{Documents, Step};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
@@ -234,6 +234,9 @@ enum Saved {
     },
     Refused {
         dropped: Vec<Unsupported>,
+        overwrite: Overwrite,
+    },
+    BaseChanged {
         overwrite: Overwrite,
     },
 }
@@ -1581,9 +1584,14 @@ impl Workspace {
         let must_rename =
             document.may_lose_unseen_content() || document.is_macro_enabled() || document.read_only;
         match document.path.clone() {
-            Some(path) if !must_rename => {
-                self.save_to(id, path, Some(Overwrite::InPlace), window, cx)
-            }
+            Some(path) if !must_rename => self.save_to(
+                id,
+                path,
+                Some(Overwrite::InPlace),
+                ChangedFile::Ask,
+                window,
+                cx,
+            ),
             Some(_) => {
                 let held = document::labels(&document.unsupported);
                 let detail = if document.read_only {
@@ -1711,7 +1719,7 @@ impl Workspace {
         let replaces_source = document
             .path
             .as_ref()
-            .is_some_and(|source| files::same_file(source, &path));
+            .is_some_and(|source| files::same_file(source, &path, files::Unresolved::ComparePaths));
         let never_overwritten = document.is_macro_enabled() || document.read_only;
         if replaces_source && never_overwritten {
             self.notify(Severity::Error, t!("save.original_protected"), cx);
@@ -1720,11 +1728,18 @@ impl Workspace {
             let lost = document.unsupported.clone();
             self.confirm_replace(id, path, Replacing::Original(lost), window, cx);
         } else if replaces_source {
-            self.save_to(id, path, Some(Overwrite::Original), window, cx);
+            self.save_to(
+                id,
+                path,
+                Some(Overwrite::Original),
+                ChangedFile::Ask,
+                window,
+                cx,
+            );
         } else if renamed && path.exists() {
             self.confirm_replace(id, path, Replacing::Existing, window, cx);
         } else {
-            self.save_to(id, path, None, window, cx);
+            self.save_to(id, path, None, ChangedFile::Ask, window, cx);
         }
     }
 
@@ -1763,7 +1778,7 @@ impl Workspace {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| {
                 if choice == Some(1) {
-                    this.save_to(id, path, overwrite, window, cx)
+                    this.save_to(id, path, overwrite, ChangedFile::Ask, window, cx)
                 } else {
                     this.save_ended(id, false, window, cx)
                 }
@@ -1775,12 +1790,54 @@ impl Workspace {
         .detach();
     }
 
+    fn confirm_changed_file(
+        &mut self,
+        id: WorkbookId,
+        path: PathBuf,
+        overwrite: Overwrite,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = self
+            .documents
+            .get(id)
+            .map(Document::name)
+            .unwrap_or_default();
+        let answer = self.ask(
+            PromptLevel::Critical,
+            &t!("save.changed_on_disk_title", name = name),
+            Some(t!("save.changed_on_disk_detail")),
+            &[
+                t!("button.replace"),
+                t!("button.save_as"),
+                t!("button.cancel"),
+            ],
+            window,
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let choice = answer.await;
+            let update = this.update_in(cx, |this, window, cx| match choice {
+                Some(0) => {
+                    this.save_to(id, path, Some(overwrite), ChangedFile::Replace, window, cx)
+                }
+                Some(1) => this.save_as_dialog(id, window, cx),
+                _ => this.save_ended(id, false, window, cx),
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during changed file prompt");
+            }
+        })
+        .detach();
+    }
+
     fn save_to(
         &mut self,
         id: WorkbookId,
         path: PathBuf,
         // None for a file Save As gave a name of its own.
         overwrite: Option<Overwrite>,
+        changed: ChangedFile,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1810,13 +1867,18 @@ impl Workspace {
                         return document::write_document_copy(&shared, &target, save_xlsx)
                             .map(|kept| Saved::Written { kept });
                     };
-                    document::save_document_file(&shared, &target, overwrite.accepted(), save_xlsx)
-                        .map(|saved| match saved {
-                            DocumentSave::Written { kept } => Saved::Written { kept },
-                            DocumentSave::Refused { dropped } => {
-                                Saved::Refused { dropped, overwrite }
-                            }
-                        })
+                    document::save_document_file(
+                        &shared,
+                        &target,
+                        overwrite.accepted(),
+                        changed,
+                        save_xlsx,
+                    )
+                    .map(|saved| match saved {
+                        DocumentSave::Written { kept } => Saved::Written { kept },
+                        DocumentSave::Refused { dropped } => Saved::Refused { dropped, overwrite },
+                        DocumentSave::BaseChanged => Saved::BaseChanged { overwrite },
+                    })
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
@@ -1864,6 +1926,11 @@ impl Workspace {
                                 this.confirm_replace(id, path, replacing, window, cx);
                             }
                         }
+                        return;
+                    }
+                    Ok(Saved::BaseChanged { overwrite }) => {
+                        this.flush_edits(id, cx);
+                        this.confirm_changed_file(id, path, overwrite, window, cx);
                         return;
                     }
                     Err(error) => {

@@ -12,6 +12,7 @@ use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
 use crate::agent_review::Review;
 use crate::entry::display_name;
+use crate::files;
 use crate::find::FindBar;
 use crate::spaces::SpaceId;
 use crate::stale_view::{StaleRequest, StaleSlot};
@@ -451,6 +452,27 @@ pub fn read_shared(shared: &RwLock<Workbook>) -> RwLockReadGuard<'_, Workbook> {
     shared.read().unwrap_or_else(PoisonError::into_inner)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangedFile {
+    // A save stops when the file it would replace cannot be copied from, so the user decides.
+    Ask,
+    Replace,
+}
+
+// A base other than the target is only read from, and a target that no longer exists holds
+// nothing to lose, so writing the target whole is safe. The target itself as a changed or
+// unusable base may hold another program's work: like Excel, a save asks before replacing it.
+fn retries_whole(error: &EngineError, target: &Path, changed: ChangedFile) -> bool {
+    match error {
+        EngineError::ChangedOnDisk(base) | EngineError::BaseUnusable { path: base, .. } => {
+            changed == ChangedFile::Replace
+                || matches!(target.try_exists(), Ok(false))
+                || !files::same_file(base, target, files::Unresolved::AssumeSame)
+        }
+        _ => false,
+    }
+}
+
 // The read lock is held only while the snapshot is taken, which fingerprints every sheet and
 // copies the ones the save writes: writing and verifying it takes far longer, and an edit
 // waiting for the write lock blocks every reader meanwhile.
@@ -459,19 +481,17 @@ fn with_snapshot<T: std::fmt::Debug>(
     job: FileJob,
     target: &Path,
     kind: SaveTarget,
+    changed: ChangedFile,
     attempt: impl Fn(SaveSnapshot) -> Result<T, EngineError>,
 ) -> Result<T, EngineError> {
     let started = Instant::now();
     let snapshot = read_shared(shared).save_snapshot(target, kind);
     let locked_ms = started.elapsed().as_millis();
     let first = snapshot.and_then(&attempt);
-    let retry = match &first {
-        // Like Excel, a save never silently replaces a version another program wrote over
-        // the file itself; the user saves again, and that save writes it whole.
-        Err(EngineError::ChangedOnDisk(changed)) => changed != target,
-        Err(EngineError::BaseUnusable { .. }) => true,
-        _ => false,
-    };
+    let retry = first
+        .as_ref()
+        .err()
+        .is_some_and(|error| retries_whole(error, target, changed));
     // The engine forgot the file it copies from, or the one sheet it could not splice, so the
     // second snapshot writes that whole.
     let finished = match (retry, first) {
@@ -501,10 +521,17 @@ pub fn write_snapshot(
     kind: SaveTarget,
     write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
 ) -> Result<Vec<Unsupported>, EngineError> {
-    with_snapshot(shared, job, target, kind, |snapshot| {
-        let lacks = snapshot.dropped().to_vec();
-        write(snapshot).map(|()| lacks)
-    })
+    with_snapshot(
+        shared,
+        job,
+        target,
+        kind,
+        ChangedFile::Replace,
+        |snapshot| {
+            let lacks = snapshot.dropped().to_vec();
+            write(snapshot).map(|()| lacks)
+        },
+    )
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -524,13 +551,20 @@ pub fn write_snapshot_unless(
     cancelled: &AtomicBool,
     write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
 ) -> Result<SnapshotOutcome, EngineError> {
-    with_snapshot(shared, job, target, kind, |snapshot| {
-        if cancelled.load(Ordering::Relaxed) {
-            return Ok(SnapshotOutcome::Abandoned);
-        }
-        let lacks = snapshot.dropped().to_vec();
-        write(snapshot).map(|()| SnapshotOutcome::Written { lacks })
-    })
+    with_snapshot(
+        shared,
+        job,
+        target,
+        kind,
+        ChangedFile::Replace,
+        |snapshot| {
+            if cancelled.load(Ordering::Relaxed) {
+                return Ok(SnapshotOutcome::Abandoned);
+            }
+            let lacks = snapshot.dropped().to_vec();
+            write(snapshot).map(|()| SnapshotOutcome::Written { lacks })
+        },
+    )
 }
 
 fn allows(accepted: &[Unsupported], dropped: &[Unsupported]) -> bool {
@@ -541,6 +575,8 @@ fn allows(accepted: &[Unsupported], dropped: &[Unsupported]) -> bool {
 pub enum DocumentSave {
     Written { kept: Vec<Unsupported> },
     Refused { dropped: Vec<Unsupported> },
+    // Nothing was written: the file to replace changed on disk or cannot be copied from.
+    BaseChanged,
 }
 
 // Checked on every attempt: a retry writes the whole file and may drop more than the first.
@@ -548,13 +584,15 @@ pub fn save_document_file(
     shared: &RwLock<Workbook>,
     target: &Path,
     accepted: &[Unsupported],
+    changed: ChangedFile,
     write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
 ) -> Result<DocumentSave, EngineError> {
-    with_snapshot(
+    let saved = with_snapshot(
         shared,
         FileJob::Saving,
         target,
         SaveTarget::Document,
+        changed,
         |snapshot| {
             if !allows(accepted, snapshot.dropped()) {
                 return Ok(DocumentSave::Refused {
@@ -564,7 +602,15 @@ pub fn save_document_file(
             let kept = snapshot.kept().to_vec();
             write(snapshot).map(|()| DocumentSave::Written { kept })
         },
-    )
+    );
+    match saved {
+        Err(EngineError::BaseUnusable { .. } | EngineError::ChangedOnDisk(_))
+            if changed == ChangedFile::Ask =>
+        {
+            Ok(DocumentSave::BaseChanged)
+        }
+        other => other,
+    }
 }
 
 // For a file Save As gave a name of its own, which nothing is lost from. Returns what the
@@ -579,6 +625,7 @@ pub fn write_document_copy(
         FileJob::Saving,
         target,
         SaveTarget::Document,
+        ChangedFile::Replace,
         |snapshot| {
             let kept = snapshot.kept().to_vec();
             write(snapshot).map(|()| kept)
@@ -908,19 +955,27 @@ mod tests {
     }
 
     #[test]
-    fn a_save_over_a_file_another_program_changed_asks_to_save_again() {
+    fn a_save_over_a_file_another_program_changed_asks_and_writes_on_replace() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("book.xlsx");
         let shared = RwLock::new(saved_then_changed_by_another_program(&target));
-        let (refused, attempts) = write_counting(&shared, &target, SaveTarget::Document);
-        assert!(
-            matches!(refused, Err(EngineError::ChangedOnDisk(_))),
-            "{refused:?}"
+        let asked = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            zenkai_engine::save_xlsx,
         );
-        assert_eq!(attempts, 1);
+        assert_eq!(asked.unwrap(), DocumentSave::BaseChanged);
         assert_eq!(saved_text(&target), "someone else's");
-        let (saved, _) = write_counting(&shared, &target, SaveTarget::Document);
-        saved.unwrap();
+        let replaced = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Replace,
+            zenkai_engine::save_xlsx,
+        );
+        assert!(matches!(replaced, Ok(DocumentSave::Written { .. })));
         assert_eq!(saved_text(&target), "mine");
     }
 
@@ -953,7 +1008,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("book.xlsx");
         let shared = RwLock::new(Workbook::new_empty().unwrap());
-        let saved = save_document_file(&shared, &target, &[], zenkai_engine::save_xlsx);
+        let saved = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            zenkai_engine::save_xlsx,
+        );
         assert_eq!(saved.unwrap(), DocumentSave::Written { kept: Vec::new() });
         assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
     }
@@ -1018,5 +1079,144 @@ mod tests {
         assert!(joined.is_err());
         assert!(document.workbook().is_some());
         assert!(document.workbook_mut().is_some());
+    }
+
+    fn unusable(path: &Path) -> EngineError {
+        EngineError::BaseUnusable {
+            path: path.to_path_buf(),
+            reason: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn an_unusable_base_is_replaced_without_asking_only_for_another_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("book.xlsx");
+        let other = dir.path().join("recovery.xlsx");
+        std::fs::write(&base, b"x").unwrap();
+        std::fs::write(&other, b"x").unwrap();
+        assert!(!retries_whole(&unusable(&base), &base, ChangedFile::Ask));
+        assert!(retries_whole(&unusable(&base), &base, ChangedFile::Replace));
+        assert!(retries_whole(&unusable(&base), &other, ChangedFile::Ask));
+    }
+
+    #[test]
+    fn a_path_that_cannot_be_resolved_is_assumed_to_be_the_same_file_when_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("gone.xlsx");
+        let spelled = dir.path().join("sub").join("..").join("gone.xlsx");
+        assert!(files::same_file(
+            &missing,
+            &spelled,
+            files::Unresolved::AssumeSame
+        ));
+        assert!(!files::same_file(
+            &missing,
+            &spelled,
+            files::Unresolved::ComparePaths
+        ));
+    }
+
+    #[test]
+    fn a_save_over_a_deleted_file_is_written_without_asking() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let shared = open_with_damaged_file(&target);
+        std::fs::remove_file(&target).unwrap();
+        let saved = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            zenkai_engine::save_xlsx,
+        );
+        assert!(
+            matches!(saved, Ok(DocumentSave::Written { .. })),
+            "{saved:?}"
+        );
+        assert_eq!(saved_text(&target), "mine");
+    }
+
+    #[test]
+    fn a_changed_target_asks_and_other_errors_never_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let other = dir.path().join("other.xlsx");
+        std::fs::write(&target, b"x").unwrap();
+        std::fs::write(&other, b"x").unwrap();
+        let changed = |path: &Path| EngineError::ChangedOnDisk(path.to_path_buf());
+        assert!(!retries_whole(&changed(&target), &target, ChangedFile::Ask));
+        assert!(retries_whole(
+            &changed(&target),
+            &target,
+            ChangedFile::Replace
+        ));
+        assert!(retries_whole(&changed(&other), &target, ChangedFile::Ask));
+        let full = EngineError::VerifyFailed("disk full".to_string());
+        assert!(!retries_whole(&full, &target, ChangedFile::Replace));
+    }
+
+    fn damaged_keeping_stamp(path: &Path) {
+        let stamp = std::fs::metadata(path).unwrap();
+        std::fs::write(path, vec![0u8; stamp.len() as usize]).unwrap();
+        let file = std::fs::File::options().write(true).open(path).unwrap();
+        file.set_modified(stamp.modified().unwrap()).unwrap();
+    }
+
+    fn open_with_damaged_file(target: &Path) -> RwLock<Workbook> {
+        let a1 = CellPos::default();
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_input(SheetId(0), a1, "first").unwrap();
+        zenkai_engine::save_xlsx(book.save_snapshot(target, SaveTarget::Document).unwrap())
+            .unwrap();
+        let mut book = zenkai_engine::open_xlsx(target).unwrap().workbook;
+        damaged_keeping_stamp(target);
+        book.set_input(SheetId(0), a1, "mine").unwrap();
+        RwLock::new(book)
+    }
+
+    #[test]
+    fn a_save_over_an_unusable_file_stops_without_writing_until_replace_is_chosen() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let shared = open_with_damaged_file(&target);
+        let before = std::fs::read(&target).unwrap();
+        let asked = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            zenkai_engine::save_xlsx,
+        );
+        assert_eq!(asked.unwrap(), DocumentSave::BaseChanged);
+        assert_eq!(std::fs::read(&target).unwrap(), before);
+        let replaced = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Replace,
+            zenkai_engine::save_xlsx,
+        );
+        assert!(matches!(replaced, Ok(DocumentSave::Written { .. })));
+        assert_eq!(saved_text(&target), "mine");
+    }
+
+    #[test]
+    fn a_recovery_copy_is_written_whole_even_when_the_document_file_is_unusable() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let recovery = dir.path().join("recovery.xlsx");
+        let shared = open_with_damaged_file(&target);
+        let before = std::fs::read(&target).unwrap();
+        let written = write_snapshot(
+            &shared,
+            FileJob::Autosaving,
+            &recovery,
+            SaveTarget::Copy,
+            zenkai_engine::save_xlsx,
+        );
+        assert!(written.is_ok(), "{written:?}");
+        assert_eq!(saved_text(&recovery), "mine");
+        assert_eq!(std::fs::read(&target).unwrap(), before);
     }
 }
