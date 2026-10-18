@@ -138,6 +138,9 @@ pub(crate) fn patch_plan(
             None
         };
         if let Some(blocks) = blocks {
+            if let Some(sheet) = data.book.worksheets.get(index) {
+                dropped.extend(carried.unwritable_restored(sheet, in_file));
+            }
             sheets.push(SheetPatch::Rows(row_job(
                 data,
                 carried,
