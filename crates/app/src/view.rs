@@ -51,7 +51,7 @@ use crate::documents::{Documents, Step};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
-use crate::interface_scale;
+use crate::interface_scale::{self, rem_px};
 use crate::jump::jump_target;
 use crate::keymap;
 use crate::memory;
@@ -763,19 +763,19 @@ impl Workspace {
         Some(
             h_flex()
                 .key_context("FindBar")
-                .h(px(36.0))
+                .h(rem_px(36.0))
                 .px_2()
                 .gap_2()
                 .items_center()
                 .border_b_1()
                 .border_color(theme.border)
                 .bg(theme.background)
-                .child(div().w(px(260.0)).child(Input::new(&bar.input)))
+                .child(div().w(rem_px(260.0)).child(Input::new(&bar.input)))
                 .children(bar.replace.as_ref().map(|replace| {
                     h_flex()
                         .gap_2()
                         .items_center()
-                        .child(div().w(px(220.0)).child(Input::new(replace)))
+                        .child(div().w(rem_px(220.0)).child(Input::new(replace)))
                         .child(
                             Button::new("replace-all")
                                 .small()
@@ -1428,7 +1428,7 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(96.0))
+                .top(rem_px(96.0))
                 .left_0()
                 .right_0()
                 .flex()
@@ -2093,14 +2093,14 @@ impl Workspace {
 
     fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
-        TitleBar::new().child(
+        TitleBar::new().h(rem_px(34.0)).child(
             h_flex()
                 .size_full()
                 .items_center()
                 .text_sm()
                 .child(
                     h_flex()
-                        .w(px(160.0))
+                        .w(rem_px(160.0))
                         .items_center()
                         .gap_2()
                         .text_color(muted)
@@ -2148,7 +2148,7 @@ impl Workspace {
                 )
                 .child(
                     h_flex()
-                        .w(px(160.0))
+                        .w(rem_px(160.0))
                         .items_center()
                         .justify_end()
                         .text_color(muted)
@@ -2167,7 +2167,7 @@ impl Workspace {
             None => self.active_input.clone(),
         };
         h_flex()
-            .h(px(32.0))
+            .h(rem_px(32.0))
             .px_2()
             .gap_2()
             .items_center()
@@ -2177,15 +2177,15 @@ impl Workspace {
             .child(match &self.go_to {
                 Some((input, _)) => div()
                     .key_context("NameBox")
-                    .w(px(120.0))
+                    .w(rem_px(120.0))
                     .child(Input::new(input))
                     .into_any_element(),
                 None => div()
                     .id("name-box")
                     .role(Role::Button)
                     .aria_label(t!("grid.name_box_label", name = name))
-                    .w(px(96.0))
-                    .h(px(24.0))
+                    .w(rem_px(96.0))
+                    .h(rem_px(24.0))
                     .px_2()
                     .flex()
                     .items_center()
@@ -2223,7 +2223,7 @@ impl Workspace {
                         .aria_label(t!("grid.formula_bar_label"))
                         .aria_value(content.clone())
                         .flex_1()
-                        .h(px(24.0))
+                        .h(rem_px(24.0))
                         .px_2()
                         .flex()
                         .items_center()
@@ -2269,7 +2269,7 @@ impl Workspace {
             )
         });
         h_flex()
-            .h(px(32.0))
+            .h(rem_px(32.0))
             .items_center()
             .border_t_1()
             .border_color(theme.border)
@@ -2570,7 +2570,7 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(96.0))
+                .top(rem_px(96.0))
                 .left_0()
                 .right_0()
                 .flex()
@@ -2880,7 +2880,7 @@ impl Workspace {
         Some(
             h_flex()
                 .key_context("RenameBar")
-                .h(px(36.0))
+                .h(rem_px(36.0))
                 .px_2()
                 .gap_2()
                 .items_center()
@@ -2888,7 +2888,7 @@ impl Workspace {
                 .border_color(theme.border)
                 .bg(theme.background)
                 .child(div().text_sm().child(t!("rename.label")))
-                .child(div().w(px(260.0)).child(Input::new(input)))
+                .child(div().w(rem_px(260.0)).child(Input::new(input)))
                 .child(
                     div()
                         .text_xs()
@@ -2977,7 +2977,7 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(96.0))
+                .top(rem_px(96.0))
                 .left_0()
                 .right_0()
                 .flex()
@@ -3098,7 +3098,7 @@ impl Workspace {
                 .child(t!("status.last_recalc", value = recalc));
         }
         h_flex()
-            .h(px(26.0))
+            .h(rem_px(26.0))
             .px_3()
             .gap_4()
             .justify_between()
@@ -3697,17 +3697,17 @@ fn command_overlay(
         .child(
             div()
                 .absolute()
-                .top(px(72.0))
+                .top(rem_px(72.0))
                 .left_0()
                 .right_0()
                 .flex()
                 .justify_center()
                 .child(
                     div()
-                        .w(px(560.0))
+                        .w(rem_px(560.0))
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(command.bordered(true).max_h(px(420.0))),
+                        .child(command.bordered(true).max_h(rem_px(420.0))),
                 ),
         )
 }

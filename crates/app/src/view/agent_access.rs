@@ -9,6 +9,7 @@ use zenkai_i18n::t;
 use super::Workspace;
 use crate::actions::LetAgentsEdit;
 use crate::assets::{LOCK_MARK, LOCK_OPEN_MARK};
+use crate::interface_scale::rem_px;
 use crate::keymap;
 
 const TOAST_TIME: Duration = Duration::from_secs(3);
@@ -104,7 +105,7 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(TOAST_TOP))
+                .top(rem_px(TOAST_TOP))
                 .left_0()
                 .right_0()
                 .flex()

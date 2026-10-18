@@ -10,6 +10,7 @@ use zenkai_i18n::t;
 use zenkai_types::{CellStyle, HAlign};
 
 use crate::actions::*;
+use crate::interface_scale::rem_px;
 use crate::keymap;
 
 fn tool(
@@ -28,7 +29,11 @@ fn tool(
 }
 
 fn separator(cx: &App) -> Div {
-    div().w(px(1.0)).h(px(18.0)).mx_1().bg(cx.theme().border)
+    div()
+        .w(px(1.0))
+        .h(rem_px(18.0))
+        .mx_1()
+        .bg(cx.theme().border)
 }
 
 pub struct ColorPickers {
@@ -39,7 +44,7 @@ pub struct ColorPickers {
 pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
     h_flex()
-        .h(px(36.0))
+        .h(rem_px(36.0))
         .px_2()
         .gap_0p5()
         .items_center()
