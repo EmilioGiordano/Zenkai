@@ -485,7 +485,7 @@ mod tests {
             Some(&document),
             Range::parse_a1("A1").unwrap(),
         );
-        for query in ["Base", "dinámica"] {
+        for query in ["Base", "Listas", "dinámica"] {
             let labels: Vec<String> = candidates(query, &catalog)
                 .into_iter()
                 .map(|candidate| candidate.label)

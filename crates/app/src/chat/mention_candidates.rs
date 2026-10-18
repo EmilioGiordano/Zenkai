@@ -82,14 +82,19 @@ pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
                 insert: format!("@{} ", workbook_text(&book.name)),
             });
         }
-        // The active workbook's sheets are listed above; its name cannot sit inside the brackets.
-        if Some(book.id) == active_id || !can_hold_external_sheet(&book.name) {
+        if !can_hold_external_sheet(&book.name) {
             continue;
         }
-        let sheets = book
-            .sheets
-            .iter()
-            .filter(|sheet| is_safe_name(sheet) && (matches(sheet) || book_hit));
+        // The active workbook's sheets that match by name are already listed above.
+        let is_active = Some(book.id) == active_id;
+        let sheets = book.sheets.iter().filter(|sheet| {
+            is_safe_name(sheet)
+                && if is_active {
+                    book_hit && !matches(sheet)
+                } else {
+                    matches(sheet) || book_hit
+                }
+        });
         for sheet in sheets.take(MAX_SHEETS_PER_BOOK) {
             found.push(Candidate {
                 group: Group::Workbooks,
@@ -300,7 +305,27 @@ mod tests {
     #[test]
     fn a_folder_file_that_is_already_open_is_listed_once() {
         let found = candidates("q3", &catalog());
-        assert_eq!(found.len(), 1);
+        let workbooks = found.iter().filter(|c| c.book.is_none()).count();
+        assert_eq!(workbooks, 1);
         assert_eq!(found[0].hint, Hint::Open);
+    }
+
+    #[test]
+    fn a_workbook_name_match_lists_the_sheets_of_the_active_workbook_too() {
+        let found = candidates("q3", &catalog());
+        let sheets: Vec<&str> = found
+            .iter()
+            .filter(|c| c.book.as_deref() == Some("sales-q3.xlsx"))
+            .map(|c| c.label.as_str())
+            .collect();
+        assert_eq!(sheets, ["@Sales", "@Sales summary", "@selection"]);
+        assert_eq!(found[1].insert, "@'[sales-q3.xlsx]Sales' ");
+    }
+
+    #[test]
+    fn an_active_sheet_that_matches_by_name_is_not_listed_twice() {
+        let found = candidates("sales", &catalog());
+        let sales = found.iter().filter(|c| c.label == "@Sales").count();
+        assert_eq!(sales, 1);
     }
 }
