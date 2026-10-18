@@ -1,5 +1,6 @@
 use super::mention_catalog::{Catalog, OpenBook, has_spreadsheet_extension};
 use super::mention_parse::{Mention, parse, quote_name, tokens, workbook_text};
+use super::name_guard::{can_hold_external_sheet, is_safe_name};
 use super::plain_name;
 use super::reference::{Reference, external_sheet};
 
@@ -44,7 +45,7 @@ fn describe(mention: &Mention, catalog: &Catalog) -> Option<(String, String)> {
         Mention::Sheet(name) => {
             let book = book_named(catalog, None)?;
             let shown = if has_spreadsheet_extension(name) {
-                external_sheet(&book.name, name)
+                can_hold_external_sheet(&book.name).then(|| external_sheet(&book.name, name))?
             } else {
                 quote_name(name)
             };
@@ -54,7 +55,8 @@ fn describe(mention: &Mention, catalog: &Catalog) -> Option<(String, String)> {
             ))
         }
         Mention::BookSheet { workbook, name } => {
-            let book = book_named(catalog, Some(workbook))?;
+            let book = book_named(catalog, Some(workbook))
+                .filter(|book| can_hold_external_sheet(&book.name))?;
             Some((
                 external_sheet(&book.name, name),
                 format!("sheet \"{}\" of {}", plain_name(name), where_is(book)),
@@ -90,8 +92,9 @@ pub fn prepare(text: &str, catalog: &Catalog) -> Prepared {
         let Some((shown, note)) = describe(&mention, catalog) else {
             continue;
         };
-        // Names come from files and can hold line breaks; they must not reach the message.
-        if shown.chars().any(char::is_control) {
+        // Names come from files and can hold line breaks or invisible format characters; they
+        // must not reach the message.
+        if !is_safe_name(&shown) {
             continue;
         }
         out.push_str(&text[taken..token.start]);
@@ -203,7 +206,7 @@ mod tests {
         }
         let prepared = prepare("@selection", &catalog);
         let note = &prepared.notes[0];
-        assert!(!note.contains(char::is_control), "{note}");
+        assert!(is_safe_name(note), "{note}");
         assert_eq!(note.matches('"').count(), 4, "{note}");
     }
 
@@ -267,6 +270,56 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn invisible_format_characters_in_names_never_reach_the_message_or_the_note() {
+        let mut catalog = two_books();
+        catalog.open[1].sheets.push("rtl\u{202E}sheet".to_string());
+        if let Some(active) = catalog.active.as_mut() {
+            active.sheets.push(sheet("zero\u{200B}width", None));
+            active.sheets.push(sheet("sep\u{2028}arator", None));
+        }
+        let text =
+            "@'[Budget 2026.xlsx]rtl\u{202E}sheet' @'zero\u{200B}width' @'sep\u{2028}arator'";
+        let prepared = prepare(text, &catalog);
+        assert_eq!(prepared.text, text);
+        assert!(prepared.notes.is_empty());
+    }
+
+    #[test]
+    fn a_workbook_with_brackets_cannot_be_the_target_of_an_external_sheet() {
+        let mut catalog = two_books();
+        catalog.open[1].name = "[a] b.xlsx".to_string();
+        let text = "@'[[a] b.xlsx]monthly'";
+        assert_eq!(prepare(text, &catalog).text, text);
+        if let Some(active) = catalog.active.as_mut() {
+            active.sheets.push(sheet("Plan.xlsx", None));
+            active.book.name = "[a] b.xlsx".to_string();
+        }
+        catalog.open[0].name = "[a] b.xlsx".to_string();
+        assert!(prepare("@'Plan.xlsx'", &catalog).notes.is_empty());
+    }
+
+    #[test]
+    fn picking_an_active_sheet_named_like_a_file_sends_a_sheet_not_a_workbook() {
+        let mut catalog = catalog();
+        if let Some(active) = catalog.active.as_mut() {
+            active.sheets.push(sheet("data.csv", None));
+        }
+        catalog.open[0].sheets.push("data.csv".to_string());
+        let picked = super::super::mention_candidates::candidates("data.csv", &catalog);
+        assert_eq!(picked.len(), 1);
+        let prepared = prepare(picked[0].insert.trim_end(), &catalog);
+        let found = chips(&prepared.text);
+        assert_eq!(
+            found[0].mention,
+            Mention::BookSheet {
+                workbook: "sales-q3.xlsx".to_string(),
+                name: "data.csv".to_string()
+            }
+        );
+        assert!(prepared.notes[0].contains("sheet \"data.csv\""));
     }
 
     #[test]

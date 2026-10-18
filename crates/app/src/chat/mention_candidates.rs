@@ -1,5 +1,6 @@
-use super::mention_catalog::{Catalog, Used};
+use super::mention_catalog::{Catalog, Used, has_spreadsheet_extension};
 use super::mention_parse::{SELECTION, sheet_text, workbook_text};
+use super::name_guard::{can_hold_external_sheet, is_safe_name};
 use super::reference::external_sheet;
 
 const MAX_CANDIDATES: usize = 40;
@@ -33,8 +34,7 @@ pub struct Candidate {
 
 pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
     let wanted = query.trim_matches('\'').to_lowercase();
-    let matches =
-        |name: &str| !name.chars().any(char::is_control) && name.to_lowercase().contains(&wanted);
+    let matches = |name: &str| is_safe_name(name) && name.to_lowercase().contains(&wanted);
     let mut found = Vec::new();
     if let Some(book) = &catalog.active {
         if let Some(selection) = book.selection.as_ref().filter(|_| matches(SELECTION)) {
@@ -47,6 +47,16 @@ pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
             });
         }
         for sheet in book.sheets.iter().filter(|sheet| matches(&sheet.name)) {
+            // A sheet named like a file is written in the external form, so it never reads as a workbook.
+            let file_like = has_spreadsheet_extension(&sheet.name);
+            if file_like && !can_hold_external_sheet(&book.book.name) {
+                continue;
+            }
+            let insert = if file_like {
+                external_sheet(&book.book.name, &sheet.name)
+            } else {
+                sheet_text(&sheet.name)
+            };
             found.push(Candidate {
                 group: Group::Sheets,
                 book: None,
@@ -56,7 +66,7 @@ pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
                     Used::Empty => Hint::EmptySheet,
                     Used::Range(range) => Hint::UsedRange(range.to_string()),
                 },
-                insert: format!("@{} ", sheet_text(&sheet.name)),
+                insert: format!("@{insert} "),
             });
         }
     }
@@ -73,13 +83,13 @@ pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
             });
         }
         // The active workbook's sheets are listed above; its name cannot sit inside the brackets.
-        if Some(book.id) == active_id || book.name.contains([']', '\n']) {
+        if Some(book.id) == active_id || !can_hold_external_sheet(&book.name) {
             continue;
         }
         let sheets = book
             .sheets
             .iter()
-            .filter(|sheet| matches(sheet) || (book_hit && !wanted.is_empty()));
+            .filter(|sheet| is_safe_name(sheet) && (matches(sheet) || book_hit));
         for sheet in sheets.take(MAX_SHEETS_PER_BOOK) {
             found.push(Candidate {
                 group: Group::Workbooks,
@@ -251,6 +261,40 @@ mod tests {
         catalog.open[1].name = "fine.xlsx".to_string();
         catalog.open[1].sheets.push("evil\nsheet".to_string());
         assert!(candidates("evil", &catalog).is_empty());
+    }
+
+    #[test]
+    fn querying_by_workbook_name_never_offers_unsafe_sheet_names() {
+        let mut catalog = with_budget_book();
+        catalog.open[1]
+            .sheets
+            .extend(["evil\nsheet".to_string(), "rtl\u{202E}sheet".to_string()]);
+        let labels: Vec<String> = candidates("budget_vs", &catalog)
+            .into_iter()
+            .map(|c| c.label)
+            .collect();
+        assert!(
+            labels
+                .iter()
+                .all(|l| !l.contains("evil") && !l.contains("rtl"))
+        );
+        assert!(labels.contains(&"@Summary".to_string()));
+    }
+
+    #[test]
+    fn an_active_sheet_named_like_a_file_is_inserted_in_the_external_form() {
+        let mut catalog = catalog();
+        if let Some(active) = catalog.active.as_mut() {
+            active.sheets.push(sheet("Plan.xlsx", None));
+        }
+        let found = candidates("plan.x", &catalog);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].insert, "@'[sales-q3.xlsx]Plan.xlsx' ");
+        catalog.open[0].name = "[a] b.xlsx".to_string();
+        if let Some(active) = catalog.active.as_mut() {
+            active.book.name = "[a] b.xlsx".to_string();
+        }
+        assert!(candidates("plan.x", &catalog).is_empty());
     }
 
     #[test]

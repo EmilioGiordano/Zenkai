@@ -1,5 +1,6 @@
 use zenkai_types::{Range, SheetId, WorkbookId};
 
+use super::name_guard::{can_hold_external_sheet, is_safe_name};
 use super::reference::Reference;
 
 const SPREADSHEET_EXTENSIONS: [&str; 7] = ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"];
@@ -58,23 +59,25 @@ impl Catalog {
             .as_ref()?
             .sheets
             .iter()
-            .find(|sheet| sheet.name.to_lowercase() == wanted)
+            .find(|sheet| sheet.name.to_lowercase() == wanted && is_safe_name(&sheet.name))
             .map(|sheet| sheet.name.clone())
     }
 
     pub(super) fn sheet_in(&self, book: &str, sheet: &str) -> Option<(String, String)> {
-        let open = self.open_book(book)?;
+        let open = self
+            .open_book(book)
+            .filter(|open| can_hold_external_sheet(&open.name))?;
         let wanted = sheet.to_lowercase();
         open.sheets
             .iter()
-            .find(|name| name.to_lowercase() == wanted)
+            .find(|name| name.to_lowercase() == wanted && is_safe_name(name))
             .map(|name| (open.name.clone(), name.clone()))
     }
 
     pub(super) fn open_book(&self, name: &str) -> Option<&OpenBook> {
         self.open
             .iter()
-            .find(|book| book.name.eq_ignore_ascii_case(name))
+            .find(|book| book.name.to_lowercase() == name.to_lowercase())
     }
 
     pub(super) fn workbook(&self, name: &str) -> Option<String> {
@@ -86,6 +89,7 @@ impl Catalog {
                     .find(|file| file.eq_ignore_ascii_case(name))
                     .cloned()
             })
+            .filter(|found| is_safe_name(found))
     }
 
     pub(super) fn folder_only(&self) -> impl Iterator<Item = &String> {

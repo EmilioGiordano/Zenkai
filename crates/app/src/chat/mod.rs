@@ -18,6 +18,7 @@ mod mention_picker;
 mod mention_prepare;
 mod menus;
 mod model_search;
+mod name_guard;
 mod permissions;
 pub(crate) mod reference;
 mod reference_scan;
@@ -185,7 +186,7 @@ fn closed<E: std::fmt::Display>(result: Result<(), E>) {
 // The name of a file is the user's, but it still ends up inside text an agent reads.
 fn plain_name(name: &str) -> String {
     name.chars()
-        .filter(|c| !c.is_control() && *c != '"')
+        .filter(|c| !name_guard::is_unsafe_char(*c) && *c != '"')
         .take(MAX_NAME_CHARS)
         .collect()
 }
@@ -604,5 +605,11 @@ mod tests {
     #[test]
     fn a_very_long_file_name_is_cut() {
         assert_eq!(plain_name(&"a".repeat(500)).chars().count(), 80);
+    }
+
+    #[test]
+    fn plain_name_drops_direction_marks_and_zero_width_characters() {
+        let hostile = "a\u{202E}b\u{2066}c\u{200F}d\u{200B}e\u{2028}f\u{FEFF}g\u{061C}h";
+        assert_eq!(plain_name(hostile), "abcdefgh");
     }
 }

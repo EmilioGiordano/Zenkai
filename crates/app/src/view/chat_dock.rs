@@ -325,7 +325,7 @@ impl Workspace {
             return self
                 .documents
                 .iter()
-                .filter(|document| document.name().eq_ignore_ascii_case(workbook))
+                .filter(|document| document.name().to_lowercase() == workbook.to_lowercase())
                 .find_map(|document| in_document(document).map(|sheet| (document.id, sheet)));
         }
         self.documents
