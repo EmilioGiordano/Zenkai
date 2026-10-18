@@ -118,6 +118,17 @@ fn for_each_within(sheet_data: &CellStore, area: Range, mut visit: impl FnMut(i3
     }
 }
 
+// Cells holding contents (not just a style) inside `area`, in no particular order.
+pub(crate) fn content_cells_within(sheet_data: &CellStore, area: Range) -> Vec<CellPos> {
+    let mut cells = Vec::new();
+    for_each_within(sheet_data, area, |row, col, cell| {
+        if !matches!(cell, Cell::EmptyCell { .. }) {
+            cells.push(position(row, col));
+        }
+    });
+    cells
+}
+
 impl CachedModel {
     pub fn new(model: UserModel<'static>) -> CachedModel {
         CachedModel {
