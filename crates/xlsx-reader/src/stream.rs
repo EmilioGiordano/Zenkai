@@ -605,6 +605,9 @@ fn read_part_with<R: Read>(
 // Streams one part through the budgets and inflates it whole only when it may hold
 // something the preflight checks; anything else is decided by entry name and needs
 // no bytes. A re-read part is measured again but not charged twice to the total.
+// Every part here ends up in the stub IronCalc DOM-parses, prefilter hit or not, so
+// the whole-part cap and the DOM charge apply to the bytes really inflated. The
+// shared strings take the DOM factor too: no measurement backs a lower one.
 // With cell counting the cells and rows stream past a counter on the same pass,
 // so the caller can charge them without reading the part again.
 pub(crate) fn read_part_if_checked<R: Read + Seek>(
@@ -629,6 +632,9 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
                 0 => break,
                 read => {
                     inflated += read as u64;
+                    if !count_cells {
+                        guard.whole_fits(inflated)?;
+                    }
                     filter.push(&chunk[..read]);
                     if count_cells {
                         counter.push(&chunk[..read]);
@@ -637,9 +643,7 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
             }
         }
         counter.finish();
-        if count_cells {
-            budgets.cells.check_dom_part(&name, inflated)?;
-        }
+        budgets.cells.check_dom_part(&name, inflated)?;
         let usage = counter.usage();
         if !filter.hit() {
             return Ok((name, Vec::new(), usage));
@@ -917,6 +921,19 @@ mod tests {
         let capped = Budgets::with_entry_cap(CellBudget::max_cells_for_test(u64::MAX), 1024);
         let error = read_checked(&bytes, &capped, true).unwrap_err();
         assert!(error.to_string().contains("per-part limit"), "{error}");
+    }
+
+    #[test]
+    fn a_part_without_checked_elements_is_still_capped_and_charged() {
+        let body = vec![b'a'; limits::MAX_WHOLE_PART_BYTES as usize + 1];
+        let bytes = stored_zip("xl/styles.xml", &body);
+        let error = read_checked(&bytes, &budgets(), false).unwrap_err();
+        assert!(error.to_string().contains("kept whole"), "{error}");
+        let small = stored_zip("xl/styles.xml", &[b'a'; 1_000]);
+        let tight = Budgets::with_cells(CellBudget::max_cells_for_test(1));
+        let error = read_checked(&small, &tight, false).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        assert_eq!(read_checked(&small, &budgets(), false).unwrap(), 0);
     }
 
     #[test]
