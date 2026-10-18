@@ -147,6 +147,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   inline fields); the encoding of a `CellStore` changed, so `.ic` files written by earlier
   builds do not load. Tests: `src/cell_store.rs` (random operations against the nested
   maps, size, encoding).
+- `Model::delete_columns` removes the `CellStore` rows it leaves without cells, so the used
+  range matches the cells; rows that were already empty and row height, style and hidden
+  state (kept in `Worksheet::rows`) stay. Needs the `CellStore` patch. Tests:
+  `delete_columns_drops_rows_left_without_cells` in `src/test/test_actions.rs` and
+  `delete_column_undo_redo_restores_cells_and_used_range` in
+  `src/test/user_model/test_multi_row_column.rs`.
 - `StaticResult` derives `Clone`, `Debug` and `PartialEq`, so a caller can copy a
   sheet's parsed formulas, for instance to save them away from the model
   (`src/expressions/parser/static_analysis.rs`).
