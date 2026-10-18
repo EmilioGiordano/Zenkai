@@ -14,6 +14,7 @@ use crate::agent_review::Review;
 use crate::entry::display_name;
 use crate::find::FindBar;
 use crate::spaces::SpaceId;
+use crate::stale_view::{StaleRequest, StaleSlot};
 
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 
@@ -34,6 +35,7 @@ pub struct Document {
     pub space: SpaceId,
     untitled: u32,
     workbook: SharedWorkbook,
+    stale: Arc<StaleSlot>,
     batch_running: bool,
     sheets_stale: bool,
     file_job: FileJob,
@@ -108,6 +110,7 @@ impl Document {
             space,
             untitled,
             workbook: Arc::new(RwLock::new(workbook)),
+            stale: Arc::default(),
             batch_running: false,
             sheets_stale: false,
             file_job: FileJob::Idle,
@@ -177,10 +180,30 @@ impl Document {
             .retain_unchanged(|cell| workbook.input(cell.sheet, cell.pos));
     }
 
+    pub fn stale_slot(&self) -> Arc<StaleSlot> {
+        Arc::clone(&self.stale)
+    }
+
+    // While a batch holds the write lock: the cells of `ranges` as they were before it, and
+    // the part of `ranges` that answer covers. Never a substitute for a live read.
+    pub fn stale_cells(
+        &self,
+        ranges: &[Range],
+        formulas: bool,
+    ) -> Option<(HashMap<CellPos, GridCell>, Vec<Range>)> {
+        self.stale.current()?.cells_in(self.sheet, formulas, ranges)
+    }
+
     pub fn queue(&mut self, edit: Edit) {
         self.edit_count += 1;
         self.last_edited = Some(Instant::now());
         self.autosave_cancel.store(true, Ordering::Relaxed);
+        // Clean work (saved, or a discarded copy) owes no recovery copy, so a stale instant
+        // left from before it must not make the first new edit overdue. Callers mark the
+        // document dirty after queueing.
+        if !self.needs_recovery() {
+            self.recovery_stale_since = None;
+        }
         self.recovery_stale_since.get_or_insert_with(Instant::now);
         self.pending.push(edit);
     }
@@ -339,6 +362,7 @@ impl Document {
             return false;
         }
         self.batch_running = false;
+        self.stale.clear();
         self.sync_sheets();
         true
     }
@@ -364,45 +388,53 @@ impl Document {
     // With `formulas`, cells holding a formula show it instead of its value (Ctrl+`).
     pub fn cells(&self, ranges: &[Range], formulas: bool) -> Option<HashMap<CellPos, GridCell>> {
         let workbook = self.workbook()?;
-        let end = workbook.used_end(self.sheet);
-        let limit = CellPos::new(end.row.offset(1), end.col.offset(1));
-        let clipped: Vec<Range> = ranges
-            .iter()
-            .filter_map(|range| range.clip_to(limit))
-            .collect();
-        let cells = clipped
-            .iter()
-            .flat_map(Range::positions)
-            .filter_map(|pos| {
-                let view = workbook.cell(self.sheet, pos);
-                let blank = view.text.is_empty()
-                    && view.style.fill.is_none()
-                    && !view.style.border_top
-                    && !view.style.border_left
-                    && !view.style.border_bottom
-                    && !view.style.border_right;
-                (!blank).then(|| {
-                    let formula = formulas
-                        .then(|| workbook.input(self.sheet, pos))
-                        .filter(|input| input.starts_with('='));
-                    let cell = match formula {
-                        Some(formula) => GridCell {
-                            text: formula.into(),
-                            kind: zenkai_types::ValueKind::Text,
-                            style: view.style,
-                        },
-                        None => GridCell {
-                            text: view.text.into(),
-                            kind: view.kind,
-                            style: view.style,
-                        },
-                    };
-                    (pos, cell)
-                })
-            })
-            .collect();
-        Some(cells)
+        Some(read_cells(&workbook, self.sheet, ranges, formulas))
     }
+}
+
+pub fn read_cells(
+    workbook: &Workbook,
+    sheet: SheetId,
+    ranges: &[Range],
+    formulas: bool,
+) -> HashMap<CellPos, GridCell> {
+    let end = workbook.used_end(sheet);
+    let limit = CellPos::new(end.row.offset(1), end.col.offset(1));
+    let clipped: Vec<Range> = ranges
+        .iter()
+        .filter_map(|range| range.clip_to(limit))
+        .collect();
+    clipped
+        .iter()
+        .flat_map(Range::positions)
+        .filter_map(|pos| {
+            let view = workbook.cell(sheet, pos);
+            let blank = view.text.is_empty()
+                && view.style.fill.is_none()
+                && !view.style.border_top
+                && !view.style.border_left
+                && !view.style.border_bottom
+                && !view.style.border_right;
+            (!blank).then(|| {
+                let formula = formulas
+                    .then(|| workbook.input(sheet, pos))
+                    .filter(|input| input.starts_with('='));
+                let cell = match formula {
+                    Some(formula) => GridCell {
+                        text: formula.into(),
+                        kind: zenkai_types::ValueKind::Text,
+                        style: view.style,
+                    },
+                    None => GridCell {
+                        text: view.text.into(),
+                        kind: view.kind,
+                        style: view.style,
+                    },
+                };
+                (pos, cell)
+            })
+        })
+        .collect()
 }
 
 pub fn contents_of(
@@ -553,7 +585,18 @@ pub fn write_document_copy(
     )
 }
 
-pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError> {
+// The engine recalculates in place and cannot yield, so the write lock is held for the whole
+// batch. The grid's reads meanwhile come from a copy of its surroundings taken just before.
+pub fn run_batch_serving(
+    shared: &RwLock<Workbook>,
+    edits: Vec<Edit>,
+    stale: Option<StaleRequest>,
+) -> Vec<EngineError> {
+    if let Some(request) = &stale
+        && request.slot.last_batch_was_slow()
+    {
+        request.publish_from(&read_shared(shared));
+    }
     let waited = Instant::now();
     let mut guard = shared.write().unwrap_or_else(PoisonError::into_inner);
     let started = Instant::now();
@@ -568,6 +611,9 @@ pub fn run_batch(shared: &RwLock<Workbook>, edits: Vec<Edit>) -> Vec<EngineError
         Ok(errors)
     });
     let errors = run.unwrap_or_else(|error| vec![error]);
+    if let Some(request) = &stale {
+        request.slot.record_hold(started.elapsed());
+    }
     let (waited_ms, ran_ms) = (
         started.duration_since(waited).as_millis(),
         started.elapsed().as_millis(),
@@ -662,7 +708,7 @@ mod tests {
         assert!(document.workbook().is_none());
         assert!(document.workbook_mut().is_none());
         drop(guard);
-        assert!(run_batch(&shared, edits).is_empty());
+        assert!(run_batch_serving(&shared, edits, None).is_empty());
         assert!(document.workbook().is_some());
     }
 
@@ -736,7 +782,7 @@ mod tests {
         let (_, edits) = document.take_batch().unwrap();
         assert_eq!(edits.len(), 1);
         let shared = Arc::clone(&document.workbook);
-        assert!(run_batch(&shared, edits).is_empty());
+        assert!(run_batch_serving(&shared, edits, None).is_empty());
         document.finish_batch(generation);
         assert!(document.begin_file_job(FileJob::Autosaving).is_some());
         assert!(!document.autosave_cancel().load(Ordering::Relaxed));
@@ -755,6 +801,22 @@ mod tests {
         document.queue(noop());
         document.recovery_written(at_start);
         assert!(document.recovery_stale_for().is_some());
+    }
+
+    #[test]
+    fn the_first_edit_after_a_save_restarts_the_staleness_clock() {
+        let mut document = document();
+        document.path = Some(PathBuf::from("book.xlsx"));
+        document.queue(noop());
+        document.dirty = true;
+        document.recovery_stale_since = Instant::now().checked_sub(Duration::from_secs(3600));
+        document.dirty = false;
+        document.queue(noop());
+        document.dirty = true;
+        let stale = document.recovery_stale_for().unwrap();
+        let every = Duration::from_secs(60);
+        let due = crate::autosave::due(Some(Duration::ZERO), every, Some(stale), every);
+        assert_ne!(due, crate::autosave::Due::Overdue);
     }
 
     #[test]
@@ -938,7 +1000,7 @@ mod tests {
             }));
         }
         let (shared, edits) = document.take_batch().unwrap();
-        assert!(run_batch(&shared, edits).is_empty());
+        assert!(run_batch_serving(&shared, edits, None).is_empty());
         assert_eq!(*order.lock().unwrap(), vec![0, 1, 2]);
     }
 

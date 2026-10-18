@@ -22,7 +22,7 @@ use chrono::{Datelike, Duration, Months, NaiveDate};
 // ---------------------------------------------------------------------------
 
 /// Parses a space-separated sqref like "A1:C3 E5" into a list of (row1,col1,row2,col2) tuples.
-fn parse_sqref(sqref: &str) -> Vec<(i32, i32, i32, i32)> {
+pub(crate) fn parse_sqref(sqref: &str) -> Vec<(i32, i32, i32, i32)> {
     sqref
         .split_whitespace()
         .filter_map(parse_range_part)
@@ -130,36 +130,19 @@ fn cell_value_key(v: &crate::cell::CellValue) -> Option<String> {
 }
 
 impl<'a> Model<'a> {
-    /// Evaluates all conditional formatting rules for the workbook.
-    ///
-    /// Iterates every worksheet's CF rules in priority order (lowest priority number,
-    /// processed last). The result for each cell is stored in
-    /// `cf_cache` and consumed by `get_extended_style_for_cell`.
-    pub fn evaluate_conditional_formatting(&mut self) {
-        self.cf_cache.clear();
-        let sheet_count = self.workbook.worksheets.len();
-        for sheet_idx in 0..sheet_count {
-            let mut cfs = self.workbook.worksheets[sheet_idx]
-                .conditional_formatting
-                .clone();
-            // Lower priority number = higher priority; process high-priority first so that
-            // the first writer into cf_cache wins.
-            cfs.sort_by_key(|cf| cf.priority);
-            for cf in cfs {
-                let ranges = parse_sqref(&cf.range);
-                if ranges.is_empty() {
-                    continue;
-                }
-                self.apply_cf_rule(sheet_idx as u32, &cf.cf_rule, &ranges);
-            }
-        }
-    }
-
     // -----------------------------------------------------------------------
     // CF evaluation helpers
     // -----------------------------------------------------------------------
 
-    fn apply_cf_rule(&mut self, sheet: u32, rule: &CfRule, ranges: &[(i32, i32, i32, i32)]) {
+    // `ranges` are the cells to visit; `all_ranges` are all the ones of the rule, which a
+    // formula rule needs to know where its references are relative to.
+    pub(crate) fn apply_cf_rule(
+        &mut self,
+        sheet: u32,
+        rule: &CfRule,
+        ranges: &[(i32, i32, i32, i32)],
+        all_ranges: &[(i32, i32, i32, i32)],
+    ) {
         match rule {
             CfRule::ColorScale { thresholds } => {
                 self.apply_cf_color_scale(sheet, thresholds, ranges);
@@ -186,7 +169,7 @@ impl<'a> Model<'a> {
                 dxf_id,
                 stop_if_true,
             } => {
-                self.apply_cf_formula(sheet, formula, *dxf_id, *stop_if_true, ranges);
+                self.apply_cf_formula(sheet, formula, *dxf_id, *stop_if_true, ranges, all_ranges);
             }
             CfRule::DuplicateValues {
                 dxf_id,
@@ -321,23 +304,8 @@ impl<'a> Model<'a> {
         }
     }
 
-    fn update_cf_cache(
-        &mut self,
-        sheet: u32,
-        row: i32,
-        col: i32,
-        result: CfCellResult,
-        stop_if_true: bool,
-    ) {
-        if stop_if_true {
-            // Replace any lower-priority results already in the cache for this cell.
-            self.cf_cache.insert((sheet, row, col), vec![result]);
-        } else {
-            self.cf_cache
-                .entry((sheet, row, col))
-                .or_default()
-                .push(result);
-        }
+    fn record_cf_result(&mut self, row: i32, col: i32, result: CfCellResult, stop_if_true: bool) {
+        self.cf_sink.push((row, col, result, stop_if_true));
     }
 
     /// Collects all numeric values from the given set of ranges on `sheet`.
@@ -417,8 +385,7 @@ impl<'a> Model<'a> {
                     if let Ok(CellValue::Number(v)) = self.get_cell_value_by_index(sheet, row, col)
                     {
                         let color = interpolate_color(v, &stops, &colors);
-                        self.update_cf_cache(
-                            sheet,
+                        self.record_cf_result(
                             row,
                             col,
                             CfCellResult::ColorScale(Color::Rgb(color)),
@@ -466,8 +433,7 @@ impl<'a> Model<'a> {
                     if let Ok(CellValue::Number(v)) = self.get_cell_value_by_index(sheet, row, col)
                     {
                         let proportion = ((v - min_val) / span).clamp(0.0, 1.0);
-                        self.update_cf_cache(
-                            sheet,
+                        self.record_cf_result(
                             row,
                             col,
                             CfCellResult::DataBar {
@@ -509,8 +475,7 @@ impl<'a> Model<'a> {
                     if let Ok(CellValue::Number(v)) = self.get_cell_value_by_index(sheet, row, col)
                     {
                         let idx = (compute_icon_index(v, &stops) as usize).min(n - 1);
-                        self.update_cf_cache(
-                            sheet,
+                        self.record_cf_result(
                             row,
                             col,
                             CfCellResult::Icon {
@@ -567,8 +532,7 @@ impl<'a> Model<'a> {
                                 count += 1;
                             }
                         }
-                        self.update_cf_cache(
-                            sheet,
+                        self.record_cf_result(
                             row,
                             col,
                             CfCellResult::Rating {
@@ -625,8 +589,7 @@ impl<'a> Model<'a> {
                             }
                         };
                         if matches {
-                            self.update_cf_cache(
-                                sheet,
+                            self.record_cf_result(
                                 row,
                                 col,
                                 CfCellResult::Dxf(dxf_id),
@@ -659,8 +622,7 @@ impl<'a> Model<'a> {
                     if let Ok(CellValue::Number(v)) = self.get_cell_value_by_index(sheet, row, col)
                     {
                         if (above && v > avg) || (!above && v < avg) {
-                            self.update_cf_cache(
-                                sheet,
+                            self.record_cf_result(
                                 row,
                                 col,
                                 CfCellResult::Dxf(dxf_id),
@@ -714,8 +676,7 @@ impl<'a> Model<'a> {
                             v >= threshold
                         };
                         if matches {
-                            self.update_cf_cache(
-                                sheet,
+                            self.record_cf_result(
                                 row,
                                 col,
                                 CfCellResult::Dxf(dxf_id),
@@ -752,8 +713,7 @@ impl<'a> Model<'a> {
                             TextOperator::Equals => cell_lower == search.as_str(),
                         };
                         if matches {
-                            self.update_cf_cache(
-                                sheet,
+                            self.record_cf_result(
                                 row,
                                 col,
                                 CfCellResult::Dxf(dxf_id),
@@ -777,34 +737,11 @@ impl<'a> Model<'a> {
         dxf_id: u32,
         stop_if_true: bool,
         ranges: &[(i32, i32, i32, i32)],
+        all_ranges: &[(i32, i32, i32, i32)],
     ) {
-        // The parse anchor is the top-left of the bounding box of *all* areas:
-        // the minimum row and minimum column across every range. For a
-        // single-area rule this is just its top-left, but for a multiple-areas
-        // rule like "D4:D8 B10:D10" the anchor is B4 (min row 4, min col 2),
-        // not the first area's top-left (D4).
-        let Some((anchor_row, anchor_col)) = ranges
-            .iter()
-            .map(|&(r1, c1, _, _)| (r1, c1))
-            .reduce(|(r, c), (r1, c1)| (r.min(r1), c.min(c1)))
-        else {
+        let Some((node, _)) = self.parse_cf_rule_formula(sheet, formula, all_ranges) else {
             return;
         };
-        let body = formula.trim().strip_prefix('=').unwrap_or(formula.trim());
-        if body.is_empty() {
-            return;
-        }
-        let sheet_name = match self.workbook.worksheets.get(sheet as usize) {
-            Some(ws) => ws.get_name(),
-            None => return,
-        };
-        let context_rc = CellReferenceRC {
-            sheet: sheet_name,
-            row: anchor_row,
-            column: anchor_col,
-        };
-        // CF formulas are stored internally in English.
-        let node = self.parse_internal_formula(body, &context_rc);
 
         for &(r1, c1, r2, c2) in ranges {
             for row in r1..=r2 {
@@ -816,13 +753,7 @@ impl<'a> Model<'a> {
                         _ => false,
                     };
                     if matches {
-                        self.update_cf_cache(
-                            sheet,
-                            row,
-                            column,
-                            CfCellResult::Dxf(dxf_id),
-                            stop_if_true,
-                        );
+                        self.record_cf_result(row, column, CfCellResult::Dxf(dxf_id), stop_if_true);
                     }
                 }
             }
@@ -854,8 +785,7 @@ impl<'a> Model<'a> {
                     if let Ok(v) = self.get_cell_value_by_index(sheet, row, col) {
                         if let Some(k) = cell_value_key(&v) {
                             if counts.get(&k).copied().unwrap_or(0) == 1 {
-                                self.update_cf_cache(
-                                    sheet,
+                                self.record_cf_result(
                                     row,
                                     col,
                                     CfCellResult::Dxf(dxf_id),
@@ -880,9 +810,8 @@ impl<'a> Model<'a> {
         stop_if_true: bool,
         ranges: &[(i32, i32, i32, i32)],
     ) {
-        let today_serial = match crate::tz::excel_serial_for_now(&self.tz) {
-            Some(s) => s.floor() as i64,
-            None => return,
+        let Some(today_serial) = self.cf_today() else {
+            return;
         };
         let today = match from_excel_date(today_serial) {
             Ok(d) => d,
@@ -1005,8 +934,7 @@ impl<'a> Model<'a> {
                         let day = v.floor();
                         let inside = day >= range.0 && day <= range.1;
                         if inside != negate {
-                            self.update_cf_cache(
-                                sheet,
+                            self.record_cf_result(
                                 row,
                                 col,
                                 CfCellResult::Dxf(dxf_id),
@@ -1045,8 +973,7 @@ impl<'a> Model<'a> {
                     if let Ok(v) = self.get_cell_value_by_index(sheet, row, col) {
                         if let Some(k) = cell_value_key(&v) {
                             if counts.get(&k).copied().unwrap_or(0) > 1 {
-                                self.update_cf_cache(
-                                    sheet,
+                                self.record_cf_result(
                                     row,
                                     col,
                                     CfCellResult::Dxf(dxf_id),
@@ -1076,13 +1003,7 @@ impl<'a> Model<'a> {
                         Ok(CellValue::None)
                     );
                     if is_blank != invert {
-                        self.update_cf_cache(
-                            sheet,
-                            row,
-                            col,
-                            CfCellResult::Dxf(dxf_id),
-                            stop_if_true,
-                        );
+                        self.record_cf_result(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
                     }
                 }
             }
@@ -1108,13 +1029,7 @@ impl<'a> Model<'a> {
                         .and_then(|ws| ws.cell(row, col))
                         .is_some_and(|c| c.get_type() == CellType::ErrorValue);
                     if is_error != invert {
-                        self.update_cf_cache(
-                            sheet,
-                            row,
-                            col,
-                            CfCellResult::Dxf(dxf_id),
-                            stop_if_true,
-                        );
+                        self.record_cf_result(row, col, CfCellResult::Dxf(dxf_id), stop_if_true);
                     }
                 }
             }
@@ -1132,17 +1047,15 @@ impl<'a> Model<'a> {
         column: i32,
     ) -> Result<ExtendedStyle, String> {
         let base = self.get_style_for_cell(sheet, row, column)?;
-        let extended = match self.cf_cache.get(&(sheet, row, column)) {
-            Some(c) => c,
-            None => {
-                return Ok(ExtendedStyle {
-                    style: base,
-                    icon: None,
-                    data_bar: None,
-                    rating: None,
-                })
-            }
-        };
+        let extended = self.cf_results(sheet, row, column);
+        if extended.is_empty() {
+            return Ok(ExtendedStyle {
+                style: base,
+                icon: None,
+                data_bar: None,
+                rating: None,
+            });
+        }
         let mut style = base;
         let mut icon = None;
         let mut data_bar = None;

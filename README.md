@@ -90,12 +90,12 @@ Requirements: Windows 10/11, the MSVC build tools (Visual Studio Build Tools wit
 `rust-toolchain.toml` and installs itself on the first build.
 
 ```powershell
-cargo build --release -p zenkai -p zenkai-mcp -j 6
+cargo build --release -p zenkai -p zenkai-mcp -j 4
 .\target\release\zenkai.exe                    # empty workbook
 .\target\release\zenkai.exe path\to\book.xlsx  # open a file
 ```
 
-`-j 6` keeps the first build (GPUI is large) from saturating the machine; drop it on a
+`-j 4` keeps the first build (GPUI is large) from saturating the machine; drop it on a
 dedicated build box. The release binary is `target\release\zenkai.exe`.
 
 ## Agents over MCP
@@ -142,25 +142,28 @@ placeholder. Release builds have no console window and log to
 
 ```powershell
 cargo fmt --check
-cargo clippy --all-targets -j 6 -- -D warnings
-cargo test -j 6
+cargo clippy --all-targets -j 4 -- -D warnings
+cargo test -j 4
 cargo deny check            # cargo install cargo-deny --locked
 ```
+
+These run in staging and in CI, not on work branches (see `AGENTS.md`, Validation).
 
 The calculation engine is IronCalc's `ironcalc_base` 0.8.3, vendored in
 `vendor/ironcalc_base` with Zenkai's changes (incremental recalculation) and built in
 place of the crates.io release through `[patch.crates-io]`. It sits outside the
 workspace, so the commands above do not cover it; after changing it, also run its own
-test suite:
+test suite, together with `vendor\ironcalc` once it exists, which is also outside the
+workspace; staging runs every vendor crate present:
 
 ```powershell
-cargo test -j 6 --manifest-path vendor\ironcalc_base\Cargo.toml --target-dir target\vendor
+cargo test -j 4 --manifest-path vendor\ironcalc_base\Cargo.toml --target-dir target\vendor
 ```
 
 ## Benchmark
 
 ```powershell
-cargo build --release -p zenkai-bench -j 6
+cargo build --release -p zenkai-bench -j 4
 .\target\release\zenkai-bench.exe run bench\fixtures 1   # generates fixtures on first run
 .\target\release\zenkai-bench.exe coverage               # function coverage table
 ```
@@ -199,12 +202,17 @@ $env:ZENKAI_READER_CORPUS = "C:\files;D:\big.xlsx"; cargo test -p zenkai-engine 
 
 GitHub Actions, in `.github/workflows/`:
 
-- `ci.yml` (pushes to `main` and every pull request): `cargo fmt --check`, `cargo clippy
-  --all-targets -- -D warnings` and `cargo test` on Windows, Linux and macOS, plus
-  `cargo deny check` on Linux.
-- `bench.yml` (pull requests that touch the engine, formats, grid, types or bench, and
-  manual runs): builds the benchmark in release on Windows and runs the baseline check
-  above. Each run uploads its numbers as the `bench-current` artifact.
+- `ci.yml` (pull requests and pushes to `main`, skipped when only docs, scripts, Markdown,
+  `.claude` or `.agents` change): draft PRs run `cargo fmt --check` and `cargo clippy
+  --all-targets -- -D warnings` on Linux; ready PRs add `cargo test` and also run on Windows,
+  plus the `vendor/` crates' own tests when the PR touches `vendor/`. A push to
+  `main` only warms the cache on Linux and Windows: it runs clippy and builds the test artifacts
+  (`cargo test --workspace --no-run`) for ready PRs to reuse; runs on `main` are never
+  cancelled. Jobs time out after 30 minutes. macOS runs only from a manual dispatch.
+- `deny.yml` (PRs that change `Cargo.toml`, `Cargo.lock` or `deny.toml`, weekly, and manual
+  runs): `cargo deny check` on Linux.
+- `bench.yml` (manual runs only): builds the benchmark in release on Windows and runs the
+  baseline check above. Each run uploads its numbers as the `bench-current` artifact.
 
 The baseline in `bench\baseline.csv` comes from the Phase 0 run on a desktop machine, not
 from a CI runner, so the timing gate fails until it is refreshed: copy the `bench-current`

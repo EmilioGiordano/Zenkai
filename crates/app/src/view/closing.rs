@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use gpui_kit::*;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
@@ -85,18 +87,44 @@ impl Workspace {
         }
     }
 
-    // Save As chose a CSV: the export leaves the workbook unsaved, so the close stops, and the
-    // user is told why.
-    pub(super) fn csv_ended_departure(
+    // A CSV never holds the whole workbook, so a CSV export that ends a save leaves the
+    // workbook unsaved and the close stops; the notice says why, or the real error.
+    pub(super) fn csv_export_ended(
         &mut self,
         id: WorkbookId,
+        path: &Path,
+        sheets: usize,
+        written: Result<(), String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let waiting = self.departure.as_ref().and_then(Departure::current) == Some(id);
+        let closing = self
+            .departure
+            .as_ref()
+            .and_then(|departure| departure.purpose_waiting_on(id));
         self.save_ended(id, false, window, cx);
-        if waiting {
-            self.notify(Severity::Warning, t!("close.csv_kept_open"), cx);
+        match (written, closing) {
+            (Err(error), _) => self.notify(Severity::Error, error, cx),
+            (Ok(()), Some(Purpose::Tab(_))) => self.notify(
+                Severity::Warning,
+                t!("close.csv_kept_tab", path = path.display()),
+                cx,
+            ),
+            (Ok(()), Some(Purpose::App)) => self.notify(
+                Severity::Warning,
+                t!("close.csv_kept_app", path = path.display()),
+                cx,
+            ),
+            (Ok(()), None) if sheets > 1 => self.notify(
+                Severity::Warning,
+                t!("notice.saved_active_sheet_only", path = path.display()),
+                cx,
+            ),
+            (Ok(()), None) => self.notify(
+                Severity::Info,
+                t!("notice.saved_to", path = path.display()),
+                cx,
+            ),
         }
     }
 

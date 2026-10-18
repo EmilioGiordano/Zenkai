@@ -1,6 +1,6 @@
 ---
 name: zk-branch
-description: Run a Zenkai task branch end to end from a TASK file in a worktree: implement, branch checks, parallel reviews, fixes, and a REPORT file.
+description: Run a Zenkai task branch end to end from a TASK file in a worktree: implement, static checks, parallel reviews, fixes, and a REPORT file.
 ---
 
 # zk-branch
@@ -18,11 +18,9 @@ Hard rules for the whole run:
   `reset --hard`, `git clean`, `branch -D`, or delete branches.
 - Never open or drive the GUI, never send input to the desktop.
 - Never commit `TASK-*.md` or `REPORT-*.md` files, nor anything outside the task.
-- Builds use the worktree's `.cargo/config.toml` target dir. Never create or change
-  that file and never override `CARGO_TARGET_DIR`.
-- One branch builds at a time: if another `zk-branch` or `zk-staging` run is
-  building, wait for it. Never run two `cargo` processes at once, at most `-j 8`
-  in total.
+- Work branches are never compiled: no `cargo`. Never create or change the worktree's
+  `.cargo/config.toml` and never override `CARGO_TARGET_DIR`.
+- One branch and one PR per concrete task; never mix tasks.
 
 ## 1. Implement
 
@@ -36,19 +34,14 @@ engine work under `crates/engine` or `vendor/` gets
 `.claude/agents/engine-implementer.md`, everything else gets
 `.claude/agents/implementer.md`.
 
-## 2. Branch checks
+## 2. Static checks
 
-In the worktree, on the touched crates only, debug builds only:
-
-```
-cargo fmt
-cargo check -p <crates> --all-targets
-cargo test -p <crates>
-```
-
-Never workspace-wide clippy or test, never `--release`, never the benchmark.
-No review starts until these checks are green. If they fail, the implementer
-fixes them first and reruns them.
+Static only, no `cargo`: the implementer self-reviews every changed signature, call site,
+import and `match`, and may run `rustfmt --check` on the touched files. The build is the
+PR's GitHub CI. The REPORT lists what could not be verified without compiling and the
+commands staging must run. No review starts until the self-review is done. A CI red caused
+by the diff blocks the merge; an unrelated red is noted on the PR in one line naming the
+branch that fixes it, never fixed in this PR.
 
 Tiny tasks (a one-line fix) skip the reviewers entirely; say so in the REPORT
 and continue at step 6.
@@ -76,7 +69,7 @@ defect, failure scenario.
 
 Hand the findings to the same implementer subagent from step 1 across all fix
 rounds. It verifies each finding, fixes the real ones, rejects the wrong ones
-with a reason, and reruns the branch checks from step 2.
+with a reason, and reruns the static checks from step 2.
 
 ## 5. Rounds
 
@@ -85,5 +78,5 @@ At most 2 review rounds (steps 3-4). If round 2 still fails, stop and report.
 ## 6. Report
 
 Write `REPORT-<topic>.md` in the worktree root, at most 60 lines: verdict,
-commits, checks run with their results, each finding fixed or rejected with a
+commits, self-review and `rustfmt --check` result, each finding fixed or rejected with a
 reason, open risks, and what needs a manual GUI test.

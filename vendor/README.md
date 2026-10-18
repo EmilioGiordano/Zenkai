@@ -56,8 +56,34 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/lib.rs`, `src/user_model/{common,undo_redo,clipboard,mod}.rs`. Builds on
   ironcalc/IronCalc#1435. Tests: `src/test/test_incremental.rs`,
   `src/test/test_recalculation_fallbacks.rs`.
+- `Model::full_evaluations` counts the evaluations of every formula, so a caller can tell
+  whether an edit evaluated in full (`src/incremental.rs`, `src/model.rs`,
+  `src/new_empty.rs`). Needs the incremental recalculation. Test:
+  `full_evaluations_counts_only_full_evaluations` in `src/test/test_incremental.rs`.
 - A formula that evaluates to an empty cell reads as 0 the first time too (`src/model.rs`,
   `evaluate_cell`). Tests: `src/test/test_empty_formula_result.rs`.
+- A workbook with circular references keeps its dependency index, and an edit is
+  recalculated incrementally unless a cell it changes is, or reads, a cell a cycle was
+  found at, or the workbook has a formula that reads cells found at run time
+  (INDIRECT, OFFSET, CELL, INFO, names) (`src/incremental.rs`,
+  `src/dependency_index.rs`, `Model::circular_cells`). The cells a cycle taints are kept
+  up to `MAX_TAINTED_CELLS`; past that, or past the walk limit, the overflow is remembered
+  until the index is rebuilt and such edits are evaluated in full without walking again.
+  Needs the incremental recalculation. Tests: `src/test/test_incremental_cycles.rs`,
+  `dependents_of_stops_past_the_cells_allowed` in `src/dependency_index.rs`.
+- Conditional formatting is re-evaluated after an incremental recalculation only for the
+  rules, and for rules that look at one cell at a time only for the cells, that the
+  changed cells can affect; each rule keeps what it gave to its cells and
+  `get_extended_style_for_cell` merges them in priority order, so the results are those of
+  a full evaluation (`src/cf_runs.rs`, `src/conditional_formatting.rs`,
+  `src/dependency_index.rs`, `src/incremental.rs`). Needs the incremental recalculation.
+  Tests: `src/cf_runs.rs`, `src/dependency_index.rs`,
+  `src/test/conditional_formatting/incremental.rs`.
+- Collecting the spill anchors reads each row's cells in column order without allocating
+  a vector per row, and the walks that look for formula cells or dynamic anchors skip a
+  sheet with no formulas (`src/model.rs`, `get_formula_cells`, `collect_spill_cells`,
+  `src/incremental.rs`, `build_dependencies`). Stands on its own. Tests:
+  `src/test/test_full_evaluation_cells.rs`.
 - `Model::support` recorded only when the workbook has spills (`src/model.rs`,
   `record_support`).
 - Hiding or showing rows recalculates what reads them, for SUBTOTAL
@@ -121,6 +147,15 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   workbook of millions of values no longer builds a 12-byte index of each one first
   (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
   `src/test/test_full_evaluation_cells.rs`.
+- `UserModel::undo_cells` and `UserModel::redo_cells` tell which cells the next undo or
+  redo step can change (`StepCells`: cell areas and the sheets whose rows or columns move,
+  or `None` for the workbook; size, visibility, style, pane and sheet-setting diffs add
+  or remove no cell), so a caller that caches per-sheet facts keeps the ones the step cannot touch
+  (`src/user_model/history.rs`, `src/user_model/common.rs`). Stands on its own. Tests:
+  `src/test/user_model/test_step_cells.rs`.
+- NOW and TODAY read the clock once per evaluation, as Excel does, so `=NOW()-NOW()` is
+  always 0 (`src/model.rs` `evaluation_milliseconds`, `src/incremental.rs`, `src/tz/`).
+  Tests: `src/test/test_now.rs`. Stands on its own.
 
 Zenkai-only, not for upstream:
 

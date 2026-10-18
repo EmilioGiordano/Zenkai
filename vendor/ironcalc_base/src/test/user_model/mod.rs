@@ -35,6 +35,7 @@ mod test_rename_sheet;
 mod test_row_column;
 mod test_sheet_state;
 mod test_sheets_undo_redo;
+mod test_step_cells;
 mod test_styles;
 mod test_to_from_bytes;
 mod test_undo_redo;

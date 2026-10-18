@@ -1,0 +1,30 @@
+name: Deny
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "**/Cargo.toml"
+      - "deny.toml"
+  schedule:
+    # Weekly, to catch new advisories without a dependency change.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deny-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
