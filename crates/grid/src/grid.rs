@@ -295,8 +295,8 @@ impl Grid {
         )
     }
 
-    pub fn visible_counts(&self) -> (u32, u16) {
-        (self.visible_rows(), self.visible_cols())
+    pub fn is_on_screen(&self, pos: CellPos) -> bool {
+        shown_contains(&self.shown_rows, &self.shown_cols, pos)
     }
 
     pub fn cached_ranges(&self) -> Vec<Range> {
@@ -1712,6 +1712,10 @@ pub const MAX_TYPED_PREVIEW_CELLS: u64 = 10_000;
 const MAX_FROZEN_ROWS: u32 = 200;
 const MAX_FROZEN_COLS: u16 = 100;
 
+fn shown_contains(rows: &[RowIdx], cols: &[ColIdx], pos: CellPos) -> bool {
+    rows.binary_search(&pos.row).is_ok() && cols.binary_search(&pos.col).is_ok()
+}
+
 fn capped_frozen(rows: u32, cols: u16) -> (u32, u16) {
     (rows.min(MAX_FROZEN_ROWS), cols.min(MAX_FROZEN_COLS))
 }
@@ -1803,12 +1807,22 @@ fn runs(indices: impl Iterator<Item = u32>) -> Vec<(u32, u32)> {
 mod tests {
     use super::{
         Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, cached_ranges, capped_frozen,
-        cycle_within, next_boundary, prev_boundary, typed_preview,
+        cycle_within, next_boundary, prev_boundary, shown_contains, typed_preview,
     };
     use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
     fn pos(text: &str) -> CellPos {
         CellPos::parse_a1(text).unwrap()
+    }
+
+    #[test]
+    fn a_cell_past_hidden_lines_is_on_screen_by_its_absolute_index() {
+        let rows: Vec<RowIdx> = (500..540).map(RowIdx::clamped).collect();
+        let cols: Vec<ColIdx> = (30..50).map(ColIdx::clamped).collect();
+        assert!(shown_contains(&rows, &cols, pos("AF501")));
+        assert!(!shown_contains(&rows, &cols, pos("A1")));
+        assert!(!shown_contains(&rows, &cols, pos("AF541")));
+        assert!(!shown_contains(&rows, &cols, pos("A501")));
     }
 
     #[test]
