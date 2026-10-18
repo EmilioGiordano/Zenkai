@@ -7,6 +7,7 @@ use zenkai_i18n::t;
 use zenkai_types::{Range, SheetId};
 
 use crate::actions::{ApplyNumberFormat, CloseFormatDialog};
+use crate::interface_scale::rem_px;
 
 // Excel's Format Cells > Number categories, with the code each one starts from.
 pub fn categories() -> [(&'static str, &'static str); 10] {
@@ -64,7 +65,7 @@ pub fn render(
         .track_focus(&dialog.focus)
         // Clicks on the dialog must not reach the grid underneath.
         .occlude()
-        .w(px(560.0))
+        .w(rem_px(560.0))
         .p_4()
         .gap_3()
         .bg(theme.background)
@@ -82,7 +83,7 @@ pub fn render(
             h_flex()
                 .gap_4()
                 .items_start()
-                .child(v_flex().w(px(150.0)).gap_0p5().children(categories))
+                .child(v_flex().w(rem_px(150.0)).gap_0p5().children(categories))
                 .child(
                     v_flex()
                         .flex_1()

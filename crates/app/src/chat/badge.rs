@@ -11,6 +11,7 @@ use zenkai_i18n::t;
 use super::reference::Reference;
 use super::reference_scan::{self, LINK_TARGET};
 use super::{ChatPanel, MONO};
+use crate::interface_scale::rem_px;
 
 const BADGE_HEIGHT: f32 = 20.0;
 const BADGE_ICON: f32 = 11.0;
@@ -24,7 +25,7 @@ fn frame(id: impl Into<ElementId>, reference: &Reference, cx: &App) -> Stateful<
         .items_center()
         .role(Role::Button)
         .aria_label(reference.text())
-        .h(px(BADGE_HEIGHT))
+        .h(rem_px(BADGE_HEIGHT))
         .pl_1()
         .pr_1p5()
         .rounded_md()
@@ -33,9 +34,9 @@ fn frame(id: impl Into<ElementId>, reference: &Reference, cx: &App) -> Stateful<
         .bg(theme.success.opacity(0.14))
         .text_color(theme.success)
         .font_family(MONO)
-        .text_size(px(11.5))
+        .text_size(rem_px(11.5))
         .whitespace_nowrap()
-        .child(Icon::new(IconName::Grid2x2).size(px(BADGE_ICON)))
+        .child(Icon::new(IconName::Grid2x2).size(rem_px(BADGE_ICON)))
         .child(reference.text())
 }
 
@@ -72,7 +73,7 @@ pub(super) fn chip(
     let target = reference.clone();
     let removal = panel.clone();
     frame(("chat-chip", index), reference, cx)
-        .h(px(BADGE_HEIGHT + 2.0))
+        .h(rem_px(BADGE_HEIGHT + 2.0))
         .cursor_pointer()
         .on_click(open_on_click(panel, target))
         .child(
@@ -186,7 +187,7 @@ pub(super) fn user_message(
                 h_flex()
                     .flex_wrap()
                     .items_center()
-                    .min_h(px(BADGE_HEIGHT))
+                    .min_h(rem_px(BADGE_HEIGHT))
                     .children(line)
             }))
             .into_any_element(),

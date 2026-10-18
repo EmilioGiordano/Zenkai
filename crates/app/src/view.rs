@@ -33,6 +33,7 @@ mod closing;
 mod settings_gate;
 mod space_panel;
 
+use crate::prompt_gate::{PROMPT_OPEN_CONTEXT, PromptGate};
 use agent_calls::{AgentLink, Decision};
 use chat_dock::ChatDock;
 use zenkai_agent::protected_view::file_origin;
@@ -46,11 +47,12 @@ use crate::clipboard;
 use crate::close_prompt::Departure;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
-use crate::document::{self, Document, DocumentSave, FileJob};
+use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
 use crate::documents::{Documents, Step};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
+use crate::interface_scale::{self, rem_px};
 use crate::jump::jump_target;
 use crate::keymap;
 use crate::memory;
@@ -74,6 +76,7 @@ mod budget;
 mod generate;
 mod lifecycle;
 mod panels;
+mod prompt;
 mod search;
 mod sidebar;
 mod theme_picker;
@@ -123,7 +126,6 @@ const MAX_AUTOSUM_SCAN: usize = 10_000;
 const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 
-const UI_SCALE_STEP: f32 = 0.125;
 const MAX_REPLACE_CELLS: usize = 100_000;
 const FONT_SIZES: [u16; 16] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 
@@ -162,8 +164,6 @@ pub struct Workspace {
     // Bumped by every CSV read, re-parse, import and cancel; a background result is
     // applied only if no newer request started meanwhile.
     csv_request: u64,
-    // Interface scale, independent of the grid zoom: everything sized in rems.
-    ui_scale: f32,
     show_formulas: bool,
     formula_bar: Option<FormulaBarEdit>,
     // The last formatting change, which F4 repeats on the selection as in Excel.
@@ -190,6 +190,7 @@ pub struct Workspace {
     // Saves ahead of closing a tab or the app; `None` when no close waits on a save.
     departure: Option<Departure>,
     close_dialog: Option<close_dialog::CloseDialog>,
+    prompts: PromptGate,
     saved_session: Option<Session>,
     cell_refresh: CellRefresh,
     missed: MissedRefreshes,
@@ -233,6 +234,9 @@ enum Saved {
     },
     Refused {
         dropped: Vec<Unsupported>,
+        overwrite: Overwrite,
+    },
+    BaseChanged {
         overwrite: Overwrite,
     },
 }
@@ -309,7 +313,6 @@ impl Workspace {
             theme_picker: None,
             csv_preview: None,
             csv_request: 0,
-            ui_scale: 1.0,
             show_formulas: false,
             formula_bar: None,
             last_style: None,
@@ -334,6 +337,7 @@ impl Workspace {
             lifecycle: Lifecycle::Running,
             departure: None,
             close_dialog: None,
+            prompts: PromptGate::default(),
             saved_session: None,
             cell_refresh: CellRefresh::Idle,
             missed: MissedRefreshes::default(),
@@ -766,19 +770,19 @@ impl Workspace {
         Some(
             h_flex()
                 .key_context("FindBar")
-                .h(px(36.0))
+                .h(rem_px(36.0))
                 .px_2()
                 .gap_2()
                 .items_center()
                 .border_b_1()
                 .border_color(theme.border)
                 .bg(theme.background)
-                .child(div().w(px(260.0)).child(Input::new(&bar.input)))
+                .child(div().w(rem_px(260.0)).child(Input::new(&bar.input)))
                 .children(bar.replace.as_ref().map(|replace| {
                     h_flex()
                         .gap_2()
                         .items_center()
-                        .child(div().w(px(220.0)).child(Input::new(replace)))
+                        .child(div().w(rem_px(220.0)).child(Input::new(replace)))
                         .child(
                             Button::new("replace-all")
                                 .small()
@@ -1103,6 +1107,9 @@ impl Workspace {
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Workbook) -> Result<(), EngineError> + Send + 'static,
     ) {
+        if self.prompts.blocks_input() {
+            return;
+        }
         // Any edit ends copy mode, as in Excel, so a later paste never reads cells or
         // sheets that changed since the copy.
         if self.clipboard_source.take().is_some() {
@@ -1389,17 +1396,15 @@ impl Workspace {
         .detach();
     }
 
-    fn set_ui_scale(&mut self, scale: f32, cx: &mut Context<Self>) {
-        self.ui_scale = scale.clamp(0.75, 2.0);
+    fn announce_interface_size(&mut self, cx: &mut Context<Self>) {
         self.notify(
             Severity::Info,
             t!(
                 "notice.interface_size",
-                percent = format!("{:.0}", self.ui_scale * 100.0)
+                percent = interface_scale::shown(cx).percent()
             ),
             cx,
         );
-        cx.notify();
     }
 
     fn next_csv_request(&mut self) -> u64 {
@@ -1433,7 +1438,7 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(96.0))
+                .top(rem_px(96.0))
                 .left_0()
                 .right_0()
                 .flex()
@@ -1579,9 +1584,14 @@ impl Workspace {
         let must_rename =
             document.may_lose_unseen_content() || document.is_macro_enabled() || document.read_only;
         match document.path.clone() {
-            Some(path) if !must_rename => {
-                self.save_to(id, path, Some(Overwrite::InPlace), window, cx)
-            }
+            Some(path) if !must_rename => self.save_to(
+                id,
+                path,
+                Some(Overwrite::InPlace),
+                ChangedFile::Ask,
+                window,
+                cx,
+            ),
             Some(_) => {
                 let held = document::labels(&document.unsupported);
                 let detail = if document.read_only {
@@ -1609,17 +1619,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let answer = window.prompt(
+        let answer = self.ask(
             PromptLevel::Warning,
             t!("save.cannot_save_title"),
             Some(detail),
             &[t!("button.save_as"), t!("button.cancel")],
+            window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| {
-                if choice == Ok(0) {
+                if choice == Some(0) {
                     this.save_as_dialog(id, window, cx)
                 } else {
                     this.save_ended(id, false, window, cx)
@@ -1708,7 +1719,7 @@ impl Workspace {
         let replaces_source = document
             .path
             .as_ref()
-            .is_some_and(|source| files::same_file(source, &path));
+            .is_some_and(|source| files::same_file(source, &path, files::Unresolved::ComparePaths));
         let never_overwritten = document.is_macro_enabled() || document.read_only;
         if replaces_source && never_overwritten {
             self.notify(Severity::Error, t!("save.original_protected"), cx);
@@ -1717,11 +1728,18 @@ impl Workspace {
             let lost = document.unsupported.clone();
             self.confirm_replace(id, path, Replacing::Original(lost), window, cx);
         } else if replaces_source {
-            self.save_to(id, path, Some(Overwrite::Original), window, cx);
+            self.save_to(
+                id,
+                path,
+                Some(Overwrite::Original),
+                ChangedFile::Ask,
+                window,
+                cx,
+            );
         } else if renamed && path.exists() {
             self.confirm_replace(id, path, Replacing::Existing, window, cx);
         } else {
-            self.save_to(id, path, None, window, cx);
+            self.save_to(id, path, None, ChangedFile::Ask, window, cx);
         }
     }
 
@@ -1748,18 +1766,19 @@ impl Workspace {
                 Some(Overwrite::Confirmed(lost)),
             ),
         };
-        let answer = window.prompt(
+        let answer = self.ask(
             PromptLevel::Critical,
             title,
             Some(&detail),
             &[t!("button.cancel"), t!("button.replace")],
+            window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| {
-                if choice == Ok(1) {
-                    this.save_to(id, path, overwrite, window, cx)
+                if choice == Some(1) {
+                    this.save_to(id, path, overwrite, ChangedFile::Ask, window, cx)
                 } else {
                     this.save_ended(id, false, window, cx)
                 }
@@ -1771,12 +1790,54 @@ impl Workspace {
         .detach();
     }
 
+    fn confirm_changed_file(
+        &mut self,
+        id: WorkbookId,
+        path: PathBuf,
+        overwrite: Overwrite,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = self
+            .documents
+            .get(id)
+            .map(Document::name)
+            .unwrap_or_default();
+        let answer = self.ask(
+            PromptLevel::Critical,
+            &t!("save.changed_on_disk_title", name = name),
+            Some(t!("save.changed_on_disk_detail")),
+            &[
+                t!("button.replace"),
+                t!("button.save_as"),
+                t!("button.cancel"),
+            ],
+            window,
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let choice = answer.await;
+            let update = this.update_in(cx, |this, window, cx| match choice {
+                Some(0) => {
+                    this.save_to(id, path, Some(overwrite), ChangedFile::Replace, window, cx)
+                }
+                Some(1) => this.save_as_dialog(id, window, cx),
+                _ => this.save_ended(id, false, window, cx),
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during changed file prompt");
+            }
+        })
+        .detach();
+    }
+
     fn save_to(
         &mut self,
         id: WorkbookId,
         path: PathBuf,
         // None for a file Save As gave a name of its own.
         overwrite: Option<Overwrite>,
+        changed: ChangedFile,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1806,13 +1867,18 @@ impl Workspace {
                         return document::write_document_copy(&shared, &target, save_xlsx)
                             .map(|kept| Saved::Written { kept });
                     };
-                    document::save_document_file(&shared, &target, overwrite.accepted(), save_xlsx)
-                        .map(|saved| match saved {
-                            DocumentSave::Written { kept } => Saved::Written { kept },
-                            DocumentSave::Refused { dropped } => {
-                                Saved::Refused { dropped, overwrite }
-                            }
-                        })
+                    document::save_document_file(
+                        &shared,
+                        &target,
+                        overwrite.accepted(),
+                        changed,
+                        save_xlsx,
+                    )
+                    .map(|saved| match saved {
+                        DocumentSave::Written { kept } => Saved::Written { kept },
+                        DocumentSave::Refused { dropped } => Saved::Refused { dropped, overwrite },
+                        DocumentSave::BaseChanged => Saved::BaseChanged { overwrite },
+                    })
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
@@ -1860,6 +1926,11 @@ impl Workspace {
                                 this.confirm_replace(id, path, replacing, window, cx);
                             }
                         }
+                        return;
+                    }
+                    Ok(Saved::BaseChanged { overwrite }) => {
+                        this.flush_edits(id, cx);
+                        this.confirm_changed_file(id, path, overwrite, window, cx);
                         return;
                     }
                     Err(error) => {
@@ -2098,14 +2169,14 @@ impl Workspace {
 
     fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
-        TitleBar::new().child(
+        TitleBar::new().h(rem_px(34.0)).child(
             h_flex()
                 .size_full()
                 .items_center()
                 .text_sm()
                 .child(
                     h_flex()
-                        .w(px(160.0))
+                        .w(rem_px(160.0))
                         .items_center()
                         .gap_2()
                         .text_color(muted)
@@ -2153,7 +2224,7 @@ impl Workspace {
                 )
                 .child(
                     h_flex()
-                        .w(px(160.0))
+                        .w(rem_px(160.0))
                         .items_center()
                         .justify_end()
                         .text_color(muted)
@@ -2172,7 +2243,7 @@ impl Workspace {
             None => self.active_input.clone(),
         };
         h_flex()
-            .h(px(32.0))
+            .h(rem_px(32.0))
             .px_2()
             .gap_2()
             .items_center()
@@ -2182,15 +2253,15 @@ impl Workspace {
             .child(match &self.go_to {
                 Some((input, _)) => div()
                     .key_context("NameBox")
-                    .w(px(120.0))
+                    .w(rem_px(120.0))
                     .child(Input::new(input))
                     .into_any_element(),
                 None => div()
                     .id("name-box")
                     .role(Role::Button)
                     .aria_label(t!("grid.name_box_label", name = name))
-                    .w(px(96.0))
-                    .h(px(24.0))
+                    .w(rem_px(96.0))
+                    .h(rem_px(24.0))
                     .px_2()
                     .flex()
                     .items_center()
@@ -2228,7 +2299,7 @@ impl Workspace {
                         .aria_label(t!("grid.formula_bar_label"))
                         .aria_value(content.clone())
                         .flex_1()
-                        .h(px(24.0))
+                        .h(rem_px(24.0))
                         .px_2()
                         .flex()
                         .items_center()
@@ -2274,7 +2345,7 @@ impl Workspace {
             )
         });
         h_flex()
-            .h(px(32.0))
+            .h(rem_px(32.0))
             .items_center()
             .border_t_1()
             .border_color(theme.border)
@@ -2371,8 +2442,7 @@ impl Workspace {
                 } else {
                     (0, 0)
                 };
-                let (visible_rows, visible_cols) = self.grid.read(cx).visible_counts();
-                if rows >= visible_rows || cols >= visible_cols {
+                if (rows, cols) != (0, 0) && !self.grid.read(cx).is_on_screen(active) {
                     self.notify(
                         Severity::Warning,
                         t!("notice.freeze_needs_visible_cell"),
@@ -2575,7 +2645,7 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(96.0))
+                .top(rem_px(96.0))
                 .left_0()
                 .right_0()
                 .flex()
@@ -2885,7 +2955,7 @@ impl Workspace {
         Some(
             h_flex()
                 .key_context("RenameBar")
-                .h(px(36.0))
+                .h(rem_px(36.0))
                 .px_2()
                 .gap_2()
                 .items_center()
@@ -2893,7 +2963,7 @@ impl Workspace {
                 .border_color(theme.border)
                 .bg(theme.background)
                 .child(div().text_sm().child(t!("rename.label")))
-                .child(div().w(px(260.0)).child(Input::new(input)))
+                .child(div().w(rem_px(260.0)).child(Input::new(input)))
                 .child(
                     div()
                         .text_xs()
@@ -2919,15 +2989,16 @@ impl Workspace {
             .get(sheet.0 as usize)
             .map(|s| s.name.clone())
             .unwrap_or_default();
-        let answer = window.prompt(
+        let answer = self.ask(
             PromptLevel::Warning,
             &t!("sheet.delete_title", name = name),
             Some(t!("sheet.delete_detail")),
             &[t!("button.cancel"), t!("button.delete")],
+            window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            if answer.await == Ok(1)
+            if answer.await == Some(1)
                 && let Err(error) = this.update_in(cx, |this, window, cx| {
                     // Excel shows the sheet that takes the deleted one's place.
                     let Some(document) = this.documents.active_mut() else {
@@ -2982,7 +3053,7 @@ impl Workspace {
         Some(
             div()
                 .absolute()
-                .top(px(96.0))
+                .top(rem_px(96.0))
                 .left_0()
                 .right_0()
                 .flex()
@@ -3103,7 +3174,7 @@ impl Workspace {
                 .child(t!("status.last_recalc", value = recalc));
         }
         h_flex()
-            .h(px(26.0))
+            .h(rem_px(26.0))
             .px_3()
             .gap_4()
             .justify_between()
@@ -3190,11 +3261,18 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        window.set_rem_size(cx.theme().font_size * self.ui_scale);
+        interface_scale::apply(window, cx);
         let theme = cx.theme();
         v_flex()
             .relative()
-            .key_context("Workspace")
+            .key_context({
+                let mut context = KeyContext::default();
+                context.add("Workspace");
+                if self.prompts.blocks_input() {
+                    context.add(PROMPT_OPEN_CONTEXT);
+                }
+                context
+            })
             // A file dropped on the window opens like File > Open.
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 if let Some(path) = paths.paths().first().cloned() {
@@ -3409,12 +3487,17 @@ impl Render for Workspace {
                 this.style(StyleChange::NumberFormat(NumberFormat::Date), window, cx)
             }))
             .on_action(cx.listener(|this, _: &InterfaceLarger, _, cx| {
-                this.set_ui_scale(this.ui_scale + UI_SCALE_STEP, cx);
+                interface_scale::larger(cx);
+                this.announce_interface_size(cx);
             }))
             .on_action(cx.listener(|this, _: &InterfaceSmaller, _, cx| {
-                this.set_ui_scale(this.ui_scale - UI_SCALE_STEP, cx);
+                interface_scale::smaller(cx);
+                this.announce_interface_size(cx);
             }))
-            .on_action(cx.listener(|this, _: &InterfaceReset, _, cx| this.set_ui_scale(1.0, cx)))
+            .on_action(cx.listener(|this, _: &InterfaceReset, _, cx| {
+                interface_scale::reset(cx);
+                this.announce_interface_size(cx);
+            }))
             .on_action(cx.listener(|this, _: &ToggleReduceMotion, _, cx| {
                 let reduce = !cx.reduce_motion();
                 cx.set_reduce_motion(reduce);
@@ -3697,17 +3780,17 @@ fn command_overlay(
         .child(
             div()
                 .absolute()
-                .top(px(72.0))
+                .top(rem_px(72.0))
                 .left_0()
                 .right_0()
                 .flex()
                 .justify_center()
                 .child(
                     div()
-                        .w(px(560.0))
+                        .w(rem_px(560.0))
                         .shadow_lg()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child(command.bordered(true).max_h(px(420.0))),
+                        .child(command.bordered(true).max_h(rem_px(420.0))),
                 ),
         )
 }

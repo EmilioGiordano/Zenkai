@@ -149,15 +149,16 @@ impl Workspace {
             return;
         };
         let detail = t!("sidebar.delete_detail", path = path.display());
-        let answer = window.prompt(
+        let answer = self.ask(
             PromptLevel::Warning,
             &t!("sidebar.delete_title", name = entry.name()),
             Some(&detail),
             &[t!("button.cancel"), t!("sidebar.move_to_recycle_bin")],
+            window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            if answer.await != Ok(1) {
+            if answer.await != Some(1) {
                 return;
             }
             let result = cx

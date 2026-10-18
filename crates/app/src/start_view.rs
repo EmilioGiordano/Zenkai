@@ -8,6 +8,7 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use crate::actions::*;
+use crate::interface_scale::rem_px;
 use crate::keymap;
 
 const RECENT_ACTIONS: [fn() -> Box<dyn Action>; 5] = [
@@ -69,7 +70,7 @@ pub fn render(recent: &[PathBuf], focus: &FocusHandle, cx: &App) -> impl IntoEle
         .justify_center()
         .child(
             v_flex()
-                .w(px(520.0))
+                .w(rem_px(520.0))
                 .gap_4()
                 .child(div().text_xl().child(t!("start.title")))
                 .child(

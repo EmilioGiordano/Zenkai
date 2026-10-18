@@ -12,6 +12,7 @@ use super::choices::{self, Choices};
 use super::controls::{self, RowParts, card, explanation, group_title, mode_cards, segmented};
 use super::rows::{RowId, Section, Values, visible_rows};
 use super::{OpenDropdown, SettingsWindow, agents, info, keyboard, update};
+use crate::interface_scale::rem_px;
 use crate::space_appearance::SpaceAppearance;
 use crate::space_controls::style_cards;
 use crate::{agent_settings, space_settings, theme_list};
@@ -446,7 +447,7 @@ impl SettingsWindow {
                     .map(|(label, current)| CommandItem::new().label(label).checked(current)),
             ),
         }
-        .max_h(px(260.0))
+        .max_h(rem_px(260.0))
         .bordered(true)
         .on_confirm(move |path, window, cx| {
             choices::pick(row, path.row, cx);

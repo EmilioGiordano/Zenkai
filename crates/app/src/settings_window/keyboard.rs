@@ -8,6 +8,7 @@ use zenkai_i18n::t;
 use super::SettingsWindow;
 use super::controls::{card, group_title};
 use crate::actions::{RecordShortcutKeys, ResetAllShortcuts};
+use crate::interface_scale::rem_px;
 use crate::keymap::{self, Chord, Conflict, KeymapState, Model, Proposal};
 
 const MODIFIER_KEYS: [&str; 5] = ["shift", "control", "alt", "platform", "function"];
@@ -349,7 +350,7 @@ impl SettingsWindow {
             .when(shortcut.modified, |this| {
                 this.child(
                     div()
-                        .size(px(6.0))
+                        .size(rem_px(6.0))
                         .rounded_full()
                         .bg(theme.warning)
                         .flex_shrink_0(),

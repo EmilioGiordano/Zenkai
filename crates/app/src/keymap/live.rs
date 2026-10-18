@@ -11,6 +11,7 @@ use super::edit::{self, Edit};
 use super::model::{Command, Model, is_guarded};
 use super::overrides::{Override, Overrides, Problem, validate};
 use crate::agent_settings;
+use crate::prompt_gate::PROMPT_OPEN_CONTEXT;
 
 // What settings.json asks for, as last applied to the app's key bindings.
 #[derive(Default)]
@@ -60,11 +61,17 @@ fn rebuild(cx: &mut App, model: &Model, overrides: &Overrides) {
         .bindings()
         .filter(|binding| !owned.contains(binding.action().name()))
         .filter(|binding| !is_dialog_shield(binding))
+        .filter(|binding| !is_prompt_shield(binding))
         .cloned()
         .collect();
     let effective = model.effective(overrides);
     let shields = shield_close_dialog(&effective);
-    let ours = effective.into_iter().chain(shields).filter_map(load);
+    let prompt_shields = shield_open_prompt(&effective);
+    let ours = effective
+        .into_iter()
+        .chain(shields)
+        .chain(prompt_shields)
+        .filter_map(load);
     let rebuilt: Vec<KeyBinding> = others.into_iter().chain(ours).collect();
     cx.clear_key_bindings();
     cx.bind_keys(rebuilt);
@@ -98,6 +105,28 @@ fn shield_close_dialog(bindings: &[Binding]) -> Vec<Binding> {
             chord: binding.chord.clone(),
             action: Box::new(NoAction),
             context: Some("CloseDialog"),
+        })
+        .collect()
+}
+
+fn is_prompt_shield(binding: &KeyBinding) -> bool {
+    binding.action().as_any().is::<NoAction>()
+        && binding
+            .predicate()
+            .is_some_and(|predicate| mentions(&predicate, PROMPT_OPEN_CONTEXT))
+}
+
+// A native question is open: nothing in the workspace may act until it is answered.
+fn shield_open_prompt(bindings: &[Binding]) -> Vec<Binding> {
+    let mut seen: HashSet<&Chord> = HashSet::new();
+    bindings
+        .iter()
+        .filter(|binding| matches!(binding.context, None | Some("Workspace")))
+        .filter(|binding| seen.insert(&binding.chord))
+        .map(|binding| Binding {
+            chord: binding.chord.clone(),
+            action: Box::new(NoAction),
+            context: Some(PROMPT_OPEN_CONTEXT),
         })
         .collect()
 }
@@ -288,4 +317,44 @@ fn edit(cx: &mut App, edits: Vec<Edit>) {
     agent_settings::change(cx, move |settings| {
         edit::apply(&Model::build(), &mut settings.keymap, &edits)
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use gpui_kit::{KeyBinding, NoAction};
+
+    use super::{
+        Chord, Model, Overrides, PROMPT_OPEN_CONTEXT, is_prompt_shield, load, shield_open_prompt,
+    };
+
+    #[test]
+    fn every_workspace_chord_is_shielded_while_a_prompt_is_open() {
+        let bindings = Model::build().effective(&Overrides::default());
+        let shields = shield_open_prompt(&bindings);
+        let workspace_chords: HashSet<&Chord> = bindings
+            .iter()
+            .filter(|binding| matches!(binding.context, None | Some("Workspace")))
+            .map(|binding| &binding.chord)
+            .collect();
+        assert!(!workspace_chords.is_empty());
+        assert_eq!(shields.len(), workspace_chords.len());
+        for shield in &shields {
+            assert_eq!(shield.context, Some(PROMPT_OPEN_CONTEXT));
+            assert!(shield.action.as_any().is::<NoAction>());
+            assert!(workspace_chords.contains(&shield.chord));
+        }
+    }
+
+    #[test]
+    fn a_loaded_prompt_shield_is_recognised_so_a_rebuild_does_not_duplicate_it() {
+        let bindings = Model::build().effective(&Overrides::default());
+        let loaded: Vec<KeyBinding> = shield_open_prompt(&bindings)
+            .into_iter()
+            .filter_map(load)
+            .collect();
+        assert!(!loaded.is_empty());
+        assert!(loaded.iter().all(is_prompt_shield));
+    }
 }

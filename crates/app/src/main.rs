@@ -24,6 +24,7 @@ mod files;
 mod find;
 mod format_dialog;
 mod generate_dialog;
+mod interface_scale;
 mod jump;
 mod keymap;
 mod language;
@@ -32,6 +33,7 @@ mod memory;
 mod palette;
 mod panel_width;
 mod previews;
+mod prompt_gate;
 mod recent;
 mod recovery;
 mod refresh;
@@ -71,9 +73,13 @@ fn main() {
             zenkai_grid::bind_keys(cx);
             keymap::init(cx);
             theme::init(cx);
+            interface_scale::init(cx);
             agent_settings::init(cx);
             settings_window::register_agent_actions(cx);
             cx.on_action(|_: &actions::OpenSettings, cx| settings_window::open(cx));
+            cx.on_action(|_: &actions::InterfaceLarger, cx| interface_scale::larger(cx));
+            cx.on_action(|_: &actions::InterfaceSmaller, cx| interface_scale::smaller(cx));
+            cx.on_action(|_: &actions::InterfaceReset, cx| interface_scale::reset(cx));
             cx.on_action(|_: &actions::RecordShortcutKeys, cx| {
                 settings_window::open_to_find_shortcut(cx)
             });

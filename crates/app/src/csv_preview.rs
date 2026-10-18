@@ -13,6 +13,7 @@ use zenkai_formats::{
 };
 
 use crate::actions::{CancelCsvImport, ConfirmCsvImport};
+use crate::interface_scale::rem_px;
 
 const PREVIEW_ROWS: usize = 12;
 const PREVIEW_COLS: usize = 8;
@@ -113,7 +114,7 @@ pub fn render(
                 .when(index % 2 == 1, |line| line.bg(theme.table_even))
                 .children((0..total_cols.min(PREVIEW_COLS)).map(|col| {
                     div()
-                        .w(px(110.0))
+                        .w(rem_px(110.0))
                         .px_2()
                         .py_0p5()
                         .text_sm()
@@ -167,7 +168,7 @@ pub fn render(
         .track_focus(focus)
         // Clicks on the preview must not reach the grid underneath.
         .occlude()
-        .w(px(920.0))
+        .w(rem_px(920.0))
         .p_4()
         .gap_3()
         .bg(theme.background)
@@ -192,14 +193,14 @@ pub fn render(
                         .child(t!("csv.separator")),
                 )
                 .children(delimiter_buttons)
-                .child(div().w(px(12.0)))
+                .child(div().w(rem_px(12.0)))
                 .child(
                     div()
                         .text_color(theme.muted_foreground)
                         .child(t!("csv.decimal")),
                 )
                 .children(decimal_buttons)
-                .child(div().w(px(12.0)))
+                .child(div().w(rem_px(12.0)))
                 .child(
                     div()
                         .text_color(theme.muted_foreground)

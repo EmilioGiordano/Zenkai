@@ -1,4 +1,5 @@
 use super::*;
+use crate::interface_scale::rem_px;
 use zenkai_i18n::t;
 
 impl GenerateDialog {
@@ -14,7 +15,7 @@ impl GenerateDialog {
         let options_open =
             matches!(&self.panel, Some(Panel::Options(open)) if open.column == index);
         let type_cell = v_flex()
-            .w(px(220.0))
+            .w(rem_px(220.0))
             .child(
                 h_flex()
                     .gap_1()
@@ -65,7 +66,7 @@ impl GenerateDialog {
                 });
         let removable = self.draft.is_added(index) && index + 1 == self.draft.columns().len();
         let unique_cell = h_flex()
-            .w(px(64.0))
+            .w(rem_px(64.0))
             .gap_1()
             .items_center()
             .child(
@@ -95,10 +96,10 @@ impl GenerateDialog {
                     .items_center()
                     .child(
                         h_flex()
-                            .w(px(176.0))
+                            .w(rem_px(176.0))
                             .gap_2()
                             .items_center()
-                            .child(div().w(px(18.0)).text_sm().child(letter.clone()))
+                            .child(div().w(rem_px(18.0)).text_sm().child(letter.clone()))
                             .child(
                                 div().flex_1().min_w_0().child(
                                     Input::new(&inputs.header)
@@ -109,7 +110,7 @@ impl GenerateDialog {
                     .child(type_cell)
                     .child(options_cell)
                     .child(
-                        div().w(px(84.0)).child(
+                        div().w(rem_px(84.0)).child(
                             Input::new(&inputs.blanks)
                                 .aria_label(t!("gen.aria_blanks", letter = letter)),
                         ),
@@ -119,10 +120,10 @@ impl GenerateDialog {
             .when(column.header_changed(), |row| {
                 row.child(
                     h_flex()
-                        .pl(px(30.0))
+                        .pl(rem_px(30.0))
                         .gap_2()
                         .items_center()
-                        .child(div().size(px(8.0)).rounded_full().bg(theme.warning))
+                        .child(div().size(rem_px(8.0)).rounded_full().bg(theme.warning))
                         .child(
                             div()
                                 .text_xs()
@@ -144,7 +145,7 @@ impl GenerateDialog {
             .when_some(self.column_error(index), |row, message| {
                 row.child(
                     div()
-                        .pl(px(30.0))
+                        .pl(rem_px(30.0))
                         .text_xs()
                         .text_color(theme.danger)
                         .child(format!("⚠ {message}")),

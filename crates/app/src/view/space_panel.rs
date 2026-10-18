@@ -9,6 +9,7 @@ use zenkai_i18n::t;
 
 use super::{Severity, Workspace};
 use crate::actions::{CloseSpacePanel, ResetSpaceAppearance};
+use crate::interface_scale::rem_px;
 use crate::keymap;
 use crate::panel_width::Panel;
 use crate::space_appearance::{
@@ -219,7 +220,7 @@ impl Workspace {
             theme.border,
             theme.muted_foreground,
         );
-        let title_dot = div().size(px(12.0)).rounded_full().bg(resolve(
+        let title_dot = div().size(rem_px(12.0)).rounded_full().bg(resolve(
             &space_settings::current(cx),
             color,
             &appearance,
@@ -353,10 +354,10 @@ impl Workspace {
                         .id("space-panel")
                         .track_focus(&focus)
                         .absolute()
-                        .top(px(72.0))
-                        .left(px(left))
-                        .w(px(PANEL_WIDTH))
-                        .max_h(px(640.0))
+                        .top(rem_px(72.0))
+                        .left(rem_px(left))
+                        .w(rem_px(PANEL_WIDTH))
+                        .max_h(rem_px(640.0))
                         .overflow_y_scroll()
                         .p_4()
                         .gap_4()

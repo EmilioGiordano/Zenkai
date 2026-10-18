@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod carried_moves;
+#[cfg(test)]
+mod content_cells_property;
 mod edit_profile;
 mod error;
 mod file;

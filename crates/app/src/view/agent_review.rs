@@ -10,6 +10,7 @@ use zenkai_types::{CellRef, Range, SheetId, WorkbookId};
 use super::Workspace;
 use crate::actions::*;
 use crate::agent_review::{CellChange, reject_unchanged};
+use crate::interface_scale::rem_px;
 use crate::keymap;
 
 const POPOVER_WIDTH: f32 = 300.0;
@@ -326,7 +327,7 @@ impl Workspace {
                 .absolute()
                 .left(corner.x)
                 .top(corner.y + px(2.0))
-                .w(px(POPOVER_WIDTH))
+                .w(rem_px(POPOVER_WIDTH))
                 .p_3()
                 .gap_2()
                 .rounded_md()
