@@ -254,6 +254,9 @@ impl Workspace {
     ) -> Result<PlannedWrite, ToolError> {
         let document = agent_routing::target(&self.documents, id)?;
         agent_routing::access(document, Self::permission(cx)).check_write()?;
+        if self.prompts.blocks_input() {
+            return Err(ToolError::DialogOpen);
+        }
         // An agent write landing under the user's typing would mix the two edits.
         if self.documents.active_id() == Some(id) && self.user_is_editing(cx) {
             return Err(ToolError::UserEditing);
@@ -366,6 +369,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.prompts.blocks_input() {
+            call.respond(Err(ToolError::DialogOpen));
+            return;
+        }
         let Some(name) = self.documents.get(id).map(Document::name) else {
             call.respond(Err(ToolError::UnknownWorkbook(id)));
             return;
