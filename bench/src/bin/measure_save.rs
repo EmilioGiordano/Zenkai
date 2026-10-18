@@ -221,6 +221,9 @@ fn edit_and_write_in_memory(
     Ok(())
 }
 
+// The deflate levels the floor compares; None is the level a save writes with.
+const FLOOR_LEVELS: [Option<i32>; 3] = [Some(1), Some(3), None];
+
 // What any save of a changed sheet costs whatever it copies: the sheet is one deflated zip
 // entry, so it is inflated from the old file and deflated into the new one whole.
 fn floor(target: &Path) -> Result<()> {
@@ -243,21 +246,30 @@ fn floor(target: &Path) -> Result<()> {
     let mut xml = Vec::new();
     archive.by_name(&name)?.read_to_end(&mut xml)?;
     let inflate_ms = ms(start);
-    let deflated = Instant::now();
-    let mut zip = zip::ZipWriter::new(Discard::default());
-    let options =
-        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    zip.start_file(name.as_str(), options)?;
-    zip.write_all(&xml)?;
-    let compressed = zip.finish()?.len;
-    let deflate_ms = ms(deflated);
+    let mut levels = Vec::new();
+    for level in FLOOR_LEVELS {
+        let deflated = Instant::now();
+        let mut zip = zip::ZipWriter::new(Discard::default());
+        let options = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .compression_level(level);
+        zip.start_file(name.as_str(), options)?;
+        zip.write_all(&xml)?;
+        let compressed = zip.finish()?.len;
+        let label = level.map_or("default".to_string(), |level| level.to_string());
+        levels.push(format!(
+            "level_{label}_ms={:.0} level_{label}_mb={:.1}",
+            ms(deflated),
+            compressed as f64 / 1024.0 / 1024.0
+        ));
+    }
     done(
         "floor",
         start,
         &format!(
-            "part={name} xml_mb={:.1} deflated_mb={:.1} inflate_ms={inflate_ms:.0} deflate_ms={deflate_ms:.0}",
+            "part={name} xml_mb={:.1} inflate_ms={inflate_ms:.0} {}",
             xml.len() as f64 / 1024.0 / 1024.0,
-            compressed as f64 / 1024.0 / 1024.0
+            levels.join(" ")
         ),
     );
     Ok(())
