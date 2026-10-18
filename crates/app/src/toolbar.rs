@@ -1,16 +1,18 @@
 use gpui_kit::assets::IconName;
-use gpui_kit::base::{Selectable, h_flex};
+use gpui_kit::base::{Selectable, h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::color_picker::{ColorPicker, ColorPickerState};
 use gpui_kit::component::menu::DropdownMenu;
+use gpui_kit::component::popover::Popover;
 use gpui_kit::*;
+use zenkai_agent::preferences::InterfaceScale;
 use zenkai_i18n::t;
 use zenkai_types::{CellStyle, HAlign};
 
 use crate::actions::*;
-use crate::interface_scale::rem_px;
+use crate::interface_scale::{self, rem_px};
 use crate::keymap;
 
 fn tool(
@@ -34,6 +36,110 @@ fn separator(cx: &App) -> Div {
         .h(rem_px(18.0))
         .mx_1()
         .bg(cx.theme().border)
+}
+
+fn shortcut_row(label: &'static str, keys: String, muted: Hsla) -> impl IntoElement {
+    h_flex()
+        .justify_between()
+        .gap_4()
+        .child(label)
+        .child(div().text_color(muted).child(keys))
+}
+
+fn keys_of(cx: &App, action: &dyn Action) -> String {
+    keymap::shortcut(cx, action).unwrap_or_default()
+}
+
+// Shown only while the interface is not at 100%, so the state is visible and one click away
+// from the controls that change it.
+fn interface_size(cx: &App) -> Option<impl IntoElement> {
+    let scale = interface_scale::shown(cx);
+    if scale == InterfaceScale::default() {
+        return None;
+    }
+    let percent = scale.percent();
+    let muted = cx.theme().muted_foreground;
+    let smaller_keys = keys_of(cx, &InterfaceSmaller);
+    let larger_keys = keys_of(cx, &InterfaceLarger);
+    let reset_keys = keys_of(cx, &InterfaceReset);
+    Some(
+        Popover::new("interface-size")
+            .anchor(Anchor::TopRight)
+            .trigger(
+                Button::new("interface-size-trigger")
+                    .ghost()
+                    .compact()
+                    .label(t!("interface.pill", percent = percent)),
+            )
+            .content(move |_, _, _| {
+                v_flex()
+                    .w(rem_px(280.0))
+                    .gap_2()
+                    .text_sm()
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .items_center()
+                            .child(t!("interface.title"))
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        Button::new("interface-smaller")
+                                            .compact()
+                                            .icon(IconName::Minus)
+                                            .tooltip(t!("interface.smaller"))
+                                            .on_click(|_, window, cx| {
+                                                window.dispatch_action(
+                                                    InterfaceSmaller.boxed_clone(),
+                                                    cx,
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .w(rem_px(44.0))
+                                            .text_center()
+                                            .child(format!("{percent}%")),
+                                    )
+                                    .child(
+                                        Button::new("interface-larger")
+                                            .compact()
+                                            .icon(IconName::Plus)
+                                            .tooltip(t!("interface.larger"))
+                                            .on_click(|_, window, cx| {
+                                                window.dispatch_action(
+                                                    InterfaceLarger.boxed_clone(),
+                                                    cx,
+                                                )
+                                            }),
+                                    ),
+                            ),
+                    )
+                    .child(shortcut_row(
+                        t!("interface.smaller"),
+                        smaller_keys.clone(),
+                        muted,
+                    ))
+                    .child(shortcut_row(
+                        t!("interface.larger"),
+                        larger_keys.clone(),
+                        muted,
+                    ))
+                    .child(shortcut_row(
+                        t!("interface.reset"),
+                        reset_keys.clone(),
+                        muted,
+                    ))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(t!("interface.note")),
+                    )
+            }),
+    )
 }
 
 pub struct ColorPickers {
@@ -234,6 +340,7 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
             ZoomIn,
         ))
         .child(div().flex_1())
+        .children(interface_size(cx))
         .child(tool(
             cx,
             "theme",
