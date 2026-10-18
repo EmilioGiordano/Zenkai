@@ -51,6 +51,7 @@ use crate::documents::{Documents, Step};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
+use crate::interface_scale;
 use crate::jump::jump_target;
 use crate::keymap;
 use crate::memory;
@@ -123,7 +124,6 @@ const MAX_AUTOSUM_SCAN: usize = 10_000;
 const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 
-const UI_SCALE_STEP: f32 = 0.125;
 const MAX_REPLACE_CELLS: usize = 100_000;
 const FONT_SIZES: [u16; 16] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 
@@ -162,8 +162,6 @@ pub struct Workspace {
     // Bumped by every CSV read, re-parse, import and cancel; a background result is
     // applied only if no newer request started meanwhile.
     csv_request: u64,
-    // Interface scale, independent of the grid zoom: everything sized in rems.
-    ui_scale: f32,
     show_formulas: bool,
     formula_bar: Option<FormulaBarEdit>,
     // The last formatting change, which F4 repeats on the selection as in Excel.
@@ -309,7 +307,6 @@ impl Workspace {
             theme_picker: None,
             csv_preview: None,
             csv_request: 0,
-            ui_scale: 1.0,
             show_formulas: false,
             formula_bar: None,
             last_style: None,
@@ -1389,17 +1386,15 @@ impl Workspace {
         .detach();
     }
 
-    fn set_ui_scale(&mut self, scale: f32, cx: &mut Context<Self>) {
-        self.ui_scale = scale.clamp(0.75, 2.0);
+    fn announce_interface_size(&mut self, cx: &mut Context<Self>) {
         self.notify(
             Severity::Info,
             t!(
                 "notice.interface_size",
-                percent = format!("{:.0}", self.ui_scale * 100.0)
+                percent = interface_scale::shown(cx).percent()
             ),
             cx,
         );
-        cx.notify();
     }
 
     fn next_csv_request(&mut self) -> u64 {
@@ -3190,7 +3185,7 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        window.set_rem_size(cx.theme().font_size * self.ui_scale);
+        interface_scale::apply(window, cx);
         let theme = cx.theme();
         v_flex()
             .relative()
@@ -3409,12 +3404,17 @@ impl Render for Workspace {
                 this.style(StyleChange::NumberFormat(NumberFormat::Date), window, cx)
             }))
             .on_action(cx.listener(|this, _: &InterfaceLarger, _, cx| {
-                this.set_ui_scale(this.ui_scale + UI_SCALE_STEP, cx);
+                interface_scale::larger(cx);
+                this.announce_interface_size(cx);
             }))
             .on_action(cx.listener(|this, _: &InterfaceSmaller, _, cx| {
-                this.set_ui_scale(this.ui_scale - UI_SCALE_STEP, cx);
+                interface_scale::smaller(cx);
+                this.announce_interface_size(cx);
             }))
-            .on_action(cx.listener(|this, _: &InterfaceReset, _, cx| this.set_ui_scale(1.0, cx)))
+            .on_action(cx.listener(|this, _: &InterfaceReset, _, cx| {
+                interface_scale::reset(cx);
+                this.announce_interface_size(cx);
+            }))
             .on_action(cx.listener(|this, _: &ToggleReduceMotion, _, cx| {
                 let reduce = !cx.reduce_motion();
                 cx.set_reduce_motion(reduce);

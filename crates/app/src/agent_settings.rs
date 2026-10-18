@@ -62,6 +62,7 @@ pub fn init(cx: &mut App) {
     cx.set_global(Remembered(Vec::new()));
     cx.observe_global::<AgentConfig>(|cx| {
         crate::theme::sync_with_settings(cx);
+        crate::interface_scale::sync_with_settings(cx);
         crate::keymap::sync_with_settings(cx);
         remember_confirmations(cx);
     })
@@ -223,6 +224,7 @@ pub fn change(cx: &mut App, edit: impl Fn(&mut Settings) + Send + 'static) {
         });
         if written_failed {
             cx.update(crate::theme::revert_to_settings);
+            cx.update(crate::interface_scale::revert_to_settings);
         }
         refresh_secrets(cx);
     })

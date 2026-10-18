@@ -20,6 +20,7 @@ use zenkai_i18n::t;
 
 use crate::actions::*;
 use crate::agent_settings::{self, HeldDecision};
+use crate::interface_scale;
 use crate::keymap::KeymapState;
 use crate::space_settings;
 use keyboard::{KeyboardState, Shortcut};
@@ -241,6 +242,7 @@ impl SettingsWindow {
 
 impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        interface_scale::apply(window, cx);
         let settings = agent_settings::settings(cx).clone();
         self.shown_held = cx
             .global::<agent_settings::AgentConfig>()
