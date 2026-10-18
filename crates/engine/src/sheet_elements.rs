@@ -320,19 +320,30 @@ impl Elements {
     // Rows or columns from `from` (1-based) on were inserted or deleted on this sheet. The
     // parts the relationships point at (drawing anchors, table ranges, pivot locations,
     // comment cells) name rows and columns Zenkai cannot shift, so they all go.
-    pub fn moved(&mut self, axis: Axis, from: u32) {
+    pub fn moved(&mut self, axis: Axis, from: u32) -> Option<Elements> {
+        let changed = self.linked != Linked::Dropped
+            || self
+                .standalone
+                .iter()
+                .any(|e| !e.reach.survives(axis, from));
+        let before = changed.then(|| self.clone());
         self.linked = Linked::Dropped;
         self.standalone.retain(|e| e.reach.survives(axis, from));
+        before
     }
 
     // Rows or columns were inserted or deleted on another sheet. The parts the
     // relationships point at (chart series, table formulas, pivot tables) may name cells
     // there and are never read, so they all go, even those that name none.
-    pub fn moved_elsewhere(&mut self) {
+    pub fn moved_elsewhere(&mut self) -> Option<Elements> {
+        let changed = matches!(self.linked, Linked::Kept(_))
+            || self.standalone.iter().any(|e| e.reach == Reach::Workbook);
+        let before = changed.then(|| self.clone());
         if self.linked != Linked::Nothing {
             self.linked = Linked::Dropped;
         }
         self.standalone.retain(|e| e.reach != Reach::Workbook);
+        before
     }
 }
 

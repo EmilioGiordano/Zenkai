@@ -5,12 +5,14 @@
 // output declares only the main and relationship namespaces. The elements written back
 // only into the file they were read from are `sheet_elements`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{self, Write};
 
 use roxmltree::Node;
 
+use crate::carried_moves::{LostKind, MoveTaken, Moves, Restored, Taken};
 use crate::file::Unsupported;
+use crate::model::HistoryStep;
 use crate::saved::Remains;
 use crate::sheet_elements::{Axis, ElementBudget, Elements, Place};
 
@@ -206,14 +208,14 @@ impl Indexed {
         lost
     }
 
-    // `from` is the 1-based first row or column that moved.
-    fn moved_from(&mut self, from: u32) -> Vec<Unsupported> {
+    // `from` is the 1-based first row or column that moved. Returns what the move took,
+    // with the kinds of it a save reports as lost.
+    fn moved_from(&mut self, from: u32) -> Option<(Vec<Unsupported>, Indexed)> {
         if from > self.reach {
-            return Vec::new();
+            return None;
         }
         let lost = self.lost();
-        *self = Indexed::default();
-        lost
+        Some((lost, std::mem::take(self)))
     }
 }
 
@@ -261,6 +263,17 @@ impl SheetSettings {
         self.elements.write_at(out, Place::AfterBreaks)
     }
 
+    // The kinds of elements the model holds that a save into a file holding `remains` of the
+    // sheet cannot write, such as hyperlinks whose relationships part an earlier save left out.
+    pub(crate) fn unwritable(&self, remains: Remains) -> BTreeSet<Unsupported> {
+        let written = self.elements.left_in(remains).kinds();
+        self.elements
+            .kinds()
+            .difference(&written)
+            .copied()
+            .collect()
+    }
+
     // What a save writes into a file that holds `remains` of the sheet.
     pub(crate) fn left_in(&self, remains: Remains) -> SheetSettings {
         SheetSettings {
@@ -280,6 +293,8 @@ impl SheetSettings {
 #[derive(Debug, Default)]
 pub struct Carried {
     sheets: HashMap<u32, SheetSettings>,
+    taken: Moves,
+    restored: Restored,
     // Each kind lost by an edit, with the count of losses when it last was. A sheet that
     // lost one is always written again, so a file written after the loss lacks it too.
     dropped: BTreeMap<Unsupported, u64>,
@@ -291,6 +306,8 @@ impl Carried {
     pub fn new(sheets: HashMap<u32, SheetSettings>) -> Carried {
         Carried {
             sheets,
+            taken: Moves::default(),
+            restored: Restored::default(),
             dropped: BTreeMap::new(),
             losses: 0,
             moves: HashMap::new(),
@@ -341,18 +358,123 @@ impl Carried {
     // them, against what the file it copies from holds (`Held`).
     fn moved(&mut self, sheet_id: u32, axis: Axis, from: u32) {
         let mut lost = Vec::new();
+        let mut taken = Vec::new();
         for (id, settings) in &mut self.sheets {
+            let mut gone = Taken::default();
             if *id != sheet_id {
-                settings.elements.moved_elsewhere();
-                continue;
+                gone.elements = settings.elements.moved_elsewhere();
+            } else {
+                let indexed = match axis {
+                    Axis::Rows => &mut settings.rows,
+                    Axis::Columns => &mut settings.columns,
+                };
+                if let Some((kinds, old)) = indexed.moved_from(from) {
+                    lost = kinds;
+                    match axis {
+                        Axis::Rows => gone.rows = Some(old),
+                        Axis::Columns => gone.columns = Some(old),
+                    }
+                }
+                gone.elements = settings.elements.moved(axis, from);
             }
-            lost = match axis {
-                Axis::Rows => settings.rows.moved_from(from),
-                Axis::Columns => settings.columns.moved_from(from),
-            };
-            settings.elements.moved(axis, from);
+            if !gone.is_empty() {
+                taken.push((*id, gone));
+            }
         }
+        let kinds = lost
+            .iter()
+            .map(|kind| LostKind {
+                kind: *kind,
+                before: self.dropped.get(kind).copied(),
+            })
+            .collect();
+        self.taken.push(MoveTaken {
+            sheets: taken,
+            kinds,
+        });
         self.record(lost);
+    }
+
+    // The model replayed a step that undid or redid a row or column move; gives back or
+    // takes again what that move took. Deliberately restores the lost-kind counts too, so
+    // a save after an undo does not warn about what the undo brought back.
+    pub(crate) fn move_replayed(&mut self, step: HistoryStep) {
+        let Some(replayed) = self.taken.pop(step) else {
+            tracing::warn!(?step, "a replayed move has no entry of what it took");
+            return;
+        };
+        let now = replayed
+            .kinds
+            .iter()
+            .map(|lost| LostKind {
+                kind: lost.kind,
+                before: self.dropped.get(&lost.kind).copied(),
+            })
+            .collect();
+        let sheets = replayed
+            .sheets
+            .into_iter()
+            .filter_map(|(id, taken)| match self.sheets.get_mut(&id) {
+                Some(settings) => {
+                    let put_back = taken.elements.is_some();
+                    let inverse = taken.exchange(settings);
+                    if put_back {
+                        self.restored.add(id, settings.elements.kinds());
+                    }
+                    Some((id, inverse))
+                }
+                None => {
+                    tracing::warn!(sheet_id = id, "a move took settings of a missing sheet");
+                    None
+                }
+            })
+            .collect();
+        match step {
+            HistoryStep::Undo => {
+                for lost in &replayed.kinds {
+                    match lost.before {
+                        Some(count) => self.dropped.insert(lost.kind, count),
+                        None => self.dropped.remove(&lost.kind),
+                    };
+                }
+            }
+            HistoryStep::Redo => self.record(replayed.kinds.iter().map(|lost| lost.kind).collect()),
+        }
+        self.taken
+            .push_inverse(step, MoveTaken { sheets, kinds: now });
+    }
+
+    // The model moved a move's history entry between its stacks and then failed to replay
+    // it. Every check of a row or column move runs before it changes anything, so the
+    // settings still match the model: the entry is replaced by an empty one on the other
+    // stack, so a later replay of it restores nothing the failed step never dropped.
+    pub(crate) fn move_replay_failed(&mut self, step: HistoryStep) {
+        self.taken.forgo(step);
+    }
+
+    pub(crate) fn restored(&self) -> &Restored {
+        &self.restored
+    }
+
+    pub(crate) fn unwritable_restored(
+        &self,
+        sheet: &ironcalc::base::types::Worksheet,
+        remains: Remains,
+    ) -> BTreeSet<Unsupported> {
+        let pending = self.restored.of(sheet.sheet_id);
+        match self.written(sheet) {
+            Some(settings) => settings
+                .unwritable(remains)
+                .intersection(&pending)
+                .copied()
+                .collect(),
+            None => BTreeSet::new(),
+        }
+    }
+
+    // The model's history has nothing to redo, so the moves kept for redoing are stale.
+    pub(crate) fn redo_emptied(&mut self) {
+        self.taken.redo_emptied();
     }
 
     fn record(&mut self, lost: Vec<Unsupported>) {

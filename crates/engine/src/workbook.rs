@@ -568,7 +568,14 @@ impl Workbook {
     // The ids of the sheets a replayed step moves rows or columns on, read before the
     // replay while the step's sheet indices still hold; every sheet when the step also
     // changes the sheets themselves.
-    fn replay_moves(&self, moved: Option<Vec<u32>>) -> Option<Vec<u32>> {
+    fn replay_moves(&mut self, step: HistoryStep) -> Option<Vec<u32>> {
+        if !self.model.can_redo() {
+            self.carried.redo_emptied();
+        }
+        let moved = match step {
+            HistoryStep::Undo => self.model.sheets_moved_by_undo(),
+            HistoryStep::Redo => self.model.sheets_moved_by_redo(),
+        };
         let worksheets = &self.model.get_model().workbook.worksheets;
         moved?
             .into_iter()
@@ -583,7 +590,13 @@ impl Workbook {
     // A row-level save copies what the model does not hold from the file, which a
     // replayed move would leave in the wrong place. Only the sheets that step moved
     // count; a failed replay may have stopped anywhere, so it counts every sheet.
-    fn history_replayed(&mut self, moved: Option<Vec<u32>>, replayed: bool) {
+    fn history_replayed(&mut self, moved: Option<Vec<u32>>, replayed: bool, step: HistoryStep) {
+        if moved.as_ref().is_some_and(|ids| !ids.is_empty()) {
+            match replayed {
+                true => self.carried.move_replayed(step),
+                false => self.carried.move_replay_failed(step),
+            }
+        }
         let sheet_ids = match moved.filter(|_| replayed) {
             Some(ids) => ids,
             None => {
@@ -659,15 +672,12 @@ impl Workbook {
     }
 
     fn step_profiled(&mut self, step: HistoryStep) -> Result<EditProfile, EngineError> {
-        let moved = self.replay_moves(match step {
-            HistoryStep::Undo => self.model.sheets_moved_by_undo(),
-            HistoryStep::Redo => self.model.sheets_moved_by_redo(),
-        });
+        let moved = self.replay_moves(step);
         let profile = self
             .model
             .step(step, |model, take| profiled(model, take))
             .map_err(rejected);
-        self.history_replayed(moved, profile.is_ok());
+        self.history_replayed(moved, profile.is_ok(), step);
         Ok(self.warmed(profile?))
     }
 
@@ -1370,22 +1380,22 @@ impl Engine for Workbook {
     }
 
     fn undo(&mut self) -> Result<(), EngineError> {
-        let moved = self.replay_moves(self.model.sheets_moved_by_undo());
+        let moved = self.replay_moves(HistoryStep::Undo);
         let undone = self
             .model
             .step(HistoryStep::Undo, |model, take| take(model))
             .map_err(rejected);
-        self.history_replayed(moved, undone.is_ok());
+        self.history_replayed(moved, undone.is_ok(), HistoryStep::Undo);
         undone
     }
 
     fn redo(&mut self) -> Result<(), EngineError> {
-        let moved = self.replay_moves(self.model.sheets_moved_by_redo());
+        let moved = self.replay_moves(HistoryStep::Redo);
         let redone = self
             .model
             .step(HistoryStep::Redo, |model, take| take(model))
             .map_err(rejected);
-        self.history_replayed(moved, redone.is_ok());
+        self.history_replayed(moved, redone.is_ok(), HistoryStep::Redo);
         redone
     }
 

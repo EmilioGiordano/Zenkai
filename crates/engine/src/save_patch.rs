@@ -148,6 +148,9 @@ pub(crate) fn patch_plan(
             .unwrap_or_default();
         let relationships = job.relationships();
         dropped.extend(held.rewrite(index, written, relationships)?);
+        if let Some(sheet) = data.book.worksheets.get(index) {
+            dropped.extend(carried.unwritable_restored(sheet, in_file));
+        }
         *remains
             .get_mut(index)
             .ok_or_else(|| rejected("a changed sheet is not in the saved file"))? =
