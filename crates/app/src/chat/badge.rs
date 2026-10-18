@@ -8,6 +8,7 @@ use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::*;
 use zenkai_i18n::t;
 
+use super::mention;
 use super::reference::Reference;
 use super::reference_scan::{self, LINK_TARGET};
 use super::{ChatPanel, MONO};
@@ -16,15 +17,14 @@ use crate::interface_scale::rem_px;
 const BADGE_HEIGHT: f32 = 20.0;
 const BADGE_ICON: f32 = 11.0;
 
-fn frame(id: impl Into<ElementId>, reference: &Reference, cx: &App) -> Stateful<Div> {
+fn frame(id: impl Into<ElementId>, label: String, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
     h_flex()
         .id(id)
         .flex_shrink_0()
         .gap_1()
         .items_center()
-        .role(Role::Button)
-        .aria_label(reference.text())
+        .aria_label(label.clone())
         .h(rem_px(BADGE_HEIGHT))
         .pl_1()
         .pr_1p5()
@@ -37,7 +37,7 @@ fn frame(id: impl Into<ElementId>, reference: &Reference, cx: &App) -> Stateful<
         .text_size(rem_px(11.5))
         .whitespace_nowrap()
         .child(Icon::new(IconName::Grid2x2).size(rem_px(BADGE_ICON)))
-        .child(reference.text())
+        .child(label)
 }
 
 fn open_on_click(
@@ -55,13 +55,10 @@ pub(super) fn badge(
     cx: &App,
 ) -> impl IntoElement {
     let text = reference.text();
-    frame(
-        SharedString::from(format!("reference-{text}")),
-        reference,
-        cx,
-    )
-    .cursor_pointer()
-    .on_click(open_on_click(panel, reference.clone()))
+    frame(SharedString::from(format!("reference-{text}")), text, cx)
+        .role(Role::Button)
+        .cursor_pointer()
+        .on_click(open_on_click(panel, reference.clone()))
 }
 
 pub(super) fn chip(
@@ -72,7 +69,8 @@ pub(super) fn chip(
 ) -> impl IntoElement {
     let target = reference.clone();
     let removal = panel.clone();
-    frame(("chat-chip", index), reference, cx)
+    frame(("chat-chip", index), reference.text(), cx)
+        .role(Role::Button)
         .h(rem_px(BADGE_HEIGHT + 2.0))
         .cursor_pointer()
         .on_click(open_on_click(panel, target))
@@ -146,40 +144,88 @@ impl MarkdownPlugin for ReferencePlugin {
     }
 }
 
+fn mention_chip(
+    label: &str,
+    reference: Option<Reference>,
+    panel: &WeakEntity<ChatPanel>,
+    cx: &App,
+) -> AnyElement {
+    let chip = frame(
+        SharedString::from(format!("mention-{label}")),
+        label.to_string(),
+        cx,
+    );
+    match reference {
+        Some(reference) => chip
+            .role(Role::Button)
+            .cursor_pointer()
+            .on_click(open_on_click(panel.clone(), reference))
+            .into_any_element(),
+        None => chip.into_any_element(),
+    }
+}
+
+fn push_text(lines: &mut Vec<Vec<AnyElement>>, text: &str) {
+    for (index, line) in text.split('\n').enumerate() {
+        if index > 0 {
+            lines.push(Vec::new());
+        }
+        if let Some(current) = lines.last_mut() {
+            current.extend(
+                line.split_inclusive(' ')
+                    .map(|word| div().child(word.to_string()).into_any_element()),
+            );
+        }
+    }
+}
+
+fn push_element(lines: &mut [Vec<AnyElement>], element: AnyElement) {
+    if let Some(current) = lines.last_mut() {
+        current.push(element);
+    }
+}
+
+// Pushes the text, drawing cell references as badges; true when it found any.
+fn push_plain(
+    lines: &mut Vec<Vec<AnyElement>>,
+    text: &str,
+    panel: &WeakEntity<ChatPanel>,
+    cx: &App,
+) -> bool {
+    let mut found = false;
+    for part in reference_scan::split(text) {
+        match part {
+            reference_scan::Part::Text(text) => push_text(lines, &text),
+            reference_scan::Part::Reference(reference) => {
+                found = true;
+                push_element(
+                    lines,
+                    badge(&reference, panel.clone(), cx).into_any_element(),
+                );
+            }
+        }
+    }
+    found
+}
+
 pub(super) fn user_message(
     text: &str,
     panel: &WeakEntity<ChatPanel>,
     cx: &App,
 ) -> Option<AnyElement> {
-    let parts = reference_scan::split(text);
-    if parts
-        .iter()
-        .all(|part| matches!(part, reference_scan::Part::Text(_)))
-    {
-        return None;
-    }
+    let chips = mention::chips(text);
+    let mut styled = !chips.is_empty();
     let mut lines: Vec<Vec<AnyElement>> = vec![Vec::new()];
-    for part in parts {
-        match part {
-            reference_scan::Part::Text(text) => {
-                for (index, line) in text.split('\n').enumerate() {
-                    if index > 0 {
-                        lines.push(Vec::new());
-                    }
-                    if let Some(current) = lines.last_mut() {
-                        current.extend(
-                            line.split_inclusive(' ')
-                                .map(|word| div().child(word.to_string()).into_any_element()),
-                        );
-                    }
-                }
-            }
-            reference_scan::Part::Reference(reference) => {
-                if let Some(current) = lines.last_mut() {
-                    current.push(badge(&reference, panel.clone(), cx).into_any_element());
-                }
-            }
-        }
+    let mut taken = 0;
+    for chip in chips {
+        styled |= push_plain(&mut lines, &text[taken..chip.start], panel, cx);
+        let label = &text[chip.start..chip.end];
+        push_element(&mut lines, mention_chip(label, chip.reference, panel, cx));
+        taken = chip.end;
+    }
+    styled |= push_plain(&mut lines, &text[taken..], panel, cx);
+    if !styled {
+        return None;
     }
     Some(
         v_flex()
