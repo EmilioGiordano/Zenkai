@@ -18,7 +18,7 @@ use zenkai_engine::{
     Engine, EngineError, SaveTarget, Workbook, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
     scan_unsupported,
 };
-use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId, StyleChange};
+use zenkai_types::{CellPos, ColIdx, NumberFormat, Range, Rgb, RowIdx, SheetId, StyleChange};
 
 const SIDE: i64 = 7;
 const SHEETS: [&str; 4] = ["Data", "Calc", "Notes", "Untouched"];
@@ -75,7 +75,7 @@ fn base_file(path: &Path) {
 #[derive(Clone, Debug)]
 enum Op {
     Set(u32, i64, i64, String),
-    Bold(u32, i64, i64, bool),
+    Style(u32, i64, i64, StyleChange),
     InsertRow(u32, i64),
     DeleteRow(u32, i64),
     Undo,
@@ -96,12 +96,28 @@ fn input() -> impl Strategy<Value = String> {
     ]
 }
 
+fn style_change() -> impl Strategy<Value = StyleChange> {
+    prop_oneof![
+        any::<bool>().prop_map(StyleChange::Bold),
+        any::<bool>().prop_map(StyleChange::Italic),
+        prop::sample::select(vec![
+            NumberFormat::General,
+            NumberFormat::Percent,
+            NumberFormat::Date,
+            NumberFormat::Currency,
+        ])
+        .prop_map(StyleChange::NumberFormat),
+        prop::option::of(prop::sample::select(vec![0xFF0000, 0x00FF00, 0x123456]))
+            .prop_map(|color| StyleChange::Fill(color.map(Rgb))),
+    ]
+}
+
 fn op() -> impl Strategy<Value = Op> {
     let sheet = || 0u32..3;
     let at = || 0..SIDE;
     prop_oneof![
         8 => (sheet(), at(), at(), input()).prop_map(|(s, r, c, v)| Op::Set(s, r, c, v)),
-        1 => (sheet(), at(), at(), any::<bool>()).prop_map(|(s, r, c, b)| Op::Bold(s, r, c, b)),
+        2 => (sheet(), at(), at(), style_change()).prop_map(|(s, r, c, change)| Op::Style(s, r, c, change)),
         2 => (sheet(), at()).prop_map(|(s, r)| Op::InsertRow(s, r)),
         2 => (sheet(), at()).prop_map(|(s, r)| Op::DeleteRow(s, r)),
         2 => Just(Op::Undo),
@@ -113,9 +129,9 @@ fn apply(book: &mut Workbook, op: &Op, document: &Path) {
     // An edit the engine refuses is not part of the state being checked.
     let _ = match op {
         Op::Set(s, r, c, v) => book.set_input(SheetId(*s), pos(*r, *c), v),
-        Op::Bold(s, r, c, bold) => {
+        Op::Style(s, r, c, change) => {
             let at = pos(*r, *c);
-            book.apply_style(SheetId(*s), Range::new(at, at), StyleChange::Bold(*bold))
+            book.apply_style(SheetId(*s), Range::new(at, at), *change)
         }
         Op::InsertRow(s, r) => book.insert_rows(SheetId(*s), RowIdx::clamped(*r), 1),
         Op::DeleteRow(s, r) => book.delete_rows(SheetId(*s), RowIdx::clamped(*r), 1),
