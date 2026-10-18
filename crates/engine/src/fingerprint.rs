@@ -406,7 +406,6 @@ pub(crate) fn book_print(book: &Workbook) -> Result<u64, EngineError> {
         shared_strings: _,
         defined_names,
         worksheets,
-        // Compared apart, see above.
         styles: _,
         name,
         settings,
