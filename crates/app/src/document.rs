@@ -472,7 +472,8 @@ fn with_snapshot<T: std::fmt::Debug>(
         Err(EngineError::BaseUnusable { .. }) => true,
         _ => false,
     };
-    // The engine forgot the file it copies from, so the second snapshot writes it whole.
+    // The engine forgot the file it copies from, or the one sheet it could not splice, so the
+    // second snapshot writes that whole.
     let finished = match (retry, first) {
         (true, Err(error)) => {
             tracing::warn!(?job, %error, "the file copied from changed, writing it whole");

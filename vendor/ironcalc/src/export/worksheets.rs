@@ -30,7 +30,7 @@ use ironcalc_base::{
         types::CellReferenceRC,
         utils::number_to_column,
     },
-    types::{ArrayFormulaCell, ArrayKind, Cell, FormulaValue, SpillValue, Worksheet},
+    types::{ArrayFormulaCell, ArrayKind, Cell, FormulaValue, Row, SpillValue, Worksheet},
 };
 
 use crate::export::conditional_formatting::get_conditional_formatting_xml;
@@ -67,10 +67,19 @@ fn get_formula_attribute(
     escape_xml(formula).to_string()
 }
 
-#[derive(Clone, Copy)]
-enum Shared {
+/// How a formula cell refers to an Excel shared formula.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SharedFormula {
+    /// The formula is written whole.
     No,
-    Anchor { si: i32, last_row: i32 },
+    /// The cell holds the text of shared formula `si`, which covers the range from the
+    /// cell down to `last_row` and right to `last_column`.
+    Anchor {
+        si: i32,
+        last_row: i32,
+        last_column: i32,
+    },
+    /// The cell takes shared formula `si`, shifted to its position.
     Follower { si: i32 },
 }
 
@@ -84,9 +93,9 @@ fn shared_formula_of(
     cell: &Cell,
     runs: &mut HashMap<i32, i32>,
     next_si: &mut i32,
-) -> Shared {
+) -> SharedFormula {
     let Cell::CellFormula { f, .. } = cell else {
-        return Shared::No;
+        return SharedFormula::No;
     };
     let formulas = &worksheet.shared_formulas;
     let same_formula = |row: i32| {
@@ -98,7 +107,7 @@ fn shared_formula_of(
     };
     if row > 1 && same_formula(row - 1) {
         if let Some(si) = runs.get(&column) {
-            return Shared::Follower { si: *si };
+            return SharedFormula::Follower { si: *si };
         }
     }
     let mut last_row = row;
@@ -106,12 +115,16 @@ fn shared_formula_of(
         last_row += 1;
     }
     if last_row == row {
-        return Shared::No;
+        return SharedFormula::No;
     }
     let si = *next_si;
     *next_si += 1;
     runs.insert(column, si);
-    Shared::Anchor { si, last_row }
+    SharedFormula::Anchor {
+        si,
+        last_row,
+        last_column: column,
+    }
 }
 
 /// Writes the worksheet part row by row, so a large sheet is never held whole in memory
@@ -271,45 +284,24 @@ pub fn write_worksheet_xml<W: Write>(
     let mut shared_runs = HashMap::new();
     let mut next_si = 0;
     for row_index in &worksheet.sheet_data.rows_sorted() {
-        let row_style_str = match row_style_dict.get(row_index) {
-            Some(row_style) => {
-                let hidden_str = if row_style.hidden {
-                    r#" hidden="1""#
-                } else {
-                    ""
-                };
-                format!(
-                    r#" s="{}" ht="{}" customHeight="{}" customFormat="{}"{}"#,
-                    row_style.s,
-                    row_style.height,
-                    i32::from(row_style.custom_height),
-                    i32::from(row_style.custom_format),
-                    hidden_str,
+        write_row(
+            writer,
+            worksheet,
+            parsed_formulas,
+            &sheet_name,
+            *row_index,
+            row_style_dict.get(row_index),
+            |column_index, cell| {
+                shared_formula_of(
+                    worksheet,
+                    *row_index,
+                    column_index,
+                    cell,
+                    &mut shared_runs,
+                    &mut next_si,
                 )
-            }
-            None => "".to_string(),
-        };
-        write!(writer, "<row r=\"{row_index}\"{row_style_str}>")?;
-        for (column_index, cell) in worksheet.sheet_data.row_cells_sorted(*row_index) {
-            let shared = shared_formula_of(
-                worksheet,
-                *row_index,
-                column_index,
-                cell,
-                &mut shared_runs,
-                &mut next_si,
-            );
-            write_cell(
-                writer,
-                &sheet_name,
-                *row_index,
-                column_index,
-                cell,
-                parsed_formulas,
-                shared,
-            )?;
-        }
-        write!(writer, "</row>")?;
+            },
+        )?;
     }
 
     write!(
@@ -322,6 +314,87 @@ pub fn write_worksheet_xml<W: Write>(
     )
 }
 
+fn row_style_attributes(row_style: Option<&Row>) -> String {
+    match row_style {
+        Some(row_style) => {
+            let hidden_str = if row_style.hidden {
+                r#" hidden="1""#
+            } else {
+                ""
+            };
+            format!(
+                r#" s="{}" ht="{}" customHeight="{}" customFormat="{}"{}"#,
+                row_style.s,
+                row_style.height,
+                i32::from(row_style.custom_height),
+                i32::from(row_style.custom_format),
+                hidden_str,
+            )
+        }
+        None => "".to_string(),
+    }
+}
+
+fn write_row<W: Write>(
+    writer: &mut W,
+    worksheet: &Worksheet,
+    parsed_formulas: &[(Node, StaticResult)],
+    sheet_name: &str,
+    row_index: i32,
+    row_style: Option<&Row>,
+    mut shared_of: impl FnMut(i32, &Cell) -> SharedFormula,
+) -> io::Result<()> {
+    let row_style_str = row_style_attributes(row_style);
+    write!(writer, "<row r=\"{row_index}\"{row_style_str}>")?;
+    for (column_index, cell) in worksheet.sheet_data.row_cells_sorted(row_index) {
+        let shared = shared_of(column_index, cell);
+        write_cell(
+            writer,
+            sheet_name,
+            row_index,
+            column_index,
+            cell,
+            parsed_formulas,
+            shared,
+        )?;
+    }
+    write!(writer, "</row>")
+}
+
+/// The rows of `worksheet` that carry a height or a style, by row number.
+pub fn row_styles(worksheet: &Worksheet) -> HashMap<i32, &Row> {
+    worksheet.rows.iter().map(|row| (row.r, row)).collect()
+}
+
+/// Writes the `<row>` elements of `rows`, in the order given, and nothing else of the
+/// part, so the rows can be placed among rows written earlier. A listed row without
+/// cells is written empty, with its height and style from `row_styles`, which the caller
+/// builds once for all its calls. `shared(row, column)` says how
+/// each formula cell refers to a shared formula; answering [`SharedFormula::No`] never
+/// starts a shared formula whose `si` could clash with the rows around them.
+pub fn write_rows_xml<W: Write>(
+    writer: &mut W,
+    worksheet: &Worksheet,
+    parsed_formulas: &[(Node, StaticResult)],
+    row_styles: &HashMap<i32, &Row>,
+    rows: &[i32],
+    shared: impl Fn(i32, i32) -> SharedFormula,
+) -> io::Result<()> {
+    let sheet_name = worksheet.get_name();
+    for &row_index in rows {
+        write_row(
+            writer,
+            worksheet,
+            parsed_formulas,
+            &sheet_name,
+            row_index,
+            row_styles.get(&row_index).copied(),
+            |column_index, _| shared(row_index, column_index),
+        )?;
+    }
+    Ok(())
+}
+
 fn write_cell<W: Write>(
     writer: &mut W,
     sheet_name: &str,
@@ -329,7 +402,7 @@ fn write_cell<W: Write>(
     column_index: i32,
     cell: &Cell,
     parsed_formulas: &[(Node, StaticResult)],
-    shared: Shared,
+    shared: SharedFormula,
 ) -> io::Result<()> {
     let column_name = number_to_column(column_index).unwrap();
     let cell_name = format!("{column_name}{row_index}");
@@ -341,13 +414,24 @@ fn write_cell<W: Write>(
             &parsed_formulas[*f as usize].0,
         )
     };
-    let formula_xml = |f: &i32| match shared {
-        Shared::No => format!("<f>{}</f>", formula_of(f)),
-        Shared::Anchor { si, last_row } => format!(
-            "<f t=\"shared\" ref=\"{cell_name}:{column_name}{last_row}\" si=\"{si}\">{}</f>",
-            formula_of(f)
-        ),
-        Shared::Follower { si } => format!("<f t=\"shared\" si=\"{si}\"/>"),
+    let formula_xml = |f: &i32| -> io::Result<String> {
+        Ok(match shared {
+            SharedFormula::No => format!("<f>{}</f>", formula_of(f)),
+            SharedFormula::Anchor {
+                si,
+                last_row,
+                last_column,
+            } => {
+                let last_column_name = number_to_column(last_column).ok_or_else(|| {
+                    io::Error::other(format!("column {last_column} is outside the sheet"))
+                })?;
+                format!(
+                    "<f t=\"shared\" ref=\"{cell_name}:{last_column_name}{last_row}\" si=\"{si}\">{}</f>",
+                    formula_of(f)
+                )
+            }
+            SharedFormula::Follower { si } => format!("<f t=\"shared\" si=\"{si}\"/>"),
+        })
     };
     // The parts of an array formula: its text, style, spill range and dynamic marker,
     // or None for one this writer skips.
@@ -421,7 +505,7 @@ fn write_cell<W: Write>(
             //   <v>1</v>
             // </c>
             let style = get_cell_style_attribute(*s);
-            let formula = formula_xml(f);
+            let formula = formula_xml(f)?;
             let b = i32::from(*v);
             write!(
                 writer,
@@ -438,7 +522,7 @@ fn write_cell<W: Write>(
             //   <f>A5+C3</f>
             //   <v>123</v>
             // </c>
-            let formula = formula_xml(f);
+            let formula = formula_xml(f)?;
             let style = get_cell_style_attribute(*s);
             write!(
                 writer,
@@ -454,7 +538,7 @@ fn write_cell<W: Write>(
             //   <f>CONCATENATE(A1, A2)</f>
             //   <v>Hello world!</v>
             // </c>
-            let formula = formula_xml(f);
+            let formula = formula_xml(f)?;
             let style = get_cell_style_attribute(*s);
             let escaped_v = escape_xml(v);
             write!(
@@ -472,7 +556,7 @@ fn write_cell<W: Write>(
             //   <f>A1/A3<f/>
             //   <v>#DIV/0!</v>
             // </c>
-            let formula = formula_xml(f);
+            let formula = formula_xml(f)?;
             let style = get_cell_style_attribute(*s);
             write!(
                 writer,

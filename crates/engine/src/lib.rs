@@ -11,6 +11,7 @@ mod rectangles;
 mod row_split;
 mod save;
 mod save_patch;
+mod save_rows;
 mod save_sheet;
 mod saved;
 mod sheet_copy;

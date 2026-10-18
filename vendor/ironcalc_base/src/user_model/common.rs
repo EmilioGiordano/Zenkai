@@ -20,7 +20,8 @@ use crate::{
 };
 
 use crate::user_model::history::{
-    step_cells, ColumnData, Diff, DiffList, DiffType, History, QueueDiffs, RowData, StepCells,
+    sheets_moved, step_cells, ColumnData, Diff, DiffList, DiffType, History, QueueDiffs, RowData,
+    StepCells,
 };
 
 use super::border_utils::is_max_border;
@@ -360,6 +361,24 @@ impl<'a> UserModel<'a> {
             });
         };
         Ok(())
+    }
+
+    /// The indices of the sheets whose rows or columns the next [UserModel::undo] inserts
+    /// or deletes, or `None` when that step also adds, removes or moves sheets and could
+    /// change any of them. Nothing to undo moves nothing.
+    pub fn sheets_moved_by_undo(&self) -> Option<Vec<u32>> {
+        match self.history.undo_stack.last() {
+            Some(list) => sheets_moved(list),
+            None => Some(Vec::new()),
+        }
+    }
+
+    /// As [UserModel::sheets_moved_by_undo], for the next [UserModel::redo].
+    pub fn sheets_moved_by_redo(&self) -> Option<Vec<u32>> {
+        match self.history.redo_stack.last() {
+            Some(list) => sheets_moved(list),
+            None => Some(Vec::new()),
+        }
     }
 
     /// Returns true if there are items to be undone

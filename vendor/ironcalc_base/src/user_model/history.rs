@@ -310,6 +310,26 @@ pub(crate) enum Diff {
 
 pub(crate) type DiffList = Vec<Diff>;
 
+// The indices of the sheets whose rows or columns the list inserts or deletes. A list that
+// also adds, removes or moves sheets changes what an index means, so it answers None.
+pub(crate) fn sheets_moved(list: &DiffList) -> Option<Vec<u32>> {
+    let mut sheets = Vec::new();
+    for diff in list {
+        match diff {
+            Diff::InsertRows { sheet, .. }
+            | Diff::DeleteRows { sheet, .. }
+            | Diff::InsertColumns { sheet, .. }
+            | Diff::DeleteColumns { sheet, .. } => sheets.push(*sheet),
+            Diff::NewSheet { .. }
+            | Diff::DuplicateSheet { .. }
+            | Diff::DeleteSheet { .. }
+            | Diff::MoveSheet { .. } => return None,
+            _ => {}
+        }
+    }
+    Some(sheets)
+}
+
 /// The cells an undo or redo step can change. See [crate::UserModel::undo_cells].
 #[derive(Default)]
 pub struct StepCells {

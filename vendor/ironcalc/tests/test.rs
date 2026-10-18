@@ -490,3 +490,35 @@ fn test_workbook_theme_colors() {
         "#C9211E".to_string()
     );
 }
+
+#[test]
+fn test_comment_and_whitespace_between_rows() {
+    let bytes = fs::read("tests/example.xlsx").unwrap();
+    let expected = load_from_xlsx_bytes(&bytes, "home", "en", "UTC").unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let mut body = Vec::new();
+        entry.read_to_end(&mut body).unwrap();
+        if name == "xl/worksheets/sheet1.xml" {
+            let text = String::from_utf8(body).unwrap();
+            assert!(text.contains("<sheetData>"));
+            body = text
+                .replacen("<sheetData>", "<sheetData>\n<!-- note -->\n", 1)
+                .replace("</row>", "</row>\n<!-- row -->")
+                .into_bytes();
+        }
+        writer
+            .start_file(name, zip::write::FileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer, &body).unwrap();
+    }
+    let edited = writer.finish().unwrap().into_inner();
+    let model = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    assert_eq!(
+        model.worksheets[0].sheet_data,
+        expected.worksheets[0].sheet_data
+    );
+}

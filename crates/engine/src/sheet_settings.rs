@@ -284,6 +284,7 @@ pub struct Carried {
     // lost one is always written again, so a file written after the loss lacks it too.
     dropped: BTreeMap<Unsupported, u64>,
     losses: u64,
+    moves: HashMap<u32, u64>,
 }
 
 impl Carried {
@@ -292,6 +293,24 @@ impl Carried {
             sheets,
             dropped: BTreeMap::new(),
             losses: 0,
+            moves: HashMap::new(),
+        }
+    }
+
+    // How many times the sheet's rows or columns may have moved; it only grows.
+    pub(crate) fn moves(&self, sheet_id: u32) -> u64 {
+        self.moves.get(&sheet_id).copied().unwrap_or(0)
+    }
+
+    fn count_move(&mut self, sheet_id: u32) {
+        let moves = self.moves.entry(sheet_id).or_default();
+        *moves = moves.wrapping_add(1);
+    }
+
+    // The sheets a replayed undo or redo step moved rows or columns on.
+    pub(crate) fn history_replayed(&mut self, sheet_ids: impl IntoIterator<Item = u32>) {
+        for sheet_id in sheet_ids {
+            self.count_move(sheet_id);
         }
     }
 
@@ -309,10 +328,12 @@ impl Carried {
     }
 
     pub fn rows_moved(&mut self, sheet_id: u32, from: u32) {
+        self.count_move(sheet_id);
         self.moved(sheet_id, Axis::Rows, from);
     }
 
     pub fn columns_moved(&mut self, sheet_id: u32, from: u32) {
+        self.count_move(sheet_id);
         self.moved(sheet_id, Axis::Columns, from);
     }
 
@@ -782,6 +803,16 @@ mod tests {
         assert_eq!(dropped(&carried, 0), [Unsupported::Outline]);
         assert!(dropped(&carried, carried.losses()).is_empty());
         assert!(carried.get(1).is_some_and(|s| s.rows.outline.is_empty()));
+    }
+
+    #[test]
+    fn moves_are_counted_per_sheet_and_for_the_sheets_of_a_replayed_step() {
+        let mut carried = Carried::default();
+        carried.rows_moved(1, 3);
+        carried.columns_moved(1, 2);
+        assert_eq!((carried.moves(1), carried.moves(2)), (2, 0));
+        carried.history_replayed([1, 2]);
+        assert_eq!((carried.moves(1), carried.moves(2)), (3, 1));
     }
 
     #[test]

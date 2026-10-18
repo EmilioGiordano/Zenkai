@@ -28,6 +28,16 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   formula (`<f t="shared" ref=".." si="..">` once, then `<f t="shared" si=".."/>`), so the
   formula is stringified once per run and the part is smaller (`src/export/worksheets.rs`).
   Tests: `src/export/test/test_export.rs`.
+- `write_rows_xml` writes only the `<row>` elements a caller lists, with the shared formula
+  encoding (`SharedFormula`) the caller chooses for each formula cell, so rows can be
+  placed among rows copied from an existing part without clashing with its `si` numbers
+  (`src/export/worksheets.rs`). Builds on the shared formula runs above, whose row writer
+  it shares. The caller builds the row styles once with `row_styles` and passes them to every
+  call, so a caller writing many spans does not rebuild the map per span. Tests:
+  `src/export/test/test_export.rs`.
+- The xlsx import skips comments and whitespace between the `<row>` elements of a sheet
+  instead of failing on them as rows without an index (`src/import/worksheets.rs`). Test:
+  `test_comment_and_whitespace_between_rows` in `tests/test.rs`.
 - `get_shared_string_item_xml` writes one `<si>` element of the shared
   strings part, so a caller can append strings to an existing part
   (`src/export/shared_strings.rs`). Tests: `src/export/test/test_export.rs`.
@@ -147,6 +157,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   workbook of millions of values no longer builds a 12-byte index of each one first
   (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
   `src/test/test_full_evaluation_cells.rs`.
+- `UserModel::sheets_moved_by_undo` and `sheets_moved_by_redo` say which sheets the next
+  undo or redo inserts or deletes rows or columns on, or `None` when the step also adds,
+  removes or moves sheets, so a caller tracking row moves need not assume the worst on
+  every replay (`src/user_model/history.rs`, `common.rs`). Tests:
+  `src/test/user_model/test_sheets_moved.rs`.
 - `UserModel::undo_cells` and `UserModel::redo_cells` tell which cells the next undo or
   redo step can change (`StepCells`: cell areas and the sheets whose rows or columns move,
   or `None` for the workbook; size, visibility, style, pane and sheet-setting diffs add

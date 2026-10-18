@@ -9,7 +9,8 @@ use crate::layout::{
 };
 use crate::limits;
 use crate::package::{part_path, read_entry, read_package};
-use crate::shared_strings::{SHARED_STRINGS_PART, copy_appended};
+use crate::shared_strings::{GuardRead, SHARED_STRINGS_PART, copy_appended};
+use crate::splice::{ReachingAnchor, RowSpan, splice_rows};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted};
 
 const CONTENT_TYPES_PART: &str = "[Content_Types].xml";
@@ -148,6 +149,22 @@ impl BasePackage {
             .map_err(io::Error::other)?;
         let mut guard = self.budgets.stream(entry, &self.meter, SHARED_STRINGS_PART);
         copy_appended(&mut guard, expected, appended, out)
+    }
+
+    // The worksheet `part` with the rows of `spans` replaced by what `write_span` writes and
+    // every other row copied byte for byte. An error means the part cannot be spliced
+    // safely and has to be written whole.
+    pub fn splice_rows<W: Write>(
+        &mut self,
+        part: &str,
+        dimension: &str,
+        spans: &[RowSpan],
+        out: &mut W,
+        write_span: impl FnMut(&RowSpan, &[ReachingAnchor], &mut W) -> io::Result<()>,
+    ) -> io::Result<()> {
+        let entry = self.archive.by_name(part).map_err(io::Error::other)?;
+        let mut guard = self.budgets.stream_worksheet(entry, &self.meter, part);
+        splice_rows(GuardRead(&mut guard), out, dimension, spans, write_span)
     }
 
     // What a save relies on when it writes sheets into this file, read again because a

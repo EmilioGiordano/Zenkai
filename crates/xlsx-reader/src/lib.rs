@@ -12,6 +12,7 @@ mod package;
 mod shared_strings;
 mod sheet_data;
 mod sheet_stream;
+mod splice;
 mod stream;
 mod text;
 mod verify;
@@ -29,6 +30,7 @@ pub use layout::{PackageLayout, PartNames, SharedStrings, StyleCounts};
 pub use limits::CellBudget;
 pub use links::{SheetLink, SheetLinks, relationships_part};
 pub use shared_strings::SHARED_STRINGS_PART;
+pub use splice::{AnchorKind, ReachingAnchor, RowSpan, cannot_splice, is_cannot_splice};
 pub use verify::{Written, check_written};
 
 use crate::formulas::Names;

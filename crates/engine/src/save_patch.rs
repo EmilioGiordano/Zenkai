@@ -1,12 +1,15 @@
 // A save that starts from the file on disk: every part the workbook did not change is
-// copied without inflating it, and only the changed sheets are written again.
+// copied without inflating it, and only the changed sheets, or their changed rows, are
+// written again.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{BufWriter, Seek, Write};
 use std::sync::Arc;
 
 use ironcalc::export::get_shared_string_item_xml;
-use zenkai_xlsx_reader::{BasePackage, SHARED_STRINGS_PART, Written, relationships_part};
+use zenkai_xlsx_reader::{
+    BasePackage, SHARED_STRINGS_PART, Written, is_cannot_splice, relationships_part,
+};
 use zip::ZipWriter;
 
 use crate::error::EngineError;
@@ -14,14 +17,29 @@ use crate::file::Unsupported;
 use crate::fingerprint::{DynamicArrays, SheetPrint};
 use crate::held::Held;
 use crate::save::{ModelData, SheetJob, deflated, rejected, sheet_job, write_sheet};
+use crate::save_rows::{RowJob, dirty_blocks, row_job, write_rows};
 use crate::saved::{Contents, Metadata, SavedFile, Strings};
 use crate::sheet_elements::Relationships;
 use crate::sheet_settings::Carried;
 use crate::table_headers::{headers_match, tables_on};
 
+enum SheetPatch {
+    Whole(SheetJob),
+    Rows(RowJob),
+}
+
+impl SheetPatch {
+    fn part(&self) -> &str {
+        match self {
+            SheetPatch::Whole(job) => &job.part,
+            SheetPatch::Rows(job) => &job.part,
+        }
+    }
+}
+
 pub(crate) struct PatchPlan {
     pub(crate) base: Arc<SavedFile>,
-    sheets: Vec<SheetJob>,
+    sheets: Vec<SheetPatch>,
     // Whole <si> elements for the strings the model added since the file was written,
     // which held `strings_in_file`.
     strings: Vec<u8>,
@@ -50,7 +68,7 @@ pub(crate) fn patch_plan(
         return Ok(None);
     }
     let changed: Vec<usize> = (0..prints.len())
-        .filter(|&index| prints[index] != saved.sheets[index])
+        .filter(|&index| prints[index].changed_since(&saved.sheets[index]))
         .collect();
     let new_arrays = changed
         .iter()
@@ -88,7 +106,26 @@ pub(crate) fn patch_plan(
             return Err(rejected("a changed sheet is not in the saved file"));
         };
         let part = part.clone();
-        let in_file = match tables_intact(data, &held, index) {
+        let intact = tables_intact(data, &held, index);
+        // A sheet written row by row keeps everything the file holds around its rows, which
+        // is only right while its tables still match their headers.
+        let blocks = if intact && !base.unspliceable.contains(&part) {
+            dirty_blocks(&saved.sheets[index], &prints[index])
+        } else {
+            None
+        };
+        if let Some(blocks) = blocks {
+            sheets.push(SheetPatch::Rows(row_job(
+                data,
+                carried,
+                index,
+                part,
+                blocks,
+                &prints[index].bounds(),
+            )?));
+            continue;
+        }
+        let in_file = match intact {
             true => in_file,
             false => in_file.unlinked(),
         };
@@ -104,7 +141,7 @@ pub(crate) fn patch_plan(
             .get_mut(index)
             .ok_or_else(|| rejected("a changed sheet is not in the saved file"))? =
             in_file.rewritten(relationships);
-        sheets.push(job);
+        sheets.push(SheetPatch::Whole(job));
     }
     let contents = Contents {
         worksheets: saved.worksheets.clone(),
@@ -185,10 +222,12 @@ fn check_strings(
     Ok(())
 }
 
-// Returns what was written, part by part, for the verification.
+// Returns what was written, part by part, for the verification. A sheet that cannot be
+// spliced leaves its part in `refused`.
 pub(crate) fn write_patch<W: Write + Seek>(
     plan: PatchPlan,
     writer: W,
+    refused: &mut Option<String>,
 ) -> Result<(W, Vec<(String, Written)>), EngineError> {
     let saved = plan.base.as_ref();
     let read_failed = base_unusable(saved);
@@ -204,12 +243,17 @@ pub(crate) fn write_patch<W: Write + Seek>(
         check_strings(saved, &mut base, &names)?;
     }
     // A rewritten sheet written without the elements that point into its relationships
-    // part leaves the part out; the parts it pointed at stay, unreferenced.
+    // part leaves the part out; the parts it pointed at stay, unreferenced. A sheet written
+    // row by row keeps the part around its rows, and with it its relationships.
     let rels: HashSet<String> = plan
         .sheets
         .iter()
-        .filter(|job| job.relationships() == Relationships::Dropped)
-        .map(|job| relationships_part(&job.part))
+        .filter_map(|job| match job {
+            SheetPatch::Whole(job) if job.relationships() == Relationships::Dropped => {
+                Some(relationships_part(&job.part))
+            }
+            _ => None,
+        })
         .collect();
     let chain = if plan.sheets.is_empty() {
         None
@@ -220,17 +264,29 @@ pub(crate) fn write_patch<W: Write + Seek>(
         Some(chain) => (chain.dropped, chain.rewritten.into_iter().collect()),
         None => (Vec::new(), HashMap::new()),
     };
-    let mut sheets: HashMap<String, SheetJob> = plan
+    let mut sheets: HashMap<String, SheetPatch> = plan
         .sheets
         .into_iter()
-        .map(|job| (job.part.clone(), job))
+        .map(|job| (job.part().to_string(), job))
         .collect();
     let mut strings_left = plan.strings;
     let mut zip = ZipWriter::new(writer);
     let mut written = Vec::with_capacity(names.len());
     for (index, name) in names.into_iter().enumerate() {
         if let Some(job) = sheets.remove(&name) {
-            write_sheet(&mut zip, job)?;
+            match job {
+                SheetPatch::Whole(job) => write_sheet(&mut zip, job)?,
+                SheetPatch::Rows(job) => {
+                    zip.start_file(name.as_str(), deflated())
+                        .map_err(rejected)?;
+                    if let Err(error) = write_rows(&mut base, &mut zip, &job) {
+                        if is_cannot_splice(&error) {
+                            *refused = Some(name);
+                        }
+                        return Err(copy_failed(error));
+                    }
+                }
+            }
         } else if rels.contains(&name) || dropped.iter().any(|d| d.eq_ignore_ascii_case(&name)) {
             continue;
         } else if let Some(bytes) = rewritten.remove(&name) {
@@ -304,6 +360,7 @@ mod tests {
                 remains: vec![Remains::All],
                 losses_through: 0,
             },
+            unspliceable: Vec::new(),
         };
         let prints = sheet_prints(data, &carried).unwrap();
         let Err(EngineError::Rejected(reason)) =

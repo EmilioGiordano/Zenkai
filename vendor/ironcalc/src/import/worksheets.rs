@@ -795,7 +795,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
     // Cells part of an array formula
     let mut array_cell = HashMap::new();
 
-    for row in sheet_data_nodes.children() {
+    for row in sheet_data_nodes.children().filter(|n| n.is_element()) {
         // This is the row number 1-indexed
         let mut row_index = match get_attribute(&row, "r") {
             Ok(s) => Some(s.parse::<i32>()?),
