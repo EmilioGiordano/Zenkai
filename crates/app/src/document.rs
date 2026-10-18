@@ -460,14 +460,12 @@ pub enum ChangedFile {
 }
 
 // A base other than the target is only read from, so writing the target whole loses nothing
-// the user has not seen. The target itself as an unusable base may hold another program's work.
+// the user has not seen. The target itself as a changed or unusable base may hold another
+// program's work: like Excel, a save asks before replacing it.
 fn retries_whole(error: &EngineError, target: &Path, changed: ChangedFile) -> bool {
     match error {
-        // Like Excel, a save never silently replaces a version another program wrote over
-        // the file itself; the user saves again, and that save writes it whole.
-        EngineError::ChangedOnDisk(base) => base != target,
-        EngineError::BaseUnusable { path, .. } => {
-            changed == ChangedFile::Replace || !files::may_be_same_file(path, target)
+        EngineError::ChangedOnDisk(base) | EngineError::BaseUnusable { path: base, .. } => {
+            changed == ChangedFile::Replace || !files::may_be_same_file(base, target)
         }
         _ => false,
     }
@@ -575,7 +573,7 @@ fn allows(accepted: &[Unsupported], dropped: &[Unsupported]) -> bool {
 pub enum DocumentSave {
     Written { kept: Vec<Unsupported> },
     Refused { dropped: Vec<Unsupported> },
-    // Nothing was written: the file to replace cannot be copied from and was likely changed.
+    // Nothing was written: the file to replace changed on disk or cannot be copied from.
     BaseChanged,
 }
 
@@ -604,7 +602,9 @@ pub fn save_document_file(
         },
     );
     match saved {
-        Err(EngineError::BaseUnusable { .. }) if changed == ChangedFile::Ask => {
+        Err(EngineError::BaseUnusable { .. } | EngineError::ChangedOnDisk(_))
+            if changed == ChangedFile::Ask =>
+        {
             Ok(DocumentSave::BaseChanged)
         }
         other => other,
@@ -953,19 +953,27 @@ mod tests {
     }
 
     #[test]
-    fn a_save_over_a_file_another_program_changed_asks_to_save_again() {
+    fn a_save_over_a_file_another_program_changed_asks_and_writes_on_replace() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("book.xlsx");
         let shared = RwLock::new(saved_then_changed_by_another_program(&target));
-        let (refused, attempts) = write_counting(&shared, &target, SaveTarget::Document);
-        assert!(
-            matches!(refused, Err(EngineError::ChangedOnDisk(_))),
-            "{refused:?}"
+        let asked = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            zenkai_engine::save_xlsx,
         );
-        assert_eq!(attempts, 1);
+        assert_eq!(asked.unwrap(), DocumentSave::BaseChanged);
         assert_eq!(saved_text(&target), "someone else's");
-        let (saved, _) = write_counting(&shared, &target, SaveTarget::Document);
-        saved.unwrap();
+        let replaced = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Replace,
+            zenkai_engine::save_xlsx,
+        );
+        assert!(matches!(replaced, Ok(DocumentSave::Written { .. })));
         assert_eq!(saved_text(&target), "mine");
     }
 
@@ -1084,6 +1092,7 @@ mod tests {
         let base = dir.path().join("book.xlsx");
         let other = dir.path().join("recovery.xlsx");
         std::fs::write(&base, b"x").unwrap();
+        std::fs::write(&other, b"x").unwrap();
         assert!(!retries_whole(&unusable(&base), &base, ChangedFile::Ask));
         assert!(retries_whole(&unusable(&base), &base, ChangedFile::Replace));
         assert!(retries_whole(&unusable(&base), &other, ChangedFile::Ask));
@@ -1094,25 +1103,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("gone.xlsx");
         let spelled = dir.path().join("sub").join("..").join("gone.xlsx");
-        assert!(!retries_whole(&unusable(&missing), &spelled, ChangedFile::Ask));
+        assert!(!retries_whole(
+            &unusable(&missing),
+            &spelled,
+            ChangedFile::Ask
+        ));
     }
 
     #[test]
-    fn only_a_base_unusable_or_a_changed_other_file_retries() {
-        let target = Path::new("book.xlsx");
-        let changed = |path: &str| EngineError::ChangedOnDisk(PathBuf::from(path));
-        assert!(!retries_whole(
-            &changed("book.xlsx"),
-            target,
+    fn a_changed_target_asks_and_other_errors_never_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let other = dir.path().join("other.xlsx");
+        std::fs::write(&target, b"x").unwrap();
+        std::fs::write(&other, b"x").unwrap();
+        let changed = |path: &Path| EngineError::ChangedOnDisk(path.to_path_buf());
+        assert!(!retries_whole(&changed(&target), &target, ChangedFile::Ask));
+        assert!(retries_whole(
+            &changed(&target),
+            &target,
             ChangedFile::Replace
         ));
-        assert!(retries_whole(
-            &changed("other.xlsx"),
-            target,
-            ChangedFile::Ask
-        ));
+        assert!(retries_whole(&changed(&other), &target, ChangedFile::Ask));
         let full = EngineError::VerifyFailed("disk full".to_string());
-        assert!(!retries_whole(&full, target, ChangedFile::Replace));
+        assert!(!retries_whole(&full, &target, ChangedFile::Replace));
     }
 
     fn damaged_keeping_stamp(path: &Path) {
