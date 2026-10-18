@@ -57,8 +57,15 @@ impl ChatLayoutState {
 
     pub fn toggled_full_window(self) -> ChatLayoutState {
         match self.current {
-            ChatLayout::FullWindow => self.set(self.before_full_window),
+            ChatLayout::FullWindow => self.without_full_window(),
             _ => self.set(ChatLayout::FullWindow),
+        }
+    }
+
+    pub fn without_full_window(self) -> ChatLayoutState {
+        match self.current {
+            ChatLayout::FullWindow => self.set(self.before_full_window),
+            _ => self,
         }
     }
 }
@@ -119,6 +126,14 @@ mod tests {
             side.toggled_full_window().toggled_full_window().current(),
             ChatLayout::SideBySide
         );
+    }
+
+    #[test]
+    fn leaving_full_window_for_the_sheet_returns_to_the_previous_layout() {
+        let side = ChatLayoutState::default().set(ChatLayout::SideBySide);
+        let full = side.toggled_full_window();
+        assert_eq!(full.without_full_window().current(), ChatLayout::SideBySide);
+        assert_eq!(side.without_full_window(), side);
     }
 
     #[test]

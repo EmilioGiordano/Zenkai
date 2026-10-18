@@ -195,6 +195,7 @@ impl Workspace {
             );
             return;
         };
+        self.show_sheet_beside_chat(cx);
         self.switch_to(id, window, cx);
         if self.documents.active_id() != Some(id) {
             return;
@@ -263,6 +264,13 @@ impl Workspace {
 
     pub(super) fn chat_fills_window(&self) -> bool {
         self.chat.open && self.chat_layout() == ChatLayout::FullWindow
+    }
+
+    pub(super) fn show_sheet_beside_chat(&mut self, cx: &mut Context<Self>) {
+        if self.chat_fills_window() {
+            self.chat.layout = self.chat.layout.without_full_window();
+            cx.notify();
+        }
     }
 
     pub(super) fn change_chat_layout(

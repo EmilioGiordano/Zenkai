@@ -2869,6 +2869,7 @@ impl Workspace {
     }
 
     fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_sheet_beside_chat(cx);
         self.palette = None;
         self.revert_theme_preview(cx);
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("goto.placeholder")));
