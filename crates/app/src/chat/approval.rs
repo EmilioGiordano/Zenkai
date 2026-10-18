@@ -7,15 +7,16 @@ use gpui_kit::*;
 use zenkai_agent::chat::session::ChoiceKind;
 use zenkai_agent::chat::thread::ToolCard;
 use zenkai_agent::chat::tool_rows;
+use zenkai_agent::tools::escaped_text;
 use zenkai_i18n::t;
 
 use super::tools::ToolViews;
 use super::{ChatPanel, MONO, View};
-use crate::actions::{AllowAgentChange, DenyAgentChange, ShowAgentChange};
+use crate::actions::{
+    AllowAgentChange, AllowChatPermission, DenyAgentChange, DenyChatPermission, ShowAgentChange,
+};
 use crate::keymap;
 
-// A change an agent asked to make to a workbook, shown in the chat in place of the bar over the
-// workbook. The workspace owns the decision; the buttons dispatch its actions.
 pub(crate) struct AgentChange {
     pub caption: Option<String>,
     pub summary: String,
@@ -34,6 +35,7 @@ struct Disclosure {
 struct Card {
     caption: Option<String>,
     summary: String,
+    provenance: Option<&'static str>,
     consequence: Option<String>,
     disclosure: Option<Disclosure>,
     answers: Vec<Button>,
@@ -66,7 +68,10 @@ fn render_card(card: Card, cx: &App) -> Div {
                         .when_some(card.caption, |column, caption| {
                             column.child(div().text_xs().text_color(muted).child(caption))
                         })
-                        .child(div().font_weight(FontWeight::MEDIUM).child(card.summary)),
+                        .child(div().font_weight(FontWeight::MEDIUM).child(card.summary))
+                        .when_some(card.provenance, |column, note| {
+                            column.child(div().text_xs().text_color(muted).child(note))
+                        }),
                 ),
         )
         .when_some(card.consequence, |column, consequence| {
@@ -149,20 +154,12 @@ impl ChatPanel {
             Button::new("agent-change-allow")
                 .primary()
                 .small()
-                .label(keymap::labeled(
-                    cx,
-                    t!("chat.approval.allow"),
-                    &AllowAgentChange,
-                ))
+                .label(t!("approval.allow"))
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(AllowAgentChange), cx)),
             Button::new("agent-change-deny")
                 .secondary()
                 .small()
-                .label(keymap::labeled(
-                    cx,
-                    t!("chat.approval.deny"),
-                    &DenyAgentChange,
-                ))
+                .label(t!("approval.deny"))
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(DenyAgentChange), cx)),
         ];
         if change.offer_show {
@@ -170,7 +167,7 @@ impl ChatPanel {
                 Button::new("agent-change-show")
                     .ghost()
                     .small()
-                    .label(keymap::labeled(cx, t!("approval.show"), &ShowAgentChange))
+                    .label(t!("approval.show"))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(ShowAgentChange), cx)
                     }),
@@ -179,6 +176,7 @@ impl ChatPanel {
         let card = Card {
             caption: change.caption.clone(),
             summary: change.summary.clone(),
+            provenance: None,
             consequence: Some(change.consequence.clone()),
             disclosure,
             answers,
@@ -237,13 +235,13 @@ impl ChatPanel {
                     ChoiceKind::AllowOnce => answers.push(button.primary().label(keymap::labeled(
                         cx,
                         t!("chat.approval.allow"),
-                        &AllowAgentChange,
+                        &AllowChatPermission,
                     ))),
                     ChoiceKind::RejectOnce => answers.push(button.secondary().label(
-                        keymap::labeled(cx, t!("chat.approval.deny"), &DenyAgentChange),
+                        keymap::labeled(cx, t!("chat.approval.deny"), &DenyChatPermission),
                     )),
                     ChoiceKind::AllowAlways | ChoiceKind::RejectAlways => {
-                        standing.push(button.ghost().label(choice.label.clone()))
+                        standing.push(button.ghost().label(escaped_text(&choice.label)))
                     }
                 }
             }
@@ -252,6 +250,8 @@ impl ChatPanel {
             Card {
                 caption: None,
                 summary: tool_rows::approval_summary(card),
+                provenance: (!tool_rows::is_zenkai_tool(card))
+                    .then(|| t!("chat.approval.from_agent")),
                 consequence: tool_rows::consequence(card).map(str::to_string),
                 disclosure,
                 answers,
