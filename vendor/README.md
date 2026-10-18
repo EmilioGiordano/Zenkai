@@ -41,6 +41,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - `get_shared_string_item_xml` writes one `<si>` element of the shared
   strings part, so a caller can append strings to an existing part
   (`src/export/shared_strings.rs`). Tests: `src/export/test/test_export.rs`.
+- `get_style_items_xml` writes the font, fill, border, number format and cell format
+  elements a styles part lacks past the first N of each list, so a caller can append
+  styles to an existing part and keep every existing style index and byte
+  (`src/export/styles.rs`; the whole-list writers now share the per-item writers). Tests:
+  `src/export/test/test_export.rs`.
 
 Zenkai-only, not for upstream:
 

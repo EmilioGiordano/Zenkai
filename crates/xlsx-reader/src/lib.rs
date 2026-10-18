@@ -14,6 +14,7 @@ mod sheet_data;
 mod sheet_stream;
 mod splice;
 mod stream;
+mod styles_part;
 mod text;
 mod verify;
 
@@ -26,11 +27,12 @@ use ironcalc::base::types::Workbook;
 
 pub use base::{BaseFacts, BasePackage, CalcChain};
 pub use diff::workbook_differences;
-pub use layout::{PackageLayout, PartNames, SharedStrings, StyleCounts};
+pub use layout::{PackageLayout, PartNames, SharedStrings};
 pub use limits::CellBudget;
 pub use links::{SheetLink, SheetLinks, relationships_part};
 pub use shared_strings::SHARED_STRINGS_PART;
 pub use splice::{AnchorKind, ReachingAnchor, RowSpan, cannot_splice, is_cannot_splice};
+pub use styles_part::{STYLES_PART, StyleAppendix, StyleCounts, StylesShape};
 pub use verify::{Written, check_written};
 
 use crate::formulas::Names;
@@ -214,7 +216,7 @@ fn read_from<R: Read + Seek>(
             &package,
             workbook.shared_strings.len(),
         )?,
-        styles: layout::style_counts(&mut archive, meter, &budgets)?,
+        styles: styles_part::style_counts(&mut archive, meter, &budgets)?,
         part_names: layout::part_names_of(&layout::names_in_order(&mut archive)?),
         sheet_links,
     };

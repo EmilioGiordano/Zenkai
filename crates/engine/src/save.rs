@@ -21,12 +21,12 @@ use crate::preflight::run_with_engine_stack;
 use crate::save_patch::{PatchPlan, Patched, patch_plan, write_patch};
 use crate::save_sheet::{SheetWriter, prepare};
 use crate::saved::{
-    Contents, Metadata, Remains, SavedFile, SavedSlot, Stamp, Strings, selected_sheet,
-    sheet_prints, style_counts,
+    Contents, Metadata, Remains, SavedFile, SavedSlot, Stamp, Strings, selected_sheet, sheet_prints,
 };
 use crate::sheet_copy::copied_sheet;
 use crate::sheet_elements::Relationships;
 use crate::sheet_settings::{Carried, SheetSettings};
+use crate::style_growth::StylesBase;
 
 // IronCalc's rows are written in many small pieces; the settings writer and the deflate
 // stream take them in chunks this large.
@@ -212,19 +212,19 @@ fn full_contents(
     carried: &Carried,
     book: u64,
     sheets: Vec<SheetPrint>,
-) -> Contents {
-    Contents {
+) -> Result<Contents, EngineError> {
+    Ok(Contents {
         worksheets: (0..sheets.len()).map(full_part).collect(),
         remains: vec![Remains::Nothing; sheets.len()],
         held: Held::written_whole(sheets.len()),
         strings: Strings::Aligned(data.book.shared_strings.len()),
-        styles: style_counts(data.book),
+        styles: StylesBase::written(&data.book.styles)?,
         book,
         sheets,
         selected: selected_sheet(data.book),
         metadata: Metadata::Written,
         losses_through: carried.losses(),
-    }
+    })
 }
 
 enum Chosen {
@@ -285,7 +285,7 @@ fn choose(
         }
         None => (
             Chosen::Full(full_sheets(data, carried)?),
-            full_contents(data, carried, book, prints),
+            full_contents(data, carried, book, prints)?,
             Fate::full(
                 held,
                 lost.union(&unwritable_restored(data, carried))

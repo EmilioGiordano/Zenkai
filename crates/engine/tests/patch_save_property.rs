@@ -18,7 +18,10 @@ use zenkai_engine::{
     Engine, EngineError, SaveTarget, Workbook, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
     scan_unsupported,
 };
-use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId, StyleChange};
+use zenkai_types::{CellPos, ColIdx, NumberFormat, Range, Rgb, RowIdx, SheetId, StyleChange};
+
+mod support;
+use support::cell_xfs;
 
 const SIDE: i64 = 7;
 const SHEETS: [&str; 4] = ["Data", "Calc", "Notes", "Untouched"];
@@ -75,7 +78,7 @@ fn base_file(path: &Path) {
 #[derive(Clone, Debug)]
 enum Op {
     Set(u32, i64, i64, String),
-    Bold(u32, i64, i64, bool),
+    Style(u32, i64, i64, StyleChange),
     InsertRow(u32, i64),
     DeleteRow(u32, i64),
     Undo,
@@ -96,12 +99,28 @@ fn input() -> impl Strategy<Value = String> {
     ]
 }
 
+fn style_change() -> impl Strategy<Value = StyleChange> {
+    prop_oneof![
+        any::<bool>().prop_map(StyleChange::Bold),
+        any::<bool>().prop_map(StyleChange::Italic),
+        prop::sample::select(vec![
+            NumberFormat::General,
+            NumberFormat::Percent,
+            NumberFormat::Date,
+            NumberFormat::Currency,
+        ])
+        .prop_map(StyleChange::NumberFormat),
+        prop::option::of(prop::sample::select(vec![0xFF0000, 0x00FF00, 0x123456]))
+            .prop_map(|color| StyleChange::Fill(color.map(Rgb))),
+    ]
+}
+
 fn op() -> impl Strategy<Value = Op> {
     let sheet = || 0u32..3;
     let at = || 0..SIDE;
     prop_oneof![
         8 => (sheet(), at(), at(), input()).prop_map(|(s, r, c, v)| Op::Set(s, r, c, v)),
-        1 => (sheet(), at(), at(), any::<bool>()).prop_map(|(s, r, c, b)| Op::Bold(s, r, c, b)),
+        2 => (sheet(), at(), at(), style_change()).prop_map(|(s, r, c, change)| Op::Style(s, r, c, change)),
         2 => (sheet(), at()).prop_map(|(s, r)| Op::InsertRow(s, r)),
         2 => (sheet(), at()).prop_map(|(s, r)| Op::DeleteRow(s, r)),
         2 => Just(Op::Undo),
@@ -113,9 +132,9 @@ fn apply(book: &mut Workbook, op: &Op, document: &Path) {
     // An edit the engine refuses is not part of the state being checked.
     let _ = match op {
         Op::Set(s, r, c, v) => book.set_input(SheetId(*s), pos(*r, *c), v),
-        Op::Bold(s, r, c, bold) => {
+        Op::Style(s, r, c, change) => {
             let at = pos(*r, *c);
-            book.apply_style(SheetId(*s), Range::new(at, at), StyleChange::Bold(*bold))
+            book.apply_style(SheetId(*s), Range::new(at, at), *change)
         }
         Op::InsertRow(s, r) => book.insert_rows(SheetId(*s), RowIdx::clamped(*r), 1),
         Op::DeleteRow(s, r) => book.delete_rows(SheetId(*s), RowIdx::clamped(*r), 1),
@@ -302,10 +321,12 @@ proptest! {
         prop_assert!(cells(&book) == expected, "{}", first_difference(&expected, &cells(&book)));
         let base = dir.path().join("base.xlsx");
         std::fs::write(&base, original).unwrap();
-        // A copying save keeps the other application's part as it was.
-        if raw_part(&document, "xl/styles.xml") == raw_part(&base, "xl/styles.xml") {
-            prop_assert_eq!(raw_part(&document, UNTOUCHED_PART), raw_part(&base, UNTOUCHED_PART));
-        }
+        // The saves above copy from the other application's file: a sheet no op touched
+        // is as it was, and the styles it points at are the same, new ones at the end.
+        prop_assert_eq!(raw_part(&document, UNTOUCHED_PART), raw_part(&base, UNTOUCHED_PART));
+        let styles_of = |file: &Path| cell_xfs(&inflated(&mut zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap(), "xl/styles.xml").unwrap());
+        let (old, new) = (styles_of(&base), styles_of(&document));
+        prop_assert!(new.starts_with(&old), "an existing style changed");
     }
 }
 

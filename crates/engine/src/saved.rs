@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
 
 use ironcalc::base::types::Workbook;
-use zenkai_xlsx_reader::{PackageLayout, PartNames, SharedStrings, StyleCounts};
+use zenkai_xlsx_reader::{PackageLayout, PartNames, SharedStrings};
 
 use crate::error::EngineError;
 use crate::fingerprint::{ROW_PRINT_BUDGET_BYTES, SheetPrint, book_print, sheet_print};
@@ -12,6 +12,7 @@ use crate::held::Held;
 use crate::save::ModelData;
 use crate::sheet_elements::Relationships;
 use crate::sheet_settings::Carried;
+use crate::style_growth::StylesBase;
 
 // A file is taken as unchanged on disk while its length and modification time are.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +80,7 @@ impl Remains {
 pub(crate) struct Contents {
     pub(crate) worksheets: Vec<String>,
     pub(crate) strings: Strings,
-    pub(crate) styles: StyleCounts,
+    pub(crate) styles: StylesBase,
     pub(crate) book: u64,
     pub(crate) sheets: Vec<SheetPrint>,
     // The sheet the file opens on. A save that copies the workbook part keeps it.
@@ -166,13 +167,6 @@ pub(crate) fn sheet_prints(
         .collect()
 }
 
-pub(crate) fn style_counts(book: &Workbook) -> StyleCounts {
-    StyleCounts {
-        cell_xfs: book.styles.cell_xfs.len(),
-        dxfs: book.styles.dxfs.len(),
-    }
-}
-
 pub(crate) fn selected_sheet(book: &Workbook) -> usize {
     book.views.get(&0).map_or(0, |view| view.sheet as usize)
 }
@@ -190,8 +184,8 @@ pub(crate) struct FileOnDisk<'a> {
     pub(crate) parts: OpenedParts,
 }
 
-// When a save could copy from the file: its strings and styles line up with the model's,
-// so a rewritten sheet's indexes mean the same there, and each part name is there once, so
+// When a save could copy from the file: its strings and cell formats line up with the
+// model's, so a rewritten sheet's indexes mean the same there, and each part name is there once, so
 // the part a save rewrites is the one a reader reads. `data` must still hold the values
 // the file stores, before any recalculation.
 pub(crate) fn opened(
@@ -208,22 +202,25 @@ pub(crate) fn opened(
         SharedStrings::Aligned(count) => Strings::Aligned(count),
         SharedStrings::Unaligned => return None,
     };
-    let aligned = layout.styles == style_counts(data.book)
-        && layout.worksheets.len() == data.book.worksheets.len()
+    let aligned = layout.worksheets.len() == data.book.worksheets.len()
         && layout.part_names == PartNames::Unique;
     if !aligned {
         return None;
     }
-    let prints = book_print(data.book).and_then(|book| Ok((book, sheet_prints(data, carried)?)));
+    let prints = StylesBase::opened(layout.styles, &data.book.styles).and_then(|styles| {
+        let book = book_print(data.book)?;
+        Ok((styles, book, sheet_prints(data, carried)?))
+    });
     match prints {
-        Ok((book, sheets)) => Some(SavedFile {
+        Ok((None, ..)) => None,
+        Ok((Some(styles), book, sheets)) => Some(SavedFile {
             path: path.to_path_buf(),
             stamp,
             contents: Contents {
                 remains: vec![Remains::All; layout.worksheets.len()],
                 worksheets: layout.worksheets,
                 strings,
-                styles: layout.styles,
+                styles,
                 book,
                 sheets,
                 selected: selected_sheet(data.book),

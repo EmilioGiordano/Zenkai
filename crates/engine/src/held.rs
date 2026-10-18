@@ -134,7 +134,7 @@ impl Held {
 
 #[cfg(test)]
 mod tests {
-    use zenkai_xlsx_reader::{PartNames, SharedStrings, StyleCounts};
+    use zenkai_xlsx_reader::{PartNames, SharedStrings, StyleCounts, StylesShape};
 
     use super::*;
 
@@ -145,8 +145,15 @@ mod tests {
                 .collect(),
             shared_strings: SharedStrings::Absent,
             styles: StyleCounts {
+                num_fmts: 0,
+                fonts: 1,
+                fills: 2,
+                borders: 1,
+                cell_style_xfs: 1,
                 cell_xfs: 1,
+                cell_styles: 1,
                 dxfs: 0,
+                shape: StylesShape::Appendable,
             },
             part_names: PartNames::Unique,
             sheet_links,

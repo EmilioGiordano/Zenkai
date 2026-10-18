@@ -18,6 +18,7 @@ mod saved;
 mod sheet_copy;
 mod sheet_elements;
 mod sheet_settings;
+mod style_growth;
 mod table_headers;
 #[cfg(test)]
 mod used_end_property;
