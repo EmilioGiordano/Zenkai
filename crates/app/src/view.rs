@@ -59,6 +59,7 @@ use crate::keymap;
 use crate::memory;
 use crate::palette;
 use crate::panel_width::{Panel, Resize};
+use crate::pending_save::{AfterJob, JobEnd};
 use crate::previews::TypedPreviews;
 use crate::recent;
 use crate::recovery;
@@ -123,6 +124,8 @@ enum StructureEdit {
     FreezePanes,
 }
 
+const SAVE_AGAIN_POLL: Duration = Duration::from_millis(50);
+const SAVE_AGAIN_LIMIT: Duration = Duration::from_secs(300);
 const MAX_AUTOSUM_SCAN: usize = 10_000;
 const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
@@ -1572,9 +1575,72 @@ impl Workspace {
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
         // Text typed in the formula bar is entered before saving, as in Excel.
         self.close_formula_bar(true, window, cx);
-        if let Some(id) = self.documents.active_id() {
+        let Some(id) = self.documents.active_id() else {
+            return;
+        };
+        let Some(document) = self.documents.get_mut(id) else {
+            return;
+        };
+        if document.is_following_up() {
+            return;
+        }
+        if document.file_job() != FileJob::Idle {
+            document.request_save();
+        } else if document.has_pending() {
+            self.save_again(id, window, cx);
+        } else {
             self.save_document(id, window, cx);
         }
+    }
+
+    // After an edit batch or another file job the save cannot start yet; it waits for them,
+    // and gives up after a while so a stuck job never leaves a wait running forever.
+    fn save_again(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(document) = self.documents.get_mut(id) else {
+            return;
+        };
+        if !document.begin_follow_up() {
+            return;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            let started = Instant::now();
+            loop {
+                let waiting = this.update_in(cx, |this, window, cx| {
+                    let Some(document) = this.documents.get_mut(id) else {
+                        return false;
+                    };
+                    if this.lifecycle == Lifecycle::Closing {
+                        document.clear_pending_save();
+                        return false;
+                    }
+                    if document.has_pending() || document.file_job() != FileJob::Idle {
+                        if started.elapsed() < SAVE_AGAIN_LIMIT {
+                            return true;
+                        }
+                        let reason = match document.file_job() {
+                            FileJob::Idle => t!("notice.still_calculating"),
+                            FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
+                        };
+                        document.clear_pending_save();
+                        this.notify(Severity::Warning, reason, cx);
+                        return false;
+                    }
+                    document.clear_pending_save();
+                    this.save_document(id, window, cx);
+                    false
+                });
+                match waiting {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        tracing::debug!(%error, "workspace closed while a save waited");
+                        break;
+                    }
+                }
+                cx.background_executor().timer(SAVE_AGAIN_POLL).await;
+            }
+        })
+        .detach();
     }
 
     fn save_document(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
@@ -1885,9 +1951,22 @@ impl Workspace {
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(t!("busy.saving"), cx);
                 let shown = this.documents.active_id() == Some(id);
+                let wrote = matches!(result, Ok(Saved::Written { .. }));
+                let mut follow_up = AfterJob::Nothing;
                 let current = this.documents.get_mut(id).is_some_and(|document| {
                     document.end_file_job(generation);
-                    document.is_current(generation)
+                    let current = document.is_current(generation);
+                    if current {
+                        let end = if wrote {
+                            JobEnd::Saved {
+                                edited_meanwhile: document.edit_count() != edits_at_start,
+                            }
+                        } else {
+                            JobEnd::Failed
+                        };
+                        follow_up = document.settle_save(generation, end);
+                    }
+                    current
                 });
                 let Some(document) = this.documents.get_mut(id).filter(|_| current) else {
                     if let Err(error) = result {
@@ -1954,6 +2033,9 @@ impl Workspace {
                 }
                 this.flush_edits(id, cx);
                 this.save_ended(id, fully_saved, window, cx);
+                if follow_up == AfterJob::SaveAgain {
+                    this.save_again(id, window, cx);
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during save");

@@ -14,6 +14,7 @@ use crate::agent_review::Review;
 use crate::entry::display_name;
 use crate::files;
 use crate::find::FindBar;
+use crate::pending_save::{AfterJob, JobEnd, PendingSave};
 use crate::spaces::SpaceId;
 use crate::stale_view::{StaleRequest, StaleSlot};
 
@@ -40,6 +41,7 @@ pub struct Document {
     batch_running: bool,
     sheets_stale: bool,
     file_job: FileJob,
+    pending_save: PendingSave,
     pub path: Option<PathBuf>,
     pub dirty: bool,
     pub sheet: SheetId,
@@ -115,6 +117,7 @@ impl Document {
             batch_running: false,
             sheets_stale: false,
             file_job: FileJob::Idle,
+            pending_save: PendingSave::None,
             path,
             dirty: false,
             sheet: SheetId(0),
@@ -232,6 +235,30 @@ impl Document {
 
     pub fn file_job(&self) -> FileJob {
         self.file_job
+    }
+
+    pub fn request_save(&mut self) {
+        self.pending_save.request();
+    }
+
+    // A job of an older generation belongs to a replaced document and settles nothing.
+    pub fn settle_save(&mut self, generation: u64, end: JobEnd) -> AfterJob {
+        if !self.is_current(generation) {
+            return AfterJob::Nothing;
+        }
+        self.pending_save.settle(end)
+    }
+
+    pub fn is_following_up(&self) -> bool {
+        self.pending_save.is_following()
+    }
+
+    pub fn begin_follow_up(&mut self) -> bool {
+        self.pending_save.begin_follow_up()
+    }
+
+    pub fn clear_pending_save(&mut self) {
+        self.pending_save.clear();
     }
 
     pub fn begin_file_job(&mut self, job: FileJob) -> Option<SharedWorkbook> {
@@ -712,6 +739,23 @@ mod tests {
 
     fn noop() -> Edit {
         Box::new(|_| Ok(()))
+    }
+
+    #[test]
+    fn a_stale_job_settles_nothing_in_a_new_document() {
+        let old = document();
+        let generation = old.generation();
+        let mut current = document();
+        current.request_save();
+        assert_eq!(
+            current.settle_save(generation, JobEnd::Autosaved),
+            AfterJob::Nothing
+        );
+        let own = current.generation();
+        assert_eq!(
+            current.settle_save(own, JobEnd::Autosaved),
+            AfterJob::SaveAgain
+        );
     }
 
     #[test]

@@ -33,6 +33,7 @@ mod logging;
 mod memory;
 mod palette;
 mod panel_width;
+mod pending_save;
 mod previews;
 mod prompt_gate;
 mod recent;
