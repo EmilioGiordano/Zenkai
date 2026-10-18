@@ -46,6 +46,10 @@ fn escaped(c: char) -> String {
     }
 }
 
+pub fn escaped_text(text: &str) -> String {
+    text.chars().map(escaped).collect()
+}
+
 // The first characters of `text`, escaped, with an ellipsis when cut.
 pub fn shown_text(text: &str) -> String {
     let mut shown: String = text.chars().take(SHOWN_CHARS).map(escaped).collect();
