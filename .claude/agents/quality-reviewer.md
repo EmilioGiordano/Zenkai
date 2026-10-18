@@ -94,8 +94,8 @@ is not reported.
 
 ## Do not report
 
-- Formatting and anything rustfmt or clippy owns. Run `cargo fmt --check` and
-  `cargo clippy --all-targets -- -D warnings` and only say whether they pass.
+- Formatting and anything rustfmt or clippy owns. Run `rustfmt --check` on the touched
+  `.rs` files only (never `cargo`); clippy is `not run (staging)`.
 - Missing comments or doc comments. The project omits them on purpose.
 - Performance without measurement. That belongs to `perf-auditor`; mention a lead at most
   once under Notes.
@@ -109,8 +109,8 @@ pattern and why it is fine.
 
 ## Blocking policy
 
-- `FAIL` if any `BLOCKER`, `Critical` or `High` finding is `CONFIRMED`, or if fmt or clippy
-  fail.
+- `FAIL` if any `BLOCKER`, `Critical` or `High` finding is `CONFIRMED`, or if `rustfmt --check`
+  fails.
 - `PLAUSIBLE` findings never fail a review by themselves. They are leads for the
   implementer.
 - `PASS` otherwise. `Medium` and `Low` findings are listed and left to the implementer.
@@ -123,7 +123,7 @@ Use exactly this structure.
 # Quality review
 
 Target: <working tree | branch <name> vs main | union> in <directory>
-Checks: fmt <pass|fail>, clippy <pass|fail>
+Checks: rustfmt <pass|fail|not run>, clippy not run (staging)
 Files reviewed: <n>
 
 ## Verdict: PASS | FAIL

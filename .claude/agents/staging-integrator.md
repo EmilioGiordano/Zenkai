@@ -17,7 +17,8 @@ You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` fi
 - Never send keystrokes or clicks to the desktop and never launch the app. The user tests
   the exe by hand.
 - Never kill a process, including a running `zenkai.exe`.
-- At most `-j 8` for cargo. Do not override `CARGO_TARGET_DIR`; use the target dir below.
+- One `cargo` process at a time, `-j 4`, and no heavy measurement alongside a build. Do not
+  override `CARGO_TARGET_DIR`; use the target dir below.
 - Run long commands in the background and wait for the completion notification. Never hand
   back while a build or test is still running, and leave no cargo or rustc process behind.
 
@@ -40,7 +41,9 @@ You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` fi
    resolution needs a design choice, abort that merge with `git merge --abort`, skip the
    branch and report it.
 5. After all merges, once: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-   `cargo test`, `cargo deny check`, `cargo build --release`.
+   `cargo test`, `cargo deny check`, `cargo build --release`, then the vendor suites the
+   workspace excludes, for each crate present under `vendor/` (`ironcalc_base`, and
+   `ironcalc` once it exists): `cargo test --manifest-path vendor/<crate>/Cargo.toml`.
 6. Run the benchmark in `bench/` (release) when any merged branch touched `crates/engine`,
    `crates/grid`, `crates/formats` or `bench/`, as `README.md` documents it, and compare it
    with the saved baseline and the SPEC budgets.

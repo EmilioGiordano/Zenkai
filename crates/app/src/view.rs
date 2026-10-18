@@ -64,6 +64,7 @@ use crate::region;
 use crate::session::Session;
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Neighbour;
+use crate::stale_view::StaleRequest;
 use crate::start_view;
 use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
@@ -445,6 +446,7 @@ impl Workspace {
         let refresh = self.missed.upgraded(generation, refresh);
         let Some(mut cells) = document.cells(&ranges, self.show_formulas) else {
             self.missed.miss_cells(generation, refresh);
+            self.show_stale_cells(&ranges, cx);
             self.wait_for_workbook(id, cx);
             return;
         };
@@ -455,6 +457,22 @@ impl Workspace {
             CellsRefresh::Merge => grid.merge_cells(cells, &ranges, cx),
             CellsRefresh::Replace => grid.replace_cells(cells, cx),
         });
+    }
+
+    // While a batch recalculates, rows the grid never loaded show their values from before
+    // it. They merge into the cache only inside the part the copy covers, so nothing outside
+    // it is wiped; the refresh after the batch replaces them with the new values.
+    fn show_stale_cells(&mut self, ranges: &[Range], cx: &mut Context<Self>) {
+        let Some(document) = self.documents.active() else {
+            return;
+        };
+        let Some((mut cells, covered)) = document.stale_cells(ranges, self.show_formulas) else {
+            return;
+        };
+        self.previews
+            .apply(document.generation(), document.sheet, &covered, &mut cells);
+        self.grid
+            .update(cx, |grid, cx| grid.merge_cells(cells, &covered, cx));
     }
 
     // A background task waits for the lock, so the UI thread never does, and then hands the
@@ -1136,6 +1154,12 @@ impl Workspace {
             return;
         };
         let generation = document.generation();
+        let stale = StaleRequest {
+            slot: document.stale_slot(),
+            sheet: document.sheet,
+            formulas: self.show_formulas,
+            viewport: self.grid.read(cx).cached_ranges(),
+        };
         self.previews.batch_started(generation);
         self.busy = Some(t!("busy.calculating").into());
         cx.notify();
@@ -1143,7 +1167,7 @@ impl Workspace {
         cx.spawn(async move |this, cx| {
             let errors = cx
                 .background_executor()
-                .spawn(async move { document::run_batch(&shared, edits) })
+                .spawn(async move { document::run_batch_serving(&shared, edits, Some(stale)) })
                 .await;
             let update = this.update(cx, |this, cx| {
                 this.previews.batch_finished(generation);
@@ -1426,9 +1450,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(document) = self.documents.get(id) else {
+            self.save_ended(id, false, window, cx);
             return;
         };
         let Some(workbook) = document.workbook() else {
+            self.save_ended(id, false, window, cx);
             self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
             return;
         };
@@ -1440,18 +1466,8 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move { files::write_csv_file(&target, &rows) })
                 .await;
-            let update = this.update(cx, |this, cx| match written {
-                Ok(()) if sheets > 1 => this.notify(
-                    Severity::Warning,
-                    t!("notice.saved_active_sheet_only", path = path.display()),
-                    cx,
-                ),
-                Ok(()) => this.notify(
-                    Severity::Info,
-                    t!("notice.saved_to", path = path.display()),
-                    cx,
-                ),
-                Err(error) => this.notify(Severity::Error, error, cx),
+            let update = this.update_in(cx, |this, window, cx| {
+                this.csv_export_ended(id, &path, sheets, written, window, cx)
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during export");
@@ -1681,7 +1697,6 @@ impl Workspace {
     ) {
         if files::is_delimited_text(&chosen) {
             self.export_csv(id, chosen, window, cx);
-            self.csv_ended_departure(id, window, cx);
             return;
         }
         let Some(document) = self.documents.get(id) else {

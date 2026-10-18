@@ -169,6 +169,10 @@ impl Departure {
         self.current
     }
 
+    pub fn purpose_waiting_on(&self, id: WorkbookId) -> Option<Purpose> {
+        (self.current == Some(id)).then_some(self.purpose)
+    }
+
     pub fn settled(&mut self, id: WorkbookId, saved: bool) -> Settled {
         if self.current != Some(id) {
             return Settled::Ignored;
@@ -284,6 +288,27 @@ mod tests {
         departure.next();
         assert_eq!(departure.settled(WorkbookId(8), false), Settled::Ignored);
         assert_eq!(departure.current(), Some(WorkbookId(7)));
+    }
+
+    #[test]
+    fn only_the_workbook_being_saved_reports_the_purpose_of_the_close() {
+        let mut departure = Departure::closing_app(vec![WorkbookId(1)], ClosePlan::default());
+        assert_eq!(departure.purpose_waiting_on(WorkbookId(1)), None);
+        departure.next();
+        assert_eq!(
+            departure.purpose_waiting_on(WorkbookId(1)),
+            Some(Purpose::App)
+        );
+        assert_eq!(departure.purpose_waiting_on(WorkbookId(2)), None);
+        departure.settled(WorkbookId(1), false);
+        assert_eq!(departure.purpose_waiting_on(WorkbookId(1)), None);
+
+        let mut tab = Departure::closing_tab(WorkbookId(3));
+        tab.next();
+        assert_eq!(
+            tab.purpose_waiting_on(WorkbookId(3)),
+            Some(Purpose::Tab(WorkbookId(3)))
+        );
     }
 
     #[test]
