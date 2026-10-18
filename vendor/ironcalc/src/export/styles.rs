@@ -91,9 +91,6 @@ fn get_borders_xml(styles: &Styles) -> String {
 // <numFmts count="1">
 //   <numFmt numFmtId="164" formatCode="##,#00;[Blue]\-\-#,##0"/>
 // </numFmts>
-// <numFmts count="1">
-//   <numFmt numFmtId="164" formatCode="##,#00;[Blue]\-\-#,##0"/>
-// </numFmts>
 fn get_num_fmt_xml(num_fmt: &NumFmt) -> String {
     let num_fmt_id = num_fmt.num_fmt_id;
     let format_code = escape_xml(&num_fmt.format_code);
