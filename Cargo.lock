@@ -9965,6 +9965,7 @@ dependencies = [
 name = "zenkai-engine"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "csv",
  "iana-time-zone",
  "ironcalc",
@@ -10050,6 +10051,7 @@ dependencies = [
 name = "zenkai-xlsx-reader"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "ironcalc",
  "proptest",
  "quick-xml 0.41.0",

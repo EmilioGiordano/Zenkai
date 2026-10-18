@@ -9,7 +9,6 @@ use ironcalc::base::expressions::parser::static_analysis::StaticResult;
 use ironcalc::base::types::Worksheet;
 use ironcalc::export::{get_package_parts, write_worksheet_xml};
 use zenkai_xlsx_reader::Written;
-use zip::write::FileOptions;
 
 use crate::carried_moves::{Counts, Restored};
 use crate::error::EngineError;
@@ -340,10 +339,6 @@ pub(crate) fn snapshot(
     })
 }
 
-pub(crate) fn deflated() -> FileOptions {
-    FileOptions::default().compression_method(zip::CompressionMethod::Deflated)
-}
-
 pub(crate) fn write_sheet<W: Write + Seek>(
     parts: &mut PartWriter<W>,
     mut job: SheetJob,
@@ -371,7 +366,7 @@ pub(crate) fn write_full<W: Write + Seek>(
     plan: FullPlan,
     writer: W,
 ) -> Result<(W, Vec<(String, Written)>), EngineError> {
-    let mut parts = PartWriter::new(writer);
+    let mut parts = PartWriter::new(writer)?;
     for (name, content) in plan.parts {
         parts.start_generated(&name)?;
         parts.write_all(content.as_bytes()).map_err(rejected)?;

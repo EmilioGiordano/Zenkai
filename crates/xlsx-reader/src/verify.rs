@@ -10,13 +10,25 @@ use crate::ReadError;
 use crate::layout::{PartNames, names_in_order, part_names_of};
 use crate::limits;
 use crate::package::read_package;
-use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, Guard};
+use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Written {
     // Copied from the base file without inflating it.
     Copied,
-    Generated,
+    Generated(PartDigest),
+}
+
+// What the writer saw of a generated part: its XML, which it checked as it went, and the
+// compressed bytes it handed to the file, with where they start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartDigest {
+    pub compression: zip::CompressionMethod,
+    pub crc32: u32,
+    pub size: u64,
+    pub data_start: u64,
+    pub compressed_size: u64,
+    pub compressed_crc32: u32,
 }
 
 fn unreadable(error: impl ToString) -> ReadError {
@@ -33,9 +45,9 @@ fn open(
 
 // Proves a file just written reads back without building a model: the archive holds
 // exactly the planned parts in order, every copied part is byte for byte the base
-// file's, and every generated part inflates with a matching checksum within the
-// reader's caps and is well-formed XML. The workbook and its relationships parse,
-// so the sheets resolve.
+// file's, and every generated part's compressed bytes, checksum and sizes on disk are
+// the ones its writer recorded, within the reader's caps. The workbook and its
+// relationships parse, so the sheets resolve.
 pub fn check_written(
     written: &Path,
     base: Option<&Path>,
@@ -90,17 +102,58 @@ pub fn check_written(
                 same_raw_entry(&mut archive, index, base, at)
                     .map_err(|e| unreadable(format!("{name}: {e}")))?;
             }
-            Written::Generated => {
-                let entry = archive.by_index(index).map_err(unreadable)?;
-                let guard = if package.worksheets.iter().any(|sheet| &sheet.path == name) {
-                    budgets.stream_worksheet(entry, &meter, name)
+            Written::Generated(digest) => {
+                if package.worksheets.iter().any(|sheet| &sheet.path == name) {
+                    budgets.admit_written_worksheet(digest.size)?;
                 } else {
-                    budgets.stream(entry, &meter, name)
-                };
-                check_xml(BufReader::with_capacity(CHUNK_BYTES, GuardRead(guard)))
+                    budgets.admit_written(name, digest.size)?;
+                }
+                as_recorded(&mut archive, index, digest)
                     .map_err(|e| unreadable(format!("{name}: {e}")))?;
             }
         }
+    }
+    Ok(())
+}
+
+// Reads the compressed bytes back without inflating them: equal to what the writer
+// recorded, they inflate to the XML it checked.
+fn as_recorded<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    index: usize,
+    digest: &PartDigest,
+) -> Result<(), String> {
+    let mut entry = archive.by_index_raw(index).map_err(|e| e.to_string())?;
+    let on_disk = (
+        entry.compression(),
+        entry.crc32(),
+        entry.size(),
+        entry.data_start(),
+        entry.compressed_size(),
+    );
+    let recorded = (
+        digest.compression,
+        digest.crc32,
+        digest.size,
+        digest.data_start,
+        digest.compressed_size,
+    );
+    if on_disk != recorded {
+        return Err("its zip entry is not the one written".to_string());
+    }
+    let mut hasher = crc32fast::Hasher::new();
+    let mut read = 0u64;
+    let mut chunk = vec![0u8; CHUNK_BYTES];
+    loop {
+        let bytes = entry.read(&mut chunk).map_err(|e| e.to_string())?;
+        if bytes == 0 {
+            break;
+        }
+        hasher.update(&chunk[..bytes]);
+        read += bytes as u64;
+    }
+    if read != digest.compressed_size || hasher.finalize() != digest.compressed_crc32 {
+        return Err("its bytes on disk are not the ones written".to_string());
     }
     Ok(())
 }
@@ -136,14 +189,6 @@ fn same_raw_entry<A: Read + Seek, B: Read + Seek>(
         if left[..read] != right[..read] {
             return Err("differs from the base file".to_string());
         }
-    }
-}
-
-struct GuardRead<'b, R>(Guard<'b, R>);
-
-impl<R: Read> Read for GuardRead<'_, R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.0.read_chunk(buf).map_err(std::io::Error::other)
     }
 }
 
@@ -187,116 +232,131 @@ mod tests {
     const RELS: &[u8] = b"<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/></Relationships>";
     const SHEET: &[u8] = b"<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData></worksheet>";
 
+    const SOUND: [(&str, &[u8]); 3] = [
+        ("xl/workbook.xml", WORKBOOK),
+        ("xl/_rels/workbook.xml.rels", RELS),
+        ("xl/worksheets/sheet1.xml", SHEET),
+    ];
+
     fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
         let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for (name, body) in entries {
             writer
-                .start_file(
-                    *name,
-                    zip::write::FileOptions::default()
-                        .compression_method(zip::CompressionMethod::Stored),
-                )
+                .start_file(*name, zip::write::FileOptions::default())
                 .unwrap();
             writer.write_all(body).unwrap();
         }
         std::fs::write(path, writer.finish().unwrap().into_inner()).unwrap();
     }
 
-    fn plan(kinds: &[(&str, Written)]) -> Vec<(String, Written)> {
-        kinds.iter().map(|(n, k)| (n.to_string(), *k)).collect()
+    // What a writer would have recorded for each part of a file still as it wrote it.
+    fn recorded(path: &Path, copied: &[&str]) -> Vec<(String, Written)> {
+        let mut archive = zip::ZipArchive::new(File::open(path).unwrap()).unwrap();
+        (0..archive.len())
+            .map(|index| {
+                let mut entry = archive.by_index_raw(index).unwrap();
+                let name = entry.name().to_string();
+                if copied.contains(&name.as_str()) {
+                    return (name, Written::Copied);
+                }
+                let mut raw = Vec::new();
+                entry.read_to_end(&mut raw).unwrap();
+                let digest = PartDigest {
+                    compression: entry.compression(),
+                    crc32: entry.crc32(),
+                    size: entry.size(),
+                    data_start: entry.data_start(),
+                    compressed_size: entry.compressed_size(),
+                    compressed_crc32: crc32fast::hash(&raw),
+                };
+                (name, Written::Generated(digest))
+            })
+            .collect()
     }
 
-    fn generated() -> Vec<(String, Written)> {
-        plan(&[
-            ("xl/workbook.xml", Written::Generated),
-            ("xl/_rels/workbook.xml.rels", Written::Generated),
-            ("xl/worksheets/sheet1.xml", Written::Generated),
-        ])
+    fn sound(dir: &Path) -> (std::path::PathBuf, Vec<(String, Written)>) {
+        let path = dir.join("ok.xlsx");
+        write_zip(&path, &SOUND);
+        let parts = recorded(&path, &[]);
+        (path, parts)
     }
 
     #[test]
     fn a_sound_file_passes() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ok.xlsx");
-        write_zip(
-            &path,
-            &[
-                ("xl/workbook.xml", WORKBOOK),
-                ("xl/_rels/workbook.xml.rels", RELS),
-                ("xl/worksheets/sheet1.xml", SHEET),
-            ],
-        );
-        check_written(&path, None, &generated()).unwrap();
+        let (path, parts) = sound(dir.path());
+        check_written(&path, None, &parts).unwrap();
     }
 
     #[test]
-    fn an_unclosed_sheet_fails() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("cut.xlsx");
+    fn malformed_xml_fails() {
+        check_xml(SHEET).unwrap();
         let cut = &SHEET[..SHEET.len() - 20];
-        write_zip(
-            &path,
-            &[
-                ("xl/workbook.xml", WORKBOOK),
-                ("xl/_rels/workbook.xml.rels", RELS),
-                ("xl/worksheets/sheet1.xml", cut),
-            ],
-        );
-        assert!(check_written(&path, None, &generated()).is_err());
+        for malformed in [cut, b"<a><b></a>", b"<a/><b/>", b"text", b""] {
+            assert!(check_xml(malformed).is_err());
+        }
     }
 
     #[test]
     fn a_truncated_file_fails() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("short.xlsx");
-        write_zip(
-            &path,
-            &[
-                ("xl/workbook.xml", WORKBOOK),
-                ("xl/_rels/workbook.xml.rels", RELS),
-                ("xl/worksheets/sheet1.xml", SHEET),
-            ],
-        );
+        let (path, parts) = sound(dir.path());
         let bytes = std::fs::read(&path).unwrap();
         std::fs::write(&path, &bytes[..bytes.len() - 30]).unwrap();
-        assert!(check_written(&path, None, &generated()).is_err());
+        assert!(check_written(&path, None, &parts).is_err());
     }
 
     #[test]
     fn a_flipped_byte_fails_the_checksum() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("flip.xlsx");
-        write_zip(
-            &path,
-            &[
-                ("xl/workbook.xml", WORKBOOK),
-                ("xl/_rels/workbook.xml.rels", RELS),
-                ("xl/worksheets/sheet1.xml", SHEET),
-            ],
-        );
+        let (path, parts) = sound(dir.path());
+        let Written::Generated(sheet) = parts[2].1 else {
+            panic!("the sheet was generated");
+        };
         let mut bytes = std::fs::read(&path).unwrap();
-        let at = bytes.windows(4).position(|w| w == b"<v>1").unwrap();
-        bytes[at + 3] = b'2';
+        let last = usize::try_from(sheet.data_start + sheet.compressed_size - 1).unwrap();
+        bytes[last] ^= 0x80;
         std::fs::write(&path, &bytes).unwrap();
-        assert!(check_written(&path, None, &generated()).is_err());
+        let error = check_written(&path, None, &parts).unwrap_err();
+        assert!(
+            error.to_string().contains("not the ones written"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_header_other_than_recorded_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut parts) = sound(dir.path());
+        let Written::Generated(sheet) = &mut parts[2].1 else {
+            panic!("the sheet was generated");
+        };
+        sheet.size += 1;
+        let error = check_written(&path, None, &parts).unwrap_err();
+        assert!(error.to_string().contains("not the one written"), "{error}");
+    }
+
+    #[test]
+    fn a_part_past_the_per_part_cap_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut parts) = sound(dir.path());
+        let Written::Generated(rels) = &mut parts[1].1 else {
+            panic!("the relationships were generated");
+        };
+        rels.size = limits::MAX_ENTRY_BYTES + 1;
+        let error = check_written(&path, None, &parts).unwrap_err();
+        assert!(error.to_string().contains("per-part limit"), "{error}");
     }
 
     #[test]
     fn a_part_written_twice_fails() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("twice.xlsx");
-        write_zip(
-            &path,
-            &[
-                ("xl/workbook.xml", WORKBOOK),
-                ("xl/_rels/workbook.xml.rels", RELS),
-                ("xl/worksheets/sheet1.xml", SHEET),
-                ("xl/worksheets/sheet1.xml", SHEET),
-            ],
-        );
-        let mut kinds = generated();
-        kinds.push(("xl/worksheets/sheet1.xml".to_string(), Written::Generated));
-        let error = check_written(&path, None, &kinds).unwrap_err();
+        let mut entries = SOUND.to_vec();
+        entries.push(("xl/worksheets/sheet1.xml", SHEET));
+        write_zip(&path, &entries);
+        let parts = recorded(&path, &[]);
+        let error = check_written(&path, None, &parts).unwrap_err();
         assert!(error.to_string().contains("twice"), "{error}");
     }
 
@@ -304,23 +364,17 @@ mod tests {
     fn copied_parts_must_match_the_base() {
         let dir = tempfile::tempdir().unwrap();
         let base = dir.path().join("base.xlsx");
-        let entries: [(&str, &[u8]); 4] = [
-            ("xl/workbook.xml", WORKBOOK),
-            ("xl/_rels/workbook.xml.rels", RELS),
-            ("xl/worksheets/sheet1.xml", SHEET),
-            ("xl/media/a.bin", b"original"),
-        ];
+        let mut entries = SOUND.to_vec();
+        entries.push(("xl/media/a.bin", b"original"));
         write_zip(&base, &entries);
-        let mut kinds = generated();
-        kinds.push(("xl/media/a.bin".to_string(), Written::Copied));
         let same = dir.path().join("same.xlsx");
         write_zip(&same, &entries);
-        check_written(&same, Some(&base), &kinds).unwrap();
+        let parts = recorded(&same, &["xl/media/a.bin"]);
+        check_written(&same, Some(&base), &parts).unwrap();
         let other = dir.path().join("other.xlsx");
-        let mut changed = entries;
-        changed[3] = ("xl/media/a.bin", b"replaced");
-        write_zip(&other, &changed);
-        assert!(check_written(&other, Some(&base), &kinds).is_err());
-        assert!(check_written(&same, Some(&base), &generated()).is_err());
+        entries[3] = ("xl/media/a.bin", b"replaced");
+        write_zip(&other, &entries);
+        assert!(check_written(&other, Some(&base), &parts).is_err());
+        assert!(check_written(&same, None, &parts).is_err());
     }
 }

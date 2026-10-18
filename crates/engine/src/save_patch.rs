@@ -286,7 +286,7 @@ pub(crate) fn write_patch<W: Write + Seek>(
         .collect();
     let mut strings_left = plan.strings;
     let mut styles_left = plan.styles;
-    let mut parts = PartWriter::new(writer);
+    let mut parts = PartWriter::new(writer)?;
     for (index, name) in names.into_iter().enumerate() {
         if let Some(job) = sheets.remove(&name) {
             match job {
