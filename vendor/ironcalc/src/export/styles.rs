@@ -28,7 +28,17 @@ fn get_font_xml(font: &Font) -> String {
     let family = format!("<family val=\"{}\"/>", font.family);
     let scheme = format!("<scheme val=\"{}\"/>", font.scheme);
     format!(
-        "<font>            {size}            {color}            {name}            {bold}            {italic}            {underline}            {strike}            {family}            {scheme}         </font>"
+        "<font>\
+            {size}\
+            {color}\
+            {name}\
+            {bold}\
+            {italic}\
+            {underline}\
+            {strike}\
+            {family}\
+            {scheme}\
+         </font>"
     )
 }
 

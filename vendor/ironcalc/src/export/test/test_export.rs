@@ -444,6 +444,7 @@ fn the_style_items_after_the_existing_ones_end_each_list() {
         }
     }
     assert!(items.fonts.contains("<b/>"));
+    assert!(!items.fonts.contains("  "), "{}", items.fonts);
     assert!(items.fills.contains("<fgColor rgb=\"FFFF0000\"/>"));
     assert_eq!(items.borders, "");
 }
