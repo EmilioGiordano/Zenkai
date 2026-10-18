@@ -12,6 +12,7 @@ mod header;
 mod launch;
 mod mention_candidates;
 pub(crate) mod mention_catalog;
+mod mention_label;
 mod mention_parse;
 mod mention_picker;
 mod mention_prepare;
@@ -28,7 +29,7 @@ mod startup;
 mod tools;
 mod transcript;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Instant, SystemTime};
 
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
@@ -116,6 +117,7 @@ pub struct ChatPanel {
     thread: Thread,
     texts: BTreeMap<MessageId, Entity<TextViewState>>,
     linked_messages: BTreeSet<MessageId>,
+    sent_books: HashMap<String, String>,
     references: Vec<Reference>,
     link: Link,
     live: Option<Live>,
@@ -283,6 +285,7 @@ impl ChatPanel {
             thread: Thread::default(),
             texts: BTreeMap::new(),
             linked_messages: BTreeSet::new(),
+            sent_books: HashMap::new(),
             references: Vec::new(),
             link: Link::Idle,
             live: None,
@@ -424,6 +427,9 @@ impl ChatPanel {
         if !self.thread.submit(text.clone()) {
             return;
         }
+        if let Some((_, book)) = self.active_workbook(cx) {
+            self.sent_books.insert(text.clone(), book);
+        }
         self.references.clear();
         self.forget_mentions();
         self.composer
@@ -486,6 +492,7 @@ impl ChatPanel {
         self.editing_blocked = None;
         self.texts.clear();
         self.linked_messages.clear();
+        self.sent_books.clear();
         self.references.clear();
         self.queued = None;
         self.gate = None;

@@ -284,13 +284,14 @@ impl ChatPanel {
             )
             .when(!self.references.is_empty(), |composer| {
                 let panel = cx.weak_entity();
+                let book = self.active_workbook(cx).map(|(_, name)| name);
                 composer.child(
                     h_flex().flex_wrap().gap_1p5().children(
                         self.references
                             .iter()
                             .enumerate()
                             .map(|(index, reference)| {
-                                badge::chip(index, reference, panel.clone(), cx)
+                                badge::chip(index, reference, book.as_deref(), panel.clone(), cx)
                             }),
                     ),
                 )

@@ -14,7 +14,12 @@ use super::ChatPanel;
 use super::badge::{self, ReferencePlugin};
 use crate::agent_settings::AgentConfig;
 
-fn user_bubble(text: &str, panel: &WeakEntity<ChatPanel>, cx: &App) -> impl IntoElement {
+fn user_bubble(
+    text: &str,
+    book: Option<&str>,
+    panel: &WeakEntity<ChatPanel>,
+    cx: &App,
+) -> impl IntoElement {
     let theme = cx.theme();
     div().flex().justify_end().child(
         div()
@@ -25,7 +30,7 @@ fn user_bubble(text: &str, panel: &WeakEntity<ChatPanel>, cx: &App) -> impl Into
             .bg(theme.secondary)
             .text_color(theme.secondary_foreground)
             .line_height(relative(1.5))
-            .child(match badge::user_message(text, panel, cx) {
+            .child(match badge::user_message(text, book, panel, cx) {
                 Some(message) => message,
                 None => div().child(text.to_string()).into_any_element(),
             }),
@@ -62,6 +67,7 @@ fn notice(kind: NoticeKind, text: &str, cx: &App) -> impl IntoElement {
 impl ChatPanel {
     pub(super) fn render_entries(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let panel = cx.weak_entity();
+        let active_book = self.active_workbook(cx).map(|(_, name)| name);
         let display = cx.global::<AgentConfig>().state.current.agents.tool_calls;
         let mut views = std::mem::take(&mut self.tools);
         let entries = self.thread.entries();
@@ -101,7 +107,13 @@ impl ChatPanel {
                 }
                 Item::Used { count } => Some(self.render_used(count, cx)),
                 Item::Entry(index) => match &entries[index] {
-                    Entry::User(text) => Some(user_bubble(text, &panel, cx).into_any_element()),
+                    Entry::User(text) => {
+                        let book = self.sent_books.get(text).or(active_book.as_ref());
+                        Some(
+                            user_bubble(text, book.map(String::as_str), &panel, cx)
+                                .into_any_element(),
+                        )
+                    }
                     Entry::Worked { seconds } => {
                         Some(worked_divider(*seconds, cx).into_any_element())
                     }
@@ -111,9 +123,9 @@ impl ChatPanel {
                     Entry::Assistant { id, text } => Some(match self.texts.get(id) {
                         Some(state) => TextView::new(state)
                             .markdown_extensions(
-                                MarkdownExtensions::default()
-                                    .parser_revision(1)
-                                    .plugin(ReferencePlugin::new(panel.clone())),
+                                MarkdownExtensions::default().parser_revision(1).plugin(
+                                    ReferencePlugin::new(panel.clone(), active_book.clone()),
+                                ),
                             )
                             .selectable(true)
                             .stream_fade(true)

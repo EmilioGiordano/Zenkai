@@ -182,7 +182,16 @@ pub(super) fn tokens(text: &str) -> Vec<Token<'_>> {
 pub struct Chip {
     pub start: usize,
     pub end: usize,
-    pub reference: Option<Reference>,
+    pub mention: Mention,
+}
+
+impl Chip {
+    pub fn reference(&self) -> Option<&Reference> {
+        match &self.mention {
+            Mention::Cells(reference) => Some(reference),
+            _ => None,
+        }
+    }
 }
 
 // The mentions of a sent message that are drawn as chips, found by shape alone.
@@ -194,10 +203,7 @@ pub fn chips(text: &str) -> Vec<Chip> {
             Some(Chip {
                 start: token.start,
                 end: token.end,
-                reference: match mention {
-                    Mention::Cells(reference) => Some(reference),
-                    _ => None,
-                },
+                mention,
             })
         })
         .collect()
@@ -342,8 +348,8 @@ mod tests {
             .map(|chip| &text[chip.start..chip.end])
             .collect();
         assert_eq!(words, ["@Sales!A1:C40", "@budget-2026.xlsx"]);
-        assert!(found[0].reference.is_some());
-        assert!(found[1].reference.is_none());
+        assert!(found[0].reference().is_some());
+        assert!(found[1].reference().is_none());
     }
 
     #[test]
