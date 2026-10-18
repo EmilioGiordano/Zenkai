@@ -50,6 +50,7 @@ const MONO: &str = "IBM Plex Mono";
 
 pub enum ChatEvent {
     Leave,
+    ViewChanged,
     NeedsAnswer,
     ResumeSession,
 }
@@ -116,6 +117,7 @@ pub struct ChatPanel {
     tools: tools::ToolViews,
     agent_change: Option<approval::AgentChange>,
     change_cells_open: bool,
+    editing_blocked: bool,
     gate: Option<Gate>,
     problem: Option<Problem>,
     turn_started: Option<Instant>,
@@ -278,6 +280,7 @@ impl ChatPanel {
             tools: tools::ToolViews::default(),
             agent_change: None,
             change_cells_open: false,
+            editing_blocked: false,
             gate: None,
             problem: None,
             turn_started: None,
@@ -412,7 +415,7 @@ impl ChatPanel {
         self.turn_started = Some(Instant::now());
         self.turn_began = Some(SystemTime::now());
         self.problem = None;
-        self.view = View::Chat;
+        self.set_view(View::Chat, cx);
         self.menu = None;
         self.remember_conversation(&text, cx);
         let context = self.prompt_context(cx);
@@ -461,6 +464,7 @@ impl ChatPanel {
         }
         self.thread.clear();
         self.tools = tools::ToolViews::default();
+        self.editing_blocked = false;
         self.texts.clear();
         self.linked_messages.clear();
         self.references.clear();
@@ -474,7 +478,7 @@ impl ChatPanel {
             ..AgentState::default()
         };
         self.mode_synced = false;
-        self.view = View::Chat;
+        self.set_view(View::Chat, cx);
         self.menu = None;
         self.title = None;
         self.focus_composer(window, cx);
@@ -494,7 +498,20 @@ impl ChatPanel {
         );
     }
 
+    fn set_view(&mut self, view: View, cx: &mut Context<Self>) {
+        if self.view != view {
+            self.view = view;
+            cx.emit(ChatEvent::ViewChanged);
+        }
+    }
+
+    pub(crate) fn note_editing_blocked(&mut self, cx: &mut Context<Self>) {
+        self.editing_blocked = true;
+        cx.notify();
+    }
+
     pub(super) fn allow_agent_editing(&mut self, cx: &mut Context<Self>) {
+        self.editing_blocked = false;
         closed(
             self.workspace
                 .update(cx, |workspace, cx| workspace.allow_agent_editing(cx)),

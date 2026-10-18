@@ -10,8 +10,8 @@ use gpui_kit::*;
 use zenkai_agent::bridge::{Bridge, ENDPOINT_FILE};
 use zenkai_agent::settings::{ExternalAgents, PermissionMode, Settings};
 use zenkai_agent::tools::{
-    self, CallOrigin, NewWorkbook, PlannedWrite, ReadRequest, ToolCall, ToolEndpoint, ToolError,
-    ToolReply, ToolRequest, WorkbookId, WriteRequest,
+    self, CallOrigin, NewWorkbook, PlannedWrite, ReadOnlyReason, ReadRequest, ToolCall,
+    ToolEndpoint, ToolError, ToolReply, ToolRequest, WorkbookId, WriteRequest,
 };
 
 use super::agent_review::AgentWrite;
@@ -171,7 +171,14 @@ impl Workspace {
             },
             ToolRequest::Write(id, request) => match self.plan_agent_write(id, &request, cx) {
                 Ok(plan) => self.route_agent_write(call, id, plan, window, cx),
-                Err(error) => call.respond(Err(error)),
+                Err(error) => {
+                    let blocked =
+                        matches!(error, ToolError::ReadOnly(ReadOnlyReason::ProtectedView));
+                    if blocked && call.origin == CallOrigin::Chat {
+                        self.tell_chat_editing_is_blocked(cx);
+                    }
+                    call.respond(Err(error))
+                }
             },
             ToolRequest::CreateWorkbook(new) => self.route_agent_create(call, new, window, cx),
             ToolRequest::OpenWorkbook(path) => self.open_for_agent(call, path, window, cx),

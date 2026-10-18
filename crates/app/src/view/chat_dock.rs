@@ -86,6 +86,7 @@ impl Workspace {
                     window.focus(&focus, cx);
                 }
                 // Shown without taking the focus: the user may be typing in the grid.
+                ChatEvent::ViewChanged => cx.notify(),
                 ChatEvent::NeedsAnswer => {
                     this.chat.open = true;
                     cx.notify();
@@ -240,6 +241,12 @@ impl Workspace {
                 panel.deny_permission(cx);
             }
         });
+    }
+
+    pub(super) fn tell_chat_editing_is_blocked(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = self.chat.panel.clone() {
+            panel.update(cx, |panel, cx| panel.note_editing_blocked(cx));
+        }
     }
 
     pub(super) fn chat_open(&self) -> bool {
