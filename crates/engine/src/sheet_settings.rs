@@ -10,6 +10,7 @@ use std::io::{self, Write};
 
 use roxmltree::Node;
 
+use crate::carried_moves::{MoveTaken, Taken};
 use crate::file::Unsupported;
 use crate::model::HistoryStep;
 use crate::saved::Remains;
@@ -274,43 +275,6 @@ impl SheetSettings {
             elements: self.elements.left_in(remains),
         }
     }
-}
-
-// What a row or column move took from one sheet. Exchanged with the sheet's settings by
-// every undo and redo of the move, so the other side of the exchange is what it took next.
-#[derive(Debug, Default)]
-struct Taken {
-    rows: Option<Indexed>,
-    columns: Option<Indexed>,
-    elements: Option<Elements>,
-}
-
-impl Taken {
-    fn is_empty(&self) -> bool {
-        self.rows.is_none() && self.columns.is_none() && self.elements.is_none()
-    }
-
-    fn exchange(self, settings: &mut SheetSettings) -> Taken {
-        Taken {
-            rows: self
-                .rows
-                .map(|rows| std::mem::replace(&mut settings.rows, rows)),
-            columns: self
-                .columns
-                .map(|columns| std::mem::replace(&mut settings.columns, columns)),
-            elements: self
-                .elements
-                .map(|elements| std::mem::replace(&mut settings.elements, elements)),
-        }
-    }
-}
-
-// The sheets a move changed, and the kinds it recorded as lost with the count each had
-// before, so undoing it can forget them.
-#[derive(Debug, Default)]
-struct MoveTaken {
-    sheets: Vec<(u32, Taken)>,
-    kinds: Vec<(Unsupported, Option<u64>)>,
 }
 
 // The settings carried for every sheet, by IronCalc's sheet id so they follow a sheet

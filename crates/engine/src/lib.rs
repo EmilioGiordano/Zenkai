@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod carried_moves;
 mod edit_profile;
 mod error;
 mod file;
