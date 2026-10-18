@@ -5,9 +5,10 @@ use zenkai_i18n::t;
 
 use crate::chat::thread::{Entry, ToolCard, ToolKind, ToolStatus};
 use crate::settings::ToolCallDisplay;
-use crate::tools::{escaped_text, is_protected_view_refusal, shown_text};
+use crate::tools::{escaped_multiline, escaped_text, shown_text};
 
 const RESULT_LINES: usize = 6;
+const MAX_BODY_CHARS: usize = 600;
 const TARGET_KEYS: [&str; 6] = ["path", "file_path", "command", "pattern", "query", "url"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,27 +71,6 @@ impl KnownTool {
         }
     }
 
-    fn is_read_only(self) -> bool {
-        matches!(
-            self,
-            KnownTool::ListWorkbooks
-                | KnownTool::ListSheets
-                | KnownTool::GetSelection
-                | KnownTool::ReadRange
-                | KnownTool::Find
-        )
-    }
-
-    fn changes_cells(self) -> bool {
-        matches!(
-            self,
-            KnownTool::WriteCells
-                | KnownTool::SetFormula
-                | KnownTool::FormatRange
-                | KnownTool::GenerateData
-        )
-    }
-
     fn target(self, input: &Value) -> Option<String> {
         let text = |key: &str| input.get(key).and_then(Value::as_str);
         let on_sheet = |key: &str| match (text("sheet"), text(key)) {
@@ -147,20 +127,13 @@ pub fn row_text(card: &ToolCard) -> RowText {
     }
 }
 
-pub fn is_zenkai_tool(card: &ToolCard) -> bool {
-    KnownTool::of(&card.title).is_some()
-}
-
+// The kind and the title are whatever the agent reported, so nothing here may hide a call.
 pub fn is_read_only(card: &ToolCard) -> bool {
-    match KnownTool::of(&card.title) {
-        Some(tool) => tool.is_read_only(),
-        None => matches!(card.kind, ToolKind::Read | ToolKind::Search),
-    }
+    matches!(card.kind, ToolKind::Read | ToolKind::Search)
 }
 
 pub fn needs_attention(card: &ToolCard) -> bool {
     card.status == ToolStatus::WaitingForPermission
-        || (card.status == ToolStatus::Failed && is_protected_view_refusal(&card.detail))
 }
 
 fn groupable(card: &ToolCard) -> bool {
@@ -188,32 +161,28 @@ pub fn group_text(cards: &[&ToolCard]) -> RowText {
     }
 }
 
-pub fn cell_count(card: &ToolCard) -> Option<usize> {
-    if KnownTool::of(&card.title) != Some(KnownTool::WriteCells) {
-        return None;
-    }
-    let input = parsed(&card.input)?;
-    let rows = input.get("rows")?.as_array()?;
-    Some(rows.iter().filter_map(Value::as_array).map(Vec::len).sum())
-}
-
+// A permission question is shown with the agent's own words: the title says nothing reliable
+// about which tool really runs.
 pub fn approval_summary(card: &ToolCard) -> String {
-    let text = row_text(card);
-    match cell_count(card) {
-        Some(count) if !text.target.is_empty() => t!(
-            "chat.approval.write_cells",
-            count = count,
-            target = text.target
-        ),
-        _ if text.target.is_empty() => text.label,
-        _ => format!("{} {}", text.label, text.target),
+    let title = escaped_text(&card.title);
+    match parsed(&card.input).as_ref().and_then(generic_target) {
+        Some(target) => format!("{title} {}", shown_text(&target)),
+        None => title,
     }
 }
 
-pub fn consequence(card: &ToolCard) -> Option<&'static str> {
-    KnownTool::of(&card.title)
-        .filter(|tool| tool.changes_cells())
-        .map(|_| t!("chat.approval.not_saved"))
+pub struct BodyPreview {
+    pub shown: String,
+    pub more_chars: usize,
+}
+
+pub fn body_preview(text: &str) -> BodyPreview {
+    let escaped = escaped_multiline(text);
+    let total = escaped.chars().count();
+    BodyPreview {
+        shown: escaped.chars().take(MAX_BODY_CHARS).collect(),
+        more_chars: total.saturating_sub(MAX_BODY_CHARS),
+    }
 }
 
 pub fn used_label(count: usize) -> String {
@@ -250,6 +219,7 @@ pub struct ResultPreview {
 }
 
 pub fn result_preview(detail: &str) -> ResultPreview {
+    let detail = escaped_multiline(detail);
     let mut lines = detail.lines();
     let shown: Vec<&str> = lines.by_ref().take(RESULT_LINES).collect();
     ResultPreview {
@@ -337,12 +307,14 @@ mod tests {
     }
 
     fn read(id: &str) -> Entry {
-        Entry::Tool(card(
+        let mut read = card(
             id,
             "mcp__zenkai__read_range",
             ToolStatus::Completed,
             r#"{"sheet":"Sales","range":"A1:F9"}"#,
-        ))
+        );
+        read.kind = ToolKind::Read;
+        Entry::Tool(read)
     }
 
     fn write(id: &str, status: ToolStatus) -> Entry {
@@ -370,11 +342,9 @@ mod tests {
     fn only_a_whole_tool_name_counts() {
         let finding = card("1", "Finding files", ToolStatus::Completed, "");
         assert_eq!(row_text(&finding).label, "Finding files");
-        assert!(!is_read_only(&finding));
         let found = card("2", "Find", ToolStatus::Completed, r#"{"text":"total"}"#);
         assert_eq!(row_text(&found).label, "Find");
         assert_eq!(row_text(&found).target, "\"total\"");
-        assert!(is_read_only(&found));
     }
 
     #[test]
@@ -406,18 +376,6 @@ mod tests {
             "",
         ));
         assert!(!text.label.contains('\u{202E}') && !text.label.contains('\n'));
-        assert!(!is_zenkai_tool(&card(
-            "2",
-            "Run it",
-            ToolStatus::Completed,
-            ""
-        )));
-        assert!(is_zenkai_tool(&card(
-            "3",
-            "read_range",
-            ToolStatus::Completed,
-            ""
-        )));
     }
 
     #[test]
@@ -512,24 +470,21 @@ mod tests {
     }
 
     #[test]
-    fn a_protected_view_refusal_is_never_hidden() {
-        let mut refused = card("1", "write_cells", ToolStatus::Failed, "");
-        refused.detail =
-            "the file came from the internet (Protected View), so agents may only read it"
-                .to_string();
-        assert!(needs_attention(&refused));
+    fn only_a_waiting_call_is_forced_visible_and_the_title_never_makes_a_call_read_only() {
+        assert!(needs_attention(&card(
+            "1",
+            "x",
+            ToolStatus::WaitingForPermission,
+            ""
+        )));
         assert!(!needs_attention(&card(
             "2",
             "write_cells",
             ToolStatus::Failed,
             ""
         )));
-        assert!(needs_attention(&card(
-            "3",
-            "x",
-            ToolStatus::WaitingForPermission,
-            ""
-        )));
+        let forged = card("3", "read_range", ToolStatus::Completed, "");
+        assert!(!is_read_only(&forged));
     }
 
     #[test]
@@ -545,33 +500,26 @@ mod tests {
     }
 
     #[test]
-    fn a_cell_write_is_summed_up_with_its_cell_count_and_consequence() {
-        let write = card(
+    fn an_approval_summary_uses_the_agents_own_title_escaped() {
+        let forged = card(
             "1",
-            "write_cells",
+            "write_cells\u{202E}",
             ToolStatus::WaitingForPermission,
-            r#"{"sheet":"Summary","start":"A1","rows":[["a","b"],["c","d"],["e"]]}"#,
+            r#"{"command":"rm -rf x"}"#,
         );
-        assert_eq!(cell_count(&write), Some(5));
-        assert_eq!(approval_summary(&write), "Write 5 cells at Summary!A1");
-        assert_eq!(
-            consequence(&write),
-            Some("Nothing is saved to disk; Ctrl+Z undoes it.")
-        );
+        assert_eq!(approval_summary(&forged), "write_cells\\u{202E} rm -rf x");
+        let plain = card("2", "Run tests", ToolStatus::WaitingForPermission, "");
+        assert_eq!(approval_summary(&plain), "Run tests");
     }
 
     #[test]
-    fn other_calls_are_summed_up_by_label_and_target_without_a_consequence() {
-        let read = card(
-            "1",
-            "read_range",
-            ToolStatus::WaitingForPermission,
-            r#"{"sheet":"S","range":"A1:B2"}"#,
-        );
-        assert_eq!(approval_summary(&read), "Read range S!A1:B2");
-        assert_eq!(consequence(&read), None);
-        let command = card("2", "Run tests", ToolStatus::WaitingForPermission, "");
-        assert_eq!(approval_summary(&command), "Run tests");
+    fn bodies_are_escaped_and_capped() {
+        let preview = body_preview(&format!("a\nb\u{202E}{}", "x".repeat(700)));
+        assert!(preview.shown.contains('\n'));
+        assert!(!preview.shown.contains('\u{202E}'));
+        assert_eq!(preview.shown.chars().count(), MAX_BODY_CHARS);
+        assert!(preview.more_chars > 0);
+        assert_eq!(body_preview("short").more_chars, 0);
     }
 
     #[test]

@@ -196,28 +196,37 @@ impl ChatPanel {
         card: &ToolCard,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let cells = tool_rows::cell_count(card).unwrap_or(0);
-        let open = views.cells_open(&card.id);
-        let disclosure = (cells > 0 && !card.input.is_empty()).then(|| {
+        let open = views.input_open(&card.id);
+        let disclosure = (!card.input.is_empty()).then(|| {
             let toggled = card.id.clone();
+            let input = tool_rows::body_preview(&tool_rows::pretty_input(&card.input));
             Disclosure {
                 button: Button::new(SharedString::from(format!(
-                    "ask-cells-{}",
+                    "ask-input-{}",
                     card.id.as_str()
                 )))
                 .ghost()
                 .small()
                 .label(if open {
-                    t!("chat.approval.hide_cells", count = cells)
+                    t!("chat.approval.hide_input")
                 } else {
-                    t!("chat.approval.show_cells", count = cells)
+                    t!("chat.approval.show_input")
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.tools.toggle_cells(&toggled);
+                    this.tools.toggle_input(&toggled);
                     cx.notify();
                 })),
                 open,
-                body: Some(tool_rows::pretty_input(&card.input)),
+                body: Some(if input.more_chars > 0 {
+                    format!(
+                        "{}
+{}",
+                        input.shown,
+                        t!("chat.tool.more_chars", count = input.more_chars)
+                    )
+                } else {
+                    input.shown
+                }),
             }
         });
         let mut answers = Vec::new();
@@ -250,9 +259,8 @@ impl ChatPanel {
             Card {
                 caption: None,
                 summary: tool_rows::approval_summary(card),
-                provenance: (!tool_rows::is_zenkai_tool(card))
-                    .then(|| t!("chat.approval.from_agent")),
-                consequence: tool_rows::consequence(card).map(str::to_string),
+                provenance: Some(t!("chat.approval.from_agent")),
+                consequence: None,
                 disclosure,
                 answers,
                 standing,

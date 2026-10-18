@@ -46,6 +46,18 @@ fn escaped(c: char) -> String {
     }
 }
 
+pub fn escaped_multiline(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if matches!(c, '\n' | '\t') {
+                c.to_string()
+            } else {
+                escaped(c)
+            }
+        })
+        .collect()
+}
+
 pub fn escaped_text(text: &str) -> String {
     text.chars().map(escaped).collect()
 }
