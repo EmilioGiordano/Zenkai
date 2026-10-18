@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use ironcalc::export::get_shared_string_item_xml;
 use zenkai_xlsx_reader::{
-    BasePackage, SHARED_STRINGS_PART, Written, is_cannot_splice, relationships_part,
+    BasePackage, SHARED_STRINGS_PART, STYLES_PART, StyleAppendix, Written, is_cannot_splice,
+    relationships_part,
 };
 use zip::ZipWriter;
 
@@ -44,6 +45,8 @@ pub(crate) struct PatchPlan {
     // which held `strings_in_file`.
     strings: Vec<u8>,
     strings_in_file: usize,
+    // The styles the edits created, which go at the end of the file's styles part.
+    styles: Option<Box<StyleAppendix>>,
 }
 
 // What the written file will hold, for the next save to copy from.
@@ -55,7 +58,8 @@ pub(crate) struct Patched {
 }
 
 // None when the workbook changed in a way only a full save writes: the sheet list, the
-// names or the styles, or a dynamic array in a file that may lack the metadata part.
+// names, a style the file already holds, or a dynamic array in a file that may lack the
+// metadata part.
 pub(crate) fn patch_plan(
     base: Arc<SavedFile>,
     book: u64,
@@ -64,7 +68,10 @@ pub(crate) fn patch_plan(
     carried: &Carried,
 ) -> Result<Option<Patched>, EngineError> {
     let saved = &base.contents;
-    if saved.book != book || saved.sheets.len() != prints.len() {
+    if saved.book != book
+        || saved.sheets.len() != prints.len()
+        || !saved.styles.unchanged(&data.book.styles)?
+    {
         return Ok(None);
     }
     let changed: Vec<usize> = (0..prints.len())
@@ -96,6 +103,10 @@ pub(crate) fn patch_plan(
         },
         Strings::Absent if all_strings.is_empty() => (Vec::new(), Strings::Absent),
         Strings::Absent => return Ok(None),
+    };
+    let (styles, appendix) = match changed.is_empty() {
+        true => (saved.styles, None),
+        false => saved.styles.grown(&data.book.styles)?,
     };
     let mut held = saved.held.clone();
     let mut remains = saved.remains.clone();
@@ -146,7 +157,7 @@ pub(crate) fn patch_plan(
     let contents = Contents {
         worksheets: saved.worksheets.clone(),
         strings: written_strings,
-        styles: saved.styles,
+        styles,
         book,
         sheets: prints.to_vec(),
         selected: saved.selected,
@@ -161,6 +172,7 @@ pub(crate) fn patch_plan(
             sheets,
             strings,
             strings_in_file,
+            styles: appendix.map(Box::new),
         },
         contents,
         dropped,
@@ -193,7 +205,7 @@ fn check_facts(base: &SavedFile, package: &mut BasePackage) -> Result<(), Engine
     let unusable = base_unusable(base);
     let facts = package.facts().map_err(|e| unusable(&e))?;
     let saved = &base.contents;
-    if facts.worksheets != saved.worksheets || facts.styles != saved.styles {
+    if facts.worksheets != saved.worksheets || facts.styles != saved.styles.counts {
         return Err(unusable(
             &"its sheets or styles are not the ones it was read with",
         ));
@@ -270,6 +282,7 @@ pub(crate) fn write_patch<W: Write + Seek>(
         .map(|job| (job.part().to_string(), job))
         .collect();
     let mut strings_left = plan.strings;
+    let mut styles_left = plan.styles;
     let mut zip = ZipWriter::new(writer);
     let mut written = Vec::with_capacity(names.len());
     for (index, name) in names.into_iter().enumerate() {
@@ -293,6 +306,13 @@ pub(crate) fn write_patch<W: Write + Seek>(
             zip.start_file(name.as_str(), deflated())
                 .map_err(rejected)?;
             zip.write_all(&bytes).map_err(rejected)?;
+        } else if let Some(appendix) = styles_left.take_if(|_| name == STYLES_PART) {
+            zip.start_file(name.as_str(), deflated())
+                .map_err(rejected)?;
+            let mut buffered = BufWriter::new(&mut zip);
+            base.copy_styles(saved.contents.styles.counts, &appendix, &mut buffered)
+                .map_err(copy_failed)?;
+            buffered.flush().map_err(rejected)?;
         } else if name == SHARED_STRINGS_PART && !strings_left.is_empty() {
             zip.start_file(name.as_str(), deflated())
                 .map_err(rejected)?;
@@ -311,7 +331,7 @@ pub(crate) fn write_patch<W: Write + Seek>(
         }
         written.push((name, Written::Generated));
     }
-    if !sheets.is_empty() || !strings_left.is_empty() {
+    if !sheets.is_empty() || !strings_left.is_empty() || styles_left.is_some() {
         return Err(base_unusable(saved)(&"a part is missing from it"));
     }
     Ok((zip.finish().map_err(rejected)?, written))
@@ -328,10 +348,9 @@ mod tests {
     use crate::fingerprint::book_print;
     use crate::held::Held;
     use crate::save::ModelData;
-    use crate::saved::{
-        Contents, Metadata, Remains, SavedFile, Stamp, Strings, sheet_prints, style_counts,
-    };
+    use crate::saved::{Contents, Metadata, Remains, SavedFile, Stamp, Strings, sheet_prints};
     use crate::sheet_settings::Carried;
+    use crate::style_growth::StylesBase;
 
     #[test]
     fn a_changed_sheet_missing_from_the_saved_parts_fails_the_save() {
@@ -351,7 +370,7 @@ mod tests {
             contents: Contents {
                 worksheets: Vec::new(),
                 strings: Strings::Aligned(data.book.shared_strings.len()),
-                styles: style_counts(data.book),
+                styles: StylesBase::written(&data.book.styles).unwrap(),
                 book,
                 sheets,
                 selected: 0,

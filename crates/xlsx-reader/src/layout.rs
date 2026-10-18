@@ -3,12 +3,10 @@ use std::io::{Read, Seek};
 
 use crate::ReadError;
 use crate::links::SheetLinks;
-use crate::package::{Package, read_entry};
+use crate::package::Package;
 use crate::shared_strings::{SHARED_STRINGS_PART, SST_HEAD_BYTES, sst_root};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter};
-
-// IronCalc's importer reads the styles from this path whatever the relationships say.
-const STYLES_PART: &str = "xl/styles.xml";
+use crate::styles_part::StyleCounts;
 
 // Where the parts of an opened file live, for a save that copies the parts it does
 // not change.
@@ -62,41 +60,6 @@ pub enum SharedStrings {
     // under an unprefixed <sst> that new <si> elements can be appended to.
     Aligned(usize),
     Unaligned,
-}
-
-// The elements of the styles part a cell's s="" and a rule's dxfId="" count into. A sheet
-// written by the engine points into the copied part only when the model holds as many.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct StyleCounts {
-    pub cell_xfs: usize,
-    pub dxfs: usize,
-}
-
-pub(crate) fn style_counts<R: Read + Seek>(
-    archive: &mut zip::ZipArchive<R>,
-    meter: &CompressedMeter,
-    budgets: &Budgets,
-) -> Result<StyleCounts, ReadError> {
-    let unreadable = |e: &dyn std::fmt::Display| ReadError::Unreadable(e.to_string());
-    let entry = archive.by_name(STYLES_PART).map_err(|e| unreadable(&e))?;
-    let bytes = read_entry(entry, meter, budgets)?;
-    let text = std::str::from_utf8(&bytes).map_err(|e| unreadable(&e))?;
-    let styles = roxmltree::Document::parse(text).map_err(|e| unreadable(&e))?;
-    let count = |list: &str, item: &str| {
-        styles
-            .root_element()
-            .children()
-            .find(|node| node.has_tag_name(list))
-            .map_or(0, |node| {
-                node.children()
-                    .filter(|child| child.has_tag_name(item))
-                    .count()
-            })
-    };
-    Ok(StyleCounts {
-        cell_xfs: count("cellXfs", "xf"),
-        dxfs: count("dxfs", "dxf"),
-    })
 }
 
 pub(crate) fn shared_strings_layout<R: Read + Seek>(
@@ -273,7 +236,8 @@ mod read_tests {
 
     use ironcalc::base::Model;
 
-    use super::{SharedStrings, StyleCounts};
+    use super::SharedStrings;
+    use crate::styles_part::StylesShape;
 
     fn saved(model: &Model) -> Vec<u8> {
         ironcalc::export::save_xlsx_to_writer(model, Cursor::new(Vec::new()))
@@ -297,12 +261,9 @@ mod read_tests {
         let nothing = crate::SheetLinks::Known(Default::default());
         assert_eq!(opened.layout.sheet_links, [nothing.clone(), nothing]);
         let styles = &opened.book.styles;
-        assert_eq!(
-            opened.layout.styles,
-            StyleCounts {
-                cell_xfs: styles.cell_xfs.len(),
-                dxfs: styles.dxfs.len(),
-            }
-        );
+        assert_eq!(opened.layout.styles.cell_xfs, styles.cell_xfs.len());
+        assert_eq!(opened.layout.styles.dxfs, styles.dxfs.len());
+        assert_eq!(opened.layout.styles.fonts, styles.fonts.len());
+        assert_eq!(opened.layout.styles.shape, StylesShape::Appendable);
     }
 }
