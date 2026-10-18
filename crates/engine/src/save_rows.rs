@@ -15,20 +15,24 @@ use ironcalc::base::expressions::types::CellReferenceRC;
 use ironcalc::base::types::{Cell, Row, Worksheet};
 use ironcalc::export::{SharedFormula, row_styles, write_rows_xml};
 use zenkai_xlsx_reader::{AnchorKind, BasePackage, ReachingAnchor, RowSpan, cannot_splice};
-use zip::ZipWriter;
 
 use crate::error::EngineError;
 use crate::fingerprint::{MAX_ROW, ROWS_PER_BLOCK, SheetPrint, UsedBounds};
 use crate::save::{ModelData, SHEET_BUFFER_BYTES, rejected};
+use crate::save_parts::PartWriter;
 use crate::save_sheet::{bounds_reference, with_row_outline, written_height};
 use crate::sheet_settings::{Carried, Outline};
 
 // The blocks of rows that changed, when the sheet can be written row by row.
 pub(crate) fn dirty_blocks(saved: &SheetPrint, now: &SheetPrint) -> Option<BTreeSet<usize>> {
     if !now.same_frame(saved) || now.moved_since(saved) {
+        tracing::debug!("the sheet's frame changed or its rows moved; it is written whole");
         return None;
     }
-    let (before, after) = (saved.row_blocks()?, now.row_blocks()?);
+    let (Some(before), Some(after)) = (saved.row_blocks(), now.row_blocks()) else {
+        tracing::debug!("the sheet has no row prints within the budget; it is written whole");
+        return None;
+    };
     let block = |blocks: &[u64], index: usize| blocks.get(index).copied().unwrap_or(0);
     let mut dirty = BTreeSet::new();
     let mut used = 0usize;
@@ -43,6 +47,13 @@ pub(crate) fn dirty_blocks(saved: &SheetPrint, now: &SheetPrint) -> Option<BTree
     }
     // Past half of the blocks in use the copy saves little.
     let few = !dirty.is_empty() && dirty.len().saturating_mul(2) <= used;
+    if !few {
+        tracing::debug!(
+            dirty = dirty.len(),
+            used,
+            "too many row blocks changed; the sheet is written whole"
+        );
+    }
     few.then_some(dirty)
 }
 
@@ -324,11 +335,11 @@ impl RowJob {
 // The caller started the zip entry. An error means the part could not be spliced.
 pub(crate) fn write_rows<W: Write + Seek>(
     base: &mut BasePackage,
-    zip: &mut ZipWriter<W>,
+    parts: &mut PartWriter<W>,
     job: &RowJob,
 ) -> io::Result<()> {
     let styles = row_styles(&job.sheet);
-    let mut buffered = BufWriter::with_capacity(SHEET_BUFFER_BYTES, zip);
+    let mut buffered = BufWriter::with_capacity(SHEET_BUFFER_BYTES, parts);
     base.splice_rows(
         &job.part,
         &job.dimension,

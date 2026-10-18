@@ -11,13 +11,13 @@ use zenkai_xlsx_reader::{
     BasePackage, SHARED_STRINGS_PART, STYLES_PART, StyleAppendix, Written, is_cannot_splice,
     relationships_part,
 };
-use zip::ZipWriter;
 
 use crate::error::EngineError;
 use crate::file::Unsupported;
 use crate::fingerprint::{DynamicArrays, SheetPrint};
 use crate::held::Held;
-use crate::save::{ModelData, SheetJob, deflated, rejected, sheet_job, write_sheet};
+use crate::save::{ModelData, SheetJob, rejected, sheet_job, write_sheet};
+use crate::save_parts::PartWriter;
 use crate::save_rows::{RowJob, dirty_blocks, row_job, write_rows};
 use crate::saved::{Contents, Metadata, SavedFile, Strings};
 use crate::sheet_elements::Relationships;
@@ -68,10 +68,12 @@ pub(crate) fn patch_plan(
     carried: &Carried,
 ) -> Result<Option<Patched>, EngineError> {
     let saved = &base.contents;
-    if saved.book != book
-        || saved.sheets.len() != prints.len()
-        || !saved.styles.unchanged(&data.book.styles)?
-    {
+    if saved.book != book || saved.sheets.len() != prints.len() {
+        tracing::info!("the sheet list or the names changed; the save writes everything");
+        return Ok(None);
+    }
+    if !saved.styles.unchanged(&data.book.styles)? {
+        tracing::info!("a style the file holds changed; the save writes everything");
         return Ok(None);
     }
     let changed: Vec<usize> = (0..prints.len())
@@ -81,8 +83,14 @@ pub(crate) fn patch_plan(
         .iter()
         .any(|&index| prints[index].dynamic_arrays() == DynamicArrays::Present);
     if new_arrays && saved.metadata == Metadata::Unknown {
+        tracing::info!("a changed sheet holds a dynamic array; the save writes everything");
         return Ok(None);
     }
+    tracing::info!(
+        changed = changed.len(),
+        sheets = prints.len(),
+        "the save copies the sheets that did not change"
+    );
     let all_strings = &data.book.shared_strings;
     let strings_in_file = match saved.strings {
         Strings::Aligned(count) => count,
@@ -99,10 +107,16 @@ pub(crate) fn patch_plan(
                     .into_bytes(),
                 Strings::Aligned(all_strings.len()),
             ),
-            None => return Ok(None),
+            None => {
+                tracing::info!("the shared strings shrank; the save writes everything");
+                return Ok(None);
+            }
         },
         Strings::Absent if all_strings.is_empty() => (Vec::new(), Strings::Absent),
-        Strings::Absent => return Ok(None),
+        Strings::Absent => {
+            tracing::info!("the file has no shared strings part; the save writes everything");
+            return Ok(None);
+        }
     };
     let (styles, appendix) = match changed.is_empty() {
         true => (saved.styles, None),
@@ -111,6 +125,18 @@ pub(crate) fn patch_plan(
     let mut held = saved.held.clone();
     let mut remains = saved.remains.clone();
     let mut dropped = BTreeSet::new();
+    // A sheet copied from the file holds what its remains say, which an undo since may
+    // have put back into the model without the file holding it.
+    let copied = data
+        .book
+        .worksheets
+        .iter()
+        .zip(&remains)
+        .enumerate()
+        .filter(|(index, _)| changed.binary_search(index).is_err());
+    for (_, (sheet, &in_file)) in copied {
+        dropped.extend(carried.unwritable_restored(sheet, in_file));
+    }
     let mut sheets = Vec::with_capacity(changed.len());
     for index in changed {
         let (Some(part), Some(&in_file)) = (saved.worksheets.get(index), remains.get(index)) else {
@@ -125,7 +151,16 @@ pub(crate) fn patch_plan(
         } else {
             None
         };
+        tracing::debug!(
+            sheet = index,
+            intact,
+            dirty_blocks = blocks.as_ref().map(BTreeSet::len),
+            "a changed sheet is written"
+        );
         if let Some(blocks) = blocks {
+            if let Some(sheet) = data.book.worksheets.get(index) {
+                dropped.extend(carried.unwritable_restored(sheet, in_file));
+            }
             sheets.push(SheetPatch::Rows(row_job(
                 data,
                 carried,
@@ -250,6 +285,7 @@ pub(crate) fn write_patch<W: Write + Seek>(
     let copy_failed = base_unusable(saved);
     let copy_failed = |error: std::io::Error| copy_failed(&error);
     let strings_in_file = plan.strings_in_file;
+    let checks = tracing::info_span!("save_base_checks").entered();
     let mut base = BasePackage::open(&saved.path).map_err(read_failed)?;
     let names = base.part_names().map_err(read_failed)?;
     check_facts(saved, &mut base)?;
@@ -279,6 +315,7 @@ pub(crate) fn write_patch<W: Write + Seek>(
         Some(chain) => (chain.dropped, chain.rewritten.into_iter().collect()),
         None => (Vec::new(), HashMap::new()),
     };
+    drop(checks);
     let mut sheets: HashMap<String, SheetPatch> = plan
         .sheets
         .into_iter()
@@ -286,16 +323,20 @@ pub(crate) fn write_patch<W: Write + Seek>(
         .collect();
     let mut strings_left = plan.strings;
     let mut styles_left = plan.styles;
-    let mut zip = ZipWriter::new(writer);
-    let mut written = Vec::with_capacity(names.len());
+    let mut parts = PartWriter::new(writer)?;
     for (index, name) in names.into_iter().enumerate() {
         if let Some(job) = sheets.remove(&name) {
             match job {
-                SheetPatch::Whole(job) => write_sheet(&mut zip, job)?,
+                SheetPatch::Whole(job) => {
+                    let _span =
+                        tracing::debug_span!("save_part", kind = "whole", part = %name).entered();
+                    write_sheet(&mut parts, job)?
+                }
                 SheetPatch::Rows(job) => {
-                    zip.start_file(name.as_str(), deflated())
-                        .map_err(rejected)?;
-                    if let Err(error) = write_rows(&mut base, &mut zip, &job) {
+                    let _span =
+                        tracing::debug_span!("save_part", kind = "rows", part = %name).entered();
+                    parts.start_generated(&name)?;
+                    if let Err(error) = write_rows(&mut base, &mut parts, &job) {
                         if is_cannot_splice(&error) {
                             *refused = Some(name);
                         }
@@ -306,20 +347,20 @@ pub(crate) fn write_patch<W: Write + Seek>(
         } else if rels.contains(&name) || dropped.iter().any(|d| d.eq_ignore_ascii_case(&name)) {
             continue;
         } else if let Some(bytes) = rewritten.remove(&name) {
-            zip.start_file(name.as_str(), deflated())
-                .map_err(rejected)?;
-            zip.write_all(&bytes).map_err(rejected)?;
+            let _span = tracing::debug_span!("save_part", kind = "package", part = %name).entered();
+            parts.start_generated(&name)?;
+            parts.write_all(&bytes).map_err(rejected)?;
         } else if let Some(appendix) = styles_left.take_if(|_| name == STYLES_PART) {
-            zip.start_file(name.as_str(), deflated())
-                .map_err(rejected)?;
-            let mut buffered = BufWriter::new(&mut zip);
+            let _span = tracing::debug_span!("save_part", kind = "styles", part = %name).entered();
+            parts.start_generated(&name)?;
+            let mut buffered = BufWriter::new(&mut parts);
             base.copy_styles(saved.contents.styles.counts, &appendix, &mut buffered)
                 .map_err(copy_failed)?;
             buffered.flush().map_err(rejected)?;
         } else if name == SHARED_STRINGS_PART && !strings_left.is_empty() {
-            zip.start_file(name.as_str(), deflated())
-                .map_err(rejected)?;
-            let mut buffered = BufWriter::new(&mut zip);
+            let _span = tracing::debug_span!("save_part", kind = "strings", part = %name).entered();
+            parts.start_generated(&name)?;
+            let mut buffered = BufWriter::new(&mut parts);
             base.copy_shared_strings(
                 strings_in_file,
                 &std::mem::take(&mut strings_left),
@@ -328,16 +369,14 @@ pub(crate) fn write_patch<W: Write + Seek>(
             .map_err(copy_failed)?;
             buffered.flush().map_err(rejected)?;
         } else {
-            base.copy_raw(index, &mut zip).map_err(copy_failed)?;
-            written.push((name, Written::Copied));
-            continue;
+            let _span = tracing::debug_span!("save_part", kind = "copied", part = %name).entered();
+            parts.copy(name, |zip| base.copy_raw(index, zip).map_err(copy_failed))?;
         }
-        written.push((name, Written::Generated));
     }
     if !sheets.is_empty() || !strings_left.is_empty() || styles_left.is_some() {
         return Err(base_unusable(saved)(&"a part is missing from it"));
     }
-    Ok((zip.finish().map_err(rejected)?, written))
+    tracing::info_span!("save_zip_finish").in_scope(|| parts.finish())
 }
 
 #[cfg(test)]

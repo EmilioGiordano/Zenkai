@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{PoisonError, RwLock, RwLockWriteGuard, mpsc};
@@ -9,7 +9,11 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use peak_alloc::PeakAlloc;
-use zenkai_engine::{Engine, EngineError, SaveTarget, Workbook, open_xlsx, save_xlsx};
+use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::format::FmtSpan;
+use zenkai_engine::{
+    Engine, EngineError, SaveTarget, Workbook, open_xlsx, save_xlsx, write_xlsx_unverified,
+};
 use zenkai_types::{CellPos, RowIdx, SheetId};
 
 #[global_allocator]
@@ -153,6 +157,73 @@ fn edit_and_save(
     Ok(())
 }
 
+// Takes the bytes a save writes and keeps only their count; the zip writer seeks back to
+// finish each entry's header, so the position follows the seeks.
+#[derive(Default)]
+struct Discard {
+    position: u64,
+    len: u64,
+}
+
+impl Write for Discard {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.position += buf.len() as u64;
+        self.len = self.len.max(self.position);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Seek for Discard {
+    fn seek(&mut self, to: SeekFrom) -> io::Result<u64> {
+        let moved = |base: u64, offset: i64| {
+            base.checked_add_signed(offset)
+                .ok_or_else(|| io::Error::other("seek before the start"))
+        };
+        self.position = match to {
+            SeekFrom::Start(offset) => offset,
+            SeekFrom::End(offset) => moved(self.len, offset)?,
+            SeekFrom::Current(offset) => moved(self.position, offset)?,
+        };
+        Ok(self.position)
+    }
+}
+
+// The save as the app takes it, written into nothing: the source file is only read, and
+// the verification, the sync and the rename are left out.
+fn edit_and_write_in_memory(
+    workbook: &mut Workbook,
+    sheet: SheetId,
+    cells: &[CellPos],
+    source: &Path,
+) -> Result<()> {
+    begin("edit");
+    let start = Instant::now();
+    flip(workbook, sheet, cells)?;
+    done("edit", start, &format!("edits={}", cells.len()));
+
+    begin("save");
+    let start = Instant::now();
+    let snapshot = workbook.save_snapshot(source, SaveTarget::Document)?;
+    let locked_ms = ms(start);
+    let written = write_xlsx_unverified(snapshot, Discard::default())?;
+    done(
+        "save",
+        start,
+        &format!(
+            "locked_ms={locked_ms:.0} zip_mb={:.1} written=in_memory",
+            written.len as f64 / 1024.0 / 1024.0
+        ),
+    );
+    Ok(())
+}
+
+// The deflate levels the floor compares; None is the level a save writes with.
+const FLOOR_LEVELS: [Option<i32>; 3] = [Some(1), Some(3), None];
+
 // What any save of a changed sheet costs whatever it copies: the sheet is one deflated zip
 // entry, so it is inflated from the old file and deflated into the new one whole.
 fn floor(target: &Path) -> Result<()> {
@@ -175,32 +246,54 @@ fn floor(target: &Path) -> Result<()> {
     let mut xml = Vec::new();
     archive.by_name(&name)?.read_to_end(&mut xml)?;
     let inflate_ms = ms(start);
-    let deflated = Instant::now();
-    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let options =
-        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    zip.start_file(name.as_str(), options)?;
-    zip.write_all(&xml)?;
-    let compressed = zip.finish()?.into_inner().len();
-    let deflate_ms = ms(deflated);
+    let mut levels = Vec::new();
+    for level in FLOOR_LEVELS {
+        let deflated = Instant::now();
+        let mut zip = zip::ZipWriter::new(Discard::default());
+        let options = zip::write::FileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .compression_level(level);
+        zip.start_file(name.as_str(), options)?;
+        zip.write_all(&xml)?;
+        let compressed = zip.finish()?.len;
+        let label = level.map_or("default".to_string(), |level| level.to_string());
+        levels.push(format!(
+            "level_{label}_ms={:.0} level_{label}_mb={:.1}",
+            ms(deflated),
+            compressed as f64 / 1024.0 / 1024.0
+        ));
+    }
     done(
         "floor",
         start,
         &format!(
-            "part={name} xml_mb={:.1} deflated_mb={:.1} inflate_ms={inflate_ms:.0} deflate_ms={deflate_ms:.0}",
+            "part={name} xml_mb={:.1} inflate_ms={inflate_ms:.0} {}",
             xml.len() as f64 / 1024.0 / 1024.0,
-            compressed as f64 / 1024.0 / 1024.0
+            levels.join(" ")
         ),
     );
     Ok(())
 }
 
+// Each span of the save is printed with its time when it closes, on stderr.
+fn trace_spans() {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("zenkai_engine=debug,zenkai_xlsx_reader=debug"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_span_events(FmtSpan::CLOSE)
+        .with_ansi(false)
+        .with_writer(io::stderr)
+        .init();
+}
+
 // The second save copies from the file the first one wrote, as saving a document again does.
 // The first snapshot, of the workbook as opened, costs what the fingerprint taken at open
-// costs: every sheet hashed and nothing copied.
+// costs: every sheet hashed and nothing copied. With `--in-memory` in place of the saved
+// file, one save copies from the source file into nothing and nothing is written to disk.
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage = "usage: measure_save <file.xlsx> <saved.xlsx> [edited cell, A1] [sheet index, 0] \
+    let usage = "usage: measure_save <file.xlsx> <saved.xlsx | --in-memory> [edited cell, A1] [sheet index, 0] \
                  [edits down the cell's column, 1]";
     let (source, target, cell, sheet, edits) = match args.as_slice() {
         [source, target] => (source, target, "A1", "0", "1"),
@@ -219,8 +312,9 @@ fn main() -> Result<()> {
         .parse()
         .with_context(|| format!("{edits} is not a number of edits"))?;
     let source = PathBuf::from(source);
+    let in_memory = target == "--in-memory";
     let target = PathBuf::from(target);
-    if target.exists() {
+    if !in_memory && target.exists() {
         bail!("{} exists; pick a new path", target.display());
     }
     let pos = CellPos::parse_a1(cell).ok_or_else(|| anyhow!("{cell} is not a cell"))?;
@@ -230,19 +324,30 @@ fn main() -> Result<()> {
             .with_context(|| format!("{sheet} is not a sheet index"))?,
     );
 
+    trace_spans();
     begin("open");
     let start = Instant::now();
-    let workbook: Workbook = open_xlsx(&source)
+    let mut workbook: Workbook = open_xlsx(&source)
         .with_context(|| format!("opening {}", source.display()))?
         .workbook;
     done("open", start, "");
 
     begin("unedited_snapshot");
     let start = Instant::now();
-    drop(workbook.save_snapshot(&target, SaveTarget::Document)?);
+    let unedited_target = if in_memory { &source } else { &target };
+    drop(workbook.save_snapshot(unedited_target, SaveTarget::Document)?);
     done("unedited_snapshot", start, "");
 
     let cells = scattered(&workbook, sheet, pos, edits);
+    if in_memory {
+        println!(
+            "save=in_memory sheet={} cell={cell} edits={}",
+            sheet.0,
+            cells.len()
+        );
+        edit_and_write_in_memory(&mut workbook, sheet, &cells, &source)?;
+        return floor(&source);
+    }
     let shared = RwLock::new(workbook);
     println!(
         "save=first sheet={} cell={cell} edits={}",

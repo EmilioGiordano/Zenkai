@@ -6,6 +6,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+crc32fast = "1"
 csv = "1"
 ironcalc = "=0.8.3"
 iana-time-zone = "0.1"
