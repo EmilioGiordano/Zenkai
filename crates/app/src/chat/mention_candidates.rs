@@ -4,7 +4,7 @@ use super::name_guard::{can_hold_external_sheet, is_safe_name};
 use super::reference::external_sheet;
 
 const MAX_CANDIDATES: usize = 40;
-const MAX_SHEETS_PER_BOOK: usize = 12;
+pub(super) const MAX_SHEETS_PER_BOOK: usize = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
@@ -113,6 +113,26 @@ pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
             hint: Hint::WorkingFolder,
             insert: format!("@{} ", workbook_text(file)),
         });
+        // Listing every folder file's sheets for an empty query would bury the files themselves.
+        if wanted.is_empty() {
+            continue;
+        }
+        let Some((_, sheets)) = catalog.folder_sheets_of(file) else {
+            continue;
+        };
+        for sheet in sheets
+            .iter()
+            .filter(|sheet| is_safe_name(sheet))
+            .take(MAX_SHEETS_PER_BOOK)
+        {
+            found.push(Candidate {
+                group: Group::Workbooks,
+                book: Some(file.clone()),
+                label: format!("@{sheet}"),
+                hint: Hint::Pending,
+                insert: format!("@{} ", external_sheet(file, sheet)),
+            });
+        }
     }
     found.truncate(MAX_CANDIDATES);
     found
@@ -320,6 +340,71 @@ mod tests {
             .collect();
         assert_eq!(sheets, ["@Sales", "@Sales summary", "@selection"]);
         assert_eq!(found[1].insert, "@'[sales-q3.xlsx]Sales' ");
+    }
+
+    fn with_folder_sheets() -> Catalog {
+        let mut catalog = catalog();
+        catalog.folder_sheets.insert(
+            "reports/budget 2026.xlsx".to_string(),
+            vec![
+                "Plan".to_string(),
+                "evil
+name"
+                    .to_string(),
+                "Actual".to_string(),
+            ],
+        );
+        catalog
+    }
+
+    #[test]
+    fn a_folder_workbook_that_matches_lists_its_fetched_sheets() {
+        let found = candidates("budget", &with_folder_sheets());
+        let rows: Vec<(Option<&str>, &str)> = found
+            .iter()
+            .map(|c| (c.book.as_deref(), c.label.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (None, "@reports/budget 2026.xlsx"),
+                (Some("reports/budget 2026.xlsx"), "@Plan"),
+                (Some("reports/budget 2026.xlsx"), "@Actual"),
+            ]
+        );
+        assert_eq!(found[1].insert, "@'[reports/budget 2026.xlsx]Plan' ");
+    }
+
+    #[test]
+    fn a_sheet_name_alone_does_not_list_the_sheets_of_a_folder_workbook() {
+        assert!(candidates("plan", &with_folder_sheets()).is_empty());
+        let all = candidates("", &with_folder_sheets());
+        assert!(all.iter().all(|c| c.book.is_none()));
+    }
+
+    #[test]
+    fn fetched_sheets_of_an_unusable_folder_book_name_are_not_offered() {
+        let mut catalog = with_folder_sheets();
+        let sheets = catalog.folder_sheets.remove("reports/budget 2026.xlsx");
+        catalog.folder = vec!["odd[1].xlsx".to_string()];
+        catalog
+            .folder_sheets
+            .insert("odd[1].xlsx".to_string(), sheets.unwrap_or_default());
+        assert!(candidates("odd", &catalog).iter().all(|c| c.book.is_none()));
+    }
+
+    #[test]
+    fn the_sheets_of_a_folder_workbook_are_capped() {
+        let mut catalog = with_folder_sheets();
+        catalog.folder_sheets.insert(
+            "reports/budget 2026.xlsx".to_string(),
+            (0..50).map(|n| format!("s{n}")).collect(),
+        );
+        let listed = candidates("budget", &catalog)
+            .iter()
+            .filter(|c| c.book.is_some())
+            .count();
+        assert_eq!(listed, MAX_SHEETS_PER_BOOK);
     }
 
     #[test]

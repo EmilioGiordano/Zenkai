@@ -8,6 +8,7 @@ mod composer;
 mod events;
 mod extras;
 mod files;
+mod folder_sheets;
 mod header;
 mod launch;
 pub(crate) mod mention_candidates;

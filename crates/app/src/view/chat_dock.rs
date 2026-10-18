@@ -443,6 +443,7 @@ fn catalog_of(open: &[&Document], active: Option<&Document>, selection: Range) -
         active,
         open: open.iter().map(|document| open_book(document)).collect(),
         folder: Vec::new(),
+        folder_sheets: Default::default(),
     }
 }
 
