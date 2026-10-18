@@ -332,8 +332,8 @@ impl Grid {
     pub fn reset(&mut self, view: SheetView, cx: &mut Context<Self>) {
         self.apply_view(view);
         self.cells = Rc::new(HashMap::new());
-        self.top = RowIdx::default();
-        self.left = ColIdx::default();
+        self.top = self.layout.row_from(RowIdx::default());
+        self.left = self.layout.col_from(ColIdx::default());
         self.editor = None;
         self.marquee = None;
         self.selection = Selection {
@@ -354,8 +354,8 @@ impl Grid {
 
     pub fn restore_view(&mut self, state: ViewState, cx: &mut Context<Self>) {
         self.selection = state.selection;
-        self.top = state.top;
-        self.left = state.left;
+        self.top = self.layout.row_from(state.top);
+        self.left = self.layout.col_from(state.left);
         self.tab_start = None;
         self.viewport_changed(cx);
         cx.emit(GridEvent::SelectionChanged);
@@ -605,10 +605,11 @@ impl Grid {
     }
 
     fn page(&mut self, down: bool, cx: &mut Context<Self>) {
-        let lines = self.visible_rows().saturating_sub(1).max(1);
-        self.top = self.paged_row(self.top, lines, down);
+        let lines = i64::from(self.visible_rows().saturating_sub(1).max(1));
+        let delta = if down { lines } else { -lines };
+        self.top = self.shifted_row(self.top, delta);
         let pos = CellPos::new(
-            self.paged_row(self.selection.active.row, lines, down),
+            self.shifted_row(self.selection.active.row, delta),
             self.selection.active.col,
         );
         self.select(pos, pos, cx);
@@ -623,14 +624,30 @@ impl Grid {
         &self.shown_cols[..self.shown_cols.len().saturating_sub(1)]
     }
 
-    fn paged_row(&self, from: RowIdx, lines: u32, down: bool) -> RowIdx {
-        let moved = if down {
-            self.layout.rows_after(from, lines)
+    fn shifted_row(&self, from: RowIdx, delta: i64) -> RowIdx {
+        let lines = u32::try_from(delta.unsigned_abs()).unwrap_or(u32::MAX);
+        let landed = if delta >= 0 {
+            self.layout.rows_after(from, lines).last().copied()
         } else {
-            self.layout.rows_before(from, lines, RowIdx::default())
+            self.layout
+                .rows_before(from, lines, RowIdx::default())
+                .first()
+                .copied()
         };
-        let landed = if down { moved.last() } else { moved.first() };
-        landed.copied().unwrap_or(from)
+        landed.unwrap_or(from)
+    }
+
+    fn shifted_col(&self, from: ColIdx, delta: i64) -> ColIdx {
+        let lines = u32::try_from(delta.unsigned_abs()).unwrap_or(u32::MAX);
+        let landed = if delta >= 0 {
+            self.layout.cols_after(from, lines).last().copied()
+        } else {
+            self.layout
+                .cols_before(from, lines, ColIdx::default())
+                .first()
+                .copied()
+        };
+        landed.unwrap_or(from)
     }
 
     // Frozen rows and columns are always on screen, so only the scrolled pane moves.
@@ -641,7 +658,11 @@ impl Grid {
         if pos.row.get() >= self.frozen_rows {
             if pos.row < top {
                 top = pos.row;
-            } else if !self.fully_shown_rows().contains(&pos.row) {
+            } else if self
+                .fully_shown_rows()
+                .last()
+                .is_none_or(|last| pos.row > *last)
+            {
                 let above = self.visible_rows().saturating_sub(2);
                 let rows = self.layout.rows_before(pos.row, above, RowIdx::default());
                 top = rows.first().copied().unwrap_or(pos.row);
@@ -650,7 +671,11 @@ impl Grid {
         if pos.col.get() >= self.frozen_cols {
             if pos.col < left {
                 left = pos.col;
-            } else if !self.fully_shown_cols().contains(&pos.col) {
+            } else if self
+                .fully_shown_cols()
+                .last()
+                .is_none_or(|last| pos.col > *last)
+            {
                 let before = u32::from(self.visible_cols().saturating_sub(2));
                 let cols = self.layout.cols_before(pos.col, before, ColIdx::default());
                 left = cols.first().copied().unwrap_or(pos.col);
@@ -724,10 +749,12 @@ impl Grid {
     fn scroll_to(&mut self, axis: Axis, first: u32, cx: &mut Context<Self>) {
         match axis {
             Axis::Vertical => {
-                self.top = RowIdx::clamped(i64::from(first) + i64::from(self.frozen_rows));
+                let top = RowIdx::clamped(i64::from(first) + i64::from(self.frozen_rows));
+                self.top = self.layout.row_from(top);
             }
             Axis::Horizontal => {
-                self.left = ColIdx::clamped(i64::from(first) + i64::from(self.frozen_cols));
+                let left = ColIdx::clamped(i64::from(first) + i64::from(self.frozen_cols));
+                self.left = self.layout.col_from(left);
             }
         }
         self.viewport_changed(cx);
@@ -1151,8 +1178,8 @@ impl Grid {
             (rows, cols)
         };
         if rows != 0 || cols != 0 {
-            self.top = self.top.offset(rows);
-            self.left = self.left.offset(cols);
+            self.top = self.shifted_row(self.top, rows);
+            self.left = self.shifted_col(self.left, cols);
             self.viewport_changed(cx);
         }
     }
@@ -1757,11 +1784,15 @@ fn cached_ranges(
     ranges
 }
 
+// Runs closer than MAX_GAP hidden lines are read as one, so interleaved hidden lines do
+// not fan the cache out into one range per gap.
+const MAX_GAP: u32 = 32;
+
 fn runs(indices: impl Iterator<Item = u32>) -> Vec<(u32, u32)> {
     let mut runs: Vec<(u32, u32)> = Vec::new();
     for index in indices {
         match runs.last_mut() {
-            Some((_, last)) if *last + 1 == index => *last = index,
+            Some((_, last)) if index - *last <= MAX_GAP => *last = index,
             _ => runs.push((index, index)),
         }
     }
@@ -1836,6 +1867,15 @@ mod tests {
             })
             .sum();
         assert!(cells < 1_000);
+    }
+
+    #[test]
+    fn cache_merges_runs_split_by_a_few_hidden_lines() {
+        let alternating: Vec<RowIdx> = (0..40)
+            .map(|row| RowIdx::clamped(i64::from(row) * 2))
+            .collect();
+        let ranges = cached_ranges(&alternating, &cols(0, 9), 0, 0);
+        assert_eq!(ranges, vec![Range::new(pos("A1"), pos("J79"))]);
     }
 
     #[test]
