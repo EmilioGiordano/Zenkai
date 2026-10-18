@@ -22,6 +22,7 @@ pub struct SheetEntry {
 pub struct OpenBook {
     pub id: WorkbookId,
     pub name: String,
+    pub sheets: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,6 +60,15 @@ impl Catalog {
             .iter()
             .find(|sheet| sheet.name.to_lowercase() == wanted)
             .map(|sheet| sheet.name.clone())
+    }
+
+    pub(super) fn sheet_in(&self, book: &str, sheet: &str) -> Option<(String, String)> {
+        let open = self.open_book(book)?;
+        let wanted = sheet.to_lowercase();
+        open.sheets
+            .iter()
+            .find(|name| name.to_lowercase() == wanted)
+            .map(|name| (open.name.clone(), name.clone()))
     }
 
     pub(super) fn open_book(&self, name: &str) -> Option<&OpenBook> {
@@ -116,6 +126,11 @@ pub(super) mod sample {
         let book = OpenBook {
             id: WorkbookId(3),
             name: "sales-q3.xlsx".to_string(),
+            sheets: vec![
+                "Sales".to_string(),
+                "Sales summary".to_string(),
+                "selection".to_string(),
+            ],
         };
         Catalog {
             active: Some(ActiveBook {
@@ -126,6 +141,7 @@ pub(super) mod sample {
                     sheet("selection", None),
                 ],
                 selection: Some(Reference {
+                    workbook: None,
                     sheet: Some("Sales".to_string()),
                     range: range("B4:D12"),
                 }),
@@ -141,6 +157,7 @@ pub(super) mod sample {
 
     pub fn cells(sheet: &str, text: &str) -> Mention {
         Mention::Cells(Reference {
+            workbook: None,
             sheet: Some(sheet.to_string()),
             range: range(text),
         })
@@ -151,6 +168,22 @@ pub(super) mod sample {
 mod tests {
     use super::sample::*;
     use super::*;
+
+    #[test]
+    fn a_sheet_of_another_open_workbook_is_found_by_book_and_sheet_ignoring_case() {
+        let mut catalog = catalog();
+        catalog.open.push(OpenBook {
+            id: WorkbookId(4),
+            name: "Budget.xlsx".to_string(),
+            sheets: vec!["monthly".to_string(), "Summary".to_string()],
+        });
+        assert_eq!(
+            catalog.sheet_in("budget.XLSX", "SUMMARY"),
+            Some(("Budget.xlsx".to_string(), "Summary".to_string()))
+        );
+        assert_eq!(catalog.sheet_in("Budget.xlsx", "Nope"), None);
+        assert_eq!(catalog.sheet_in("Other.xlsx", "Summary"), None);
+    }
 
     #[test]
     fn used_ranges_fill_in_by_sheet_for_the_right_workbook_only() {

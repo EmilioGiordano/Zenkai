@@ -10,17 +10,32 @@ fn needs_quotes(sheet: &str) -> bool {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reference {
+    pub workbook: Option<String>,
     pub sheet: Option<String>,
     pub range: Range,
 }
 
 impl Reference {
     pub fn text(&self) -> String {
+        match (&self.workbook, &self.sheet) {
+            (Some(workbook), Some(sheet)) => {
+                format!("{}!{}", external_sheet(workbook, sheet), self.range)
+            }
+            _ => self.local_text(),
+        }
+    }
+
+    pub fn local_text(&self) -> String {
         match &self.sheet {
             Some(sheet) => sheet_range(sheet, self.range),
             None => self.range.to_string(),
         }
     }
+}
+
+// Excel's external form, quoted whole: '[book.xlsx]Sheet'.
+pub fn external_sheet(workbook: &str, sheet: &str) -> String {
+    super::mention_parse::quote_name(&format!("[{workbook}]{sheet}"))
 }
 
 pub fn quote_sheet(sheet: &str) -> String {

@@ -14,6 +14,7 @@ const BOUNDARY_BEFORE: [char; 8] = ['(', '[', '{', '"', ',', ';', '>', '*'];
 pub enum Mention {
     Selection,
     Sheet(String),
+    BookSheet { workbook: String, name: String },
     Cells(Reference),
     Workbook(String),
 }
@@ -41,9 +42,21 @@ fn read_quoted(rest: &str) -> Result<(String, &str), MentionError> {
 }
 
 struct Parts<'a> {
+    workbook: Option<String>,
     name: String,
     quoted: bool,
     range: Option<&'a str>,
+}
+
+fn external_parts(name: String) -> (Option<String>, String) {
+    let external = name
+        .strip_prefix('[')
+        .and_then(|rest| rest.split_once(']'))
+        .filter(|(book, sheet)| !book.is_empty() && !sheet.is_empty());
+    match external {
+        Some((book, sheet)) => (Some(book.to_string()), sheet.to_string()),
+        None => (None, name),
+    }
 }
 
 fn split(token: &str) -> Result<Parts<'_>, MentionError> {
@@ -53,7 +66,9 @@ fn split(token: &str) -> Result<Parts<'_>, MentionError> {
             "" => None,
             _ => Some(after.strip_prefix('!').ok_or(MentionError::BadRange)?),
         };
+        let (workbook, name) = external_parts(name);
         return Ok(Parts {
+            workbook,
             name,
             quoted: true,
             range,
@@ -61,11 +76,13 @@ fn split(token: &str) -> Result<Parts<'_>, MentionError> {
     }
     Ok(match token.split_once('!') {
         Some((name, range)) => Parts {
+            workbook: None,
             name: name.to_string(),
             quoted: false,
             range: Some(range),
         },
         None => Parts {
+            workbook: None,
             name: token.to_string(),
             quoted: false,
             range: None,
@@ -73,9 +90,30 @@ fn split(token: &str) -> Result<Parts<'_>, MentionError> {
     })
 }
 
+fn place(
+    workbook: Option<String>,
+    name: String,
+    catalog: Option<&Catalog>,
+) -> Result<(Option<String>, String), MentionError> {
+    match (catalog, workbook) {
+        (Some(catalog), Some(workbook)) => catalog
+            .sheet_in(&workbook, &name)
+            .map(|(book, sheet)| (Some(book), sheet))
+            .ok_or(MentionError::UnknownName),
+        (Some(catalog), None) => catalog
+            .sheet(&name)
+            .map(|sheet| (None, sheet))
+            .ok_or(MentionError::UnknownName),
+        (None, workbook) => Ok((workbook, name)),
+    }
+}
+
 // Without a catalog only the shape is checked, which is how a sent message is drawn again.
+// A name with a spreadsheet extension is a file; a sheet with such a name is written in the
+// external form, so the two never share a spelling.
 pub fn parse(token: &str, catalog: Option<&Catalog>) -> Result<Mention, MentionError> {
     let Parts {
+        workbook,
         name,
         quoted,
         range,
@@ -85,26 +123,36 @@ pub fn parse(token: &str, catalog: Option<&Catalog>) -> Result<Mention, MentionE
     }
     if let Some(range) = range {
         let range = Range::parse_a1(range).ok_or(MentionError::BadRange)?;
-        let sheet = match catalog {
-            Some(catalog) => catalog.sheet(&name).ok_or(MentionError::UnknownName)?,
-            None => name,
-        };
+        let (workbook, sheet) = place(workbook, name, catalog)?;
         return Ok(Mention::Cells(Reference {
+            workbook,
             sheet: Some(sheet),
             range,
         }));
     }
+    if workbook.is_some() {
+        return Ok(match place(workbook, name, catalog)? {
+            (Some(workbook), name) => Mention::BookSheet { workbook, name },
+            (None, name) => Mention::Sheet(name),
+        });
+    }
     if !quoted && name.eq_ignore_ascii_case(SELECTION) {
         return Ok(Mention::Selection);
     }
+    let file_like = has_spreadsheet_extension(&name);
     match catalog {
-        Some(catalog) => catalog
-            .sheet(&name)
-            .map(Mention::Sheet)
-            .or_else(|| catalog.workbook(&name).map(Mention::Workbook))
-            .ok_or(MentionError::UnknownName),
+        Some(catalog) => {
+            let sheet = || catalog.sheet(&name).map(Mention::Sheet);
+            let book = || catalog.workbook(&name).map(Mention::Workbook);
+            if file_like {
+                book().or_else(sheet)
+            } else {
+                sheet().or_else(book)
+            }
+            .ok_or(MentionError::UnknownName)
+        }
+        None if file_like => Ok(Mention::Workbook(name)),
         None if quoted => Ok(Mention::Sheet(name)),
-        None if has_spreadsheet_extension(&name) => Ok(Mention::Workbook(name)),
         None => Err(MentionError::UnknownName),
     }
 }
@@ -268,6 +316,9 @@ pub fn active_query(text: &str, cursor: usize) -> Option<ActiveQuery> {
 
 #[cfg(test)]
 mod tests {
+    use zenkai_types::WorkbookId;
+
+    use super::super::mention_catalog::OpenBook;
     use super::super::mention_catalog::sample::*;
     use super::*;
 
@@ -337,6 +388,86 @@ mod tests {
         );
         assert_eq!(parse("Sales", None), Err(MentionError::UnknownName));
         assert_eq!(parse("notes.txt", None), Err(MentionError::UnknownName));
+    }
+
+    #[test]
+    fn quoted_workbooks_keep_their_kind_whatever_their_spelling() {
+        for name in [
+            "Listas Accesorias DISTRIS - 2024.11.20.xlsx",
+            "Dinámica - 2024.xlsx",
+            "plan-final.v2.xlsx",
+            "reports/budget 2026.xlsx",
+            "it's.xlsx",
+        ] {
+            let text = workbook_text(name);
+            let body = text.as_str();
+            assert_eq!(
+                parse(body, None),
+                Ok(Mention::Workbook(name.to_string())),
+                "{name}"
+            );
+            let mut catalog = catalog();
+            catalog.open[0].name = name.to_string();
+            assert_eq!(
+                parse(body, Some(&catalog)),
+                Ok(Mention::Workbook(name.to_string())),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sheet_named_like_a_file_is_written_in_the_external_form_and_stays_a_sheet() {
+        let text = super::super::reference::external_sheet("sales-q3.xlsx", "Plan.xlsx");
+        assert_eq!(text, "'[sales-q3.xlsx]Plan.xlsx'");
+        let expected = Mention::BookSheet {
+            workbook: "sales-q3.xlsx".to_string(),
+            name: "Plan.xlsx".to_string(),
+        };
+        assert_eq!(parse(&text, None), Ok(expected));
+    }
+
+    #[test]
+    fn external_sheets_and_ranges_parse_with_their_workbook() {
+        assert_eq!(
+            parse("'[Budget 2026.xlsx]Dinámica'", None),
+            Ok(Mention::BookSheet {
+                workbook: "Budget 2026.xlsx".to_string(),
+                name: "Dinámica".to_string()
+            })
+        );
+        let Ok(Mention::Cells(reference)) = parse("'[Budget 2026.xlsx]Dinámica'!A1:C40", None)
+        else {
+            panic!("not a range");
+        };
+        assert_eq!(reference.workbook.as_deref(), Some("Budget 2026.xlsx"));
+        assert_eq!(reference.sheet.as_deref(), Some("Dinámica"));
+        assert_eq!(reference.text(), "'[Budget 2026.xlsx]Dinámica'!A1:C40");
+    }
+
+    #[test]
+    fn external_sheets_resolve_against_the_open_workbooks_only() {
+        let mut catalog = catalog();
+        catalog.open.push(OpenBook {
+            id: WorkbookId(4),
+            name: "Budget.xlsx".to_string(),
+            sheets: vec!["monthly".to_string(), "Summary".to_string()],
+        });
+        assert_eq!(
+            parse("'[budget.xlsx]SUMMARY'", Some(&catalog)),
+            Ok(Mention::BookSheet {
+                workbook: "Budget.xlsx".to_string(),
+                name: "Summary".to_string()
+            })
+        );
+        assert_eq!(
+            parse("'[Budget.xlsx]Nope'", Some(&catalog)),
+            Err(MentionError::UnknownName)
+        );
+        assert_eq!(
+            parse("'[Closed.xlsx]Summary'", Some(&catalog)),
+            Err(MentionError::UnknownName)
+        );
     }
 
     #[test]

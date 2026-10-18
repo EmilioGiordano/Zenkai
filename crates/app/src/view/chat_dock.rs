@@ -105,14 +105,17 @@ impl Workspace {
 
     // Sheet names and the selection only; used ranges are read off the UI thread afterwards.
     pub(crate) fn mention_catalog_for_chat(&self, cx: &App) -> Catalog {
-        let open = self
-            .documents
-            .iter()
-            .map(|document| OpenBook {
-                id: document.id,
-                name: document.name(),
-            })
-            .collect();
+        let open_book = |document: &Document| OpenBook {
+            id: document.id,
+            name: document.name(),
+            sheets: document
+                .sheets
+                .iter()
+                .filter(|info| info.visibility == SheetVisibility::Visible)
+                .map(|info| info.name.clone())
+                .collect(),
+        };
+        let open = self.documents.iter().map(open_book).collect();
         let active = self.documents.active().map(|document| {
             let sheets = document
                 .sheets
@@ -129,14 +132,12 @@ impl Workspace {
                 .iter()
                 .find(|info| info.id == document.sheet)
                 .map(|info| Reference {
+                    workbook: None,
                     sheet: Some(info.name.clone()),
                     range: self.selection(cx),
                 });
             ActiveBook {
-                book: OpenBook {
-                    id: document.id,
-                    name: document.name(),
-                },
+                book: open_book(document),
                 sheets,
                 selection,
             }
@@ -270,6 +271,7 @@ impl Workspace {
             .map(|info| info.name.clone())
             .unwrap_or_default();
         let reference = Reference {
+            workbook: None,
             sheet: Some(sheet),
             range: self.selection(cx),
         };
@@ -283,7 +285,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((id, sheet)) = self.sheet_of_reference(reference.sheet.as_deref()) else {
+        let Some((id, sheet)) =
+            self.sheet_of_reference(reference.workbook.as_deref(), reference.sheet.as_deref())
+        else {
             let sheet = reference.sheet.clone().unwrap_or_default();
             self.notify(
                 Severity::Warning,
@@ -302,8 +306,13 @@ impl Workspace {
             .update(cx, |grid, cx| grid.show_range(reference.range, cx));
     }
 
-    // The active workbook wins, then any other open workbook with a sheet of that name.
-    fn sheet_of_reference(&self, name: Option<&str>) -> Option<(WorkbookId, SheetId)> {
+    // A named workbook is the only place searched; otherwise the active workbook wins, then any
+    // other open workbook with a sheet of that name.
+    fn sheet_of_reference(
+        &self,
+        workbook: Option<&str>,
+        name: Option<&str>,
+    ) -> Option<(WorkbookId, SheetId)> {
         let in_document = |document: &Document| match name {
             Some(name) => document
                 .sheets
@@ -312,6 +321,13 @@ impl Workspace {
                 .map(|info| info.id),
             None => Some(document.sheet),
         };
+        if let Some(workbook) = workbook {
+            return self
+                .documents
+                .iter()
+                .filter(|document| document.name().eq_ignore_ascii_case(workbook))
+                .find_map(|document| in_document(document).map(|sheet| (document.id, sheet)));
+        }
         self.documents
             .active()
             .and_then(|document| in_document(document).map(|sheet| (document.id, sheet)))

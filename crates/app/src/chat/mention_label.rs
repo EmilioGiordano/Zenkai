@@ -65,13 +65,17 @@ impl Label {
     }
 
     pub(super) fn of_reference(reference: &Reference, workbook: Option<&str>) -> Label {
-        Label::within(Kind::Range, workbook, plain_name(&reference.text()))
+        let workbook = reference.workbook.as_deref().or(workbook);
+        Label::within(Kind::Range, workbook, plain_name(&reference.local_text()))
     }
 
     pub(super) fn of_mention(mention: &Mention, workbook: Option<&str>) -> Label {
         match mention {
             Mention::Selection => Label::within(Kind::Range, workbook, "selection".to_string()),
             Mention::Sheet(name) => Label::within(Kind::Sheet, workbook, plain_name(name)),
+            Mention::BookSheet { workbook, name } => {
+                Label::within(Kind::Sheet, Some(workbook), plain_name(name))
+            }
             Mention::Cells(reference) => Label::of_reference(reference, workbook),
             Mention::Workbook(path) => {
                 let shown = plain_name(file_name(path));
@@ -94,6 +98,7 @@ mod tests {
 
     fn reference(sheet: &str, range: &str) -> Reference {
         Reference {
+            workbook: None,
             sheet: Some(sheet.to_string()),
             range: Range::parse_a1(range).unwrap(),
         }
@@ -147,6 +152,22 @@ mod tests {
         assert_eq!(label.kind, Kind::Range);
         assert_eq!(label.name, "'My Sheet'!A1:C40");
         assert_eq!(label.full, "a.xlsx / 'My Sheet'!A1:C40");
+    }
+
+    #[test]
+    fn a_sheet_of_another_workbook_shows_that_workbook_not_the_sending_one() {
+        let label = Label::of_mention(
+            &Mention::BookSheet {
+                workbook: "b.xlsx".to_string(),
+                name: "Base".to_string(),
+            },
+            Some("a.xlsx"),
+        );
+        assert_eq!(label.full, "b.xlsx / Base");
+        let mut external = reference("Base", "A1");
+        external.workbook = Some("b.xlsx".to_string());
+        let label = Label::of_reference(&external, Some("a.xlsx"));
+        assert_eq!(label.full, "b.xlsx / Base!A1");
     }
 
     #[test]
