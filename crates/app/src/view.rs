@@ -1724,7 +1724,7 @@ impl Workspace {
         let replaces_source = document
             .path
             .as_ref()
-            .is_some_and(|source| files::same_file(source, &path));
+            .is_some_and(|source| files::same_file(source, &path, files::Unresolved::ComparePaths));
         let never_overwritten = document.is_macro_enabled() || document.read_only;
         if replaces_source && never_overwritten {
             self.notify(Severity::Error, t!("save.original_protected"), cx);

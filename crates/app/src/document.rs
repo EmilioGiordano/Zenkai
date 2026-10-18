@@ -459,13 +459,15 @@ pub enum ChangedFile {
     Replace,
 }
 
-// A base other than the target is only read from, so writing the target whole loses nothing
-// the user has not seen. The target itself as a changed or unusable base may hold another
-// program's work: like Excel, a save asks before replacing it.
+// A base other than the target is only read from, and a target that no longer exists holds
+// nothing to lose, so writing the target whole is safe. The target itself as a changed or
+// unusable base may hold another program's work: like Excel, a save asks before replacing it.
 fn retries_whole(error: &EngineError, target: &Path, changed: ChangedFile) -> bool {
     match error {
         EngineError::ChangedOnDisk(base) | EngineError::BaseUnusable { path: base, .. } => {
-            changed == ChangedFile::Replace || !files::may_be_same_file(base, target)
+            changed == ChangedFile::Replace
+                || matches!(target.try_exists(), Ok(false))
+                || !files::same_file(base, target, files::Unresolved::AssumeSame)
         }
         _ => false,
     }
@@ -1099,15 +1101,40 @@ mod tests {
     }
 
     #[test]
-    fn a_base_that_cannot_be_resolved_counts_as_the_target() {
+    fn a_path_that_cannot_be_resolved_is_assumed_to_be_the_same_file_when_asked() {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("gone.xlsx");
         let spelled = dir.path().join("sub").join("..").join("gone.xlsx");
-        assert!(!retries_whole(
-            &unusable(&missing),
+        assert!(files::same_file(
+            &missing,
             &spelled,
-            ChangedFile::Ask
+            files::Unresolved::AssumeSame
         ));
+        assert!(!files::same_file(
+            &missing,
+            &spelled,
+            files::Unresolved::ComparePaths
+        ));
+    }
+
+    #[test]
+    fn a_save_over_a_deleted_file_is_written_without_asking() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let shared = open_with_damaged_file(&target);
+        std::fs::remove_file(&target).unwrap();
+        let saved = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            zenkai_engine::save_xlsx,
+        );
+        assert!(
+            matches!(saved, Ok(DocumentSave::Written { .. })),
+            "{saved:?}"
+        );
+        assert_eq!(saved_text(&target), "mine");
     }
 
     #[test]
