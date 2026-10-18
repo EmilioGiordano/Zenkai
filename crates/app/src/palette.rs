@@ -226,6 +226,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.chat.model"), PickChatModel),
                 item(t!("palette.chat.permissions_menu"), PickChatPermission),
                 item(t!("palette.chat.tool_calls"), CycleToolCallDisplay),
+                item(t!("palette.chat.focus_tool_calls"), FocusToolCalls),
                 item(t!("palette.chat.toggle_tool_call"), ToggleToolCall),
                 item(t!("palette.chat.copy_tool_result"), CopyToolResult),
                 item(t!("palette.chat.next_tool_call"), FocusNextToolCall),

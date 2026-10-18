@@ -229,6 +229,9 @@ pub fn defaults() -> Vec<Binding> {
         bind("ctrl-c", CopyToolResult, Some("ToolRow")),
         bind("down", FocusNextToolCall, Some("ToolRow")),
         bind("up", FocusPreviousToolCall, Some("ToolRow")),
+        bind("tab", FocusNextToolCall, Some("ToolRow")),
+        bind("shift-tab", FocusPreviousToolCall, Some("ToolRow")),
+        bind("alt-r", FocusToolCalls, Some("AgentChat")),
         bind(
             "shift-tab",
             CycleChatPermission,

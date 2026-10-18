@@ -7,7 +7,7 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use zenkai_agent::chat::thread::{ToolCallId, ToolCard, ToolStatus};
+use zenkai_agent::chat::thread::{Entry, ToolCallId, ToolCard, ToolStatus};
 use zenkai_agent::chat::tool_rows::{self, RowText};
 use zenkai_agent::settings::ToolCallDisplay;
 use zenkai_agent::tools::is_protected_view_refusal;
@@ -51,6 +51,10 @@ impl ToolViews {
             .entry(id.clone())
             .or_insert_with(|| cx.focus_handle())
             .clone()
+    }
+
+    fn existing(&self, id: &ToolCallId) -> Option<&FocusHandle> {
+        self.focus.get(id)
     }
 
     pub(super) fn keep_only(&mut self, live: &HashSet<ToolCallId>) {
@@ -125,6 +129,21 @@ impl ChatPanel {
     pub(super) fn copy_tool_result(&self, id: &ToolCallId, cx: &mut Context<Self>) {
         if let Some(card) = self.thread.tool(id).filter(|card| !card.detail.is_empty()) {
             cx.write_to_clipboard(ClipboardItem::new_string(card.detail.clone()));
+        }
+    }
+
+    pub(super) fn focus_tool_calls(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let latest = self
+            .thread
+            .entries()
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                Entry::Tool(card) => self.tools.existing(&card.id).cloned(),
+                _ => None,
+            });
+        if let Some(handle) = latest {
+            window.focus(&handle, cx);
         }
     }
 
@@ -259,12 +278,10 @@ impl ChatPanel {
     pub(super) fn render_group(
         &self,
         views: &mut ToolViews,
+        first: &ToolCard,
         cards: &[&ToolCard],
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(first) = cards.first() else {
-            return div().into_any_element();
-        };
         let text = tool_rows::group_text(cards);
         let open = views.is_open(ToolCallDisplay::Collapsed, &first.id);
         let aria = format!("{} {}", text.label, text.target);

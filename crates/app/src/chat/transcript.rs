@@ -85,7 +85,8 @@ impl ChatPanel {
                 }
                 Item::Group(indices) => {
                     let cards: Vec<&ToolCard> = indices.into_iter().filter_map(card_at).collect();
-                    Some(self.render_group(&mut views, &cards, cx))
+                    let first = *cards.first()?;
+                    Some(self.render_group(&mut views, first, &cards, cx))
                 }
                 Item::Used { count } => Some(self.render_used(count, cx)),
                 Item::Entry(index) => match &entries[index] {

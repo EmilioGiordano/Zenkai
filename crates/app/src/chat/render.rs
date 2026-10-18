@@ -95,6 +95,11 @@ impl Render for ChatPanel {
                     this.cycle_tool_call_display(cx)
                 }),
             )
+            .on_action(
+                cx.listener(|this, _: &FocusToolCalls, window, cx| {
+                    this.focus_tool_calls(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &CopyLoginCommand, _, cx| this.copy_login_command(cx)))
             .on_action(cx.listener(|this, _: &ConfirmAgentLaunch, window, cx| {
                 this.confirm_launch(window, cx)

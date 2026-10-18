@@ -211,6 +211,7 @@ actions!(
         FocusNextToolCall,
         FocusPreviousToolCall,
         CycleToolCallDisplay,
+        FocusToolCalls,
         RecordShortcutKeys,
         ResetAllShortcuts,
     ]
