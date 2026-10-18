@@ -5,25 +5,18 @@ use gpui_kit::base::Selectable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
 use zenkai_agent::chat::thread::FileCard;
-use zenkai_engine::{Engine, Workbook};
 use zenkai_i18n::t;
-use zenkai_types::{CellPos, Range, SheetId, SheetVisibility, WorkbookId};
+use zenkai_types::{SheetId, SheetVisibility, WorkbookId};
 
 use super::{Severity, Workspace, sidebar};
 use crate::actions::ToggleAgentChat;
 use crate::agent_folder::FolderHint;
-use crate::chat::mention::{ActiveBook, Catalog, Detail, OpenBook, SheetEntry};
+use crate::chat::mention_catalog::{ActiveBook, Catalog, OpenBook, SheetEntry, Used};
 use crate::chat::reference::Reference;
 use crate::chat::{ChatEvent, ChatPanel, reference};
-use crate::document::Document;
+use crate::document::{Document, SharedWorkbook};
 use crate::keymap;
 use crate::panel_width::Panel;
-
-fn used_range(workbook: &Workbook, sheet: SheetId) -> Option<Range> {
-    let end = workbook.used_end(sheet);
-    let empty = end == CellPos::default() && workbook.input(sheet, end).is_empty();
-    (!empty).then(|| Range::new(CellPos::default(), end))
-}
 
 #[derive(Default)]
 pub(super) struct ChatDock {
@@ -63,7 +56,8 @@ impl Workspace {
         Some(reference::sheet_range(&sheet.name, self.selection(cx)))
     }
 
-    pub(crate) fn mention_catalog_for_chat(&self, detail: Detail, cx: &App) -> Catalog {
+    // Sheet names and the selection only; used ranges are read off the UI thread afterwards.
+    pub(crate) fn mention_catalog_for_chat(&self, cx: &App) -> Catalog {
         let open = self
             .documents
             .iter()
@@ -73,17 +67,14 @@ impl Workspace {
             })
             .collect();
         let active = self.documents.active().map(|document| {
-            let workbook = document.workbook();
             let sheets = document
                 .sheets
                 .iter()
                 .filter(|info| info.visibility == SheetVisibility::Visible)
                 .map(|info| SheetEntry {
+                    id: info.id,
                     name: info.name.clone(),
-                    used: match (detail, workbook.as_deref()) {
-                        (Detail::UsedRanges, Some(workbook)) => used_range(workbook, info.id),
-                        _ => None,
-                    },
+                    used: Used::Unknown,
                 })
                 .collect();
             let selection = document
@@ -108,6 +99,13 @@ impl Workspace {
             open,
             folder: Vec::new(),
         }
+    }
+
+    pub(crate) fn shared_workbook_for_chat(&self, id: WorkbookId) -> Option<SharedWorkbook> {
+        self.documents
+            .iter()
+            .find(|document| document.id == id)
+            .map(Document::shared_workbook)
     }
 
     pub(crate) fn folder_hint_for_chat(&self) -> FolderHint {

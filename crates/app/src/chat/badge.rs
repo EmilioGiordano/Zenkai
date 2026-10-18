@@ -8,7 +8,7 @@ use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::*;
 use zenkai_i18n::t;
 
-use super::mention;
+use super::mention_parse;
 use super::reference::Reference;
 use super::reference_scan::{self, LINK_TARGET};
 use super::{ChatPanel, MONO};
@@ -145,13 +145,14 @@ impl MarkdownPlugin for ReferencePlugin {
 }
 
 fn mention_chip(
+    position: usize,
     label: &str,
     reference: Option<Reference>,
     panel: &WeakEntity<ChatPanel>,
     cx: &App,
 ) -> AnyElement {
     let chip = frame(
-        SharedString::from(format!("mention-{label}")),
+        SharedString::from(format!("mention-{position}-{label}")),
         label.to_string(),
         cx,
     );
@@ -213,14 +214,17 @@ pub(super) fn user_message(
     panel: &WeakEntity<ChatPanel>,
     cx: &App,
 ) -> Option<AnyElement> {
-    let chips = mention::chips(text);
+    let chips = mention_parse::chips(text);
     let mut styled = !chips.is_empty();
     let mut lines: Vec<Vec<AnyElement>> = vec![Vec::new()];
     let mut taken = 0;
     for chip in chips {
         styled |= push_plain(&mut lines, &text[taken..chip.start], panel, cx);
         let label = &text[chip.start..chip.end];
-        push_element(&mut lines, mention_chip(label, chip.reference, panel, cx));
+        push_element(
+            &mut lines,
+            mention_chip(chip.start, label, chip.reference, panel, cx),
+        );
         taken = chip.end;
     }
     styled |= push_plain(&mut lines, &text[taken..], panel, cx);

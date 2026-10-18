@@ -9,8 +9,11 @@ mod extras;
 mod files;
 mod header;
 mod launch;
-pub(crate) mod mention;
-mod mentions;
+mod mention_candidates;
+pub(crate) mod mention_catalog;
+mod mention_parse;
+mod mention_picker;
+mod mention_prepare;
 mod menus;
 mod model_search;
 mod permissions;
@@ -157,7 +160,7 @@ pub struct ChatPanel {
     slash_index: usize,
     // The composer text for which the user closed the slash list.
     slash_dismissed: Option<String>,
-    mentions: mentions::Mentions,
+    mentions: mention_picker::Mentions,
     // Bumped when a conversation ends, so a late answer from an older session is dropped.
     epoch: u64,
     _subscriptions: Vec<Subscription>,
@@ -315,7 +318,7 @@ impl ChatPanel {
             model_scroll: ScrollHandle::new(),
             slash_index: 0,
             slash_dismissed: None,
-            mentions: mentions::Mentions::default(),
+            mentions: mention_picker::Mentions::default(),
             epoch: 0,
             _subscriptions: vec![sending, settings, searching, filtering],
         };
@@ -427,7 +430,7 @@ impl ChatPanel {
         self.remember_conversation(&text, cx);
         let context = self
             .prompt_context(cx)
-            .map(|line| mentions::with_notes(line, &mentioned.notes));
+            .map(|line| mention_picker::with_notes(line, &mentioned.notes));
         match &self.live {
             Some(live) if live.ready => live.handle.prompt(text, context),
             _ => {
@@ -468,6 +471,7 @@ impl ChatPanel {
     fn reset_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.epoch += 1;
         self.end_session(cx);
+        self.forget_mentions();
         for ask in self.permissions.drain(..) {
             ask.cancel();
         }
