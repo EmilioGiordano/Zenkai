@@ -117,9 +117,10 @@ fn read_from<R: Read + Seek>(
     timezone: &str,
     inspect: &Inspect<'_>,
 ) -> Result<OpenedBook, ReadError> {
-    limits::check_archive(&mut archive)?;
+    tracing::info_span!("open_check_archive").in_scope(|| limits::check_archive(&mut archive))?;
     let budgets = Budgets::production();
-    let package = read_package(&mut archive, meter, &budgets)?;
+    let package = tracing::info_span!("open_read_package")
+        .in_scope(|| read_package(&mut archive, meter, &budgets))?;
 
     let positions: std::collections::HashMap<&str, usize> = package
         .worksheets
@@ -127,6 +128,7 @@ fn read_from<R: Read + Seek>(
         .enumerate()
         .map(|(position, part)| (part.path.as_str(), position))
         .collect();
+    let declared_span = tracing::info_span!("open_declared_sizes").entered();
     let mut declared = 0u64;
     for index in 0..archive.len() {
         let entry = archive
@@ -136,9 +138,11 @@ fn read_from<R: Read + Seek>(
             declared = declared.saturating_add(entry.size());
         }
     }
+    drop(declared_span);
     budgets.expect_sheet_bytes(declared);
     let mut sheets: Vec<Option<StreamedSheet>> =
         (0..package.worksheets.len()).map(|_| None).collect();
+    let entries_span = tracing::info_span!("open_entries").entered();
     for index in 0..archive.len() {
         let entry_name = {
             let entry = archive
@@ -151,6 +155,8 @@ fn read_from<R: Read + Seek>(
                 .by_index(index)
                 .map_err(|e| ReadError::Unreadable(e.to_string()))?;
             let sheet_name = package.worksheets[position].name.clone();
+            let _sheet_span =
+                tracing::info_span!("open_sheet", sheet = position, bytes = entry.size()).entered();
             let streamed = stream_worksheet(entry, meter, &entry_name, &sheet_name, &budgets)?;
             // The rows were checked while streaming; the configuration carries the
             // same feature flags and validation limits as a whole part would.
@@ -166,6 +172,7 @@ fn read_from<R: Read + Seek>(
         let (_, part, _) = read_part_if_checked(&mut archive, index, meter, &budgets, false)?;
         inspect(&entry_name, &part)?;
     }
+    drop(entries_span);
 
     let mut replaced = std::collections::HashMap::new();
     let mut cells = Vec::with_capacity(sheets.len());
@@ -183,12 +190,15 @@ fn read_from<R: Read + Seek>(
         replaced.insert(part.path.clone(), streamed.stub);
         cells.push(streamed.cells);
     }
-    let stub = stub_archive(&mut archive, &replaced)?;
+    let stub = tracing::info_span!("open_stub_archive")
+        .in_scope(|| stub_archive(&mut archive, &replaced))?;
     drop(replaced);
 
-    let mut workbook = guarded(|| {
-        ironcalc::import::load_from_xlsx_bytes(&stub, name, locale, timezone)
-            .map_err(|e| ReadError::Unreadable(format!("{e:?}")))
+    let mut workbook = tracing::info_span!("open_ironcalc_load").in_scope(|| {
+        guarded(|| {
+            ironcalc::import::load_from_xlsx_bytes(&stub, name, locale, timezone)
+                .map_err(|e| ReadError::Unreadable(format!("{e:?}")))
+        })
     })?;
     let same_sheets = workbook.worksheets.len() == package.worksheets.len()
         && workbook
@@ -206,18 +216,27 @@ fn read_from<R: Read + Seek>(
         .iter()
         .map(|part| part.path.clone())
         .collect();
-    let sheet_links = links::sheet_links(&mut archive, meter, &budgets, &worksheet_paths)?;
-    let layout = PackageLayout {
-        worksheets: worksheet_paths,
-        shared_strings: layout::shared_strings_layout(
+    let sheet_links = tracing::info_span!("open_sheet_links")
+        .in_scope(|| links::sheet_links(&mut archive, meter, &budgets, &worksheet_paths))?;
+    let shared_strings = tracing::info_span!("open_shared_strings_layout").in_scope(|| {
+        layout::shared_strings_layout(
             &mut archive,
             meter,
             &budgets,
             &package,
             workbook.shared_strings.len(),
-        )?,
-        styles: styles_part::style_counts(&mut archive, meter, &budgets)?,
-        part_names: layout::part_names_of(&layout::names_in_order(&mut archive)?),
+        )
+    })?;
+    let styles = tracing::info_span!("open_style_counts")
+        .in_scope(|| styles_part::style_counts(&mut archive, meter, &budgets))?;
+    let part_names = tracing::info_span!("open_part_names").in_scope(|| {
+        layout::names_in_order(&mut archive).map(|names| layout::part_names_of(&names))
+    })?;
+    let layout = PackageLayout {
+        worksheets: worksheet_paths,
+        shared_strings,
+        styles,
+        part_names,
         sheet_links,
     };
     let names = Names {
@@ -231,17 +250,21 @@ fn read_from<R: Read + Seek>(
         .zip(&cells)
         .map(|(part, cells)| (part.name.as_str(), cells.jobs.as_slice()))
         .collect();
-    let converted = formulas::convert(&jobs, &names)?;
+    let converted = tracing::info_span!("open_convert_formulas")
+        .in_scope(|| formulas::convert(&jobs, &names))?;
     drop(jobs);
-    guarded(|| {
-        assemble::fill(&mut workbook, cells, converted)?;
-        Ok(workbook)
-    })
-    .map(|book| OpenedBook {
-        book,
-        sheet_configs: configs,
-        layout,
-    })
+    tracing::info_span!("open_fill")
+        .in_scope(|| {
+            guarded(|| {
+                assemble::fill(&mut workbook, cells, converted)?;
+                Ok(workbook)
+            })
+        })
+        .map(|book| OpenedBook {
+            book,
+            sheet_configs: configs,
+            layout,
+        })
 }
 
 // Every part of the archive, streamed once with the budgets enforced and handed to
