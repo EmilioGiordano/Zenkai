@@ -409,16 +409,24 @@ fn write_error(path: &Path) -> impl Fn(io::Error) -> EngineError + '_ {
     }
 }
 
+fn write_plan<W: Write + Seek>(
+    plan: Plan,
+    writer: W,
+    refused: &mut Option<String>,
+) -> Result<(W, Vec<(String, Written)>), EngineError> {
+    tracing::info_span!("save_write").in_scope(|| match plan {
+        Plan::Full(plan) => write_full(plan, writer),
+        Plan::Patch(plan) => write_patch(plan, writer, refused),
+    })
+}
+
 fn write_temp(
     plan: Plan,
     file: BufWriter<File>,
     temp: &Path,
     refused: &mut Option<String>,
 ) -> Result<Vec<(String, Written)>, EngineError> {
-    let (file, written) = tracing::info_span!("save_write").in_scope(|| match plan {
-        Plan::Full(plan) => write_full(plan, file),
-        Plan::Patch(plan) => write_patch(plan, file, refused),
-    })?;
+    let (file, written) = write_plan(plan, file, refused)?;
     let file = file
         .into_inner()
         .map_err(|error| write_error(temp)(error.into_error()))?;
@@ -459,6 +467,20 @@ fn adopt(slot: &SavedSlot, path: &Path, contents: Contents) {
             slot.set(None);
         }
     }
+}
+
+// Writes what `save_xlsx` would into `writer`, for measuring a save without touching the
+// disk: no temp file, no verification, no rename, and the next save copies from the same file.
+pub fn write_xlsx_to<W: Write + Seek + Send>(
+    snapshot: SaveSnapshot,
+    writer: W,
+) -> Result<W, EngineError> {
+    let plan = snapshot.plan;
+    if let Plan::Patch(plan) = &plan {
+        unchanged(Some(&plan.base))?;
+    }
+    let (writer, _) = run_with_engine_stack(|| write_plan(plan, writer, &mut None))?;
+    Ok(writer)
 }
 
 // Written to a sibling temp file, read back, then renamed over the target: the original
@@ -569,6 +591,35 @@ mod tests {
         assert_eq!(reopened.input(SheetId(0), b1), "=A1*3");
         let leftovers: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
         assert_eq!(leftovers.len(), 1, "the temp file is gone");
+    }
+
+    #[test]
+    fn a_save_written_to_memory_reopens_and_leaves_the_file_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        super::save_xlsx(
+            book()
+                .save_snapshot(&path, super::SaveTarget::Document)
+                .unwrap(),
+        )
+        .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut reopened = crate::file::open_xlsx(&path).unwrap().workbook;
+        reopened
+            .set_input(SheetId(0), CellPos::default(), "5")
+            .unwrap();
+        let snapshot = reopened
+            .save_snapshot(&path, super::SaveTarget::Document)
+            .unwrap();
+        let bytes = super::write_xlsx_to(snapshot, std::io::Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let copy = dir.path().join("copy.xlsx");
+        std::fs::write(&copy, bytes).unwrap();
+        let written = crate::file::open_xlsx(&copy).unwrap().workbook;
+        let b1 = CellPos::parse_a1("B1").unwrap();
+        assert_eq!(written.cell(SheetId(0), b1).text, "15");
     }
 
     #[test]
