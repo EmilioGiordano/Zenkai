@@ -83,6 +83,7 @@ mod search;
 mod sidebar;
 mod theme_picker;
 mod workbooks;
+use crate::job_pill::{JobPill, LongJob, SHOW_AFTER};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -157,6 +158,7 @@ pub struct Workspace {
     toast: Option<agent_access::Toast>,
     toast_generation: u64,
     busy: Option<SharedString>,
+    job_pill: JobPill,
     last_recalc: Option<Duration>,
     diagnostics: bool,
     clipboard_source: Option<InternalClip>,
@@ -308,6 +310,7 @@ impl Workspace {
             toast: None,
             toast_generation: 0,
             busy: None,
+            job_pill: JobPill::default(),
             last_recalc: None,
             diagnostics: false,
             clipboard_source: None,
@@ -1173,7 +1176,7 @@ impl Workspace {
         };
         self.previews.batch_started(generation);
         self.busy = Some(t!("busy.calculating").into());
-        cx.notify();
+        self.start_long_job(LongJob::Calculating, cx);
         let started = Instant::now();
         cx.spawn(async move |this, cx| {
             let errors = cx
@@ -1236,9 +1239,27 @@ impl Workspace {
 
     // Another document may still be recalculating; the label stays until all are done.
     fn clear_calculating(&mut self, cx: &mut Context<Self>) {
+        self.job_pill.end(LongJob::Calculating);
         if !self.documents.iter().any(Document::has_pending) {
             self.clear_busy(t!("busy.calculating"), cx);
         }
+    }
+
+    pub(crate) fn start_long_job(&mut self, job: LongJob, cx: &mut Context<Self>) {
+        self.job_pill.start(job, Instant::now());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SHOW_AFTER).await;
+            if let Err(error) = this.update(cx, |_, cx| cx.notify()) {
+                tracing::debug!(%error, "workspace closed before the progress pill");
+            }
+        })
+        .detach();
+    }
+
+    pub(crate) fn end_long_job(&mut self, job: LongJob, cx: &mut Context<Self>) {
+        self.job_pill.end(job);
+        cx.notify();
     }
 
     fn clear_busy(&mut self, label: &str, cx: &mut Context<Self>) {
@@ -1924,7 +1945,7 @@ impl Workspace {
         let edits_at_start = document.edit_count();
         let generation = document.generation();
         self.busy = Some(t!("busy.saving").into());
-        cx.notify();
+        self.start_long_job(LongJob::Saving, cx);
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
             let result = cx
@@ -1950,6 +1971,7 @@ impl Workspace {
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(t!("busy.saving"), cx);
+                this.end_long_job(LongJob::Saving, cx);
                 let shown = this.documents.active_id() == Some(id);
                 let wrote = matches!(result, Ok(Saved::Written { .. }));
                 let mut follow_up = AfterJob::Nothing;
@@ -3120,13 +3142,19 @@ impl Workspace {
     }
 
     // Opening a large file takes seconds; the status bar text alone went unnoticed.
-    // Recalculations stay in the status bar only: most last a frame and the pill would
-    // flash on every edit.
+    // Recalculations and saves reach the pill through the job pill, after a delay, so
+    // short ones never flash it.
     fn render_busy(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let long_job = self.job_pill.shown(Instant::now()).map(|job| match job {
+            LongJob::Saving => t!("busy.saving"),
+            LongJob::Calculating => t!("busy.calculating"),
+            LongJob::Autosaving => t!("busy.autosaving"),
+        });
         let busy = self
             .busy
             .clone()
-            .filter(|busy| busy.as_ref() != t!("busy.calculating"))?;
+            .filter(|busy| ![t!("busy.calculating"), t!("busy.saving")].contains(&busy.as_ref()))
+            .or_else(|| long_job.map(SharedString::from))?;
         let theme = cx.theme();
         let indicator = if cx.reduce_motion() {
             div().child("…").into_any_element()
