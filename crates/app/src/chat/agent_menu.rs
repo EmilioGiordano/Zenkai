@@ -123,6 +123,12 @@ impl ChatPanel {
         cx.notify();
     }
 
+    pub(super) fn open_ai_settings(&mut self, cx: &mut Context<Self>) {
+        self.menu = None;
+        crate::settings_window::open_to_ai(cx);
+        cx.notify();
+    }
+
     pub(super) fn follow_agent_switch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(pending) = self.pending_agent.clone() else {
             return;
