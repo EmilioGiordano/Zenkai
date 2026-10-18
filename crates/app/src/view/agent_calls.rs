@@ -20,6 +20,7 @@ use crate::actions::{AllowAgentChange, DenyAgentChange, ShowAgentChange};
 use crate::agent_review::{CellChange, changes_since, inputs_in};
 use crate::agent_routing;
 use crate::agent_settings::{AgentConfig, BridgeStatus};
+use crate::chat::approval::AgentChange;
 use crate::document::{self, Document};
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -62,6 +63,15 @@ pub(super) struct PendingChange {
     asked_at: Instant,
     focus: FocusHandle,
     return_focus: Option<FocusHandle>,
+}
+
+struct PendingText {
+    title: String,
+    detail: String,
+    summary: String,
+    consequence: String,
+    sample: Option<String>,
+    on_screen: bool,
 }
 
 pub(super) enum BridgeState {
@@ -428,6 +438,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(pending) = self.agent.pending.take() else {
+            if self.chat_question_waiting(cx) {
+                self.answer_chat_permission(decision == Decision::Allow, cx);
+            }
             return;
         };
         self.release_focus_from_bar(&pending.focus, pending.return_focus.clone(), window, cx);
@@ -455,42 +468,92 @@ impl Workspace {
         }
     }
 
-    pub(super) fn render_agent_approval(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let pending = self.agent.pending.as_ref()?;
-        let theme = cx.theme();
+    fn pending_text(&self, pending: &PendingChange) -> PendingText {
         let who = pending
             .call
             .client
             .clone()
             .unwrap_or_else(|| t!("approval.external_agent").to_string());
-        let (title, detail, sample, on_screen) = match &pending.change {
+        match &pending.change {
             Change::Write { plan, id, .. } => {
                 let workbook = self.documents.get(*id).map_or_else(
                     || t!("approval.closed_workbook").to_string(),
                     Document::name,
                 );
-                (
-                    t!("approval.wants_to_change", who = who, workbook = workbook),
-                    t!("approval.not_saved", headline = plan.headline()),
-                    plan.sample(),
-                    self.documents.active_id() == Some(*id)
+                PendingText {
+                    title: t!("approval.wants_to_change", who = who, workbook = workbook),
+                    detail: t!("approval.not_saved", headline = plan.headline()),
+                    summary: plan.headline(),
+                    consequence: t!("chat.approval.not_saved").to_string(),
+                    sample: plan.sample(),
+                    on_screen: self.documents.active_id() == Some(*id)
                         && self.active_sheet() == Some(plan.sheet()),
-                )
+                }
             }
-            Change::Create(new) => (
-                t!(
+            Change::Create(new) => {
+                let title = t!(
                     "approval.wants_to_create",
                     who = who,
                     name = tools::relative_text(&new.path)
-                ),
-                t!(
+                );
+                let detail = t!(
                     "approval.create_detail",
                     folder = new.folder.path().display()
-                ),
-                None,
-                true,
-            ),
+                );
+                PendingText {
+                    summary: title.clone(),
+                    consequence: detail.clone(),
+                    title,
+                    detail,
+                    sample: None,
+                    on_screen: true,
+                }
+            }
+        }
+    }
+
+    fn chat_shows_agent_change(&self, cx: &App) -> bool {
+        self.chat.open
+            && self
+                .chat
+                .panel
+                .as_ref()
+                .is_some_and(|panel| panel.read(cx).shows_agent_change())
+    }
+
+    // The chat shows the question in the transcript, so the bar over the workbook only appears
+    // when the chat does not.
+    pub(super) fn sync_chat_change(&mut self, cx: &mut Context<Self>) {
+        let Some(panel) = self.chat.panel.clone() else {
+            return;
         };
+        let change = self.agent.pending.as_ref().map(|pending| {
+            let text = self.pending_text(pending);
+            AgentChange {
+                caption: matches!(pending.change, Change::Write { .. }).then_some(text.title),
+                summary: text.summary,
+                consequence: text.consequence,
+                sample: text.sample,
+                offer_show: !text.on_screen,
+                focus: pending.focus.clone(),
+            }
+        });
+        panel.update(cx, |panel, cx| panel.set_agent_change(change, cx));
+    }
+
+    pub(super) fn render_agent_approval(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let pending = self.agent.pending.as_ref()?;
+        if self.chat_shows_agent_change(cx) {
+            return None;
+        }
+        let theme = cx.theme();
+        let PendingText {
+            title,
+            detail,
+            sample,
+            on_screen,
+            ..
+        } = self.pending_text(pending);
         Some(
             v_flex()
                 .key_context("AgentApproval")
@@ -566,6 +629,7 @@ impl Workspace {
             })
             .map(|(plan, _, _)| plan.target());
         self.grid.update(cx, |grid, cx| grid.set_pending(range, cx));
+        self.sync_chat_change(cx);
     }
 
     pub(super) fn show_agent_change(&mut self, window: &mut Window, cx: &mut Context<Self>) {
