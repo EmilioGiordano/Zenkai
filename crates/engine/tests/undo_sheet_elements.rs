@@ -1,7 +1,10 @@
 // Spec: undoing a row or column insert or delete brings back the sheet elements the move
 // dropped, and redoing drops them again, so a save after open, edit and undo matches a save
 // after open alone.
-#![allow(clippy::unwrap_used)]
+#![allow(
+    clippy::unwrap_used,
+    reason = "a failed unwrap in a test is a failed test"
+)]
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -28,6 +31,9 @@ fn source(dir: &Path) -> PathBuf {
     sheet.write_url(8, 0, "https://example.com").unwrap();
     let rule = DataValidation::new().allow_whole_number(DataValidationRule::Between(1, 9));
     sheet.add_data_validation(7, 1, 8, 1, &rule).unwrap();
+    let other = book.add_worksheet();
+    other.write_number(0, 0, 1.0).unwrap();
+    other.write_url(3, 0, "https://example.org").unwrap();
     book.save(&path).unwrap();
     path
 }
@@ -35,14 +41,16 @@ fn source(dir: &Path) -> PathBuf {
 fn saved_elements(book: &Workbook, path: &Path) -> Vec<String> {
     let snapshot = book.save_snapshot(path, SaveTarget::Document).unwrap();
     save_xlsx(snapshot).unwrap();
-    elements(path)
+    let mut held = elements(path, "xl/worksheets/sheet1.xml");
+    held.extend(elements(path, "xl/worksheets/sheet2.xml"));
+    held
 }
 
-fn elements(path: &Path) -> Vec<String> {
+fn elements(path: &Path, part: &str) -> Vec<String> {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
     let mut text = String::new();
     archive
-        .by_name("xl/worksheets/sheet1.xml")
+        .by_name(part)
         .unwrap()
         .read_to_string(&mut text)
         .unwrap();
@@ -67,7 +75,7 @@ fn baseline(dir: &Path) -> (PathBuf, Vec<String>) {
     let path = source(dir);
     let book = open_xlsx(&path).unwrap().workbook;
     let held = saved_elements(&book, &dir.join("baseline.xlsx"));
-    assert_eq!(held.len(), 2, "{held:?}");
+    assert_eq!(held.len(), 3, "{held:?}");
     (path, held)
 }
 
@@ -110,6 +118,45 @@ fn redo_drops_the_elements_again_and_undo_restores_them_again() {
     redone.undo().unwrap();
     redone.redo().unwrap();
     assert!(saved_elements(&redone, &dir.path().join("redone.xlsx")).is_empty());
+}
+
+// The second sheet's hyperlink is dropped by a move on the first, which cannot tell what
+// the relationships part points at.
+#[test]
+fn a_move_on_one_sheet_that_drops_the_elements_of_another_is_undone_and_redone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, held) = baseline(dir.path());
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.insert_rows(SheetId(1), row(100), 1).unwrap();
+    book.undo().unwrap();
+    assert_eq!(saved_elements(&book, &dir.path().join("undone.xlsx")), held);
+
+    let mut redone = open_xlsx(&path).unwrap().workbook;
+    redone.insert_rows(SheetId(1), row(100), 1).unwrap();
+    redone.undo().unwrap();
+    redone.redo().unwrap();
+    let kept = saved_elements(&redone, &dir.path().join("redone.xlsx"));
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    assert!(kept[0].contains("dataValidations"), "{kept:?}");
+}
+
+// Each move is one undo step, so undoing the later of two leaves the earlier one's drop.
+#[test]
+fn each_move_is_undone_by_its_own_step() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, held) = baseline(dir.path());
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.delete_rows(SHEET, row(1), 1).unwrap();
+    book.insert_rows(SHEET, row(0), 1).unwrap();
+    book.undo().unwrap();
+    book.undo().unwrap();
+    assert_eq!(saved_elements(&book, &dir.path().join("undone.xlsx")), held);
+
+    let mut once = open_xlsx(&path).unwrap().workbook;
+    once.delete_rows(SHEET, row(1), 1).unwrap();
+    once.insert_rows(SHEET, row(0), 1).unwrap();
+    once.undo().unwrap();
+    assert!(saved_elements(&once, &dir.path().join("once.xlsx")).is_empty());
 }
 
 #[test]
