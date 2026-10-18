@@ -25,6 +25,7 @@ use ironcalc_base::types::Workbook;
 use ironcalc_base::{get_milliseconds_since_epoch, Model};
 
 pub use self::shared_strings::get_shared_string_item_xml;
+pub use self::styles::{get_style_items_xml, StyleItemCounts, StyleItems};
 pub use self::worksheets::{row_styles, write_rows_xml, write_worksheet_xml, SharedFormula};
 use self::xml_constants::XML_DECLARATION;
 

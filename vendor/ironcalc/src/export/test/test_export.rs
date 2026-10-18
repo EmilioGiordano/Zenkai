@@ -1,10 +1,11 @@
 use std::fs;
 
-use ironcalc_base::types::StyleIncludes;
+use ironcalc_base::types::{Style, StyleIncludes};
 use ironcalc_base::Model;
 
 use crate::error::XlsxError;
 use crate::export::save_to_icalc;
+use crate::export::{get_style_items_xml, StyleItemCounts, StyleItems};
 use crate::import::load_from_icalc;
 use crate::{export::save_to_xlsx, import::load_from_xlsx};
 
@@ -401,6 +402,50 @@ fn a_shared_string_item_is_escaped() {
         crate::export::get_shared_string_item_xml("a<b & \u{1}"),
         "<si><t>a&lt;b &amp; _x0001_</t></si>"
     );
+}
+
+#[test]
+fn the_style_items_after_the_existing_ones_end_each_list() {
+    let mut model = new_empty_model();
+    let before = StyleItemCounts {
+        num_fmts: model.workbook.styles.num_fmts.len(),
+        fonts: model.workbook.styles.fonts.len(),
+        fills: model.workbook.styles.fills.len(),
+        borders: model.workbook.styles.borders.len(),
+        cell_xfs: model.workbook.styles.cell_xfs.len(),
+    };
+    assert_eq!(
+        get_style_items_xml(&model.workbook.styles, before),
+        StyleItems::default()
+    );
+    let mut style = Style::default();
+    style.font.b = true;
+    style.fill.color = ironcalc_base::types::Color::Rgb("#FF0000".to_string());
+    style.num_fmt = "0.000\" kg\"".to_string();
+    model.set_cell_style(0, 1, 1, &style).unwrap();
+
+    let items = get_style_items_xml(&model.workbook.styles, before);
+    let styles = crate::export::get_package_parts(&model)
+        .unwrap()
+        .into_iter()
+        .find(|(name, _)| name == "xl/styles.xml")
+        .unwrap()
+        .1;
+    assert!(items.num_fmts.starts_with("<numFmt "));
+    for (items, end) in [
+        (&items.num_fmts, "</numFmts>"),
+        (&items.fonts, "</fonts>"),
+        (&items.fills, "</fills>"),
+        (&items.borders, "</borders>"),
+        (&items.cell_xfs, "</cellXfs>"),
+    ] {
+        if !items.is_empty() {
+            assert!(styles.contains(&format!("{items}{end}")), "{items}");
+        }
+    }
+    assert!(items.fonts.contains("<b/>"));
+    assert!(items.fills.contains("<fgColor rgb=\"FFFF0000\"/>"));
+    assert_eq!(items.borders, "");
 }
 
 #[test]
