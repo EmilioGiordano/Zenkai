@@ -173,6 +173,62 @@ fn an_edit_after_an_undo_forgets_the_undone_move() {
     assert_eq!(saved_elements(&book, &dir.path().join("edited.xlsx")), held);
 }
 
+const RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+fn part_text(path: &Path, name: &str) -> Option<String> {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+    let mut text = String::new();
+    archive
+        .by_name(name)
+        .ok()?
+        .read_to_string(&mut text)
+        .unwrap();
+    Some(text)
+}
+
+// The relationship ids a sheet part uses that its relationships part does not declare.
+fn dangling_ids(path: &Path, sheet: u32) -> Vec<String> {
+    let sheet_text = part_text(path, &format!("xl/worksheets/sheet{sheet}.xml")).unwrap();
+    let rels = part_text(path, &format!("xl/worksheets/_rels/sheet{sheet}.xml.rels"));
+    let declared: Vec<String> = rels
+        .iter()
+        .flat_map(|text| {
+            roxmltree::Document::parse(text)
+                .unwrap()
+                .descendants()
+                .filter(|node| node.has_tag_name("Relationship"))
+                .map(|node| node.attribute("Id").unwrap().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    roxmltree::Document::parse(&sheet_text)
+        .unwrap()
+        .descendants()
+        .flat_map(|node| node.attributes())
+        .filter(|attribute| attribute.namespace() == Some(RELATIONSHIPS))
+        .map(|attribute| attribute.value().to_string())
+        .filter(|id| !declared.contains(id))
+        .collect()
+}
+
+// A save between a move and its undo writes the file without the hyperlink's
+// relationship; the undo must not bring back a hyperlink that points at nothing.
+#[test]
+fn a_save_between_a_move_and_its_undo_never_leaves_a_dangling_relationship() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, _) = baseline(dir.path());
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.delete_rows(SHEET, row(1), 1).unwrap();
+    saved_elements(&book, &dir.path().join("deleted.xlsx"));
+    book.undo().unwrap();
+    let undone = dir.path().join("undone.xlsx");
+    saved_elements(&book, &undone);
+    for sheet in [1, 2] {
+        assert_eq!(dangling_ids(&undone, sheet), Vec::<String>::new());
+    }
+    open_xlsx(&undone).unwrap();
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Move {
     InsertRows(i64, u32),
