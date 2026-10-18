@@ -9,6 +9,8 @@ mod extras;
 mod files;
 mod header;
 mod launch;
+pub(crate) mod mention;
+mod mentions;
 mod menus;
 mod model_search;
 mod permissions;
@@ -155,6 +157,7 @@ pub struct ChatPanel {
     slash_index: usize,
     // The composer text for which the user closed the slash list.
     slash_dismissed: Option<String>,
+    mentions: mentions::Mentions,
     // Bumped when a conversation ends, so a late answer from an older session is dropped.
     epoch: u64,
     _subscriptions: Vec<Subscription>,
@@ -224,6 +227,7 @@ impl ChatPanel {
                 }
                 InputEvent::Change => {
                     this.slash_index = 0;
+                    this.follow_mention_query(cx);
                     cx.notify();
                 }
                 InputEvent::Focus | InputEvent::Blur => cx.notify(),
@@ -311,6 +315,7 @@ impl ChatPanel {
             model_scroll: ScrollHandle::new(),
             slash_index: 0,
             slash_dismissed: None,
+            mentions: mentions::Mentions::default(),
             epoch: 0,
             _subscriptions: vec![sending, settings, searching, filtering],
         };
@@ -405,11 +410,13 @@ impl ChatPanel {
 
     pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let typed = self.composer.read(cx).value().to_string();
-        let text = self.message_with_references(&typed);
+        let mentioned = self.prepare_mentions(&typed, cx);
+        let text = self.message_with_references(&mentioned.text);
         if !self.thread.submit(text.clone()) {
             return;
         }
         self.references.clear();
+        self.forget_mentions();
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.turn_started = Some(Instant::now());
@@ -418,7 +425,9 @@ impl ChatPanel {
         self.set_view(View::Chat, cx);
         self.menu = None;
         self.remember_conversation(&text, cx);
-        let context = self.prompt_context(cx);
+        let context = self
+            .prompt_context(cx)
+            .map(|line| mentions::with_notes(line, &mentioned.notes));
         match &self.live {
             Some(live) if live.ready => live.handle.prompt(text, context),
             _ => {

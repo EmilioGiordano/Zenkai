@@ -217,10 +217,14 @@ impl ChatPanel {
     }
 
     pub(super) fn slash_open(&self, cx: &App) -> bool {
-        !self.slash_entries(cx).is_empty()
+        self.mention_open(cx) || !self.slash_entries(cx).is_empty()
     }
 
     pub(crate) fn slash_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.mention_open(cx) {
+            self.mention_step(forward, cx);
+            return;
+        }
         let count = self.slash_entries(cx).len();
         if count == 0 {
             return;
@@ -234,11 +238,19 @@ impl ChatPanel {
     }
 
     pub(crate) fn slash_close(&mut self, cx: &mut Context<Self>) {
+        if self.mention_open(cx) {
+            self.mention_close(cx);
+            return;
+        }
         self.slash_dismissed = Some(self.composer.read(cx).value().to_string());
         cx.notify();
     }
 
     pub(crate) fn slash_accept(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mention_open(cx) {
+            self.mention_accept(window, cx);
+            return;
+        }
         let entries = self.slash_entries(cx);
         let Some(entry) = entries.get(self.slash_index.min(entries.len().saturating_sub(1))) else {
             return;

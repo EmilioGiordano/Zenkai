@@ -5,17 +5,25 @@ use gpui_kit::base::Selectable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::*;
 use zenkai_agent::chat::thread::FileCard;
+use zenkai_engine::{Engine, Workbook};
 use zenkai_i18n::t;
-use zenkai_types::{SheetId, WorkbookId};
+use zenkai_types::{CellPos, Range, SheetId, SheetVisibility, WorkbookId};
 
 use super::{Severity, Workspace, sidebar};
 use crate::actions::ToggleAgentChat;
 use crate::agent_folder::FolderHint;
+use crate::chat::mention::{ActiveBook, Catalog, Detail, OpenBook, SheetEntry};
 use crate::chat::reference::Reference;
 use crate::chat::{ChatEvent, ChatPanel, reference};
 use crate::document::Document;
 use crate::keymap;
 use crate::panel_width::Panel;
+
+fn used_range(workbook: &Workbook, sheet: SheetId) -> Option<Range> {
+    let end = workbook.used_end(sheet);
+    let empty = end == CellPos::default() && workbook.input(sheet, end).is_empty();
+    (!empty).then(|| Range::new(CellPos::default(), end))
+}
 
 #[derive(Default)]
 pub(super) struct ChatDock {
@@ -53,6 +61,53 @@ impl Workspace {
             .iter()
             .find(|info| info.id == document.sheet)?;
         Some(reference::sheet_range(&sheet.name, self.selection(cx)))
+    }
+
+    pub(crate) fn mention_catalog_for_chat(&self, detail: Detail, cx: &App) -> Catalog {
+        let open = self
+            .documents
+            .iter()
+            .map(|document| OpenBook {
+                id: document.id,
+                name: document.name(),
+            })
+            .collect();
+        let active = self.documents.active().map(|document| {
+            let workbook = document.workbook();
+            let sheets = document
+                .sheets
+                .iter()
+                .filter(|info| info.visibility == SheetVisibility::Visible)
+                .map(|info| SheetEntry {
+                    name: info.name.clone(),
+                    used: match (detail, workbook.as_deref()) {
+                        (Detail::UsedRanges, Some(workbook)) => used_range(workbook, info.id),
+                        _ => None,
+                    },
+                })
+                .collect();
+            let selection = document
+                .sheets
+                .iter()
+                .find(|info| info.id == document.sheet)
+                .map(|info| Reference {
+                    sheet: Some(info.name.clone()),
+                    range: self.selection(cx),
+                });
+            ActiveBook {
+                book: OpenBook {
+                    id: document.id,
+                    name: document.name(),
+                },
+                sheets,
+                selection,
+            }
+        });
+        Catalog {
+            active,
+            open,
+            folder: Vec::new(),
+        }
     }
 
     pub(crate) fn folder_hint_for_chat(&self) -> FolderHint {

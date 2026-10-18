@@ -23,12 +23,16 @@ impl Reference {
     }
 }
 
-pub fn sheet_range(sheet: &str, range: Range) -> String {
+pub fn quote_sheet(sheet: &str) -> String {
     if needs_quotes(sheet) {
-        format!("'{}'!{range}", sheet.replace('\'', "''"))
+        format!("'{}'", sheet.replace('\'', "''"))
     } else {
-        format!("{sheet}!{range}")
+        sheet.to_string()
     }
+}
+
+pub fn sheet_range(sheet: &str, range: Range) -> String {
+    format!("{}!{range}", quote_sheet(sheet))
 }
 
 #[cfg(test)]

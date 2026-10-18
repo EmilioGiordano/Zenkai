@@ -233,7 +233,7 @@ impl ChatPanel {
             )
             .primary()
         };
-        let slash = self.render_slash(cx);
+        let slash = self.render_mentions(cx).or_else(|| self.render_slash(cx));
         let model_menu = self.render_model_menu(cx);
         let access_menu = self.render_access_menu(cx);
         let agent_menu = self.render_agent_menu(cx);
