@@ -2,7 +2,9 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use ironcalc::base::types::Workbook as Book;
-use zenkai_xlsx_reader::{ReadError, SheetLinks, workbook_differences};
+use zenkai_xlsx_reader::{ReadError, SheetLinks, list_sheets, workbook_differences};
+
+pub use zenkai_xlsx_reader::ListedSheet;
 
 use crate::error::EngineError;
 use crate::file::{Found, Unsupported, inspect_part, kinds};
@@ -17,11 +19,21 @@ pub(crate) fn engine_error(error: ReadError) -> EngineError {
         }
     }
 }
+
 use crate::preflight::run_with_engine_stack;
 use crate::saved::OpenedParts;
 use crate::sheet_elements::ElementBudget;
 use crate::sheet_settings::{self, SheetSettings};
 use crate::workbook::{read_book, read_book_fast, read_book_streaming};
+
+// The sheets of a workbook that is not open, read from its package metadata alone.
+pub fn sheet_names_of(path: &Path) -> Result<Vec<ListedSheet>, EngineError> {
+    std::fs::metadata(path).map_err(|source| EngineError::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    list_sheets(path).map_err(engine_error)
+}
 
 const SHADOW_REPORT_LINES: usize = 50;
 

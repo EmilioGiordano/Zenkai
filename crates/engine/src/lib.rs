@@ -34,4 +34,7 @@ pub use file::{Opened, Unsupported, open_xlsx, open_xlsx_with, scan_unsupported,
 pub use preflight::run_with_engine_stack;
 pub use save::{SaveSnapshot, SaveTarget, save_xlsx, write_xlsx_unverified};
 pub use workbook::{Copied, Engine, Workbook, format_preview};
-pub use xlsx_read::{ReadBook, ReaderComparison, XlsxReader, compare_readers, read_xlsx_bytes};
+pub use xlsx_read::{
+    ListedSheet, ReadBook, ReaderComparison, XlsxReader, compare_readers, read_xlsx_bytes,
+    sheet_names_of,
+};
