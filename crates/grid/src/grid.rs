@@ -654,6 +654,7 @@ impl Grid {
     // The new origin is found by the sizes of the lines up to the target, not by how many
     // lines are shown now: wide or tall lines near the target fit fewer than the current ones.
     fn scroll_into_view(&mut self, pos: CellPos, cx: &mut Context<Self>) {
+        // Second pass: the row header width can change once the first scroll lands.
         for _ in 0..2 {
             let (width, height) = self.viewport_extent();
             let origin = self.scroll_origin();
