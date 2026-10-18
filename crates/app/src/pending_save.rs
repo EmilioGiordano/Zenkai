@@ -52,6 +52,10 @@ impl PendingSave {
         free
     }
 
+    pub fn is_following(self) -> bool {
+        self == PendingSave::Following
+    }
+
     pub fn clear(&mut self) {
         *self = PendingSave::None;
     }
@@ -108,6 +112,7 @@ mod tests {
     fn only_one_follow_up_wait_runs_at_a_time() {
         let mut pending = PendingSave::None;
         assert!(pending.begin_follow_up());
+        assert!(pending.is_following());
         assert!(!pending.begin_follow_up());
         pending.request();
         assert_eq!(pending.settle(EDITED), AfterJob::Nothing);

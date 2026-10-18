@@ -249,6 +249,10 @@ impl Document {
         self.pending_save.settle(end)
     }
 
+    pub fn is_following_up(&self) -> bool {
+        self.pending_save.is_following()
+    }
+
     pub fn begin_follow_up(&mut self) -> bool {
         self.pending_save.begin_follow_up()
     }

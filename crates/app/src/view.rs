@@ -1580,6 +1580,9 @@ impl Workspace {
         let Some(document) = self.documents.get_mut(id) else {
             return;
         };
+        if document.is_following_up() {
+            return;
+        }
         if document.file_job() != FileJob::Idle {
             document.request_save();
         } else if document.has_pending() {
@@ -1625,8 +1628,13 @@ impl Workspace {
                     this.save_document(id, window, cx);
                     false
                 });
-                if !waiting.unwrap_or(false) {
-                    break;
+                match waiting {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(error) => {
+                        tracing::debug!(%error, "workspace closed while a save waited");
+                        break;
+                    }
                 }
                 cx.background_executor().timer(SAVE_AGAIN_POLL).await;
             }
