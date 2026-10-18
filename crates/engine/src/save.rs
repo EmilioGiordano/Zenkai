@@ -347,8 +347,14 @@ pub(crate) fn snapshot(
     })
 }
 
+// Measured on a 729 MB sheet: level 6 took 6.46 s (87 MB), level 3 took 2.6 s (105 MB, near the
+// original file's size), level 1 took 1.0 s (148 MB).
+const DEFLATE_LEVEL: i32 = 3;
+
 pub(crate) fn deflated() -> FileOptions {
-    FileOptions::default().compression_method(zip::CompressionMethod::Deflated)
+    FileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .compression_level(Some(DEFLATE_LEVEL))
 }
 
 pub(crate) fn write_sheet<W: Write + Seek>(
