@@ -5,7 +5,7 @@ use zenkai_i18n::t;
 
 use crate::chat::thread::{Entry, ToolCard, ToolKind, ToolStatus};
 use crate::settings::ToolCallDisplay;
-use crate::tools::{is_protected_view_refusal, shown_text};
+use crate::tools::{escaped_text, is_protected_view_refusal, shown_text};
 
 const RESULT_LINES: usize = 6;
 const TARGET_KEYS: [&str; 6] = ["path", "file_path", "command", "pattern", "query", "url"];
@@ -139,9 +139,16 @@ pub fn row_text(card: &ToolCard) -> RowText {
         .map(|target| shown_text(&target))
         .unwrap_or_default();
     RowText {
-        label: known.map_or_else(|| card.title.clone(), |tool| tool.label().to_string()),
+        label: known.map_or_else(
+            || escaped_text(&card.title),
+            |tool| tool.label().to_string(),
+        ),
         target,
     }
+}
+
+pub fn is_zenkai_tool(card: &ToolCard) -> bool {
+    KnownTool::of(&card.title).is_some()
 }
 
 pub fn is_read_only(card: &ToolCard) -> bool {
@@ -151,7 +158,6 @@ pub fn is_read_only(card: &ToolCard) -> bool {
     }
 }
 
-// Calls the user has to see whatever the display setting says.
 pub fn needs_attention(card: &ToolCard) -> bool {
     card.status == ToolStatus::WaitingForPermission
         || (card.status == ToolStatus::Failed && is_protected_view_refusal(&card.detail))
@@ -191,7 +197,6 @@ pub fn cell_count(card: &ToolCard) -> Option<usize> {
     Some(rows.iter().filter_map(Value::as_array).map(Vec::len).sum())
 }
 
-// What the user reads before allowing the call: the change in one line.
 pub fn approval_summary(card: &ToolCard) -> String {
     let text = row_text(card);
     match cell_count(card) {
@@ -205,7 +210,6 @@ pub fn approval_summary(card: &ToolCard) -> String {
     }
 }
 
-// Only for the tools that change cells in the open workbook, where Ctrl+Z is true.
 pub fn consequence(card: &ToolCard) -> Option<&'static str> {
     KnownTool::of(&card.title)
         .filter(|tool| tool.changes_cells())
@@ -391,6 +395,29 @@ mod tests {
         assert_eq!(row_text(&broken).target, "");
         assert_eq!(pretty_input(&broken.input), broken.input);
         assert_eq!(pretty_input(r#"{"a":1}"#), "{\n  \"a\": 1\n}");
+    }
+
+    #[test]
+    fn an_unknown_title_is_shown_escaped() {
+        let text = row_text(&card(
+            "1",
+            "Run\u{202E}evil\nnow",
+            ToolStatus::Completed,
+            "",
+        ));
+        assert!(!text.label.contains('\u{202E}') && !text.label.contains('\n'));
+        assert!(!is_zenkai_tool(&card(
+            "2",
+            "Run it",
+            ToolStatus::Completed,
+            ""
+        )));
+        assert!(is_zenkai_tool(&card(
+            "3",
+            "read_range",
+            ToolStatus::Completed,
+            ""
+        )));
     }
 
     #[test]
