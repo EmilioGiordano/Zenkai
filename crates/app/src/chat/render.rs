@@ -69,6 +69,7 @@ impl Render for ChatPanel {
                 body.child(self.render_empty(cx))
             })
             .children(entries)
+            .children(self.render_agent_change(cx))
             .children(self.render_gate(cx))
             .children(self.render_problem(cx))
             .children(self.render_status(cx));
@@ -89,6 +90,11 @@ impl Render for ChatPanel {
             }))
             .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.toggle_agent_editing(cx)))
             .on_action(cx.listener(|this, _: &CycleChatPermission, _, cx| this.cycle_access(cx)))
+            .on_action(
+                cx.listener(|this, _: &CycleToolCallDisplay, _, cx| {
+                    this.cycle_tool_call_display(cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &CopyLoginCommand, _, cx| this.copy_login_command(cx)))
             .on_action(cx.listener(|this, _: &ConfirmAgentLaunch, window, cx| {
                 this.confirm_launch(window, cx)

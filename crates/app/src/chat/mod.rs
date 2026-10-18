@@ -1,5 +1,6 @@
 mod access;
 mod agent_menu;
+pub(crate) mod approval;
 mod badge;
 mod cards;
 mod composer;
@@ -18,6 +19,7 @@ mod session_rows;
 mod sessions;
 mod slash;
 mod startup;
+mod tools;
 mod transcript;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -111,6 +113,9 @@ pub struct ChatPanel {
     live: Option<Live>,
     queued: Option<(String, Option<String>)>,
     permissions: Vec<PermissionAsk>,
+    tools: tools::ToolViews,
+    agent_change: Option<approval::AgentChange>,
+    change_cells_open: bool,
     gate: Option<Gate>,
     problem: Option<Problem>,
     turn_started: Option<Instant>,
@@ -270,6 +275,9 @@ impl ChatPanel {
             live: None,
             queued: None,
             permissions: Vec::new(),
+            tools: tools::ToolViews::default(),
+            agent_change: None,
+            change_cells_open: false,
             gate: None,
             problem: None,
             turn_started: None,
@@ -452,6 +460,7 @@ impl ChatPanel {
             ask.cancel();
         }
         self.thread.clear();
+        self.tools = tools::ToolViews::default();
         self.texts.clear();
         self.linked_messages.clear();
         self.references.clear();
