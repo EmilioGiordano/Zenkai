@@ -169,8 +169,8 @@ pub struct Grid {
     cells: Rc<HashMap<CellPos, GridCell>>,
     top: RowIdx,
     left: ColIdx,
-    visible_rows: u32,
-    visible_cols: u16,
+    shown_rows: Vec<RowIdx>,
+    shown_cols: Vec<ColIdx>,
     bounds: Bounds<Pixels>,
     selection: Selection,
     editor: Option<Editor>,
@@ -225,8 +225,8 @@ impl Grid {
             cells: Rc::new(HashMap::new()),
             top: RowIdx::default(),
             left: ColIdx::default(),
-            visible_rows: 40,
-            visible_cols: 20,
+            shown_rows: (0..40).map(RowIdx::clamped).collect(),
+            shown_cols: (0..20).map(ColIdx::clamped).collect(),
             bounds: Bounds::default(),
             selection: Selection {
                 active: CellPos::default(),
@@ -276,7 +276,16 @@ impl Grid {
 
     fn row_header(&self) -> f32 {
         let origin = self.scroll_origin();
-        row_header_width(origin.row.offset(i64::from(self.visible_rows)))
+        let last = self.shown_rows.last().copied().unwrap_or(origin.row);
+        row_header_width(last.offset(1))
+    }
+
+    fn visible_rows(&self) -> u32 {
+        u32::try_from(self.shown_rows.len()).map_or(u32::MAX, |n| n.max(1))
+    }
+
+    fn visible_cols(&self) -> u16 {
+        u16::try_from(self.shown_cols.len()).map_or(u16::MAX, |n| n.max(1))
     }
 
     fn scroll_origin(&self) -> CellPos {
@@ -287,23 +296,23 @@ impl Grid {
     }
 
     pub fn visible_counts(&self) -> (u32, u16) {
-        (self.visible_rows, self.visible_cols)
+        (self.visible_rows(), self.visible_cols())
     }
 
     pub fn cached_ranges(&self) -> Vec<Range> {
         let margin = if self.scroll_drag.is_some() {
             0
         } else {
-            self.visible_rows
+            self.visible_rows()
         };
-        cached_ranges(
-            self.scroll_origin(),
-            self.visible_rows,
-            margin,
-            self.visible_cols,
-            self.frozen_rows,
-            self.frozen_cols,
-        )
+        let origin = self.scroll_origin();
+        let floor = RowIdx::clamped(i64::from(self.frozen_rows));
+        let mut rows = self.layout.rows_before(origin.row, margin, floor);
+        rows.extend(&self.shown_rows);
+        if let Some(last) = self.shown_rows.last() {
+            rows.extend(self.layout.rows_after(*last, margin));
+        }
+        cached_ranges(&rows, &self.shown_cols, self.frozen_rows, self.frozen_cols)
     }
 
     fn end_scroll_drag(&mut self, cx: &mut Context<Self>) {
@@ -323,8 +332,8 @@ impl Grid {
     pub fn reset(&mut self, view: SheetView, cx: &mut Context<Self>) {
         self.apply_view(view);
         self.cells = Rc::new(HashMap::new());
-        self.top = RowIdx::default();
-        self.left = ColIdx::default();
+        self.top = self.layout.row_from(RowIdx::default());
+        self.left = self.layout.col_from(ColIdx::default());
         self.editor = None;
         self.marquee = None;
         self.selection = Selection {
@@ -345,8 +354,8 @@ impl Grid {
 
     pub fn restore_view(&mut self, state: ViewState, cx: &mut Context<Self>) {
         self.selection = state.selection;
-        self.top = state.top;
-        self.left = state.left;
+        self.top = self.layout.row_from(state.top);
+        self.left = self.layout.col_from(state.left);
         self.tab_start = None;
         self.viewport_changed(cx);
         cx.emit(GridEvent::SelectionChanged);
@@ -423,20 +432,17 @@ impl Grid {
     // scrolled out of view.
     pub fn active_cell_corner(&self) -> Option<Point<Pixels>> {
         let pos = self.selection.active;
-        let origin = self.scroll_origin();
         let (frozen_w, frozen_h) = self.frozen_size();
         let x = if pos.col.get() < self.frozen_cols {
             (0..=pos.col.get())
                 .map(|c| self.layout.col_width(ColIdx::clamped(i64::from(c))))
                 .sum()
         } else {
-            let span = pos.col.get().checked_sub(origin.col.get())?;
-            if span >= self.visible_cols {
-                return None;
-            }
+            let at = self.shown_cols.binary_search(&pos.col).ok()?;
             frozen_w
-                + (origin.col.get()..=pos.col.get())
-                    .map(|c| self.layout.col_width(ColIdx::clamped(i64::from(c))))
+                + self.shown_cols[..=at]
+                    .iter()
+                    .map(|col| self.layout.col_width(*col))
                     .sum::<f32>()
         };
         let y = if pos.row.get() < self.frozen_rows {
@@ -444,13 +450,11 @@ impl Grid {
                 .map(|r| self.layout.row_height(RowIdx::clamped(i64::from(r))))
                 .sum()
         } else {
-            let span = pos.row.get().checked_sub(origin.row.get())?;
-            if span >= self.visible_rows {
-                return None;
-            }
+            let at = self.shown_rows.binary_search(&pos.row).ok()?;
             frozen_h
-                + (origin.row.get()..=pos.row.get())
-                    .map(|r| self.layout.row_height(RowIdx::clamped(i64::from(r))))
+                + self.shown_rows[..=at]
+                    .iter()
+                    .map(|row| self.layout.row_height(*row))
                     .sum::<f32>()
         };
         let left = (self.row_header() + x) * self.zoom;
@@ -601,15 +605,49 @@ impl Grid {
     }
 
     fn page(&mut self, down: bool, cx: &mut Context<Self>) {
-        let delta = i64::from(self.visible_rows.saturating_sub(1).max(1));
-        let delta = if down { delta } else { -delta };
-        self.top = self.top.offset(delta);
+        let lines = i64::from(self.visible_rows().saturating_sub(1).max(1));
+        let delta = if down { lines } else { -lines };
+        self.top = self.shifted_row(self.top, delta);
         let pos = CellPos::new(
-            self.selection.active.row.offset(delta),
+            self.shifted_row(self.selection.active.row, delta),
             self.selection.active.col,
         );
         self.select(pos, pos, cx);
         self.viewport_changed(cx);
+    }
+
+    fn fully_shown_rows(&self) -> &[RowIdx] {
+        &self.shown_rows[..self.shown_rows.len().saturating_sub(1)]
+    }
+
+    fn fully_shown_cols(&self) -> &[ColIdx] {
+        &self.shown_cols[..self.shown_cols.len().saturating_sub(1)]
+    }
+
+    fn shifted_row(&self, from: RowIdx, delta: i64) -> RowIdx {
+        let lines = u32::try_from(delta.unsigned_abs()).unwrap_or(u32::MAX);
+        let landed = if delta >= 0 {
+            self.layout.rows_after(from, lines).last().copied()
+        } else {
+            self.layout
+                .rows_before(from, lines, RowIdx::default())
+                .first()
+                .copied()
+        };
+        landed.unwrap_or(from)
+    }
+
+    fn shifted_col(&self, from: ColIdx, delta: i64) -> ColIdx {
+        let lines = u32::try_from(delta.unsigned_abs()).unwrap_or(u32::MAX);
+        let landed = if delta >= 0 {
+            self.layout.cols_after(from, lines).last().copied()
+        } else {
+            self.layout
+                .cols_before(from, lines, ColIdx::default())
+                .first()
+                .copied()
+        };
+        landed.unwrap_or(from)
     }
 
     // Frozen rows and columns are always on screen, so only the scrolled pane moves.
@@ -620,19 +658,27 @@ impl Grid {
         if pos.row.get() >= self.frozen_rows {
             if pos.row < top {
                 top = pos.row;
-            } else if pos.row.get() >= top.get() + self.visible_rows.saturating_sub(1) {
-                top = RowIdx::clamped(
-                    i64::from(pos.row.get()) - i64::from(self.visible_rows.saturating_sub(2)),
-                );
+            } else if self
+                .fully_shown_rows()
+                .last()
+                .is_none_or(|last| pos.row > *last)
+            {
+                let above = self.visible_rows().saturating_sub(2);
+                let rows = self.layout.rows_before(pos.row, above, RowIdx::default());
+                top = rows.first().copied().unwrap_or(pos.row);
             }
         }
         if pos.col.get() >= self.frozen_cols {
             if pos.col < left {
                 left = pos.col;
-            } else if pos.col.get() >= left.get() + self.visible_cols.saturating_sub(1) {
-                left = ColIdx::clamped(
-                    i64::from(pos.col.get()) - i64::from(self.visible_cols.saturating_sub(2)),
-                );
+            } else if self
+                .fully_shown_cols()
+                .last()
+                .is_none_or(|last| pos.col > *last)
+            {
+                let before = u32::from(self.visible_cols().saturating_sub(2));
+                let cols = self.layout.cols_before(pos.col, before, ColIdx::default());
+                left = cols.first().copied().unwrap_or(pos.col);
             }
         }
         if (top, left) != (self.top, self.left) {
@@ -658,8 +704,8 @@ impl Grid {
         let height =
             (f32::from(self.bounds.size.height) / self.zoom - HEADER_HEIGHT - frozen_h - bar)
                 .max(0.0);
-        self.visible_cols = self.layout.visible_cols(origin.col, width);
-        self.visible_rows = self.layout.visible_rows(origin.row, height);
+        self.shown_cols = self.layout.shown_cols(origin.col, width);
+        self.shown_rows = self.layout.shown_rows(origin.row, height);
     }
 
     fn scroll_of(&self, axis: Axis) -> Scroll {
@@ -667,12 +713,12 @@ impl Grid {
         match axis {
             Axis::Vertical => Scroll {
                 first: origin.row.get() - self.frozen_rows,
-                visible: self.visible_rows,
+                visible: self.visible_rows(),
                 used: (self.used_end.row.get() + 1).saturating_sub(self.frozen_rows),
             },
             Axis::Horizontal => Scroll {
                 first: u32::from(origin.col.get() - self.frozen_cols),
-                visible: u32::from(self.visible_cols),
+                visible: u32::from(self.visible_cols()),
                 used: (u32::from(self.used_end.col.get()) + 1)
                     .saturating_sub(u32::from(self.frozen_cols)),
             },
@@ -703,10 +749,12 @@ impl Grid {
     fn scroll_to(&mut self, axis: Axis, first: u32, cx: &mut Context<Self>) {
         match axis {
             Axis::Vertical => {
-                self.top = RowIdx::clamped(i64::from(first) + i64::from(self.frozen_rows));
+                let top = RowIdx::clamped(i64::from(first) + i64::from(self.frozen_rows));
+                self.top = self.layout.row_from(top);
             }
             Axis::Horizontal => {
-                self.left = ColIdx::clamped(i64::from(first) + i64::from(self.frozen_cols));
+                let left = ColIdx::clamped(i64::from(first) + i64::from(self.frozen_cols));
+                self.left = self.layout.col_from(left);
             }
         }
         self.viewport_changed(cx);
@@ -782,12 +830,10 @@ impl Grid {
     fn edge_at(&self, position: Point<Pixels>) -> Option<(Edge, f32)> {
         let x = f32::from(position.x - self.bounds.origin.x) / self.zoom;
         let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
-        let origin = self.scroll_origin();
         if (0.0..HEADER_HEIGHT).contains(&y) {
             let frozen = (0..self.frozen_cols).map(|c| ColIdx::clamped(i64::from(c)));
-            let scrolled = (0..self.visible_cols).map(|c| origin.col.offset(i64::from(c)));
             let mut edge = self.row_header();
-            for col in frozen.chain(scrolled) {
+            for col in frozen.chain(self.shown_cols.iter().copied()) {
                 edge += self.layout.col_width(col);
                 if (x - edge).abs() <= RESIZE_GRIP {
                     return Some((Edge::Column(col), x));
@@ -798,9 +844,8 @@ impl Grid {
             }
         } else if (0.0..self.row_header()).contains(&x) {
             let frozen = (0..self.frozen_rows).map(|r| RowIdx::clamped(i64::from(r)));
-            let scrolled = (0..self.visible_rows).map(|r| origin.row.offset(i64::from(r)));
             let mut edge = HEADER_HEIGHT;
-            for row in frozen.chain(scrolled) {
+            for row in frozen.chain(self.shown_rows.iter().copied()) {
                 edge += self.layout.row_height(row);
                 if (y - edge).abs() <= RESIZE_GRIP {
                     return Some((Edge::Row(row), y));
@@ -816,11 +861,9 @@ impl Grid {
     // Right edge of a visible column and bottom edge of a visible row, in unzoomed grid
     // coordinates.
     fn col_right(&self, target: ColIdx) -> Option<f32> {
-        let origin = self.scroll_origin();
         let frozen = (0..self.frozen_cols).map(|c| ColIdx::clamped(i64::from(c)));
-        let scrolled = (0..self.visible_cols).map(|c| origin.col.offset(i64::from(c)));
         let mut edge = self.row_header();
-        for col in frozen.chain(scrolled) {
+        for col in frozen.chain(self.shown_cols.iter().copied()) {
             edge += self.layout.col_width(col);
             if col == target {
                 return Some(edge);
@@ -830,11 +873,9 @@ impl Grid {
     }
 
     fn row_bottom(&self, target: RowIdx) -> Option<f32> {
-        let origin = self.scroll_origin();
         let frozen = (0..self.frozen_rows).map(|r| RowIdx::clamped(i64::from(r)));
-        let scrolled = (0..self.visible_rows).map(|r| origin.row.offset(i64::from(r)));
         let mut edge = HEADER_HEIGHT;
-        for row in frozen.chain(scrolled) {
+        for row in frozen.chain(self.shown_rows.iter().copied()) {
             edge += self.layout.row_height(row);
             if row == target {
                 return Some(edge);
@@ -1137,8 +1178,8 @@ impl Grid {
             (rows, cols)
         };
         if rows != 0 || cols != 0 {
-            self.top = self.top.offset(rows);
-            self.left = self.left.offset(cols);
+            self.top = self.shifted_row(self.top, rows);
+            self.left = self.shifted_col(self.left, cols);
             self.viewport_changed(cx);
         }
     }
@@ -1354,10 +1395,8 @@ impl Render for Grid {
         let frame = Frame {
             layout: self.layout.clone(),
             cells: self.cells.clone(),
-            top: self.top,
-            left: self.left,
-            rows: self.visible_rows,
-            cols: self.visible_cols,
+            shown_rows: self.shown_rows.clone(),
+            shown_cols: self.shown_cols.clone(),
             selection: self.selection.range(),
             active: self.selection.active,
             editor: self.editor.clone(),
@@ -1696,53 +1735,68 @@ pub fn typed_preview(existing: Option<&GridCell>, text: &SharedString) -> Option
     })
 }
 
-// A margin of rows above and below the viewport, so a short scroll while the workbook
-// is busy still lands on cached values.
+// `rows` carries a margin above and below the viewport, so a short scroll while the
+// workbook is busy still lands on cached values. Hidden lines split the ranges.
 fn cached_ranges(
-    origin: CellPos,
-    visible_rows: u32,
-    margin_rows: u32,
-    visible_cols: u16,
+    rows: &[RowIdx],
+    cols: &[ColIdx],
     frozen_rows: u32,
     frozen_cols: u16,
 ) -> Vec<Range> {
-    let first_row = origin
-        .row
-        .offset(-i64::from(margin_rows))
-        .max(RowIdx::clamped(i64::from(frozen_rows)));
-    let last_row = origin
-        .row
-        .offset(i64::from(visible_rows) + i64::from(margin_rows));
-    let end_col = origin.col.offset(i64::from(visible_cols));
+    let row_runs = runs(rows.iter().map(|row| row.get()));
+    let col_runs = runs(cols.iter().map(|col| u32::from(col.get())));
+    let row_pair =
+        |(first, last): (u32, u32)| (RowIdx::clamped(first.into()), RowIdx::clamped(last.into()));
+    let col_pair =
+        |(first, last): (u32, u32)| (ColIdx::clamped(first.into()), ColIdx::clamped(last.into()));
+    let frozen_row_last = RowIdx::clamped(i64::from(frozen_rows) - 1);
+    let frozen_col_last = ColIdx::clamped(i64::from(frozen_cols) - 1);
     let zero = CellPos::default();
-    let mut ranges = vec![Range::new(
-        CellPos::new(first_row, origin.col),
-        CellPos::new(last_row, end_col),
-    )];
-    if frozen_rows > 0 {
-        let last = RowIdx::clamped(i64::from(frozen_rows) - 1);
-        ranges.push(Range::new(
-            CellPos::new(zero.row, origin.col),
-            CellPos::new(last, end_col),
-        ));
+    let mut ranges = Vec::new();
+    for rows in row_runs.iter().copied().map(row_pair) {
+        for cols in col_runs.iter().copied().map(col_pair) {
+            ranges.push(Range::new(
+                CellPos::new(rows.0, cols.0),
+                CellPos::new(rows.1, cols.1),
+            ));
+        }
+        if frozen_cols > 0 {
+            ranges.push(Range::new(
+                CellPos::new(rows.0, zero.col),
+                CellPos::new(rows.1, frozen_col_last),
+            ));
+        }
     }
-    if frozen_cols > 0 {
-        let last = ColIdx::clamped(i64::from(frozen_cols) - 1);
-        ranges.push(Range::new(
-            CellPos::new(first_row, zero.col),
-            CellPos::new(last_row, last),
-        ));
+    if frozen_rows > 0 {
+        for cols in col_runs.iter().copied().map(col_pair) {
+            ranges.push(Range::new(
+                CellPos::new(zero.row, cols.0),
+                CellPos::new(frozen_row_last, cols.1),
+            ));
+        }
     }
     if frozen_rows > 0 && frozen_cols > 0 {
         ranges.push(Range::new(
             zero,
-            CellPos::new(
-                RowIdx::clamped(i64::from(frozen_rows) - 1),
-                ColIdx::clamped(i64::from(frozen_cols) - 1),
-            ),
+            CellPos::new(frozen_row_last, frozen_col_last),
         ));
     }
     ranges
+}
+
+// Runs closer than MAX_GAP hidden lines are read as one, so interleaved hidden lines do
+// not fan the cache out into one range per gap.
+const MAX_GAP: u32 = 32;
+
+fn runs(indices: impl Iterator<Item = u32>) -> Vec<(u32, u32)> {
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for index in indices {
+        match runs.last_mut() {
+            Some((_, last)) if index - *last <= MAX_GAP => *last = index,
+            _ => runs.push((index, index)),
+        }
+    }
+    runs
 }
 
 #[cfg(test)]
@@ -1751,7 +1805,7 @@ mod tests {
         Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, cached_ranges, capped_frozen,
         cycle_within, next_boundary, prev_boundary, typed_preview,
     };
-    use zenkai_types::{CellPos, CellStyle, Range, ValueKind};
+    use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
     fn pos(text: &str) -> CellPos {
         CellPos::parse_a1(text).unwrap()
@@ -1775,26 +1829,62 @@ mod tests {
         assert_eq!(next_boundary(text, text.len()), text.len());
     }
 
+    fn rows(first: u32, last: u32) -> Vec<RowIdx> {
+        (first..=last)
+            .map(|row| RowIdx::clamped(i64::from(row)))
+            .collect()
+    }
+
+    fn cols(first: u16, last: u16) -> Vec<ColIdx> {
+        (first..=last)
+            .map(|col| ColIdx::clamped(i64::from(col)))
+            .collect()
+    }
+
     #[test]
-    fn cache_covers_a_screen_above_and_below() {
-        let ranges = cached_ranges(pos("C101"), 40, 40, 10, 0, 0);
+    fn cache_covers_the_shown_rows_and_columns() {
+        let ranges = cached_ranges(&rows(60, 180), &cols(2, 12), 0, 0);
         assert_eq!(ranges, vec![Range::new(pos("C61"), pos("M181"))]);
     }
 
     #[test]
-    fn cache_without_margin_covers_only_the_viewport() {
-        let ranges = cached_ranges(pos("C101"), 40, 0, 10, 0, 0);
-        assert_eq!(ranges, vec![Range::new(pos("C101"), pos("M141"))]);
+    fn cache_skips_a_huge_hidden_span() {
+        let mut shown = rows(0, 1);
+        shown.extend(rows(1_000_001, 1_000_040));
+        let ranges = cached_ranges(&shown, &cols(0, 9), 0, 0);
+        assert_eq!(
+            ranges,
+            vec![
+                Range::new(pos("A1"), pos("J2")),
+                Range::new(pos("A1000002"), pos("J1000041")),
+            ]
+        );
+        let cells: u32 = ranges
+            .iter()
+            .map(|r| {
+                (r.end.row.get() - r.start.row.get() + 1)
+                    * (u32::from(r.end.col.get() - r.start.col.get()) + 1)
+            })
+            .sum();
+        assert!(cells < 1_000);
     }
 
     #[test]
-    fn cache_stops_at_the_first_row_and_below_the_frozen_rows() {
-        assert_eq!(
-            cached_ranges(pos("A11"), 40, 40, 10, 0, 0),
-            vec![Range::new(pos("A1"), pos("K91"))]
-        );
-        let ranges = cached_ranges(pos("A11"), 5, 5, 10, 8, 0);
-        assert_eq!(ranges[0], Range::new(pos("A9"), pos("K21")));
+    fn cache_merges_runs_split_by_a_few_hidden_lines() {
+        let alternating: Vec<RowIdx> = (0..40)
+            .map(|row| RowIdx::clamped(i64::from(row) * 2))
+            .collect();
+        let ranges = cached_ranges(&alternating, &cols(0, 9), 0, 0);
+        assert_eq!(ranges, vec![Range::new(pos("A1"), pos("J79"))]);
+    }
+
+    #[test]
+    fn cache_keeps_the_frozen_panes() {
+        let ranges = cached_ranges(&rows(60, 180), &cols(2, 12), 2, 2);
+        assert_eq!(ranges.len(), 4);
+        assert!(ranges.contains(&Range::new(pos("C1"), pos("M2"))));
+        assert!(ranges.contains(&Range::new(pos("A61"), pos("B181"))));
+        assert!(ranges.contains(&Range::new(pos("A1"), pos("B2"))));
     }
 
     #[test]
@@ -1804,15 +1894,6 @@ mod tests {
             capped_frozen(1_048_575, 16_383),
             (MAX_FROZEN_ROWS, MAX_FROZEN_COLS)
         );
-    }
-
-    #[test]
-    fn cache_keeps_the_frozen_panes() {
-        let ranges = cached_ranges(pos("C101"), 40, 40, 10, 2, 2);
-        assert_eq!(ranges.len(), 4);
-        assert!(ranges.contains(&Range::new(pos("C1"), pos("M2"))));
-        assert!(ranges.contains(&Range::new(pos("A61"), pos("B181"))));
-        assert!(ranges.contains(&Range::new(pos("A1"), pos("B2"))));
     }
 
     #[test]
