@@ -8,20 +8,30 @@ use std::thread::{Builder, Scope, ScopedJoinHandle};
 use crate::ReadError;
 use crate::limits::CellBudget;
 use crate::package::WorksheetPart;
-use crate::sheet_stream::{StreamedSheet, stream_worksheet};
+use crate::sheet_stream::{StreamedSheet, Tuning, stream_worksheet};
 use crate::stream::{Budgets, CompressedMeter, Counted};
 
 // A worksheet smaller than this streams in a fraction of a second, less than starting a
 // thread and reading the zip directory again costs.
 const MIN_THREAD_SHEET_BYTES: u64 = 8 * 1024 * 1024;
 
-// How an open uses the cores. The calling thread only waits for the others and reads the
-// small parts, so the sheet threads can take every core but the one left to the UI.
+// How an open uses the cores: a thread budget, which is every core but the one left to
+// the UI, and the sheets large enough to be worth threads.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReadPlan {
-    pub(crate) sheet_threads: usize,
+    pub(crate) threads: usize,
     pub(crate) min_sheet_bytes: u64,
     pub(crate) cells: CellBudget,
+    pub(crate) tuning: Tuning,
+}
+
+// Threads that stream sheets, and for each of them the threads that scan its rows. A sheet
+// thread inflates and merges while its workers parse, so a sheet thread and its workers
+// together are never more than the budget: sheet_threads * (1 + workers) <= threads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Layout {
+    pub(crate) sheet_threads: usize,
+    pub(crate) workers: usize,
 }
 
 impl ReadPlan {
@@ -32,21 +42,36 @@ impl ReadPlan {
 
     pub(crate) fn with_threads(threads: usize) -> ReadPlan {
         ReadPlan {
-            sheet_threads: if threads >= 2 { threads } else { 0 },
+            threads: if threads >= 2 { threads } else { 0 },
             min_sheet_bytes: MIN_THREAD_SHEET_BYTES,
             cells: CellBudget::production(),
+            tuning: Tuning::production(0),
         }
     }
 
     pub(crate) fn single_threaded(&self) -> ReadPlan {
         ReadPlan {
-            sheet_threads: 0,
+            threads: 0,
             ..*self
         }
     }
 
     pub(crate) fn is_serial(&self) -> bool {
-        self.sheet_threads == 0
+        self.threads == 0
+    }
+
+    // A third of the budget at most goes to threads that stream sheets at once, since the
+    // parse behind each is what takes the time; the rest scan rows. A single sheet gets
+    // every thread but its own.
+    pub(crate) fn layout(&self, sheets: usize) -> Option<Layout> {
+        if self.is_serial() || sheets == 0 {
+            return None;
+        }
+        let sheet_threads = sheets.min((self.threads / 3).max(1));
+        Some(Layout {
+            sheet_threads,
+            workers: (self.threads - sheet_threads) / sheet_threads,
+        })
     }
 }
 
@@ -66,6 +91,8 @@ pub(crate) struct Job<'j, R> {
     worksheets: &'j [WorksheetPart],
     budgets: &'j Budgets,
     tasks: &'j [SheetTask],
+    layout: Option<Layout>,
+    tuning: Tuning,
     next: AtomicUsize,
 }
 
@@ -84,12 +111,8 @@ impl<'scope> SheetStreams<'scope> {
     pub(crate) fn start<'env, R: Read + Seek>(
         scope: &'scope Scope<'scope, 'env>,
         job: &'env Job<'env, R>,
-        plan: &ReadPlan,
     ) -> Option<SheetStreams<'scope>> {
-        let threads = plan.sheet_threads.min(job.tasks.len());
-        if threads < 2 {
-            return None;
-        }
+        let threads = job.layout?.sheet_threads;
         let (sender, arrived) = channel();
         let parent = tracing::Span::current();
         let mut handles = Vec::new();
@@ -156,12 +179,19 @@ impl<'j, R> Job<'j, R> {
         worksheets: &'j [WorksheetPart],
         budgets: &'j Budgets,
         tasks: &'j [SheetTask],
+        plan: &ReadPlan,
     ) -> Job<'j, R> {
+        let layout = plan.layout(tasks.len());
         Job {
             open,
             worksheets,
             budgets,
             tasks,
+            layout,
+            tuning: Tuning {
+                workers: layout.map_or(0, |layout| layout.workers),
+                ..plan.tuning
+            },
             next: AtomicUsize::new(0),
         }
     }
@@ -207,7 +237,14 @@ fn stream_task<R: Read + Seek>(
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
     let _sheet_span =
         tracing::info_span!("open_sheet", sheet = task.position, bytes = entry.size()).entered();
-    stream_worksheet(entry, meter, &part.path, &part.name, job.budgets)
+    stream_worksheet(
+        entry,
+        meter,
+        &part.path,
+        &part.name,
+        job.budgets,
+        job.tuning,
+    )
 }
 
 #[cfg(test)]
@@ -228,7 +265,8 @@ mod tests {
 
     fn threaded() -> ReadPlan {
         ReadPlan {
-            sheet_threads: 3,
+            threads: 6,
+            tuning: Tuning::production(0),
             min_sheet_bytes: 0,
             cells: CellBudget::production(),
         }
@@ -338,6 +376,18 @@ mod tests {
     fn one_thread_per_core_but_the_one_left_to_the_interface() {
         assert!(ReadPlan::with_threads(0).is_serial());
         assert!(ReadPlan::with_threads(1).is_serial());
-        assert_eq!(ReadPlan::with_threads(7).sheet_threads, 7);
+        assert_eq!(ReadPlan::with_threads(7).threads, 7);
+    }
+
+    #[test]
+    fn sheet_threads_and_their_workers_never_pass_the_budget() {
+        for threads in 2..=64 {
+            for sheets in 1..=12 {
+                let layout = ReadPlan::with_threads(threads).layout(sheets).unwrap();
+                assert!(layout.sheet_threads >= 1 && layout.sheet_threads <= sheets);
+                assert!(layout.sheet_threads * (1 + layout.workers) <= threads);
+            }
+        }
+        assert_eq!(ReadPlan::with_threads(1).layout(3), None);
     }
 }

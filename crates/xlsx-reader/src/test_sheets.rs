@@ -128,7 +128,7 @@ fn run_cells(shape: &SheetShape, row: u32, spilled: bool, out: &mut String) {
         );
     }
     if shape.spills {
-        if (row + ARRAY_EVERY - 5) % ARRAY_EVERY == 0 {
+        if (row + ARRAY_EVERY - 5).is_multiple_of(ARRAY_EVERY) {
             let _ = write!(
                 out,
                 "<c r=\"BB{row}\" cm=\"1\"><f t=\"array\" ref=\"BB{row}:BB{}\">1+1</f><v>2</v></c>",

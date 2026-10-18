@@ -19,6 +19,7 @@ mod styles_part;
 #[cfg(test)]
 mod test_sheets;
 mod text;
+mod unit_pool;
 mod verify;
 
 use std::fs::File;
@@ -41,7 +42,7 @@ pub use verify::{PartDigest, Written, check_written, check_xml};
 use crate::formulas::Names;
 use crate::package::{read_package, stub_archive};
 use crate::parallel::{Job, Open, ReadPlan, SheetStreams, SheetTask};
-use crate::sheet_stream::{StreamedSheet, stream_config, stream_worksheet};
+use crate::sheet_stream::{StreamedSheet, Tuning, stream_config, stream_worksheet};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, read_part_if_checked};
 
 pub use stream::has_checked_element;
@@ -191,10 +192,10 @@ fn read_planned<R: Read + Seek>(
     }
     drop(declared_span);
     budgets.expect_sheet_bytes(declared);
-    let job = Job::new(open, &package.worksheets, &budgets, &tasks);
+    let job = Job::new(open, &package.worksheets, &budgets, &tasks, plan);
     let entries_span = tracing::info_span!("open_entries").entered();
     let sheets = std::thread::scope(|scope| {
-        let mut streams = SheetStreams::start(scope, &job, plan);
+        let mut streams = SheetStreams::start(scope, &job);
         let sheets = stream_entries(
             &mut archive,
             meter,
@@ -308,7 +309,7 @@ fn read_planned<R: Read + Seek>(
 }
 
 // Every archive entry in order: worksheets from their thread or streamed here, the other
-// parts read here and handed to `inspect`.
+// parts read here and handed to `inspect`. A sheet streamed here is small, so no workers.
 fn stream_entries<R: Read + Seek>(
     archive: &mut zip::ZipArchive<Counted<R>>,
     meter: &CompressedMeter,
@@ -338,7 +339,14 @@ fn stream_entries<R: Read + Seek>(
                     let _sheet_span =
                         tracing::info_span!("open_sheet", sheet = position, bytes = entry.size())
                             .entered();
-                    stream_worksheet(entry, meter, &entry_name, &sheet_name, budgets)?
+                    stream_worksheet(
+                        entry,
+                        meter,
+                        &entry_name,
+                        &sheet_name,
+                        budgets,
+                        Tuning::production(0),
+                    )?
                 }
             };
             // The rows were checked while streaming; the configuration carries the
