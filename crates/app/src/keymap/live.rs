@@ -60,11 +60,17 @@ fn rebuild(cx: &mut App, model: &Model, overrides: &Overrides) {
         .bindings()
         .filter(|binding| !owned.contains(binding.action().name()))
         .filter(|binding| !is_dialog_shield(binding))
+        .filter(|binding| !is_prompt_shield(binding))
         .cloned()
         .collect();
     let effective = model.effective(overrides);
     let shields = shield_close_dialog(&effective);
-    let ours = effective.into_iter().chain(shields).filter_map(load);
+    let prompt_shields = shield_open_prompt(&effective);
+    let ours = effective
+        .into_iter()
+        .chain(shields)
+        .chain(prompt_shields)
+        .filter_map(load);
     let rebuilt: Vec<KeyBinding> = others.into_iter().chain(ours).collect();
     cx.clear_key_bindings();
     cx.bind_keys(rebuilt);
@@ -98,6 +104,28 @@ fn shield_close_dialog(bindings: &[Binding]) -> Vec<Binding> {
             chord: binding.chord.clone(),
             action: Box::new(NoAction),
             context: Some("CloseDialog"),
+        })
+        .collect()
+}
+
+fn is_prompt_shield(binding: &KeyBinding) -> bool {
+    binding.action().as_any().is::<NoAction>()
+        && binding
+            .predicate()
+            .is_some_and(|predicate| mentions(&predicate, "PromptOpen"))
+}
+
+// A native question is open: nothing in the workspace may act until it is answered.
+fn shield_open_prompt(bindings: &[Binding]) -> Vec<Binding> {
+    let mut seen: HashSet<&Chord> = HashSet::new();
+    bindings
+        .iter()
+        .filter(|binding| matches!(binding.context, None | Some("Workspace")))
+        .filter(|binding| seen.insert(&binding.chord))
+        .map(|binding| Binding {
+            chord: binding.chord.clone(),
+            action: Box::new(NoAction),
+            context: Some("PromptOpen"),
         })
         .collect()
 }
