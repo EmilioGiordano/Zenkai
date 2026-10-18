@@ -3,12 +3,14 @@ pub enum PendingSave {
     #[default]
     None,
     Requested,
+    // A wait to run the saved-again request is already running; no second one may start.
+    Following,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JobEnd {
     Saved { edited_meanwhile: bool },
-    // Whatever its outcome, an autosave never wrote the file.
+    // An autosave writes only the recovery copy, so the file still needs the pressed Save.
     Autosaved,
     Failed,
 }
@@ -21,10 +23,15 @@ pub enum AfterJob {
 
 impl PendingSave {
     pub fn request(&mut self) {
-        *self = PendingSave::Requested;
+        if *self == PendingSave::None {
+            *self = PendingSave::Requested;
+        }
     }
 
     pub fn settle(&mut self, end: JobEnd) -> AfterJob {
+        if *self == PendingSave::Following {
+            return AfterJob::Nothing;
+        }
         let requested = std::mem::take(self) == PendingSave::Requested;
         match end {
             JobEnd::Saved {
@@ -37,6 +44,16 @@ impl PendingSave {
             }
             _ => AfterJob::Nothing,
         }
+    }
+
+    pub fn begin_follow_up(&mut self) -> bool {
+        let free = *self != PendingSave::Following;
+        *self = PendingSave::Following;
+        free
+    }
+
+    pub fn clear(&mut self) {
+        *self = PendingSave::None;
     }
 }
 
@@ -85,6 +102,18 @@ mod tests {
         assert_eq!(pending.settle(JobEnd::Failed), AfterJob::Nothing);
         assert_eq!(pending, PendingSave::None);
         assert_eq!(pending.settle(EDITED), AfterJob::Nothing);
+    }
+
+    #[test]
+    fn only_one_follow_up_wait_runs_at_a_time() {
+        let mut pending = PendingSave::None;
+        assert!(pending.begin_follow_up());
+        assert!(!pending.begin_follow_up());
+        pending.request();
+        assert_eq!(pending.settle(EDITED), AfterJob::Nothing);
+        assert_eq!(pending, PendingSave::Following);
+        pending.clear();
+        assert_eq!(pending, PendingSave::None);
     }
 
     #[test]

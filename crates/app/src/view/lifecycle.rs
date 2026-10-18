@@ -280,7 +280,7 @@ impl Workspace {
                 if !document.is_current(generation) {
                     return;
                 }
-                let follow_up = document.settle_save(JobEnd::Autosaved);
+                let follow_up = document.settle_save(generation, JobEnd::Autosaved);
                 match result {
                     Ok(SnapshotOutcome::Written { lacks }) => {
                         document.recovery_written(edits);
@@ -474,6 +474,7 @@ impl Workspace {
                 for ((id, generation), result) in generations.iter().zip(&results) {
                     if let Some(document) = this.documents.get_mut(*id) {
                         document.end_file_job(*generation);
+                        document.clear_pending_save();
                         if let Ok(lacks) = result {
                             document.mark_recovery_adopted();
                             document.recovery_lacks(lacks);

@@ -124,6 +124,7 @@ enum StructureEdit {
 }
 
 const SAVE_AGAIN_POLL: Duration = Duration::from_millis(50);
+const SAVE_AGAIN_LIMIT: Duration = Duration::from_secs(300);
 const MAX_AUTOSUM_SCAN: usize = 10_000;
 const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
@@ -1576,27 +1577,55 @@ impl Workspace {
         let Some(id) = self.documents.active_id() else {
             return;
         };
-        match self.documents.get_mut(id) {
-            Some(document) if document.file_job() != FileJob::Idle => document.request_save(),
-            _ => self.save_document(id, window, cx),
+        let Some(document) = self.documents.get_mut(id) else {
+            return;
+        };
+        if document.file_job() != FileJob::Idle {
+            document.request_save();
+        } else if document.has_pending() {
+            self.save_again(id, window, cx);
+        } else {
+            self.save_document(id, window, cx);
         }
     }
 
-    // After an edit batch or another file job the save cannot start yet; it waits for them.
+    // After an edit batch or another file job the save cannot start yet; it waits for them,
+    // and gives up after a while so a stuck job never leaves a wait running forever.
     fn save_again(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(document) = self.documents.get_mut(id) else {
+            return;
+        };
+        if !document.begin_follow_up() {
+            return;
+        }
         cx.spawn_in(window, async move |this, cx| {
+            let started = Instant::now();
             loop {
-                let ready = this.update_in(cx, |this, window, cx| {
-                    let Some(document) = this.documents.get(id) else {
-                        return true;
+                let waiting = this.update_in(cx, |this, window, cx| {
+                    let Some(document) = this.documents.get_mut(id) else {
+                        return false;
                     };
-                    if document.has_pending() || document.file_job() != FileJob::Idle {
+                    if this.lifecycle == Lifecycle::Closing {
+                        document.clear_pending_save();
                         return false;
                     }
+                    if document.has_pending() || document.file_job() != FileJob::Idle {
+                        if started.elapsed() < SAVE_AGAIN_LIMIT {
+                            return true;
+                        }
+                        let reason = match document.file_job() {
+                            FileJob::Idle => t!("notice.still_calculating"),
+                            FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
+                        };
+                        document.clear_pending_save();
+                        this.notify(Severity::Warning, reason, cx);
+                        return false;
+                    }
+                    document.clear_pending_save();
                     this.save_document(id, window, cx);
-                    true
+                    false
                 });
-                if ready.unwrap_or(true) {
+                if !waiting.unwrap_or(false) {
                     break;
                 }
                 cx.background_executor().timer(SAVE_AGAIN_POLL).await;
@@ -1926,7 +1955,7 @@ impl Workspace {
                         } else {
                             JobEnd::Failed
                         };
-                        follow_up = document.settle_save(end);
+                        follow_up = document.settle_save(generation, end);
                     }
                     current
                 });
