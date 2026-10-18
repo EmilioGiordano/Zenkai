@@ -153,17 +153,7 @@ pub(crate) fn part_unsupported(name: &str, part: &[u8]) -> Result<Vec<Unsupporte
         .filter(|(prefix, _)| name.starts_with(prefix))
         .map(|(_, kind)| kind)
         .collect();
-    let features = preflight::check_part(part)?;
-    for (present, kind) in [
-        (features.hyperlinks, Unsupported::Hyperlinks),
-        (features.data_validation, Unsupported::DataValidation),
-        (features.auto_filter, Unsupported::AutoFilter),
-        (features.protection, Unsupported::SheetProtection),
-    ] {
-        if present {
-            found.push(kind);
-        }
-    }
+    found.extend(preflight::check_part(part)?);
     Ok(found)
 }
 

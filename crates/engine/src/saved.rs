@@ -10,6 +10,7 @@ use crate::error::EngineError;
 use crate::fingerprint::{SheetPrint, book_print, sheet_print};
 use crate::held::Held;
 use crate::save::ModelData;
+use crate::sheet_elements::Relationships;
 use crate::sheet_settings::Carried;
 
 // A file is taken as unchanged on disk while its length and modification time are.
@@ -43,6 +44,36 @@ pub(crate) enum Metadata {
     Unknown,
 }
 
+// What the file still holds of a sheet's elements that only a save into that same file
+// writes back (`sheet_elements`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Remains {
+    // Everything the sheet was read with, and its relationships part.
+    All,
+    // Its elements, without the relationships part or anything pointing into it.
+    Unlinked,
+    // Nothing: a whole save wrote the sheet from the model alone.
+    Nothing,
+}
+
+impl Remains {
+    pub(crate) fn unlinked(self) -> Remains {
+        match self {
+            Remains::All | Remains::Unlinked => Remains::Unlinked,
+            Remains::Nothing => Remains::Nothing,
+        }
+    }
+
+    // What the file holds once the sheet is rewritten into it, keeping its relationships
+    // part or not.
+    pub(crate) fn rewritten(self, relationships: Relationships) -> Remains {
+        match relationships {
+            Relationships::Kept => self,
+            Relationships::Dropped => self.unlinked(),
+        }
+    }
+}
+
 // What a save knows about the file it writes before the rename gives it a stamp.
 #[derive(Clone, Debug)]
 pub(crate) struct Contents {
@@ -55,6 +86,8 @@ pub(crate) struct Contents {
     pub(crate) selected: usize,
     pub(crate) metadata: Metadata,
     pub(crate) held: Held,
+    // By position, as `worksheets`.
+    pub(crate) remains: Vec<Remains>,
     // The losses `Carried` counted when the file was written: it lacks those, and only
     // later ones are still in it.
     pub(crate) losses_through: u64,
@@ -163,6 +196,7 @@ pub(crate) fn opened(
             path: path.to_path_buf(),
             stamp,
             contents: Contents {
+                remains: vec![Remains::All; layout.worksheets.len()],
                 worksheets: layout.worksheets,
                 strings,
                 styles: layout.styles,

@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ReadError;
 use crate::limits::{self, CellBudget, MAX_ENTRY_BYTES, MAX_TOTAL_BYTES, Route, Usage};
+use crate::nesting::{NestingCheck, is_xml_part};
 
 pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
 
@@ -563,6 +564,7 @@ pub(crate) fn read_part<R: Read>(
         budgets.stream(entry, meter, part),
         part,
         WholeLimit::KeptWhole,
+        true,
     )
 }
 
@@ -575,13 +577,16 @@ enum WholeLimit {
     DomCharged,
 }
 
+// `nest_checked` is false for a part another pass over it has already counted.
 fn read_part_with<R: Read>(
     mut guard: Guard<'_, R>,
     part: &str,
     limit: WholeLimit,
+    nest_checked: bool,
 ) -> Result<Vec<u8>, ReadError> {
     let mut bytes = Vec::with_capacity(CHUNK_BYTES);
     let mut chunk = [0u8; CHUNK_BYTES];
+    let mut nesting = (nest_checked && is_xml_part(part)).then(|| NestingCheck::new(part));
     loop {
         match guard.read_chunk(&mut chunk)? {
             0 => {
@@ -593,6 +598,9 @@ fn read_part_with<R: Read>(
                 return Ok(bytes);
             }
             read => {
+                if let Some(nesting) = &mut nesting {
+                    nesting.push(&chunk[..read])?;
+                }
                 bytes.extend_from_slice(&chunk[..read]);
                 if let WholeLimit::KeptWhole = limit {
                     guard.whole_fits(bytes.len() as u64)?;
@@ -625,6 +633,7 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
         let mut guard = budgets.stream(entry, meter, &name);
         let mut filter = Prefilter::new();
         let mut counter = CellCounter::new();
+        let mut nesting = is_xml_part(&name).then(|| NestingCheck::new(&name));
         let mut chunk = [0u8; CHUNK_BYTES];
         let mut inflated = 0u64;
         loop {
@@ -634,6 +643,9 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
                     inflated += read as u64;
                     if !count_cells {
                         guard.whole_fits(inflated)?;
+                    }
+                    if let Some(nesting) = &mut nesting {
+                        nesting.push(&chunk[..read])?;
                     }
                     filter.push(&chunk[..read]);
                     if count_cells {
@@ -659,7 +671,12 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
     Ok((
         name.clone(),
-        read_part_with(budgets.stream_reread(entry, meter, &name), &name, limit)?,
+        read_part_with(
+            budgets.stream_reread(entry, meter, &name),
+            &name,
+            limit,
+            false,
+        )?,
         usage,
     ))
 }

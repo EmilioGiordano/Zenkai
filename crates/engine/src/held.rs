@@ -1,19 +1,37 @@
-// A patch save loses only what a rewritten worksheet owns: its own elements and what its
-// relationships point at. A full save loses everything here.
+// A patch save can lose only what a rewritten worksheet owns: its own elements and what
+// its relationships point at, when it is written without them. A full save loses
+// everything here.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use zenkai_xlsx_reader::{PackageLayout, SheetLink, SheetLinks};
 
+use crate::error::EngineError;
 use crate::file::Unsupported;
+use crate::save::rejected;
+use crate::sheet_elements::Relationships;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Held {
     // Found in parts other than worksheets. A patch save copies them whole, even those
     // only a rewritten sheet pointed at, so a later open still finds them there.
     book: BTreeSet<Unsupported>,
     // By position, as the file's worksheets.
-    sheets: Vec<BTreeSet<Unsupported>>,
+    sheets: Vec<Owned>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Owned {
+    // Found in the sheet's own part.
+    elements: BTreeSet<Unsupported>,
+    // Reached through its relationships part.
+    linked: BTreeSet<Unsupported>,
+}
+
+impl Owned {
+    fn all(&self) -> BTreeSet<Unsupported> {
+        self.elements.union(&self.linked).copied().collect()
+    }
 }
 
 fn kind_of(link: SheetLink) -> Unsupported {
@@ -52,15 +70,16 @@ impl Held {
             .worksheets
             .iter()
             .zip(&layout.sheet_links)
-            .map(|(part, links)| {
-                let part = part.to_ascii_lowercase();
-                let mut owned = by_part.get(&part).cloned().unwrap_or_default();
-                match links {
-                    SheetLinks::Known(links) => owned.extend(links.iter().map(|l| kind_of(*l))),
+            .map(|(part, links)| Owned {
+                elements: by_part
+                    .get(&part.to_ascii_lowercase())
+                    .cloned()
+                    .unwrap_or_default(),
+                linked: match links {
+                    SheetLinks::Known(links) => links.iter().map(|l| kind_of(*l)).collect(),
                     // Whatever the other parts hold may hang off this sheet.
-                    SheetLinks::Unknown => owned.extend(book.iter().copied()),
-                }
-                owned
+                    SheetLinks::Unknown => book.clone(),
+                },
             })
             .collect();
         Held { book, sheets }
@@ -69,36 +88,47 @@ impl Held {
     pub(crate) fn all(&self) -> BTreeSet<Unsupported> {
         self.sheets
             .iter()
-            .flatten()
-            .chain(&self.book)
-            .copied()
+            .flat_map(Owned::all)
+            .chain(self.book.iter().copied())
             .collect()
     }
 
-    pub(crate) fn owned_by(&self, rewritten: &[usize]) -> BTreeSet<Unsupported> {
-        rewritten
-            .iter()
-            .filter_map(|index| self.sheets.get(*index))
-            .flatten()
-            .copied()
-            .collect()
-    }
-
-    // What the file holds once a patch save rewrote these sheets.
-    pub(crate) fn without(&self, rewritten: &[usize]) -> Held {
-        let sheets = self
-            .sheets
-            .iter()
-            .enumerate()
-            .map(|(index, owned)| match rewritten.contains(&index) {
-                true => BTreeSet::new(),
-                false => owned.clone(),
-            })
-            .collect();
+    // A file a full save wrote holds nothing unsupported, in any of its `sheets`.
+    pub(crate) fn written_whole(sheets: usize) -> Held {
         Held {
-            book: self.book.clone(),
-            sheets,
+            book: BTreeSet::new(),
+            sheets: vec![Owned::default(); sheets],
         }
+    }
+
+    pub(crate) fn links_to(&self, index: usize, kind: Unsupported) -> bool {
+        self.sheets
+            .get(index)
+            .is_some_and(|owned| owned.linked.contains(&kind))
+    }
+
+    // Sheet `index` is rewritten with elements that hold `written`, keeping its
+    // relationships part or not. Returns what it held and no longer does.
+    pub(crate) fn rewrite(
+        &mut self,
+        index: usize,
+        written: BTreeSet<Unsupported>,
+        relationships: Relationships,
+    ) -> Result<BTreeSet<Unsupported>, EngineError> {
+        let owned = self
+            .sheets
+            .get_mut(index)
+            .ok_or_else(|| rejected("a rewritten sheet is not in the file it is written into"))?;
+        let after = Owned {
+            elements: written,
+            linked: match relationships {
+                Relationships::Kept => owned.linked.clone(),
+                Relationships::Dropped => BTreeSet::new(),
+            },
+        };
+        let lost = owned.all().difference(&after.all()).copied().collect();
+        *owned = after;
+        Ok(lost)
     }
 }
 
@@ -138,16 +168,40 @@ mod tests {
     }
 
     #[test]
-    fn a_sheet_owns_its_elements_and_what_its_links_point_at() {
+    fn a_rewritten_sheet_loses_only_what_it_is_written_without() {
         let pivot = SheetLinks::Known(set_of_links(&[SheetLink::PivotTable]));
         let none = SheetLinks::Known(BTreeSet::new());
-        let held = Held::of(&found(), &layout(vec![none, pivot]));
-        assert_eq!(held.owned_by(&[0]), set(&[Unsupported::AutoFilter]));
-        assert_eq!(held.owned_by(&[1]), set(&[Unsupported::PivotTables]));
-        let after = held.without(&[0, 1]);
-        assert!(after.owned_by(&[0, 1]).is_empty());
+        let mut held = Held::of(&found(), &layout(vec![none, pivot]));
+        assert!(held.links_to(1, Unsupported::PivotTables));
+        assert!(!held.links_to(0, Unsupported::PivotTables));
+        assert!(
+            held.rewrite(1, BTreeSet::new(), Relationships::Kept)
+                .unwrap()
+                .is_empty()
+        );
+        let filter = set(&[Unsupported::AutoFilter]);
+        assert!(
+            held.rewrite(0, filter, Relationships::Kept)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
-            after.all(),
+            held.rewrite(0, BTreeSet::new(), Relationships::Kept)
+                .unwrap(),
+            set(&[Unsupported::AutoFilter])
+        );
+        assert_eq!(
+            held.rewrite(1, BTreeSet::new(), Relationships::Dropped)
+                .unwrap(),
+            set(&[Unsupported::PivotTables])
+        );
+        assert!(
+            held.rewrite(2, BTreeSet::new(), Relationships::Kept)
+                .is_err()
+        );
+        assert!(!held.links_to(1, Unsupported::PivotTables));
+        assert_eq!(
+            held.all(),
             set(&[Unsupported::PivotTables, Unsupported::Macros])
         );
     }
@@ -158,21 +212,41 @@ mod tests {
             "XL/Worksheets/Sheet1.xml".to_string(),
             Unsupported::AutoFilter,
         )];
-        let held = Held::of(&found, &layout(vec![SheetLinks::Known(BTreeSet::new())]));
-        assert_eq!(held.owned_by(&[0]), set(&[Unsupported::AutoFilter]));
-        assert_eq!(held.without(&[0]).all(), BTreeSet::new());
+        let mut held = Held::of(&found, &layout(vec![SheetLinks::Known(BTreeSet::new())]));
+        assert_eq!(
+            held.rewrite(0, BTreeSet::new(), Relationships::Kept)
+                .unwrap(),
+            set(&[Unsupported::AutoFilter])
+        );
+        assert_eq!(held.all(), BTreeSet::new());
     }
 
     #[test]
     fn a_sheet_with_unknown_links_may_own_anything_outside_the_sheets() {
-        let held = Held::of(&found(), &layout(vec![SheetLinks::Unknown]));
+        let mut held = Held::of(&found(), &layout(vec![SheetLinks::Unknown]));
         assert_eq!(
-            held.owned_by(&[0]),
+            held.rewrite(0, BTreeSet::new(), Relationships::Dropped)
+                .unwrap(),
             set(&[
                 Unsupported::PivotTables,
                 Unsupported::Macros,
                 Unsupported::AutoFilter
             ])
+        );
+    }
+
+    #[test]
+    fn a_file_written_whole_loses_nothing_when_a_sheet_is_rewritten() {
+        let mut held = Held::written_whole(2);
+        assert!(
+            held.rewrite(1, BTreeSet::new(), Relationships::Dropped)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(held.all().is_empty());
+        assert!(
+            held.rewrite(2, BTreeSet::new(), Relationships::Dropped)
+                .is_err()
         );
     }
 

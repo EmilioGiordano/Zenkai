@@ -2,13 +2,17 @@
 // settings and outline, and never writes them. They are read from the original sheet
 // parts on open and written back by `save_sheet` on save. Every element is rebuilt
 // from validated values, never copied as text: the file is hostile input and IronCalc's
-// output declares only the main and relationship namespaces.
+// output declares only the main and relationship namespaces. The elements written back
+// only into the file they were read from are `sheet_elements`.
 
 use std::collections::{BTreeMap, HashMap};
+use std::io::{self, Write};
 
 use roxmltree::Node;
 
 use crate::file::Unsupported;
+use crate::saved::Remains;
+use crate::sheet_elements::{Axis, ElementBudget, Elements, Place};
 
 const MAX_ROW: u32 = 1_048_576;
 const MAX_COLUMN: u32 = 16_384;
@@ -221,6 +225,7 @@ pub struct SheetSettings {
     pub print: String,
     pub rows: Indexed,
     pub columns: Indexed,
+    pub elements: Elements,
 }
 
 impl SheetSettings {
@@ -246,14 +251,27 @@ impl SheetSettings {
         format!("<sheetFormatPr{attributes}/>")
     }
 
-    // Elements after the cell data, in the order CT_Worksheet requires.
-    pub fn trailing_elements(&self) -> String {
-        format!(
-            "{}{}{}",
-            self.print,
-            self.rows.breaks_element("rowBreaks"),
-            self.columns.breaks_element("colBreaks")
-        )
+    // Writes the elements after IronCalc's conditional formatting, in the order
+    // CT_Worksheet requires.
+    pub fn write_trailing_elements(&self, out: &mut impl Write) -> io::Result<()> {
+        self.elements.write_at(out, Place::BeforePrint)?;
+        out.write_all(self.print.as_bytes())?;
+        out.write_all(self.rows.breaks_element("rowBreaks").as_bytes())?;
+        out.write_all(self.columns.breaks_element("colBreaks").as_bytes())?;
+        self.elements.write_at(out, Place::AfterBreaks)
+    }
+
+    // What a save writes into a file that holds `remains` of the sheet.
+    pub(crate) fn left_in(&self, remains: Remains) -> SheetSettings {
+        SheetSettings {
+            properties: self.properties.clone(),
+            view: self.view.clone(),
+            format: self.format.clone(),
+            print: self.print.clone(),
+            rows: self.rows.clone(),
+            columns: self.columns.clone(),
+            elements: self.elements.left_in(remains),
+        }
     }
 }
 
@@ -291,17 +309,29 @@ impl Carried {
     }
 
     pub fn rows_moved(&mut self, sheet_id: u32, from: u32) {
-        if let Some(settings) = self.sheets.get_mut(&sheet_id) {
-            let lost = settings.rows.moved_from(from);
-            self.record(lost);
-        }
+        self.moved(sheet_id, Axis::Rows, from);
     }
 
     pub fn columns_moved(&mut self, sheet_id: u32, from: u32) {
-        if let Some(settings) = self.sheets.get_mut(&sheet_id) {
-            let lost = settings.columns.moved_from(from);
-            self.record(lost);
+        self.moved(sheet_id, Axis::Columns, from);
+    }
+
+    // The elements a move drops are reported by the save that writes the sheet without
+    // them, against what the file it copies from holds (`Held`).
+    fn moved(&mut self, sheet_id: u32, axis: Axis, from: u32) {
+        let mut lost = Vec::new();
+        for (id, settings) in &mut self.sheets {
+            if *id != sheet_id {
+                settings.elements.moved_elsewhere();
+                continue;
+            }
+            lost = match axis {
+                Axis::Rows => settings.rows.moved_from(from),
+                Axis::Columns => settings.columns.moved_from(from),
+            };
+            settings.elements.moved(axis, from);
         }
+        self.record(lost);
     }
 
     fn record(&mut self, lost: Vec<Unsupported>) {
@@ -396,7 +426,8 @@ fn escape_text(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-pub fn read(part: &str) -> SheetSettings {
+// `budget` is what the workbook has left for the elements `sheet_elements` keeps.
+pub fn read(part: &str, budget: &mut ElementBudget) -> SheetSettings {
     let part = part.strip_prefix('\u{feff}').unwrap_or(part);
     let (head, data, tail) = split_at_cell_data(part);
     let outside = format!("{head}{tail}");
@@ -419,6 +450,7 @@ pub fn read(part: &str) -> SheetSettings {
             .unwrap_or_default(),
         format: child(sheet, "sheetFormatPr").map(|format| attributes(format, SHEET_FORMAT)),
         print: print(sheet),
+        elements: Elements::read(sheet, budget),
         ..SheetSettings::default()
     };
     read_column_outline(sheet, &mut settings.columns);
@@ -691,7 +723,7 @@ mod tests {
         let part = sheet(
             r#"<sheetData/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape" scale="5000" r:id="rId1"/>"#,
         );
-        let settings = read(&part);
+        let settings = read(&part, &mut ElementBudget::workbook());
         assert_eq!(
             settings.print,
             r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9" orientation="landscape"/>"#
@@ -703,7 +735,7 @@ mod tests {
         let part = format!(
             r#"<x:worksheet xmlns:x="{MAIN}"><x:sheetPr><x:tabColor rgb="FFFF0000"/></x:sheetPr><x:sheetData><x:row r="2" outlineLevel="1"><x:c r="A2"/></x:row></x:sheetData><x:headerFooter><x:oddHeader>&amp;CA &lt; B</x:oddHeader></x:headerFooter></x:worksheet>"#
         );
-        let settings = read(&part);
+        let settings = read(&part, &mut ElementBudget::workbook());
         assert_eq!(
             settings.properties,
             r#"<sheetPr><tabColor rgb="FFFF0000"/></sheetPr>"#
