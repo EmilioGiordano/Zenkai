@@ -421,9 +421,11 @@ impl Carried {
     }
 
     // The model moved a move's history entry between its stacks and then failed to replay
-    // it; the entry moves the same way, with nothing exchanged.
+    // it. Every check of a row or column move runs before it changes anything, so the
+    // settings still match the model: the entry is replaced by an empty one on the other
+    // stack, so a later replay of it restores nothing the failed step never dropped.
     pub(crate) fn move_replay_failed(&mut self, step: HistoryStep) {
-        self.taken.requeue(step);
+        self.taken.forgo(step);
     }
 
     // The model's history has nothing to redo, so the moves kept for redoing are stale.

@@ -75,9 +75,9 @@ impl Moves {
         }
     }
 
-    pub(crate) fn requeue(&mut self, step: HistoryStep) {
-        if let Some(entry) = self.pop(step) {
-            self.push_inverse(step, entry);
+    pub(crate) fn forgo(&mut self, step: HistoryStep) {
+        if self.pop(step).is_some() {
+            self.push_inverse(step, MoveTaken::default());
         }
     }
 }
