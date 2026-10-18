@@ -9,7 +9,7 @@ use zenkai_agent::chat::thread::FileCard;
 use zenkai_agent::settings::PermissionMode;
 use zenkai_agent::tools::AgentAccess;
 use zenkai_i18n::t;
-use zenkai_types::{SheetId, SheetVisibility, WorkbookId};
+use zenkai_types::{Range, SheetId, SheetVisibility, WorkbookId};
 
 use super::{Severity, Workspace, sidebar};
 use crate::actions::*;
@@ -105,48 +105,8 @@ impl Workspace {
 
     // Sheet names and the selection only; used ranges are read off the UI thread afterwards.
     pub(crate) fn mention_catalog_for_chat(&self, cx: &App) -> Catalog {
-        let open_book = |document: &Document| OpenBook {
-            id: document.id,
-            name: document.name(),
-            sheets: document
-                .sheets
-                .iter()
-                .filter(|info| info.visibility == SheetVisibility::Visible)
-                .map(|info| info.name.clone())
-                .collect(),
-        };
-        let open = self.documents.iter().map(open_book).collect();
-        let active = self.documents.active().map(|document| {
-            let sheets = document
-                .sheets
-                .iter()
-                .filter(|info| info.visibility == SheetVisibility::Visible)
-                .map(|info| SheetEntry {
-                    id: info.id,
-                    name: info.name.clone(),
-                    used: Used::Unknown,
-                })
-                .collect();
-            let selection = document
-                .sheets
-                .iter()
-                .find(|info| info.id == document.sheet)
-                .map(|info| Reference {
-                    workbook: None,
-                    sheet: Some(info.name.clone()),
-                    range: self.selection(cx),
-                });
-            ActiveBook {
-                book: open_book(document),
-                sheets,
-                selection,
-            }
-        });
-        Catalog {
-            active,
-            open,
-            folder: Vec::new(),
-        }
+        let open: Vec<&Document> = self.documents.iter().collect();
+        catalog_of(&open, self.documents.active(), self.selection(cx))
     }
 
     pub(crate) fn shared_workbook_for_chat(&self, id: WorkbookId) -> Option<SharedWorkbook> {
@@ -439,5 +399,106 @@ impl Workspace {
     ) -> Option<std::sync::Arc<zenkai_agent::chat::process::ProcessTree>> {
         let panel = self.chat.panel.clone()?;
         panel.update(cx, |panel, _| panel.shutdown())
+    }
+}
+
+fn catalog_of(open: &[&Document], active: Option<&Document>, selection: Range) -> Catalog {
+    let open_book = |document: &Document| OpenBook {
+        id: document.id,
+        name: document.name(),
+        sheets: document
+            .sheets
+            .iter()
+            .filter(|info| info.visibility == SheetVisibility::Visible)
+            .map(|info| info.name.clone())
+            .collect(),
+    };
+    let active = active.map(|document| {
+        let sheets = document
+            .sheets
+            .iter()
+            .filter(|info| info.visibility == SheetVisibility::Visible)
+            .map(|info| SheetEntry {
+                id: info.id,
+                name: info.name.clone(),
+                used: Used::Unknown,
+            })
+            .collect();
+        let selection = document
+            .sheets
+            .iter()
+            .find(|info| info.id == document.sheet)
+            .map(|info| Reference {
+                workbook: None,
+                sheet: Some(info.name.clone()),
+                range: selection,
+            });
+        ActiveBook {
+            book: open_book(document),
+            sheets,
+            selection,
+        }
+    });
+    Catalog {
+        active,
+        open: open.iter().map(|document| open_book(document)).collect(),
+        folder: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use zenkai_engine::{Engine, Workbook};
+    use zenkai_types::{Range, SheetId, WorkbookId};
+
+    use super::catalog_of;
+    use crate::chat::mention_candidates::candidates;
+    use crate::document::Document;
+    use crate::spaces::SpaceId;
+
+    fn heavy_document() -> Document {
+        let mut workbook = Workbook::new_empty().unwrap();
+        workbook.rename_sheet(SheetId(0), "Base").unwrap();
+        for name in ["Dinámica", "Datos"] {
+            let sheet = workbook.add_sheet().unwrap();
+            workbook.rename_sheet(sheet, name).unwrap();
+        }
+        Document::new(
+            WorkbookId(1),
+            SpaceId(0),
+            1,
+            workbook,
+            Some(PathBuf::from(
+                "C:/work/Listas Accesorias DISTRIS - 2024.11.20.xlsx",
+            )),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn the_catalog_the_app_builds_offers_the_sheets_of_the_active_workbook() {
+        let document = heavy_document();
+        let catalog = catalog_of(
+            &[&document],
+            Some(&document),
+            Range::parse_a1("A1").unwrap(),
+        );
+        for query in ["Base", "dinámica"] {
+            let labels: Vec<String> = candidates(query, &catalog)
+                .into_iter()
+                .map(|candidate| candidate.label)
+                .collect();
+            for sheet in ["@Base", "@Dinámica", "@Datos"] {
+                let wanted =
+                    query == "Listas" || sheet.to_lowercase().contains(&query.to_lowercase());
+                assert_eq!(
+                    labels.contains(&sheet.to_string()),
+                    wanted,
+                    "{query} {sheet}"
+                );
+            }
+        }
     }
 }

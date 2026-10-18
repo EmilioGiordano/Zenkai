@@ -10,7 +10,7 @@ mod extras;
 mod files;
 mod header;
 mod launch;
-mod mention_candidates;
+pub(crate) mod mention_candidates;
 pub(crate) mod mention_catalog;
 mod mention_label;
 mod mention_parse;
