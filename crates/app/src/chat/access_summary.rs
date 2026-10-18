@@ -30,8 +30,7 @@ fn grant_label(grant: Grant) -> &'static str {
 
 fn read_only_note(access: AgentAccess) -> Option<&'static str> {
     match access {
-        AgentAccess::Editable => None,
-        AgentAccess::ReadOnly(ReadOnlyReason::Settings) => None,
+        AgentAccess::Editable | AgentAccess::ReadOnly(ReadOnlyReason::Settings) => None,
         AgentAccess::ReadOnly(ReadOnlyReason::ProtectedView) => {
             Some(t!("chat.access.note.protected_view"))
         }
@@ -71,7 +70,8 @@ impl ChatPanel {
         let summary = v_flex()
             .child(rule(cx))
             .child(heading(t!("chat.access.can_do"), cx))
-            .child(rows);
+            .child(rows)
+            .child(note(t!("chat.access.note.own_tools"), cx));
         Some(match read_only_note(file) {
             Some(text) => summary.child(note(text, cx)),
             None => summary,
