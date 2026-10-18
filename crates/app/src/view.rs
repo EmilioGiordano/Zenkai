@@ -43,6 +43,7 @@ use crate::actions::*;
 use crate::agent_settings::{self, AgentConfig, HeldDecision};
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
+use crate::chat_layout::{ChatLayout, ChatLayoutState};
 use crate::clipboard;
 use crate::close_prompt::Departure;
 use crate::csv_preview::{self, CsvPreview};
@@ -3262,9 +3263,9 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         interface_scale::apply(window, cx);
+        let root = Self::leave_full_window_for_sheet_commands(v_flex(), cx);
         let theme = cx.theme();
-        v_flex()
-            .relative()
+        root.relative()
             .key_context({
                 let mut context = KeyContext::default();
                 context.add("Workspace");
@@ -3636,6 +3637,21 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &ToggleAgentChat, window, cx| this.toggle_chat(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &CycleChatLayout, window, cx| {
+                this.change_chat_layout(ChatLayoutState::cycled, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleChatFullWindow, window, cx| {
+                this.change_chat_layout(ChatLayoutState::toggled_full_window, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DockChat, window, cx| {
+                this.change_chat_layout(|state| state.set(ChatLayout::Docked), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SplitChatBesideSheet, window, cx| {
+                this.change_chat_layout(|state| state.set(ChatLayout::SideBySide), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FillWindowWithChat, window, cx| {
+                this.change_chat_layout(|state| state.set(ChatLayout::FullWindow), window, cx)
+            }))
             .on_action(cx.listener(|this, _: &AddSelectionToChat, window, cx| {
                 this.add_selection_to_chat(window, cx)
             }))
@@ -3740,12 +3756,17 @@ impl Render for Workspace {
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .children(self.render_sidebar(window, cx))
-                    .child(if self.documents.active().is_some() {
-                        self.render_workbook(cx).into_any_element()
-                    } else {
-                        self.render_empty(cx).into_any_element()
-                    })
+                    .children(
+                        self.render_sidebar(window, cx)
+                            .filter(|_| !self.chat_fills_window()),
+                    )
+                    .children((!self.chat_fills_window()).then(|| {
+                        if self.documents.active().is_some() {
+                            self.render_workbook(cx).into_any_element()
+                        } else {
+                            self.render_empty(cx).into_any_element()
+                        }
+                    }))
                     .children(self.render_chat(window, cx)),
             )
             .children(self.render_palette())

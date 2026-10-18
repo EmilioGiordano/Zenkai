@@ -38,6 +38,7 @@ use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
 
 use crate::agent_settings::AgentConfig;
+use crate::chat_layout::ChatLayout;
 use crate::view::Workspace;
 use access::Access;
 use launch::{Live, Prepared};
@@ -158,6 +159,8 @@ pub struct ChatPanel {
     slash_dismissed: Option<String>,
     // Bumped when a conversation ends, so a late answer from an older session is dropped.
     epoch: u64,
+    layout: ChatLayout,
+    selected_range: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -313,6 +316,8 @@ impl ChatPanel {
             slash_index: 0,
             slash_dismissed: None,
             epoch: 0,
+            layout: ChatLayout::default(),
+            selected_range: None,
             _subscriptions: vec![sending, settings, searching, filtering],
         };
         panel.load_history(history_queue, cx);

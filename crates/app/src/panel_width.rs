@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-const GRID_MINIMUM: f32 = 480.0;
+pub const GRID_MINIMUM: f32 = 480.0;
 pub const KEY_STEP: f32 = 16.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
