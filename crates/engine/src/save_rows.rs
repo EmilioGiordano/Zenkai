@@ -15,11 +15,11 @@ use ironcalc::base::expressions::types::CellReferenceRC;
 use ironcalc::base::types::{Cell, Row, Worksheet};
 use ironcalc::export::{SharedFormula, row_styles, write_rows_xml};
 use zenkai_xlsx_reader::{AnchorKind, BasePackage, ReachingAnchor, RowSpan, cannot_splice};
-use zip::ZipWriter;
 
 use crate::error::EngineError;
 use crate::fingerprint::{MAX_ROW, ROWS_PER_BLOCK, SheetPrint, UsedBounds};
 use crate::save::{ModelData, SHEET_BUFFER_BYTES, rejected};
+use crate::save_parts::PartWriter;
 use crate::save_sheet::{bounds_reference, with_row_outline, written_height};
 use crate::sheet_settings::{Carried, Outline};
 
@@ -324,11 +324,11 @@ impl RowJob {
 // The caller started the zip entry. An error means the part could not be spliced.
 pub(crate) fn write_rows<W: Write + Seek>(
     base: &mut BasePackage,
-    zip: &mut ZipWriter<W>,
+    parts: &mut PartWriter<W>,
     job: &RowJob,
 ) -> io::Result<()> {
     let styles = row_styles(&job.sheet);
-    let mut buffered = BufWriter::with_capacity(SHEET_BUFFER_BYTES, zip);
+    let mut buffered = BufWriter::with_capacity(SHEET_BUFFER_BYTES, parts);
     base.splice_rows(
         &job.part,
         &job.dimension,

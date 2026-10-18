@@ -11,13 +11,13 @@ use zenkai_xlsx_reader::{
     BasePackage, SHARED_STRINGS_PART, STYLES_PART, StyleAppendix, Written, is_cannot_splice,
     relationships_part,
 };
-use zip::ZipWriter;
 
 use crate::error::EngineError;
 use crate::file::Unsupported;
 use crate::fingerprint::{DynamicArrays, SheetPrint};
 use crate::held::Held;
-use crate::save::{ModelData, SheetJob, deflated, rejected, sheet_job, write_sheet};
+use crate::save::{ModelData, SheetJob, rejected, sheet_job, write_sheet};
+use crate::save_parts::PartWriter;
 use crate::save_rows::{RowJob, dirty_blocks, row_job, write_rows};
 use crate::saved::{Contents, Metadata, SavedFile, Strings};
 use crate::sheet_elements::Relationships;
@@ -286,16 +286,14 @@ pub(crate) fn write_patch<W: Write + Seek>(
         .collect();
     let mut strings_left = plan.strings;
     let mut styles_left = plan.styles;
-    let mut zip = ZipWriter::new(writer);
-    let mut written = Vec::with_capacity(names.len());
+    let mut parts = PartWriter::new(writer);
     for (index, name) in names.into_iter().enumerate() {
         if let Some(job) = sheets.remove(&name) {
             match job {
-                SheetPatch::Whole(job) => write_sheet(&mut zip, job)?,
+                SheetPatch::Whole(job) => write_sheet(&mut parts, job)?,
                 SheetPatch::Rows(job) => {
-                    zip.start_file(name.as_str(), deflated())
-                        .map_err(rejected)?;
-                    if let Err(error) = write_rows(&mut base, &mut zip, &job) {
+                    parts.start_generated(&name)?;
+                    if let Err(error) = write_rows(&mut base, &mut parts, &job) {
                         if is_cannot_splice(&error) {
                             *refused = Some(name);
                         }
@@ -306,20 +304,17 @@ pub(crate) fn write_patch<W: Write + Seek>(
         } else if rels.contains(&name) || dropped.iter().any(|d| d.eq_ignore_ascii_case(&name)) {
             continue;
         } else if let Some(bytes) = rewritten.remove(&name) {
-            zip.start_file(name.as_str(), deflated())
-                .map_err(rejected)?;
-            zip.write_all(&bytes).map_err(rejected)?;
+            parts.start_generated(&name)?;
+            parts.write_all(&bytes).map_err(rejected)?;
         } else if let Some(appendix) = styles_left.take_if(|_| name == STYLES_PART) {
-            zip.start_file(name.as_str(), deflated())
-                .map_err(rejected)?;
-            let mut buffered = BufWriter::new(&mut zip);
+            parts.start_generated(&name)?;
+            let mut buffered = BufWriter::new(&mut parts);
             base.copy_styles(saved.contents.styles.counts, &appendix, &mut buffered)
                 .map_err(copy_failed)?;
             buffered.flush().map_err(rejected)?;
         } else if name == SHARED_STRINGS_PART && !strings_left.is_empty() {
-            zip.start_file(name.as_str(), deflated())
-                .map_err(rejected)?;
-            let mut buffered = BufWriter::new(&mut zip);
+            parts.start_generated(&name)?;
+            let mut buffered = BufWriter::new(&mut parts);
             base.copy_shared_strings(
                 strings_in_file,
                 &std::mem::take(&mut strings_left),
@@ -328,16 +323,13 @@ pub(crate) fn write_patch<W: Write + Seek>(
             .map_err(copy_failed)?;
             buffered.flush().map_err(rejected)?;
         } else {
-            base.copy_raw(index, &mut zip).map_err(copy_failed)?;
-            written.push((name, Written::Copied));
-            continue;
+            parts.copy(name, |zip| base.copy_raw(index, zip).map_err(copy_failed))?;
         }
-        written.push((name, Written::Generated));
     }
     if !sheets.is_empty() || !strings_left.is_empty() || styles_left.is_some() {
         return Err(base_unusable(saved)(&"a part is missing from it"));
     }
-    Ok((zip.finish().map_err(rejected)?, written))
+    parts.finish()
 }
 
 #[cfg(test)]
