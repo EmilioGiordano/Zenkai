@@ -544,11 +544,14 @@ impl Workbook {
         file: Option<FileOnDisk<'_>>,
         opened: &[Unsupported],
     ) -> Result<Workbook, EngineError> {
-        let model = engine_model(book)?;
+        let model = tracing::info_span!("open_engine_model").in_scope(|| engine_model(book))?;
         let carried = carried_by_position(&model, settings);
         let saved = SavedSlot::default();
         if let Some(file) = file {
-            saved.set(crate::saved::opened(file, ModelData::of(&model), &carried));
+            saved.set(
+                tracing::info_span!("open_saved_parts")
+                    .in_scope(|| crate::saved::opened(file, ModelData::of(&model), &carried)),
+            );
         }
         Ok(evaluated(model, carried, saved, opened.to_vec()))
     }
@@ -1799,14 +1802,14 @@ fn evaluated(
     opened: Vec<Unsupported>,
 ) -> Workbook {
     let mut model = UserModel::from_model(model);
-    model.evaluate();
+    tracing::info_span!("open_evaluate").in_scope(|| model.evaluate());
     let workbook = Workbook {
         model: CachedModel::new(model),
         carried,
         saved,
         opened,
     };
-    workbook.warm_used_areas();
+    tracing::info_span!("open_warm_used_areas").in_scope(|| workbook.warm_used_areas());
     workbook
 }
 

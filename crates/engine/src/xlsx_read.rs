@@ -113,23 +113,25 @@ pub(crate) fn read_xlsx_file(
             let settings = read_settings(&bytes)?;
             Ok(finish(read, settings))
         }
-        XlsxReader::Fast => match read_streaming(path, name) {
-            Ok(read) => Ok(read),
-            Err(ReadError::Unsafe(reason)) => Err(EngineError::refused(reason)),
-            Err(error) => {
-                let bytes = std::fs::read(path).map_err(read_error)?;
-                let (book, unsupported) = fallback_to_ironcalc(&bytes, name, &error)?;
-                let settings = read_settings(&bytes)?;
-                Ok(finish(
-                    ReadBook {
-                        book,
-                        unsupported,
-                        fallback: Some(error.to_string()),
-                    },
-                    settings,
-                ))
+        XlsxReader::Fast => {
+            match tracing::info_span!("open_read_file").in_scope(|| read_streaming(path, name)) {
+                Ok(read) => Ok(read),
+                Err(ReadError::Unsafe(reason)) => Err(EngineError::refused(reason)),
+                Err(error) => {
+                    let bytes = std::fs::read(path).map_err(read_error)?;
+                    let (book, unsupported) = fallback_to_ironcalc(&bytes, name, &error)?;
+                    let settings = read_settings(&bytes)?;
+                    Ok(finish(
+                        ReadBook {
+                            book,
+                            unsupported,
+                            fallback: Some(error.to_string()),
+                        },
+                        settings,
+                    ))
+                }
             }
-        },
+        }
         XlsxReader::Shadow => {
             let bytes = std::fs::read(path).map_err(read_error)?;
             let read = read_xlsx_bytes(&bytes, name, XlsxReader::Shadow)?;
@@ -204,7 +206,8 @@ fn take_unsupported(found: Found) -> Result<Vec<Unsupported>, EngineError> {
 fn read_streaming(path: &Path, name: &str) -> Result<FileRead, ReadError> {
     let found: Found = Mutex::new(Vec::new());
     let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
-    let opened = run_with_engine_stack(|| Ok(read_book_streaming(path, name, &inspect)))
+    let opened = tracing::info_span!("open_read_streaming")
+        .in_scope(|| run_with_engine_stack(|| Ok(read_book_streaming(path, name, &inspect))))
         .map_err(|error| ReadError::Unsupported(error.to_string()))??;
     let found = found
         .into_inner()
