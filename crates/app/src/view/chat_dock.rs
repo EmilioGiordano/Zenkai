@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::Selectable;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_agent::chat::thread::FileCard;
 use zenkai_agent::settings::PermissionMode;
@@ -11,12 +12,13 @@ use zenkai_i18n::t;
 use zenkai_types::{SheetId, SheetVisibility, WorkbookId};
 
 use super::{Severity, Workspace, sidebar};
-use crate::actions::ToggleAgentChat;
+use crate::actions::*;
 use crate::agent_folder::FolderHint;
 use crate::agent_routing;
 use crate::chat::mention_catalog::{ActiveBook, Catalog, OpenBook, SheetEntry, Used};
 use crate::chat::reference::Reference;
 use crate::chat::{ChatEvent, ChatPanel, reference};
+use crate::chat_layout::{ChatLayout, ChatLayoutState};
 use crate::document::{Document, SharedWorkbook};
 use crate::keymap;
 use crate::panel_width::Panel;
@@ -25,11 +27,45 @@ use crate::panel_width::Panel;
 pub(super) struct ChatDock {
     pub(super) panel: Option<Entity<ChatPanel>>,
     pub(super) open: bool,
+    layout: ChatLayoutState,
     pub(super) synced_change: Option<(u64, bool)>,
     events: Option<Subscription>,
 }
 
+macro_rules! leave_full_window_before {
+    ($root:expr, $cx:expr; $($action:ty),+ $(,)?) => {{
+        let mut root = $root;
+        $(
+            root = root.capture_action($cx.listener(|this, _: &$action, _, cx| {
+                this.show_sheet_beside_chat(cx)
+            }));
+        )+
+        root
+    }};
+}
+
 impl Workspace {
+    // Commands the composer does not swallow and that act on the sheet or the open workbooks.
+    pub(super) fn leave_full_window_for_sheet_commands<E: InteractiveElement>(
+        root: E,
+        cx: &mut Context<Self>,
+    ) -> E {
+        leave_full_window_before!(
+            root, cx;
+            Open, NewWorkbook, NextDocument, PreviousDocument, ReopenClosedDocument,
+            NextSheet, PreviousSheet, NewSheet, DuplicateSheet, DeleteSheet, RenameSheet,
+            MoveSheetLeft, MoveSheetRight, Find, Replace, GoTo, GenerateData, InsertChart,
+            ToggleFormulas, ZoomIn, ZoomOut, ZoomReset, Undo, Redo, PasteValues,
+            SortAscending, SortDescending, FreezeTopRow, FreezeFirstColumn, FreezePanes,
+            InsertRows, DeleteRows, InsertColumns, DeleteColumns, HideRows, UnhideRows,
+            HideColumns, UnhideColumns, AlignLeft, AlignCenter, AlignRight, BordersAll,
+            BordersOutside, BorderBottom, BordersNone, ToggleWrapText, IncreaseDecimal,
+            DecreaseDecimal, FormatNumber, FormatCurrency, FormatPercent, FormatDate,
+            FormatGeneral, ClearFormats, ClearAll, NoFill, AutomaticFontColor, GrowFont,
+            ShrinkFont,
+        )
+    }
+
     pub(crate) fn active_workbook_for_chat(&self) -> Option<(WorkbookId, String)> {
         let document = self.documents.active()?;
         Some((document.id, document.name()))
@@ -145,6 +181,7 @@ impl Workspace {
             &panel,
             window,
             |this, _, event: &ChatEvent, window, cx| match event {
+                ChatEvent::Leave if this.chat_fills_window() => {}
                 ChatEvent::Leave => {
                     let focus = this.grid.focus_handle(cx);
                     window.focus(&focus, cx);
@@ -255,6 +292,7 @@ impl Workspace {
             );
             return;
         };
+        self.show_sheet_beside_chat(cx);
         self.switch_to(id, window, cx);
         if self.documents.active_id() != Some(id) {
             return;
@@ -317,21 +355,65 @@ impl Workspace {
         self.chat.open
     }
 
+    pub(crate) fn chat_layout(&self) -> ChatLayout {
+        self.chat.layout.current()
+    }
+
+    pub(super) fn chat_fills_window(&self) -> bool {
+        self.chat.open && self.chat_layout() == ChatLayout::FullWindow
+    }
+
+    pub(super) fn show_sheet_beside_chat(&mut self, cx: &mut Context<Self>) {
+        if self.chat_fills_window() {
+            self.chat.layout = self.chat.layout.without_full_window();
+            cx.notify();
+        }
+    }
+
+    pub(super) fn change_chat_layout(
+        &mut self,
+        change: impl FnOnce(ChatLayoutState) -> ChatLayoutState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_open = self.chat.open;
+        self.chat.layout = change(self.chat.layout);
+        if !was_open {
+            self.open_chat(window, cx);
+            return;
+        }
+        // The sheet is not drawn in full window, so the focus cannot stay on it.
+        if self.chat_fills_window()
+            && let Some(panel) = self.chat.panel.clone()
+        {
+            panel.update(cx, |panel, cx| panel.focus_composer(window, cx));
+        }
+        cx.notify();
+    }
+
     pub(super) fn render_chat(
         &self,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
         let panel = self.chat.panel.clone().filter(|_| self.chat.open)?;
+        let fills_window = self.chat_fills_window();
+        let layout = self.chat_layout();
+        let range = self
+            .selection_for_chat(cx)
+            .filter(|_| layout == ChatLayout::FullWindow);
+        panel.update(cx, |panel, cx| panel.show_workspace_view(layout, range, cx));
         let width = self.panel_width(Panel::Chat, window);
         Some(
             div()
                 .relative()
-                .flex_shrink_0()
                 .h_full()
-                .w(px(width))
+                .when(fills_window, |dock| dock.flex_1().min_w_0())
+                .when(!fills_window, |dock| dock.flex_shrink_0().w(px(width)))
                 .child(panel)
-                .child(self.panel_edge(Panel::Chat, window, cx)),
+                .when(!fills_window, |dock| {
+                    dock.child(self.panel_edge(Panel::Chat, window, cx))
+                }),
         )
     }
 

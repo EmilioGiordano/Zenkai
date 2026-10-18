@@ -279,6 +279,7 @@ impl Workspace {
     }
 
     pub(super) fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_sheet_beside_chat(cx);
         if files::is_delimited_text(&path) {
             self.import_csv(path, window, cx);
             return;

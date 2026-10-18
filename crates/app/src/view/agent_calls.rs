@@ -663,6 +663,7 @@ impl Workspace {
         else {
             return;
         };
+        self.show_sheet_beside_chat(cx);
         self.switch_to(id, window, cx);
         if self.documents.active_id() != Some(id) {
             return;

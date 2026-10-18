@@ -5,7 +5,8 @@ use zenkai_i18n::t;
 
 use super::Workspace;
 use crate::actions::*;
-use crate::panel_width::{Direction, Panel, PanelWidths, Resize, Shown};
+use crate::chat_layout::{ChatLayout, SideSplit};
+use crate::panel_width::{Direction, KEY_STEP, Panel, PanelWidths, Resize, Shown};
 
 const EDGE_HIT_AREA: f32 = 6.0;
 
@@ -17,6 +18,7 @@ struct Drag {
 
 pub(super) struct PanelsState {
     pub widths: PanelWidths,
+    side_split: SideSplit,
     dragging: Option<Drag>,
     sidebar_edge: FocusHandle,
     chat_edge: FocusHandle,
@@ -26,6 +28,7 @@ impl PanelsState {
     pub fn new(cx: &mut App) -> PanelsState {
         PanelsState {
             widths: PanelWidths::default(),
+            side_split: SideSplit::default(),
             dragging: None,
             sidebar_edge: cx.focus_handle(),
             chat_edge: cx.focus_handle(),
@@ -44,16 +47,48 @@ impl Workspace {
     fn shown_panels(&self) -> Shown {
         Shown {
             sidebar: self.sidebar.visible,
-            chat: self.chat_open(),
+            chat: self.chat_open() && self.chat_layout() == ChatLayout::Docked,
         }
     }
 
     pub(super) fn panel_width(&self, panel: Panel, window: &Window) -> f32 {
         let window_width = f32::from(window.viewport_size().width);
-        self.panels
-            .widths
-            .fitted(window_width, self.shown_panels())
-            .width_of(panel)
+        match (panel, self.chat_layout()) {
+            (Panel::Chat, ChatLayout::SideBySide) => self
+                .panels
+                .side_split
+                .chat_width(self.side_by_side_room(window)),
+            (Panel::Chat, ChatLayout::FullWindow) => window_width,
+            _ => self
+                .panels
+                .widths
+                .fitted(window_width, self.shown_panels())
+                .width_of(panel),
+        }
+    }
+
+    fn side_by_side_room(&self, window: &Window) -> f32 {
+        let sidebar = if self.sidebar.visible {
+            self.panel_width(Panel::Sidebar, window)
+        } else {
+            0.0
+        };
+        f32::from(window.viewport_size().width) - sidebar
+    }
+
+    fn splits_beside_sheet(&self, panel: Panel) -> bool {
+        panel == Panel::Chat && self.chat_layout() == ChatLayout::SideBySide
+    }
+
+    fn resize_side_split(&mut self, requested: f32, window: &Window, cx: &mut Context<Self>) {
+        let split = self
+            .panels
+            .side_split
+            .with_chat_width(requested, self.side_by_side_room(window));
+        if split != self.panels.side_split {
+            self.panels.side_split = split;
+            cx.notify();
+        }
     }
 
     fn change_panel_widths(
@@ -77,6 +112,15 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
+        if self.splits_beside_sheet(panel) {
+            let current = self.panel_width(panel, window);
+            let requested = match resize {
+                Resize::Wider => current + KEY_STEP,
+                Resize::Narrower => current - KEY_STEP,
+            };
+            self.resize_side_split(requested, window, cx);
+            return;
+        }
         self.change_panel_widths(
             |widths, window_width, shown| widths.stepped(panel, resize, window_width, shown),
             window,
@@ -86,6 +130,11 @@ impl Workspace {
     }
 
     fn restore_panel_width(&mut self, panel: Panel, window: &Window, cx: &mut Context<Self>) {
+        if self.splits_beside_sheet(panel) {
+            self.panels.side_split = SideSplit::default();
+            cx.notify();
+            return;
+        }
         self.change_panel_widths(
             |widths, window_width, shown| widths.restored(panel, window_width, shown),
             window,
@@ -120,6 +169,10 @@ impl Workspace {
             Panel::Sidebar => (Panel::Sidebar, drag.start_width + moved),
             Panel::Chat => (Panel::Chat, drag.start_width - moved),
         };
+        if self.splits_beside_sheet(panel) {
+            self.resize_side_split(requested, window, cx);
+            return;
+        }
         self.change_panel_widths(
             |widths, window_width, shown| widths.resized(panel, requested, window_width, shown),
             window,
@@ -156,7 +209,11 @@ impl Workspace {
             .dragging
             .as_ref()
             .is_some_and(|drag| drag.panel == panel);
-        let (min, max) = panel.limits();
+        let (min, max) = if self.splits_beside_sheet(panel) {
+            SideSplit::limits(self.side_by_side_room(window))
+        } else {
+            panel.limits()
+        };
         let (id, label) = match panel {
             Panel::Sidebar => ("sidebar-edge", t!("panel.edge.sidebar")),
             Panel::Chat => ("chat-edge", t!("panel.edge.chat")),
