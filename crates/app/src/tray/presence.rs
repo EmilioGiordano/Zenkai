@@ -15,6 +15,10 @@ impl Presence {
         }
     }
 
+    pub fn can_close_window(self) -> bool {
+        self == Presence::Shown
+    }
+
     pub fn dot_rgb(self) -> [u8; 3] {
         match self {
             Presence::Shown => [0x3f, 0xb9, 0x50],
@@ -53,6 +57,12 @@ mod tests {
             Presence::HiddenToTray.after_visibility(false, false),
             Presence::HiddenToTray
         );
+    }
+
+    #[test]
+    fn the_window_can_be_closed_only_while_shown() {
+        assert!(Presence::Shown.can_close_window());
+        assert!(!Presence::HiddenToTray.can_close_window());
     }
 
     #[test]
