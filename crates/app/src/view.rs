@@ -77,6 +77,7 @@ use crate::toolbar;
 mod budget;
 mod generate;
 mod lifecycle;
+mod main_window;
 mod panels;
 mod prompt;
 mod search;
@@ -366,11 +367,16 @@ impl Workspace {
         workspace.reset_grid(window, cx);
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
-            let asked = this.update(cx, |this, cx| {
-                this.request_close(CloseGoal::Quit, window, cx)
-            });
+            let goal = main_window::close_goal(cx);
+            let asked = this.update(cx, |this, cx| this.request_close(goal, window, cx));
             asked.is_err()
         });
+        #[cfg(windows)]
+        workspace._subscriptions.push(
+            cx.observe_window_visibility(window, |_, visibility, _, cx| {
+                crate::tray::note_visibility(visibility, cx)
+            }),
+        );
         workspace.start_memory_sampler(cx);
         workspace.start_session(initial, window, cx);
         workspace.load_recent(cx);

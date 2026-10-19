@@ -8,6 +8,8 @@ actions!(
         Save,
         SaveAs,
         Quit,
+        #[cfg(windows)]
+        OpenZenkai,
         Undo,
         Redo,
         Copy,

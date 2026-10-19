@@ -57,6 +57,16 @@ pub fn groups(recent: &[std::path::PathBuf]) -> Vec<CommandGroup> {
     .collect()
 }
 
+#[cfg(windows)]
+fn tray_entries() -> Vec<Entry> {
+    vec![item(t!("palette.open_zenkai"), OpenZenkai)]
+}
+
+#[cfg(not(windows))]
+fn tray_entries() -> Vec<Entry> {
+    Vec::new()
+}
+
 pub fn table() -> Vec<Group> {
     vec![
         group(
@@ -76,7 +86,10 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.previous_workbook"), PreviousDocument),
                 item(t!("palette.save"), Save),
                 item(t!("palette.save_as"), SaveAs),
-            ],
+                item(t!("palette.quit"), Quit),
+            ]
+            .into_iter()
+            .chain(tray_entries()),
         ),
         group(
             t!("palette.group.edit"),

@@ -419,6 +419,12 @@ impl Workspace {
         self.run_close(plan, window, cx);
     }
 
+    // Quitting with unsaved work can raise a prompt even when the setting does not ask first
+    // (a busy workbook, autosave off), so the window must be visible whenever there is any.
+    #[cfg(windows)]
+    pub(crate) fn close_may_prompt(&self) -> bool {
+        !self.documents.unsaved().is_empty()
+    }
 
     // Closing keeps unsaved work: every workbook holding some, except the ones the plan
     // discards, is written to its recovery copy, and the session lists them so the next start
@@ -430,6 +436,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if self.lifecycle == Lifecycle::Closing {
+            return;
+        }
+        #[cfg(windows)]
+        if plan.goal == CloseGoal::Hide {
+            self.hide_to_tray(cx);
             return;
         }
         self.lifecycle = Lifecycle::Closing;
