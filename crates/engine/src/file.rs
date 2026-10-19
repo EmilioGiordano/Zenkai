@@ -88,8 +88,9 @@ pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineE
         _ => None,
     };
     let held = &read.unsupported;
-    let workbook =
-        preflight::run_with_engine_stack(|| Workbook::from_file(read.book, settings, file, held))?;
+    let workbook = tracing::info_span!("open_workbook_build").in_scope(|| {
+        preflight::run_with_engine_stack(|| Workbook::from_file(read.book, settings, file, held))
+    })?;
     Ok(Opened {
         workbook,
         unsupported: read.unsupported,
