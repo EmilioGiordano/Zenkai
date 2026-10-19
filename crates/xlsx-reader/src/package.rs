@@ -86,7 +86,10 @@ pub(crate) fn read_package<R: Read + Seek>(
                 .to_string(),
         });
     }
-    let sheet_ids: Vec<u32> = sheets.iter().map(|s| s.sheet_id).collect();
+    let mut first_position: HashMap<u32, usize> = HashMap::new();
+    for (position, sheet) in sheets.iter().enumerate() {
+        first_position.entry(sheet.sheet_id).or_insert(position);
+    }
     let mut defined_names = Vec::new();
     for node in workbook
         .descendants()
@@ -102,10 +105,9 @@ pub(crate) fn read_package<R: Read + Seek>(
                     .get(index)
                     .ok_or_else(|| unreadable("a defined name points past the last sheet"))?
                     .sheet_id;
-                sheet_ids
-                    .iter()
-                    .position(|id| *id == sheet_id)
-                    .and_then(|position| u32::try_from(position).ok())
+                first_position
+                    .get(&sheet_id)
+                    .and_then(|position| u32::try_from(*position).ok())
             }
             None => None,
         };
@@ -130,6 +132,7 @@ pub(crate) fn read_package<R: Read + Seek>(
         targets.insert(attribute("Id")?, (attribute("Type")?, attribute("Target")?));
     }
     let mut worksheets: Vec<WorksheetPart> = Vec::new();
+    let mut seen_paths = std::collections::HashSet::new();
     for sheet in &sheets {
         let (kind, target) = targets
             .get(sheet.rel_id.as_str())
@@ -138,7 +141,7 @@ pub(crate) fn read_package<R: Read + Seek>(
             continue;
         }
         let path = part_path(target);
-        if worksheets.iter().any(|w| w.path == path) {
+        if !seen_paths.insert(path.clone()) {
             return Err(ReadError::Unsupported("two sheets share one part".into()));
         }
         worksheets.push(WorksheetPart {
@@ -214,6 +217,65 @@ mod tests {
         (0..archive.len())
             .map(|index| archive.by_index(index).unwrap().name().to_string())
             .collect()
+    }
+
+    fn package_archive(sheets: usize, shared_part: bool) -> Vec<u8> {
+        let mut workbook = String::from(
+            "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>",
+        );
+        let mut rels = String::from(
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+        );
+        for id in 1..=sheets {
+            workbook.push_str(&format!(
+                "<sheet name=\"S{id}\" sheetId=\"{id}\" r:id=\"rId{id}\"/>"
+            ));
+            let target = if shared_part { 1 } else { id };
+            rels.push_str(&format!(
+                "<Relationship Id=\"rId{id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{target}.xml\"/>"
+            ));
+        }
+        workbook.push_str("</sheets><definedNames>");
+        for id in 0..sheets {
+            workbook.push_str(&format!(
+                "<definedName name=\"N{id}\" localSheetId=\"{id}\">S1!$A$1</definedName>"
+            ));
+        }
+        workbook.push_str("</definedNames></workbook>");
+        rels.push_str("</Relationships>");
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::FileOptions::default();
+        for (name, body) in [
+            ("xl/workbook.xml", workbook),
+            ("xl/_rels/workbook.xml.rels", rels),
+        ] {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(body.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn package_of(bytes: &[u8]) -> Result<Package, ReadError> {
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes))).unwrap();
+        read_package(&mut archive, &meter, &Budgets::production())
+    }
+
+    #[test]
+    fn a_workbook_with_many_sheets_is_read_in_linear_time() {
+        let bytes = package_archive(20_000, false);
+        let started = std::time::Instant::now();
+        let package = package_of(&bytes).unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(package.worksheets.len(), 20_000);
+        assert_eq!(package.defined_names.len(), 20_000);
+        assert_eq!(package.defined_names[19_999].1, Some(19_999));
+    }
+
+    #[test]
+    fn two_sheets_sharing_one_part_are_still_refused() {
+        let error = package_of(&package_archive(3, true)).err().unwrap();
+        assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
     }
 
     #[test]
