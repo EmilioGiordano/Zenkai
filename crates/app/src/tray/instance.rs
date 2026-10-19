@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
+use std::io::{BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use interprocess::local_socket::prelude::*;
 use interprocess::local_socket::{GenericNamespaced, Listener, ListenerNonblockingMode, Stream};
-use zenkai_agent::bridge::{listener_options, random_hex};
+use zenkai_agent::bridge::{listener_options, random_hex, tokens_match};
 
 use super::TrayEvent;
 use super::handoff::Handoff;
@@ -18,9 +18,10 @@ const CONNECT_WINDOW_MS: u64 = 2_000;
 const TOKEN_RETRIES: u64 = 3;
 const TOKEN_RETRY_WAIT_MS: u64 = 150;
 const READ_DEADLINE_MS: u64 = 2_000;
-// The whole attempt: connecting, the token retries and the two reads.
+// The whole attempt: connecting, the token retries, and the token read, the write and the
+// acknowledgement, each of which has its own READ_DEADLINE.
 const HANDOFF_TIMEOUT: Duration = Duration::from_millis(
-    CONNECT_WINDOW_MS + (TOKEN_RETRIES - 1) * TOKEN_RETRY_WAIT_MS + 2 * READ_DEADLINE_MS,
+    CONNECT_WINDOW_MS + (TOKEN_RETRIES - 1) * TOKEN_RETRY_WAIT_MS + 3 * READ_DEADLINE_MS,
 );
 const CONNECT_WINDOW: Duration = Duration::from_millis(CONNECT_WINDOW_MS);
 const TOKEN_RETRY_WAIT: Duration = Duration::from_millis(TOKEN_RETRY_WAIT_MS);
@@ -196,17 +197,20 @@ fn send(pipe: &str, line: &str) -> bool {
     let Some(stream) = connect(pipe) else {
         return false;
     };
+    if let Err(error) = stream.set_nonblocking(true) {
+        tracing::debug!(%error, "could not poll the instance pipe");
+        return false;
+    }
     let mut stream = BufReader::new(stream);
-    let mut offered = String::new();
-    if stream.read_line(&mut offered).is_err() || !is_ours(pipe, offered.trim()) {
+    let offered = read_line_by_deadline(&mut stream).unwrap_or_default();
+    if !is_ours(pipe, offered.trim()) {
         tracing::warn!("the instance pipe is held by a process that is not this user's Zenkai");
         return false;
     }
     if !write_line(stream.get_mut(), line) {
         return false;
     }
-    let mut reply = String::new();
-    stream.read_line(&mut reply).is_ok() && reply.trim() == ACK
+    read_line_by_deadline(&mut stream).is_some_and(|reply| reply.trim() == ACK)
 }
 
 // The token file is written just after the pipe exists, so a mismatch is retried briefly.
@@ -218,22 +222,16 @@ fn is_ours(pipe: &str, offered: &str) -> bool {
         if attempt > 0 {
             std::thread::sleep(TOKEN_RETRY_WAIT);
         }
-        if std::fs::read_to_string(&path).is_ok_and(|expected| tokens_match(&expected, offered)) {
+        if std::fs::read_to_string(&path).is_ok_and(|expected| token_matches(&expected, offered)) {
             return true;
         }
     }
     false
 }
 
-fn tokens_match(expected: &str, given: &str) -> bool {
-    let (expected, given) = (expected.trim().as_bytes(), given.as_bytes());
-    !expected.is_empty()
-        && expected.len() == given.len()
-        && expected
-            .iter()
-            .zip(given)
-            .fold(0u8, |difference, (a, b)| difference | (a ^ b))
-            == 0
+fn token_matches(expected: &str, given: &str) -> bool {
+    let expected = expected.trim().as_bytes();
+    !expected.is_empty() && tokens_match(expected, given.as_bytes())
 }
 
 struct HandlerSlot(Arc<AtomicUsize>);
@@ -242,6 +240,14 @@ impl Drop for HandlerSlot {
     fn drop(&mut self) {
         self.0.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+fn reserve_handler(active: &Arc<AtomicUsize>) -> Option<HandlerSlot> {
+    if active.fetch_add(1, Ordering::SeqCst) >= MAX_HANDLERS {
+        active.fetch_sub(1, Ordering::SeqCst);
+        return None;
+    }
+    Some(HandlerSlot(active.clone()))
 }
 
 pub fn serve(primary: Primary, events: async_channel::Sender<TrayEvent>) {
@@ -259,12 +265,10 @@ pub fn serve(primary: Primary, events: async_channel::Sender<TrayEvent>) {
                     continue;
                 }
             };
-            if active.fetch_add(1, Ordering::SeqCst) >= MAX_HANDLERS {
-                active.fetch_sub(1, Ordering::SeqCst);
+            let Some(slot) = reserve_handler(&active) else {
                 tracing::warn!("too many launches at once; one was dropped");
                 continue;
-            }
-            let slot = HandlerSlot(active.clone());
+            };
             let (events, token) = (events.clone(), token.clone());
             std::thread::spawn(move || {
                 answer(stream, &token, &events);
@@ -369,10 +373,21 @@ mod tests {
 
     #[test]
     fn tokens_match_only_when_equal_and_not_empty() {
-        assert!(tokens_match("abc\r\n", "abc"));
-        assert!(!tokens_match("abc", "abd"));
-        assert!(!tokens_match("abc", "ab"));
-        assert!(!tokens_match("", ""));
+        assert!(token_matches("abc\r\n", "abc"));
+        assert!(!token_matches("abc", "abd"));
+        assert!(!token_matches("abc", "ab"));
+        assert!(!token_matches("", ""));
+    }
+
+    #[test]
+    fn exactly_four_handlers_run_at_once_and_a_finished_one_frees_its_place() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let mut slots: Vec<_> = (0..MAX_HANDLERS)
+            .map(|_| reserve_handler(&active).expect("a free place"))
+            .collect();
+        assert!(reserve_handler(&active).is_none());
+        slots.pop();
+        assert!(reserve_handler(&active).is_some());
     }
 
     // One test, because the pipe name is per executable: a second claim in this process is

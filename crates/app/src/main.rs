@@ -82,7 +82,9 @@ fn main() {
     logging::log_panics();
     #[cfg(windows)]
     if matches!(claim, tray::Claim::Standalone) {
-        tracing::warn!("another Zenkai could not be reached; starting a separate one");
+        tracing::warn!(
+            "the single instance pipe or its token could not be set up; running without single instance protection"
+        );
     }
     zenkai_i18n::init(language::startup());
 

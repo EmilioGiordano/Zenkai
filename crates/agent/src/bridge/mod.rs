@@ -68,7 +68,7 @@ impl BridgeAddress {
     }
 }
 
-fn tokens_match(expected: &[u8], given: &[u8]) -> bool {
+pub fn tokens_match(expected: &[u8], given: &[u8]) -> bool {
     // Compared in constant time so the reply time says nothing about the token.
     expected.len() == given.len()
         && expected
