@@ -9,13 +9,17 @@ pub mod limits;
 mod links;
 mod nesting;
 mod package;
+mod parallel;
 mod shared_strings;
 mod sheet_data;
 mod sheet_stream;
 mod splice;
 mod stream;
 mod styles_part;
+#[cfg(test)]
+mod test_sheets;
 mod text;
+mod unit_pool;
 mod verify;
 
 use std::fs::File;
@@ -37,7 +41,8 @@ pub use verify::{PartDigest, Written, check_written, check_xml};
 
 use crate::formulas::Names;
 use crate::package::{read_package, stub_archive};
-use crate::sheet_stream::{StreamedSheet, stream_config, stream_worksheet};
+use crate::parallel::{Job, Open, ReadPlan, SheetStreams, SheetTask};
+use crate::sheet_stream::{StreamedSheet, Tuning, stream_config, stream_worksheet};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, read_part_if_checked};
 
 pub use stream::has_checked_element;
@@ -89,11 +94,14 @@ pub fn read_xlsx_file(
     timezone: &str,
     inspect: &Inspect<'_>,
 ) -> Result<OpenedBook, ReadError> {
-    let file = File::open(path).map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    let meter = CompressedMeter::new();
-    let archive = zip::ZipArchive::new(meter.wrap(BufReader::new(file)))
-        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    read_from(archive, &meter, name, locale, timezone, inspect)
+    let open = || {
+        let file = File::open(path).map_err(|e| ReadError::Unreadable(e.to_string()))?;
+        let meter = CompressedMeter::new();
+        let archive = zip::ZipArchive::new(meter.wrap(BufReader::new(file)))
+            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+        Ok((archive, meter))
+    };
+    read_from(&open, &ReadPlan::detect(), name, locale, timezone, inspect)
 }
 
 pub fn read_xlsx(
@@ -103,22 +111,62 @@ pub fn read_xlsx(
     timezone: &str,
     inspect: &Inspect<'_>,
 ) -> Result<OpenedBook, ReadError> {
-    let meter = CompressedMeter::new();
-    let archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes)))
-        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-    read_from(archive, &meter, name, locale, timezone, inspect)
+    read_xlsx_planned(bytes, &ReadPlan::detect(), name, locale, timezone, inspect)
 }
 
-fn read_from<R: Read + Seek>(
-    mut archive: zip::ZipArchive<Counted<R>>,
-    meter: &CompressedMeter,
+fn read_xlsx_planned(
+    bytes: &[u8],
+    plan: &ReadPlan,
     name: &str,
     locale: &str,
     timezone: &str,
     inspect: &Inspect<'_>,
 ) -> Result<OpenedBook, ReadError> {
+    let open = || {
+        let meter = CompressedMeter::new();
+        let archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes)))
+            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+        Ok((archive, meter))
+    };
+    read_from(&open, plan, name, locale, timezone, inspect)
+}
+
+// Worksheets stream on several threads, which share the memory budget, so the cell that
+// first crosses it, and the figures in its refusal, depend on timing. A refusal is
+// therefore read again on one thread, which gives the refusal a single thread gives.
+fn read_from<R: Read + Seek>(
+    open: &Open<'_, R>,
+    plan: &ReadPlan,
+    name: &str,
+    locale: &str,
+    timezone: &str,
+    inspect: &Inspect<'_>,
+) -> Result<OpenedBook, ReadError> {
+    match read_planned(open, plan, name, locale, timezone, inspect) {
+        Err(ReadError::Unsafe(_)) if !plan.is_serial() => read_planned(
+            open,
+            &plan.single_threaded(),
+            name,
+            locale,
+            timezone,
+            inspect,
+        ),
+        other => other,
+    }
+}
+
+fn read_planned<R: Read + Seek>(
+    open: &Open<'_, R>,
+    plan: &ReadPlan,
+    name: &str,
+    locale: &str,
+    timezone: &str,
+    inspect: &Inspect<'_>,
+) -> Result<OpenedBook, ReadError> {
+    let (mut archive, meter) = open()?;
+    let meter = &meter;
     tracing::info_span!("open_check_archive").in_scope(|| limits::check_archive(&mut archive))?;
-    let budgets = Budgets::production();
+    let budgets = Budgets::with_cells(plan.cells);
     let package = tracing::info_span!("open_read_package")
         .in_scope(|| read_package(&mut archive, meter, &budgets))?;
 
@@ -130,48 +178,41 @@ fn read_from<R: Read + Seek>(
         .collect();
     let declared_span = tracing::info_span!("open_declared_sizes").entered();
     let mut declared = 0u64;
+    let mut tasks = Vec::new();
     for index in 0..archive.len() {
         let entry = archive
             .by_index_raw(index)
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-        if positions.contains_key(entry.name()) {
+        if let Some(&position) = positions.get(entry.name()) {
             declared = declared.saturating_add(entry.size());
+            if entry.size() >= plan.min_sheet_bytes {
+                tasks.push(SheetTask { index, position });
+            }
         }
     }
     drop(declared_span);
     budgets.expect_sheet_bytes(declared);
-    let mut sheets: Vec<Option<StreamedSheet>> =
-        (0..package.worksheets.len()).map(|_| None).collect();
+    let job = Job::new(open, &package.worksheets, &budgets, &tasks, plan);
     let entries_span = tracing::info_span!("open_entries").entered();
-    for index in 0..archive.len() {
-        let entry_name = {
-            let entry = archive
-                .by_index(index)
-                .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-            entry.name().to_string()
-        };
-        if let Some(&position) = positions.get(entry_name.as_str()) {
-            let entry = archive
-                .by_index(index)
-                .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-            let sheet_name = package.worksheets[position].name.clone();
-            let _sheet_span =
-                tracing::info_span!("open_sheet", sheet = position, bytes = entry.size()).entered();
-            let streamed = stream_worksheet(entry, meter, &entry_name, &sheet_name, &budgets)?;
-            // The rows were checked while streaming; the configuration carries the
-            // same feature flags and validation limits as a whole part would.
-            nesting::check_nesting(&entry_name, &streamed.stub)?;
-            inspect(&entry_name, &streamed.stub)?;
-            sheets[position] = Some(streamed);
-            continue;
+    let sheets = std::thread::scope(|scope| {
+        let mut streams = SheetStreams::start(scope, &job);
+        let sheets = stream_entries(
+            &mut archive,
+            meter,
+            &package,
+            &positions,
+            &budgets,
+            inspect,
+            &mut streams,
+        );
+        if sheets.is_err() {
+            budgets.cancel();
         }
-        if skipped_part(&entry_name) {
-            inspect(&entry_name, &[])?;
-            continue;
+        if let Some(streams) = streams {
+            streams.finish();
         }
-        let (_, part, _) = read_part_if_checked(&mut archive, index, meter, &budgets, false)?;
-        inspect(&entry_name, &part)?;
-    }
+        sheets
+    })?;
     drop(entries_span);
 
     let mut replaced = std::collections::HashMap::new();
@@ -265,6 +306,64 @@ fn read_from<R: Read + Seek>(
             sheet_configs: configs,
             layout,
         })
+}
+
+// Every archive entry in order: worksheets from their thread or streamed here, the other
+// parts read here and handed to `inspect`. A sheet streamed here is small, so no workers.
+fn stream_entries<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<Counted<R>>,
+    meter: &CompressedMeter,
+    package: &package::Package,
+    positions: &std::collections::HashMap<&str, usize>,
+    budgets: &Budgets,
+    inspect: &Inspect<'_>,
+    streams: &mut Option<SheetStreams<'_>>,
+) -> Result<Vec<Option<StreamedSheet>>, ReadError> {
+    let mut sheets: Vec<Option<StreamedSheet>> =
+        (0..package.worksheets.len()).map(|_| None).collect();
+    for index in 0..archive.len() {
+        let entry_name = {
+            let entry = archive
+                .by_index(index)
+                .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+            entry.name().to_string()
+        };
+        if let Some(&position) = positions.get(entry_name.as_str()) {
+            let streamed = match streams.as_mut().and_then(|streams| streams.take(index)) {
+                Some(streamed) => streamed?,
+                None => {
+                    let entry = archive
+                        .by_index(index)
+                        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+                    let sheet_name = package.worksheets[position].name.clone();
+                    let _sheet_span =
+                        tracing::info_span!("open_sheet", sheet = position, bytes = entry.size())
+                            .entered();
+                    stream_worksheet(
+                        entry,
+                        meter,
+                        &entry_name,
+                        &sheet_name,
+                        budgets,
+                        Tuning::production(0),
+                    )?
+                }
+            };
+            // The rows were checked while streaming; the configuration carries the
+            // same feature flags and validation limits as a whole part would.
+            nesting::check_nesting(&entry_name, &streamed.stub)?;
+            inspect(&entry_name, &streamed.stub)?;
+            sheets[position] = Some(streamed);
+            continue;
+        }
+        if skipped_part(&entry_name) {
+            inspect(&entry_name, &[])?;
+            continue;
+        }
+        let (_, part, _) = read_part_if_checked(archive, index, meter, budgets, false)?;
+        inspect(&entry_name, &part)?;
+    }
+    Ok(sheets)
 }
 
 // Every part of the archive, streamed once with the budgets enforced and handed to
