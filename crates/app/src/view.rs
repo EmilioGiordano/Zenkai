@@ -3380,6 +3380,10 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 this.request_close(CloseGoal::Quit, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
+                let goal = main_window::close_goal(cx);
+                this.request_close(goal, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &NextDocument, window, cx| {
                 this.step_document(Step::Next, window, cx)
             }))

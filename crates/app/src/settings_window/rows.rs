@@ -54,6 +54,7 @@ impl Section {
 pub enum RowId {
     RestoreSession,
     CloseWithUnsaved,
+    CloseWindowWithUnsaved,
     Language,
     Autosave,
     ColorMode,
@@ -87,9 +88,10 @@ pub struct RowInfo {
 }
 
 impl RowId {
-    pub const ALL: [RowId; 24] = [
+    pub const ALL: [RowId; 25] = [
         RowId::RestoreSession,
         RowId::CloseWithUnsaved,
+        RowId::CloseWindowWithUnsaved,
         RowId::Language,
         RowId::Autosave,
         RowId::ColorMode,
@@ -136,6 +138,13 @@ impl RowId {
                 t!("settings.row.close_with_unsaved"),
                 t!("settings.row.close_with_unsaved.description"),
                 &["close", "quit", "exit", "save", "ask"],
+            ),
+            RowId::CloseWindowWithUnsaved => row(
+                Section::General,
+                t!("settings.group.closing"),
+                t!("settings.row.close_window_with_unsaved"),
+                t!("settings.row.close_window_with_unsaved.description"),
+                &["close", "window", "tray", "hide", "save", "ask"],
             ),
             RowId::Language => row(
                 Section::General,
@@ -321,6 +330,10 @@ impl RowId {
             RowId::CloseWithUnsaved => {
                 settings.general.close_with_unsaved != default.general.close_with_unsaved
             }
+            RowId::CloseWindowWithUnsaved => {
+                settings.general.close_window_with_unsaved
+                    != default.general.close_window_with_unsaved
+            }
             RowId::Language => settings.language != default.language,
             RowId::Autosave => {
                 settings.general.autosave_seconds != default.general.autosave_seconds
@@ -361,6 +374,10 @@ impl RowId {
             }
             RowId::CloseWithUnsaved => {
                 settings.general.close_with_unsaved = default.general.close_with_unsaved
+            }
+            RowId::CloseWindowWithUnsaved => {
+                settings.general.close_window_with_unsaved =
+                    default.general.close_window_with_unsaved
             }
             RowId::Language => settings.language = default.language,
             RowId::Autosave => settings.general.autosave_seconds = default.general.autosave_seconds,
@@ -553,6 +570,7 @@ mod tests {
             [
                 RowId::RestoreSession,
                 RowId::CloseWithUnsaved,
+                RowId::CloseWindowWithUnsaved,
                 RowId::Language,
                 RowId::Autosave
             ]
