@@ -839,3 +839,37 @@ fn insert_and_delete_columns_in_a_wide_row() {
     assert_eq!(columns.len(), width as usize);
     assert!(columns.windows(2).all(|pair| pair[0] < pair[1]));
 }
+
+#[test]
+fn delete_columns_drops_rows_left_without_cells() {
+    let mut model = new_empty_model();
+    for row in 1..=100 {
+        model._set(&format!("C{row}"), "1");
+    }
+    model._set("A200", "x");
+    model.set_row_height(0, 50, 40.0).unwrap();
+
+    model.delete_columns(0, 3, 1).unwrap();
+
+    let sheet_data = &model.workbook.worksheet(0).unwrap().sheet_data;
+    assert_eq!(sheet_data.rows_sorted(), vec![200]);
+    let dimension = model.workbook.worksheet(0).unwrap().dimension();
+    assert_eq!((dimension.min_row, dimension.max_row), (200, 200));
+    assert!((model.get_row_height(0, 50).unwrap() - 40.0).abs() < 1e-9);
+}
+
+#[test]
+fn delete_columns_keeps_rows_that_were_already_empty() {
+    let mut model = new_empty_model();
+    model._set("A1", "1");
+    model
+        .workbook
+        .worksheet_mut(0)
+        .unwrap()
+        .sheet_data
+        .insert_row(7, []);
+
+    model.delete_columns(0, 3, 1).unwrap();
+
+    assert!(model.workbook.worksheet(0).unwrap().sheet_data.has_row(7));
+}

@@ -153,6 +153,15 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - `CellStore::append` moves the rows of another store into the first, so a caller that
   reads a sheet in pieces can build each piece in its own store and join them
   (`src/cell_store.rs`). Stands on its own. Test in the module.
+- `Model::delete_columns` removes the `CellStore` rows it leaves without cells, so the used
+  range matches the cells; rows that were already empty and row height, style and hidden
+  state (kept in `Worksheet::rows`) stay. Needs the `CellStore` patch. IronCalc's own
+  exporter writes only `sheet_data` rows, so an emptied row's height or style reaches the
+  file only through Zenkai's save, which re-adds every `Worksheet::rows` entry; an upstream
+  PR must export those rows too. Tests:
+  `delete_columns_drops_rows_left_without_cells` in `src/test/test_actions.rs` and
+  `delete_column_undo_redo_restores_cells_and_used_range` in
+  `src/test/user_model/test_multi_row_column.rs`.
 - `StaticResult` derives `Clone`, `Debug` and `PartialEq`, so a caller can copy a
   sheet's parsed formulas, for instance to save them away from the model
   (`src/expressions/parser/static_analysis.rs`).

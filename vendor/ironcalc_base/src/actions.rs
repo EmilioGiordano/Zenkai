@@ -661,7 +661,14 @@ impl<'a> Model<'a> {
         all_rows.sort_unstable();
 
         for r in all_rows {
+            let had_cells = self.workbook.worksheet(sheet)?.sheet_data.row_len(r) > 0;
             self.shift_row_cells(sheet, r, column_start, -column_count, column_count)?;
+            // A row emptied by the delete is dropped so the used range matches the cells.
+            // Height, style and hidden state live in `rows`, not here.
+            let data = &mut self.workbook.worksheet_mut(sheet)?.sheet_data;
+            if had_cells && data.row_len(r) == 0 {
+                data.remove_row(r);
+            }
         }
         // Update all formulas in the workbook
         let disp = DisplaceData::Column {

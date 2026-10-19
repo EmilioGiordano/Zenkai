@@ -171,3 +171,27 @@ fn delete_columns_errors() {
         Err("Please use insert columns instead".to_string())
     );
 }
+
+#[test]
+fn delete_column_undo_redo_restores_cells_and_used_range() {
+    let mut model = UserModel::from_model(new_empty_model());
+    for row in 1..=100 {
+        model.set_user_input(0, row, 3, &row.to_string()).unwrap();
+    }
+    let rows_of = |model: &UserModel| {
+        model.get_model().workbook.worksheet(0).unwrap().sheet_data.rows_sorted()
+    };
+    let before = rows_of(&model);
+
+    model.delete_columns(0, 3, 1).unwrap();
+    assert!(rows_of(&model).is_empty());
+
+    model.undo().unwrap();
+    assert_eq!(rows_of(&model), before);
+    for row in 1..=100 {
+        assert_eq!(model.get_formatted_cell_value(0, row, 3).unwrap(), row.to_string());
+    }
+
+    model.redo().unwrap();
+    assert!(rows_of(&model).is_empty());
+}
