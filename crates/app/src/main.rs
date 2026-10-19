@@ -71,6 +71,11 @@ fn main() {
     #[cfg(windows)]
     let claim = match tray::claim(initial.as_deref()) {
         tray::Claim::HandedOff => return,
+        tray::Claim::Unreachable => {
+            zenkai_i18n::init(language::startup());
+            tray::warn_another_zenkai_unreachable();
+            return;
+        }
         claim => claim,
     };
     logging::init();
@@ -112,11 +117,13 @@ fn main() {
                 cx.new(|cx| view::Workspace::new(initial, window, cx))
             });
             match opened {
-                Ok((_window, _workspace)) => {
-                    #[cfg(windows)]
-                    tray::install(_window, &_workspace, claim, cx);
+                #[cfg(windows)]
+                Ok((window, workspace)) => {
+                    tray::install(window, &workspace, claim, cx);
                     cx.activate(true)
                 }
+                #[cfg(not(windows))]
+                Ok(_) => cx.activate(true),
                 Err(error) => {
                     tracing::error!(%error, "could not open the main window");
                     cx.quit();

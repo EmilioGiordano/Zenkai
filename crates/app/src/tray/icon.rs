@@ -15,7 +15,6 @@ pub fn build(presence: Presence) -> Result<Icon, TrayError> {
     Icon::from_rgba(pixels, width, height).map_err(|error| TrayError::Icon(error.to_string()))
 }
 
-// Each entry of an .ico is (width, height, ..., size, offset) after a 6 byte header.
 fn png_entry(ico: &[u8], size: u32) -> Result<&[u8], TrayError> {
     let missing = || TrayError::Icon(format!("no {size} pixel image in the application icon"));
     let count = read_u16(ico, 4).ok_or_else(missing)?;
@@ -56,7 +55,6 @@ fn decode_png(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), TrayError> {
     Ok((pixels, info.width, info.height))
 }
 
-// A dot in the bottom right corner with a dark ring so it reads on any taskbar colour.
 fn draw_dot(pixels: &mut [u8], width: u32, height: u32, rgb: [u8; 3]) {
     let radius = width as f32 * 0.24;
     let ring = (width as f32 / 32.0).max(1.0);

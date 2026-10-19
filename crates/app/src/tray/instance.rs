@@ -1,49 +1,41 @@
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 use interprocess::local_socket::prelude::*;
-use interprocess::local_socket::{GenericNamespaced, Listener, ListenerOptions, Stream};
-use serde::{Deserialize, Serialize};
+use interprocess::local_socket::{GenericNamespaced, Listener, ListenerNonblockingMode, Stream};
+use zenkai_agent::bridge::{listener_options, random_hex};
 
 use super::TrayEvent;
+use super::handoff::Handoff;
 
-const MAX_MESSAGE_BYTES: u64 = 64 * 1024;
+const TOKEN_BYTES: usize = 32;
+const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 const ACK: &str = "ok";
-// A running Zenkai that does not answer within this is stuck, so the new launch goes on alone.
 const HANDOFF_TIMEOUT: Duration = Duration::from_secs(4);
-const ACK_TIMEOUT: Duration = Duration::from_secs(10);
+const READ_DEADLINE: Duration = Duration::from_secs(2);
+const READ_POLL: Duration = Duration::from_millis(10);
+const MAX_HANDLERS: usize = 4;
+const CONNECT_WINDOW: Duration = Duration::from_secs(2);
+const CONNECT_RETRY: Duration = Duration::from_millis(25);
+const TOKEN_RETRIES: usize = 3;
+const TOKEN_RETRY_WAIT: Duration = Duration::from_millis(150);
+
+pub struct Primary {
+    listener: Listener,
+    token: String,
+}
 
 pub enum Claim {
-    Primary(Listener),
+    Primary(Primary),
     HandedOff,
+    Unreachable,
     Standalone,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct Handoff {
-    open: Option<String>,
-}
-
-impl Handoff {
-    fn of(open: Option<&Path>) -> Handoff {
-        Handoff {
-            open: open.and_then(|path| path.to_str()).map(str::to_string),
-        }
-    }
-
-    fn encode(&self) -> Option<String> {
-        serde_json::to_string(self).ok()
-    }
-
-    fn decode(line: &str) -> Option<Handoff> {
-        serde_json::from_str(line.trim()).ok()
-    }
-}
-
-// Keyed by user and by executable, so another account or a debug build next to an installed
-// one never hands its launch to the wrong process.
+// Keyed by user and executable, so another account or a debug build never meets this one.
 fn pipe_name(user: &str, exe: &Path) -> String {
     let path = exe.to_string_lossy().to_lowercase();
     let hash = path.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
@@ -62,52 +54,105 @@ fn own_pipe_name() -> Option<String> {
     Some(pipe_name(&user, &exe))
 }
 
-// The first process to create the pipe is the running Zenkai; anyone else hands over.
+fn token_path(pipe: &str) -> Option<PathBuf> {
+    Some(crate::recovery::session_directory()?.join(format!("{pipe}.token")))
+}
+
 pub fn claim(open: Option<&Path>) -> Claim {
     let Some(pipe) = own_pipe_name() else {
-        tracing::debug!("could not name the single instance pipe");
         return Claim::Standalone;
     };
-    let Ok(name) = pipe.as_str().to_ns_name::<GenericNamespaced>() else {
-        return Claim::Standalone;
-    };
-    match ListenerOptions::new().name(name).create_sync() {
-        Ok(listener) => Claim::Primary(listener),
-        Err(error) => {
-            tracing::debug!(%error, "the instance pipe exists; handing the launch over");
-            let absolute = open.map(|path| std::path::absolute(path).unwrap_or(path.to_path_buf()));
-            if hand_over(&pipe, &Handoff::of(absolute.as_deref())) {
+    let created = listener_options(&pipe).and_then(|options| {
+        options
+            .nonblocking(ListenerNonblockingMode::Stream)
+            .create_sync()
+    });
+    match created {
+        Ok(listener) => match publish_token(&pipe) {
+            Some(token) => Claim::Primary(Primary { listener, token }),
+            None => Claim::Standalone,
+        },
+        Err(error)
+            if matches!(
+                error.kind(),
+                ErrorKind::PermissionDenied | ErrorKind::AddrInUse
+            ) =>
+        {
+            tracing::debug!(%error, "the instance pipe exists");
+            let handoff = match open.map(std::path::absolute).transpose() {
+                Ok(absolute) => Handoff::of(absolute.as_deref()),
+                Err(error) => {
+                    tracing::warn!(%error, "the file to open has no absolute path; opening none");
+                    Handoff::of(None)
+                }
+            };
+            if hand_over(&pipe, &handoff) {
                 Claim::HandedOff
             } else {
-                Claim::Standalone
+                Claim::Unreachable
             }
+        }
+        Err(error) => {
+            tracing::debug!(%error, "could not create the instance pipe");
+            Claim::Standalone
         }
     }
 }
 
+// Only a process that can read this file can prove it is the running Zenkai of this user.
+fn publish_token(pipe: &str) -> Option<String> {
+    let path = token_path(pipe)?;
+    let token = random_hex(TOKEN_BYTES).ok()?;
+    if let Some(folder) = path.parent()
+        && std::fs::create_dir_all(folder).is_err()
+    {
+        return None;
+    }
+    std::fs::write(&path, &token).ok()?;
+    Some(token)
+}
+
 fn hand_over(pipe: &str, handoff: &Handoff) -> bool {
-    let (done, answered) = mpsc::channel();
-    let pipe = pipe.to_string();
     let Some(line) = handoff.encode() else {
         return false;
     };
+    let (done, answered) = mpsc::channel();
+    let pipe = pipe.to_string();
     std::thread::spawn(move || {
-        let sent = send(&pipe, &line);
-        if done.send(sent).is_err() {
+        if done.send(send(&pipe, &line)).is_err() {
             tracing::debug!("the launch stopped waiting for the running Zenkai");
         }
     });
     answered.recv_timeout(HANDOFF_TIMEOUT).unwrap_or(false)
 }
 
+// The listener makes its next pipe instance only after accepting, so a connect that lands
+// in between is busy for a moment.
+fn connect(pipe: &str) -> Option<Stream> {
+    let deadline = Instant::now() + CONNECT_WINDOW;
+    loop {
+        let name = pipe.to_ns_name::<GenericNamespaced>().ok()?;
+        match Stream::connect(name) {
+            Ok(stream) => return Some(stream),
+            Err(_) if Instant::now() < deadline => std::thread::sleep(CONNECT_RETRY),
+            Err(error) => {
+                tracing::debug!(%error, "could not connect to the instance pipe");
+                return None;
+            }
+        }
+    }
+}
+
 fn send(pipe: &str, line: &str) -> bool {
-    let Ok(name) = pipe.to_ns_name::<GenericNamespaced>() else {
-        return false;
-    };
-    let Ok(stream) = Stream::connect(name) else {
+    let Some(stream) = connect(pipe) else {
         return false;
     };
     let mut stream = BufReader::new(stream);
+    let mut offered = String::new();
+    if stream.read_line(&mut offered).is_err() || !is_ours(pipe, offered.trim()) {
+        tracing::warn!("the instance pipe is held by a process that is not this user's Zenkai");
+        return false;
+    }
     if writeln!(stream.get_mut(), "{line}").is_err() || stream.get_mut().flush().is_err() {
         return false;
     }
@@ -115,81 +160,128 @@ fn send(pipe: &str, line: &str) -> bool {
     stream.read_line(&mut reply).is_ok() && reply.trim() == ACK
 }
 
-// Accepting happens on a thread of its own; every request is answered only after the
-// foreground has handled it, so a stuck window never looks like a healthy one.
-pub fn serve(listener: Listener, events: async_channel::Sender<TrayEvent>) {
+// The token file is written just after the pipe exists, so a mismatch is retried briefly.
+fn is_ours(pipe: &str, offered: &str) -> bool {
+    let Some(path) = token_path(pipe) else {
+        return false;
+    };
+    for attempt in 0..TOKEN_RETRIES {
+        if attempt > 0 {
+            std::thread::sleep(TOKEN_RETRY_WAIT);
+        }
+        if std::fs::read_to_string(&path).is_ok_and(|expected| tokens_match(&expected, offered)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn tokens_match(expected: &str, given: &str) -> bool {
+    let (expected, given) = (expected.trim().as_bytes(), given.as_bytes());
+    !expected.is_empty()
+        && expected.len() == given.len()
+        && expected
+            .iter()
+            .zip(given)
+            .fold(0u8, |difference, (a, b)| difference | (a ^ b))
+            == 0
+}
+
+struct HandlerSlot(Arc<AtomicUsize>);
+
+impl Drop for HandlerSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+pub fn serve(primary: Primary, events: async_channel::Sender<TrayEvent>) {
+    let Primary { listener, token } = primary;
+    let token: Arc<str> = token.into();
+    let active = Arc::new(AtomicUsize::new(0));
     std::thread::spawn(move || {
         for connection in listener.incoming() {
-            match connection {
-                Ok(stream) => {
-                    let events = events.clone();
-                    std::thread::spawn(move || answer(stream, &events));
+            let stream = match connection {
+                Ok(stream) => stream,
+                Err(error) => {
+                    tracing::warn!(%error, "the instance pipe refused a connection");
+                    continue;
                 }
-                Err(error) => tracing::warn!(%error, "the instance pipe refused a connection"),
+            };
+            if active.fetch_add(1, Ordering::SeqCst) >= MAX_HANDLERS {
+                active.fetch_sub(1, Ordering::SeqCst);
+                tracing::warn!("too many launches at once; one was dropped");
+                continue;
             }
+            let slot = HandlerSlot(active.clone());
+            let (events, token) = (events.clone(), token.clone());
+            std::thread::spawn(move || {
+                answer(stream, &token, &events);
+                drop(slot);
+            });
         }
     });
 }
 
-fn answer(stream: Stream, events: &async_channel::Sender<TrayEvent>) {
+fn answer(stream: Stream, token: &str, events: &async_channel::Sender<TrayEvent>) {
     let mut stream = BufReader::new(stream);
-    let mut line = String::new();
-    if (&mut stream)
-        .take(MAX_MESSAGE_BYTES)
-        .read_line(&mut line)
+    if writeln!(stream.get_mut(), "{token}")
+        .and_then(|()| stream.get_mut().flush())
         .is_err()
     {
         return;
     }
+    let Some(line) = read_line_by_deadline(&mut stream) else {
+        tracing::warn!("a launch sent nothing usable in time");
+        return;
+    };
     let Some(handoff) = Handoff::decode(&line) else {
         tracing::warn!("ignored a malformed message on the instance pipe");
         return;
     };
-    let (handled, wait) = mpsc::channel();
-    let open = handoff.open.map(PathBuf::from);
-    if events
-        .send_blocking(TrayEvent::Open {
-            path: open,
-            handled,
-        })
-        .is_err()
-    {
+    let path = match handoff.requested() {
+        Some(Ok(path)) => Some(path),
+        Some(Err(refusal)) => {
+            tracing::warn!(%refusal, "refused the file a launch asked to open");
+            None
+        }
+        None => None,
+    };
+    if events.try_send(TrayEvent::Open { path }).is_err() {
         return;
     }
-    if wait.recv_timeout(ACK_TIMEOUT).is_ok() {
-        let reply = stream.get_mut();
-        if let Err(error) = writeln!(reply, "{ACK}").and_then(|()| reply.flush()) {
-            tracing::debug!(%error, "the launching process went away before the answer");
-        }
+    let reply = stream.get_mut();
+    if let Err(error) = writeln!(reply, "{ACK}").and_then(|()| reply.flush()) {
+        tracing::debug!(%error, "the launching process went away before the answer");
     }
+}
+
+// Accepted streams are non-blocking (pipes have no read timeout), so reading polls until the deadline.
+fn read_line_by_deadline(stream: &mut BufReader<Stream>) -> Option<String> {
+    let deadline = Instant::now() + READ_DEADLINE;
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 4096];
+    let line = loop {
+        if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.truncate(end);
+            break Some(bytes);
+        }
+        if bytes.len() > MAX_MESSAGE_BYTES || Instant::now() >= deadline {
+            break None;
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => std::thread::sleep(READ_POLL),
+            Ok(read) => bytes.extend_from_slice(&chunk[..read]),
+            Err(error) if error.kind() == ErrorKind::WouldBlock => std::thread::sleep(READ_POLL),
+            Err(_) => break None,
+        }
+    };
+    String::from_utf8(line?).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_handoff_round_trips_with_and_without_a_file() {
-        let none = Handoff::of(None);
-        assert_eq!(Handoff::decode(&none.encode().unwrap()), Some(none));
-        let some = Handoff::of(Some(Path::new("C:\\Datos\\Ñandú planilla.xlsx")));
-        assert_eq!(Handoff::decode(&some.encode().unwrap()), Some(some));
-    }
-
-    #[test]
-    fn a_malformed_message_is_not_a_handoff() {
-        assert_eq!(Handoff::decode(""), None);
-        assert_eq!(Handoff::decode("not json"), None);
-        assert_eq!(Handoff::decode("{\"open\":5}"), None);
-    }
-
-    #[test]
-    fn a_message_line_ends_with_a_newline_that_decode_ignores() {
-        assert_eq!(
-            Handoff::decode("{\"open\":null}\r\n"),
-            Some(Handoff { open: None })
-        );
-    }
 
     #[test]
     fn the_pipe_name_depends_on_user_and_executable() {
@@ -204,34 +296,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn tokens_match_only_when_equal_and_not_empty() {
+        assert!(tokens_match("abc\r\n", "abc"));
+        assert!(!tokens_match("abc", "abd"));
+        assert!(!tokens_match("abc", "ab"));
+        assert!(!tokens_match("", ""));
+    }
+
     // One test, because the pipe name is per executable: a second claim in this process is
     // what a second launch looks like.
     #[test]
-    fn a_second_launch_gives_up_on_a_stuck_first_one_and_hands_over_to_a_live_one() {
-        let Claim::Primary(listener) = claim(None) else {
+    fn a_second_launch_hands_over_to_a_live_first_and_never_to_an_unproven_one() {
+        let Claim::Primary(primary) = claim(None) else {
             panic!("the first claim must own the pipe");
         };
-        let started = std::time::Instant::now();
-        assert!(matches!(claim(None), Claim::Standalone));
+        let token = primary.token.clone();
+
+        let started = Instant::now();
+        assert!(matches!(claim(None), Claim::Unreachable));
         assert!(started.elapsed() < HANDOFF_TIMEOUT + Duration::from_secs(3));
 
         let (events, received) = async_channel::unbounded();
-        serve(listener, events);
+        serve(primary, events);
         let (opened, opened_paths) = mpsc::channel();
         std::thread::spawn(move || {
-            while let Ok(event) = received.recv_blocking() {
-                if let TrayEvent::Open { path, handled } = event {
-                    opened.send(path).unwrap();
-                    handled.send(()).unwrap();
-                }
+            while let Ok(TrayEvent::Open { path }) = received.recv_blocking() {
+                opened.send(path).unwrap();
             }
         });
         assert!(matches!(
-            claim(Some(Path::new("planilla.xlsx"))),
+            claim(Some(Path::new("C:\\planilla.xlsx"))),
             Claim::HandedOff
         ));
-        let paths: Vec<Option<PathBuf>> = opened_paths.try_iter().collect();
-        let last = paths.last().unwrap().as_ref().unwrap();
-        assert!(last.is_absolute() && last.ends_with("planilla.xlsx"));
+        assert!(matches!(
+            claim(Some(Path::new("C:\\run.exe"))),
+            Claim::HandedOff
+        ));
+        let mut paths: Vec<Option<PathBuf>> = Vec::new();
+        while let Ok(path) = opened_paths.recv_timeout(Duration::from_millis(700)) {
+            paths.push(path);
+        }
+        assert!(paths.contains(&Some(PathBuf::from(r"C:\planilla.xlsx"))));
+        assert_eq!(
+            paths.iter().flatten().count(),
+            1,
+            "the unsupported file is refused but its launch still raises the window"
+        );
+
+        let file = token_path(&own_pipe_name().unwrap()).unwrap();
+        std::fs::write(&file, "someone else's token").unwrap();
+        assert!(matches!(claim(None), Claim::Unreachable));
+        std::fs::write(&file, token).unwrap();
     }
 }

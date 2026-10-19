@@ -2,7 +2,7 @@
 // another program: a damaged file is set aside, never crashes the start, and a session that
 // is accepted cannot point the recovery machinery outside the recovery folder.
 #[path = "../../../../test-support/json_mutation.rs"]
-mod json_mutation;
+pub(crate) mod json_mutation;
 
 use proptest::prelude::*;
 

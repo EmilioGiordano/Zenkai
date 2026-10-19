@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::mpsc;
 
 use gpui_kit::*;
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
@@ -10,7 +9,11 @@ use crate::actions::OpenZenkai;
 use crate::close_prompt::CloseGoal;
 use crate::view::Workspace;
 use presence::Presence;
+use window::NativeWindow;
 
+mod handoff;
+#[cfg(test)]
+mod handoff_fuzz;
 mod icon;
 mod instance;
 mod labels;
@@ -21,6 +24,7 @@ pub use instance::{Claim, claim};
 
 const OPEN_ID: &str = "zenkai-open";
 const QUIT_ID: &str = "zenkai-quit";
+const MAX_OPENS_AT_ONCE: usize = 8;
 
 #[derive(Debug, thiserror::Error)]
 enum TrayError {
@@ -36,10 +40,7 @@ pub enum TrayEvent {
     Show,
     Quit,
     Refresh,
-    Open {
-        path: Option<PathBuf>,
-        handled: mpsc::Sender<()>,
-    },
+    Open { path: Option<PathBuf> },
 }
 
 struct Tray {
@@ -50,7 +51,8 @@ struct Tray {
     memory: MenuItem,
     presence: Presence,
     hide_requested: bool,
-    window: isize,
+    window: NativeWindow,
+    events: async_channel::Sender<TrayEvent>,
 }
 
 impl Global for Tray {}
@@ -83,8 +85,7 @@ pub fn installed(cx: &App) -> bool {
     cx.has_global::<Tray>()
 }
 
-// Closing the window while the tray is installed leaves Zenkai running, so the dot turns
-// yellow once GPUI reports the window hidden. Called from an update, hence the deferred hide.
+// Called from inside an update, so the hide itself runs in a task of its own.
 pub fn hide_main_window(cx: &mut App) {
     if !cx.has_global::<Tray>() {
         return;
@@ -93,11 +94,17 @@ pub fn hide_main_window(cx: &mut App) {
     tray.hide_requested = true;
     let window = tray.window;
     cx.spawn(async move |_| {
-        if !window::hide(window) {
+        if !window.hide() {
             tracing::warn!("the main window was not found to hide it");
         }
     })
     .detach();
+}
+
+pub fn request_show(cx: &App) {
+    if let Some(tray) = cx.try_global::<Tray>() {
+        send(&tray.events, TrayEvent::Show);
+    }
 }
 
 pub fn note_visibility(visibility: WindowVisibility, cx: &mut App) {
@@ -111,14 +118,18 @@ pub fn note_visibility(visibility: WindowVisibility, cx: &mut App) {
     tray.show_presence(presence);
 }
 
+pub fn warn_another_zenkai_unreachable() {
+    window::warn_blocking(t!("tray.unreachable.title"), t!("tray.unreachable.text"));
+}
+
 // The window's root is gpui-kit's, so the workspace is reached through its entity.
 #[derive(Clone)]
-struct Main {
+struct MainWindow {
     window: AnyWindowHandle,
     workspace: WeakEntity<Workspace>,
 }
 
-impl Main {
+impl MainWindow {
     fn update<R>(
         &self,
         cx: &mut impl AppContext,
@@ -139,22 +150,22 @@ impl Main {
 }
 
 pub fn install(window: AnyWindowHandle, workspace: &Entity<Workspace>, claim: Claim, cx: &mut App) {
-    let main = Main {
+    let main = MainWindow {
         window,
         workspace: workspace.downgrade(),
     };
     let (events, received) = async_channel::unbounded();
-    if let Claim::Primary(listener) = claim {
-        instance::serve(listener, events.clone());
+    if let Claim::Primary(primary) = claim {
+        instance::serve(primary, events.clone());
     }
-    let window = main
-        .update(cx, |_, window, _| window::handle_of(window))
+    let native = main
+        .update(cx, |_, window, _| NativeWindow::of(window))
         .flatten();
     let opener = events.clone();
     cx.on_action(move |_: &OpenZenkai, _| send(&opener, TrayEvent::Show));
-    let built = window
+    let built = native
         .ok_or(TrayError::NoWindowHandle)
-        .and_then(|window| build(window, &events));
+        .and_then(|native| build(native, &events));
     match built {
         Ok(tray) => {
             cx.set_global(tray);
@@ -171,8 +182,12 @@ pub fn install(window: AnyWindowHandle, workspace: &Entity<Workspace>, claim: Cl
         Err(error) => tracing::warn!(%error, "no tray icon; closing the window will quit"),
     }
     cx.spawn(async move |cx| {
-        while let Ok(event) = received.recv().await {
-            handle(event, &main, window, cx);
+        while let Ok(first) = received.recv().await {
+            let mut batch = vec![first];
+            while let Ok(next) = received.try_recv() {
+                batch.push(next);
+            }
+            handle(batch, &main, native, cx);
         }
     })
     .detach();
@@ -184,7 +199,10 @@ fn send(events: &async_channel::Sender<TrayEvent>, event: TrayEvent) {
     }
 }
 
-fn build(window: isize, events: &async_channel::Sender<TrayEvent>) -> Result<Tray, TrayError> {
+fn build(
+    window: NativeWindow,
+    events: &async_channel::Sender<TrayEvent>,
+) -> Result<Tray, TrayError> {
     let create = |error: &dyn std::fmt::Display| TrayError::Create(error.to_string());
     let open = MenuItem::with_id(MenuId::new(OPEN_ID), t!("tray.open"), true, None);
     let workbooks = MenuItem::new(labels::workbooks_label(0), false, None);
@@ -232,10 +250,10 @@ fn build(window: isize, events: &async_channel::Sender<TrayEvent>) -> Result<Tra
         presence: Presence::Shown,
         hide_requested: false,
         window,
+        events: events.clone(),
     })
 }
 
-// Hovering the icon refreshes the labels, so they are current when the menu opens.
 fn pointer_event(event: &TrayIconEvent) -> Option<TrayEvent> {
     match event {
         TrayIconEvent::Click {
@@ -260,7 +278,7 @@ fn menu_event(id: &str) -> Option<TrayEvent> {
     }
 }
 
-fn refresh_summary(main: &Main, cx: &mut impl AppContext) {
+fn refresh_summary(main: &MainWindow, cx: &mut impl AppContext) {
     main.update(cx, |workspace, _, cx| {
         let (workbooks, committed_mb) = workspace.tray_summary();
         if cx.has_global::<Tray>() {
@@ -269,38 +287,56 @@ fn refresh_summary(main: &Main, cx: &mut impl AppContext) {
     });
 }
 
-// Runs in a foreground task, outside any update, because showing the window makes Windows
-// call into GPUI at once.
-fn handle(event: TrayEvent, main: &Main, window: Option<isize>, cx: &mut AsyncApp) {
-    match event {
-        TrayEvent::Show => reveal(main, window, cx),
-        TrayEvent::Refresh => refresh_summary(main, cx),
-        TrayEvent::Open { path, handled } => {
-            reveal(main, window, cx);
-            if let Some(path) = path {
-                main.update(cx, |workspace, window, cx| {
-                    workspace.open_path(path, window, cx)
-                });
-            }
-            if handled.send(()).is_err() {
-                tracing::debug!("the launching process stopped waiting");
+// Runs in a foreground task, outside any update. Events that queued up together raise the
+// window once, so a burst of launches cannot take the focus over and over.
+fn handle(
+    batch: Vec<TrayEvent>,
+    main: &MainWindow,
+    native: Option<NativeWindow>,
+    cx: &mut AsyncApp,
+) {
+    let (mut reveal_wanted, mut refresh_wanted, mut quit_wanted) = (false, false, false);
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for event in batch {
+        match event {
+            TrayEvent::Show => reveal_wanted = true,
+            TrayEvent::Refresh => refresh_wanted = true,
+            TrayEvent::Quit => quit_wanted = true,
+            TrayEvent::Open { path } => {
+                reveal_wanted = true;
+                if let Some(path) = path
+                    && paths.len() < MAX_OPENS_AT_ONCE
+                    && !paths.contains(&path)
+                {
+                    paths.push(path);
+                }
             }
         }
-        TrayEvent::Quit => {
-            let may_prompt = main.update(cx, |workspace, _, _| workspace.close_may_prompt());
-            if may_prompt.unwrap_or(false) {
-                reveal(main, window, cx);
-            }
-            main.update(cx, |workspace, window, cx| {
-                workspace.request_close(CloseGoal::Quit, window, cx)
-            });
+    }
+    if reveal_wanted {
+        reveal(main, native, cx);
+    } else if refresh_wanted {
+        refresh_summary(main, cx);
+    }
+    for path in paths {
+        main.update(cx, |workspace, window, cx| {
+            workspace.open_path(path, window, cx)
+        });
+    }
+    if quit_wanted {
+        let needs_window = main.update(cx, |workspace, _, _| workspace.close_needs_window());
+        if needs_window.unwrap_or(false) {
+            reveal(main, native, cx);
         }
+        main.update(cx, |workspace, window, cx| {
+            workspace.request_close(CloseGoal::Quit, window, cx)
+        });
     }
 }
 
-fn reveal(main: &Main, window: Option<isize>, cx: &mut AsyncApp) {
-    if let Some(window) = window
-        && !window::show(window)
+fn reveal(main: &MainWindow, native: Option<NativeWindow>, cx: &mut AsyncApp) {
+    if let Some(native) = native
+        && !native.show()
     {
         tracing::warn!("the main window was not found to show it");
     }

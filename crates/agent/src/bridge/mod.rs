@@ -40,7 +40,7 @@ pub enum BridgeError {
     },
 }
 
-fn random_hex(bytes: usize) -> Result<String, BridgeError> {
+pub fn random_hex(bytes: usize) -> Result<String, BridgeError> {
     let mut buffer = vec![0u8; bytes];
     getrandom::fill(&mut buffer).map_err(|error| BridgeError::Random(error.to_string()))?;
     Ok(buffer.iter().map(|b| format!("{b:02x}")).collect())
@@ -78,7 +78,7 @@ fn tokens_match(expected: &[u8], given: &[u8]) -> bool {
             == 0
 }
 
-fn listener_options(pipe: &str) -> std::io::Result<ListenerOptions<'static>> {
+pub fn listener_options(pipe: &str) -> std::io::Result<ListenerOptions<'static>> {
     let name = pipe.to_string().to_ns_name::<GenericNamespaced>()?;
     let options = ListenerOptions::new().name(name);
     #[cfg(windows)]
