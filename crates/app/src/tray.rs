@@ -23,6 +23,7 @@ mod window;
 pub use instance::{Claim, claim};
 
 const OPEN_ID: &str = "zenkai-open";
+const CLOSE_ID: &str = "zenkai-close";
 const QUIT_ID: &str = "zenkai-quit";
 const MAX_OPENS_AT_ONCE: usize = 8;
 
@@ -38,6 +39,7 @@ enum TrayError {
 
 pub enum TrayEvent {
     Show,
+    CloseWindow,
     Quit,
     Refresh,
     Open { path: Option<PathBuf> },
@@ -48,6 +50,7 @@ struct Tray {
     icon: TrayIcon,
     shown: Icon,
     hidden: Icon,
+    close_window: MenuItem,
     workbooks: MenuItem,
     memory: MenuItem,
     presence: Presence,
@@ -64,6 +67,7 @@ impl Tray {
             return;
         }
         self.presence = presence;
+        self.close_window.set_enabled(presence.can_close_window());
         let (image, tooltip) = match presence {
             Presence::Shown => (self.shown.clone(), t!("tray.tooltip_shown")),
             Presence::HiddenToTray => (self.hidden.clone(), t!("tray.tooltip_hidden")),
@@ -210,12 +214,15 @@ fn build(
 ) -> Result<Tray, TrayError> {
     let create = |error: &dyn std::fmt::Display| TrayError::Create(error.to_string());
     let open = MenuItem::with_id(MenuId::new(OPEN_ID), t!("tray.open"), true, None);
+    let close_window =
+        MenuItem::with_id(MenuId::new(CLOSE_ID), t!("tray.close_window"), true, None);
     let workbooks = MenuItem::new(labels::workbooks_label(0), false, None);
     let memory = MenuItem::new(labels::memory_label(0), false, None);
     let quit = MenuItem::with_id(MenuId::new(QUIT_ID), t!("tray.quit"), true, None);
     let menu = Menu::new();
     menu.append_items(&[
         &open,
+        &close_window,
         &PredefinedMenuItem::separator(),
         &workbooks,
         &memory,
@@ -250,6 +257,7 @@ fn build(
         icon,
         shown,
         hidden,
+        close_window,
         workbooks,
         memory,
         presence: Presence::Shown,
@@ -278,6 +286,7 @@ fn pointer_event(event: &TrayIconEvent) -> Option<TrayEvent> {
 fn menu_event(id: &str) -> Option<TrayEvent> {
     match id {
         OPEN_ID => Some(TrayEvent::Show),
+        CLOSE_ID => Some(TrayEvent::CloseWindow),
         QUIT_ID => Some(TrayEvent::Quit),
         _ => None,
     }
@@ -300,7 +309,8 @@ fn handle(
     native: Option<NativeWindow>,
     cx: &mut AsyncApp,
 ) {
-    let (mut reveal_wanted, mut refresh_wanted, mut quit_wanted) = (false, false, false);
+    let (mut reveal_wanted, mut refresh_wanted, mut quit_wanted, mut close_wanted) =
+        (false, false, false, false);
     let mut paths: Vec<PathBuf> = Vec::new();
     let mut notices: Vec<String> = Vec::new();
     let mut dropped = 0;
@@ -308,6 +318,7 @@ fn handle(
         match event {
             TrayEvent::Show => reveal_wanted = true,
             TrayEvent::Refresh => refresh_wanted = true,
+            TrayEvent::CloseWindow => close_wanted = true,
             TrayEvent::Quit => quit_wanted = true,
             TrayEvent::Open { path } => {
                 reveal_wanted = true;
@@ -345,6 +356,15 @@ fn handle(
             workspace.warn_about_launch(notice, cx)
         });
     }
+    if close_wanted && !quit_wanted {
+        let needs_window = main.update(cx, |workspace, _, _| workspace.close_needs_window());
+        if needs_window.unwrap_or(false) {
+            reveal(main, native, cx);
+        }
+        main.update(cx, |workspace, window, cx| {
+            workspace.request_close(CloseGoal::Hide, window, cx)
+        });
+    }
     if quit_wanted {
         let needs_window = main.update(cx, |workspace, _, _| workspace.close_needs_window());
         if needs_window.unwrap_or(false) {
@@ -373,11 +393,12 @@ fn reveal(main: &MainWindow, native: Option<NativeWindow>, cx: &mut AsyncApp) {
 
 #[cfg(test)]
 mod tests {
-    use super::{OPEN_ID, QUIT_ID, TrayEvent, menu_event};
+    use super::{CLOSE_ID, OPEN_ID, QUIT_ID, TrayEvent, menu_event};
 
     #[test]
     fn menu_ids_map_to_commands() {
         assert!(matches!(menu_event(OPEN_ID), Some(TrayEvent::Show)));
+        assert!(matches!(menu_event(CLOSE_ID), Some(TrayEvent::CloseWindow)));
         assert!(matches!(menu_event(QUIT_ID), Some(TrayEvent::Quit)));
         assert!(menu_event("other").is_none());
     }
