@@ -9,8 +9,6 @@ actions!(
         SaveAs,
         Quit,
         CloseWindow,
-        #[cfg(windows)]
-        OpenZenkai,
         Undo,
         Redo,
         Copy,

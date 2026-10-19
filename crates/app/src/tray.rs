@@ -5,9 +5,9 @@ use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use zenkai_i18n::t;
 
-use crate::actions::OpenZenkai;
 use crate::close_prompt::CloseGoal;
 use crate::view::Workspace;
+use handoff::Refusal;
 use presence::Presence;
 use window::NativeWindow;
 
@@ -41,6 +41,7 @@ pub enum TrayEvent {
     Quit,
     Refresh,
     Open { path: Option<PathBuf> },
+    Refused(Refusal),
 }
 
 struct Tray {
@@ -156,13 +157,17 @@ pub fn install(window: AnyWindowHandle, workspace: &Entity<Workspace>, claim: Cl
     };
     let (events, received) = async_channel::unbounded();
     if let Claim::Primary(primary) = claim {
+        let token_file = primary.token_file();
+        cx.on_app_quit(move |_| {
+            instance::remove_token_file(&token_file);
+            async {}
+        })
+        .detach();
         instance::serve(primary, events.clone());
     }
     let native = main
         .update(cx, |_, window, _| NativeWindow::of(window))
         .flatten();
-    let opener = events.clone();
-    cx.on_action(move |_: &OpenZenkai, _| send(&opener, TrayEvent::Show));
     let built = native
         .ok_or(TrayError::NoWindowHandle)
         .and_then(|native| build(native, &events));
@@ -297,6 +302,8 @@ fn handle(
 ) {
     let (mut reveal_wanted, mut refresh_wanted, mut quit_wanted) = (false, false, false);
     let mut paths: Vec<PathBuf> = Vec::new();
+    let mut notices: Vec<String> = Vec::new();
+    let mut dropped = 0;
     for event in batch {
         match event {
             TrayEvent::Show => reveal_wanted = true,
@@ -305,11 +312,18 @@ fn handle(
             TrayEvent::Open { path } => {
                 reveal_wanted = true;
                 if let Some(path) = path
-                    && paths.len() < MAX_OPENS_AT_ONCE
                     && !paths.contains(&path)
                 {
-                    paths.push(path);
+                    if paths.len() < MAX_OPENS_AT_ONCE {
+                        paths.push(path);
+                    } else {
+                        dropped += 1;
+                    }
                 }
+            }
+            TrayEvent::Refused(refusal) => {
+                reveal_wanted = true;
+                notices.push(t!("tray.refused", reason = refusal.message()));
             }
         }
     }
@@ -318,9 +332,17 @@ fn handle(
     } else if refresh_wanted {
         refresh_summary(main, cx);
     }
+    if dropped > 0 {
+        notices.push(t!("tray.too_many", count = dropped));
+    }
     for path in paths {
         main.update(cx, |workspace, window, cx| {
             workspace.open_path(path, window, cx)
+        });
+    }
+    for notice in notices {
+        main.update(cx, |workspace, _, cx| {
+            workspace.warn_about_launch(notice, cx)
         });
     }
     if quit_wanted {

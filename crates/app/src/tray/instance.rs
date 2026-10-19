@@ -14,18 +14,31 @@ use super::handoff::Handoff;
 const TOKEN_BYTES: usize = 32;
 const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 const ACK: &str = "ok";
-const HANDOFF_TIMEOUT: Duration = Duration::from_secs(4);
-const READ_DEADLINE: Duration = Duration::from_secs(2);
+const CONNECT_WINDOW_MS: u64 = 2_000;
+const TOKEN_RETRIES: u64 = 3;
+const TOKEN_RETRY_WAIT_MS: u64 = 150;
+const READ_DEADLINE_MS: u64 = 2_000;
+// The whole attempt: connecting, the token retries and the two reads.
+const HANDOFF_TIMEOUT: Duration = Duration::from_millis(
+    CONNECT_WINDOW_MS + (TOKEN_RETRIES - 1) * TOKEN_RETRY_WAIT_MS + 2 * READ_DEADLINE_MS,
+);
+const CONNECT_WINDOW: Duration = Duration::from_millis(CONNECT_WINDOW_MS);
+const TOKEN_RETRY_WAIT: Duration = Duration::from_millis(TOKEN_RETRY_WAIT_MS);
+const READ_DEADLINE: Duration = Duration::from_millis(READ_DEADLINE_MS);
 const READ_POLL: Duration = Duration::from_millis(10);
 const MAX_HANDLERS: usize = 4;
-const CONNECT_WINDOW: Duration = Duration::from_secs(2);
 const CONNECT_RETRY: Duration = Duration::from_millis(25);
-const TOKEN_RETRIES: usize = 3;
-const TOKEN_RETRY_WAIT: Duration = Duration::from_millis(150);
 
 pub struct Primary {
     listener: Listener,
     token: String,
+    token_file: PathBuf,
+}
+
+impl Primary {
+    pub fn token_file(&self) -> PathBuf {
+        self.token_file.clone()
+    }
 }
 
 pub enum Claim {
@@ -69,7 +82,11 @@ pub fn claim(open: Option<&Path>) -> Claim {
     });
     match created {
         Ok(listener) => match publish_token(&pipe) {
-            Some(token) => Claim::Primary(Primary { listener, token }),
+            Some((token, token_file)) => Claim::Primary(Primary {
+                listener,
+                token,
+                token_file,
+            }),
             None => Claim::Standalone,
         },
         Err(error)
@@ -100,21 +117,53 @@ pub fn claim(open: Option<&Path>) -> Claim {
 }
 
 // Only a process that can read this file can prove it is the running Zenkai of this user.
-fn publish_token(pipe: &str) -> Option<String> {
+// The old file is removed first and the new one created exclusively, so a planted link is
+// never followed.
+fn publish_token(pipe: &str) -> Option<(String, PathBuf)> {
     let path = token_path(pipe)?;
-    let token = random_hex(TOKEN_BYTES).ok()?;
-    if let Some(folder) = path.parent()
-        && std::fs::create_dir_all(folder).is_err()
-    {
+    let token = match random_hex(TOKEN_BYTES) {
+        Ok(token) => token,
+        Err(error) => {
+            tracing::warn!(%error, "no random token for the instance pipe; starting alone");
+            return None;
+        }
+    };
+    if let Err(error) = write_token_file(&path, &token) {
+        tracing::warn!(%error, path = %path.display(), "could not write the instance token; starting alone");
         return None;
     }
-    std::fs::write(&path, &token).ok()?;
-    Some(token)
+    Some((token, path))
+}
+
+fn write_token_file(path: &Path, token: &str) -> std::io::Result<()> {
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(token.as_bytes())
+}
+
+pub fn remove_token_file(path: &Path) {
+    if let Err(error) = std::fs::remove_file(path) {
+        tracing::debug!(%error, "could not remove the instance token");
+    }
 }
 
 fn hand_over(pipe: &str, handoff: &Handoff) -> bool {
-    let Some(line) = handoff.encode() else {
-        return false;
+    let line = match handoff.encode() {
+        Ok(line) => line,
+        Err(error) => {
+            tracing::warn!(%error, "could not encode the launch for the running Zenkai");
+            return false;
+        }
     };
     let (done, answered) = mpsc::channel();
     let pipe = pipe.to_string();
@@ -153,7 +202,7 @@ fn send(pipe: &str, line: &str) -> bool {
         tracing::warn!("the instance pipe is held by a process that is not this user's Zenkai");
         return false;
     }
-    if writeln!(stream.get_mut(), "{line}").is_err() || stream.get_mut().flush().is_err() {
+    if !write_line(stream.get_mut(), line) {
         return false;
     }
     let mut reply = String::new();
@@ -196,7 +245,9 @@ impl Drop for HandlerSlot {
 }
 
 pub fn serve(primary: Primary, events: async_channel::Sender<TrayEvent>) {
-    let Primary { listener, token } = primary;
+    let Primary {
+        listener, token, ..
+    } = primary;
     let token: Arc<str> = token.into();
     let active = Arc::new(AtomicUsize::new(0));
     std::thread::spawn(move || {
@@ -225,10 +276,7 @@ pub fn serve(primary: Primary, events: async_channel::Sender<TrayEvent>) {
 
 fn answer(stream: Stream, token: &str, events: &async_channel::Sender<TrayEvent>) {
     let mut stream = BufReader::new(stream);
-    if writeln!(stream.get_mut(), "{token}")
-        .and_then(|()| stream.get_mut().flush())
-        .is_err()
-    {
+    if !write_line(stream.get_mut(), token) {
         return;
     }
     let Some(line) = read_line_by_deadline(&mut stream) else {
@@ -239,21 +287,43 @@ fn answer(stream: Stream, token: &str, events: &async_channel::Sender<TrayEvent>
         tracing::warn!("ignored a malformed message on the instance pipe");
         return;
     };
-    let path = match handoff.requested() {
-        Some(Ok(path)) => Some(path),
+    let (path, refusal) = match handoff.requested() {
+        Some(Ok(path)) => (Some(path), None),
         Some(Err(refusal)) => {
             tracing::warn!(%refusal, "refused the file a launch asked to open");
-            None
+            (None, Some(refusal))
         }
-        None => None,
+        None => (None, None),
     };
     if events.try_send(TrayEvent::Open { path }).is_err() {
         return;
     }
-    let reply = stream.get_mut();
-    if let Err(error) = writeln!(reply, "{ACK}").and_then(|()| reply.flush()) {
-        tracing::debug!(%error, "the launching process went away before the answer");
+    if let Some(refusal) = refusal
+        && events.try_send(TrayEvent::Refused(refusal)).is_err()
+    {
+        return;
     }
+    if !write_line(stream.get_mut(), ACK) {
+        tracing::debug!("the launching process went away before the answer");
+    }
+}
+
+// The accepted stream is non-blocking, so a write can ask to be retried.
+fn write_line(stream: &mut Stream, text: &str) -> bool {
+    let bytes = format!("{text}\n").into_bytes();
+    let deadline = Instant::now() + READ_DEADLINE;
+    let mut sent = 0;
+    while sent < bytes.len() {
+        match stream.write(&bytes[sent..]) {
+            Ok(0) => return false,
+            Ok(written) => sent += written,
+            Err(error) if error.kind() == ErrorKind::WouldBlock && Instant::now() < deadline => {
+                std::thread::sleep(READ_POLL);
+            }
+            Err(_) => return false,
+        }
+    }
+    stream.flush().is_ok()
 }
 
 // Accepted streams are non-blocking (pipes have no read timeout), so reading polls until the deadline.
@@ -282,6 +352,7 @@ fn read_line_by_deadline(stream: &mut BufReader<Stream>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tray::handoff::Refusal;
 
     #[test]
     fn the_pipe_name_depends_on_user_and_executable() {
@@ -321,8 +392,12 @@ mod tests {
         serve(primary, events);
         let (opened, opened_paths) = mpsc::channel();
         std::thread::spawn(move || {
-            while let Ok(TrayEvent::Open { path }) = received.recv_blocking() {
-                opened.send(path).unwrap();
+            while let Ok(event) = received.recv_blocking() {
+                match event {
+                    TrayEvent::Open { path } => opened.send(Ok(path)).unwrap(),
+                    TrayEvent::Refused(refusal) => opened.send(Err(refusal)).unwrap(),
+                    _ => {}
+                }
             }
         });
         assert!(matches!(
@@ -334,9 +409,14 @@ mod tests {
             Claim::HandedOff
         ));
         let mut paths: Vec<Option<PathBuf>> = Vec::new();
+        let mut refusals = Vec::new();
         while let Ok(path) = opened_paths.recv_timeout(Duration::from_millis(700)) {
-            paths.push(path);
+            match path {
+                Ok(path) => paths.push(path),
+                Err(refusal) => refusals.push(refusal),
+            }
         }
+        assert_eq!(refusals, [Refusal::UnsupportedExtension]);
         assert!(paths.contains(&Some(PathBuf::from(r"C:\planilla.xlsx"))));
         assert_eq!(
             paths.iter().flatten().count(),
