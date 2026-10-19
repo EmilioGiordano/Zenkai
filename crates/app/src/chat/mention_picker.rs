@@ -30,6 +30,8 @@ pub(super) struct Mentions {
     folder: Vec<String>,
     // Sheet names read for this picker session, by folder-relative path.
     folder_sheets: HashMap<String, Vec<String>>,
+    // Names of the workbooks picked in the message being written, which its note needs.
+    picked_sheets: HashMap<String, Vec<String>>,
     sheet_names: SheetNameCache,
     // Bumped per query, so names read for an older query are not shown.
     query_generation: u64,
@@ -105,7 +107,7 @@ impl ChatPanel {
         {
             Ok(mut catalog) => {
                 catalog.folder = self.mentions.folder.clone();
-                catalog.folder_sheets = self.mentions.folder_sheets.clone();
+                catalog.folder_sheets = self.mentions.picked_sheets.clone();
                 Some(catalog)
             }
             Err(error) => {
@@ -168,12 +170,12 @@ impl ChatPanel {
                     this.mentions
                         .sheet_names
                         .insert(read.key, read.names.clone());
-                    if shown && this.mentions.catalog.is_some() {
+                    if let (true, Some(catalog)) = (shown, this.mentions.catalog.as_mut()) {
+                        catalog
+                            .folder_sheets
+                            .insert(read.file.clone(), read.names.clone());
                         this.mentions.folder_sheets.insert(read.file, read.names);
                     }
-                }
-                if let Some(catalog) = this.mentions.catalog.as_mut() {
-                    catalog.folder_sheets = this.mentions.folder_sheets.clone();
                 }
                 cx.notify();
             }));
@@ -281,6 +283,7 @@ impl ChatPanel {
 
     pub(super) fn close_mentions(&mut self) {
         self.mentions.catalog = None;
+        self.mentions.folder_sheets.clear();
         self.mentions.index = 0;
     }
 
@@ -288,7 +291,7 @@ impl ChatPanel {
     pub(super) fn forget_mentions(&mut self) {
         self.close_mentions();
         self.mentions.folder.clear();
-        self.mentions.folder_sheets.clear();
+        self.mentions.picked_sheets.clear();
     }
 
     pub(super) fn mention_step(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -319,6 +322,14 @@ impl ChatPanel {
             return;
         };
         let insert = chosen.insert.clone();
+        if let Some((file, names)) = chosen.book.as_ref().and_then(|book| {
+            self.mentions
+                .folder_sheets
+                .get_key_value(book)
+                .map(|(file, names)| (file.clone(), names.clone()))
+        }) {
+            self.mentions.picked_sheets.insert(file, names);
+        }
         self.close_mentions();
         self.composer.update(cx, |state, cx| {
             let text = insert.trim_end().to_string();

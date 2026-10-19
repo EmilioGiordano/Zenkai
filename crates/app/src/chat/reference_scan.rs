@@ -2,10 +2,9 @@ use std::borrow::Cow;
 
 use zenkai_types::Range;
 
-use super::name_guard::is_safe_name;
+use super::name_guard::{MAX_SHEET_NAME_CHARS, is_safe_name};
 use super::reference::Reference;
 
-const MAX_SHEET_NAME_CHARS: usize = 31;
 const FORBIDDEN_IN_SHEET_NAME: [char; 7] = ['[', ']', ':', '\\', '/', '?', '*'];
 const MAX_CELL_CHARS: usize = 12;
 const MAX_AUTOLINK_CHARS: usize = 256;

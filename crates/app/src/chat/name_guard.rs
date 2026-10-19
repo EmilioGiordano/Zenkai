@@ -14,6 +14,8 @@ pub(super) fn is_unsafe_char(c: char) -> bool {
         )
 }
 
+pub(super) const MAX_SHEET_NAME_CHARS: usize = 31;
+
 pub(super) fn is_safe_name(name: &str) -> bool {
     !name.chars().any(is_unsafe_char)
 }

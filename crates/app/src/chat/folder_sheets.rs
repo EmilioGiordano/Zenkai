@@ -6,7 +6,7 @@ use zenkai_engine::{ListedSheet, sheet_names_of};
 
 use super::mention_candidates::MAX_SHEETS_PER_BOOK;
 use super::mention_catalog::Catalog;
-use super::name_guard::{can_hold_external_sheet, is_safe_name};
+use super::name_guard::{MAX_SHEET_NAME_CHARS, can_hold_external_sheet, is_safe_name};
 
 pub(super) const MAX_FILES_PER_QUERY: usize = 8;
 const CACHE_ENTRIES: usize = 64;
@@ -86,7 +86,11 @@ pub(super) fn best_matches(query: &str, catalog: &Catalog) -> Vec<String> {
 pub(super) fn visible_safe_names(listed: Vec<ListedSheet>) -> Vec<String> {
     listed
         .into_iter()
-        .filter(|sheet| !sheet.hidden && is_safe_name(&sheet.name))
+        .filter(|sheet| {
+            !sheet.hidden
+                && sheet.name.chars().take(MAX_SHEET_NAME_CHARS + 1).count() <= MAX_SHEET_NAME_CHARS
+                && is_safe_name(&sheet.name)
+        })
         .map(|sheet| sheet.name)
         .take(MAX_SHEETS_PER_BOOK)
         .collect()
@@ -142,11 +146,21 @@ mod tests {
             listed("Secret", true),
             listed("evil\nname", false),
             listed("rtl\u{202E}x", false),
+            listed(&"x".repeat(5000), false),
+            listed(&"y".repeat(MAX_SHEET_NAME_CHARS), false),
         ];
         sheets.extend((0..30).map(|n| listed(&format!("s{n}"), false)));
         let names = visible_safe_names(sheets);
         assert_eq!(names.len(), MAX_SHEETS_PER_BOOK);
-        assert_eq!(&names[..2], ["Data", "s0"]);
+        assert_eq!(
+            &names[..2],
+            ["Data", "y".repeat(MAX_SHEET_NAME_CHARS).as_str()]
+        );
+        assert!(
+            names
+                .iter()
+                .all(|name| name.chars().count() <= MAX_SHEET_NAME_CHARS)
+        );
     }
 
     #[test]

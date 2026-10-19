@@ -106,6 +106,9 @@ pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
         }
     }
     for file in catalog.folder_only().filter(|file| matches(file)) {
+        if found.len() >= MAX_CANDIDATES {
+            break;
+        }
         found.push(Candidate {
             group: Group::Workbooks,
             book: None,
@@ -117,7 +120,11 @@ pub fn candidates(query: &str, catalog: &Catalog) -> Vec<Candidate> {
         if wanted.is_empty() {
             continue;
         }
-        let Some((_, sheets)) = catalog.folder_sheets_of(file) else {
+        let Some(sheets) = catalog
+            .folder_sheets
+            .get(file)
+            .filter(|_| can_hold_external_sheet(file))
+        else {
             continue;
         };
         for sheet in sheets
