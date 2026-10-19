@@ -192,6 +192,8 @@ pub struct Workspace {
     sidebar: SidebarState,
     panels: PanelsState,
     lifecycle: Lifecycle,
+    #[cfg(windows)]
+    quit_after_hide: bool,
     // Saves ahead of closing a tab or the app; `None` when no close waits on a save.
     departure: Option<Departure>,
     close_dialog: Option<close_dialog::CloseDialog>,
@@ -340,6 +342,8 @@ impl Workspace {
             sidebar: SidebarState::new(cx),
             panels: PanelsState::new(cx),
             lifecycle: Lifecycle::Running,
+            #[cfg(windows)]
+            quit_after_hide: false,
             departure: None,
             close_dialog: None,
             prompts: PromptGate::default(),

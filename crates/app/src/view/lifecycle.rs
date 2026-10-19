@@ -394,6 +394,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(windows)]
+        if !goal.keeps_running() && self.lifecycle == Lifecycle::Closing {
+            self.quit_after_hide = true;
+        }
         if !goal.keeps_running()
             && let Some(departure) = self.departure.as_mut()
         {
@@ -606,16 +610,20 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let unprotected = self.recovery_dir.is_none()
-            && self
-                .documents
-                .iter()
-                .any(|document| document.needs_recovery() && plan.keeps(document.id));
-        if unprotected {
+        if self.holds_unprotected_work(&plan) {
             self.ask_to_quit_anyway(t!("quit.autosave_off_reason"), plan, window, cx);
             return;
         }
         self.write_session_and_quit(plan, cx);
+    }
+
+    // Without a recovery folder, work kept in memory has no copy to come back from.
+    pub(super) fn holds_unprotected_work(&self, plan: &ClosePlan) -> bool {
+        self.recovery_dir.is_none()
+            && self
+                .documents
+                .iter()
+                .any(|document| document.needs_recovery() && plan.keeps(document.id))
     }
 
     fn recovery_file_of(&self, id: WorkbookId) -> Option<PathBuf> {
@@ -741,6 +749,10 @@ impl Workspace {
                 if proceed {
                     this.quit_or_hide(plan, window, cx);
                 } else {
+                    #[cfg(windows)]
+                    {
+                        this.quit_after_hide = false;
+                    }
                     this.lifecycle = Lifecycle::Running;
                     this.clear_busy(t!("busy.closing"), cx);
                 }
