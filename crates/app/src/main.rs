@@ -26,6 +26,7 @@ mod find;
 mod format_dialog;
 mod generate_dialog;
 mod interface_scale;
+mod job_pill;
 mod jump;
 mod keymap;
 mod language;

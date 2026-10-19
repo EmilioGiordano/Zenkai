@@ -15,6 +15,7 @@ use crate::close_prompt::ClosePlan;
 use crate::document::{self, FileJob, SharedWorkbook, SnapshotOutcome};
 use crate::documents::Intent;
 use crate::entry::Entry;
+use crate::job_pill::LongJob;
 use crate::pending_save::{AfterJob, JobEnd};
 use crate::recovery;
 use zenkai_agent::settings_file::{self, SettingsPaths};
@@ -258,6 +259,7 @@ impl Workspace {
         };
         let edits = document.edit_count();
         let generation = document.generation();
+        self.start_long_job(LongJob::Autosaving, cx);
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -273,6 +275,7 @@ impl Workspace {
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
+                this.end_long_job(LongJob::Autosaving, cx);
                 let Some(document) = this.documents.get_mut(id) else {
                     return;
                 };
