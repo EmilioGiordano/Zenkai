@@ -159,7 +159,7 @@ pub enum LoadFailure {
 
 pub fn load_workbook(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFailure> {
     let started = Instant::now();
-    let loaded = load_any(path, reader);
+    let loaded = tracing::info_span!("open_workbook").in_scope(|| load_any(path, reader));
     let elapsed_ms = started.elapsed().as_millis();
     match &loaded {
         Ok(load) => tracing::info!(

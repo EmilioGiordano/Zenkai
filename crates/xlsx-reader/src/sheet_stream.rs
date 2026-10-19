@@ -5,8 +5,9 @@ use quick_xml::events::{BytesStart, Event};
 
 use crate::ReadError;
 use crate::limits::Usage;
-use crate::sheet_data::{SheetCells, scan_rows_into};
+use crate::sheet_data::{SheetCells, Totals, scan_rows_into};
 use crate::stream::{Budgets, CharacterCheck, CompressedMeter, Guard};
+use crate::unit_pool::{PoolEnv, UnitPool, UnitScan};
 
 // Rows are parsed in pieces of about this size, the same size the buffered reader
 // used; a piece is dropped once its cells are merged.
@@ -35,15 +36,36 @@ fn unsupported(what: &str) -> ReadError {
     ReadError::Unsupported(what.to_string())
 }
 
+// Where a worksheet's rows are cut into pieces and how many threads scan them.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Tuning {
+    pub(crate) piece_bytes: usize,
+    pub(crate) cut_margin: usize,
+    pub(crate) workers: usize,
+}
+
+impl Tuning {
+    pub(crate) const fn production(workers: usize) -> Tuning {
+        Tuning {
+            piece_bytes: PIECE_BYTES,
+            cut_margin: CUT_MARGIN,
+            workers,
+        }
+    }
+}
+
 // One pass over the worksheet: the configuration flows into the stub byte for byte,
 // rows are parsed in pieces cut before row starts and dropped after merging, and only
-// the model cells, strings and formula texts stay in memory.
+// the model cells, strings and formula texts stay in memory. With workers, the pieces
+// are scanned on other threads and merged back in order, so the sheet is the one the
+// pieces would have built one after another.
 pub(crate) fn stream_worksheet<R: Read>(
     entry: R,
     meter: &CompressedMeter,
     part: &str,
     sheet_name: &str,
     budgets: &Budgets,
+    tuning: Tuning,
 ) -> Result<StreamedSheet, ReadError> {
     let mut pump = Pump::new(entry, meter, part, budgets);
     let Some((tag, content)) = pump.sheet_content()? else {
@@ -58,13 +80,13 @@ pub(crate) fn stream_worksheet<R: Read>(
     let prefix = pump.head[..tag].to_vec();
     pump.head.drain(..content);
     pump.pos = 0;
-    let mut driver = Driver {
+    let driver = Driver {
         sheet_name,
         prefixes: &prefixes,
         budgets,
         merged: SheetCells::default(),
     };
-    let mut rowtags: Vec<u8> = Vec::new();
+    let rowtags: Vec<u8> = Vec::new();
     let cut = match pump.peek()? {
         (Next::SheetDataEnd, end) => {
             pump.pos += end;
@@ -82,44 +104,119 @@ pub(crate) fn stream_worksheet<R: Read>(
             pattern
         }
     };
+    let env = PoolEnv {
+        cut: &cut,
+        prefixes: &prefixes,
+        sheet_name,
+        budgets,
+    };
+    let (tail, driver, rowtags) = std::thread::scope(|scope| {
+        let mut units = Units {
+            driver,
+            rowtags,
+            pool: UnitPool::start(scope, tuning.workers, &env),
+        };
+        let read = read_units(&mut pump, &mut units, &cut, tuning);
+        let tail = units.settle(read);
+        if let Some(pool) = units.pool.take() {
+            pool.close();
+        }
+        tail.map(|tail| (tail, units.driver, units.rowtags))
+    })?;
+    Ok(assembled(prefix, qname, rowtags, tail, driver))
+}
+
+// Why the reading of units stopped. An error from the source comes after the units cut
+// before it, so those are settled first; an error from a unit is final.
+enum Halt {
+    Source(ReadError),
+    Unit(ReadError),
+}
+
+impl From<ReadError> for Halt {
+    fn from(error: ReadError) -> Halt {
+        Halt::Source(error)
+    }
+}
+
+// The sheet being built and the threads scanning units for it.
+struct Units<'d, 'p> {
+    driver: Driver<'d>,
+    rowtags: Vec<u8>,
+    pool: Option<UnitPool<'p>>,
+}
+
+impl Units<'_, '_> {
+    fn unit(&mut self, cut: &[u8], bytes: &[u8]) -> Result<(), Halt> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let driver = &mut self.driver;
+        let rowtags = &mut self.rowtags;
+        match &mut self.pool {
+            None => parse_unit(driver, rowtags, cut, bytes),
+            Some(pool) => pool.submit(bytes, &mut |scan| absorb_unit(driver, rowtags, scan)),
+        }
+        .map_err(Halt::Unit)
+    }
+
+    fn drain(&mut self) -> Result<(), ReadError> {
+        let driver = &mut self.driver;
+        let rowtags = &mut self.rowtags;
+        match &mut self.pool {
+            None => Ok(()),
+            Some(pool) => pool.drain(&mut |scan| absorb_unit(driver, rowtags, scan)),
+        }
+    }
+
+    // The tail of the sheet once every unit before it is in, or the first error in
+    // document order: a unit's own, or the source's after the units before it.
+    fn settle(&mut self, read: Result<Vec<u8>, Halt>) -> Result<Vec<u8>, ReadError> {
+        match read {
+            Ok(tail) => self.drain().map(|()| tail),
+            Err(Halt::Unit(error)) => Err(error),
+            Err(Halt::Source(error)) => match self.drain() {
+                Err(earlier) => Err(earlier),
+                Ok(()) => Err(error),
+            },
+        }
+    }
+}
+
+// Every unit of rows up to the end of sheetData, then the bytes after it.
+fn read_units<R: Read>(
+    pump: &mut Pump<'_, R>,
+    units: &mut Units<'_, '_>,
+    cut: &[u8],
+    tuning: Tuning,
+) -> Result<Vec<u8>, Halt> {
     loop {
-        while !pump.eof && pump.window().len() < PIECE_BYTES + CUT_MARGIN {
+        while !pump.eof && pump.window().len() < tuning.piece_bytes + tuning.cut_margin {
             pump.fill()?;
         }
         if pump.window().is_empty() {
-            return Err(unreadable("sheetData is not closed"));
+            return Err(unreadable("sheetData is not closed").into());
         }
         if let Some((rel, end)) = find_end_tag(pump.window()) {
             let start = pump.pos;
-            parse_unit(
-                &mut driver,
-                &mut rowtags,
-                &cut,
-                &pump.head[start..start + rel],
-            )?;
+            units.unit(cut, &pump.head[start..start + rel])?;
             pump.pos = start + end;
-            let tail = pump.rest()?;
-            return Ok(assembled(prefix, qname, rowtags, tail, driver));
+            return Ok(pump.rest()?);
         }
-        match find_cut(pump.window(), &cut) {
+        match find_cut(pump.window(), cut) {
             Some(at) if at > 0 => {
                 let start = pump.pos;
-                parse_unit(
-                    &mut driver,
-                    &mut rowtags,
-                    &cut,
-                    &pump.head[start..start + at],
-                )?;
+                units.unit(cut, &pump.head[start..start + at])?;
                 pump.pos = start + at;
-                if pump.pos > PIECE_BYTES {
+                if pump.pos > tuning.piece_bytes {
                     let pos = pump.pos;
                     pump.head.drain(..pos);
                     pump.pos = 0;
                 }
             }
-            _ if pump.eof => return Err(unreadable("sheetData is not closed")),
+            _ if pump.eof => return Err(unreadable("sheetData is not closed").into()),
             _ if pump.window().len() >= ROW_CAP_BYTES => {
-                return Err(unsupported("a row larger than supported"));
+                return Err(unsupported("a row larger than supported").into());
             }
             _ => pump.fill()?,
         }
@@ -283,29 +380,63 @@ fn parse_unit(
     let text = std::str::from_utf8(unit).map_err(unreadable)?;
     let before = driver.merged.totals();
     let spills = scan_rows_into(&mut driver.merged, text, driver.prefixes, driver.sheet_name)?;
-    // An array formula spills into later rows; when its range runs past the rows
-    // read so far a later piece would miss the cover, so the file goes to IronCalc.
-    if spills {
-        return Err(unsupported("an array formula spilling past one piece"));
-    }
-    let after = driver.merged.totals();
-    let usage = Usage {
-        cells: after.cells.saturating_sub(before.cells),
-        // One event per formula cell: plain and array formulas convert, shared
-        // anchors convert once, shared children point at their anchor.
-        formulas: after.formulas.saturating_sub(before.formulas),
-        bytes: after
-            .bytes
-            .saturating_sub(before.bytes)
-            .saturating_add(rowtags_bytes),
-        rows: after.rows.saturating_sub(before.rows),
+    driver.charge_unit(before, spills, rowtags_bytes)
+}
+
+// A unit scanned on its own, taken into the sheet in document order. Its error is the
+// one the scan of the whole sheet would have met at that point.
+fn absorb_unit(
+    driver: &mut Driver,
+    rowtags: &mut Vec<u8>,
+    scan: UnitScan,
+) -> Result<(), ReadError> {
+    let first_row = scan.cells.first_row();
+    let spills = match scan.outcome {
+        Ok(spills) => spills,
+        // A scan on its own cannot see that its first row repeats an earlier one, and
+        // that is met before anything after the first row.
+        Err(_) if first_row != 0 && first_row <= driver.merged.last_row() => {
+            return Err(unsupported("rows out of order"));
+        }
+        Err(error) => return Err(error),
     };
-    driver.budgets.check_usage(usage)
+    let before = driver.merged.totals();
+    driver.merged.absorb(scan.cells)?;
+    rowtags.extend_from_slice(&scan.rowtags);
+    driver.charge_unit(before, spills, scan.rowtags_bytes)
+}
+
+impl Driver<'_> {
+    fn charge_unit(
+        &self,
+        before: Totals,
+        spills: bool,
+        rowtags_bytes: u64,
+    ) -> Result<(), ReadError> {
+        // An array formula spills into later rows; when its range runs past the rows
+        // read so far a later piece would miss the cover, so the file goes to IronCalc.
+        if spills {
+            return Err(unsupported("an array formula spilling past one piece"));
+        }
+        let after = self.merged.totals();
+        let usage = Usage {
+            cells: after.cells.saturating_sub(before.cells),
+            // One event per formula cell: plain and array formulas convert, shared
+            // anchors convert once, shared children point at their anchor.
+            formulas: after.formulas.saturating_sub(before.formulas),
+            bytes: after
+                .bytes
+                .saturating_sub(before.bytes)
+                .saturating_add(rowtags_bytes),
+            rows: after.rows.saturating_sub(before.rows),
+        };
+        self.budgets.check_usage(usage)
+    }
 }
 
 // The outline row tags of one unit, found by the same pattern the pieces cut by;
 // the strict parse later still sees every byte.
-fn rowtags_from_unit(rowtags: &mut Vec<u8>, cut: &[u8], unit: &[u8]) -> u64 {
+pub(crate) fn rowtags_from_unit(rowtags: &mut Vec<u8>, cut: &[u8], unit: &[u8]) -> u64 {
     let mut from = 0;
     let mut added = 0u64;
     while from < unit.len() {
@@ -661,13 +792,17 @@ fn classify(window: &[u8]) -> Result<Option<(Next, usize)>, ReadError> {
             Ok(tag_end(window).map(|end| (Next::Row, skipped + end)))
         }
         Event::Empty(start) if start.local_name().as_ref() == b"row" => {
-            Ok(Some((Next::Row, skipped + position(&reader))))
+            Ok(Some((Next::Row, skipped.saturating_add(position(&reader)))))
         }
-        Event::End(end) if end.local_name().as_ref() == b"sheetData" => {
-            Ok(Some((Next::SheetDataEnd, skipped + position(&reader))))
-        }
+        Event::End(end) if end.local_name().as_ref() == b"sheetData" => Ok(Some((
+            Next::SheetDataEnd,
+            skipped.saturating_add(position(&reader)),
+        ))),
         Event::Eof => Ok(None),
-        _ => Ok(Some((Next::Other, skipped + position(&reader)))),
+        _ => Ok(Some((
+            Next::Other,
+            skipped.saturating_add(position(&reader)),
+        ))),
     }
 }
 
@@ -1220,7 +1355,142 @@ mod tests {
             "xl/worksheets/sheet1.xml",
             "Sheet1",
             budgets,
+            Tuning::production(0),
         )
+    }
+
+    fn stream_tuned(xml: &str, tuning: Tuning) -> Result<StreamedSheet, ReadError> {
+        let meter = CompressedMeter::new();
+        stream_worksheet(
+            meter.wrap(xml.as_bytes()),
+            &meter,
+            "xl/worksheets/sheet1.xml",
+            "Sheet1",
+            &budgets(),
+            tuning,
+        )
+    }
+
+    fn same_streamed(
+        serial: Result<StreamedSheet, ReadError>,
+        threaded: Result<StreamedSheet, ReadError>,
+    ) {
+        match (serial, threaded) {
+            (Ok(serial), Ok(threaded)) => {
+                assert_eq!(serial.stub, threaded.stub);
+                assert_eq!(serial.settings, threaded.settings);
+                assert!(serial.cells == threaded.cells, "cells differ");
+            }
+            (Err(serial), Err(threaded)) => {
+                assert_eq!(format!("{serial:?}"), format!("{threaded:?}"));
+            }
+            (serial, threaded) => panic!(
+                "serial {:?}, threaded {:?}",
+                serial.map(|_| ()),
+                threaded.map(|_| ())
+            ),
+        }
+    }
+
+    // Pieces of a few hundred bytes cut the generated rows at every kind of place.
+    fn small_pieces(piece_bytes: usize, workers: usize) -> Tuning {
+        Tuning {
+            piece_bytes,
+            cut_margin: piece_bytes / 4,
+            workers,
+        }
+    }
+
+    #[test]
+    fn scanning_pieces_on_workers_builds_the_sheet_the_serial_scan_builds() {
+        use crate::test_sheets::{SheetShape, sheet_xml};
+        let mut compared = 0;
+        for seed in 1..=6u64 {
+            for (spills, gaps, shared_strings) in [
+                (false, false, 0),
+                (false, true, 4),
+                (true, false, 3),
+                (true, true, 0),
+            ] {
+                let shape = SheetShape {
+                    spills,
+                    gaps,
+                    shared_strings,
+                    ..SheetShape::plain(150 + seed as u32 * 40, seed)
+                };
+                let xml = sheet_xml(&shape);
+                for piece_bytes in [300, 1_000, 4_096, 50_000] {
+                    let serial = stream_tuned(&xml, small_pieces(piece_bytes, 0));
+                    for workers in [1, 2, 3, 5] {
+                        same_streamed(
+                            serial_again(&xml, piece_bytes),
+                            stream_tuned(&xml, small_pieces(piece_bytes, workers)),
+                        );
+                        compared += 1;
+                    }
+                    if !spills {
+                        let whole = stream_tuned(&xml, Tuning::production(0));
+                        same_streamed(whole, serial);
+                    }
+                }
+            }
+        }
+        assert!(compared > 100);
+    }
+
+    fn serial_again(xml: &str, piece_bytes: usize) -> Result<StreamedSheet, ReadError> {
+        stream_tuned(xml, small_pieces(piece_bytes, 0))
+    }
+
+    #[test]
+    fn a_hostile_sheet_is_refused_as_the_serial_scan_refuses_it() {
+        use crate::test_sheets::{SheetShape, sheet_xml};
+        let xml = sheet_xml(&SheetShape::plain(3_000, 5));
+        for workers in [1, 6] {
+            let tuning = |workers| small_pieces(500, workers);
+            let run = |tuning| {
+                let meter = CompressedMeter::new();
+                let tight = Budgets::with_cells(CellBudget::max_cells_for_test(400));
+                stream_worksheet(
+                    meter.wrap(xml.as_bytes()),
+                    &meter,
+                    "xl/worksheets/sheet1.xml",
+                    "Sheet1",
+                    &tight,
+                    tuning,
+                )
+            };
+            let serial = run(tuning(0));
+            let threaded = run(tuning(workers));
+            assert!(matches!(serial, Err(ReadError::Unsafe(_))));
+            assert!(matches!(threaded, Err(ReadError::Unsafe(_))));
+        }
+    }
+
+    #[test]
+    fn a_failing_unit_gives_the_error_of_the_serial_scan() {
+        use crate::test_sheets::{SheetShape, sheet_xml};
+        let good = sheet_xml(&SheetShape::plain(200, 9));
+        let rows_end = good.len() - "</sheetData></worksheet>".len();
+        let repeated_row = r#"<row r="3"><c r="A3"><v>1</v></c></row>"#;
+        let broken_row = r#"<row r="9999"><c r="A9999" t="s"><v>x</v></c></row>"#;
+        let unclosed = r#"<row r="9998"><c r="A9998"><v>1"#;
+        for tail in [repeated_row, broken_row, unclosed] {
+            let xml = format!("{}{tail}{}", &good[..rows_end], &good[rows_end..]);
+            for piece_bytes in [300, 2_000] {
+                for workers in [1, 3] {
+                    same_streamed(
+                        serial_again(&xml, piece_bytes),
+                        stream_tuned(&xml, small_pieces(piece_bytes, workers)),
+                    );
+                }
+            }
+        }
+        let truncated = &good[..good.len() / 2];
+        same_streamed(
+            serial_again(truncated, 300),
+            stream_tuned(truncated, small_pieces(300, 3)),
+        );
     }
 
     #[test]

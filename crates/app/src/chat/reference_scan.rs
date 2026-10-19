@@ -132,7 +132,14 @@ fn reference_at(chars: &[char], at: usize) -> Option<(Reference, usize)> {
     };
     let (range, end) = parse_range(chars, cell_at)?;
     let qualified = sheet.is_some() || range.start != range.end;
-    (qualified && boundary_after(chars, end)).then_some((Reference { sheet, range }, end))
+    (qualified && boundary_after(chars, end)).then_some((
+        Reference {
+            workbook: None,
+            sheet,
+            range,
+        },
+        end,
+    ))
 }
 
 fn find(chars: &[char], skip: impl Fn(&[char], usize) -> Option<usize>) -> Vec<Found> {

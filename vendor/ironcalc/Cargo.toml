@@ -121,6 +121,12 @@ version = "1.0"
 [dependencies.zip]
 version = "0.6"
 
+# Path-only self dependency, stripped when publishing: turns on the mocked clock for
+# this crate's own tests while leaving normal builds untouched.
+[dev-dependencies.ironcalc]
+path = "."
+features = ["mock_time"]
+
 [dev-dependencies.uuid]
 version = "1.2.2"
 features = [

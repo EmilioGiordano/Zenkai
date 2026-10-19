@@ -51,6 +51,7 @@ pub fn defaults() -> Vec<Binding> {
             ConfirmCloseDialog,
             Some("CloseDialog && !CloseButton"),
         ),
+        bind("y", ConfirmCloseDialog, Some("CloseDialog")),
         bind("n", DiscardCloseDialog, Some("CloseDialog")),
         bind("escape", CancelCloseDialog, Some("CloseDialog")),
         bind("tab", FocusNextControl, Some("CloseDialog")),
@@ -266,6 +267,8 @@ pub fn defaults() -> Vec<Binding> {
 
 #[cfg(test)]
 mod tests {
+    use gpui_kit::Action;
+
     use super::*;
 
     #[test]
@@ -275,5 +278,28 @@ mod tests {
             .filter(|line| line.starts_with("        bind("))
             .count();
         assert_eq!(defaults().len(), written);
+    }
+
+    #[test]
+    fn the_close_dialog_accepts_y_to_save_and_n_to_discard() {
+        let dialog_action = |chord: &str| {
+            defaults()
+                .into_iter()
+                .find(|binding| {
+                    binding.chord.as_str() == chord
+                        && binding
+                            .context
+                            .is_some_and(|context| context.starts_with("CloseDialog"))
+                })
+                .map(|binding| binding.action.name())
+        };
+        assert_eq!(
+            dialog_action("y"),
+            Some(<ConfirmCloseDialog as Action>::name_for_type())
+        );
+        assert_eq!(
+            dialog_action("n"),
+            Some(<DiscardCloseDialog as Action>::name_for_type())
+        );
     }
 }

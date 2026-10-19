@@ -51,6 +51,9 @@ Zenkai-only, not for upstream:
 
 - The empty `[workspace]` table in `Cargo.toml`, so the crate builds on its own
   while living inside Zenkai's workspace directory.
+- The path-only `ironcalc` dev-dependency with the `mock_time` feature, which the published
+  crate strips from `Cargo.toml`. Without it the generated tests compare templates holding
+  `NOW()` and `TODAY()` against today's clock and fail as the date moves.
 
 ## ironcalc_base 0.8.3
 
@@ -147,6 +150,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   inline fields); the encoding of a `CellStore` changed, so `.ic` files written by earlier
   builds do not load. Tests: `src/cell_store.rs` (random operations against the nested
   maps, size, encoding).
+- `CellStore::append` moves the rows of another store into the first, so a caller that
+  reads a sheet in pieces can build each piece in its own store and join them
+  (`src/cell_store.rs`). Stands on its own. Test in the module.
 - `Model::delete_columns` removes the `CellStore` rows it leaves without cells, so the used
   range matches the cells; rows that were already empty and row height, style and hidden
   state (kept in `Worksheet::rows`) stay. Needs the `CellStore` patch. IronCalc's own

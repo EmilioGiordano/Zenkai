@@ -10,6 +10,7 @@ use ironcalc::base::types::{Cell, Row};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
+mod merge;
 mod values;
 mod xml;
 
@@ -40,6 +41,7 @@ const DEFAULT_ROW_HEIGHT: f64 = 14.5;
 // numbers strings and formulas in document order. Formula texts are owned so row pieces
 // can be dropped as the worksheet streams in.
 #[derive(Default)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(crate) struct SheetCells {
     pub(crate) rows: Vec<Row>,
     pub(crate) data: CellStore,
@@ -49,6 +51,7 @@ pub(crate) struct SheetCells {
     pub(crate) events: Vec<FormulaEvent>,
     pub(crate) jobs: Vec<FormulaJob>,
     string_index: HashMap<Arc<str>, usize>,
+    first_row: i32,
     last_row: i32,
     cell_count: u64,
     string_bytes: u64,
@@ -65,6 +68,22 @@ pub(crate) struct Totals {
 }
 
 impl SheetCells {
+    // The sheet-local index of the text, added when no string had it before.
+    fn intern_with(&mut self, text: &str, shared: impl FnOnce() -> Arc<str>) -> i32 {
+        let index = match self.string_index.get(text) {
+            Some(index) => *index,
+            None => {
+                let next = self.strings.len();
+                let shared = shared();
+                self.string_bytes += shared.len() as u64 + BYTES_PER_UNIQUE_STRING;
+                self.string_index.insert(shared.clone(), next);
+                self.strings.push(shared);
+                next
+            }
+        };
+        i32::try_from(index).unwrap_or(i32::MAX)
+    }
+
     pub(crate) fn totals(&self) -> Totals {
         Totals {
             cells: self.cell_count,
@@ -76,17 +95,20 @@ impl SheetCells {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(crate) struct Slot {
     pub(crate) row: i32,
     pub(crate) column: i32,
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(crate) enum FormulaEvent {
     Convert { job: usize },
     SharedAnchor { si: i32, job: usize },
     SharedChild { si: i32 },
 }
 
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(crate) struct FormulaJob {
     pub(crate) text: String,
     pub(crate) row: i32,
@@ -253,6 +275,9 @@ impl<'a> Scanner<'a, '_> {
         let row_index = row_index.ok_or_else(|| unreadable("a row without a row index"))?;
         if self.cells.last_row >= row_index {
             return Err(unsupported("rows out of order"));
+        }
+        if self.cells.first_row == 0 {
+            self.cells.first_row = row_index;
         }
         self.cells.last_row = row_index;
         self.cells.cell_count += cells.len() as u64;
@@ -440,18 +465,7 @@ impl<'a> Scanner<'a, '_> {
     }
 
     fn intern(&mut self, text: String) -> i32 {
-        let index = match self.cells.string_index.get(text.as_str()) {
-            Some(index) => *index,
-            None => {
-                let next = self.cells.strings.len();
-                let shared: Arc<str> = Arc::from(text);
-                self.cells.string_bytes += shared.len() as u64 + BYTES_PER_UNIQUE_STRING;
-                self.cells.string_index.insert(shared.clone(), next);
-                self.cells.strings.push(shared);
-                next
-            }
-        };
-        i32::try_from(index).unwrap_or(i32::MAX)
+        self.cells.intern_with(&text, || Arc::from(text.as_str()))
     }
 
     fn string_cell(&mut self, text: String, s: i32, place: Slot) -> Cell {

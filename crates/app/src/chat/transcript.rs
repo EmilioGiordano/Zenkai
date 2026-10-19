@@ -14,7 +14,12 @@ use super::ChatPanel;
 use super::badge::{self, ReferencePlugin};
 use crate::agent_settings::AgentConfig;
 
-fn user_bubble(text: &str, panel: &WeakEntity<ChatPanel>, cx: &App) -> impl IntoElement {
+fn user_bubble(
+    text: &str,
+    book: Option<&str>,
+    panel: &WeakEntity<ChatPanel>,
+    cx: &App,
+) -> impl IntoElement {
     let theme = cx.theme();
     div().flex().justify_end().child(
         div()
@@ -25,7 +30,7 @@ fn user_bubble(text: &str, panel: &WeakEntity<ChatPanel>, cx: &App) -> impl Into
             .bg(theme.secondary)
             .text_color(theme.secondary_foreground)
             .line_height(relative(1.5))
-            .child(match badge::user_message(text, panel, cx) {
+            .child(match badge::user_message(text, book, panel, cx) {
                 Some(message) => message,
                 None => div().child(text.to_string()).into_any_element(),
             }),
@@ -69,6 +74,15 @@ impl ChatPanel {
             Entry::Tool(card) => Some(card),
             _ => None,
         };
+        let mut user_total = 0;
+        let user_ranks: Vec<usize> = entries
+            .iter()
+            .map(|entry| {
+                let rank = user_total;
+                user_total += usize::from(matches!(entry, Entry::User(_)));
+                rank
+            })
+            .collect();
         let plan = tool_rows::plan(entries, display);
         let calls: HashSet<ToolCallId> = entries
             .iter()
@@ -101,7 +115,11 @@ impl ChatPanel {
                 }
                 Item::Used { count } => Some(self.render_used(count, cx)),
                 Item::Entry(index) => match &entries[index] {
-                    Entry::User(text) => Some(user_bubble(text, &panel, cx).into_any_element()),
+                    Entry::User(text) => {
+                        let rank = user_ranks[index];
+                        let book = self.sent_books.of(rank, user_total);
+                        Some(user_bubble(text, book, &panel, cx).into_any_element())
+                    }
                     Entry::Worked { seconds } => {
                         Some(worked_divider(*seconds, cx).into_any_element())
                     }

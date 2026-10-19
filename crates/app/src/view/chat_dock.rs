@@ -9,16 +9,17 @@ use zenkai_agent::chat::thread::FileCard;
 use zenkai_agent::settings::PermissionMode;
 use zenkai_agent::tools::AgentAccess;
 use zenkai_i18n::t;
-use zenkai_types::{SheetId, WorkbookId};
+use zenkai_types::{Range, SheetId, SheetVisibility, WorkbookId};
 
 use super::{Severity, Workspace, sidebar};
 use crate::actions::*;
 use crate::agent_folder::FolderHint;
 use crate::agent_routing;
+use crate::chat::mention_catalog::{ActiveBook, Catalog, OpenBook, SheetEntry, Used};
 use crate::chat::reference::Reference;
 use crate::chat::{ChatEvent, ChatPanel, reference};
 use crate::chat_layout::{ChatLayout, ChatLayoutState};
-use crate::document::Document;
+use crate::document::{Document, SharedWorkbook};
 use crate::keymap;
 use crate::panel_width::Panel;
 
@@ -100,6 +101,19 @@ impl Workspace {
             .iter()
             .find(|info| info.id == document.sheet)?;
         Some(reference::sheet_range(&sheet.name, self.selection(cx)))
+    }
+
+    // Sheet names and the selection only; used ranges are read off the UI thread afterwards.
+    pub(crate) fn mention_catalog_for_chat(&self, cx: &App) -> Catalog {
+        let open: Vec<&Document> = self.documents.iter().collect();
+        catalog_of(&open, self.documents.active(), self.selection(cx))
+    }
+
+    pub(crate) fn shared_workbook_for_chat(&self, id: WorkbookId) -> Option<SharedWorkbook> {
+        self.documents
+            .iter()
+            .find(|document| document.id == id)
+            .map(Document::shared_workbook)
     }
 
     pub(crate) fn folder_hint_for_chat(&self) -> FolderHint {
@@ -217,6 +231,7 @@ impl Workspace {
             .map(|info| info.name.clone())
             .unwrap_or_default();
         let reference = Reference {
+            workbook: None,
             sheet: Some(sheet),
             range: self.selection(cx),
         };
@@ -230,7 +245,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((id, sheet)) = self.sheet_of_reference(reference.sheet.as_deref()) else {
+        let Some((id, sheet)) =
+            self.sheet_of_reference(reference.workbook.as_deref(), reference.sheet.as_deref())
+        else {
             let sheet = reference.sheet.clone().unwrap_or_default();
             self.notify(
                 Severity::Warning,
@@ -249,8 +266,13 @@ impl Workspace {
             .update(cx, |grid, cx| grid.show_range(reference.range, cx));
     }
 
-    // The active workbook wins, then any other open workbook with a sheet of that name.
-    fn sheet_of_reference(&self, name: Option<&str>) -> Option<(WorkbookId, SheetId)> {
+    // A named workbook is the only place searched; otherwise the active workbook wins, then any
+    // other open workbook with a sheet of that name.
+    fn sheet_of_reference(
+        &self,
+        workbook: Option<&str>,
+        name: Option<&str>,
+    ) -> Option<(WorkbookId, SheetId)> {
         let in_document = |document: &Document| match name {
             Some(name) => document
                 .sheets
@@ -259,6 +281,13 @@ impl Workspace {
                 .map(|info| info.id),
             None => Some(document.sheet),
         };
+        if let Some(workbook) = workbook {
+            return self
+                .documents
+                .iter()
+                .filter(|document| document.name().to_lowercase() == workbook.to_lowercase())
+                .find_map(|document| in_document(document).map(|sheet| (document.id, sheet)));
+        }
         self.documents
             .active()
             .and_then(|document| in_document(document).map(|sheet| (document.id, sheet)))
@@ -370,5 +399,106 @@ impl Workspace {
     ) -> Option<std::sync::Arc<zenkai_agent::chat::process::ProcessTree>> {
         let panel = self.chat.panel.clone()?;
         panel.update(cx, |panel, _| panel.shutdown())
+    }
+}
+
+fn catalog_of(open: &[&Document], active: Option<&Document>, selection: Range) -> Catalog {
+    let open_book = |document: &Document| OpenBook {
+        id: document.id,
+        name: document.name(),
+        sheets: document
+            .sheets
+            .iter()
+            .filter(|info| info.visibility == SheetVisibility::Visible)
+            .map(|info| info.name.clone())
+            .collect(),
+    };
+    let active = active.map(|document| {
+        let sheets = document
+            .sheets
+            .iter()
+            .filter(|info| info.visibility == SheetVisibility::Visible)
+            .map(|info| SheetEntry {
+                id: info.id,
+                name: info.name.clone(),
+                used: Used::Unknown,
+            })
+            .collect();
+        let selection = document
+            .sheets
+            .iter()
+            .find(|info| info.id == document.sheet)
+            .map(|info| Reference {
+                workbook: None,
+                sheet: Some(info.name.clone()),
+                range: selection,
+            });
+        ActiveBook {
+            book: open_book(document),
+            sheets,
+            selection,
+        }
+    });
+    Catalog {
+        active,
+        open: open.iter().map(|document| open_book(document)).collect(),
+        folder: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use zenkai_engine::{Engine, Workbook};
+    use zenkai_types::{Range, SheetId, WorkbookId};
+
+    use super::catalog_of;
+    use crate::chat::mention_candidates::candidates;
+    use crate::document::Document;
+    use crate::spaces::SpaceId;
+
+    fn heavy_document() -> Document {
+        let mut workbook = Workbook::new_empty().unwrap();
+        workbook.rename_sheet(SheetId(0), "Base").unwrap();
+        for name in ["Dinámica", "Datos"] {
+            let sheet = workbook.add_sheet().unwrap();
+            workbook.rename_sheet(sheet, name).unwrap();
+        }
+        Document::new(
+            WorkbookId(1),
+            SpaceId(0),
+            1,
+            workbook,
+            Some(PathBuf::from(
+                "C:/work/Listas Accesorias DISTRIS - 2024.11.20.xlsx",
+            )),
+            Vec::new(),
+        )
+    }
+
+    #[test]
+    fn the_catalog_the_app_builds_offers_the_sheets_of_the_active_workbook() {
+        let document = heavy_document();
+        let catalog = catalog_of(
+            &[&document],
+            Some(&document),
+            Range::parse_a1("A1").unwrap(),
+        );
+        for query in ["Base", "Listas", "dinámica"] {
+            let labels: Vec<String> = candidates(query, &catalog)
+                .into_iter()
+                .map(|candidate| candidate.label)
+                .collect();
+            for sheet in ["@Base", "@Dinámica", "@Datos"] {
+                let wanted =
+                    query == "Listas" || sheet.to_lowercase().contains(&query.to_lowercase());
+                assert_eq!(
+                    labels.contains(&sheet.to_string()),
+                    wanted,
+                    "{query} {sheet}"
+                );
+            }
+        }
     }
 }

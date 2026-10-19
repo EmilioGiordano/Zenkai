@@ -1,43 +1,91 @@
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::InlineTokenContext;
 use gpui_kit::component::text::{
     InlineElement, InlineRenderContext, MarkdownNode, MarkdownPlugin, markdown_ast,
 };
-use gpui_kit::component::{ActiveTheme, Icon};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::*;
 use zenkai_i18n::t;
 
+use super::ChatPanel;
+use super::mention_label::Label;
+use super::mention_parse::{self, Chip};
 use super::reference::Reference;
 use super::reference_scan::{self, LINK_TARGET};
-use super::{ChatPanel, MONO};
 use crate::interface_scale::rem_px;
 
 const BADGE_HEIGHT: f32 = 20.0;
-const BADGE_ICON: f32 = 11.0;
+const ICON_SIZE: f32 = 14.0;
 
-fn frame(id: impl Into<ElementId>, reference: &Reference, cx: &App) -> Stateful<Div> {
+fn frame(id: impl Into<ElementId>, label: &Label, clickable: bool, cx: &App) -> Stateful<Div> {
     let theme = cx.theme();
-    h_flex()
+    let accent = theme.success;
+    let full = label.full.clone();
+    let mut parts = h_flex().gap_1().items_center().whitespace_nowrap();
+    if let Some(workbook) = &label.workbook {
+        parts = parts
+            .child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child(workbook.clone()),
+            )
+            .child(div().text_color(theme.muted_foreground).child("/"));
+    }
+    let frame = h_flex()
         .id(id)
         .flex_shrink_0()
         .gap_1()
         .items_center()
-        .role(Role::Button)
-        .aria_label(reference.text())
+        .aria_label(label.full.clone())
         .h(rem_px(BADGE_HEIGHT))
-        .pl_1()
-        .pr_1p5()
-        .rounded_md()
-        .border_1()
-        .border_color(theme.success.opacity(0.35))
-        .bg(theme.success.opacity(0.14))
-        .text_color(theme.success)
-        .font_family(MONO)
-        .text_size(rem_px(11.5))
+        .text_color(accent)
+        .font_weight(FontWeight::MEDIUM)
+        .text_size(rem_px(13.0))
         .whitespace_nowrap()
-        .child(Icon::new(IconName::Grid2x2).size(rem_px(BADGE_ICON)))
-        .child(reference.text())
+        .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
+        .child(
+            svg()
+                .path(label.kind.icon())
+                .size(rem_px(ICON_SIZE))
+                .flex_shrink_0()
+                .text_color(accent),
+        )
+        .child(parts.child(label.name.clone()));
+    if clickable {
+        frame.hover(|style| style.underline())
+    } else {
+        frame
+    }
+}
+
+// A mention inserted from the picker is one editing unit of the composer, drawn like a sent one.
+pub(super) fn composer_token(
+    context: &InlineTokenContext,
+    book: Option<&str>,
+    cx: &App,
+) -> AnyElement {
+    let text = context.token().text();
+    let mention = text
+        .strip_prefix('@')
+        .and_then(|body| mention_parse::parse(body, None).ok());
+    let Some(mention) = mention else {
+        return div().child(text.clone()).into_any_element();
+    };
+    let label = Label::of_mention(&mention, book);
+    let theme = cx.theme();
+    let selection = theme.selection;
+    let token = frame(("composer-token", context.range().start), &label, false, cx)
+        .h(context.line_height())
+        .max_w(context.available_width())
+        .rounded_sm();
+    if context.is_selected() {
+        token.bg(selection).into_any_element()
+    } else {
+        token.into_any_element()
+    }
 }
 
 fn open_on_click(
@@ -51,28 +99,30 @@ fn open_on_click(
 
 pub(super) fn badge(
     reference: &Reference,
+    book: Option<&str>,
     panel: WeakEntity<ChatPanel>,
     cx: &App,
 ) -> impl IntoElement {
-    let text = reference.text();
-    frame(
-        SharedString::from(format!("reference-{text}")),
-        reference,
-        cx,
-    )
-    .cursor_pointer()
-    .on_click(open_on_click(panel, reference.clone()))
+    let label = Label::of_reference(reference, book);
+    let id = SharedString::from(format!("reference-{}", reference.text()));
+    frame(id, &label, true, cx)
+        .role(Role::Button)
+        .cursor_pointer()
+        .on_click(open_on_click(panel, reference.clone()))
 }
 
 pub(super) fn chip(
     index: usize,
     reference: &Reference,
+    book: Option<&str>,
     panel: WeakEntity<ChatPanel>,
     cx: &App,
 ) -> impl IntoElement {
+    let label = Label::of_reference(reference, book);
     let target = reference.clone();
     let removal = panel.clone();
-    frame(("chat-chip", index), reference, cx)
+    frame(("chat-chip", index), &label, true, cx)
+        .role(Role::Button)
         .h(rem_px(BADGE_HEIGHT + 2.0))
         .cursor_pointer()
         .on_click(open_on_click(panel, target))
@@ -142,44 +192,95 @@ impl MarkdownPlugin for ReferencePlugin {
         cx: &mut App,
     ) -> Option<InlineElement> {
         let reference = node.data::<Reference>()?;
-        Some(InlineElement::new(badge(reference, self.panel.clone(), cx)))
+        Some(InlineElement::new(badge(
+            reference,
+            None,
+            self.panel.clone(),
+            cx,
+        )))
     }
+}
+
+fn mention_chip(
+    chip: &Chip,
+    book: Option<&str>,
+    panel: &WeakEntity<ChatPanel>,
+    cx: &App,
+) -> AnyElement {
+    let label = Label::of_mention(&chip.mention, book);
+    let id = SharedString::from(format!("mention-{}-{}", chip.start, label.full));
+    match chip.reference() {
+        Some(reference) => frame(id, &label, true, cx)
+            .role(Role::Button)
+            .cursor_pointer()
+            .on_click(open_on_click(panel.clone(), reference.clone()))
+            .into_any_element(),
+        None => frame(id, &label, false, cx).into_any_element(),
+    }
+}
+
+fn push_text(lines: &mut Vec<Vec<AnyElement>>, text: &str) {
+    for (index, line) in text.split('\n').enumerate() {
+        if index > 0 {
+            lines.push(Vec::new());
+        }
+        if let Some(current) = lines.last_mut() {
+            current.extend(
+                line.split_inclusive(' ')
+                    .map(|word| div().child(word.to_string()).into_any_element()),
+            );
+        }
+    }
+}
+
+fn push_element(lines: &mut [Vec<AnyElement>], element: AnyElement) {
+    if let Some(current) = lines.last_mut() {
+        current.push(element);
+    }
+}
+
+// Pushes the text, drawing cell references as badges; true when it found any.
+fn push_plain(
+    lines: &mut Vec<Vec<AnyElement>>,
+    text: &str,
+    book: Option<&str>,
+    panel: &WeakEntity<ChatPanel>,
+    cx: &App,
+) -> bool {
+    let mut found = false;
+    for part in reference_scan::split(text) {
+        match part {
+            reference_scan::Part::Text(text) => push_text(lines, &text),
+            reference_scan::Part::Reference(reference) => {
+                found = true;
+                push_element(
+                    lines,
+                    badge(&reference, book, panel.clone(), cx).into_any_element(),
+                );
+            }
+        }
+    }
+    found
 }
 
 pub(super) fn user_message(
     text: &str,
+    book: Option<&str>,
     panel: &WeakEntity<ChatPanel>,
     cx: &App,
 ) -> Option<AnyElement> {
-    let parts = reference_scan::split(text);
-    if parts
-        .iter()
-        .all(|part| matches!(part, reference_scan::Part::Text(_)))
-    {
-        return None;
-    }
+    let chips = mention_parse::chips(text);
+    let mut styled = !chips.is_empty();
     let mut lines: Vec<Vec<AnyElement>> = vec![Vec::new()];
-    for part in parts {
-        match part {
-            reference_scan::Part::Text(text) => {
-                for (index, line) in text.split('\n').enumerate() {
-                    if index > 0 {
-                        lines.push(Vec::new());
-                    }
-                    if let Some(current) = lines.last_mut() {
-                        current.extend(
-                            line.split_inclusive(' ')
-                                .map(|word| div().child(word.to_string()).into_any_element()),
-                        );
-                    }
-                }
-            }
-            reference_scan::Part::Reference(reference) => {
-                if let Some(current) = lines.last_mut() {
-                    current.push(badge(&reference, panel.clone(), cx).into_any_element());
-                }
-            }
-        }
+    let mut taken = 0;
+    for chip in chips {
+        styled |= push_plain(&mut lines, &text[taken..chip.start], book, panel, cx);
+        push_element(&mut lines, mention_chip(&chip, book, panel, cx));
+        taken = chip.end;
+    }
+    styled |= push_plain(&mut lines, &text[taken..], book, panel, cx);
+    if !styled {
+        return None;
     }
     Some(
         v_flex()

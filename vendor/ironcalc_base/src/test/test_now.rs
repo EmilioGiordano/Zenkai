@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
-use crate::{mock_time, test::util::new_empty_model};
+use crate::{cell::CellValue, mock_time, test::util::new_empty_model};
 
 // 14:44 20 Mar 2023 Berlin
 const TIMESTAMP_2023: i64 = 1679319865208;
@@ -38,7 +38,8 @@ fn returns_date_time() {
     assert_eq!(text, *"3/20/2023, 1:44 PM");
 }
 
-// Excel reads the clock once per recalculation, so two calls always agree.
+// Excel reads the clock once per recalculation, so two calls always agree. The difference
+// inherits a date format, so the tests compare the number, not the text.
 #[test]
 fn one_clock_reading_per_evaluation() {
     mock_time::set_mock_time(TIMESTAMP_2023);
@@ -51,14 +52,26 @@ fn one_clock_reading_per_evaluation() {
     );
     model._set("A4", "=NOW()");
     model.evaluate();
-    assert_eq!(model._get_text("A1"), *"0");
-    assert_eq!(model._get_text("A2"), *"0");
-    assert_eq!(model._get_text("A3"), *"0");
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A1"),
+        Ok(CellValue::Number(0.0))
+    );
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A2"),
+        Ok(CellValue::Number(0.0))
+    );
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A3"),
+        Ok(CellValue::Number(0.0))
+    );
     assert_eq!(model._get_text("A4"), *"3/20/2023, 1:44 PM");
 
     mock_time::set_mock_time(TIMESTAMP_2023 + 3_600_000);
     model.evaluate();
-    assert_eq!(model._get_text("A1"), *"0");
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A1"),
+        Ok(CellValue::Number(0.0))
+    );
     assert_eq!(model._get_text("A4"), *"3/20/2023, 2:44 PM");
 }
 
@@ -75,5 +88,8 @@ fn incremental_evaluation_takes_a_new_clock_reading() {
     mock_time::set_mock_time(TIMESTAMP_2023 + 3_600_000);
     model.evaluate_incremental(&[(0, 1, 2)]);
     assert_eq!(model._get_text("A1"), *"3/20/2023, 2:44 PM");
-    assert_eq!(model._get_text("A2"), *"0");
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A2"),
+        Ok(CellValue::Number(0.0))
+    );
 }

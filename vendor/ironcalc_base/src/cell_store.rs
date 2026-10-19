@@ -109,6 +109,11 @@ impl CellStore {
         self.rows.insert(row, Row::from_unsorted(cells));
     }
 
+    /// Moves every row of `other` in. A row of `other` replaces the row with the same number.
+    pub fn append(&mut self, other: CellStore) {
+        self.rows.extend(other.rows);
+    }
+
     pub fn remove_row(&mut self, row: i32) {
         self.rows.remove(&row);
     }
@@ -239,6 +244,24 @@ mod tests {
         assert!(store.has_row(2));
         assert_eq!(store.row_len(2), 0);
         assert!(store.take_from_column(9, 1).is_empty());
+    }
+
+    #[test]
+    fn append_moves_the_rows_of_the_other_store() {
+        let mut store = CellStore::new();
+        store.insert(1, 1, cell(1));
+        store.insert(2, 1, cell(2));
+        let mut other = CellStore::new();
+        other.insert(2, 5, cell(25));
+        other.insert(3, 1, cell(3));
+        other.insert_row(4, []);
+        store.append(other);
+        assert_eq!(store.rows_sorted(), vec![1, 2, 3, 4]);
+        assert_eq!(store.get(1, 1), Some(&cell(1)));
+        assert_eq!(store.get(2, 1), None);
+        assert_eq!(store.get(2, 5), Some(&cell(25)));
+        assert_eq!(store.get(3, 1), Some(&cell(3)));
+        assert_eq!(store.row_len(4), 0);
     }
 
     #[test]
