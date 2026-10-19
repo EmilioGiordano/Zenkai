@@ -45,7 +45,7 @@ use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::chat_layout::{ChatLayout, ChatLayoutState};
 use crate::clipboard;
-use crate::close_prompt::Departure;
+use crate::close_prompt::{CloseGoal, Departure};
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
@@ -366,7 +366,9 @@ impl Workspace {
         workspace.reset_grid(window, cx);
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
-            let asked = this.update(cx, |this, cx| this.request_close(window, cx));
+            let asked = this.update(cx, |this, cx| {
+                this.request_close(CloseGoal::Quit, window, cx)
+            });
             asked.is_err()
         });
         workspace.start_memory_sampler(cx);
@@ -3369,7 +3371,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::new_workbook))
-            .on_action(cx.listener(|this, _: &Quit, window, cx| this.request_close(window, cx)))
+            .on_action(cx.listener(|this, _: &Quit, window, cx| {
+                this.request_close(CloseGoal::Quit, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &NextDocument, window, cx| {
                 this.step_document(Step::Next, window, cx)
             }))

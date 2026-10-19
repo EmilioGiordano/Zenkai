@@ -128,6 +128,7 @@ impl Workspace {
                 ClosePlan {
                     discard: dialog.choices.ids_to_discard(),
                     start_empty: !dialog.choices.reopen,
+                    goal: dialog.choices.goal,
                 },
             ),
         };
@@ -151,6 +152,7 @@ impl Workspace {
                 ClosePlan {
                     discard: dialog.choices.all_ids(),
                     start_empty: !dialog.choices.reopen,
+                    goal: dialog.choices.goal,
                 },
                 window,
                 cx,

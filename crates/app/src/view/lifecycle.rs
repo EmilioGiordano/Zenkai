@@ -11,7 +11,7 @@ use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
 use crate::autosave::{self, Due};
-use crate::close_prompt::ClosePlan;
+use crate::close_prompt::{CloseGoal, ClosePlan};
 use crate::document::{self, FileJob, SharedWorkbook, SnapshotOutcome};
 use crate::documents::Intent;
 use crate::entry::Entry;
@@ -388,7 +388,12 @@ impl Workspace {
 
     // With the default setting the unsaved workbooks are listed first and the user decides
     // which to save; "keep changes" goes straight to recovery copies.
-    pub(super) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn request_close(
+        &mut self,
+        goal: CloseGoal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.lifecycle == Lifecycle::Closing
             || self.close_dialog.is_some()
             || self.departure.is_some()
@@ -396,17 +401,24 @@ impl Workspace {
         {
             return;
         }
-        self.park_active(window, cx);
+        if !goal.keeps_running() {
+            self.park_active(window, cx);
+        }
         let general = &agent_settings::settings(cx).general;
         let asks = general.close_with_unsaved == CloseWithUnsaved::Ask;
-        let reopen_offered = general.restore_session;
+        let reopen_offered = general.restore_session && !goal.keeps_running();
         let unsaved = self.documents.unsaved();
         if asks && !unsaved.is_empty() {
-            self.ask_to_close_app(unsaved, reopen_offered, window, cx);
+            self.ask_to_close_app(unsaved, reopen_offered, goal, window, cx);
             return;
         }
-        self.run_close(ClosePlan::default(), window, cx);
+        let plan = ClosePlan {
+            goal,
+            ..ClosePlan::default()
+        };
+        self.run_close(plan, window, cx);
     }
+
 
     // Closing keeps unsaved work: every workbook holding some, except the ones the plan
     // discards, is written to its recovery copy, and the session lists them so the next start
