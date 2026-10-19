@@ -11,7 +11,7 @@ use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
 use crate::autosave::{self, Due};
-use crate::close_prompt::ClosePlan;
+use crate::close_prompt::{CloseGoal, ClosePlan};
 use crate::document::{self, FileJob, SharedWorkbook, SnapshotOutcome};
 use crate::documents::Intent;
 use crate::entry::Entry;
@@ -391,24 +391,53 @@ impl Workspace {
 
     // With the default setting the unsaved workbooks are listed first and the user decides
     // which to save; "keep changes" goes straight to recovery copies.
-    pub(super) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn request_close(
+        &mut self,
+        goal: CloseGoal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        #[cfg(windows)]
+        if !goal.keeps_running() && self.lifecycle == Lifecycle::Closing {
+            self.quit_after_hide = true;
+        }
+        if !goal.keeps_running()
+            && let Some(departure) = self.departure.as_mut()
+        {
+            departure.plan.goal = goal;
+        }
+        if self.close_dialog.is_some() {
+            self.retarget_close_dialog(goal);
+            self.focus_close_dialog(window, cx);
+            return;
+        }
         if self.lifecycle == Lifecycle::Closing
-            || self.close_dialog.is_some()
             || self.departure.is_some()
             || self.prompts.blocks_input()
         {
             return;
         }
-        self.park_active(window, cx);
+        if !goal.keeps_running() {
+            self.park_active(window, cx);
+        }
         let general = &agent_settings::settings(cx).general;
-        let asks = general.close_with_unsaved == CloseWithUnsaved::Ask;
-        let reopen_offered = general.restore_session;
+        let when_unsaved = if goal.keeps_running() {
+            general.close_window_with_unsaved
+        } else {
+            general.close_with_unsaved
+        };
+        let asks = when_unsaved == CloseWithUnsaved::Ask;
+        let reopen_offered = general.restore_session && !goal.keeps_running();
         let unsaved = self.documents.unsaved();
         if asks && !unsaved.is_empty() {
-            self.ask_to_close_app(unsaved, reopen_offered, window, cx);
+            self.ask_to_close_app(unsaved, reopen_offered, goal, window, cx);
             return;
         }
-        self.run_close(ClosePlan::default(), window, cx);
+        let plan = ClosePlan {
+            goal,
+            ..ClosePlan::default()
+        };
+        self.run_close(plan, window, cx);
     }
 
     // Closing keeps unsaved work: every workbook holding some, except the ones the plan
@@ -435,6 +464,11 @@ impl Workspace {
                     Ok(None) if polls < CLOSE_POLLS_BEFORE_ASKING => polls += 1,
                     Ok(None) => {
                         let asked = this.update_in(cx, |this, window, cx| {
+                            #[cfg(windows)]
+                            if plan.goal == CloseGoal::Hide {
+                                this.abandon_hide(t!("quit.busy_reason"), cx);
+                                return;
+                            }
                             this.ask_to_quit_anyway(
                                 t!("quit.busy_reason"),
                                 plan.clone(),
@@ -494,6 +528,15 @@ impl Workspace {
                     .iter()
                     .filter_map(|result| result.as_ref().err().map(ToString::to_string))
                     .collect();
+                #[cfg(windows)]
+                if plan.goal == CloseGoal::Hide {
+                    if failures.is_empty() {
+                        this.finish_hide(plan.clone(), window, cx);
+                    } else {
+                        this.abandon_hide(&failures.join("; "), cx);
+                    }
+                    return;
+                }
                 if failures.is_empty() {
                     this.finish_close_with_session(plan.clone(), window, cx);
                 } else {
@@ -570,16 +613,20 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let unprotected = self.recovery_dir.is_none()
-            && self
-                .documents
-                .iter()
-                .any(|document| document.needs_recovery() && plan.keeps(document.id));
-        if unprotected {
+        if self.holds_unprotected_work(&plan) {
             self.ask_to_quit_anyway(t!("quit.autosave_off_reason"), plan, window, cx);
             return;
         }
         self.write_session_and_quit(plan, cx);
+    }
+
+    // Without a recovery folder, work kept in memory has no copy to come back from.
+    pub(super) fn holds_unprotected_work(&self, plan: &ClosePlan) -> bool {
+        self.recovery_dir.is_none()
+            && self
+                .documents
+                .iter()
+                .any(|document| document.needs_recovery() && plan.keeps(document.id))
     }
 
     fn recovery_file_of(&self, id: WorkbookId) -> Option<PathBuf> {
@@ -637,7 +684,7 @@ impl Workspace {
     }
 
     // The spaces and links are kept even when unsaved work could not be.
-    fn write_session_and_quit(&mut self, plan: ClosePlan, cx: &mut Context<Self>) {
+    pub(super) fn write_session_and_quit(&mut self, plan: ClosePlan, cx: &mut Context<Self>) {
         let session = self.snapshot_session_leaving(&plan, cx);
         let session_directory = recovery::session_directory();
         let mut clean: Vec<PathBuf> = self
@@ -677,28 +724,38 @@ impl Workspace {
         .detach();
     }
 
-    fn ask_to_quit_anyway(
+    pub(super) fn ask_to_quit_anyway(
         &mut self,
         reason: &str,
         plan: ClosePlan,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let detail = t!("quit.detail", reason = reason);
+        #[cfg(windows)]
+        crate::tray::request_show(cx);
+        let (detail, proceed_label) = if plan.goal.keeps_running() {
+            (t!("hide.detail", reason = reason), t!("hide.anyway"))
+        } else {
+            (t!("quit.detail", reason = reason), t!("quit.anyway"))
+        };
         let answer = self.ask(
             PromptLevel::Critical,
             t!("quit.title"),
             Some(&detail),
-            &[t!("button.cancel"), t!("quit.anyway")],
+            &[t!("button.cancel"), proceed_label],
             window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            let quit = answer.await == Some(1);
-            let update = this.update(cx, |this, cx| {
-                if quit {
-                    this.write_session_and_quit(plan, cx);
+            let proceed = answer.await == Some(1);
+            let update = this.update_in(cx, |this, window, cx| {
+                if proceed {
+                    this.quit_or_hide(plan, window, cx);
                 } else {
+                    #[cfg(windows)]
+                    {
+                        this.quit_after_hide = false;
+                    }
                     this.lifecycle = Lifecycle::Running;
                     this.clear_busy(t!("busy.closing"), cx);
                 }

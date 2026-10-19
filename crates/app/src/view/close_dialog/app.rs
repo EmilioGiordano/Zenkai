@@ -8,7 +8,7 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::{CloseDialog, button_row};
-use crate::close_prompt::{Age, Choices, Purpose};
+use crate::close_prompt::{Age, Choices, CloseGoal, Purpose};
 use crate::documents::Unsaved;
 use crate::view::Workspace;
 
@@ -27,12 +27,13 @@ impl Workspace {
         &mut self,
         items: Vec<Unsaved>,
         reopen_offered: bool,
+        goal: CloseGoal,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.open_close_dialog(
             Purpose::App,
-            Choices::new(items, reopen_offered),
+            Choices::new(items, reopen_offered).closing_to(goal),
             None,
             window,
             cx,

@@ -57,6 +57,8 @@ mod theme;
 mod theme_list;
 mod theme_palettes;
 mod toolbar;
+#[cfg(windows)]
+mod tray;
 mod view;
 
 use std::path::PathBuf;
@@ -64,10 +66,28 @@ use std::path::PathBuf;
 use gpui_kit::*;
 
 fn main() {
+    let initial: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
+    // Before the log starts: a launch that only hands over must not truncate the log of the
+    // Zenkai that keeps running.
+    #[cfg(windows)]
+    let claim = match tray::claim(initial.as_deref()) {
+        tray::Claim::HandedOff => return,
+        tray::Claim::Unreachable => {
+            zenkai_i18n::init(language::startup());
+            tray::warn_another_zenkai_unreachable();
+            return;
+        }
+        claim => claim,
+    };
     logging::init();
     logging::log_panics();
+    #[cfg(windows)]
+    if matches!(claim, tray::Claim::Standalone) {
+        tracing::warn!(
+            "the single instance pipe or its token could not be set up; running without single instance protection"
+        );
+    }
     zenkai_i18n::init(language::startup());
-    let initial: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
 
     gpui_kit::application()
         .with_assets(assets::ZenkaiAssets)
@@ -100,6 +120,12 @@ fn main() {
                 cx.new(|cx| view::Workspace::new(initial, window, cx))
             });
             match opened {
+                #[cfg(windows)]
+                Ok((window, workspace)) => {
+                    tray::install(window, &workspace, claim, cx);
+                    cx.activate(true)
+                }
+                #[cfg(not(windows))]
                 Ok(_) => cx.activate(true),
                 Err(error) => {
                     tracing::error!(%error, "could not open the main window");

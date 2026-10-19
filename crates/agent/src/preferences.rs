@@ -20,6 +20,11 @@ pub struct GeneralSettings {
         description = "What closing Zenkai does with workbooks that have unsaved changes: \"ask\" lists them and asks which to save, \"keep\" saves recovery copies and brings them back next time."
     )]
     pub close_with_unsaved: CloseWithUnsaved,
+    #[serde(default = "keep_when_closing_window")]
+    #[schemars(
+        description = "What closing the window does with workbooks that have unsaved changes: \"keep\" hides the window and keeps them open, \"ask\" asks which to save and closes the ones that are not saved."
+    )]
+    pub close_window_with_unsaved: CloseWithUnsaved,
     #[serde(default = "default_autosave", deserialize_with = "clamped_autosave")]
     #[schemars(
         range(min = 10, max = 600),
@@ -45,6 +50,17 @@ impl CloseWithUnsaved {
             CloseWithUnsaved::Keep => t!("settings.close_with_unsaved.keep"),
         }
     }
+
+    pub fn window_label(self) -> &'static str {
+        match self {
+            CloseWithUnsaved::Ask => t!("settings.close_window.ask"),
+            CloseWithUnsaved::Keep => t!("settings.close_window.keep"),
+        }
+    }
+}
+
+fn keep_when_closing_window() -> CloseWithUnsaved {
+    CloseWithUnsaved::Keep
 }
 
 fn restore_by_default() -> bool {
@@ -69,6 +85,7 @@ impl Default for GeneralSettings {
         GeneralSettings {
             restore_session: restore_by_default(),
             close_with_unsaved: CloseWithUnsaved::default(),
+            close_window_with_unsaved: keep_when_closing_window(),
             autosave_seconds: DEFAULT_AUTOSAVE_SECONDS,
         }
     }
@@ -384,6 +401,7 @@ mod tests {
         let general = GeneralSettings::default();
         assert!(general.restore_session);
         assert_eq!(general.close_with_unsaved, CloseWithUnsaved::Ask);
+        assert_eq!(general.close_window_with_unsaved, CloseWithUnsaved::Keep);
         assert_eq!(general.autosave_seconds, 60);
     }
 

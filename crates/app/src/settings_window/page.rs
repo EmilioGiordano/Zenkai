@@ -199,6 +199,25 @@ impl SettingsWindow {
                     .into_any_element(),
                 );
             }
+            RowId::CloseWindowWithUnsaved => {
+                let current = settings.general.close_window_with_unsaved;
+                parts.control = Some(
+                    segmented(
+                        "close-window-unsaved",
+                        CloseWithUnsaved::ALL
+                            .into_iter()
+                            .map(|choice| (choice, choice.window_label(), choice == current))
+                            .collect(),
+                        |choice, _, cx| {
+                            agent_settings::change(cx, move |settings| {
+                                settings.general.close_window_with_unsaved = choice
+                            })
+                        },
+                        cx,
+                    )
+                    .into_any_element(),
+                );
+            }
             RowId::FastXlsxReader => {
                 parts.control = Some(controls::switch(
                     ("row", id),

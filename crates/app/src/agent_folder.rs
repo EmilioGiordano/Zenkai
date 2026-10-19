@@ -7,7 +7,6 @@ use zenkai_i18n::t;
 use crate::files;
 
 const DEFAULT_FOLDER_NAME: &str = "Zenkai";
-const LISTED_EXTENSIONS: [&str; 7] = ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"];
 const SCAN_DEPTH: usize = 3;
 const SCAN_ENTRIES: usize = 5_000;
 
@@ -136,7 +135,7 @@ fn is_listed_spreadsheet(path: &Path) -> bool {
     !lock_or_temp
         && extension
             .as_deref()
-            .is_some_and(|extension| LISTED_EXTENSIONS.contains(&extension))
+            .is_some_and(|extension| crate::files::SPREADSHEET_EXTENSIONS.contains(&extension))
 }
 
 #[cfg(test)]

@@ -29,11 +29,27 @@ impl Age {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CloseGoal {
+    #[default]
+    Quit,
+    // The window goes to the tray and every workbook stays in memory.
+    #[cfg(windows)]
+    Hide,
+}
+
+impl CloseGoal {
+    pub fn keeps_running(self) -> bool {
+        self != CloseGoal::Quit
+    }
+}
+
 // What closing the app does with the workbooks the user left unsaved.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClosePlan {
     pub discard: Vec<WorkbookId>,
     pub start_empty: bool,
+    pub goal: CloseGoal,
 }
 
 impl ClosePlan {
@@ -49,6 +65,7 @@ pub struct Choices {
     selected: Vec<bool>,
     pub reopen: bool,
     pub reopen_offered: bool,
+    pub goal: CloseGoal,
 }
 
 impl Choices {
@@ -58,7 +75,12 @@ impl Choices {
             items,
             reopen: reopen_offered,
             reopen_offered,
+            goal: CloseGoal::Quit,
         }
+    }
+
+    pub fn closing_to(self, goal: CloseGoal) -> Choices {
+        Choices { goal, ..self }
     }
 
     pub fn items(&self) -> &[Unsaved] {
@@ -262,6 +284,7 @@ mod tests {
             ClosePlan {
                 discard: vec![WorkbookId(2)],
                 start_empty: false,
+                ..ClosePlan::default()
             },
         );
         assert_eq!(departure.next(), Next::Save(WorkbookId(1)));

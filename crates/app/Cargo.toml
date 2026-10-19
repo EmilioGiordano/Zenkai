@@ -31,6 +31,13 @@ zenkai-grid = { path = "../grid" }
 zenkai-i18n = { path = "../i18n" }
 zenkai-types = { path = "../types" }
 
+[target.'cfg(windows)'.dependencies]
+interprocess = "=2.4.4"
+png = "=0.18.1"
+raw-window-handle = "=0.6.2"
+tray-icon = { version = "=0.26.1", default-features = false }
+winsafe = { version = "=0.0.19", default-features = false, features = ["user"] }
+
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "3"
 

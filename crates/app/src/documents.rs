@@ -14,7 +14,7 @@ pub use unsaved::Unsaved;
 
 mod restore;
 #[cfg(test)]
-mod session_fuzz;
+pub(crate) mod session_fuzz;
 #[cfg(test)]
 mod session_property;
 mod spaces;

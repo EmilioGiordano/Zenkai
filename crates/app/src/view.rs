@@ -45,7 +45,7 @@ use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::chat_layout::{ChatLayout, ChatLayoutState};
 use crate::clipboard;
-use crate::close_prompt::Departure;
+use crate::close_prompt::{CloseGoal, Departure};
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
@@ -77,6 +77,7 @@ use crate::toolbar;
 mod budget;
 mod generate;
 mod lifecycle;
+mod main_window;
 mod panels;
 mod prompt;
 mod search;
@@ -193,6 +194,8 @@ pub struct Workspace {
     sidebar: SidebarState,
     panels: PanelsState,
     lifecycle: Lifecycle,
+    #[cfg(windows)]
+    quit_after_hide: bool,
     // Saves ahead of closing a tab or the app; `None` when no close waits on a save.
     departure: Option<Departure>,
     close_dialog: Option<close_dialog::CloseDialog>,
@@ -342,6 +345,8 @@ impl Workspace {
             sidebar: SidebarState::new(cx),
             panels: PanelsState::new(cx),
             lifecycle: Lifecycle::Running,
+            #[cfg(windows)]
+            quit_after_hide: false,
             departure: None,
             close_dialog: None,
             prompts: PromptGate::default(),
@@ -369,9 +374,16 @@ impl Workspace {
         workspace.reset_grid(window, cx);
         let this = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
-            let asked = this.update(cx, |this, cx| this.request_close(window, cx));
+            let goal = main_window::close_goal(cx);
+            let asked = this.update(cx, |this, cx| this.request_close(goal, window, cx));
             asked.is_err()
         });
+        #[cfg(windows)]
+        workspace._subscriptions.push(
+            cx.observe_window_visibility(window, |_, visibility, _, cx| {
+                crate::tray::note_visibility(visibility, cx)
+            }),
+        );
         workspace.start_memory_sampler(cx);
         workspace.start_session(initial, window, cx);
         workspace.load_recent(cx);
@@ -3397,7 +3409,13 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::new_workbook))
-            .on_action(cx.listener(|this, _: &Quit, window, cx| this.request_close(window, cx)))
+            .on_action(cx.listener(|this, _: &Quit, window, cx| {
+                this.request_close(CloseGoal::Quit, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CloseWindow, window, cx| {
+                let goal = main_window::close_goal(cx);
+                this.request_close(goal, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &NextDocument, window, cx| {
                 this.step_document(Step::Next, window, cx)
             }))

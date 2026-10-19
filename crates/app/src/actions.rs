@@ -8,6 +8,7 @@ actions!(
         Save,
         SaveAs,
         Quit,
+        CloseWindow,
         Undo,
         Redo,
         Copy,

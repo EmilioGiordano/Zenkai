@@ -9,7 +9,7 @@ use crate::actions::{
     CancelCloseDialog, ConfirmCloseDialog, DiscardCloseDialog, FocusNextControl,
     FocusPreviousControl,
 };
-use crate::close_prompt::{Choices, ClosePlan, Departure, Purpose};
+use crate::close_prompt::{Choices, CloseGoal, ClosePlan, Departure, Purpose};
 use crate::document::Document;
 use crate::interface_scale::rem_px;
 
@@ -128,6 +128,7 @@ impl Workspace {
                 ClosePlan {
                     discard: dialog.choices.ids_to_discard(),
                     start_empty: !dialog.choices.reopen,
+                    goal: dialog.choices.goal,
                 },
             ),
         };
@@ -151,10 +152,26 @@ impl Workspace {
                 ClosePlan {
                     discard: dialog.choices.all_ids(),
                     start_empty: !dialog.choices.reopen,
+                    goal: dialog.choices.goal,
                 },
                 window,
                 cx,
             ),
+        }
+    }
+
+    // Quitting wins over hiding: a Quit asked while a hide prompt is open makes the prompt a quit.
+    pub(super) fn retarget_close_dialog(&mut self, goal: CloseGoal) {
+        if let Some(dialog) = self.close_dialog.as_mut()
+            && !goal.keeps_running()
+        {
+            dialog.choices.goal = goal;
+        }
+    }
+
+    pub(super) fn focus_close_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.close_dialog.as_ref() {
+            window.focus(&dialog.focus, cx);
         }
     }
 
