@@ -497,6 +497,45 @@ fn sheet_configs_from<R: Read + Seek>(
     Ok(configs)
 }
 
+pub const MAX_LISTED_SHEETS: usize = 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedSheet {
+    pub name: String,
+    pub hidden: bool,
+}
+
+// The sheet names of one file, in workbook order, from the package metadata alone:
+// no worksheet, shared strings or styles part is ever inflated. The archive goes
+// through the same entry and size caps as a full open.
+pub fn list_sheets(path: &Path) -> Result<Vec<ListedSheet>, ReadError> {
+    let file = File::open(path).map_err(|e| ReadError::Unreadable(e.to_string()))?;
+    let meter = CompressedMeter::new();
+    let mut archive = zip::ZipArchive::new(meter.wrap(BufReader::new(file)))
+        .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+    list_sheets_from(&mut archive, &meter)
+}
+
+fn list_sheets_from<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<Counted<R>>,
+    meter: &CompressedMeter,
+) -> Result<Vec<ListedSheet>, ReadError> {
+    limits::check_archive(archive)?;
+    let package = read_package(archive, meter, &Budgets::production())?;
+    if package.sheet_names.len() > MAX_LISTED_SHEETS {
+        return Err(ReadError::Unsafe(format!(
+            "{} sheets in the workbook",
+            package.sheet_names.len()
+        )));
+    }
+    Ok(package
+        .sheet_names
+        .into_iter()
+        .zip(package.hidden)
+        .map(|(name, hidden)| ListedSheet { name, hidden })
+        .collect())
+}
+
 // IronCalc's importer and parser can panic on malformed input; here that only means the
 // file goes to the regular reader.
 fn guarded<T>(job: impl FnOnce() -> Result<T, ReadError>) -> Result<T, ReadError> {
@@ -525,6 +564,110 @@ mod tests {
             writer.write_all(body).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    const MAIN_NS: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    const REL_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    fn listing_archive(sheets: &[(&str, &str)], extra: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut workbook = String::new();
+        let mut rels = String::new();
+        for (index, (name, state)) in sheets.iter().enumerate() {
+            let id = index + 1;
+            workbook.push_str(&format!(
+                "<sheet name=\"{name}\" sheetId=\"{id}\" {state} r:id=\"rId{id}\"/>"
+            ));
+            rels.push_str(&format!(
+                "<Relationship Id=\"rId{id}\" Type=\"{REL_NS}/worksheet\" Target=\"worksheets/sheet{id}.xml\"/>"
+            ));
+        }
+        let workbook = format!(
+            "<workbook xmlns=\"{MAIN_NS}\" xmlns:r=\"{REL_NS}\"><sheets>{workbook}</sheets></workbook>"
+        );
+        let rels = format!(
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{rels}</Relationships>"
+        );
+        let mut entries: Vec<(&str, &[u8])> = vec![
+            ("xl/workbook.xml", workbook.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ];
+        entries.extend_from_slice(extra);
+        zipped(&entries, true)
+    }
+
+    fn listed(bytes: &[u8]) -> Result<Vec<ListedSheet>, ReadError> {
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes))).unwrap();
+        list_sheets_from(&mut archive, &meter)
+    }
+
+    #[test]
+    fn listing_returns_names_in_order_with_the_hidden_state() {
+        let bytes = listing_archive(
+            &[
+                ("Ventas", ""),
+                ("Oculta", "state=\"hidden\""),
+                ("Año 2024 日本", ""),
+                ("Muy", "state=\"veryHidden\""),
+            ],
+            &[],
+        );
+        let sheets = listed(&bytes).unwrap();
+        let summary: Vec<(&str, bool)> =
+            sheets.iter().map(|s| (s.name.as_str(), s.hidden)).collect();
+        assert_eq!(
+            summary,
+            [
+                ("Ventas", false),
+                ("Oculta", true),
+                ("Año 2024 日本", false),
+                ("Muy", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn listing_never_inflates_a_worksheet_or_the_other_big_parts() {
+        let bomb = vec![0u8; 70 * 1024 * 1024];
+        let bytes = listing_archive(
+            &[("A", ""), ("B", "")],
+            &[
+                ("xl/worksheets/sheet1.xml", &bomb),
+                ("xl/worksheets/sheet2.xml", b"not xml at all <<<"),
+                ("xl/sharedStrings.xml", &bomb),
+                ("xl/styles.xml", &bomb),
+            ],
+        );
+        assert_eq!(listed(&bytes).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn listing_refuses_a_workbook_part_that_is_a_zip_bomb() {
+        let mut bomb = b"<workbook><sheets>".to_vec();
+        bomb.resize(70 * 1024 * 1024, b' ');
+        let bytes = zipped(&[("xl/workbook.xml", &bomb)], true);
+        let error = listed(&bytes).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+    }
+
+    #[test]
+    fn listing_refuses_more_sheets_than_the_cap() {
+        let names: Vec<String> = (0..=MAX_LISTED_SHEETS).map(|n| format!("S{n}")).collect();
+        let sheets: Vec<(&str, &str)> = names.iter().map(|n| (n.as_str(), "")).collect();
+        let error = listed(&listing_archive(&sheets, &[])).unwrap_err();
+        assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+        let within = &sheets[..MAX_LISTED_SHEETS];
+        assert_eq!(
+            listed(&listing_archive(within, &[])).unwrap().len(),
+            MAX_LISTED_SHEETS
+        );
+    }
+
+    #[test]
+    fn listing_a_package_without_a_workbook_is_unreadable() {
+        let bytes = zipped(&[("hello.txt", b"hi")], false);
+        let error = listed(&bytes).unwrap_err();
+        assert!(matches!(error, ReadError::Unreadable(_)), "{error}");
     }
 
     #[test]

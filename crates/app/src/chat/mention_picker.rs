@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::PoisonError;
 use std::time::UNIX_EPOCH;
 
@@ -10,6 +11,7 @@ use zenkai_engine::{Engine, Workbook};
 use zenkai_i18n::t;
 use zenkai_types::{CellPos, Range, SheetId};
 
+use super::folder_sheets::{self, SheetNameCache};
 use super::mention_candidates::{self, Candidate, Group, Hint};
 use super::mention_catalog::{Catalog, Used};
 use super::mention_parse::{self, ActiveQuery};
@@ -26,6 +28,13 @@ pub(super) struct Mentions {
     // Built when the picker opens and dropped when it closes, so typing never queries documents.
     catalog: Option<Catalog>,
     folder: Vec<String>,
+    // Sheet names read for this picker session, by folder-relative path.
+    folder_sheets: HashMap<String, Vec<String>>,
+    // Names of the workbooks picked in the message being written, which its note needs.
+    picked_sheets: HashMap<String, Vec<String>>,
+    sheet_names: SheetNameCache,
+    // Bumped per query, so names read for an older query are not shown.
+    query_generation: u64,
     index: usize,
     // The composer text for which the user closed the picker.
     dismissed: Option<String>,
@@ -98,6 +107,7 @@ impl ChatPanel {
         {
             Ok(mut catalog) => {
                 catalog.folder = self.mentions.folder.clone();
+                catalog.folder_sheets = self.mentions.picked_sheets.clone();
                 Some(catalog)
             }
             Err(error) => {
@@ -109,8 +119,9 @@ impl ChatPanel {
 
     pub(super) fn follow_mention_query(&mut self, cx: &mut Context<Self>) {
         self.mentions.index = 0;
+        self.mentions.query_generation += 1;
         if self.mention_query(cx).is_none() {
-            self.mentions.catalog = None;
+            self.close_mentions();
         } else if self.mentions.catalog.is_none() {
             self.mentions.catalog = self.catalog_now(cx);
             if self.mentions.catalog.is_some() {
@@ -118,6 +129,58 @@ impl ChatPanel {
                 self.read_used_ranges(cx);
             }
         }
+        self.read_folder_sheets(cx);
+    }
+
+    // Names come from the file, off the UI thread; the picker shows them when they arrive.
+    fn read_folder_sheets(&self, cx: &mut Context<Self>) {
+        let (Some(query), Some(catalog), Some(live)) = (
+            self.mention_query(cx),
+            self.mentions.catalog.as_ref(),
+            self.live.as_ref(),
+        ) else {
+            return;
+        };
+        let files: Vec<String> = folder_sheets::best_matches(&query.text, catalog)
+            .into_iter()
+            .filter(|file| !self.mentions.folder_sheets.contains_key(file))
+            .collect();
+        if files.is_empty() {
+            return;
+        }
+        let folder = live.folder.path().to_path_buf();
+        let cache = self.mentions.sheet_names.clone();
+        let generation = self.mentions.query_generation;
+        cx.spawn(async move |this, cx| {
+            let scanned = folder.clone();
+            let fetched = cx
+                .background_executor()
+                .spawn(async move { folder_sheets::fetch(&scanned, files, &cache) })
+                .await;
+            closed(this.update(cx, |this, cx| {
+                let current = this
+                    .live
+                    .as_ref()
+                    .is_some_and(|live| live.folder.path() == folder);
+                if !current {
+                    return;
+                }
+                let shown = generation == this.mentions.query_generation;
+                for read in fetched {
+                    this.mentions
+                        .sheet_names
+                        .insert(read.key, read.names.clone());
+                    if let (true, Some(catalog)) = (shown, this.mentions.catalog.as_mut()) {
+                        catalog
+                            .folder_sheets
+                            .insert(read.file.clone(), read.names.clone());
+                        this.mentions.folder_sheets.insert(read.file, read.names);
+                    }
+                }
+                cx.notify();
+            }));
+        })
+        .detach();
     }
 
     // Only the folder the live agent works in, which is all it can open.
@@ -150,6 +213,7 @@ impl ChatPanel {
                     catalog.folder = names.clone();
                 }
                 this.mentions.folder = names;
+                this.read_folder_sheets(cx);
                 cx.notify();
             }));
         })
@@ -219,13 +283,15 @@ impl ChatPanel {
 
     pub(super) fn close_mentions(&mut self) {
         self.mentions.catalog = None;
+        self.mentions.folder_sheets.clear();
         self.mentions.index = 0;
     }
 
-    // Also drops the folder list, which belongs to the agent that was live when it was read.
+    // Also drops the folder list and its sheet names, which belong to the agent that was live when it was read.
     pub(super) fn forget_mentions(&mut self) {
         self.close_mentions();
         self.mentions.folder.clear();
+        self.mentions.picked_sheets.clear();
     }
 
     pub(super) fn mention_step(&mut self, forward: bool, cx: &mut Context<Self>) {
@@ -256,6 +322,14 @@ impl ChatPanel {
             return;
         };
         let insert = chosen.insert.clone();
+        if let Some((file, names)) = chosen.book.as_ref().and_then(|book| {
+            self.mentions
+                .folder_sheets
+                .get_key_value(book)
+                .map(|(file, names)| (file.clone(), names.clone()))
+        }) {
+            self.mentions.picked_sheets.insert(file, names);
+        }
         self.close_mentions();
         self.composer.update(cx, |state, cx| {
             let text = insert.trim_end().to_string();

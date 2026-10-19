@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use zenkai_types::{Range, SheetId, WorkbookId};
 
 use super::name_guard::{can_hold_external_sheet, is_safe_name};
@@ -39,6 +41,7 @@ pub struct Catalog {
     pub active: Option<ActiveBook>,
     pub open: Vec<OpenBook>,
     pub folder: Vec<String>,
+    pub folder_sheets: HashMap<String, Vec<String>>,
 }
 
 impl Catalog {
@@ -64,14 +67,27 @@ impl Catalog {
     }
 
     pub(super) fn sheet_in(&self, book: &str, sheet: &str) -> Option<(String, String)> {
-        let open = self
-            .open_book(book)
-            .filter(|open| can_hold_external_sheet(&open.name))?;
         let wanted = sheet.to_lowercase();
-        open.sheets
-            .iter()
-            .find(|name| name.to_lowercase() == wanted && is_safe_name(name))
-            .map(|name| (open.name.clone(), name.clone()))
+        let found_in = |book: &str, sheets: &[String]| {
+            sheets
+                .iter()
+                .find(|name| name.to_lowercase() == wanted && is_safe_name(name))
+                .map(|name| (book.to_string(), name.clone()))
+        };
+        match self.open_book(book) {
+            Some(open) if can_hold_external_sheet(&open.name) => found_in(&open.name, &open.sheets),
+            Some(_) => None,
+            None => {
+                let (file, sheets) = self.folder_sheets_of(book)?;
+                found_in(file, sheets)
+            }
+        }
+    }
+
+    pub(super) fn folder_sheets_of(&self, book: &str) -> Option<(&String, &Vec<String>)> {
+        self.folder_only()
+            .find(|file| file.eq_ignore_ascii_case(book) && can_hold_external_sheet(file))
+            .and_then(|file| self.folder_sheets.get(file).map(|sheets| (file, sheets)))
     }
 
     pub(super) fn open_book(&self, name: &str) -> Option<&OpenBook> {
@@ -156,6 +172,7 @@ pub(super) mod sample {
                 "reports/budget 2026.xlsx".to_string(),
                 "sales-q3.xlsx".to_string(),
             ],
+            folder_sheets: HashMap::new(),
         }
     }
 

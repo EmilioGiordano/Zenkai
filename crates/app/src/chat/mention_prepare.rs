@@ -54,6 +54,17 @@ fn describe(mention: &Mention, catalog: &Catalog) -> Option<(String, String)> {
                 format!("sheet \"{}\" of {}", plain_name(name), where_is(book)),
             ))
         }
+        Mention::BookSheet { workbook, name } if catalog.open_book(workbook).is_none() => {
+            let (file, _) = catalog.folder_sheets_of(workbook)?;
+            Some((
+                external_sheet(file, name),
+                format!(
+                    "sheet \"{}\" of the file \"{}\" in the working folder, not open; open_workbook takes that path",
+                    plain_name(name),
+                    plain_name(file)
+                ),
+            ))
+        }
         Mention::BookSheet { workbook, name } => {
             let book = book_named(catalog, Some(workbook))
                 .filter(|book| can_hold_external_sheet(&book.name))?;
@@ -117,6 +128,21 @@ mod tests {
     use super::super::mention_catalog::sample::*;
     use super::super::mention_parse::{active_query, chips};
     use super::*;
+
+    #[test]
+    fn a_sheet_of_a_folder_workbook_is_explained_as_not_open() {
+        let mut catalog = catalog();
+        catalog.folder_sheets.insert(
+            "reports/budget 2026.xlsx".to_string(),
+            vec!["Plan".to_string()],
+        );
+        let prepared = prepare("see @'[reports/budget 2026.xlsx]Plan'", &catalog);
+        assert_eq!(prepared.text, "see @'[reports/budget 2026.xlsx]Plan'");
+        assert!(prepared.notes[0].contains("not open"));
+        assert!(prepared.notes[0].contains("reports/budget 2026.xlsx"));
+        let unknown = prepare("see @'[reports/budget 2026.xlsx]Nope'", &catalog);
+        assert!(unknown.notes.is_empty());
+    }
 
     #[test]
     fn a_quoted_sheet_with_spaces_round_trips() {
