@@ -394,8 +394,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_dialog.is_some() {
+            self.focus_close_dialog(window, cx);
+            return;
+        }
         if self.lifecycle == Lifecycle::Closing
-            || self.close_dialog.is_some()
             || self.departure.is_some()
             || self.prompts.blocks_input()
         {
@@ -405,7 +408,12 @@ impl Workspace {
             self.park_active(window, cx);
         }
         let general = &agent_settings::settings(cx).general;
-        let asks = general.close_with_unsaved == CloseWithUnsaved::Ask;
+        let when_unsaved = if goal.keeps_running() {
+            general.close_window_with_unsaved
+        } else {
+            general.close_with_unsaved
+        };
+        let asks = when_unsaved == CloseWithUnsaved::Ask;
         let reopen_offered = general.restore_session && !goal.keeps_running();
         let unsaved = self.documents.unsaved();
         if asks && !unsaved.is_empty() {
@@ -417,13 +425,6 @@ impl Workspace {
             ..ClosePlan::default()
         };
         self.run_close(plan, window, cx);
-    }
-
-    // Quitting with unsaved work can raise a prompt even when the setting does not ask first
-    // (a busy workbook, autosave off), so the window must be visible whenever there is any.
-    #[cfg(windows)]
-    pub(crate) fn close_may_prompt(&self) -> bool {
-        !self.documents.unsaved().is_empty()
     }
 
     // Closing keeps unsaved work: every workbook holding some, except the ones the plan
@@ -440,8 +441,7 @@ impl Workspace {
         }
         #[cfg(windows)]
         if plan.goal == CloseGoal::Hide {
-            self.hide_to_tray(cx);
-            return;
+            self.close_discarded(&plan, window, cx);
         }
         self.lifecycle = Lifecycle::Closing;
         self.park_active(window, cx);
@@ -455,6 +455,11 @@ impl Workspace {
                     Ok(None) if polls < CLOSE_POLLS_BEFORE_ASKING => polls += 1,
                     Ok(None) => {
                         let asked = this.update_in(cx, |this, window, cx| {
+                            #[cfg(windows)]
+                            if plan.goal == CloseGoal::Hide {
+                                this.abandon_hide(t!("quit.busy_reason"), cx);
+                                return;
+                            }
                             this.ask_to_quit_anyway(
                                 t!("quit.busy_reason"),
                                 plan.clone(),
@@ -514,6 +519,15 @@ impl Workspace {
                     .iter()
                     .filter_map(|result| result.as_ref().err().map(ToString::to_string))
                     .collect();
+                #[cfg(windows)]
+                if plan.goal == CloseGoal::Hide {
+                    if failures.is_empty() {
+                        this.hide_to_tray(cx);
+                    } else {
+                        this.abandon_hide(&failures.join("; "), cx);
+                    }
+                    return;
+                }
                 if failures.is_empty() {
                     this.finish_close_with_session(plan.clone(), window, cx);
                 } else {
@@ -704,6 +718,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(windows)]
+        crate::tray::request_show(cx);
         let detail = t!("quit.detail", reason = reason);
         let answer = self.ask(
             PromptLevel::Critical,

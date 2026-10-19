@@ -160,6 +160,12 @@ impl Workspace {
         }
     }
 
+    pub(super) fn focus_close_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(dialog) = self.close_dialog.as_ref() {
+            window.focus(&dialog.focus, cx);
+        }
+    }
+
     pub(super) fn cancel_close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_close_dialog(window, cx);
     }
