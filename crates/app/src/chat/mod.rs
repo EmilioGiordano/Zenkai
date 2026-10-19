@@ -10,12 +10,20 @@ mod extras;
 mod files;
 mod header;
 mod launch;
+pub(crate) mod mention_candidates;
+pub(crate) mod mention_catalog;
+mod mention_label;
+mod mention_parse;
+mod mention_picker;
+mod mention_prepare;
 mod menus;
 mod model_search;
+mod name_guard;
 mod permissions;
 pub(crate) mod reference;
 mod reference_scan;
 mod render;
+mod sent_books;
 mod session_rows;
 mod sessions;
 mod slash;
@@ -43,6 +51,7 @@ use crate::view::Workspace;
 use access::Access;
 use launch::{Live, Prepared};
 use reference::Reference;
+use sent_books::SentBooks;
 use zenkai_i18n::t;
 
 const SCROLL_FOLLOW_SLACK: f32 = 48.0;
@@ -111,6 +120,7 @@ pub struct ChatPanel {
     thread: Thread,
     texts: BTreeMap<MessageId, Entity<TextViewState>>,
     linked_messages: BTreeSet<MessageId>,
+    sent_books: SentBooks,
     references: Vec<Reference>,
     link: Link,
     live: Option<Live>,
@@ -157,6 +167,7 @@ pub struct ChatPanel {
     slash_index: usize,
     // The composer text for which the user closed the slash list.
     slash_dismissed: Option<String>,
+    mentions: mention_picker::Mentions,
     // Bumped when a conversation ends, so a late answer from an older session is dropped.
     epoch: u64,
     layout: ChatLayout,
@@ -175,7 +186,7 @@ fn closed<E: std::fmt::Display>(result: Result<(), E>) {
 // The name of a file is the user's, but it still ends up inside text an agent reads.
 fn plain_name(name: &str) -> String {
     name.chars()
-        .filter(|c| !c.is_control() && *c != '"')
+        .filter(|c| !name_guard::is_unsafe_char(*c) && *c != '"')
         .take(MAX_NAME_CHARS)
         .collect()
 }
@@ -228,6 +239,7 @@ impl ChatPanel {
                 }
                 InputEvent::Change => {
                     this.slash_index = 0;
+                    this.follow_mention_query(cx);
                     cx.notify();
                 }
                 InputEvent::Focus | InputEvent::Blur => cx.notify(),
@@ -276,6 +288,7 @@ impl ChatPanel {
             thread: Thread::default(),
             texts: BTreeMap::new(),
             linked_messages: BTreeSet::new(),
+            sent_books: SentBooks::default(),
             references: Vec::new(),
             link: Link::Idle,
             live: None,
@@ -315,6 +328,7 @@ impl ChatPanel {
             model_scroll: ScrollHandle::new(),
             slash_index: 0,
             slash_dismissed: None,
+            mentions: mention_picker::Mentions::default(),
             epoch: 0,
             layout: ChatLayout::default(),
             selected_range: None,
@@ -411,11 +425,15 @@ impl ChatPanel {
 
     pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let typed = self.composer.read(cx).value().to_string();
-        let text = self.message_with_references(&typed);
+        let mentioned = self.prepare_mentions(&typed, cx);
+        let text = self.message_with_references(&mentioned.text);
         if !self.thread.submit(text.clone()) {
             return;
         }
+        let book = self.active_workbook(cx).map(|(_, name)| name);
+        self.sent_books.record(book);
         self.references.clear();
+        self.forget_mentions();
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.turn_started = Some(Instant::now());
@@ -424,7 +442,9 @@ impl ChatPanel {
         self.set_view(View::Chat, cx);
         self.menu = None;
         self.remember_conversation(&text, cx);
-        let context = self.prompt_context(cx);
+        let context = self
+            .prompt_context(cx)
+            .map(|line| mention_picker::with_notes(line, &mentioned.notes));
         match &self.live {
             Some(live) if live.ready => live.handle.prompt(text, context),
             _ => {
@@ -465,6 +485,7 @@ impl ChatPanel {
     fn reset_conversation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.epoch += 1;
         self.end_session(cx);
+        self.forget_mentions();
         for ask in self.permissions.drain(..) {
             ask.cancel();
         }
@@ -473,6 +494,7 @@ impl ChatPanel {
         self.editing_blocked = None;
         self.texts.clear();
         self.linked_messages.clear();
+        self.sent_books.clear();
         self.references.clear();
         self.queued = None;
         self.gate = None;
@@ -583,5 +605,11 @@ mod tests {
     #[test]
     fn a_very_long_file_name_is_cut() {
         assert_eq!(plain_name(&"a".repeat(500)).chars().count(), 80);
+    }
+
+    #[test]
+    fn plain_name_drops_direction_marks_and_zero_width_characters() {
+        let hostile = "a\u{202E}b\u{2066}c\u{200F}d\u{200B}e\u{2028}f\u{FEFF}g\u{061C}h";
+        assert_eq!(plain_name(hostile), "abcdefgh");
     }
 }

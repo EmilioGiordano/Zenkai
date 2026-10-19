@@ -217,6 +217,7 @@ impl ChatPanel {
         let focused = self.composer.focus_handle(cx).contains_focused(window, cx);
         let agent = self.agent_name(cx);
         let busy = self.busy();
+        let token_book = self.active_workbook(cx).map(|(_, name)| name);
         let send = if busy {
             icon_button(
                 "chat-stop",
@@ -233,7 +234,7 @@ impl ChatPanel {
             )
             .primary()
         };
-        let slash = self.render_slash(cx);
+        let slash = self.render_mentions(cx).or_else(|| self.render_slash(cx));
         let model_menu = self.render_model_menu(cx);
         let access_menu = self.render_access_menu(cx);
         let agent_menu = self.render_agent_menu(cx);
@@ -278,19 +279,23 @@ impl ChatPanel {
             .children(slash)
             .child(
                 Textarea::new(&self.composer)
+                    .token(move |context, _, cx| {
+                        badge::composer_token(context, token_book.as_deref(), cx)
+                    })
                     .appearance(false)
                     .bordered(false)
                     .aria_label(t!("chat.composer.label")),
             )
             .when(!self.references.is_empty(), |composer| {
                 let panel = cx.weak_entity();
+                let book = self.active_workbook(cx).map(|(_, name)| name);
                 composer.child(
                     h_flex().flex_wrap().gap_1p5().children(
                         self.references
                             .iter()
                             .enumerate()
                             .map(|(index, reference)| {
-                                badge::chip(index, reference, panel.clone(), cx)
+                                badge::chip(index, reference, book.as_deref(), panel.clone(), cx)
                             }),
                     ),
                 )
