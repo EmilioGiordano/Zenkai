@@ -3,8 +3,10 @@ use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf, Prefix};
 
 use serde::{Deserialize, Serialize};
+use zenkai_i18n::t;
 
-const OPENABLE_EXTENSIONS: [&str; 8] = ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt"];
+use crate::files::is_openable;
+
 const MAX_PATH_UNITS: usize = 32_767;
 
 // The file a second launch was given, as UTF-16 code units so no Windows path is lost.
@@ -15,8 +17,8 @@ pub struct Handoff {
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Refusal {
-    #[error("not a plain local drive path")]
-    NotLocalDrivePath,
+    #[error("not a plain drive or share path")]
+    NotPlainPath,
     #[error("the path is too long")]
     TooLong,
     #[error("the path names an alternate data stream")]
@@ -27,6 +29,18 @@ pub enum Refusal {
     UnsupportedExtension,
 }
 
+impl Refusal {
+    pub fn message(&self) -> &'static str {
+        match self {
+            Refusal::NotPlainPath => t!("tray.refusal.not_plain"),
+            Refusal::TooLong => t!("tray.refusal.too_long"),
+            Refusal::AlternateStream => t!("tray.refusal.stream"),
+            Refusal::RelativeSegment => t!("tray.refusal.relative"),
+            Refusal::UnsupportedExtension => t!("tray.refusal.extension"),
+        }
+    }
+}
+
 impl Handoff {
     pub fn of(open: Option<&Path>) -> Handoff {
         Handoff {
@@ -34,8 +48,8 @@ impl Handoff {
         }
     }
 
-    pub fn encode(&self) -> Option<String> {
-        serde_json::to_string(self).ok()
+    pub fn encode(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
     }
 
     pub fn decode(line: &str) -> Option<Handoff> {
@@ -49,33 +63,39 @@ impl Handoff {
     }
 }
 
+fn has_colon(name: &std::ffi::OsStr) -> bool {
+    name.encode_wide().any(|unit| unit == u16::from(b':'))
+}
+
 pub fn accept_path(raw: &OsString) -> Result<PathBuf, Refusal> {
     if raw.encode_wide().count() > MAX_PATH_UNITS {
         return Err(Refusal::TooLong);
     }
     let path = Path::new(raw);
     let mut components = path.components();
-    let on_a_drive = matches!(
-        components.next(),
-        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
-    );
-    if !on_a_drive || components.next() != Some(Component::RootDir) {
-        return Err(Refusal::NotLocalDrivePath);
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return Err(Refusal::NotPlainPath);
+    };
+    match prefix.kind() {
+        Prefix::Disk(_) => {}
+        Prefix::UNC(server, share) if !server.is_empty() && !share.is_empty() => {
+            if has_colon(server) || has_colon(share) {
+                return Err(Refusal::AlternateStream);
+            }
+        }
+        _ => return Err(Refusal::NotPlainPath),
+    }
+    if components.next() != Some(Component::RootDir) {
+        return Err(Refusal::NotPlainPath);
     }
     for component in components {
         match component {
-            Component::Normal(name) if name.encode_wide().any(|unit| unit == u16::from(b':')) => {
-                return Err(Refusal::AlternateStream);
-            }
+            Component::Normal(name) if has_colon(name) => return Err(Refusal::AlternateStream),
             Component::Normal(_) => {}
             _ => return Err(Refusal::RelativeSegment),
         }
     }
-    let openable = path
-        .extension()
-        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
-        .is_some_and(|extension| OPENABLE_EXTENSIONS.contains(&extension.as_str()));
-    if !openable {
+    if !is_openable(path) {
         return Err(Refusal::UnsupportedExtension);
     }
     Ok(path.to_path_buf())
@@ -129,22 +149,39 @@ mod tests {
     }
 
     #[test]
+    fn plain_network_shares_are_accepted_with_the_same_rules() {
+        assert!(accepted(r"\\server\share\dir\a.xlsx").is_ok());
+        assert_eq!(
+            accepted(r"\\server\share\a.xlsx:s"),
+            Err(Refusal::AlternateStream)
+        );
+        assert_eq!(
+            accepted(r"\\server\share\a.exe"),
+            Err(Refusal::UnsupportedExtension)
+        );
+        assert_eq!(
+            accepted(r"\\server\share\..\a.xlsx"),
+            Err(Refusal::RelativeSegment)
+        );
+        assert!(accepted(r"\\server\a.xlsx").is_err());
+    }
+
+    #[test]
     fn network_device_and_namespace_paths_are_refused() {
         for text in [
-            "\\\\host\\share\\a.xlsx",
             "\\\\.\\C:\\a.xlsx",
             "\\\\?\\C:\\a.xlsx",
             "\\\\?\\UNC\\host\\share\\a.xlsx",
             "\\\\.\\pipe\\x.xlsx",
         ] {
-            assert_eq!(accepted(text), Err(Refusal::NotLocalDrivePath), "{text}");
+            assert_eq!(accepted(text), Err(Refusal::NotPlainPath), "{text}");
         }
     }
 
     #[test]
     fn relative_and_drive_relative_paths_are_refused() {
         for text in ["a.xlsx", "C:a.xlsx", "\\a.xlsx", ".\\a.xlsx"] {
-            assert_eq!(accepted(text), Err(Refusal::NotLocalDrivePath), "{text}");
+            assert_eq!(accepted(text), Err(Refusal::NotPlainPath), "{text}");
         }
         assert_eq!(accepted("C:\\a\\..\\b.xlsx"), Err(Refusal::RelativeSegment));
     }

@@ -6,6 +6,7 @@ use proptest::prelude::*;
 
 use super::handoff::Handoff;
 use crate::documents::session_fuzz::json_mutation;
+use crate::files::is_openable;
 
 fn baseline() -> serde_json::Value {
     let units: Vec<u16> = "C:\\Datos\\planilla.xlsx".encode_utf16().collect();
@@ -14,10 +15,18 @@ fn baseline() -> serde_json::Value {
 
 fn check_accepted(path: &Path) {
     let mut components = path.components();
-    assert!(matches!(
-        components.next(),
-        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
-    ));
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        panic!("{path:?} has no drive or share");
+    };
+    match prefix.kind() {
+        Prefix::Disk(_) => {}
+        Prefix::UNC(server, share) => {
+            assert!(!server.is_empty() && !share.is_empty(), "{path:?}");
+            assert!(!server.to_string_lossy().contains(':'), "{path:?}");
+            assert!(!share.to_string_lossy().contains(':'), "{path:?}");
+        }
+        other => panic!("{path:?} has the prefix {other:?}"),
+    }
     assert_eq!(components.next(), Some(Component::RootDir));
     for component in components {
         let Component::Normal(name) = component else {
@@ -25,14 +34,7 @@ fn check_accepted(path: &Path) {
         };
         assert!(!name.to_string_lossy().contains(':'), "{path:?}");
     }
-    let extension = path
-        .extension()
-        .map(|extension| extension.to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    assert!(
-        ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt"].contains(&extension.as_str()),
-        "{path:?}"
-    );
+    assert!(is_openable(path), "{path:?}");
 }
 
 fn check_message(bytes: &[u8]) {
@@ -70,11 +72,12 @@ proptest! {
     }
 
     #[test]
-    fn drive_shaped_paths_with_odd_segments_stay_inside_the_rules(
+    fn drive_and_share_shaped_paths_with_odd_segments_stay_inside_the_rules(
         segments in prop::collection::vec("[a-zA-Z0-9 .:*?<>|\\\\/_-]{0,12}", 0..5),
         extension in prop::sample::select(vec!["xlsx", "csv", "exe", "xlsx:x", ""]),
+        root in prop::sample::select(vec![r"C:\", r"\\srv\share\", r"\\srv\", r"\\?\C:\"]),
     ) {
-        let text = format!("C:\\{}.{extension}", segments.join("\\"));
+        let text = format!("{root}{}.{extension}", segments.join("\\"));
         let units: Vec<u16> = text.encode_utf16().collect();
         let message = serde_json::json!({ "open": units }).to_string();
         check_message(message.as_bytes());
