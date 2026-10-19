@@ -394,7 +394,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !goal.keeps_running()
+            && let Some(departure) = self.departure.as_mut()
+        {
+            departure.plan.goal = goal;
+        }
         if self.close_dialog.is_some() {
+            self.retarget_close_dialog(goal);
             self.focus_close_dialog(window, cx);
             return;
         }
@@ -438,10 +444,6 @@ impl Workspace {
     ) {
         if self.lifecycle == Lifecycle::Closing {
             return;
-        }
-        #[cfg(windows)]
-        if plan.goal == CloseGoal::Hide {
-            self.close_discarded(&plan, window, cx);
         }
         self.lifecycle = Lifecycle::Closing;
         self.park_active(window, cx);
@@ -522,7 +524,7 @@ impl Workspace {
                 #[cfg(windows)]
                 if plan.goal == CloseGoal::Hide {
                     if failures.is_empty() {
-                        this.hide_to_tray(cx);
+                        this.finish_hide(plan.clone(), window, cx);
                     } else {
                         this.abandon_hide(&failures.join("; "), cx);
                     }
@@ -671,7 +673,7 @@ impl Workspace {
     }
 
     // The spaces and links are kept even when unsaved work could not be.
-    fn write_session_and_quit(&mut self, plan: ClosePlan, cx: &mut Context<Self>) {
+    pub(super) fn write_session_and_quit(&mut self, plan: ClosePlan, cx: &mut Context<Self>) {
         let session = self.snapshot_session_leaving(&plan, cx);
         let session_directory = recovery::session_directory();
         let mut clean: Vec<PathBuf> = self
@@ -711,7 +713,7 @@ impl Workspace {
         .detach();
     }
 
-    fn ask_to_quit_anyway(
+    pub(super) fn ask_to_quit_anyway(
         &mut self,
         reason: &str,
         plan: ClosePlan,
@@ -720,20 +722,24 @@ impl Workspace {
     ) {
         #[cfg(windows)]
         crate::tray::request_show(cx);
-        let detail = t!("quit.detail", reason = reason);
+        let (detail, proceed_label) = if plan.goal.keeps_running() {
+            (t!("hide.detail", reason = reason), t!("hide.anyway"))
+        } else {
+            (t!("quit.detail", reason = reason), t!("quit.anyway"))
+        };
         let answer = self.ask(
             PromptLevel::Critical,
             t!("quit.title"),
             Some(&detail),
-            &[t!("button.cancel"), t!("quit.anyway")],
+            &[t!("button.cancel"), proceed_label],
             window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            let quit = answer.await == Some(1);
-            let update = this.update(cx, |this, cx| {
-                if quit {
-                    this.write_session_and_quit(plan, cx);
+            let proceed = answer.await == Some(1);
+            let update = this.update_in(cx, |this, window, cx| {
+                if proceed {
+                    this.quit_or_hide(plan, window, cx);
                 } else {
                     this.lifecycle = Lifecycle::Running;
                     this.clear_busy(t!("busy.closing"), cx);

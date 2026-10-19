@@ -9,7 +9,7 @@ use crate::actions::{
     CancelCloseDialog, ConfirmCloseDialog, DiscardCloseDialog, FocusNextControl,
     FocusPreviousControl,
 };
-use crate::close_prompt::{Choices, ClosePlan, Departure, Purpose};
+use crate::close_prompt::{Choices, CloseGoal, ClosePlan, Departure, Purpose};
 use crate::document::Document;
 use crate::interface_scale::rem_px;
 
@@ -157,6 +157,15 @@ impl Workspace {
                 window,
                 cx,
             ),
+        }
+    }
+
+    // Quitting wins over hiding: a Quit asked while a hide prompt is open makes the prompt a quit.
+    pub(super) fn retarget_close_dialog(&mut self, goal: CloseGoal) {
+        if let Some(dialog) = self.close_dialog.as_mut()
+            && !goal.keeps_running()
+        {
+            dialog.choices.goal = goal;
         }
     }
 
