@@ -15,7 +15,7 @@ use crate::{
     model::{FmtSettings, Model},
     types::{
         Alignment, ArrayKind, BorderItem, Cell, CellType, Col, Color, HorizontalAlignment,
-        SheetProperties, SheetState, Style, Theme, VerticalAlignment,
+        SheetProperties, SheetState, Style, Theme, VerticalAlignment, Workbook,
     },
 };
 
@@ -308,6 +308,62 @@ impl<'a> UserModel<'a> {
     ///  * [Model::to_bytes]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.model.to_bytes()
+    }
+
+    /// Returns the internal representation of a model together with its undo and redo
+    /// history, which [UserModel::to_bytes] leaves out.
+    ///
+    /// Fails while an edit group is open or evaluation is paused, as the model is then
+    /// between two states.
+    ///
+    /// See also:
+    /// * [UserModel::from_bytes_with_history]
+    pub fn to_bytes_with_history(&self) -> Result<Vec<u8>, String> {
+        if self.edit_group.is_some() || self.pause_evaluation {
+            return Err("the model is in the middle of an edit".to_string());
+        }
+        let mut bytes = Vec::new();
+        for section in [
+            bitcode::encode(&self.model.workbook),
+            bitcode::encode(&self.history.undo_stack),
+            bitcode::encode(&self.history.redo_stack),
+        ] {
+            bytes.extend_from_slice(&(section.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(&section);
+        }
+        Ok(bytes)
+    }
+
+    /// Creates a model from the bytes of [UserModel::to_bytes_with_history], with the
+    /// same undo and redo history.
+    pub fn from_bytes_with_history(
+        s: &[u8],
+        language_id: &'a str,
+    ) -> Result<UserModel<'a>, String> {
+        let (workbook, rest) = next_section(s)?;
+        let (undo_stack, rest) = next_section(rest)?;
+        let (redo_stack, rest) = next_section(rest)?;
+        if !rest.is_empty() {
+            return Err("Error parsing workbook: trailing bytes".to_string());
+        }
+        let workbook: Workbook =
+            bitcode::decode(workbook).map_err(|e| format!("Error parsing workbook: {e}"))?;
+        let undo_stack: Vec<DiffList> =
+            bitcode::decode(undo_stack).map_err(|e| format!("Error parsing undo history: {e}"))?;
+        let redo_stack: Vec<DiffList> =
+            bitcode::decode(redo_stack).map_err(|e| format!("Error parsing redo history: {e}"))?;
+        let model = Model::from_workbook(workbook, language_id)?;
+        Ok(UserModel {
+            model,
+            history: History {
+                undo_stack,
+                redo_stack,
+            },
+            send_queue: vec![],
+            pause_evaluation: false,
+            edit_group: None,
+            pending_recalculation: PendingRecalculation::Workbook,
+        })
     }
 
     /// Returns the internal model
@@ -910,9 +966,7 @@ impl<'a> UserModel<'a> {
                 return Err("Every area must lie inside the bounds".to_string());
             }
             if !self.model.arrays_inside(area, bounds)? {
-                return Err(
-                    "Cannot clear the range because it contains array formulas".to_string()
-                );
+                return Err("Cannot clear the range because it contains array formulas".to_string());
             }
         }
         if areas.is_empty() {
@@ -2352,6 +2406,15 @@ impl<'a> UserModel<'a> {
             self.evaluate();
         }
     }
+}
+
+// Splits off the first length-prefixed section of `bytes`.
+fn next_section(bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
+    let truncated = || "Error parsing workbook: truncated".to_string();
+    let (length, rest) = bytes.split_at_checked(8).ok_or_else(truncated)?;
+    let length = u64::from_le_bytes(length.try_into().map_err(|_| truncated())?);
+    let length = usize::try_from(length).map_err(|_| truncated())?;
+    rest.split_at_checked(length).ok_or_else(truncated)
 }
 
 #[cfg(test)]
