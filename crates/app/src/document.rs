@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use zenkai_i18n::t;
 
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Engine, EngineError, SaveSnapshot, SaveTarget, Unsupported, Workbook};
+use zenkai_engine::{Engine, EngineError, Kept, SaveSnapshot, SaveTarget, Unsupported, Workbook};
 use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
@@ -30,6 +30,8 @@ pub enum FileJob {
     Idle,
     Saving,
     Autosaving,
+    // Being written to disk so it can leave memory; nothing else may start meanwhile.
+    Hibernating,
 }
 
 pub struct Document {
@@ -73,6 +75,8 @@ pub struct Document {
     recovery_on_disk: bool,
     // Set by an edit; the running autosave drops its write and leaves the old copy in place.
     autosave_cancel: Arc<AtomicBool>,
+    // The edit count a hibernation failed at, so the same work is not dumped again and again.
+    hibernation_failed_at: Option<u64>,
 }
 
 pub fn labels(kinds: &[Unsupported]) -> String {
@@ -140,6 +144,7 @@ impl Document {
             recovery_stale_since: None,
             recovery_on_disk: false,
             autosave_cancel: Arc::new(AtomicBool::new(false)),
+            hibernation_failed_at: None,
         }
     }
 
@@ -335,6 +340,14 @@ impl Document {
 
     pub fn has_recovery_copy(&self) -> bool {
         self.recovery_on_disk
+    }
+
+    pub fn hibernation_failed(&mut self) {
+        self.hibernation_failed_at = Some(self.edit_count);
+    }
+
+    pub fn hibernation_was_refused(&self) -> bool {
+        self.hibernation_failed_at == Some(self.edit_count)
     }
 
     pub fn mark_recovery_adopted(&mut self) {
@@ -592,6 +605,18 @@ pub fn write_snapshot_unless(
             write(snapshot).map(|()| SnapshotOutcome::Written { lacks })
         },
     )
+}
+
+// Writes the workbook and its history to `dump`; the workbook stays where it is.
+pub fn write_hibernation(shared: &RwLock<Workbook>, dump: &Path) -> Result<Kept, EngineError> {
+    let started = Instant::now();
+    let kept = read_shared(shared).hibernate(dump);
+    let elapsed_ms = started.elapsed().as_millis();
+    match &kept {
+        Ok(_) => tracing::info!(?dump, elapsed_ms, "workbook hibernated"),
+        Err(error) => tracing::warn!(?dump, %error, elapsed_ms, "could not hibernate a workbook"),
+    }
+    kept
 }
 
 fn allows(accepted: &[Unsupported], dropped: &[Unsupported]) -> bool {

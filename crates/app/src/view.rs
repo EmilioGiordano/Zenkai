@@ -1660,6 +1660,7 @@ impl Workspace {
                     }
                     document.clear_pending_save();
                     this.save_document(id, window, cx);
+                            FileJob::Hibernating => t!("notice.still_hibernating"),
                     false
                 });
                 match waiting {
@@ -1956,6 +1957,7 @@ impl Workspace {
         };
         let edits_at_start = document.edit_count();
         let generation = document.generation();
+                FileJob::Hibernating => t!("notice.still_hibernating"),
         self.busy = Some(t!("busy.saving").into());
         self.start_long_job(LongJob::Saving, cx);
         cx.spawn_in(window, async move |this, cx| {
