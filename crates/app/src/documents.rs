@@ -77,27 +77,51 @@ pub struct Loaded {
     pub unsupported: Vec<Unsupported>,
     pub read_only: bool,
     pub origin: FileOrigin,
-    pub from_recovery: bool,
+    pub provenance: Provenance,
 }
 
 impl Loaded {
     fn into_document(self, link: &Link) -> Document {
-        let unsupported = if self.from_recovery {
+        let from_copy = self.provenance != Provenance::File;
+        let unsupported = if from_copy {
             link.unsupported.clone()
         } else {
             self.unsupported
         };
         let mut document = Document::new(
             link.id,
+// Where a loaded workbook was read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provenance {
+    File,
+    // The autosaved copy of unsaved work, which can lack what the file holds.
+    Recovery,
+    // The memory dump of a hibernated workbook: the same workbook, with its undo history.
+    Dump,
+}
+
             link.space,
             link.untitled,
             self.workbook,
             link.path.clone(),
             unsupported,
         );
-        document.restored = self.from_recovery;
-        document.read_only = self.read_only || (self.from_recovery && link.read_only);
-        document.dirty = self.from_recovery && link.dirty;
+        document.restored = match self.provenance {
+            Provenance::File => false,
+            Provenance::Recovery => true,
+            Provenance::Dump => link
+                .rested
+                .as_ref()
+                .and_then(|rested| rested.hibernation.as_ref())
+                .is_some_and(|hibernation| hibernation.restored),
+        };
+        document.read_only = self.read_only || (from_copy && link.read_only);
+        document.dirty = from_copy && link.dirty;
+        if self.provenance == Provenance::Dump {
+            // The recovery copy was written from this very work, and the new document has
+            // made no edit yet.
+            document.set_autosaved_at(Some(document.edit_count()));
+        }
         document.origin = link.origin.unwrap_or(self.origin);
         document.view = link.view;
         let last = u32::try_from(document.sheets.len().saturating_sub(1)).unwrap_or(0);
