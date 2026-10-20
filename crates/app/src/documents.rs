@@ -2,16 +2,18 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Unsupported, Workbook};
+use zenkai_engine::{Kept, Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
-use crate::document::Document;
+use crate::document::{Document, FileJob, SharedWorkbook};
 use crate::entry::{Entry, Link, LinkStatus, Slot};
 use crate::files;
 use crate::spaces::{SpaceId, Spaces};
 
 pub use unsaved::Unsaved;
 
+#[cfg(test)]
+mod hibernation;
 mod restore;
 #[cfg(test)]
 pub(crate) mod session_fuzz;
@@ -65,10 +67,36 @@ pub struct Documents {
     spaces: Spaces,
 }
 
+// A workbook claimed by `begin_hibernation`, for the job that writes it.
+pub struct Hibernating {
+    pub generation: u64,
+    pub edits: u64,
+    pub workbook: SharedWorkbook,
+}
+
+// What the job wrote, for `finish_hibernation`.
+pub struct Dumped {
+    pub generation: u64,
+    pub edits: u64,
+    pub recovery: PathBuf,
+    pub dump: PathBuf,
+    pub kept: Kept,
+}
+
 pub enum Installed {
     OnScreen,
     Background,
     Gone,
+}
+
+// Where a loaded workbook was read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provenance {
+    File,
+    // The autosaved copy of unsaved work, which can lack what the file holds.
+    Recovery,
+    // The memory dump of a hibernated workbook: the same workbook, with its undo history.
+    Dump,
 }
 
 pub struct Loaded {
@@ -90,16 +118,6 @@ impl Loaded {
         };
         let mut document = Document::new(
             link.id,
-// Where a loaded workbook was read from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Provenance {
-    File,
-    // The autosaved copy of unsaved work, which can lack what the file holds.
-    Recovery,
-    // The memory dump of a hibernated workbook: the same workbook, with its undo history.
-    Dump,
-}
-
             link.space,
             link.untitled,
             self.workbook,
@@ -518,6 +536,66 @@ impl Documents {
             }
             _ => false,
         }
+    }
+
+    // Workbooks with unsaved work go to disk in two steps, so the write runs in the background:
+    // `begin_hibernation` claims the workbook and `finish_hibernation` swaps it for a link.
+    pub fn begin_hibernation(&mut self, id: WorkbookId) -> Option<Hibernating> {
+        if self.wanted() == Some(id) {
+            return None;
+        }
+        let Some(SlotMut::Other(Slot::Loaded(document))) = self.slot_mut(id) else {
+            return None;
+        };
+        if !document.can_hibernate() {
+            return None;
+        }
+        let workbook = document.begin_file_job(FileJob::Hibernating)?;
+        Some(Hibernating {
+            generation: document.generation(),
+            edits: document.edit_count(),
+            workbook,
+        })
+    }
+
+    // The workbook stays in memory, and is not offered again until it is edited.
+    pub fn abandon_hibernation(&mut self, id: WorkbookId, generation: u64, failed: bool) {
+        if let Some(document) = self.get_mut(id) {
+            document.end_file_job(generation);
+            if failed {
+                document.hibernation_failed();
+            }
+        }
+    }
+
+    // Whether the workbook left memory. If anything changed while the dump was written, the
+    // dump is stale and the workbook stays.
+    pub fn finish_hibernation(&mut self, id: WorkbookId, dumped: Dumped) -> bool {
+        let Dumped {
+            generation,
+            edits,
+            recovery,
+            dump,
+            kept,
+        } = dumped;
+        let on_screen_or_wanted = self.active_id() == Some(id) || self.wanted() == Some(id);
+        let Some(SlotMut::Other(slot)) = self.slot_mut(id) else {
+            self.abandon_hibernation(id, generation, false);
+            return false;
+        };
+        let Slot::Loaded(document) = slot else {
+            return false;
+        };
+        document.end_file_job(generation);
+        if on_screen_or_wanted
+            || document.generation() != generation
+            || document.edit_count() != edits
+            || !document.can_hibernate()
+        {
+            return false;
+        }
+        *slot = Slot::Link(document.to_hibernated_link(recovery, dump, kept));
+        true
     }
 
     // The nearest loaded neighbour takes over, to the right first, so the screen never lands
