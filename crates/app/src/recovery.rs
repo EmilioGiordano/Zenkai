@@ -8,6 +8,9 @@ pub fn session_directory() -> Option<PathBuf> {
 }
 
 const PREFIX: &str = "autosave-";
+// Not `.xlsx`, so `leftovers` never offers a dump as work to recover: it only holds the undo
+// history of a workbook whose work the autosave copy keeps.
+const DUMP_EXTENSION: &str = "zkh";
 
 pub fn directory() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")
@@ -32,6 +35,14 @@ fn session_name() -> &'static str {
 
 pub fn document_file(directory: &Path, id: WorkbookId) -> PathBuf {
     directory.join(format!("{PREFIX}{}-{}.xlsx", session_name(), id.0))
+}
+
+pub fn dump_file(directory: &Path, id: WorkbookId) -> PathBuf {
+    directory.join(format!(
+        "{PREFIX}{}-{}.{DUMP_EXTENSION}",
+        session_name(),
+        id.0
+    ))
 }
 
 fn lock_file(directory: &Path) -> PathBuf {
@@ -90,6 +101,45 @@ pub fn leftovers(directory: &Path) -> Vec<PathBuf> {
         .collect();
     found.sort();
     found
+}
+
+fn is_dump(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.starts_with(PREFIX) && name.ends_with(&format!(".{DUMP_EXTENSION}"))
+        })
+}
+
+// A dump of a session that is gone is useless: its memory went with it, and the autosave
+// copy next to it is what recovery offers.
+pub fn remove_dead_dumps(directory: &Path) {
+    let own_lock = lock_file(directory);
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for path in entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| is_dump(path) && lock_of(path) != own_lock && !owner_is_alive(path))
+    {
+        remove(&path);
+    }
+}
+
+// Every dump of this session, at the end of it: a hibernated workbook is not loaded again.
+pub fn remove_own_dumps(directory: &Path) {
+    let own_lock = lock_file(directory);
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for path in entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| is_dump(path) && lock_of(path) == own_lock)
+    {
+        remove(&path);
+    }
 }
 
 pub fn write(snapshot: SaveSnapshot) -> Result<(), EngineError> {
@@ -171,6 +221,25 @@ mod tests {
         );
         drop(live_lock);
         assert_eq!(leftovers(dir.path()), vec![live.clone()]);
+    }
+
+    #[test]
+    fn dumps_are_never_offered_for_recovery_and_only_a_dead_session_loses_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let _lock = lock_session(dir.path()).unwrap();
+        let own = dump_file(dir.path(), WorkbookId(1));
+        let dead = dir.path().join("autosave-1-1-0.zkh");
+        let live = dir.path().join("autosave-2-2-0.zkh");
+        for dump in [&own, &dead, &live] {
+            std::fs::write(dump, b"x").unwrap();
+        }
+        let live_lock = std::fs::File::create(lock_of(&live)).unwrap();
+        live_lock.lock().unwrap();
+        assert!(leftovers(dir.path()).is_empty());
+        remove_dead_dumps(dir.path());
+        assert!(own.exists() && live.exists() && !dead.exists());
+        remove_own_dumps(dir.path());
+        assert!(!own.exists() && live.exists());
     }
 
     #[test]
