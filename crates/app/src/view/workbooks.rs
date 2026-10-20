@@ -520,7 +520,12 @@ impl Workspace {
                     Installed::Gone => {}
                 }
                 if file_changed {
-                    let text = t!("notice.file_changed_while_unloaded", name = name);
+                    let text = match provenance {
+                        Provenance::File => t!("notice.file_changed_while_unloaded", name = name),
+                        Provenance::Dump | Provenance::Recovery => {
+                            t!("notice.file_changed_while_hibernated", name = name)
+                        }
+                    };
                     self.notify(Severity::Warning, text, cx);
                 }
             }
