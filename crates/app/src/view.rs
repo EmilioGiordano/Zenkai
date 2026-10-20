@@ -3454,6 +3454,17 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::new_workbook))
+            .on_action(cx.listener(|this, _: &CycleMarkdownView, window, cx| {
+                this.cycle_markdown_view(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ReloadMarkdown, window, cx| {
+                this.reload_shown_text(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &KeepMarkdownChanges, _, cx| {
+                    this.keep_shown_text_changes(cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &Quit, window, cx| {
                 this.request_close(CloseGoal::Quit, window, cx)
             }))
