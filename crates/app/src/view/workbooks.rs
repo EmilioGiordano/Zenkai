@@ -57,7 +57,7 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
                     copy: None,
                     recovery_lost: false,
                     dump_lost: false,
-                    file_changed: false,
+                    file_changed: file_changed_since_rest(link),
                 };
             }
             Err(error) => {
@@ -86,7 +86,7 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
                     copy: Some(copy.clone()),
                     recovery_lost: false,
                     dump_lost,
-                    file_changed: false,
+                    file_changed: file_changed_since_rest(link),
                 };
             }
             Err(error) => {
@@ -125,6 +125,14 @@ fn changed_while_out_of_memory(link: &Link, path: &std::path::Path) -> bool {
         return false;
     };
     Stamp::of(path).is_ok_and(|now| rested.file.changed(now))
+}
+
+// The unsaved work of a hibernated workbook still stands on the file it was opened from, which
+// a later save would overwrite.
+fn file_changed_since_rest(link: &Link) -> bool {
+    link.path
+        .as_deref()
+        .is_some_and(|path| changed_while_out_of_memory(link, path))
 }
 
 pub(super) fn failure_text(failure: &LoadFailure) -> String {
@@ -742,6 +750,50 @@ mod tests {
         assert_eq!(text(&workbook), "");
         assert!(!setup.dump.exists());
         assert!(setup.copy.exists());
+    }
+
+    #[test]
+    fn a_file_changed_while_a_workbook_was_hibernated_is_noticed_on_wake() {
+        let mut setup = hibernated();
+        let file = setup._dir.path().join("saved.xlsx");
+        std::fs::write(&file, b"first").unwrap();
+        setup.link.path = Some(file.clone());
+        let stamp = Stamp::of(&file).unwrap();
+        let hibernation = setup.link.rested.take().unwrap().hibernation;
+        setup.link.rested = Some(Rested {
+            file: FileSeen {
+                stamp: Some(stamp),
+                at: SystemTime::now(),
+            },
+            hibernation,
+        });
+        let LinkLoad::Loaded { file_changed, .. } = read_link(&setup.link, XlsxReader::Fast)
+        else {
+            panic!("the link did not load");
+        };
+        assert!(!file_changed);
+
+        let mut setup = hibernated();
+        std::fs::write(&file, b"second, longer").unwrap();
+        setup.link.path = Some(file);
+        let hibernation = setup.link.rested.take().unwrap().hibernation;
+        setup.link.rested = Some(Rested {
+            file: FileSeen {
+                stamp: Some(stamp),
+                at: SystemTime::now(),
+            },
+            hibernation,
+        });
+        let LinkLoad::Loaded {
+            file_changed,
+            provenance,
+            ..
+        } = read_link(&setup.link, XlsxReader::Fast)
+        else {
+            panic!("the link did not load");
+        };
+        assert_eq!(provenance, Provenance::Dump);
+        assert!(file_changed);
     }
 
     #[test]
