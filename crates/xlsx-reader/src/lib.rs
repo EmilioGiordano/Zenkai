@@ -22,7 +22,6 @@ mod text;
 mod unit_pool;
 mod verify;
 
-use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -41,7 +40,7 @@ pub use styles_part::{STYLES_PART, StyleAppendix, StyleCounts, StylesShape};
 pub use verify::{PartDigest, Written, check_written, check_xml};
 
 use crate::formulas::Names;
-use crate::package::{read_package, stub_archive};
+use crate::package::{importer_worksheet_paths, read_package, stub_archive};
 use crate::parallel::{Job, Open, ReadPlan, SheetStreams, SheetTask};
 use crate::sheet_stream::{StreamedSheet, Tuning, stream_config, stream_worksheet};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, read_part_if_checked};
@@ -410,19 +409,11 @@ fn scan_archive<R: Read + Seek>(
     budgets: &Budgets,
     inspect: &Inspect<'_>,
 ) -> Result<(), ReadError> {
-    // The importer loads exactly the worksheets the package relationships name, resolving
-    // each target the way `part_path` does, so those parts are the ones counted. Only
-    // when the package cannot be read is every part under the usual folder counted
-    // instead; every part still streams through the caps below, and IronCalc still
-    // decides the file.
-    let package_sheets: Option<HashSet<String>> =
-        read_package(archive, meter, budgets).ok().map(|package| {
-            package
-                .worksheets
-                .into_iter()
-                .map(|sheet| sheet.path)
-                .collect()
-        });
+    // The importer loads the worksheets the package relationships name, whatever else is
+    // wrong with the package, so those parts are the ones counted. Only when the package
+    // cannot be parsed at all is every part under the usual folder counted instead; every
+    // part still streams through the caps below, and IronCalc still decides the file.
+    let package_sheets = importer_worksheet_paths(archive, meter, budgets);
     for index in 0..archive.len() {
         let entry_name = {
             let entry = archive
@@ -875,6 +866,67 @@ mod tests {
             ];
             assert!(walk_refused(&entries, 1_000), "{target}");
         }
+    }
+
+    fn archive_with_package(workbook: &str, rels: &str, entry: &str) -> bool {
+        let sheet = bare_cells(200);
+        let entries = [
+            ("xl/workbook.xml", workbook.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+            (entry, sheet.as_bytes()),
+        ];
+        walk_refused(&entries, 1_000)
+    }
+
+    fn rels_of(items: &[(&str, &str)]) -> String {
+        let items: String = items
+            .iter()
+            .map(|(id, target)| {
+                format!(
+                    "<Relationship Id=\"{id}\" Type=\"{REL_NS}/worksheet\" Target=\"{target}\"/>"
+                )
+            })
+            .collect();
+        format!(
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{items}</Relationships>"
+        )
+    }
+
+    fn workbook_of(sheets: &[(&str, &str)]) -> String {
+        let sheets: String = sheets
+            .iter()
+            .enumerate()
+            .map(|(index, (name, id))| {
+                format!(
+                    "<sheet name=\"{name}\" sheetId=\"{}\" r:id=\"{id}\"/>",
+                    index + 1
+                )
+            })
+            .collect();
+        format!(
+            "<workbook xmlns=\"{MAIN_NS}\" xmlns:r=\"{REL_NS}\"><sheets>{sheets}</sheets></workbook>"
+        )
+    }
+
+    #[test]
+    fn sheets_of_a_package_read_package_refuses_are_still_counted() {
+        // Two sheets on one part: read_package refuses it, the importer still loads it.
+        let workbook = workbook_of(&[("A", "rId1"), ("B", "rId2")]);
+        let rels = rels_of(&[("rId1", "/data/s1.xml"), ("rId2", "/data/s1.xml")]);
+        assert!(archive_with_package(&workbook, &rels, "data/s1.xml"));
+        // A '!' in a sheet name is refused by read_package too.
+        let workbook = workbook_of(&[("A!B", "rId1")]);
+        let rels = rels_of(&[("rId1", "/data/s1.xml")]);
+        assert!(archive_with_package(&workbook, &rels, "data/s1.xml"));
+    }
+
+    #[test]
+    fn the_last_of_a_repeated_relationship_id_decides_the_sheet() {
+        let workbook = workbook_of(&[("A", "rId1")]);
+        let rels = rels_of(&[("rId1", "/data/small.xml"), ("rId1", "/data/big.xml")]);
+        assert!(archive_with_package(&workbook, &rels, "data/big.xml"));
+        let rels = rels_of(&[("rId1", "/data/big.xml"), ("rId1", "/data/small.xml")]);
+        assert!(!archive_with_package(&workbook, &rels, "data/big.xml"));
     }
 
     #[test]

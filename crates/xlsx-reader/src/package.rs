@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Seek, Write};
 
 use ironcalc::base::expressions::parser::DefinedNameS;
@@ -164,6 +164,48 @@ pub(crate) fn read_package<R: Read + Seek>(
         worksheets,
         shared_strings,
     })
+}
+
+// The parts IronCalc's importer loads as worksheets, found the way it finds them but
+// tolerating what `read_package` refuses (two sheets on one part, odd names, a missing
+// attribute on a sheet the importer would reject anyway). Counting a part too many is
+// safe; missing one lets its cells in uncharged. None when either file cannot be parsed.
+pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    meter: &CompressedMeter,
+    budgets: &Budgets,
+) -> Option<HashSet<String>> {
+    let workbook = read_text(archive, "xl/workbook.xml", meter, budgets).ok()?;
+    let workbook = roxmltree::Document::parse(&workbook).ok()?;
+    let rels = read_text(archive, "xl/_rels/workbook.xml.rels", meter, budgets).ok()?;
+    let rels = roxmltree::Document::parse(&rels).ok()?;
+    let mut targets = HashMap::new();
+    for node in rels
+        .descendants()
+        .filter(|n| n.has_tag_name("Relationship"))
+    {
+        if let (Some(id), Some(kind), Some(target)) = (
+            node.attribute("Id"),
+            node.attribute("Type"),
+            node.attribute("Target"),
+        ) {
+            // The importer keeps the last relationship of a repeated Id.
+            targets.insert(id, (kind, target));
+        }
+    }
+    let mut paths = HashSet::new();
+    for node in workbook.descendants().filter(|n| n.has_tag_name("sheet")) {
+        let id = node.attribute((
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+            "id",
+        ));
+        if let Some((kind, target)) = id.and_then(|id| targets.get(id))
+            && kind.ends_with("worksheet")
+        {
+            paths.insert(part_path(target));
+        }
+    }
+    Some(paths)
 }
 
 // The archive IronCalc's own importer reads for everything but the cells: every entry is
