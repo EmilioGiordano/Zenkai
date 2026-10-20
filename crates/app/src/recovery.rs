@@ -173,6 +173,11 @@ pub fn write(snapshot: SaveSnapshot) -> Result<(), EngineError> {
 // Moves a dead session's copy under this session's name; the copy stays where it was when the
 // move fails, since it may be the only one holding the work.
 pub fn adopt(from: &Path, to: &Path) -> std::io::Result<()> {
+    // A hibernated workbook that falls back to its recovery copy loads this session's own copy,
+    // which is already where it belongs.
+    if from == to {
+        return Ok(());
+    }
     std::fs::rename(from, to)?;
     remove_stale_lock(from);
     Ok(())
@@ -305,6 +310,9 @@ mod tests {
         let target = dir.path().join("autosave-2-2-0.xlsx");
         adopt(&old, &target).unwrap();
         assert!(!old.exists());
+        assert_eq!(std::fs::read(&target).unwrap(), b"work");
+
+        adopt(&target, &target).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"work");
 
         let kept = dir.path().join("autosave-3-3-0.xlsx");
