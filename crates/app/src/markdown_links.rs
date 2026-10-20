@@ -50,6 +50,36 @@ fn local_path(url: &str) -> Option<PathBuf> {
         .then(|| PathBuf::from(decoded.replace('/', std::path::MAIN_SEPARATOR_STR)))
 }
 
+// `CON`, `NUL`, `COM1` and the like name devices on Windows whatever the extension, in any
+// case and in any folder of the path; opening one can block or reach hardware.
+fn is_reserved_device_name(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+    let numbered = |prefix: &str| {
+        stem.strip_prefix(prefix).is_some_and(|rest| {
+            matches!(rest, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+                || matches!(rest, "\u{b9}" | "\u{b2}" | "\u{b3}")
+        })
+    };
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || numbered("COM")
+        || numbered("LPT")
+}
+
+fn names_a_device(path: &Path) -> bool {
+    path.components().any(|component| match component {
+        Component::Normal(name) => is_reserved_device_name(name),
+        _ => false,
+    })
+}
+
 fn is_network_style(url: &str) -> bool {
     url.starts_with("//") || url.starts_with("\\\\")
 }
@@ -82,7 +112,7 @@ pub fn classify_link(url: &str, folder: Option<&Path>) -> LinkTarget {
         return LinkTarget::Refused;
     };
     let openable = is_openable(&full) || DocumentKind::of(&full) == DocumentKind::Markdown;
-    if is_remote_or_device(&full) || !openable {
+    if is_remote_or_device(&full) || names_a_device(&full) || !openable {
         LinkTarget::Refused
     } else {
         LinkTarget::File(full)
@@ -101,7 +131,7 @@ pub fn image_path(url: &str, folder: Option<&Path>) -> Option<PathBuf> {
         .components()
         .all(|component| matches!(component, Component::Normal(_) | Component::CurDir));
     let full = folder?.join(relative);
-    (safe && !is_remote_or_device(&full)).then_some(full)
+    (safe && !is_remote_or_device(&full) && !names_a_device(&full)).then_some(full)
 }
 
 #[cfg(test)]
@@ -215,6 +245,44 @@ mod tests {
             assert_eq!(image_path(refused, Some(folder())), None, "{refused}");
         }
         assert_eq!(image_path("a.png", None), None);
+    }
+
+    #[test]
+    fn device_names_are_refused_in_any_case_extension_and_folder() {
+        for name in [
+            "CON",
+            "con.md",
+            "Nul.xlsx",
+            "aux.txt.md",
+            "PRN",
+            "com1.md",
+            "LPT9.xlsx",
+            "COM\u{b9}.md",
+            "sub/CON/plan.md",
+            "nul .md",
+            "CONIN$.md",
+        ] {
+            assert_eq!(
+                classify_link(name, Some(folder())),
+                LinkTarget::Refused,
+                "{name}"
+            );
+            assert_eq!(image_path(name, Some(folder())), None, "{name}");
+        }
+        for fine in [
+            "console.md",
+            "com10.md",
+            "com0.md",
+            "lpt.md",
+            "conn/plan.md",
+        ] {
+            assert!(
+                matches!(classify_link(fine, Some(folder())), LinkTarget::File(_)),
+                "{fine}"
+            );
+        }
+        assert!(image_path("icons/aux.png", Some(folder())).is_none());
+        assert!(image_path("icons/auxiliary.png", Some(folder())).is_some());
     }
 
     #[test]
