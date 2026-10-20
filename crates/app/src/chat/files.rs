@@ -25,8 +25,8 @@ impl ChatPanel {
         }));
     }
 
-    // Workbooks and Markdown files the agent wrote in its folder by its own means, not through the tools, are
-    // listed in the space after the turn and announced with the same card.
+    // Workbooks and Markdown files the agent wrote in its folder by its own means, not through
+    // the tools, are listed in the space after the turn and announced with the same card.
     pub(super) fn list_files_written(&mut self, since: SystemTime, cx: &mut Context<Self>) {
         let Some(folder) = self
             .live

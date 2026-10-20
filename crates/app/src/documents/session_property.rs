@@ -112,11 +112,7 @@ impl Model {
             return name.clone();
         }
         self.next_copy += 1;
-        let extension = if self.pending_text(id) {
-            "md"
-        } else {
-            "xlsx"
-        };
+        let extension = if self.pending_text(id) { "md" } else { "xlsx" };
         let name = format!("autosave-1-2-{}.{extension}", self.next_copy);
         self.copies.insert(id, name.clone());
         name
@@ -161,7 +157,8 @@ impl Model {
                 if let Some(text) = self.documents.text_mut(id) {
                     text.saved(text.edit_count(), None);
                     if text.path.is_none() {
-                        text.path = Some(PathBuf::from(format!("C:/work/saved{}.md", self.next_save)));
+                        text.path =
+                            Some(PathBuf::from(format!("C:/work/saved{}.md", self.next_save)));
                     }
                     self.unsaved.remove(&id);
                     return;

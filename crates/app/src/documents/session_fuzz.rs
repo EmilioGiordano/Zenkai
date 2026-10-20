@@ -82,7 +82,9 @@ fn check_restored(session: &Session) {
         if let Some(copy) = &link.recovery {
             let name = copy.file_name().unwrap().to_string_lossy();
             assert_eq!(copy.parent(), Some(recovery_dir), "{copy:?}");
-            assert!(name.starts_with("autosave-") && crate::recovery::has_recovery_extension(&name));
+            assert!(
+                name.starts_with("autosave-") && crate::recovery::has_recovery_extension(&name)
+            );
             assert!(!name.contains(':') && !name.chars().any(std::path::is_separator));
         }
     }
