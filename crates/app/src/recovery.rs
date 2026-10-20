@@ -111,6 +111,22 @@ fn is_dump(path: &Path) -> bool {
         })
 }
 
+// The dump a file belongs to: the dump itself, or the temp file the engine writes it through
+// (`~$<dump name>.<pid>.tmp`) and leaves behind if the process dies mid-write.
+fn dump_of(path: &Path) -> Option<PathBuf> {
+    if is_dump(path) {
+        return Some(path.to_path_buf());
+    }
+    let name = path.file_name()?.to_str()?;
+    let name = name.strip_prefix("~$")?.strip_suffix(".tmp")?;
+    let (dump_name, process) = name.rsplit_once('.')?;
+    if process.is_empty() || !process.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let dump = path.with_file_name(dump_name);
+    is_dump(&dump).then_some(dump)
+}
+
 // A dump of a session that is gone is useless: its memory went with it, and the autosave
 // copy next to it is what recovery offers.
 pub fn remove_dead_dumps(directory: &Path) {
@@ -121,7 +137,9 @@ pub fn remove_dead_dumps(directory: &Path) {
     for path in entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| is_dump(path) && lock_of(path) != own_lock && !owner_is_alive(path))
+        .filter(|path| {
+            dump_of(path).is_some_and(|dump| lock_of(&dump) != own_lock && !owner_is_alive(&dump))
+        })
     {
         remove(&path);
     }
@@ -136,7 +154,7 @@ pub fn remove_own_dumps(directory: &Path) {
     for path in entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| is_dump(path) && lock_of(path) == own_lock)
+        .filter(|path| dump_of(path).is_some_and(|dump| lock_of(&dump) == own_lock))
     {
         remove(&path);
     }
@@ -240,6 +258,29 @@ mod tests {
         assert!(own.exists() && live.exists() && !dead.exists());
         remove_own_dumps(dir.path());
         assert!(!own.exists() && live.exists());
+    }
+
+    #[test]
+    fn the_temp_file_of_a_dump_goes_with_the_dump() {
+        let dir = tempfile::tempdir().unwrap();
+        let _lock = lock_session(dir.path()).unwrap();
+        let own = dump_file(dir.path(), WorkbookId(1));
+        let own_name = own.file_name().unwrap().to_string_lossy().into_owned();
+        let own_temp = dir.path().join(format!("~${own_name}.4242.tmp"));
+        let dead_temp = dir.path().join("~$autosave-1-1-0.zkh.99.tmp");
+        let live_temp = dir.path().join("~$autosave-2-2-0.zkh.99.tmp");
+        let stranger = dir.path().join("~$report.xlsx.99.tmp");
+        for file in [&own_temp, &dead_temp, &live_temp, &stranger] {
+            std::fs::write(file, b"x").unwrap();
+        }
+        let live_lock = std::fs::File::create(dir.path().join("autosave-2-2.lock")).unwrap();
+        live_lock.lock().unwrap();
+        remove_dead_dumps(dir.path());
+        assert!(!dead_temp.exists());
+        assert!(own_temp.exists() && live_temp.exists() && stranger.exists());
+        remove_own_dumps(dir.path());
+        assert!(!own_temp.exists());
+        assert!(live_temp.exists() && stranger.exists());
     }
 
     #[test]
