@@ -117,6 +117,118 @@ fn assert_same_fill(source_formula: &str, source: (i32, i32), target: &Area) {
     assert_eq!(snapshot(&by_sharing), after, "{source_formula} redo");
 }
 
+// Cells whose own style and whose references' formats differ from row to row, so a fill
+// meets many (style, number format) pairs and creates styles part way through.
+fn styled_model_with(source: &str) -> UserModel<'static> {
+    let mut model = model_with(source);
+    let formats = [
+        "$#,##0.00",
+        "0.0%",
+        "d/m/yyyy",
+        "#,##0.000",
+        "General",
+        "0.00",
+    ];
+    for row in 1..=12 {
+        let format = formats[row as usize % formats.len()];
+        model
+            .update_range_style(&area(row, 1, 1, 1), "num_fmt", format)
+            .unwrap();
+    }
+    model
+        .update_range_style(&area(5, 6, 1, 1), "num_fmt", "0.00%")
+        .unwrap();
+    model
+        .update_range_style(&area(7, 6, 1, 1), "font.b", "true")
+        .unwrap();
+    model
+        .update_range_style(&area(8, 6, 1, 1), "font.i", "true")
+        .unwrap();
+    model
+        .update_range_style(&area(10, 6, 1, 1), "fill.bg_color", "#334455")
+        .unwrap();
+    model
+        .update_range_style(&area(11, 6, 1, 1), "num_fmt", "$#,##0.00")
+        .unwrap();
+    model.set_user_input(0, 9, 6, "'quoted").unwrap();
+    model
+}
+
+fn assert_same_styled_fill(source_formula: &str, source: (i32, i32), target: &Area) {
+    let mut by_text = styled_model_with(source_formula);
+    let mut by_sharing = styled_model_with(source_formula);
+    fill_as_text(&mut by_text, source, target);
+    assert!(
+        by_sharing.fill_formula(source, target).unwrap(),
+        "{source_formula}"
+    );
+    assert_eq!(
+        snapshot(&by_sharing),
+        snapshot(&by_text),
+        "{source_formula} cells"
+    );
+    for row in 1..=14 {
+        for column in 1..=7 {
+            assert_eq!(
+                by_sharing.get_cell_style(0, row, column).unwrap(),
+                by_text.get_cell_style(0, row, column).unwrap(),
+                "{source_formula} style at {row},{column}"
+            );
+        }
+    }
+    assert_eq!(
+        by_sharing.model.workbook.styles, by_text.model.workbook.styles,
+        "{source_formula} style tables"
+    );
+    by_text.undo().unwrap();
+    by_sharing.undo().unwrap();
+    assert_eq!(
+        by_sharing.model.workbook.styles, by_text.model.workbook.styles,
+        "{source_formula} undo"
+    );
+    by_text.redo().unwrap();
+    by_sharing.redo().unwrap();
+    assert_eq!(
+        snapshot(&by_sharing),
+        snapshot(&by_text),
+        "{source_formula} redo"
+    );
+    assert_eq!(
+        by_sharing.model.workbook.styles, by_text.model.workbook.styles,
+        "{source_formula} redo"
+    );
+}
+
+#[test]
+fn a_fill_styles_cells_as_filling_as_text_does() {
+    for formula in FORMULAS {
+        assert_same_styled_fill(formula, (5, 6), &area(6, 6, 1, 7));
+        assert_same_styled_fill(formula, (5, 6), &area(1, 6, 1, 4));
+        assert_same_styled_fill(formula, (5, 6), &area(5, 7, 4, 1));
+        assert_same_styled_fill(formula, (5, 6), &area(6, 7, 3, 4));
+    }
+}
+
+#[test]
+fn a_fill_reading_its_own_earlier_cells_styles_them_as_filling_as_text_does() {
+    for formula in ["=F4+1", "=F4*B5", "=SUM(F$1:F4)", "=F4-A5"] {
+        assert_same_styled_fill(formula, (5, 6), &area(6, 6, 1, 7));
+    }
+}
+
+#[test]
+fn a_longer_fill_creates_no_more_styles_than_the_pairs_it_meets() {
+    let styles_grown_by = |height: i32| {
+        let mut model = styled_model_with("=A5*2");
+        let before = model.model.workbook.styles.cell_xfs.len();
+        assert!(model.fill_formula((5, 6), &area(6, 6, 1, height)).unwrap());
+        model.model.workbook.styles.cell_xfs.len() - before
+    };
+    let seven_rows = styles_grown_by(7);
+    assert!(seven_rows > 0);
+    assert_eq!(styles_grown_by(500), seven_rows);
+}
+
 #[test]
 fn filling_down_matches_filling_as_text() {
     for formula in FORMULAS {
