@@ -28,7 +28,7 @@ const MAX_FILL_CELLS: u64 = 1_000_000;
 const STYLE_HISTORY_BYTES_PER_CELL: u64 = 1536;
 const STYLE_HISTORY_BUDGET_BYTES: u64 = 1536 * 1024 * 1024;
 const MAX_STYLED_CELLS: u64 = STYLE_HISTORY_BUDGET_BYTES / STYLE_HISTORY_BYTES_PER_CELL;
-const LANGUAGE: &str = "en";
+pub(crate) const LANGUAGE: &str = "en";
 // Stored widths are in Excel characters and heights in points; these give Excel's pixels.
 const PIXELS_PER_CHAR: f64 = 7.0;
 const CHAR_WIDTH_PADDING: f64 = 5.0;
@@ -171,11 +171,11 @@ pub trait Engine: Send {
 }
 
 pub struct Workbook {
-    model: CachedModel,
-    carried: Carried,
-    saved: SavedSlot,
+    pub(crate) model: CachedModel,
+    pub(crate) carried: Carried,
+    pub(crate) saved: SavedSlot,
     // What the file held when it was opened, for a save that knows nothing newer.
-    opened: Vec<Unsupported>,
+    pub(crate) opened: Vec<Unsupported>,
 }
 
 // What a copy produced: the text Excel and other apps understand, plus the engine's
@@ -1807,7 +1807,15 @@ fn evaluated(
     saved: SavedSlot,
     opened: Vec<Unsupported>,
 ) -> Workbook {
-    let mut model = UserModel::from_model(model);
+    evaluated_user_model(UserModel::from_model(model), carried, saved, opened)
+}
+
+pub(crate) fn evaluated_user_model(
+    mut model: UserModel<'static>,
+    carried: Carried,
+    saved: SavedSlot,
+    opened: Vec<Unsupported>,
+) -> Workbook {
     tracing::info_span!("open_evaluate").in_scope(|| model.evaluate());
     let workbook = Workbook {
         model: CachedModel::new(model),
