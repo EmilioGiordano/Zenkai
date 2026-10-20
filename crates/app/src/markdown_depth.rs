@@ -9,7 +9,10 @@ const LIST_INDENT: usize = 2;
 // (quotes and list levels) plus the inline nesting (open brackets and emphasis), and stops at
 // the first line over the limit.
 pub fn too_deep(text: &str) -> bool {
-    text.split('\n').any(|line| line_depth(line) > MAX_NESTING)
+    // CommonMark ends a line at a line feed, a carriage return or both; the empty piece between
+    // a carriage return and its line feed is harmless.
+    text.split(['\n', '\r'])
+        .any(|line| line_depth(line) > MAX_NESTING)
 }
 
 fn line_depth(line: &str) -> usize {
@@ -108,6 +111,19 @@ mod tests {
         assert!(too_deep(&"[".repeat(1_000_000)));
         assert!(too_deep(&"*a ".repeat(100_000)));
         assert!(too_deep(&"_a ".repeat(100_000)));
+    }
+
+    #[test]
+    fn lines_ended_by_a_lone_carriage_return_are_counted_like_any_other() {
+        let list: String = (0..100)
+            .map(|level| format!("{}- item\r", " ".repeat(level * 2)))
+            .collect();
+        assert!(too_deep(&list));
+        let crlf: String = (0..100)
+            .map(|level| format!("{}- item\r\n", " ".repeat(level * 2)))
+            .collect();
+        assert!(too_deep(&crlf));
+        assert!(!too_deep(&"> quoted\r".repeat(100_000)));
     }
 
     #[test]
