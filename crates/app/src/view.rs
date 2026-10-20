@@ -1965,6 +1965,7 @@ impl Workspace {
         };
         let edits_at_start = document.edit_count();
         let generation = document.generation();
+        let guard = document.file_guard();
         self.busy = Some(t!("busy.saving").into());
         self.start_long_job(LongJob::Saving, cx);
         cx.spawn_in(window, async move |this, cx| {
@@ -1981,6 +1982,7 @@ impl Workspace {
                         &target,
                         overwrite.accepted(),
                         changed,
+                        guard,
                         save_xlsx,
                     )
                     .map(|saved| match saved {

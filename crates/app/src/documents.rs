@@ -138,6 +138,9 @@ impl Loaded {
         };
         document.read_only = self.read_only || (from_copy && link.read_only);
         document.dirty = from_copy && link.dirty;
+        if from_copy && let Some(rested) = &link.rested {
+            document.guard_file(rested.file);
+        }
         if self.provenance == Provenance::Dump {
             // The recovery copy was written from this very work, and the new document has
             // made no edit yet.
