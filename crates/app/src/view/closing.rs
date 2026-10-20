@@ -61,7 +61,7 @@ impl Workspace {
         if self.departure.as_ref().and_then(Departure::current) != Some(id) {
             return;
         }
-        if self.documents.get(id).is_some() {
+        if self.documents.is_loaded(id) {
             self.save_document(id, window, cx);
         } else {
             self.save_ended(id, false, window, cx);

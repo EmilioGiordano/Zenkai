@@ -348,6 +348,10 @@ impl Workspace {
     }
 
     fn load_recovered(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if recovery::is_text(&path) {
+            self.load_recovered_text(path, window, cx);
+            return;
+        }
         cx.spawn_in(window, async move |this, cx| {
             let opened = cx
                 .background_executor()

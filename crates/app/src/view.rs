@@ -32,6 +32,8 @@ mod close_dialog;
 mod closing;
 mod settings_gate;
 mod space_panel;
+mod text_actions;
+mod texts;
 
 use crate::prompt_gate::{PROMPT_OPEN_CONTEXT, PromptGate};
 use agent_calls::{AgentLink, Decision};
@@ -193,6 +195,8 @@ pub struct Workspace {
     last_unload: Option<Instant>,
     sidebar: SidebarState,
     panels: PanelsState,
+    text_panes: texts::TextPanes,
+    text_watch: text_watch::TextWatch,
     lifecycle: Lifecycle,
     #[cfg(windows)]
     quit_after_hide: bool,
@@ -344,6 +348,8 @@ impl Workspace {
             last_unload: None,
             sidebar: SidebarState::new(cx),
             panels: PanelsState::new(cx),
+            text_panes: texts::TextPanes::new(),
+            text_watch: text_watch::TextWatch::default(),
             lifecycle: Lifecycle::Running,
             #[cfg(windows)]
             quit_after_hide: false,
@@ -403,6 +409,10 @@ impl Workspace {
     }
 
     fn window_title(&self) -> String {
+        if let Some(text) = self.documents.shown_text() {
+            let marker = if text.dirty { "• " } else { "" };
+            return format!("{marker}{} - Zenkai", text.name());
+        }
         self.documents
             .active()
             .map_or_else(|| "Zenkai".to_string(), Document::title)
@@ -612,6 +622,9 @@ impl Workspace {
     fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
         self.revert_theme_preview(cx);
+        if self.find_in_text(false, window, cx) {
+            return;
+        }
         let Some(document) = self.documents.active_mut() else {
             return;
         };
@@ -636,6 +649,9 @@ impl Workspace {
     }
 
     fn open_replace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find_in_text(true, window, cx) {
+            return;
+        }
         self.open_find(window, cx);
         let Some(bar) = self
             .documents
@@ -3256,6 +3272,21 @@ impl Workspace {
                 )
             })
             .children(access_chip);
+        if let Some(text) = self.documents.shown_text() {
+            let (line, column) = self
+                .shown_pane()
+                .map_or((1, 1), |entry| entry.pane.read(cx).caret(cx));
+            let saved = if text.dirty {
+                t!("markdown.status.unsaved")
+            } else {
+                t!("markdown.status.saved")
+            };
+            right = right
+                .child(t!("markdown.status.name"))
+                .child(t!("markdown.status.position", line = line, column = column))
+                .child(t!("markdown.status.encoding"))
+                .child(saved);
+        }
         match self.stats.filter(|_| self.documents.active().is_some()) {
             Some(stats) if stats.count > 1 => {
                 if let Some(avg) = stats.average() {
@@ -3281,8 +3312,10 @@ impl Workspace {
         {
             right = right.child(t!("status.read_only"));
         }
-        let zoom = self.grid.read(cx).zoom();
-        right = right.child(format!("{:.0}%", zoom * 100.0));
+        if self.documents.shown_text().is_none() {
+            let zoom = self.grid.read(cx).zoom();
+            right = right.child(format!("{:.0}%", zoom * 100.0));
+        }
         if self.diagnostics {
             let recalc = self
                 .last_recalc
@@ -3891,6 +3924,8 @@ impl Render for Workspace {
                     .children((!self.chat_fills_window()).then(|| {
                         if self.documents.active().is_some() {
                             self.render_workbook(cx).into_any_element()
+                        } else if let Some(entry) = self.shown_pane() {
+                            self.render_text(entry.pane.clone(), cx).into_any_element()
                         } else {
                             self.render_empty(cx).into_any_element()
                         }
