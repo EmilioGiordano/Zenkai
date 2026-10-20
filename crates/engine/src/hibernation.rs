@@ -62,7 +62,7 @@ impl Workbook {
     // evaluated in full, as after an open, so a volatile function shows its current value.
     pub fn wake(path: &Path, kept: &Kept) -> Result<Workbook, EngineError> {
         let payload = read_dump(path, MAX_DUMP_BYTES)?;
-        run_with_engine_stack(|| {
+        run_with_engine_stack(move || {
             let model =
                 UserModel::from_bytes_with_history(&payload, LANGUAGE).map_err(|error| {
                     if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
@@ -82,6 +82,8 @@ impl Workbook {
 }
 
 fn header_of(payload: &[u8]) -> [u8; HEADER_BYTES] {
+            // The encoded dump is not needed once decoded; the evaluation below is the peak.
+            drop(payload);
     let mut header = [0; HEADER_BYTES];
     header[..MAGIC.len()].copy_from_slice(&MAGIC);
     header[MAGIC.len()..MAGIC.len() + LENGTH_BYTES]
