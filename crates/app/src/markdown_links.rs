@@ -98,12 +98,13 @@ fn local_path(url: &str) -> Option<PathBuf> {
         .then(|| PathBuf::from(decoded.replace('/', std::path::MAIN_SEPARATOR_STR)))
 }
 
-// `CON`, `NUL`, `COM1` and the like name devices on Windows whatever the extension, in any
-// case and in any folder of the path; opening one can block or reach hardware.
+// `CON`, `NUL`, `COM1` and the like name devices on Windows whatever the extension or stream
+// suffix, in any case and in any folder of the path; opening one can block or reach hardware.
+// A `:` inside a name is an alternate data stream and is refused outright.
 fn is_reserved_device_name(name: &std::ffi::OsStr) -> bool {
     let name = name.to_string_lossy();
     let stem = name
-        .split('.')
+        .split(['.', ':'])
         .next()
         .unwrap_or_default()
         .trim_end_matches(' ')
@@ -123,7 +124,9 @@ fn is_reserved_device_name(name: &std::ffi::OsStr) -> bool {
 
 fn names_a_device(path: &Path) -> bool {
     path.components().any(|component| match component {
-        Component::Normal(name) => is_reserved_device_name(name),
+        Component::Normal(name) => {
+            is_reserved_device_name(name) || name.to_string_lossy().contains(':')
+        }
         _ => false,
     })
 }
@@ -452,6 +455,12 @@ mod tests {
             "sub/CON/plan.md",
             "nul .md",
             "CONIN$.md",
+            "CON:x",
+            "NUL:x.png",
+            "notes/CON:stream.md",
+            "notes/plan.md:hidden",
+            "img/a.png:stream",
+            "sub/aux :s.md",
         ] {
             assert_eq!(
                 classify_link(name, Some(folder())),
