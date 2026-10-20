@@ -65,6 +65,9 @@ pub struct Documents {
     empty_space: SpaceId,
     closed: Vec<PathBuf>,
     spaces: Spaces,
+    // Workbooks that left memory: the last reference to each is dropped by the caller on a
+    // background thread, since freeing a large model takes long enough to stall a frame.
+    retired: Vec<SharedWorkbook>,
 }
 
 // A workbook claimed by `begin_hibernation`, for the job that writes it.
@@ -183,6 +186,7 @@ impl Documents {
             empty_space: space,
             closed: Vec::new(),
             spaces,
+            retired: Vec::new(),
         }
     }
 
@@ -531,11 +535,17 @@ impl Documents {
         };
         match slot {
             Slot::Loaded(document) if document.can_unload() => {
+                let model = document.shared_workbook();
                 *slot = Slot::Link(document.to_link());
+                self.retired.push(model);
                 true
             }
             _ => false,
         }
+    }
+
+    pub fn take_retired(&mut self) -> Vec<SharedWorkbook> {
+        std::mem::take(&mut self.retired)
     }
 
     // Workbooks with unsaved work go to disk in two steps, so the write runs in the background:
@@ -594,7 +604,9 @@ impl Documents {
         {
             return false;
         }
+        let model = document.shared_workbook();
         *slot = Slot::Link(document.to_hibernated_link(recovery, dump, kept));
+        self.retired.push(model);
         true
     }
 

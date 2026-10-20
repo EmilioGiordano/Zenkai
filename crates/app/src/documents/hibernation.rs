@@ -81,6 +81,23 @@ fn unsaved_work_leaves_memory_as_a_link_and_comes_back_with_its_history() {
 }
 
 #[test]
+fn a_workbook_that_leaves_memory_is_handed_back_to_be_freed_elsewhere() {
+    let (mut documents, id, dir) = with_unsaved_work();
+    assert!(documents.take_retired().is_empty());
+    let (dumped, _) = dump_of(&mut documents, id, &dir).unwrap();
+    assert!(documents.finish_hibernation(id, dumped));
+    let retired = documents.take_retired();
+    assert_eq!(retired.len(), 1);
+    assert_eq!(std::sync::Arc::strong_count(&retired[0]), 1);
+    assert!(documents.take_retired().is_empty());
+
+    let clean = open_file(&mut documents, "c.xlsx");
+    open_file(&mut documents, "d.xlsx");
+    assert!(documents.unload(clean));
+    assert_eq!(documents.take_retired().len(), 1);
+}
+
+#[test]
 fn an_edit_while_the_dump_is_written_keeps_the_workbook_in_memory() {
     let (mut documents, id, dir) = with_unsaved_work();
     let (dumped, _) = dump_of(&mut documents, id, &dir).unwrap();

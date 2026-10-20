@@ -114,9 +114,19 @@ impl Workspace {
         let (name, generation) = (document.name(), document.generation());
         if self.documents.unload(id) {
             self.previews.forget(generation);
+            self.drop_retired(cx);
             self.last_unload = Some(Instant::now());
             self.probe_links(cx);
             self.notify(Severity::Info, t!("notice.unloaded", name = name), cx);
+        }
+    }
+
+    fn drop_retired(&mut self, cx: &mut Context<Self>) {
+        let retired = self.documents.take_retired();
+        if !retired.is_empty() {
+            cx.background_executor()
+                .spawn(async move { drop(retired) })
+                .detach();
         }
     }
 
@@ -186,6 +196,7 @@ impl Workspace {
             && let Some((name, generation)) = named
         {
             self.previews.forget(generation);
+            self.drop_retired(cx);
             self.probe_links(cx);
             self.persist_session(cx);
             self.notify(Severity::Info, t!("notice.hibernated", name = name), cx);
