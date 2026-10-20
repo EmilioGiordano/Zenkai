@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use zenkai_types::WorkbookId;
@@ -97,6 +97,13 @@ impl Documents {
         }
         self.text_shown = Some(id);
         self.wanted = None;
+    }
+
+    // Whether the tab or link at this path is a text document, loaded or not.
+    pub fn is_text_at(&self, path: &Path) -> bool {
+        self.find_by_path(path)
+            .and_then(|id| self.entry(id))
+            .is_some_and(|entry| entry.kind().is_text())
     }
 
     pub fn set_mode(&mut self, id: WorkbookId, mode: ViewMode) {
@@ -353,6 +360,20 @@ mod tests {
             from_recovery: false,
         });
         assert!(matches!(outcome, Installed::Gone));
+    }
+
+    #[test]
+    fn a_path_is_a_text_whether_its_tab_is_loaded_or_still_a_link() {
+        let mut documents = documents();
+        let link = restored_text(&mut documents, false);
+        let loaded = open_text(&mut documents, "a.md");
+        let book = open_file(&mut documents, "b.xlsx");
+        assert!(documents.is_text_at(Path::new("a.md")));
+        assert!(documents.is_text_at(Path::new("plan.md")));
+        assert!(matches!(documents.entry(link), Some(Entry::Link(_))));
+        assert!(!documents.is_text_at(Path::new("b.xlsx")));
+        assert!(!documents.is_text_at(Path::new("none.md")));
+        assert!(documents.entry(loaded).is_some() && documents.entry(book).is_some());
     }
 
     #[test]
