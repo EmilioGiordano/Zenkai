@@ -91,6 +91,22 @@ fn an_edit_while_the_dump_is_written_keeps_the_workbook_in_memory() {
 }
 
 #[test]
+fn a_save_pressed_while_the_dump_is_written_keeps_the_workbook_in_memory() {
+    let (mut documents, id, dir) = with_unsaved_work();
+    let (dumped, _) = dump_of(&mut documents, id, &dir).unwrap();
+    documents.get_mut(id).unwrap().request_save();
+    assert!(!documents.finish_hibernation(id, dumped));
+    assert!(documents.get(id).unwrap().has_pending_save());
+}
+
+#[test]
+fn a_workbook_with_a_save_waiting_is_not_offered() {
+    let (mut documents, id, _dir) = with_unsaved_work();
+    documents.get_mut(id).unwrap().request_save();
+    assert!(documents.begin_hibernation(id).is_none());
+}
+
+#[test]
 fn a_workbook_that_came_on_screen_while_the_dump_was_written_stays() {
     let (mut documents, id, dir) = with_unsaved_work();
     let (dumped, _) = dump_of(&mut documents, id, &dir).unwrap();

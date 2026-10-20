@@ -262,6 +262,10 @@ impl Document {
         self.pending_save.begin_follow_up()
     }
 
+    pub fn has_pending_save(&self) -> bool {
+        self.pending_save != PendingSave::None
+    }
+
     pub fn clear_pending_save(&mut self) {
         self.pending_save.clear();
     }

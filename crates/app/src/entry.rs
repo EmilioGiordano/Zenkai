@@ -253,6 +253,7 @@ impl Document {
             && self.has_recovery_copy()
             && self.review.is_empty()
             && !self.has_pending()
+            && !self.has_pending_save()
             && self.file_job() == FileJob::Idle
             && !self.hibernation_was_refused()
     }
