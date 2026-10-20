@@ -33,6 +33,7 @@ mod language;
 mod logging;
 mod markdown_highlight;
 mod markdown_links;
+mod markdown_pane;
 mod memory;
 mod palette;
 mod panel_width;
