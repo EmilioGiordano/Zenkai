@@ -82,6 +82,7 @@ impl Documents {
             status: LinkStatus::NotLoaded,
             recovery_lost: false,
             origin: None,
+            rested: None,
         }));
         id
     }
