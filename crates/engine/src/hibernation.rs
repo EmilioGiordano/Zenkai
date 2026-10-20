@@ -2,10 +2,11 @@
 // memory while idle. Only the cells and the history go to the file; the small bookkeeping a
 // save needs about the file the workbook came from stays in `Kept`, in memory. The dump
 // never outlives the process: a crash is covered by the recovery copy, which holds the same
-// work without the history.
+// work without the history. The file is written one encoded section at a time, so the peak
+// next to the workbook is its largest section, not the whole dump.
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use ironcalc::base::UserModel;
@@ -46,11 +47,21 @@ impl Workbook {
         // stay in memory, where its edits can still be saved.
         ironcalc::base::open_budget::check_open_budget(&self.model.get_model().workbook)
             .map_err(EngineError::refused)?;
-        let payload = self
-            .model
-            .to_bytes_with_history()
-            .map_err(EngineError::Rejected)?;
-        write_dump(path, &payload, MAX_DUMP_BYTES)?;
+        write_dump(path, MAX_DUMP_BYTES, |sink| {
+            let mut failure = None;
+            let written = self.model.write_with_history(&mut |chunk| {
+                sink.put(chunk).map_err(|error| {
+                    let message = error.to_string();
+                    failure = Some(error);
+                    message
+                })
+            });
+            match (failure, written) {
+                (Some(error), _) => Err(error),
+                (None, Err(message)) => Err(EngineError::Rejected(message)),
+                (None, Ok(())) => Ok(()),
+            }
+        })?;
         Ok(Kept {
             carried: self.carried.clone(),
             saved: self.saved.clone(),
@@ -71,6 +82,8 @@ impl Workbook {
                         EngineError::BadDump(error)
                     }
                 })?;
+            // The encoded dump is not needed once decoded; the evaluation below is the peak.
+            drop(payload);
             Ok(evaluated_user_model(
                 model,
                 kept.carried.clone(),
@@ -81,14 +94,11 @@ impl Workbook {
     }
 }
 
-fn header_of(payload: &[u8]) -> [u8; HEADER_BYTES] {
-            // The encoded dump is not needed once decoded; the evaluation below is the peak.
-            drop(payload);
+fn header_of(length: u64, checksum: u32) -> [u8; HEADER_BYTES] {
     let mut header = [0; HEADER_BYTES];
     header[..MAGIC.len()].copy_from_slice(&MAGIC);
-    header[MAGIC.len()..MAGIC.len() + LENGTH_BYTES]
-        .copy_from_slice(&(payload.len() as u64).to_le_bytes());
-    header[MAGIC.len() + LENGTH_BYTES..].copy_from_slice(&crc32fast::hash(payload).to_le_bytes());
+    header[MAGIC.len()..MAGIC.len() + LENGTH_BYTES].copy_from_slice(&length.to_le_bytes());
+    header[MAGIC.len() + LENGTH_BYTES..].copy_from_slice(&checksum.to_le_bytes());
     header
 }
 
@@ -117,31 +127,87 @@ fn parse_header(
     Ok((declared, u32::from_le_bytes(checksum)))
 }
 
-fn write_dump(path: &Path, payload: &[u8], cap: u64) -> Result<(), EngineError> {
-    if payload.len() as u64 > cap {
-        return Err(EngineError::TooLarge(format!(
-            "the workbook is too large to rest on disk ({} MB, up to {} MB)",
-            payload.len() as u64 / 1024 / 1024,
-            cap / 1024 / 1024
-        )));
+// Where `write_dump` puts the payload: straight into the file, counting its length and
+// checksum as it goes, and refusing the byte that would pass the cap.
+pub(crate) struct Sink {
+    file: fs::File,
+    hasher: crc32fast::Hasher,
+    written: u64,
+    cap: u64,
+    temp: std::path::PathBuf,
+}
+
+impl Sink {
+    pub(crate) fn put(&mut self, bytes: &[u8]) -> Result<(), EngineError> {
+        let total = self.written.saturating_add(bytes.len() as u64);
+        if total > self.cap {
+            return Err(EngineError::TooLarge(format!(
+                "the workbook is too large to rest on disk (over {} MB)",
+                self.cap / 1024 / 1024
+            )));
+        }
+        self.file
+            .write_all(bytes)
+            .map_err(|source| EngineError::Write {
+                path: self.temp.clone(),
+                source,
+            })?;
+        self.hasher.update(bytes);
+        self.written = total;
+        Ok(())
     }
+}
+
+fn write_dump(
+    path: &Path,
+    cap: u64,
+    fill: impl FnOnce(&mut Sink) -> Result<(), EngineError>,
+) -> Result<(), EngineError> {
     let temp = temp_path(path);
-    let written = fs::OpenOptions::new()
+    // The temp name carries our process id, so one left by an earlier hibernation of this
+    // process is ours to replace.
+    match fs::remove_file(&temp) {
+        Ok(()) => {}
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => return Err(EngineError::Write { path: temp, source }),
+    }
+    let file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temp)
-        .and_then(|mut file| {
-            file.write_all(&header_of(payload))?;
-            file.write_all(payload)?;
-            file.sync_all()
+        .map_err(|source| EngineError::Write {
+            path: temp.clone(),
+            source,
+        })?;
+    let mut sink = Sink {
+        file,
+        hasher: crc32fast::Hasher::new(),
+        written: 0,
+        cap,
+        temp: temp.clone(),
+    };
+    let finished = sink
+        .file
+        .write_all(&[0; HEADER_BYTES])
+        .map_err(|source| EngineError::Write {
+            path: temp.clone(),
+            source,
+        })
+        .and_then(|()| fill(&mut sink))
+        .and_then(|()| {
+            let header = header_of(sink.written, sink.hasher.clone().finalize());
+            let patched = sink
+                .file
+                .seek(SeekFrom::Start(0))
+                .and_then(|_| sink.file.write_all(&header))
+                .and_then(|()| sink.file.sync_all());
+            patched.map_err(|source| EngineError::Write {
+                path: temp.clone(),
+                source,
+            })
         });
-    if let Err(source) = written {
-        if source.kind() != std::io::ErrorKind::AlreadyExists {
-            remove_temp(&temp);
-        }
-        return Err(EngineError::Write { path: temp, source });
-    }
-    if let Err(error) = verify_file(&temp, cap) {
+    drop(sink);
+    if let Err(error) = finished.and_then(|()| verify_file(&temp, cap)) {
         remove_temp(&temp);
         return Err(error);
     }
@@ -212,9 +278,13 @@ fn read_dump(path: &Path, cap: u64) -> Result<Vec<u8>, EngineError> {
 mod tests {
     use super::*;
 
+    fn write_bytes(path: &Path, payload: &[u8], cap: u64) -> Result<(), EngineError> {
+        write_dump(path, cap, |sink| sink.put(payload))
+    }
+
     fn dump_in(dir: &Path, payload: &[u8]) -> std::path::PathBuf {
         let path = dir.join("book.zkh");
-        write_dump(&path, payload, MAX_DUMP_BYTES).unwrap();
+        write_bytes(&path, payload, MAX_DUMP_BYTES).unwrap();
         path
     }
 
@@ -230,10 +300,10 @@ mod tests {
     fn a_payload_at_the_cap_is_written_and_one_byte_over_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("book.zkh");
-        write_dump(&path, &[7; 64], 64).unwrap();
+        write_bytes(&path, &[7; 64], 64).unwrap();
         assert_eq!(read_dump(&path, 64).unwrap().len(), 64);
         let refused = dir.path().join("over.zkh");
-        let error = write_dump(&refused, &[7; 65], 64).unwrap_err();
+        let error = write_bytes(&refused, &[7; 65], 64).unwrap_err();
         assert!(matches!(error, EngineError::TooLarge(_)), "{error}");
         assert!(!refused.exists());
         assert!(matches!(read_dump(&path, 63), Err(EngineError::BadDump(_))));
@@ -260,6 +330,40 @@ mod tests {
             assert!(read_dump(&broken, MAX_DUMP_BYTES).is_err());
             assert!(verify_file(&broken, MAX_DUMP_BYTES).is_err());
         }
+    }
+
+    #[test]
+    fn a_dump_written_in_pieces_reads_back_whole_and_the_cap_counts_every_piece() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.zkh");
+        write_dump(&path, 10, |sink| {
+            sink.put(b"hello")?;
+            sink.put(b"world")
+        })
+        .unwrap();
+        assert_eq!(read_dump(&path, 10).unwrap(), b"helloworld");
+        let over = dir.path().join("over.zkh");
+        let error = write_dump(&over, 10, |sink| {
+            sink.put(b"hello")?;
+            sink.put(b"world!")
+        })
+        .unwrap_err();
+        assert!(matches!(error, EngineError::TooLarge(_)), "{error}");
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "no temp file stays"
+        );
+    }
+
+    #[test]
+    fn a_temp_file_left_by_this_process_does_not_block_the_next_dump() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.zkh");
+        fs::write(temp_path(&path), b"left behind").unwrap();
+        write_bytes(&path, b"cells", MAX_DUMP_BYTES).unwrap();
+        assert_eq!(read_dump(&path, MAX_DUMP_BYTES).unwrap(), b"cells");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]
