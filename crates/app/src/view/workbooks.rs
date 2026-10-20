@@ -635,3 +635,198 @@ impl Workspace {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+    use std::time::SystemTime;
+
+    use zenkai_agent::protected_view::FileOrigin;
+    use zenkai_engine::{Engine, SaveTarget, Stamp, Workbook, XlsxReader};
+    use zenkai_grid::ViewState;
+    use zenkai_types::{CellPos, SheetId, WorkbookId};
+
+    use super::{LinkLoad, changed_while_out_of_memory, read_link};
+    use crate::documents::Provenance;
+    use crate::entry::{FileSeen, Hibernation, Link, LinkStatus, Rested};
+    use crate::files::FileLoad;
+    use crate::recovery;
+    use crate::spaces::SpaceId;
+
+    struct Setup {
+        _dir: tempfile::TempDir,
+        dump: PathBuf,
+        copy: PathBuf,
+        link: Link,
+    }
+
+    fn text(workbook: &Workbook) -> String {
+        workbook.cell(SheetId(0), CellPos::default()).text
+    }
+
+    // A workbook with the edit "42" and an undo step, as a hibernated link with a dump and a
+    // recovery copy that both hold the edit.
+    fn hibernated() -> Setup {
+        let dir = tempfile::tempdir().unwrap();
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_input(SheetId(0), CellPos::default(), "42")
+            .unwrap();
+        let dump = dir.path().join("book.zkh");
+        let copy = dir.path().join("copy.xlsx");
+        let kept = book.hibernate(&dump).unwrap();
+        recovery::write(book.save_snapshot(&copy, SaveTarget::Copy).unwrap()).unwrap();
+        let link = Link {
+            id: WorkbookId(7),
+            space: SpaceId(0),
+            untitled: 1,
+            path: None,
+            recovery: Some(copy.clone()),
+            dirty: true,
+            read_only: false,
+            unsupported: Vec::new(),
+            sheet: zenkai_types::SheetId(0),
+            view: ViewState::default(),
+            size: None,
+            status: LinkStatus::NotLoaded,
+            recovery_lost: false,
+            origin: Some(FileOrigin::Local),
+            rested: Some(Rested {
+                file: FileSeen {
+                    stamp: None,
+                    at: SystemTime::now(),
+                },
+                hibernation: Some(Hibernation {
+                    dump: dump.clone(),
+                    kept,
+                    restored: false,
+                }),
+            }),
+        };
+        Setup {
+            _dir: dir,
+            dump,
+            copy,
+            link,
+        }
+    }
+
+    fn damage(dump: &Path) {
+        let mut bytes = std::fs::read(dump).unwrap();
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xff;
+        std::fs::write(dump, bytes).unwrap();
+    }
+
+    fn loaded(load: LinkLoad) -> (Box<FileLoad>, Provenance, bool) {
+        match load {
+            LinkLoad::Loaded {
+                file,
+                provenance,
+                dump_lost,
+                ..
+            } => (file, provenance, dump_lost),
+            LinkLoad::Missing => panic!("the link was reported missing"),
+            LinkLoad::Failed(message) => panic!("the link failed to load: {message}"),
+        }
+    }
+
+    #[test]
+    fn a_hibernated_workbook_wakes_from_its_dump_with_its_history_and_the_dump_goes() {
+        let setup = hibernated();
+        let (file, provenance, dump_lost) = loaded(read_link(&setup.link, XlsxReader::Fast));
+        assert_eq!(provenance, Provenance::Dump);
+        assert!(!dump_lost);
+        let mut workbook = file.workbook;
+        assert_eq!(text(&workbook), "42");
+        workbook.undo().unwrap();
+        assert_eq!(text(&workbook), "");
+        assert!(!setup.dump.exists());
+        assert!(setup.copy.exists());
+    }
+
+    #[test]
+    fn a_dump_that_cannot_be_read_falls_back_to_the_recovery_copy_and_says_so() {
+        for break_dump in [damage as fn(&Path), |dump| {
+            std::fs::remove_file(dump).unwrap()
+        }] {
+            let setup = hibernated();
+            break_dump(&setup.dump);
+            let (file, provenance, dump_lost) = loaded(read_link(&setup.link, XlsxReader::Fast));
+            assert_eq!(provenance, Provenance::Recovery);
+            assert!(dump_lost);
+            assert_eq!(text(&file.workbook), "42");
+            assert!(!setup.dump.exists());
+        }
+    }
+
+    #[test]
+    fn with_neither_the_dump_nor_the_copy_the_stale_file_is_never_shown() {
+        let mut setup = hibernated();
+        damage(&setup.dump);
+        std::fs::remove_file(&setup.copy).unwrap();
+        let file = setup._dir.path().join("saved.xlsx");
+        let mut older = Workbook::new_empty().unwrap();
+        older
+            .set_input(SheetId(0), CellPos::default(), "old")
+            .unwrap();
+        recovery::write(older.save_snapshot(&file, SaveTarget::Copy).unwrap()).unwrap();
+        setup.link.path = Some(file);
+        assert!(matches!(
+            read_link(&setup.link, XlsxReader::Fast),
+            LinkLoad::Failed(_)
+        ));
+        assert!(
+            setup.dump.exists(),
+            "the damaged dump is kept for another look"
+        );
+    }
+
+    #[test]
+    fn a_file_that_changed_while_the_workbook_was_out_of_memory_is_noticed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        std::fs::write(&path, b"first").unwrap();
+        let mut setup = hibernated();
+        setup.link.path = Some(path.clone());
+        let stamp = Stamp::of(&path).unwrap();
+        setup.link.rested = Some(Rested {
+            file: FileSeen {
+                stamp: Some(stamp),
+                at: SystemTime::now(),
+            },
+            hibernation: None,
+        });
+        assert!(!changed_while_out_of_memory(&setup.link, &path));
+        std::fs::write(&path, b"second, longer").unwrap();
+        assert!(changed_while_out_of_memory(&setup.link, &path));
+    }
+
+    #[test]
+    fn without_an_engine_stamp_a_file_modified_after_the_unload_counts_as_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        std::fs::write(&path, b"first").unwrap();
+        let mut setup = hibernated();
+        setup.link.rested = Some(Rested {
+            file: FileSeen {
+                stamp: None,
+                at: SystemTime::now(),
+            },
+            hibernation: None,
+        });
+        assert!(!changed_while_out_of_memory(&setup.link, &path));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(&path, b"second").unwrap();
+        assert!(changed_while_out_of_memory(&setup.link, &path));
+    }
+
+    #[test]
+    fn a_link_that_never_left_memory_has_nothing_to_compare() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        std::fs::write(&path, b"first").unwrap();
+        let mut setup = hibernated();
+        setup.link.rested = None;
+        assert!(!changed_while_out_of_memory(&setup.link, &path));
+    }
+}
