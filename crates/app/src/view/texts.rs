@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::base::v_flex;
 use gpui_kit::*;
@@ -11,7 +11,8 @@ use crate::documents::{Installed, TextLoad};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::markdown_pane::{MarkdownPane, PaneEvent, PaneState, folder_of};
 use crate::recovery;
-use crate::text_document::{DocumentKind, ViewMode, notice_after_recovery};
+use crate::text_disk::RecoveredFile;
+use crate::text_document::{DocumentKind, ViewMode};
 use crate::text_file::{self, Decoded, ReadError, Stamp, StampRecord};
 
 pub(super) struct TextPane {
@@ -26,6 +27,7 @@ enum TextLink {
         decoded: Decoded,
         stamp: Option<Stamp>,
         base: Option<StampRecord>,
+        file_exists: bool,
         copy: Option<PathBuf>,
         recovery_lost: bool,
     },
@@ -44,6 +46,7 @@ fn read_text_link(link: &Link) -> TextLink {
                     decoded,
                     stamp: link.path.as_deref().and_then(text_file::stamp_of),
                     base: link.base,
+                    file_exists: link.path.as_deref().is_some_and(Path::exists),
                     copy: Some(copy.clone()),
                     recovery_lost: false,
                 };
@@ -64,6 +67,7 @@ fn read_text_link(link: &Link) -> TextLink {
             decoded,
             stamp,
             base: None,
+            file_exists: true,
             copy: None,
             recovery_lost,
         },
@@ -300,6 +304,7 @@ impl Workspace {
                 decoded,
                 stamp,
                 base,
+                file_exists,
                 copy,
                 recovery_lost,
             } => {
@@ -328,7 +333,7 @@ impl Workspace {
                 }
                 if let Some(text) = self.documents.text_mut(id) {
                     text.notice =
-                        notice_after_recovery(text.path.is_some(), moved, stamp.is_some());
+                        RecoveredFile::judge(text.path.as_deref(), moved, file_exists).notice();
                 }
                 self.add_pane(id, &decoded.text, mode, window, cx);
                 if let Some(copy) = copy {

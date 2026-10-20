@@ -9,7 +9,7 @@ use super::lifecycle::Lifecycle;
 use super::{Severity, Workspace};
 use crate::files;
 use crate::recovery;
-use crate::text_document::{DiskNotice, Writing};
+use crate::text_disk::{DiskNotice, Writing};
 use crate::text_file::{self, DiskChange, Reaction, ReadError, Stamp};
 
 const WATCH_EVERY: Duration = Duration::from_secs(2);

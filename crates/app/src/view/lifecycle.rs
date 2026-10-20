@@ -24,7 +24,7 @@ use zenkai_agent::settings_file::{self, SettingsPaths};
 use crate::agent_settings;
 use crate::session::{self, Loaded, Session};
 use crate::space_settings;
-use crate::text_document::Writing;
+use crate::text_disk::Writing;
 use crate::text_file::Format;
 
 const AUTOSAVE_TICK: Duration = Duration::from_secs(1);

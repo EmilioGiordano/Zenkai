@@ -10,7 +10,8 @@ use crate::autosave::{self, Due};
 use crate::files;
 use crate::job_pill::LongJob;
 use crate::recovery;
-use crate::text_document::{Writing, markdown_target};
+use crate::text_disk::Writing;
+use crate::text_document::markdown_target;
 use crate::text_file::{self, DiskChange, Format, Stamp};
 
 #[derive(Clone, Copy, PartialEq, Eq)]

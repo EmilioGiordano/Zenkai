@@ -8,6 +8,7 @@ use zenkai_types::WorkbookId;
 
 use crate::entry::{Link, LinkStatus};
 use crate::spaces::SpaceId;
+use crate::text_disk::{DiskNotice, Writing};
 use crate::text_file::{Format, Stamp};
 
 pub const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
@@ -72,32 +73,6 @@ impl ViewMode {
             ViewMode::Source => t!("markdown.mode.source"),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum DiskNotice {
-    #[default]
-    None,
-    ChangedWithEdits,
-    Deleted,
-}
-
-// What a tab restored from a recovery copy says about its file. A text that never had a file
-// has nothing to have changed or been deleted.
-pub fn notice_after_recovery(has_path: bool, file_moved_on: bool, file_exists: bool) -> DiskNotice {
-    match (has_path && file_moved_on, file_exists) {
-        (false, _) => DiskNotice::None,
-        (true, true) => DiskNotice::ChangedWithEdits,
-        (true, false) => DiskNotice::Deleted,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Writing {
-    #[default]
-    Idle,
-    Saving,
-    Autosaving,
 }
 
 // Save As keeps a Markdown name as typed and gives anything else the `.md` extension, so the
@@ -345,20 +320,6 @@ mod tests {
         assert_eq!(
             markdown_target(Path::new("a/notes.txt")),
             Path::new("a/notes.txt.md")
-        );
-    }
-
-    #[test]
-    fn a_recovered_text_without_a_file_never_claims_the_file_was_deleted() {
-        assert_eq!(notice_after_recovery(false, true, false), DiskNotice::None);
-        assert_eq!(notice_after_recovery(true, false, true), DiskNotice::None);
-        assert_eq!(
-            notice_after_recovery(true, true, true),
-            DiskNotice::ChangedWithEdits
-        );
-        assert_eq!(
-            notice_after_recovery(true, true, false),
-            DiskNotice::Deleted
         );
     }
 

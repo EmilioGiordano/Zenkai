@@ -122,7 +122,7 @@ mod tests {
     use crate::documents::Step;
     use crate::entry::{Entry, LinkStatus};
     use crate::session::{FileRecord, Session, SpaceRecord, ViewRecord};
-    use crate::text_document::DiskNotice;
+    use crate::text_disk::DiskNotice;
 
     fn open_text(documents: &mut Documents, name: &str) -> WorkbookId {
         documents.open_text(
