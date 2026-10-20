@@ -177,8 +177,26 @@ fn has_image_extension(path: &Path) -> bool {
     })
 }
 
-// The targets of `![alt](target)` in the text, a bounded number, in one forward pass.
+// The targets a document may load images from: those of `![alt](target)` and those of link
+// reference definitions (`[label]: target`), which `![alt][label]` points to. A definition
+// that no image uses is listed too; it is only ever checked, never loaded.
 pub fn image_urls(text: &str) -> Vec<&str> {
+    let mut urls = inline_image_urls(text);
+    let room = MAX_IMAGE_LINKS.saturating_sub(urls.len());
+    urls.extend(definition_urls(text).take(room));
+    urls
+}
+
+fn definition_urls(text: &str) -> impl Iterator<Item = &str> {
+    text.split(['\n', '\r']).filter_map(|line| {
+        let rest = line.trim_start_matches(' ').strip_prefix('[')?;
+        let (_, after) = rest.split_once("]:")?;
+        let target = after.trim_start().split_whitespace().next()?;
+        Some(target.trim_matches(['<', '>']))
+    })
+}
+
+fn inline_image_urls(text: &str) -> Vec<&str> {
     let mut urls = Vec::new();
     let mut rest = text;
     while urls.len() < MAX_IMAGE_LINKS {
@@ -391,6 +409,19 @@ mod tests {
         assert_eq!(image_urls(text), ["one.png", "two.png \"t\""]);
         assert!(image_urls(&"![".repeat(2_000_000)).is_empty());
         assert_eq!(image_urls(&"![x](a.png)".repeat(1000)).len(), 256);
+    }
+
+    #[test]
+    fn reference_style_images_are_listed_through_their_definitions() {
+        let text = "![logo][brand] and ![x][]\n\n[brand]: img/logo.png \"Brand\"\n  [x]: <img/x.png>\r[note]: https://example.com/page\n";
+        let urls = image_urls(text);
+        assert_eq!(
+            urls,
+            ["img/logo.png", "img/x.png", "https://example.com/page"]
+        );
+        let mixed = "![a](one.png)\n[r]: two.png\n";
+        assert_eq!(image_urls(mixed), ["one.png", "two.png"]);
+        assert!(image_urls(&"[r]: a.png\n".repeat(1000)).len() <= 256);
     }
 
     #[test]
