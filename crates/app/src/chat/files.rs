@@ -25,7 +25,7 @@ impl ChatPanel {
         }));
     }
 
-    // Spreadsheets the agent wrote in its folder by its own means, not through the tools, are
+    // Workbooks and Markdown files the agent wrote in its folder by its own means, not through the tools, are
     // listed in the space after the turn and announced with the same card.
     pub(super) fn list_files_written(&mut self, since: SystemTime, cx: &mut Context<Self>) {
         let Some(folder) = self
@@ -39,7 +39,7 @@ impl ChatPanel {
         cx.spawn(async move |this, cx| {
             let found = cx
                 .background_executor()
-                .spawn(async move { agent_folder::spreadsheets_written_since(&folder, since) })
+                .spawn(async move { agent_folder::documents_written_since(&folder, since) })
                 .await;
             if found.is_empty() {
                 return;
