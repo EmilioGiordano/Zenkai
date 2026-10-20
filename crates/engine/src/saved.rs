@@ -16,13 +16,17 @@ use crate::style_growth::StylesBase;
 
 // A file is taken as unchanged on disk while its length and modification time are.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Stamp {
+pub struct Stamp {
     len: u64,
     modified: SystemTime,
 }
 
 impl Stamp {
-    pub(crate) fn of(path: &Path) -> io::Result<Stamp> {
+    pub fn modified(&self) -> SystemTime {
+        self.modified
+    }
+
+    pub fn of(path: &Path) -> io::Result<Stamp> {
         let metadata = std::fs::metadata(path)?;
         Ok(Stamp {
             len: metadata.len(),

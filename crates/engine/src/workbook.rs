@@ -691,6 +691,12 @@ impl Workbook {
         profile
     }
 
+    // When the file the workbook came from was last read or written by it; `None` if it
+    // did not come from a file it can copy from.
+    pub fn file_stamp(&self) -> Option<crate::saved::Stamp> {
+        self.saved.current().map(|file| file.stamp)
+    }
+
     // Call on a background thread after building or editing, so the UI thread never walks a sheet.
     pub fn warm_used_areas(&self) {
         for sheet in self.sheets() {
