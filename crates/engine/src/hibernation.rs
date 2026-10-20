@@ -1,12 +1,21 @@
-// The file a workbook rests in while it is out of memory: a header with a checksum, then the
-// payload. A file that does not check out is never read.
+// A workbook with unsaved work, written to disk with its undo history so it can leave
+// memory while idle. Only the cells and the history go to the file; the small bookkeeping a
+// save needs about the file the workbook came from stays in `Kept`, in memory. The dump
+// never outlives the process: a crash is covered by the recovery copy, which holds the same
+// work without the history.
 
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 
+use ironcalc::base::UserModel;
+
 use crate::error::EngineError;
-use crate::file::{remove_temp, temp_path};
+use crate::file::{Unsupported, remove_temp, temp_path};
+use crate::preflight::run_with_engine_stack;
+use crate::saved::SavedSlot;
+use crate::sheet_settings::Carried;
+use crate::workbook::{LANGUAGE, Workbook, evaluated_user_model};
 
 // The largest workbook the app opens is charged about 2.7 GB of memory (38 million cells at
 // 70 bytes), and the undo history of styled cells is capped near 1.5 GB (`workbook.rs`);
@@ -18,6 +27,59 @@ const LENGTH_BYTES: usize = 8;
 const CHECKSUM_BYTES: usize = 4;
 const HEADER_BYTES: usize = MAGIC.len() + LENGTH_BYTES + CHECKSUM_BYTES;
 const VERIFY_CHUNK_BYTES: usize = 1024 * 1024;
+
+// What a hibernated workbook still holds in memory: the settings its file carried, what the
+// file held when it was last read or written, and what the file lost. A few kilobytes
+// next to the cells.
+#[derive(Clone, Debug)]
+pub struct Kept {
+    carried: Carried,
+    saved: SavedSlot,
+    opened: Vec<Unsupported>,
+}
+
+impl Workbook {
+    // Writes the workbook and its history to `path`. The workbook is untouched: the caller
+    // drops it only once this returns, so a failed write leaves it where it was.
+    pub fn hibernate(&self, path: &Path) -> Result<Kept, EngineError> {
+        // The way back goes through the open budget; a workbook that would be refused must
+        // stay in memory, where its edits can still be saved.
+        ironcalc::base::open_budget::check_open_budget(&self.model.get_model().workbook)
+            .map_err(EngineError::refused)?;
+        let payload = self
+            .model
+            .to_bytes_with_history()
+            .map_err(EngineError::Rejected)?;
+        write_dump(path, &payload, MAX_DUMP_BYTES)?;
+        Ok(Kept {
+            carried: self.carried.clone(),
+            saved: self.saved.clone(),
+            opened: self.opened.clone(),
+        })
+    }
+
+    // The workbook as it was when `hibernate` returned `kept`, with the same history. It is
+    // evaluated in full, as after an open, so a volatile function shows its current value.
+    pub fn wake(path: &Path, kept: &Kept) -> Result<Workbook, EngineError> {
+        let payload = read_dump(path, MAX_DUMP_BYTES)?;
+        run_with_engine_stack(|| {
+            let model =
+                UserModel::from_bytes_with_history(&payload, LANGUAGE).map_err(|error| {
+                    if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
+                        EngineError::TooLarge(error)
+                    } else {
+                        EngineError::BadDump(error)
+                    }
+                })?;
+            Ok(evaluated_user_model(
+                model,
+                kept.carried.clone(),
+                kept.saved.clone(),
+                kept.opened.clone(),
+            ))
+        })
+    }
+}
 
 fn header_of(payload: &[u8]) -> [u8; HEADER_BYTES] {
     let mut header = [0; HEADER_BYTES];
