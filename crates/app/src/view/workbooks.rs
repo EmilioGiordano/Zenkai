@@ -767,8 +767,7 @@ mod tests {
             },
             hibernation,
         });
-        let LinkLoad::Loaded { file_changed, .. } = read_link(&setup.link, XlsxReader::Fast)
-        else {
+        let LinkLoad::Loaded { file_changed, .. } = read_link(&setup.link, XlsxReader::Fast) else {
             panic!("the link did not load");
         };
         assert!(!file_changed);
