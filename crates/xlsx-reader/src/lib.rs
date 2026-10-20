@@ -933,6 +933,45 @@ mod tests {
         }
     }
 
+    // A workbook part of exactly `size` bytes, padded with a comment.
+    fn workbook_of_size(sheets: &[(&str, &str)], size: usize) -> String {
+        let plain = workbook_of(sheets);
+        let comment = "<!---->".len();
+        let padding = size - plain.len() - comment;
+        let at = plain.find("<sheets>").unwrap();
+        format!(
+            "{}<!--{}-->{}",
+            &plain[..at],
+            "x".repeat(padding),
+            &plain[at..]
+        )
+    }
+
+    #[test]
+    fn a_workbook_part_past_the_peek_cap_falls_back_to_the_usual_folder() {
+        let cap = package::PEEK_CAP_BYTES as usize;
+        // 300,000 cells cost more than this budget, which still holds the 8 MB part's DOM.
+        let budget = 2_100_000;
+        let cells = bare_cells(300_000);
+        let rels = rels_of(&[("rId1", "/data/s1.xml")]);
+        for (size, peeked) in [(cap, true), (cap + 1, false)] {
+            let workbook = workbook_of_size(&[("A", "rId1")], size);
+            let elsewhere = [
+                ("xl/workbook.xml", workbook.as_bytes()),
+                ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+                ("data/s1.xml", cells.as_bytes()),
+            ];
+            assert_eq!(walk_refused(&elsewhere, budget), peeked, "{size}");
+            // Only the fallback counts the usual folder, where no relationship points.
+            let usual = [
+                ("xl/workbook.xml", workbook.as_bytes()),
+                ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+                ("xl/worksheets/s1.xml", cells.as_bytes()),
+            ];
+            assert_eq!(walk_refused(&usual, budget), !peeked, "{size}");
+        }
+    }
+
     #[test]
     fn the_last_of_a_repeated_relationship_id_decides_the_sheet() {
         let workbook = workbook_of(&[("A", "rId1")]);

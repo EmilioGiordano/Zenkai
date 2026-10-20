@@ -7,6 +7,11 @@ use crate::ReadError;
 use crate::skipped_part;
 use crate::stream::{Budgets, CompressedMeter, read_part, read_part_to_peek};
 
+// Excel writes about 150 bytes per sheet in workbook.xml and 200 in its rels, so the
+// 20,000 entries the archive allows fit in 4 MB; 8 MB leaves room for defined names and
+// keeps each DOM near 128 MB at the importer's sixteen times.
+pub(crate) const PEEK_CAP_BYTES: u64 = 8 * 1024 * 1024;
+
 pub(crate) struct WorksheetPart {
     pub(crate) name: String,
     pub(crate) path: String,
@@ -170,7 +175,8 @@ pub(crate) fn read_package<R: Read + Seek>(
 // tolerating what `read_package` refuses (two sheets on one part, odd names, a missing
 // attribute on a sheet the importer would reject anyway). Counting a part too many is
 // safe; missing one lets its cells in uncharged. None when either file cannot be parsed.
-// The two files are only peeked at: the walk reads and charges them afterwards.
+// The two files are only peeked at: the walk reads and charges them afterwards. Past
+// the cap the peek gives up (None), so a crafted part never becomes a large DOM here.
 pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     meter: &CompressedMeter,
@@ -178,7 +184,10 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
 ) -> Option<HashSet<String>> {
     let mut peek = |name: &str| -> Option<String> {
         let entry = archive.by_name(name).ok()?;
-        let bytes = read_part_to_peek(entry, meter, name, budgets).ok()?;
+        let bytes = read_part_to_peek(entry.take(PEEK_CAP_BYTES + 1), meter, name, budgets).ok()?;
+        if bytes.len() as u64 > PEEK_CAP_BYTES {
+            return None;
+        }
         String::from_utf8(bytes).ok()
     };
     // The workbook's DOM is gone before the rels' is built, so the two never coexist.
