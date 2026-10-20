@@ -6,19 +6,10 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
-use crate::markdown_links::{LinkTarget, classify_link};
+use crate::markdown_links::{LinkTarget, classify_link, host_of, shown_target};
 use crate::markdown_pane::folder_of;
 
 const EDITOR_READY: Duration = Duration::from_millis(60);
-const SHOWN_TARGET_CHARS: usize = 80;
-
-fn shown(target: &str) -> String {
-    let mut text: String = target.chars().take(SHOWN_TARGET_CHARS).collect();
-    if target.chars().count() > SHOWN_TARGET_CHARS {
-        text.push('…');
-    }
-    text
-}
 
 impl Workspace {
     // A link in a document is untrusted: the web asks first, files open only if Zenkai
@@ -40,7 +31,7 @@ impl Workspace {
             LinkTarget::File(path) => self.open_path(path, window, cx),
             LinkTarget::Refused => self.notify(
                 Severity::Warning,
-                t!("markdown.link.refused", target = shown(url)),
+                t!("markdown.link.refused", target = shown_target(url)),
                 cx,
             ),
         }
@@ -50,7 +41,11 @@ impl Workspace {
         let answer = self.ask(
             PromptLevel::Warning,
             t!("markdown.link.web_title"),
-            Some(&shown(&url)),
+            Some(&t!(
+                "markdown.link.web_detail",
+                host = host_of(&url),
+                link = shown_target(&url)
+            )),
             &[t!("markdown.link.open_browser"), t!("button.cancel")],
             window,
             cx,

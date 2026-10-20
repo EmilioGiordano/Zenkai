@@ -15,6 +15,50 @@ pub enum LinkTarget {
     Refused,
 }
 
+const SHOWN_TARGET_CHARS: usize = 80;
+
+fn is_invisible_or_bidi(character: char) -> bool {
+    character.is_control()
+        || matches!(
+            character,
+            '\u{200b}'..='\u{200f}'
+                | '\u{202a}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{061c}'
+                | '\u{feff}'
+        )
+}
+
+// What a prompt or a notice shows of a link: no control, invisible or direction-changing
+// characters that could disguise it, and an ellipsis where it was cut.
+pub fn shown_target(url: &str) -> String {
+    let mut shown: String = url
+        .chars()
+        .filter(|character| !is_invisible_or_bidi(*character))
+        .take(SHOWN_TARGET_CHARS + 1)
+        .collect();
+    if shown.chars().count() > SHOWN_TARGET_CHARS {
+        shown = shown.chars().take(SHOWN_TARGET_CHARS).collect();
+        shown.push('\u{2026}');
+    }
+    shown
+}
+
+// The host a web link goes to, without the user name some links put in front of it to look
+// like another site.
+pub fn host_of(url: &str) -> String {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = after_scheme
+        .split(['/', '?', '#', '\\'])
+        .next()
+        .unwrap_or_default();
+    let host = authority.rsplit('@').next().unwrap_or_default();
+    host.chars()
+        .filter(|character| !is_invisible_or_bidi(*character))
+        .collect()
+}
+
 fn scheme_of(url: &str) -> Option<&str> {
     let (scheme, rest) = url.split_once(':')?;
     let mut chars = scheme.chars();
@@ -298,6 +342,34 @@ mod tests {
             assert_eq!(image_path(refused, Some(folder())), None, "{refused}");
         }
         assert_eq!(image_path("a.png", None), None);
+    }
+
+    #[test]
+    fn a_shown_link_loses_what_could_disguise_it_and_marks_where_it_was_cut() {
+        assert_eq!(shown_target("https://a.b/c"), "https://a.b/c");
+        assert_eq!(
+            shown_target("https://a.b/\u{202e}gpj.exe\u{200b}\n\t"),
+            "https://a.b/gpj.exe"
+        );
+        let long = format!("https://a.b/{}", "x".repeat(200));
+        let shown = shown_target(&long);
+        assert_eq!(shown.chars().count(), SHOWN_TARGET_CHARS + 1);
+        assert!(shown.ends_with('\u{2026}'));
+        let exact = "x".repeat(SHOWN_TARGET_CHARS);
+        assert_eq!(shown_target(&exact), exact);
+    }
+
+    #[test]
+    fn the_host_is_what_follows_any_user_name() {
+        assert_eq!(host_of("https://example.com/a?b#c"), "example.com");
+        assert_eq!(host_of("https://example.com:8443/a"), "example.com:8443");
+        assert_eq!(
+            host_of("https://bank.com@evil.example/login"),
+            "evil.example"
+        );
+        assert_eq!(host_of("https://evil.example\\@bank.com/"), "evil.example");
+        assert_eq!(host_of("https://ex\u{202e}ample.com/"), "example.com");
+        assert_eq!(host_of("https://example.com"), "example.com");
     }
 
     #[test]
