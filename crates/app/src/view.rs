@@ -33,6 +33,7 @@ mod closing;
 mod settings_gate;
 mod space_panel;
 mod text_actions;
+mod text_save;
 mod texts;
 
 use crate::prompt_gate::{PROMPT_OPEN_CONTEXT, PromptGate};
@@ -1624,6 +1625,10 @@ impl Workspace {
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
         // Text typed in the formula bar is entered before saving, as in Excel.
         self.close_formula_bar(true, window, cx);
+        if let Some(id) = self.documents.shown_text().map(|text| text.id) {
+            self.save_text(id, window, cx);
+            return;
+        }
         let Some(id) = self.documents.active_id() else {
             return;
         };
@@ -1693,6 +1698,10 @@ impl Workspace {
     }
 
     fn save_document(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.documents.text(id).is_some() {
+            self.save_text(id, window, cx);
+            return;
+        }
         let Some(document) = self.documents.get(id) else {
             self.save_ended(id, false, window, cx);
             return;
@@ -1761,7 +1770,9 @@ impl Workspace {
 
     fn save_as(&mut self, _: &SaveAs, window: &mut Window, cx: &mut Context<Self>) {
         self.close_formula_bar(true, window, cx);
-        if let Some(id) = self.documents.active_id() {
+        if let Some(id) = self.documents.shown_text().map(|text| text.id) {
+            self.save_text_as(id, window, cx);
+        } else if let Some(id) = self.documents.active_id() {
             self.save_as_dialog(id, window, cx);
         }
     }
