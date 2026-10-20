@@ -1288,10 +1288,9 @@ pub(super) fn load_sheets<R: Read + std::io::Seek>(
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::{collections::HashMap, io::Cursor};
 
     use crate::import::worksheets::{load_sheet_rels, parse_reference};
-    use std::collections::HashMap;
 
     fn archive_with(parts: &[(&str, &str)]) -> zip::ZipArchive<Cursor<Vec<u8>>> {
         use std::io::Write;
