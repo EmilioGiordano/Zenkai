@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use gpui_kit::component::input::{Replace as EditorReplace, Search as EditorSearch};
 use gpui_kit::*;
 use zenkai_i18n::t;
@@ -8,8 +6,6 @@ use zenkai_types::WorkbookId;
 use super::{Severity, Workspace};
 use crate::markdown_links::{LinkTarget, classify_link, host_of, shown_target};
 use crate::markdown_pane::folder_of;
-
-const EDITOR_READY: Duration = Duration::from_millis(60);
 
 impl Workspace {
     // A link in a document is untrusted: the web asks first, files open only if Zenkai
@@ -75,21 +71,17 @@ impl Workspace {
         self.revert_theme_preview(cx);
         pane.update(cx, |pane, cx| pane.show_source(window, cx));
         let editor = pane.read(cx).editor_focus(cx);
-        cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(EDITOR_READY).await;
-            let update = this.update_in(cx, |_, window, cx| {
-                window.focus(&editor, cx);
-                if replace {
-                    window.dispatch_action(EditorReplace.boxed_clone(), cx)
-                } else {
-                    window.dispatch_action(EditorSearch.boxed_clone(), cx)
-                }
-            });
-            if let Err(error) = update {
-                tracing::debug!(%error, "workspace closed before find opened");
-            }
-        })
-        .detach();
+        // The source may only just have been shown: the action goes out once the frame that
+        // draws it is done, when the editor is in the tree the action travels through.
+        let action: Box<dyn Action> = if replace {
+            EditorReplace.boxed_clone()
+        } else {
+            EditorSearch.boxed_clone()
+        };
+        window.on_next_frame(move |window, cx| {
+            window.focus(&editor, cx);
+            window.dispatch_action(action, cx);
+        });
         true
     }
 }
