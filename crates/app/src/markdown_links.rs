@@ -104,7 +104,7 @@ fn local_path(url: &str) -> Option<PathBuf> {
 fn is_reserved_device_name(name: &std::ffi::OsStr) -> bool {
     let name = name.to_string_lossy();
     let stem = name
-        .split(['.', ':'])
+        .split('.')
         .next()
         .unwrap_or_default()
         .trim_end_matches(' ')
