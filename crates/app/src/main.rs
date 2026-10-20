@@ -31,6 +31,7 @@ mod jump;
 mod keymap;
 mod language;
 mod logging;
+mod markdown_depth;
 mod markdown_highlight;
 mod markdown_links;
 mod markdown_pane;

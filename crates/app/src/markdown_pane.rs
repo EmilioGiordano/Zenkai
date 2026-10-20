@@ -16,6 +16,7 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use crate::interface_scale::rem_px;
+use crate::markdown_depth;
 use crate::markdown_highlight::{LANGUAGE, MarkdownHighlighter};
 use crate::markdown_links::image_path;
 use crate::text_document::{DiskNotice, ViewMode};
@@ -49,6 +50,7 @@ pub struct MarkdownPane {
     state: PaneState,
     focus: FocusHandle,
     preview_stale: bool,
+    too_deep: bool,
     preview_task: Option<Task<()>>,
     follow_task: Option<Task<()>>,
     followed: usize,
@@ -130,7 +132,9 @@ impl MarkdownPane {
             editor.set_highlighter_factory(MarkdownHighlighter::factory(), cx);
             editor
         });
-        let preview = cx.new(|cx| TextViewState::markdown(text, cx));
+        let too_deep = markdown_depth::too_deep(text);
+        let shown = if too_deep { "" } else { text };
+        let preview = cx.new(|cx| TextViewState::markdown(shown, cx));
         let changes = cx.subscribe_in(&editor, window, |this, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::Change) {
                 this.preview_stale = true;
@@ -153,6 +157,7 @@ impl MarkdownPane {
             state,
             focus: cx.focus_handle(),
             preview_stale: false,
+            too_deep,
             preview_task: None,
             follow_task: None,
             followed: 0,
@@ -187,9 +192,7 @@ impl MarkdownPane {
         self.editor.update(cx, |editor, cx| {
             editor.set_value(text.to_owned(), window, cx)
         });
-        self.preview
-            .update(cx, |preview, cx| preview.set_text(text, cx));
-        self.preview_stale = false;
+        self.show_in_preview(text, cx);
         cx.notify();
     }
 
@@ -237,8 +240,15 @@ impl MarkdownPane {
 
     fn refresh_preview(&mut self, cx: &mut Context<Self>) {
         let text = self.editor.read(cx).value();
+        self.show_in_preview(&text, cx);
+    }
+
+    // Text nested too deeply is not handed to the parser; the pane says so instead.
+    fn show_in_preview(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.too_deep = markdown_depth::too_deep(text);
+        let shown = if self.too_deep { "" } else { text };
         self.preview
-            .update(cx, |preview, cx| preview.set_text(&text, cx));
+            .update(cx, |preview, cx| preview.set_text(shown, cx));
         self.preview_stale = false;
     }
 
@@ -402,6 +412,7 @@ impl MarkdownPane {
         let weak = cx.entity().downgrade();
         let folder = self.state.folder.clone();
         let centered = self.mode == ViewMode::Preview;
+        let too_deep = self.too_deep;
         div()
             .id("markdown-preview")
             .flex_1()
@@ -416,7 +427,8 @@ impl MarkdownPane {
                     .px_6()
                     .py_4()
                     .when(centered, |page| page.max_w(rem_px(READING_WIDTH)).mx_auto())
-                    .child(
+                    .when(!too_deep, |page| {
+                        page.child(
                         TextView::new(&self.preview)
                             .markdown_extensions(extensions())
                             .selectable(true)
@@ -437,7 +449,9 @@ impl MarkdownPane {
                                     tracing::debug!(%error, "markdown pane dropped a link click");
                                 }
                             }),
-                    ),
+                    )
+                    })
+                    .when(too_deep, |page| page.child(t!("markdown.too_deep"))),
             )
     }
 }
