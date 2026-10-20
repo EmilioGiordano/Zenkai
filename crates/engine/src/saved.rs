@@ -118,7 +118,7 @@ impl SavedFile {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct SavedSlot(Arc<Mutex<Option<Arc<SavedFile>>>>);
 
 impl SavedSlot {
