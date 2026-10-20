@@ -542,6 +542,17 @@ fn get_cell_from_excel(
     }
 }
 
+// Target="../comments1.xml" -> "<base>/comments1.xml"
+fn replace_relative_prefix(target: &mut String, base: &str) -> Result<(), XlsxError> {
+    if !target.is_char_boundary(2) {
+        return Err(XlsxError::Workbook(format!(
+            "The relationship target {target} is not relative to the worksheets folder"
+        )));
+    }
+    target.replace_range(..2, base);
+    Ok(())
+}
+
 fn load_sheet_rels<R: Read + std::io::Seek>(
     archive: &mut zip::read::ZipArchive<R>,
     path: &str,
@@ -550,10 +561,14 @@ fn load_sheet_rels<R: Read + std::io::Seek>(
 ) -> Result<Vec<Comment>, XlsxError> {
     // ...xl/worksheets/sheet6.xml -> xl/worksheets/_rels/sheet6.xml.rels
     let mut comments = Vec::new();
-    let v: Vec<&str> = path.split("/worksheets/").collect();
-    let mut path = v[0].to_string();
+    let Some((base, file)) = path.split_once("/worksheets/") else {
+        return Err(XlsxError::Workbook(format!(
+            "The worksheet {path} is not in a worksheets folder"
+        )));
+    };
+    let mut path = base.to_string();
     path.push_str("/worksheets/_rels/");
-    path.push_str(v[1]);
+    path.push_str(file);
     path.push_str(".rels");
     let file = archive.by_name(&path);
     if file.is_err() {
@@ -575,7 +590,7 @@ fn load_sheet_rels<R: Read + std::io::Seek>(
         if t.ends_with("comments") {
             let mut target = get_attribute(&rel, "Target")?.to_string();
             // Target="../comments1.xlsx"
-            target.replace_range(..2, v[0]);
+            replace_relative_prefix(&mut target, base)?;
             comments = load_comments(archive, &target)?;
         } else if t.ends_with("table") {
             let mut target = get_attribute(&rel, "Target")?.to_string();
@@ -584,7 +599,7 @@ fn load_sheet_rels<R: Read + std::io::Seek>(
                 p.to_string()
             } else {
                 // Target="../table1.xlsx"
-                target.replace_range(..2, v[0]);
+                replace_relative_prefix(&mut target, base)?;
                 target
             };
 
@@ -1273,7 +1288,42 @@ pub(super) fn load_sheets<R: Read + std::io::Seek>(
 
 #[cfg(test)]
 mod tests {
-    use crate::import::worksheets::parse_reference;
+    use std::io::Cursor;
+
+    use crate::import::worksheets::{load_sheet_rels, parse_reference};
+    use std::collections::HashMap;
+
+    fn archive_with(parts: &[(&str, &str)]) -> zip::ZipArchive<Cursor<Vec<u8>>> {
+        use std::io::Write;
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, body) in parts {
+            writer
+                .start_file(*name, zip::write::FileOptions::default())
+                .unwrap();
+            writer.write_all(body.as_bytes()).unwrap();
+        }
+        zip::ZipArchive::new(writer.finish().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_sheet_outside_the_worksheets_folder_is_an_error_not_a_panic() {
+        let mut archive = archive_with(&[]);
+        let mut tables = HashMap::new();
+        for path in ["data/s1.xml", "s1.xml", "xl/sheets/s1.xml", ""] {
+            let result = load_sheet_rels(&mut archive, path, &mut tables, "Sheet1");
+            assert!(result.is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_relationship_target_too_short_to_be_relative_is_an_error_not_a_panic() {
+        let rels =
+            "<Relationships><Relationship Type=\"x/comments\" Target=\"a\"/></Relationships>";
+        let mut archive = archive_with(&[("xl/worksheets/_rels/s1.xml.rels", rels)]);
+        let mut tables = HashMap::new();
+        let result = load_sheet_rels(&mut archive, "xl/worksheets/s1.xml", &mut tables, "S");
+        assert!(result.is_err());
+    }
 
     #[test]
     fn parse_reference_works() {
