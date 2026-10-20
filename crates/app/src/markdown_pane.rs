@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use gpui_kit::base::{TextView, h_flex, v_flex};
@@ -18,7 +19,7 @@ use zenkai_i18n::t;
 use crate::interface_scale::rem_px;
 use crate::markdown_depth;
 use crate::markdown_highlight::{LANGUAGE, MarkdownHighlighter};
-use crate::markdown_links::image_path;
+use crate::markdown_links::{self, image_path, vet_image};
 use crate::text_document::{DiskNotice, ViewMode};
 
 const PREVIEW_DELAY: Duration = Duration::from_millis(150);
@@ -26,6 +27,14 @@ const FOLLOW_DELAY: Duration = Duration::from_millis(120);
 const READING_WIDTH: f32 = 860.0;
 const MODES: [ViewMode; 3] = [ViewMode::Source, ViewMode::Split, ViewMode::Preview];
 pub const CONTEXT: &str = "MarkdownDocument";
+
+// The verdict on each image the document names, found off the UI thread: the preview shows an
+// image only once its path has been checked, and nothing is read from disk while drawing.
+type Images = Arc<Mutex<HashMap<PathBuf, Option<PathBuf>>>>;
+
+fn verdicts(images: &Images) -> MutexGuard<'_, HashMap<PathBuf, Option<PathBuf>>> {
+    images.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 pub enum PaneEvent {
     Edited,
@@ -51,6 +60,7 @@ pub struct MarkdownPane {
     focus: FocusHandle,
     preview_stale: bool,
     too_deep: bool,
+    images: Images,
     preview_task: Option<Task<()>>,
     follow_task: Option<Task<()>>,
     followed: usize,
@@ -150,7 +160,7 @@ impl MarkdownPane {
             }
             this.schedule_follow(cx);
         });
-        MarkdownPane {
+        let mut pane = MarkdownPane {
             editor,
             preview,
             mode,
@@ -158,11 +168,44 @@ impl MarkdownPane {
             focus: cx.focus_handle(),
             preview_stale: false,
             too_deep,
+            images: Images::default(),
             preview_task: None,
             follow_task: None,
             followed: 0,
             announced: 0,
             _subscriptions: vec![changes, moves],
+        };
+        pane.vet_images(text, cx);
+        pane
+    }
+
+    fn vet_images(&mut self, text: &str, cx: &mut Context<Self>) {
+        let Some(folder) = self.state.folder.clone() else {
+            return;
+        };
+        for url in markdown_links::image_urls(text) {
+            let Some(path) = image_path(url, Some(&folder)) else {
+                continue;
+            };
+            let mut known = verdicts(&self.images);
+            if known.contains_key(&path) {
+                continue;
+            }
+            known.insert(path.clone(), None);
+            drop(known);
+            let (images, folder) = (self.images.clone(), folder.clone());
+            cx.spawn(async move |this, cx| {
+                let target = path.clone();
+                let real = cx
+                    .background_executor()
+                    .spawn(async move { vet_image(&target, &folder) })
+                    .await;
+                verdicts(&images).insert(path, real);
+                if let Err(error) = this.update(cx, |_, cx| cx.notify()) {
+                    tracing::debug!(%error, "markdown pane closed before an image was checked");
+                }
+            })
+            .detach();
         }
     }
 
@@ -183,7 +226,12 @@ impl MarkdownPane {
     }
 
     pub fn sync(&mut self, state: PaneState, cx: &mut Context<Self>) {
+        let moved = self.state.folder != state.folder;
         self.state = state;
+        if moved {
+            verdicts(&self.images).clear();
+            self.refresh_preview(cx);
+        }
         cx.notify();
     }
 
@@ -245,6 +293,7 @@ impl MarkdownPane {
 
     // Text nested too deeply is not handed to the parser; the pane says so instead.
     fn show_in_preview(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.vet_images(text, cx);
         self.too_deep = markdown_depth::too_deep(text);
         let shown = if self.too_deep { "" } else { text };
         self.preview
@@ -411,6 +460,7 @@ impl MarkdownPane {
     fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.entity().downgrade();
         let folder = self.state.folder.clone();
+        let images = self.images.clone();
         let centered = self.mode == ViewMode::Preview;
         let too_deep = self.too_deep;
         div()
@@ -435,9 +485,12 @@ impl MarkdownPane {
                             .scrollable(true)
                             .image_source(move |uri| {
                                 match image_path(&uri.to_string(), folder.as_deref()) {
-                                    Some(path) => ImageSource::Resource(Resource::Path(Arc::from(
-                                        path.as_path(),
-                                    ))),
+                                    Some(path) => match verdicts(&images).get(&path) {
+                                        Some(Some(real)) => ImageSource::Resource(Resource::Path(
+                                            Arc::from(real.as_path()),
+                                        )),
+                                        _ => blocked_image(),
+                                    },
                                     None => blocked_image(),
                                 }
                             })
