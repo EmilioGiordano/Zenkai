@@ -8,6 +8,7 @@ use zenkai_agent::tools::{
     ToolReply, WorkbookId, WorkingFolder,
 };
 use zenkai_engine::Engine;
+use zenkai_i18n::t;
 
 use super::Workspace;
 use super::agent_calls::Change;
@@ -92,6 +93,12 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if let Some(id) = self.documents.find_by_path(path.path()) {
+            if self.documents.text(id).is_some() {
+                call.respond(Err(ToolError::File(
+                    t!("markdown.agent_refused", name = path.relative().display()).to_string(),
+                )));
+                return;
+            }
             self.switch_to(id, window, cx);
             let sheets = sheet_names(self.documents.get(id));
             call.respond(Ok(opened(id, Opening::AlreadyOpen, &path, sheets)));
