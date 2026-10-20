@@ -315,9 +315,7 @@ impl MarkdownPane {
         self.set_mode(ViewMode::Split, window, cx);
         self.editor
             .update(cx, |editor, cx| editor.insert(typed, window, cx));
-        self.preview_stale = true;
-        self.schedule_preview(cx);
-        cx.emit(PaneEvent::Edited);
+        // `insert` emits the editor's Change event, which marks the edit.
         cx.stop_propagation();
     }
 
