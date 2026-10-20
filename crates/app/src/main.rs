@@ -32,6 +32,7 @@ mod keymap;
 mod language;
 mod logging;
 mod markdown_highlight;
+mod markdown_links;
 mod memory;
 mod palette;
 mod panel_width;
