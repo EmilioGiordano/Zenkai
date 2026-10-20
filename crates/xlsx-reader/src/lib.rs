@@ -421,7 +421,17 @@ fn scan_archive<R: Read + Seek>(
                 .map_err(|e| ReadError::Unreadable(e.to_string()))?;
             entry.name().to_string()
         };
-        if skipped_part(&entry_name) {
+        // Worksheet cells reach IronCalc's reader past this walk, so they are
+        // counted on the same pass and charged to the memory budget cells share
+        // with the streaming reader; anything over refuses the file. A sheet the
+        // package names under a skipped prefix is still a sheet, never skipped.
+        let count_cells = match &package_sheets {
+            Some(sheets) => sheets.contains(&entry_name),
+            None => entry_name
+                .to_ascii_lowercase()
+                .starts_with("xl/worksheets/"),
+        };
+        if skipped_part(&entry_name) && !count_cells {
             let entry = archive
                 .by_index(index)
                 .map_err(|e| ReadError::Unreadable(e.to_string()))?;
@@ -431,15 +441,6 @@ fn scan_archive<R: Read + Seek>(
             inspect(&entry_name, &[])?;
             continue;
         }
-        // Worksheet cells reach IronCalc's reader past this walk, so they are
-        // counted on the same pass and charged to the memory budget cells share
-        // with the streaming reader; anything over refuses the file.
-        let count_cells = match &package_sheets {
-            Some(sheets) => sheets.contains(&entry_name),
-            None => entry_name
-                .to_ascii_lowercase()
-                .starts_with("xl/worksheets/"),
-        };
         let (_, part, usage) = read_part_if_checked(archive, index, meter, budgets, count_cells)?;
         if count_cells {
             budgets.check_importer_usage(usage)?;
@@ -918,6 +919,18 @@ mod tests {
         let workbook = workbook_of(&[("A!B", "rId1")]);
         let rels = rels_of(&[("rId1", "/data/s1.xml")]);
         assert!(archive_with_package(&workbook, &rels, "data/s1.xml"));
+    }
+
+    #[test]
+    fn a_sheet_under_a_skipped_prefix_is_counted_and_an_unnamed_one_is_not() {
+        for prefix in ["drawings", "charts", "media", "pivotCache", "pivotTables"] {
+            let workbook = workbook_of(&[("A", "rId1")]);
+            let rels = rels_of(&[("rId1", &format!("{prefix}/s.xml"))]);
+            let entry = format!("xl/{prefix}/s.xml");
+            assert!(archive_with_package(&workbook, &rels, &entry), "{prefix}");
+            let other = rels_of(&[("rId1", "worksheets/small.xml")]);
+            assert!(!archive_with_package(&workbook, &other, &entry), "{prefix}");
+        }
     }
 
     #[test]
