@@ -546,7 +546,7 @@ fn get_cell_from_excel(
 fn replace_relative_prefix(target: &mut String, base: &str) -> Result<(), XlsxError> {
     if !target.is_char_boundary(2) {
         return Err(XlsxError::Workbook(format!(
-            "The relationship target {target} is not relative to the worksheets folder"
+            "The relationship target {target} cannot hold the relative prefix"
         )));
     }
     target.replace_range(..2, base);
