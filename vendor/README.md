@@ -194,7 +194,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - `UserModel::to_bytes_with_history` and `UserModel::from_bytes_with_history` write and read the 
   workbook together with its undo and redo history, which `to_bytes` leaves out. The dump 
   refuses while an edit group is open or evaluation is paused (`src/user_model/common.rs`).
-  `UserModel::write_with_history` hands the same bytes to a sink one encoded section at a time.
+  `UserModel::write_with_history` hands the same bytes to a sink one encoded section at a time
+  (each part of the workbook and each worksheet on its own, then the two histories), and
+  `UserModel::from_reader_with_history` reads them back one section at a time, so neither side
+  holds the whole dump.
   Stands on its own. Tests: `src/test/user_model/test_bytes_with_history.rs`.
 
 Zenkai-only, not for upstream:

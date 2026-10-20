@@ -72,8 +72,9 @@ fn the_pieces_given_to_a_sink_join_into_the_same_bytes() {
             Ok(())
         })
         .unwrap();
-    // A length and a section for the workbook, the undo history and the redo history.
-    assert_eq!(pieces.len(), 6);
+    // A length and a section for each of the nine parts of the workbook, the sheet count,
+    // the one sheet, the undo history and the redo history.
+    assert_eq!(pieces.len(), 2 * (9 + 1 + 1 + 2));
     assert_eq!(pieces.concat(), model.to_bytes_with_history().unwrap());
 }
 
@@ -87,4 +88,40 @@ fn a_sink_that_fails_stops_the_dump() {
     });
     assert_eq!(result, Err("disk full".to_string()));
     assert_eq!(calls, 1);
+}
+
+#[test]
+fn every_worksheet_and_the_history_come_back_from_a_reader() {
+    let mut model = edited();
+    model.new_sheet().unwrap();
+    model.set_user_input(1, 2, 2, "second sheet").unwrap();
+    let bytes = model.to_bytes_with_history().unwrap();
+    let mut reader = std::io::Cursor::new(&bytes);
+    let mut restored =
+        UserModel::from_reader_with_history(&mut reader, bytes.len() as u64, "en").unwrap();
+    restored.evaluate();
+    assert_eq!(
+        restored.get_formatted_cell_value(1, 2, 2),
+        Ok("second sheet".to_string())
+    );
+    assert_eq!(
+        restored.get_formatted_cell_value(0, 2, 1),
+        Ok("2".to_string())
+    );
+    restored.undo().unwrap();
+    assert_eq!(
+        restored.get_formatted_cell_value(1, 2, 2),
+        Ok("".to_string())
+    );
+}
+
+#[test]
+fn a_reader_with_a_section_past_the_limit_or_extra_bytes_is_an_error() {
+    let bytes = edited().to_bytes_with_history().unwrap();
+    let mut reader = std::io::Cursor::new(&bytes);
+    assert!(UserModel::from_reader_with_history(&mut reader, 8, "en").is_err());
+    let mut longer = bytes.clone();
+    longer.push(0);
+    let mut reader = std::io::Cursor::new(&longer);
+    assert!(UserModel::from_reader_with_history(&mut reader, longer.len() as u64, "en").is_err());
 }

@@ -328,9 +328,11 @@ impl<'a> UserModel<'a> {
     }
 
     /// Hands the bytes of [UserModel::to_bytes_with_history] to `sink` in pieces, so a
-    /// caller writing to a file never holds more than one encoded section (the workbook,
-    /// the undo history or the redo history) at a time. Each section comes as an 8-byte
-    /// little-endian length followed by its bytes.
+    /// caller writing to a file never holds more than one encoded section at a time. The
+    /// sections are each part of the workbook (shared strings, names, styles, the
+    /// settings and so on, then the number of worksheets and every worksheet on its own),
+    /// the undo history and the redo history. Each comes as an 8-byte little-endian length
+    /// followed by its bytes.
     pub fn write_with_history(
         &self,
         sink: &mut dyn FnMut(&[u8]) -> Result<(), String>,
@@ -338,17 +340,39 @@ impl<'a> UserModel<'a> {
         if self.edit_group.is_some() || self.pause_evaluation {
             return Err("the model is in the middle of an edit".to_string());
         }
-        let sections: [&dyn Fn() -> Vec<u8>; 3] = [
-            &|| bitcode::encode(&self.model.workbook),
-            &|| bitcode::encode(&self.history.undo_stack),
-            &|| bitcode::encode(&self.history.redo_stack),
-        ];
-        for encode in sections {
-            let section = encode();
+        // Taken apart field by field, so a field added upstream fails to build here
+        // instead of going missing from the dump.
+        let Workbook {
+            shared_strings,
+            defined_names,
+            worksheets,
+            styles,
+            name,
+            settings,
+            metadata,
+            tables,
+            views,
+            theme,
+        } = &self.model.workbook;
+        let mut put = |section: Vec<u8>| -> Result<(), String> {
             sink(&(section.len() as u64).to_le_bytes())?;
-            sink(&section)?;
+            sink(&section)
+        };
+        put(bitcode::encode(shared_strings))?;
+        put(bitcode::encode(defined_names))?;
+        put(bitcode::encode(styles))?;
+        put(bitcode::encode(name))?;
+        put(bitcode::encode(settings))?;
+        put(bitcode::encode(metadata))?;
+        put(bitcode::encode(tables))?;
+        put(bitcode::encode(views))?;
+        put(bitcode::encode(theme))?;
+        put(bitcode::encode(&(worksheets.len() as u64)))?;
+        for worksheet in worksheets {
+            put(bitcode::encode(worksheet))?;
         }
-        Ok(())
+        put(bitcode::encode(&self.history.undo_stack))?;
+        put(bitcode::encode(&self.history.redo_stack))
     }
 
     /// Creates a model from the bytes of [UserModel::to_bytes_with_history], with the
@@ -357,18 +381,52 @@ impl<'a> UserModel<'a> {
         s: &[u8],
         language_id: &'a str,
     ) -> Result<UserModel<'a>, String> {
-        let (workbook, rest) = next_section(s)?;
-        let (undo_stack, rest) = next_section(rest)?;
-        let (redo_stack, rest) = next_section(rest)?;
-        if !rest.is_empty() {
-            return Err("Error parsing workbook: trailing bytes".to_string());
+        Self::from_reader_with_history(&mut &s[..], s.len() as u64, language_id)
+    }
+
+    /// Reads the sections of [UserModel::write_with_history] from `reader` one at a time,
+    /// dropping each encoded section before reading the next. No section may be longer
+    /// than `limit` bytes (the size of the dump is a good one), and the reader must end
+    /// with the last section.
+    pub fn from_reader_with_history(
+        reader: &mut dyn std::io::Read,
+        limit: u64,
+        language_id: &'a str,
+    ) -> Result<UserModel<'a>, String> {
+        let shared_strings = read_section(reader, limit)?;
+        let defined_names = read_section(reader, limit)?;
+        let styles = read_section(reader, limit)?;
+        let name = read_section(reader, limit)?;
+        let settings = read_section(reader, limit)?;
+        let metadata = read_section(reader, limit)?;
+        let tables = read_section(reader, limit)?;
+        let views = read_section(reader, limit)?;
+        let theme = read_section(reader, limit)?;
+        let count: u64 = read_section(reader, limit)?;
+        let mut worksheets = Vec::new();
+        for _ in 0..count {
+            worksheets.push(read_section(reader, limit)?);
         }
-        let workbook: Workbook =
-            bitcode::decode(workbook).map_err(|e| format!("Error parsing workbook: {e}"))?;
-        let undo_stack: Vec<DiffList> =
-            bitcode::decode(undo_stack).map_err(|e| format!("Error parsing undo history: {e}"))?;
-        let redo_stack: Vec<DiffList> =
-            bitcode::decode(redo_stack).map_err(|e| format!("Error parsing redo history: {e}"))?;
+        let undo_stack: Vec<DiffList> = read_section(reader, limit)?;
+        let redo_stack: Vec<DiffList> = read_section(reader, limit)?;
+        let mut extra = [0u8; 1];
+        match reader.read(&mut extra) {
+            Ok(0) => {}
+            Ok(_) => return Err("Error parsing workbook: trailing bytes".to_string()),
+            Err(e) => return Err(format!("Error reading workbook: {e}")),
+        }
+        let workbook = Workbook {
+            shared_strings,
+            defined_names,
+            worksheets,
+            styles,
+            name,
+            settings,
+            metadata,
+            tables,
+            views,
+            theme,
+        };
         let model = Model::from_workbook(workbook, language_id)?;
         Ok(UserModel {
             model,
@@ -983,9 +1041,7 @@ impl<'a> UserModel<'a> {
                 return Err("Every area must lie inside the bounds".to_string());
             }
             if !self.model.arrays_inside(area, bounds)? {
-                return Err(
-                    "Cannot clear the range because it contains array formulas".to_string()
-                );
+                return Err("Cannot clear the range because it contains array formulas".to_string());
             }
         }
         if areas.is_empty() {
@@ -2427,13 +2483,25 @@ impl<'a> UserModel<'a> {
     }
 }
 
-// Splits off the first length-prefixed section of `bytes`.
-fn next_section(bytes: &[u8]) -> Result<(&[u8], &[u8]), String> {
-    let truncated = || "Error parsing workbook: truncated".to_string();
-    let (length, rest) = bytes.split_at_checked(8).ok_or_else(truncated)?;
-    let length = u64::from_le_bytes(length.try_into().map_err(|_| truncated())?);
-    let length = usize::try_from(length).map_err(|_| truncated())?;
-    rest.split_at_checked(length).ok_or_else(truncated)
+// Reads and decodes the next length-prefixed section; its bytes are freed on return.
+fn read_section<T: bitcode::DecodeOwned>(
+    reader: &mut dyn std::io::Read,
+    limit: u64,
+) -> Result<T, String> {
+    let mut length = [0u8; 8];
+    reader
+        .read_exact(&mut length)
+        .map_err(|e| format!("Error reading workbook: {e}"))?;
+    let length = u64::from_le_bytes(length);
+    if length > limit {
+        return Err("Error parsing workbook: a section is longer than the dump".to_string());
+    }
+    let length = usize::try_from(length).map_err(|e| format!("Error parsing workbook: {e}"))?;
+    let mut bytes = vec![0u8; length];
+    reader
+        .read_exact(&mut bytes)
+        .map_err(|e| format!("Error reading workbook: {e}"))?;
+    bitcode::decode(&bytes).map_err(|e| format!("Error parsing workbook: {e}"))
 }
 
 #[cfg(test)]
