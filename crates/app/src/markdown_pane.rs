@@ -14,7 +14,7 @@ use zenkai_i18n::t;
 use crate::interface_scale::rem_px;
 use crate::markdown_depth;
 use crate::markdown_highlight::{LANGUAGE, MarkdownHighlighter};
-use crate::markdown_links::image_path;
+use crate::markdown_images::image_path;
 use crate::text_disk::DiskNotice;
 use crate::text_document::ViewMode;
 

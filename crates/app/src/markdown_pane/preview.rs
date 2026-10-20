@@ -12,7 +12,7 @@ use gpui_kit::*;
 
 use super::MarkdownPane;
 use crate::markdown_depth;
-use crate::markdown_links::{self, image_path, vet_image};
+use crate::markdown_images::{image_path, image_urls, vet_image};
 use crate::text_document::ViewMode;
 
 const PREVIEW_DELAY: Duration = Duration::from_millis(150);
@@ -82,7 +82,7 @@ impl MarkdownPane {
         let Some(folder) = self.state.folder.clone() else {
             return;
         };
-        for url in markdown_links::image_urls(text) {
+        for url in image_urls(text) {
             let Some(path) = image_path(url, Some(&folder)) else {
                 continue;
             };
