@@ -8,6 +8,7 @@ mod error;
 mod file;
 mod fingerprint;
 mod held;
+mod hibernation;
 mod model;
 mod preflight;
 mod rectangles;
