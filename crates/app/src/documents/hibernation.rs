@@ -8,6 +8,7 @@ use super::test_support::*;
 use super::{Documents, Dumped, Loaded, Provenance};
 use crate::document::{self, FileJob};
 use crate::entry::Entry;
+use crate::pending_save::{AfterJob, JobEnd};
 
 fn cell(workbook: &Workbook) -> String {
     workbook.cell(SheetId(0), CellPos::default()).text
@@ -112,8 +113,30 @@ fn a_save_pressed_while_the_dump_is_written_keeps_the_workbook_in_memory() {
     let (mut documents, id, dir) = with_unsaved_work();
     let (dumped, _) = dump_of(&mut documents, id, &dir).unwrap();
     documents.get_mut(id).unwrap().request_save();
+    let generation = dumped.generation;
     assert!(!documents.finish_hibernation(id, dumped));
     assert!(documents.get(id).unwrap().has_pending_save());
+    let document = documents.get_mut(id).unwrap();
+    assert_eq!(
+        document.settle_save(generation, JobEnd::Autosaved),
+        AfterJob::SaveAgain
+    );
+    assert!(!document.has_pending_save());
+}
+
+#[test]
+fn a_save_pressed_while_a_failed_dump_is_written_is_still_owed() {
+    let (mut documents, id, _dir) = with_unsaved_work();
+    let claim = documents.begin_hibernation(id).unwrap();
+    documents.get_mut(id).unwrap().request_save();
+    documents.abandon_hibernation(id, claim.generation, true);
+    let document = documents.get_mut(id).unwrap();
+    assert!(document.has_pending_save());
+    assert_eq!(
+        document.settle_save(claim.generation, JobEnd::Autosaved),
+        AfterJob::SaveAgain
+    );
+    assert!(!document.has_pending_save());
 }
 
 #[test]

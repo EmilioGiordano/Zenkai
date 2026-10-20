@@ -391,7 +391,7 @@ impl Workspace {
                 crate::tray::note_visibility(visibility, cx)
             }),
         );
-        workspace.start_memory_sampler(cx);
+        workspace.start_memory_sampler(window, cx);
         workspace.start_session(initial, window, cx);
         workspace.load_recent(cx);
         workspace

@@ -8,22 +8,23 @@ use super::{Severity, Workspace};
 use crate::document;
 use crate::documents::{Dumped, Hibernating};
 use crate::memory::{self, Candidate, Resting};
+use crate::pending_save::{AfterJob, JobEnd};
 use crate::recovery;
 
 const SAMPLE_EVERY: Duration = Duration::from_secs(1);
 
 impl Workspace {
-    pub(super) fn start_memory_sampler(&mut self, cx: &mut Context<Self>) {
-        self.memory_sampler = Some(cx.spawn(async move |this, cx| {
+    pub(super) fn start_memory_sampler(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.memory_sampler = Some(cx.spawn_in(window, async move |this, cx| {
             loop {
                 if let Some(memory_mb) = memory::current_committed_mb() {
-                    let update = this.update(cx, |this, cx| {
+                    let update = this.update_in(cx, |this, window, cx| {
                         this.memory_mb = memory_mb;
                         if this.sidebar.visible || this.diagnostics {
                             cx.notify();
                         }
-                        this.enforce_memory_budget(cx);
-                        this.rest_while_away(cx);
+                        this.enforce_memory_budget(window, cx);
+                        this.rest_while_away(window, cx);
                     });
                     if update.is_err() {
                         break;
@@ -66,7 +67,7 @@ impl Workspace {
             .collect()
     }
 
-    fn enforce_memory_budget(&mut self, cx: &mut Context<Self>) {
+    fn enforce_memory_budget(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.memory_mb <= self.memory_budget_mb {
             return;
         }
@@ -79,12 +80,12 @@ impl Workspace {
             &candidates,
         );
         if let Some((id, resting)) = chosen {
-            self.rest(id, resting, cx);
+            self.rest(id, resting, window, cx);
         }
     }
 
     // The window hidden in the tray for a long time with workbooks nobody touched since.
-    fn rest_while_away(&mut self, cx: &mut Context<Self>) {
+    fn rest_while_away(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if crate::tray::hidden_to_tray(cx) {
             self.hidden_since.get_or_insert_with(Instant::now);
         } else {
@@ -96,14 +97,20 @@ impl Workspace {
         if let Some((id, resting)) =
             memory::next_when_away(hidden_for, Instant::now(), since_last, &candidates)
         {
-            self.rest(id, resting, cx);
+            self.rest(id, resting, window, cx);
         }
     }
 
-    fn rest(&mut self, id: WorkbookId, resting: Resting, cx: &mut Context<Self>) {
+    fn rest(
+        &mut self,
+        id: WorkbookId,
+        resting: Resting,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match resting {
             Resting::Unload => self.unload_workbook(id, cx),
-            Resting::Hibernate => self.begin_hibernation(id, cx),
+            Resting::Hibernate => self.begin_hibernation(id, window, cx),
         }
     }
 
@@ -130,7 +137,7 @@ impl Workspace {
         }
     }
 
-    fn begin_hibernation(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
+    fn begin_hibernation(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(directory) = self.recovery_dir.clone() else {
             return;
         };
@@ -146,7 +153,7 @@ impl Workspace {
         self.last_unload = Some(Instant::now());
         let dump = recovery::dump_file(&directory, id);
         let recovery_copy = recovery::document_file(&directory, id);
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let written = cx
                 .background_executor()
                 .spawn({
@@ -154,7 +161,7 @@ impl Workspace {
                     async move { document::write_hibernation(&workbook, &dump) }
                 })
                 .await;
-            let update = this.update(cx, |this, cx| {
+            let update = this.update_in(cx, |this, window, cx| {
                 this.hibernating = None;
                 match written {
                     Ok(kept) => {
@@ -176,12 +183,30 @@ impl Workspace {
                         }
                     }
                 }
+                this.settle_save_after_hibernation(id, generation, window, cx);
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed while a workbook was hibernating");
             }
         })
         .detach();
+    }
+
+    // A Save pressed while the workbook was being written waits for the job, and the job is
+    // over now whether the workbook left memory or not.
+    fn settle_save_after_hibernation(
+        &mut self,
+        id: WorkbookId,
+        generation: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(document) = self.documents.get_mut(id) else {
+            return;
+        };
+        if document.settle_save(generation, JobEnd::Autosaved) == AfterJob::SaveAgain {
+            self.save_again(id, window, cx);
+        }
     }
 
     // The dump is on disk and was checked. If the workbook changed or came back on screen in
