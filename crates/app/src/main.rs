@@ -31,6 +31,7 @@ mod jump;
 mod keymap;
 mod language;
 mod logging;
+mod markdown_highlight;
 mod memory;
 mod palette;
 mod panel_width;
