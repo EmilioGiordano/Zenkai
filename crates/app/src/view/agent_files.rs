@@ -93,7 +93,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if let Some(id) = self.documents.find_by_path(path.path()) {
-            if self.documents.is_text_at(path.path()) {
+            if self
+                .documents
+                .entry(id)
+                .is_some_and(|entry| entry.kind().is_text())
+            {
                 call.respond(Err(ToolError::File(
                     t!("markdown.agent_refused", name = path.relative().display()).to_string(),
                 )));

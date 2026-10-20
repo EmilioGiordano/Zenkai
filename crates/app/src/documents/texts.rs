@@ -99,13 +99,6 @@ impl Documents {
         self.wanted = None;
     }
 
-    // Whether the tab or link at this path is a text document, loaded or not.
-    pub fn is_text_at(&self, path: &Path) -> bool {
-        self.find_by_path(path)
-            .and_then(|id| self.entry(id))
-            .is_some_and(|entry| entry.kind().is_text())
-    }
-
     pub fn set_mode(&mut self, id: WorkbookId, mode: ViewMode) {
         if let Some(text) = self.text_mut(id) {
             text.mode = mode;
@@ -363,17 +356,22 @@ mod tests {
     }
 
     #[test]
-    fn a_path_is_a_text_whether_its_tab_is_loaded_or_still_a_link() {
+    fn the_kind_of_an_entry_found_by_path_tells_a_text_loaded_or_still_a_link() {
         let mut documents = documents();
         let link = restored_text(&mut documents, false);
-        let loaded = open_text(&mut documents, "a.md");
-        let book = open_file(&mut documents, "b.xlsx");
-        assert!(documents.is_text_at(Path::new("a.md")));
-        assert!(documents.is_text_at(Path::new("plan.md")));
+        open_text(&mut documents, "a.md");
+        open_file(&mut documents, "b.xlsx");
+        let kind_at = |documents: &Documents, path: &str| {
+            documents
+                .find_by_path(Path::new(path))
+                .and_then(|id| documents.entry(id))
+                .map(Entry::kind)
+        };
         assert!(matches!(documents.entry(link), Some(Entry::Link(_))));
-        assert!(!documents.is_text_at(Path::new("b.xlsx")));
-        assert!(!documents.is_text_at(Path::new("none.md")));
-        assert!(documents.entry(loaded).is_some() && documents.entry(book).is_some());
+        assert_eq!(kind_at(&documents, "plan.md"), Some(DocumentKind::Markdown));
+        assert_eq!(kind_at(&documents, "a.md"), Some(DocumentKind::Markdown));
+        assert_eq!(kind_at(&documents, "b.xlsx"), Some(DocumentKind::Workbook));
+        assert_eq!(kind_at(&documents, "none.md"), None);
     }
 
     #[test]
