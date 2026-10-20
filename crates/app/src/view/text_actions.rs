@@ -1,4 +1,3 @@
-use gpui_kit::component::input::{Replace as EditorReplace, Search as EditorSearch};
 use gpui_kit::*;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
@@ -69,19 +68,7 @@ impl Workspace {
         };
         self.palette = None;
         self.revert_theme_preview(cx);
-        pane.update(cx, |pane, cx| pane.show_source(window, cx));
-        let editor = pane.read(cx).editor_focus(cx);
-        // The source may only just have been shown: the action goes out once the frame that
-        // draws it is done, when the editor is in the tree the action travels through.
-        let action: Box<dyn Action> = if replace {
-            EditorReplace.boxed_clone()
-        } else {
-            EditorSearch.boxed_clone()
-        };
-        window.on_next_frame(move |window, cx| {
-            window.focus(&editor, cx);
-            window.dispatch_action(action, cx);
-        });
+        pane.update(cx, |pane, cx| pane.open_find(replace, window, cx));
         true
     }
 }

@@ -178,8 +178,13 @@ impl MarkdownPane {
         }
     }
 
-    pub fn editor_focus(&self, cx: &App) -> FocusHandle {
-        self.editor.read(cx).focus_handle(cx)
+    // Find and Replace belong to the editor, so they are asked of it directly rather than by a
+    // key action that would have to find the editor in a frame that may not have drawn it yet.
+    pub fn open_find(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_source(window, cx);
+        self.focus(window, cx);
+        self.editor
+            .update(cx, |editor, cx| editor.open_search(replace, cx));
     }
 
     fn type_in_preview(
