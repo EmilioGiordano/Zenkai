@@ -181,8 +181,22 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
         let bytes = read_part_to_peek(entry, meter, name, budgets).ok()?;
         String::from_utf8(bytes).ok()
     };
-    let workbook = peek("xl/workbook.xml")?;
-    let workbook = roxmltree::Document::parse(&workbook).ok()?;
+    // The workbook's DOM is gone before the rels' is built, so the two never coexist.
+    let sheet_ids: Vec<String> = {
+        let workbook = peek("xl/workbook.xml")?;
+        let workbook = roxmltree::Document::parse(&workbook).ok()?;
+        workbook
+            .descendants()
+            .filter(|n| n.has_tag_name("sheet"))
+            .filter_map(|node| {
+                node.attribute((
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                    "id",
+                ))
+                .map(str::to_string)
+            })
+            .collect()
+    };
     let rels = peek("xl/_rels/workbook.xml.rels")?;
     let rels = roxmltree::Document::parse(&rels).ok()?;
     let mut targets = HashMap::new();
@@ -200,12 +214,8 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
         }
     }
     let mut paths = HashSet::new();
-    for node in workbook.descendants().filter(|n| n.has_tag_name("sheet")) {
-        let id = node.attribute((
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
-            "id",
-        ));
-        if let Some((kind, target)) = id.and_then(|id| targets.get(id))
+    for id in &sheet_ids {
+        if let Some((kind, target)) = targets.get(id.as_str())
             && kind.ends_with("worksheet")
         {
             paths.insert(part_path(target));
