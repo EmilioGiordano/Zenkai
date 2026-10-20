@@ -29,7 +29,7 @@ struct Probe {
 #[derive(Clone, Copy)]
 enum Reload {
     // Nothing is asked: it happens only to a text that has no edits of its own.
-    Quiet { edits: u64 },
+    Quiet { edits: u64, seen: Option<Stamp> },
     Chosen,
 }
 
@@ -104,10 +104,13 @@ impl Workspace {
             _ => text_file::disk_change(text.stamp, now),
         };
         let edits = text.edit_count();
+        if change == DiskChange::Changed && now.is_some() && text.reload_failed_at == now {
+            return;
+        }
         match text_file::react(change, text.dirty) {
             Reaction::Nothing => {}
             Reaction::ReloadQuietly => {
-                self.reload_text_from_disk(id, Reload::Quiet { edits }, window, cx)
+                self.reload_text_from_disk(id, Reload::Quiet { edits, seen: now }, window, cx)
             }
             Reaction::OfferReload => self.set_text_notice(id, DiskNotice::ChangedWithEdits, cx),
             Reaction::KeepAndMarkDeleted => self.set_text_notice(id, DiskNotice::Deleted, cx),
@@ -194,7 +197,7 @@ impl Workspace {
         let Some(text) = self.documents.text(id) else {
             return;
         };
-        if let Reload::Quiet { edits } = how
+        if let Reload::Quiet { edits, .. } = how
             && (text.dirty || text.edit_count() != edits)
         {
             return;
@@ -227,7 +230,14 @@ impl Workspace {
                 );
             }
             Err(ReadError::Missing) => self.set_text_notice(id, DiskNotice::Deleted, cx),
-            Err(error) => self.notify(Severity::Error, error.to_string(), cx),
+            Err(error) => {
+                if let Reload::Quiet { seen, .. } = how
+                    && let Some(text) = self.documents.text_mut(id)
+                {
+                    text.reload_failed_at = seen;
+                }
+                self.notify(Severity::Error, error.to_string(), cx);
+            }
         }
     }
 

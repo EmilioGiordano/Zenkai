@@ -124,6 +124,8 @@ pub struct TextDocument {
     pub stamp: Option<Stamp>,
     // Bumped whenever `stamp` is set, so a poll of the file that started earlier is ignored.
     pub stamp_epoch: u64,
+    // The disk stamp a quiet reload failed on, so the same failure is told once.
+    pub reload_failed_at: Option<Stamp>,
     pub notice: DiskNotice,
     pub writing: Writing,
     edit_count: u64,
@@ -154,6 +156,7 @@ impl TextDocument {
             format: Format::default(),
             stamp: None,
             stamp_epoch: 0,
+            reload_failed_at: None,
             notice: DiskNotice::None,
             writing: Writing::Idle,
             edit_count: 0,
@@ -209,6 +212,7 @@ impl TextDocument {
     // The editor holds the file's text again, with the history dropped.
     pub fn reloaded(&mut self, stamp: Option<Stamp>) {
         self.set_stamp(stamp);
+        self.reload_failed_at = None;
         self.dirty = false;
         self.notice = DiskNotice::None;
         self.edit_count += 1;
