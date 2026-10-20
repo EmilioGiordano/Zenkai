@@ -116,6 +116,36 @@ fn every_worksheet_and_the_history_come_back_from_a_reader() {
 }
 
 #[test]
+fn a_worksheet_count_the_dump_cannot_hold_is_refused_before_reading_them() {
+    let mut bytes = Vec::new();
+    let mut section = |content: Vec<u8>| {
+        bytes.extend_from_slice(&(content.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&content);
+    };
+    let model = edited();
+    let mut whole = Vec::new();
+    model
+        .write_with_history(&mut |chunk| {
+            whole.extend_from_slice(chunk);
+            Ok(())
+        })
+        .unwrap();
+    // The nine parts of the workbook, then a count of a billion worksheets and nothing more.
+    let mut rest = &whole[..];
+    for _ in 0..9 {
+        let length = u64::from_le_bytes(rest[..8].try_into().unwrap()) as usize;
+        section(rest[8..8 + length].to_vec());
+        rest = &rest[8 + length..];
+    }
+    section(bitcode::encode(&1_000_000_000u64));
+    let mut reader = std::io::Cursor::new(&bytes);
+    let error = UserModel::from_reader_with_history(&mut reader, bytes.len() as u64, "en")
+        .err()
+        .unwrap();
+    assert!(error.contains("more worksheets"), "{error}");
+}
+
+#[test]
 fn a_reader_with_a_section_past_the_limit_or_extra_bytes_is_an_error() {
     let bytes = edited().to_bytes_with_history().unwrap();
     let mut reader = std::io::Cursor::new(&bytes);

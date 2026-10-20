@@ -403,6 +403,11 @@ impl<'a> UserModel<'a> {
         let views = read_section(reader, limit)?;
         let theme = read_section(reader, limit)?;
         let count: u64 = read_section(reader, limit)?;
+        // Every worksheet takes at least the 8 bytes of its length, so a count the dump cannot
+        // hold is refused before anything is allocated for it.
+        if count > limit / 8 {
+            return Err("Error parsing workbook: more worksheets than the dump can hold".to_string());
+        }
         let mut worksheets = Vec::new();
         for _ in 0..count {
             worksheets.push(read_section(reader, limit)?);
