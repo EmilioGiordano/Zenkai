@@ -8,8 +8,10 @@ use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, WorkbookId};
 
 use crate::entry::{Link, LinkStatus};
 use crate::panel_width::PanelWidths;
+use crate::recovery;
 use crate::space_appearance::{SpaceAppearance, SpaceOverride};
 use crate::spaces::{SpaceColor, SpaceId};
+use crate::text_document::{DocumentKind, ViewMode};
 
 const VERSION: u32 = 1;
 const FILE_NAME: &str = "session.json";
@@ -50,6 +52,10 @@ pub struct FileRecord {
     pub untitled: u32,
     pub dirty: bool,
     pub read_only: bool,
+    #[serde(default)]
+    pub kind: DocumentKind,
+    #[serde(default)]
+    pub mode: ViewMode,
     pub unsupported: Vec<String>,
     pub active: bool,
     pub sheet: u32,
@@ -226,6 +232,8 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         untitled: link.untitled,
         dirty: link.dirty,
         read_only: link.read_only,
+        kind: link.kind,
+        mode: link.mode,
         unsupported: link
             .unsupported
             .iter()
@@ -237,7 +245,7 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
     }
 }
 
-// Only a plain `autosave-*.xlsx` name is trusted, so a tampered session cannot point the
+// Only a plain `autosave-*` name with a recovery extension is trusted, so a tampered session cannot point the
 // recovery machinery (which moves and deletes these files) at any other file.
 fn recovery_name(name: &str) -> Option<&str> {
     let mut parts = Path::new(name).components();
@@ -245,8 +253,11 @@ fn recovery_name(name: &str) -> Option<&str> {
         return None;
     };
     let plain = parts.next().is_none() && only.to_str() == Some(name);
-    (plain && name.starts_with("autosave-") && name.ends_with(".xlsx") && !name.contains(':'))
-        .then_some(name)
+    (plain
+        && name.starts_with("autosave-")
+        && recovery::has_recovery_extension(name)
+        && !name.contains(':'))
+    .then_some(name)
 }
 
 // A guard code this version does not know forces Save As, the safe side of the doubt.
@@ -282,6 +293,8 @@ pub fn link_of(
         size: None,
         status: LinkStatus::NotLoaded,
         origin: None,
+        kind: record.kind,
+        mode: record.mode,
     }
 }
 
@@ -354,6 +367,8 @@ mod tests {
             untitled: 0,
             dirty: true,
             read_only: false,
+            kind: Default::default(),
+            mode: Default::default(),
             unsupported: vec!["charts".to_string(), "macros".to_string()],
             active: true,
             sheet: 2,
@@ -567,6 +582,51 @@ mod tests {
         }
         let honest = link_of(&record(), WorkbookId(0), SpaceId(0), Some(directory));
         assert!(!honest.recovery_lost);
+    }
+
+    #[test]
+    fn a_record_written_before_documents_had_a_kind_is_a_workbook_in_preview() {
+        let mut value = serde_json::to_value(record()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("kind");
+        object.remove("mode");
+        let old: FileRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(old.kind, DocumentKind::Workbook);
+        assert_eq!(old.mode, ViewMode::Preview);
+    }
+
+    #[test]
+    fn a_markdown_record_keeps_its_kind_and_mode_through_a_link_and_back() {
+        let mut text = record();
+        text.path = Some("C:\\notes\\plan.md".to_string());
+        text.recovery = Some("autosave-1-2-3.md".to_string());
+        text.kind = DocumentKind::Markdown;
+        text.mode = ViewMode::Split;
+        text.unsupported.clear();
+        text.sheet = 0;
+        let directory = Path::new("recovery");
+        let link = link_of(&text, WorkbookId(4), SpaceId(0), Some(directory));
+        assert_eq!(link.kind, DocumentKind::Markdown);
+        assert_eq!(link.mode, ViewMode::Split);
+        assert_eq!(link.recovery, Some(directory.join("autosave-1-2-3.md")));
+        assert_eq!(record_of(&link, true), text);
+    }
+
+    #[test]
+    fn a_recovery_name_with_the_text_extension_is_trusted_only_in_its_plain_form() {
+        assert_eq!(
+            recovery_name("autosave-1-2-3.md"),
+            Some("autosave-1-2-3.md")
+        );
+        for name in [
+            "autosave-1.md:stream",
+            "notes.md",
+            "..\\autosave-1.md",
+            "sub/autosave-1.md",
+            "autosave-1.markdown",
+        ] {
+            assert_eq!(recovery_name(name), None, "{name}");
+        }
     }
 
     #[test]

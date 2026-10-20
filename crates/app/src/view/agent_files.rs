@@ -17,6 +17,7 @@ use crate::agent_settings;
 use crate::document::Document;
 use crate::entry::display_name;
 use crate::files::{self, FileLoad};
+use crate::text_document::ViewMode;
 
 fn sheet_names(document: Option<&Document>) -> Vec<String> {
     document.map_or_else(Vec::new, |document| {
@@ -190,11 +191,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Vec<FileCard> {
         let mut cards = Vec::new();
+        let mode = ViewMode::default();
         for file in found {
             if self.documents.find_by_path(&file.path).is_some() {
                 continue;
             }
-            self.documents.add_link(file.path.clone(), Some(file.size));
+            self.documents
+                .add_link(file.path.clone(), Some(file.size), mode);
             cards.push(FileCard {
                 name: display_name(Some(&file.path), 0),
                 place: self.place_in_space(&file.relative),

@@ -13,7 +13,7 @@ pub fn target(documents: &Documents, id: WorkbookId) -> Result<&Document, ToolEr
     match documents.entry(id) {
         Some(Entry::Loaded(document)) => Ok(document),
         Some(Entry::Link(_)) => Err(ToolError::NotLoaded(id)),
-        None => Err(ToolError::UnknownWorkbook(id)),
+        Some(Entry::Text(_)) | None => Err(ToolError::UnknownWorkbook(id)),
     }
 }
 

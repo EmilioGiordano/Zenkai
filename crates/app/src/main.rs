@@ -53,6 +53,7 @@ mod spaces;
 mod stale_view;
 mod start_view;
 mod stats;
+mod text_document;
 mod text_file;
 mod theme;
 mod theme_list;

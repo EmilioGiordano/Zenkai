@@ -104,6 +104,8 @@ mod tests {
             untitled: 0,
             dirty: false,
             read_only: false,
+            kind: Default::default(),
+            mode: Default::default(),
             unsupported: Vec::new(),
             active: false,
             sheet: 0,

@@ -10,6 +10,7 @@ use super::test_support::documents;
 use crate::entry::Entry;
 use crate::session::{self, FileRecord, Loaded, Session, SpaceRecord, ViewRecord};
 use crate::space_appearance::SpaceAppearance;
+use crate::text_document::{DocumentKind, ViewMode};
 
 fn file(path: Option<&str>, recovery: Option<&str>, active: bool) -> FileRecord {
     FileRecord {
@@ -18,6 +19,8 @@ fn file(path: Option<&str>, recovery: Option<&str>, active: bool) -> FileRecord 
         untitled: u32::from(path.is_none()),
         dirty: recovery.is_some(),
         read_only: false,
+        kind: Default::default(),
+        mode: Default::default(),
         unsupported: vec!["charts".to_string(), "macros".to_string()],
         active,
         sheet: 1,
@@ -29,6 +32,15 @@ fn file(path: Option<&str>, recovery: Option<&str>, active: bool) -> FileRecord 
             top: 5,
             left: 0,
         },
+    }
+}
+
+fn text_file(path: &str, recovery: Option<&str>) -> FileRecord {
+    FileRecord {
+        kind: DocumentKind::Markdown,
+        mode: ViewMode::Split,
+        unsupported: Vec::new(),
+        ..file(Some(path), recovery, false)
     }
 }
 
@@ -48,6 +60,8 @@ fn baseline() -> serde_json::Value {
                 vec![
                     file(Some("C:/work/a.xlsx"), Some("autosave-1-2-3.xlsx"), true),
                     file(Some("C:/work/b.xlsx"), None, false),
+                    text_file("C:/work/notes.md", Some("autosave-1-2-5.md")),
+                    text_file("C:/work/plan.markdown", None),
                 ],
             ),
             space(
@@ -68,7 +82,7 @@ fn check_restored(session: &Session) {
         if let Some(copy) = &link.recovery {
             let name = copy.file_name().unwrap().to_string_lossy();
             assert_eq!(copy.parent(), Some(recovery_dir), "{copy:?}");
-            assert!(name.starts_with("autosave-") && name.ends_with(".xlsx"));
+            assert!(name.starts_with("autosave-") && crate::recovery::has_recovery_extension(&name));
             assert!(!name.contains(':') && !name.chars().any(std::path::is_separator));
         }
     }

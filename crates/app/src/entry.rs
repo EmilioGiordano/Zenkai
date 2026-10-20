@@ -8,6 +8,7 @@ use zenkai_types::{SheetId, WorkbookId};
 
 use crate::document::{Document, FileJob};
 use crate::spaces::SpaceId;
+use crate::text_document::{DocumentKind, TextDocument, ViewMode, text_name};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkStatus {
@@ -35,6 +36,8 @@ pub struct Link {
     pub recovery_lost: bool,
     // Known once the workbook has been loaded; a link restored from a session works it out on load.
     pub origin: Option<FileOrigin>,
+    pub kind: DocumentKind,
+    pub mode: ViewMode,
 }
 
 pub fn display_name(path: Option<&Path>, untitled: u32) -> String {
@@ -46,13 +49,17 @@ pub fn display_name(path: Option<&Path>, untitled: u32) -> String {
 
 impl Link {
     pub fn name(&self) -> String {
-        display_name(self.path.as_deref(), self.untitled)
+        match self.kind {
+            DocumentKind::Workbook => display_name(self.path.as_deref(), self.untitled),
+            DocumentKind::Markdown => text_name(self.path.as_deref(), self.untitled),
+        }
     }
 }
 
 // What the list stores for a workbook that is not on screen.
 pub enum Slot {
     Loaded(Box<Document>),
+    Text(Box<TextDocument>),
     Link(Link),
 }
 
@@ -60,6 +67,7 @@ pub enum Slot {
 #[derive(Clone, Copy)]
 pub enum Entry<'a> {
     Loaded(&'a Document),
+    Text(&'a TextDocument),
     Link(&'a Link),
 }
 
@@ -67,6 +75,7 @@ impl Slot {
     pub fn as_entry(&self) -> Entry<'_> {
         match self {
             Slot::Loaded(document) => Entry::Loaded(document),
+            Slot::Text(text) => Entry::Text(text),
             Slot::Link(link) => Entry::Link(link),
         }
     }
@@ -76,12 +85,13 @@ impl Slot {
     }
 
     pub fn is_loaded(&self) -> bool {
-        matches!(self, Slot::Loaded(_))
+        matches!(self, Slot::Loaded(_) | Slot::Text(_))
     }
 
     pub fn set_space(&mut self, space: SpaceId) {
         match self {
             Slot::Loaded(document) => document.space = space,
+            Slot::Text(text) => text.space = space,
             Slot::Link(link) => link.space = space,
         }
     }
@@ -89,7 +99,7 @@ impl Slot {
     pub fn loaded_mut(&mut self) -> Option<&mut Document> {
         match self {
             Slot::Loaded(document) => Some(document),
-            Slot::Link(_) => None,
+            Slot::Text(_) | Slot::Link(_) => None,
         }
     }
 }
@@ -98,6 +108,7 @@ impl<'a> Entry<'a> {
     pub fn id(self) -> WorkbookId {
         match self {
             Entry::Loaded(document) => document.id,
+            Entry::Text(text) => text.id,
             Entry::Link(link) => link.id,
         }
     }
@@ -105,6 +116,7 @@ impl<'a> Entry<'a> {
     pub fn space(self) -> SpaceId {
         match self {
             Entry::Loaded(document) => document.space,
+            Entry::Text(text) => text.space,
             Entry::Link(link) => link.space,
         }
     }
@@ -112,6 +124,7 @@ impl<'a> Entry<'a> {
     pub fn path(self) -> Option<&'a Path> {
         match self {
             Entry::Loaded(document) => document.path.as_deref(),
+            Entry::Text(text) => text.path.as_deref(),
             Entry::Link(link) => link.path.as_deref(),
         }
     }
@@ -119,6 +132,7 @@ impl<'a> Entry<'a> {
     pub fn untitled(self) -> u32 {
         match self {
             Entry::Loaded(document) => document.untitled(),
+            Entry::Text(text) => text.untitled(),
             Entry::Link(link) => link.untitled,
         }
     }
@@ -126,6 +140,7 @@ impl<'a> Entry<'a> {
     pub fn dirty(self) -> bool {
         match self {
             Entry::Loaded(document) => document.dirty,
+            Entry::Text(text) => text.needs_recovery(),
             Entry::Link(link) => link.dirty,
         }
     }
@@ -133,6 +148,7 @@ impl<'a> Entry<'a> {
     pub fn name(self) -> String {
         match self {
             Entry::Loaded(document) => document.name(),
+            Entry::Text(text) => text.name(),
             Entry::Link(link) => link.name(),
         }
     }
@@ -140,13 +156,29 @@ impl<'a> Entry<'a> {
     pub fn loaded(self) -> Option<&'a Document> {
         match self {
             Entry::Loaded(document) => Some(document),
-            Entry::Link(_) => None,
+            Entry::Text(_) | Entry::Link(_) => None,
+        }
+    }
+
+    pub fn text(self) -> Option<&'a TextDocument> {
+        match self {
+            Entry::Text(text) => Some(text),
+            Entry::Loaded(_) | Entry::Link(_) => None,
+        }
+    }
+
+    pub fn kind(self) -> DocumentKind {
+        match self {
+            Entry::Loaded(_) => DocumentKind::Workbook,
+            Entry::Text(text) => text.kind,
+            Entry::Link(link) => link.kind,
         }
     }
 
     pub fn to_link(self) -> Link {
         match self {
             Entry::Loaded(document) => document.to_link(),
+            Entry::Text(text) => text.to_link(),
             Entry::Link(link) => link.clone(),
         }
     }
@@ -169,6 +201,8 @@ impl Document {
             status: LinkStatus::NotLoaded,
             recovery_lost: false,
             origin: Some(self.origin),
+            kind: DocumentKind::Workbook,
+            mode: ViewMode::default(),
         }
     }
 

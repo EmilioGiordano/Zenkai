@@ -9,7 +9,9 @@ use crate::document::Document;
 use crate::entry::{Entry, Link, LinkStatus, Slot};
 use crate::files;
 use crate::spaces::{SpaceId, Spaces};
+use crate::text_document::{DocumentKind, TextDocument};
 
+pub use texts::TextLoad;
 pub use unsaved::Unsaved;
 
 mod restore;
@@ -20,6 +22,7 @@ mod session_property;
 mod spaces;
 #[cfg(test)]
 mod test_support;
+mod texts;
 mod unsaved;
 
 const MAX_CLOSED: usize = 20;
@@ -56,6 +59,9 @@ enum Side {
 pub struct Documents {
     before: Vec<Slot>,
     active: Option<Box<Document>>,
+    // A text tab on screen. It lives in the slots, and the workbook held apart is `None`
+    // meanwhile, so everything that reads `active` sees "no workbook on screen".
+    text_shown: Option<WorkbookId>,
     after: Vec<Slot>,
     wanted: Option<Want>,
     next_id: u64,
@@ -135,6 +141,7 @@ impl Documents {
         Documents {
             before: Vec::new(),
             active,
+            text_shown: None,
             after: Vec::new(),
             wanted: None,
             next_id: 1,
@@ -176,6 +183,7 @@ impl Documents {
             }
         }
         self.wanted = None;
+        self.text_shown = None;
         id
     }
 
@@ -188,7 +196,7 @@ impl Documents {
     ) -> Document {
         let id = self.take_id();
         let untitled = if path.is_none() {
-            self.lowest_free_untitled()
+            self.lowest_free_untitled(DocumentKind::Workbook)
         } else {
             0
         };
@@ -200,10 +208,10 @@ impl Documents {
         WorkbookId(self.next_id - 1)
     }
 
-    fn lowest_free_untitled(&self) -> u32 {
+    fn lowest_free_untitled(&self, kind: DocumentKind) -> u32 {
         let taken: Vec<u32> = self
             .entries()
-            .filter(|entry| entry.path().is_none())
+            .filter(|entry| entry.path().is_none() && entry.kind() == kind)
             .map(Entry::untitled)
             .collect();
         (1..).find(|number| !taken.contains(number)).unwrap_or(1)
@@ -219,11 +227,39 @@ impl Documents {
 
     // The space where a workbook created now would land.
     pub fn current_space(&self) -> SpaceId {
-        self.active.as_ref().map_or(self.empty_space, |a| a.space)
+        self.active
+            .as_ref()
+            .map(|a| a.space)
+            .or_else(|| self.shown_text().map(|text| text.space))
+            .unwrap_or(self.empty_space)
     }
 
     pub fn active_id(&self) -> Option<WorkbookId> {
         self.active.as_ref().map(|document| document.id)
+    }
+
+    // Whatever is on screen, a workbook or a text.
+    pub fn shown_id(&self) -> Option<WorkbookId> {
+        self.text_shown.or_else(|| self.active_id())
+    }
+
+    pub fn shown_text(&self) -> Option<&TextDocument> {
+        self.text_shown.and_then(|id| self.text(id))
+    }
+
+    pub fn text(&self, id: WorkbookId) -> Option<&TextDocument> {
+        self.entry(id).and_then(Entry::text)
+    }
+
+    pub fn text_mut(&mut self, id: WorkbookId) -> Option<&mut TextDocument> {
+        match self.slot_mut(id)? {
+            SlotMut::Other(Slot::Text(text)) => Some(text),
+            _ => None,
+        }
+    }
+
+    pub fn texts(&self) -> impl Iterator<Item = &TextDocument> {
+        self.entries().filter_map(Entry::text)
     }
 
     // Every workbook in tab order, the one on screen included.
@@ -257,6 +293,12 @@ impl Documents {
             None => return false,
         }
         true
+    }
+
+    // Whether the entry holds its content, as opposed to a link that has yet to load.
+    pub fn is_loaded(&self, id: WorkbookId) -> bool {
+        self.entry(id)
+            .is_some_and(|entry| !matches!(entry, Entry::Link(_)))
     }
 
     pub fn get(&self, id: WorkbookId) -> Option<&Document> {
@@ -304,6 +346,11 @@ impl Documents {
         self.iter()
             .filter(|document| document.needs_recovery())
             .map(|document| (document.id, document.edit_count()))
+            .chain(
+                self.texts()
+                    .filter(|text| text.needs_recovery())
+                    .map(|text| (text.id, text.edit_count())),
+            )
             .collect()
     }
 
@@ -325,6 +372,10 @@ impl Documents {
 
     // Only a loaded workbook can be on screen; a link asks for loading with `want`.
     pub fn activate(&mut self, id: WorkbookId) -> bool {
+        if self.text(id).is_some() {
+            self.show_text(id, true);
+            return true;
+        }
         if let Some(active) = self.active.as_deref_mut().filter(|a| a.id == id) {
             active.last_used = Instant::now();
             self.wanted = None;
@@ -356,6 +407,7 @@ impl Documents {
     fn promote(&mut self, side: Side, index: usize, target: Box<Document>, keep_old: bool) {
         let mut target = target;
         target.last_used = Instant::now();
+        self.text_shown = None;
         let old = self
             .active
             .replace(target)
@@ -395,7 +447,7 @@ impl Documents {
     // while a link is still loading.
     pub fn step(&self, step: Step) -> Option<WorkbookId> {
         let ids: Vec<WorkbookId> = self.entries().map(Entry::id).collect();
-        let from = self.wanted().or_else(|| self.active_id());
+        let from = self.wanted().or_else(|| self.shown_id());
         let index = from.and_then(|from| ids.iter().position(|id| *id == from));
         let count = ids.len();
         let target = match (step, index) {
@@ -435,7 +487,10 @@ impl Documents {
         match self.wanted {
             Some(Want { id: wanted, intent }) if wanted == id => match intent {
                 Intent::Switch => true,
-                Intent::Restore => self.active.as_ref().is_none_or(|a| a.is_pristine()),
+                Intent::Restore => match &self.active {
+                    Some(active) => active.is_pristine(),
+                    None => self.text_shown.is_none(),
+                },
             },
             _ => false,
         }
@@ -502,7 +557,7 @@ impl Documents {
         if self.wanted() == Some(id) {
             self.wanted = None;
         }
-        if self.active_id() != Some(id) {
+        if self.shown_id() != Some(id) {
             let removed = [&mut self.before, &mut self.after]
                 .into_iter()
                 .find_map(|slots| {
@@ -517,32 +572,41 @@ impl Documents {
                 None => false,
             };
         }
-        let next_right = self.after.iter().position(Slot::is_loaded);
-        let next_left = self.before.iter().rposition(Slot::is_loaded);
-        let target = if let Some(index) = next_right
-            && let Some(target) = take_loaded(&mut self.after, index)
-        {
-            let rest = self.after.split_off(index);
-            self.before.append(&mut self.after);
-            self.after = rest;
-            Some(target)
-        } else if let Some(index) = next_left
-            && let Some(target) = take_loaded(&mut self.before, index)
-        {
-            let mut tail = self.before.split_off(index);
-            tail.append(&mut self.after);
-            self.after = tail;
-            Some(target)
-        } else {
-            self.before.append(&mut self.after);
-            None
-        };
-        let Some(closed) = std::mem::replace(&mut self.active, target) else {
+        let Some((position, space, path)) = self.take_shown() else {
             return false;
         };
-        self.empty_space = closed.space;
-        self.remember(closed.path.as_deref());
+        self.empty_space = space;
+        self.remember(path.as_deref());
+        let neighbour = self.before[position..]
+            .iter()
+            .find(|slot| slot.is_loaded())
+            .or_else(|| {
+                self.before[..position]
+                    .iter()
+                    .rev()
+                    .find(|slot| slot.is_loaded())
+            })
+            .map(Slot::id);
+        if let Some(neighbour) = neighbour {
+            self.activate(neighbour);
+        }
         true
+    }
+
+    // Takes what is on screen out of the list, leaving every other slot in `before`, and
+    // returns where it was along with its space and path.
+    fn take_shown(&mut self) -> Option<(usize, SpaceId, Option<PathBuf>)> {
+        if let Some(id) = self.text_shown.take() {
+            self.before.append(&mut self.after);
+            let index = self.before.iter().position(|slot| slot.id() == id)?;
+            let removed = self.before.remove(index);
+            let entry = removed.as_entry();
+            return Some((index, entry.space(), entry.path().map(Path::to_path_buf)));
+        }
+        let closed = self.active.take()?;
+        let position = self.before.len();
+        self.before.append(&mut self.after);
+        Some((position, closed.space, closed.path))
     }
 
     fn remember(&mut self, path: Option<&Path>) {
@@ -584,6 +648,8 @@ mod tests {
             untitled: 0,
             dirty: false,
             read_only: false,
+            kind: Default::default(),
+            mode: Default::default(),
             unsupported: Vec::new(),
             active: false,
             sheet: 0,

@@ -6,6 +6,7 @@ use zenkai_types::WorkbookId;
 use super::Documents;
 use crate::document::Document;
 use crate::entry::Entry;
+use crate::text_document::TextDocument;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Unsaved {
@@ -32,7 +33,10 @@ impl Documents {
                     .and_then(Path::parent)
                     .filter(|folder| !folder.as_os_str().is_empty())
                     .map(Path::to_path_buf),
-                since_edit: entry.loaded().and_then(Document::since_last_edit),
+                since_edit: entry
+                    .loaded()
+                    .and_then(Document::since_last_edit)
+                    .or_else(|| entry.text().and_then(TextDocument::since_last_edit)),
             })
             .collect()
     }
@@ -89,6 +93,8 @@ mod tests {
             untitled: 0,
             dirty: true,
             read_only: false,
+            kind: Default::default(),
+            mode: Default::default(),
             unsupported: Vec::new(),
             active: false,
             sheet: 0,

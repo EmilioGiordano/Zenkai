@@ -8,14 +8,17 @@ use zenkai_agent::protected_view::FileOrigin;
 use zenkai_types::WorkbookId;
 
 use super::test_support::{blank, documents};
-use super::{Documents, Loaded};
+use super::{Documents, Loaded, TextLoad};
 use crate::entry::Entry;
 use crate::session::{self, Loaded as LoadedSession};
 use crate::space_appearance::SpaceAppearance;
+use crate::text_document::{DocumentKind, ViewMode};
+use crate::text_file::Format;
 
 #[derive(Clone, Debug)]
 enum Op {
     Open(u8),
+    OpenText(u8),
     Create,
     Edit(usize),
     Save(usize),
@@ -28,6 +31,7 @@ enum Op {
 fn op() -> impl Strategy<Value = Op> {
     prop_oneof![
         2 => (0u8..6).prop_map(Op::Open),
+        2 => (0u8..4).prop_map(Op::OpenText),
         2 => Just(Op::Create),
         4 => any::<usize>().prop_map(Op::Edit),
         2 => any::<usize>().prop_map(Op::Save),
@@ -76,7 +80,17 @@ impl Model {
             return;
         };
         let from_recovery = link.recovery.is_some();
+        let kind = link.kind;
         self.documents.start_loading(id);
+        if kind.is_text() {
+            self.documents.install_text(TextLoad {
+                id,
+                format: Format::default(),
+                stamp: None,
+                from_recovery,
+            });
+            return;
+        }
         self.documents.install(Loaded {
             id,
             workbook: blank(),
@@ -87,12 +101,23 @@ impl Model {
         });
     }
 
+    fn pending_text(&self, id: WorkbookId) -> bool {
+        self.documents
+            .entry(id)
+            .is_some_and(|entry| entry.kind() == DocumentKind::Markdown)
+    }
+
     fn copy_name(&mut self, id: WorkbookId) -> String {
         if let Some(name) = self.copies.get(&id) {
             return name.clone();
         }
         self.next_copy += 1;
-        let name = format!("autosave-1-2-{}.xlsx", self.next_copy);
+        let extension = if self.pending_text(id) {
+            "md"
+        } else {
+            "xlsx"
+        };
+        let name = format!("autosave-1-2-{}.{extension}", self.next_copy);
         self.copies.insert(id, name.clone());
         name
     }
@@ -105,19 +130,42 @@ impl Model {
                     self.documents.open(blank(), Some(path), Vec::new());
                 }
             }
+            Op::OpenText(n) => {
+                let path = PathBuf::from(format!("C:/work/note{n}.md"));
+                if !self.documents.has_path(&path) {
+                    self.documents.open_text(
+                        Some(path),
+                        DocumentKind::Markdown,
+                        ViewMode::Preview,
+                        Format::default(),
+                        None,
+                    );
+                }
+            }
             Op::Create => {
                 self.documents.create(blank());
             }
             Op::Edit(index) => {
                 let Some(id) = self.pick(*index) else { return };
                 self.load(id);
-                self.documents.get_mut(id).unwrap().dirty = true;
+                match self.documents.text_mut(id) {
+                    Some(text) => text.edited(),
+                    None => self.documents.get_mut(id).unwrap().dirty = true,
+                }
                 self.unsaved.insert(id);
             }
             Op::Save(index) => {
                 let Some(id) = self.pick(*index) else { return };
                 self.load(id);
                 self.next_save += 1;
+                if let Some(text) = self.documents.text_mut(id) {
+                    text.saved(text.edit_count(), None);
+                    if text.path.is_none() {
+                        text.path = Some(PathBuf::from(format!("C:/work/saved{}.md", self.next_save)));
+                    }
+                    self.unsaved.remove(&id);
+                    return;
+                }
                 let saved_as = PathBuf::from(format!("C:/work/saved{}.xlsx", self.next_save));
                 let document = self.documents.get_mut(id).unwrap();
                 document.dirty = false;
@@ -161,6 +209,9 @@ impl Model {
         for id in &self.unsaved {
             if let Some(document) = self.documents.get_mut(*id) {
                 document.mark_recovery_adopted();
+            }
+            if let Some(text) = self.documents.text_mut(*id) {
+                text.mark_recovery_adopted();
             }
         }
         let recovery_dir = self.recovery_dir.clone();
@@ -221,6 +272,10 @@ impl Model {
                     document.needs_recovery(),
                     "unsaved work is not tracked for recovery"
                 ),
+                Some(Entry::Text(text)) => assert!(
+                    text.needs_recovery(),
+                    "unsaved text is not tracked for recovery"
+                ),
                 Some(Entry::Link(link)) => assert!(
                     link.dirty && link.recovery.is_some(),
                     "an unloaded workbook lost its unsaved work"
@@ -228,12 +283,19 @@ impl Model {
                 None => panic!("a workbook with unsaved work vanished"),
             }
         }
-        if let Some(id) = self.documents.active_id() {
+        if let Some(id) = self.documents.shown_id() {
             assert!(
-                matches!(self.documents.entry(id), Some(Entry::Loaded(_))),
+                matches!(
+                    self.documents.entry(id),
+                    Some(Entry::Loaded(_) | Entry::Text(_))
+                ),
                 "the screen shows a link"
             );
         }
+        assert!(
+            self.documents.active().is_none() || self.documents.shown_text().is_none(),
+            "a workbook and a text are both on screen"
+        );
     }
 }
 
