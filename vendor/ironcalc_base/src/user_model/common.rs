@@ -319,19 +319,36 @@ impl<'a> UserModel<'a> {
     /// See also:
     /// * [UserModel::from_bytes_with_history]
     pub fn to_bytes_with_history(&self) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::new();
+        self.write_with_history(&mut |chunk| {
+            bytes.extend_from_slice(chunk);
+            Ok(())
+        })?;
+        Ok(bytes)
+    }
+
+    /// Hands the bytes of [UserModel::to_bytes_with_history] to `sink` in pieces, so a
+    /// caller writing to a file never holds more than one encoded section (the workbook,
+    /// the undo history or the redo history) at a time. Each section comes as an 8-byte
+    /// little-endian length followed by its bytes.
+    pub fn write_with_history(
+        &self,
+        sink: &mut dyn FnMut(&[u8]) -> Result<(), String>,
+    ) -> Result<(), String> {
         if self.edit_group.is_some() || self.pause_evaluation {
             return Err("the model is in the middle of an edit".to_string());
         }
-        let mut bytes = Vec::new();
-        for section in [
-            bitcode::encode(&self.model.workbook),
-            bitcode::encode(&self.history.undo_stack),
-            bitcode::encode(&self.history.redo_stack),
-        ] {
-            bytes.extend_from_slice(&(section.len() as u64).to_le_bytes());
-            bytes.extend_from_slice(&section);
+        let sections: [&dyn Fn() -> Vec<u8>; 3] = [
+            &|| bitcode::encode(&self.model.workbook),
+            &|| bitcode::encode(&self.history.undo_stack),
+            &|| bitcode::encode(&self.history.redo_stack),
+        ];
+        for encode in sections {
+            let section = encode();
+            sink(&(section.len() as u64).to_le_bytes())?;
+            sink(&section)?;
         }
-        Ok(bytes)
+        Ok(())
     }
 
     /// Creates a model from the bytes of [UserModel::to_bytes_with_history], with the

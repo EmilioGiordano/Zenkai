@@ -61,3 +61,30 @@ fn a_model_in_the_middle_of_an_edit_is_not_dumped() {
     model.resume_evaluation();
     assert!(model.to_bytes_with_history().is_ok());
 }
+
+#[test]
+fn the_pieces_given_to_a_sink_join_into_the_same_bytes() {
+    let model = edited();
+    let mut pieces = Vec::new();
+    model
+        .write_with_history(&mut |chunk| {
+            pieces.push(chunk.to_vec());
+            Ok(())
+        })
+        .unwrap();
+    // A length and a section for the workbook, the undo history and the redo history.
+    assert_eq!(pieces.len(), 6);
+    assert_eq!(pieces.concat(), model.to_bytes_with_history().unwrap());
+}
+
+#[test]
+fn a_sink_that_fails_stops_the_dump() {
+    let model = edited();
+    let mut calls = 0;
+    let result = model.write_with_history(&mut |_| {
+        calls += 1;
+        Err("disk full".to_string())
+    });
+    assert_eq!(result, Err("disk full".to_string()));
+    assert_eq!(calls, 1);
+}
