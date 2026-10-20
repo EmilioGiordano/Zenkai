@@ -601,6 +601,20 @@ pub(crate) fn read_part<R: Read>(
     )
 }
 
+pub(crate) fn read_part_to_peek<R: Read>(
+    entry: R,
+    meter: &CompressedMeter,
+    part: &str,
+    budgets: &Budgets,
+) -> Result<Vec<u8>, ReadError> {
+    read_part_with(
+        budgets.stream_reread(entry, meter, part),
+        part,
+        WholeLimit::Peek,
+        true,
+    )
+}
+
 #[derive(Clone, Copy)]
 enum WholeLimit {
     KeptWhole,
@@ -608,6 +622,9 @@ enum WholeLimit {
     // already bounded it before this read, so the cap for other parts kept whole
     // would only refuse large valid sheets. The per-part cap still applies.
     DomCharged,
+    // A part the walk reads again later: this read only has to fit, so the charge for
+    // its bytes is made once, by that later read.
+    Peek,
 }
 
 // `nest_checked` is false for a part another pass over it has already counted.
@@ -627,6 +644,7 @@ fn read_part_with<R: Read>(
                 match limit {
                     WholeLimit::KeptWhole => guard.check_whole(bytes.len() as u64)?,
                     WholeLimit::DomCharged => guard.charge_whole(bytes.len() as u64)?,
+                    WholeLimit::Peek => guard.whole_fits(bytes.len() as u64)?,
                 }
                 return Ok(bytes);
             }
@@ -635,7 +653,7 @@ fn read_part_with<R: Read>(
                     nesting.push(&chunk[..read])?;
                 }
                 bytes.extend_from_slice(&chunk[..read]);
-                if let WholeLimit::KeptWhole = limit {
+                if !matches!(limit, WholeLimit::DomCharged) {
                     guard.whole_fits(bytes.len() as u64)?;
                 }
             }

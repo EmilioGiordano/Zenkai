@@ -5,7 +5,7 @@ use ironcalc::base::expressions::parser::DefinedNameS;
 
 use crate::ReadError;
 use crate::skipped_part;
-use crate::stream::{Budgets, CompressedMeter, read_part};
+use crate::stream::{Budgets, CompressedMeter, read_part, read_part_to_peek};
 
 pub(crate) struct WorksheetPart {
     pub(crate) name: String,
@@ -170,14 +170,20 @@ pub(crate) fn read_package<R: Read + Seek>(
 // tolerating what `read_package` refuses (two sheets on one part, odd names, a missing
 // attribute on a sheet the importer would reject anyway). Counting a part too many is
 // safe; missing one lets its cells in uncharged. None when either file cannot be parsed.
+// The two files are only peeked at: the walk reads and charges them afterwards.
 pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     meter: &CompressedMeter,
     budgets: &Budgets,
 ) -> Option<HashSet<String>> {
-    let workbook = read_text(archive, "xl/workbook.xml", meter, budgets).ok()?;
+    let mut peek = |name: &str| -> Option<String> {
+        let entry = archive.by_name(name).ok()?;
+        let bytes = read_part_to_peek(entry, meter, name, budgets).ok()?;
+        String::from_utf8(bytes).ok()
+    };
+    let workbook = peek("xl/workbook.xml")?;
     let workbook = roxmltree::Document::parse(&workbook).ok()?;
-    let rels = read_text(archive, "xl/_rels/workbook.xml.rels", meter, budgets).ok()?;
+    let rels = peek("xl/_rels/workbook.xml.rels")?;
     let rels = roxmltree::Document::parse(&rels).ok()?;
     let mut targets = HashMap::new();
     for node in rels
