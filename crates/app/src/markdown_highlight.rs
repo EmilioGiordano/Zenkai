@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -9,6 +10,20 @@ use gpui_kit::component::input::{
 use gpui_kit::*;
 
 pub const LANGUAGE: &str = "markdown";
+
+// Only this much of a line is highlighted, so a line of megabytes costs no more than a short one.
+const MAX_HIGHLIGHTED_BYTES: usize = 4096;
+
+fn head_of(characters: impl Iterator<Item = char>) -> String {
+    let mut head = String::new();
+    for character in characters {
+        if head.len() >= MAX_HIGHLIGHTED_BYTES {
+            break;
+        }
+        head.push(character);
+    }
+    head
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Token {
@@ -117,8 +132,57 @@ fn word_byte(byte: Option<&u8>) -> bool {
     byte.is_some_and(|byte| byte.is_ascii_alphanumeric())
 }
 
+// What earlier searches on the same line already showed, so a closer that is missing is looked
+// for once and a closer that is far away is found once: scanning stays linear in the line.
+#[derive(Default)]
+struct Searched {
+    ticks_missing: HashSet<usize>,
+    closers: HashMap<(u8, usize), Option<usize>>,
+    bracket: Option<Option<usize>>,
+    paren_missing_from: Option<usize>,
+}
+
+impl Searched {
+    fn closer(&mut self, line: &str, from: usize, delimiter: u8, length: usize) -> Option<usize> {
+        match self.closers.get(&(delimiter, length)) {
+            Some(None) => return None,
+            Some(Some(close)) if *close > from => return Some(*close),
+            _ => {}
+        }
+        let found = closing_run(line, from, delimiter, length);
+        self.closers.insert((delimiter, length), found);
+        found
+    }
+
+    fn bracket_end(&mut self, line: &str, from: usize) -> Option<usize> {
+        match self.bracket {
+            Some(None) => return None,
+            Some(Some(end)) if end >= from => return Some(end),
+            _ => {}
+        }
+        let found = line[from..].find(']').map(|found| from + found);
+        self.bracket = Some(found);
+        found
+    }
+
+    fn paren_end(&mut self, line: &str, from: usize) -> Option<usize> {
+        if self
+            .paren_missing_from
+            .is_some_and(|missing| from >= missing)
+        {
+            return None;
+        }
+        let found = line[from..].find(')').map(|found| from + found);
+        if found.is_none() {
+            self.paren_missing_from = Some(from);
+        }
+        found
+    }
+}
+
 fn scan_inline(line: &str, start: usize, spans: &mut Spans) {
     let bytes = line.as_bytes();
+    let mut searched = Searched::default();
     let mut at = start;
     while at < bytes.len() {
         match bytes[at] {
@@ -129,7 +193,9 @@ fn scan_inline(line: &str, start: usize, spans: &mut Spans) {
                 let length = bytes[at..].iter().take_while(|byte| **byte == b'`').count();
                 let mut search = at + length;
                 let mut end = None;
-                while let Some(found) = line[search..].find('`') {
+                while !searched.ticks_missing.contains(&length)
+                    && let Some(found) = line[search..].find('`')
+                {
                     let open = search + found;
                     let run = bytes[open..]
                         .iter()
@@ -140,6 +206,9 @@ fn scan_inline(line: &str, start: usize, spans: &mut Spans) {
                         break;
                     }
                     search = open + run;
+                }
+                if end.is_none() {
+                    searched.ticks_missing.insert(length);
                 }
                 match end {
                     Some(end) => {
@@ -160,7 +229,7 @@ fn scan_inline(line: &str, start: usize, spans: &mut Spans) {
                     .is_some_and(|next| !next.is_ascii_whitespace() && *next != delimiter);
                 let intraword = delimiter == b'_' && at > 0 && word_byte(bytes.get(at - 1));
                 let close = (opens && !intraword)
-                    .then(|| closing_run(line, at + length, delimiter, length))
+                    .then(|| searched.closer(line, at + length, delimiter, length))
                     .flatten()
                     .filter(|close| delimiter != b'_' || !word_byte(bytes.get(close + length)));
                 match close {
@@ -177,13 +246,13 @@ fn scan_inline(line: &str, start: usize, spans: &mut Spans) {
                 }
             }
             b'[' => {
-                let text_end = line[at + 1..].find(']').map(|found| at + 1 + found);
+                let text_end = searched.bracket_end(line, at + 1);
                 let target = text_end
                     .filter(|end| bytes.get(end + 1) == Some(&b'('))
                     .and_then(|end| {
-                        line[end + 2..]
-                            .find(')')
-                            .map(|found| (end, end + 2 + found + 1))
+                        searched
+                            .paren_end(line, end + 2)
+                            .map(|found| (end, found + 1))
                     });
                 match target {
                     Some((text_end, uri_end)) => {
@@ -281,7 +350,7 @@ impl MarkdownHighlighter {
                 .find(|c| *c != ' ')
                 .is_some_and(|c| matches!(c, '`' | '~'))
             {
-                state = next_fence(&slice.to_string(), state);
+                state = next_fence(&head_of(slice.chars()), state);
             }
             fences.push(state);
         }
@@ -345,7 +414,7 @@ impl InputHighlighter for MarkdownHighlighter {
         let mut position = start;
         for row in first..=last {
             let line_start = self.text.line_start_offset(row);
-            let line = self.text.slice_line(row).to_string();
+            let line = head_of(self.text.slice_line(row).chars());
             let open = self.fence_at(row);
             for (span, token) in scan_line(&line, open) {
                 let from = (line_start + span.start).max(position).min(end);
@@ -373,7 +442,7 @@ impl InputHighlighter for MarkdownHighlighter {
 
 #[cfg(test)]
 mod tests {
-    use super::{Fence, Token, next_fence, scan_line};
+    use super::{Fence, MAX_HIGHLIGHTED_BYTES, Token, next_fence, scan_line};
 
     fn kinds(line: &str) -> Vec<(&str, Token)> {
         scan_line(line, None)
@@ -452,6 +521,19 @@ mod tests {
                 length: 3
             })
         );
+    }
+
+    #[test]
+    fn a_huge_line_of_unclosed_openers_is_scanned_in_bounded_time() {
+        let started = std::time::Instant::now();
+        for opener in ["[", "**x", "`a", "[a](", "_a ", "*a ", "``a `b "] {
+            let line = opener.repeat(4 * 1024 * 1024 / opener.len());
+            let head: String = line.chars().take(MAX_HIGHLIGHTED_BYTES).collect();
+            scan_line(&head, None);
+            // Without the cap, the memo alone keeps even the whole line linear.
+            scan_line(&line, None);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
     }
 
     #[test]
