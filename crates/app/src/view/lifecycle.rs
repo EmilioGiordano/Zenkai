@@ -223,6 +223,7 @@ impl Workspace {
             self.autosave(id, every, window, cx);
         }
         self.autosave_texts(every, window, cx);
+        self.watch_texts(window, cx);
     }
 
     fn autosave(

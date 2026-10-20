@@ -34,6 +34,7 @@ mod settings_gate;
 mod space_panel;
 mod text_actions;
 mod text_save;
+mod text_watch;
 mod texts;
 
 use crate::prompt_gate::{PROMPT_OPEN_CONTEXT, PromptGate};
