@@ -11,7 +11,7 @@ use crate::documents::{Installed, TextLoad};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::markdown_pane::{MarkdownPane, PaneEvent, PaneState, folder_of};
 use crate::recovery;
-use crate::text_document::{DiskNotice, DocumentKind, ViewMode};
+use crate::text_document::{DocumentKind, ViewMode, notice_after_recovery};
 use crate::text_file::{self, Decoded, ReadError, Stamp, StampRecord};
 
 pub(super) struct TextPane {
@@ -326,12 +326,9 @@ impl Workspace {
                     self.departure_load_finished(id, window, cx);
                     return;
                 }
-                if moved && let Some(text) = self.documents.text_mut(id) {
-                    text.notice = if stamp.is_some() {
-                        DiskNotice::ChangedWithEdits
-                    } else {
-                        DiskNotice::Deleted
-                    };
+                if let Some(text) = self.documents.text_mut(id) {
+                    text.notice =
+                        notice_after_recovery(text.path.is_some(), moved, stamp.is_some());
                 }
                 self.add_pane(id, &decoded.text, mode, window, cx);
                 if let Some(copy) = copy {
