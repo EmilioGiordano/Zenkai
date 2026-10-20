@@ -127,6 +127,7 @@ mod tests {
             origin: None,
             kind: Default::default(),
             mode: Default::default(),
+            base: None,
         }
     }
 

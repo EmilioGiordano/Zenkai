@@ -12,6 +12,7 @@ use crate::recovery;
 use crate::space_appearance::{SpaceAppearance, SpaceOverride};
 use crate::spaces::{SpaceColor, SpaceId};
 use crate::text_document::{DocumentKind, ViewMode};
+use crate::text_file::StampRecord;
 
 const VERSION: u32 = 1;
 const FILE_NAME: &str = "session.json";
@@ -56,6 +57,8 @@ pub struct FileRecord {
     pub kind: DocumentKind,
     #[serde(default)]
     pub mode: ViewMode,
+    #[serde(default)]
+    pub base: Option<StampRecord>,
     pub unsupported: Vec<String>,
     pub active: bool,
     pub sheet: u32,
@@ -234,6 +237,7 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         read_only: link.read_only,
         kind: link.kind,
         mode: link.mode,
+        base: link.base,
         unsupported: link
             .unsupported
             .iter()
@@ -295,6 +299,7 @@ pub fn link_of(
         origin: None,
         kind: record.kind,
         mode: record.mode,
+        base: record.base,
     }
 }
 
@@ -369,6 +374,7 @@ mod tests {
             read_only: false,
             kind: Default::default(),
             mode: Default::default(),
+            base: None,
             unsupported: vec!["charts".to_string(), "macros".to_string()],
             active: true,
             sheet: 2,
@@ -593,6 +599,19 @@ mod tests {
         let old: FileRecord = serde_json::from_value(value).unwrap();
         assert_eq!(old.kind, DocumentKind::Workbook);
         assert_eq!(old.mode, ViewMode::Preview);
+        assert_eq!(old.base, None);
+    }
+
+    #[test]
+    fn the_stamp_a_text_was_based_on_survives_the_session() {
+        let stamp = crate::text_file::stamp_of(&std::env::temp_dir()).unwrap();
+        let mut text = record();
+        text.base = Some(stamp.record());
+        let link = link_of(&text, WorkbookId(1), SpaceId(0), None);
+        assert_eq!(link.base, text.base);
+        let json = serde_json::to_string(&record_of(&link, true)).unwrap();
+        let back: FileRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.base, text.base);
     }
 
     #[test]

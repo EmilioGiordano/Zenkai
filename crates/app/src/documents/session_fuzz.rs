@@ -21,6 +21,7 @@ fn file(path: Option<&str>, recovery: Option<&str>, active: bool) -> FileRecord 
         read_only: false,
         kind: Default::default(),
         mode: Default::default(),
+        base: None,
         unsupported: vec!["charts".to_string(), "macros".to_string()],
         active,
         sheet: 1,

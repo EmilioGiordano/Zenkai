@@ -1,6 +1,8 @@
 use std::io::Read;
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
 
 use zenkai_engine::{EngineError, write_atomic};
 use zenkai_i18n::t;
@@ -35,6 +37,51 @@ pub struct Format {
 pub struct Stamp {
     modified: Option<SystemTime>,
     len: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StampRecord {
+    modified_nanos: Option<u64>,
+    len: u64,
+}
+
+impl Stamp {
+    pub fn record(self) -> StampRecord {
+        StampRecord {
+            modified_nanos: self
+                .modified
+                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                .map(|since| u64::try_from(since.as_nanos()).unwrap_or(u64::MAX)),
+            len: self.len,
+        }
+    }
+
+    pub fn from_record(record: StampRecord) -> Stamp {
+        Stamp {
+            modified: record
+                .modified_nanos
+                .map(|nanos| UNIX_EPOCH + Duration::from_nanos(nanos)),
+            len: record.len,
+        }
+    }
+
+    // Equal to no file on disk, so a save guarded by it always sees a change.
+    fn unknown() -> Stamp {
+        Stamp {
+            modified: None,
+            len: u64::MAX,
+        }
+    }
+}
+
+// The stamp a text restored from a recovery copy is saved over, and whether the file moved
+// on since the edits began. Without a recorded base nothing proves the file is unchanged.
+pub fn recovered_base(base: Option<StampRecord>, disk: Option<Stamp>) -> (Option<Stamp>, bool) {
+    match (base, disk) {
+        (Some(base), Some(disk)) if disk.record() == base => (Some(disk), false),
+        (Some(base), _) => (Some(Stamp::from_record(base)), true),
+        (None, _) => (Some(Stamp::unknown()), true),
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -271,6 +318,34 @@ mod tests {
         assert_eq!(disk_change(stamp(1), stamp(2)), DiskChange::Changed);
         assert_eq!(disk_change(stamp(1), None), DiskChange::Deleted);
         assert_eq!(disk_change(None, stamp(1)), DiskChange::Unchanged);
+    }
+
+    #[test]
+    fn a_stamp_survives_its_record() {
+        let path = std::env::temp_dir();
+        let stamp = stamp_of(&path).unwrap();
+        assert_eq!(Stamp::from_record(stamp.record()), stamp);
+        let json = serde_json::to_string(&stamp.record()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<StampRecord>(&json).unwrap(),
+            stamp.record()
+        );
+    }
+
+    #[test]
+    fn a_recovered_text_trusts_the_file_only_if_it_is_the_one_its_edits_began_from() {
+        let disk = stamp(5);
+        let same = disk.map(Stamp::record);
+        assert_eq!(recovered_base(same, disk), (disk, false));
+        let (guard, moved) = recovered_base(stamp(4).map(Stamp::record), disk);
+        assert!(moved);
+        assert_eq!(disk_change(guard, disk), DiskChange::Changed);
+        let (guard, moved) = recovered_base(None, disk);
+        assert!(moved);
+        assert_eq!(disk_change(guard, disk), DiskChange::Changed);
+        let (guard, moved) = recovered_base(same, None);
+        assert!(moved);
+        assert_eq!(disk_change(guard, None), DiskChange::Deleted);
     }
 
     #[test]

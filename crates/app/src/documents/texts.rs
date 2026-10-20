@@ -143,6 +143,7 @@ mod tests {
                     read_only: false,
                     kind: DocumentKind::Markdown,
                     mode: ViewMode::Source,
+                    base: None,
                     unsupported: Vec::new(),
                     active,
                     sheet: 0,

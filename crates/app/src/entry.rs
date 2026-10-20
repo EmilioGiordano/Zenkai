@@ -9,6 +9,7 @@ use zenkai_types::{SheetId, WorkbookId};
 use crate::document::{Document, FileJob};
 use crate::spaces::SpaceId;
 use crate::text_document::{DocumentKind, TextDocument, ViewMode, text_name};
+use crate::text_file::StampRecord;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkStatus {
@@ -38,6 +39,8 @@ pub struct Link {
     pub origin: Option<FileOrigin>,
     pub kind: DocumentKind,
     pub mode: ViewMode,
+    // The disk stamp a text's edits were based on, kept across a restart.
+    pub base: Option<StampRecord>,
 }
 
 pub fn display_name(path: Option<&Path>, untitled: u32) -> String {
@@ -203,6 +206,7 @@ impl Document {
             origin: Some(self.origin),
             kind: DocumentKind::Workbook,
             mode: ViewMode::default(),
+            base: None,
         }
     }
 

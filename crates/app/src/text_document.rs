@@ -277,6 +277,7 @@ impl TextDocument {
             origin: None,
             kind: self.kind,
             mode: self.mode,
+            base: self.stamp.map(Stamp::record),
         }
     }
 }

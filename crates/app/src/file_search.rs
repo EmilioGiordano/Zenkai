@@ -106,6 +106,7 @@ mod tests {
             read_only: false,
             kind: Default::default(),
             mode: Default::default(),
+            base: None,
             unsupported: Vec::new(),
             active: false,
             sheet: 0,

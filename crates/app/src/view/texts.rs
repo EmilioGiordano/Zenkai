@@ -11,8 +11,8 @@ use crate::documents::{Installed, TextLoad};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::markdown_pane::{MarkdownPane, PaneEvent, PaneState, folder_of};
 use crate::recovery;
-use crate::text_document::{DocumentKind, ViewMode};
-use crate::text_file::{self, Decoded, ReadError, Stamp};
+use crate::text_document::{DiskNotice, DocumentKind, ViewMode};
+use crate::text_file::{self, Decoded, ReadError, Stamp, StampRecord};
 
 pub(super) struct TextPane {
     pub(super) pane: Entity<MarkdownPane>,
@@ -25,6 +25,7 @@ enum TextLink {
     Loaded {
         decoded: Decoded,
         stamp: Option<Stamp>,
+        base: Option<StampRecord>,
         copy: Option<PathBuf>,
         recovery_lost: bool,
     },
@@ -42,6 +43,7 @@ fn read_text_link(link: &Link) -> TextLink {
                 return TextLink::Loaded {
                     decoded,
                     stamp: link.path.as_deref().and_then(text_file::stamp_of),
+                    base: link.base,
                     copy: Some(copy.clone()),
                     recovery_lost: false,
                 };
@@ -61,6 +63,7 @@ fn read_text_link(link: &Link) -> TextLink {
         Ok((decoded, stamp)) => TextLink::Loaded {
             decoded,
             stamp,
+            base: None,
             copy: None,
             recovery_lost,
         },
@@ -296,6 +299,7 @@ impl Workspace {
             TextLink::Loaded {
                 decoded,
                 stamp,
+                base,
                 copy,
                 recovery_lost,
             } => {
@@ -307,15 +311,27 @@ impl Workspace {
                     self.park_active(window, cx);
                 }
                 let from_recovery = copy.is_some();
+                let (guard, moved) = if from_recovery {
+                    text_file::recovered_base(base, stamp)
+                } else {
+                    (stamp, false)
+                };
                 let outcome = self.documents.install_text(TextLoad {
                     id,
                     format: decoded.format,
-                    stamp,
+                    stamp: guard,
                     from_recovery,
                 });
                 if matches!(outcome, Installed::Gone) {
                     self.departure_load_finished(id, window, cx);
                     return;
+                }
+                if moved && let Some(text) = self.documents.text_mut(id) {
+                    text.notice = if stamp.is_some() {
+                        DiskNotice::ChangedWithEdits
+                    } else {
+                        DiskNotice::Deleted
+                    };
                 }
                 self.add_pane(id, &decoded.text, mode, window, cx);
                 if let Some(copy) = copy {

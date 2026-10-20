@@ -86,6 +86,7 @@ impl Documents {
             origin: None,
             kind,
             mode,
+            base: None,
         }));
         id
     }
