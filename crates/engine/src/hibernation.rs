@@ -74,7 +74,7 @@ impl Workbook {
     pub fn wake(path: &Path, kept: &Kept) -> Result<Workbook, EngineError> {
         let (mut file, length) = open_verified(path, MAX_DUMP_BYTES)?;
         run_with_engine_stack(move || {
-            // Read and decoded a section at a time: next to the model, only the largest
+            // Read and decode a section at a time: next to the model, only the largest
             // section is in memory, never the whole dump.
             let model = UserModel::from_reader_with_history(
                 &mut (&mut file).take(length),
