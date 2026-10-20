@@ -152,6 +152,16 @@ impl Usage {
         }
     }
 
+    // The importer builds a part once for every sheet that names it.
+    pub fn repeated(self, times: u64) -> Usage {
+        Usage {
+            cells: self.cells.saturating_mul(times),
+            formulas: self.formulas.saturating_mul(times),
+            bytes: self.bytes.saturating_mul(times),
+            rows: self.rows.saturating_mul(times),
+        }
+    }
+
     fn scaled(self, numerator: u64, denominator: u64) -> Usage {
         let scale = |value: u64| {
             let scaled = u128::from(value) * u128::from(numerator) / u128::from(denominator);

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek, Write};
 
 use ironcalc::base::expressions::parser::DefinedNameS;
@@ -171,7 +171,7 @@ pub(crate) fn read_package<R: Read + Seek>(
     })
 }
 
-// The parts IronCalc's importer loads as worksheets, found the way it finds them but
+// The parts IronCalc's importer loads as worksheets, with how many sheets load each, found the way it finds them but
 // tolerating what `read_package` refuses (two sheets on one part, odd names, a missing
 // attribute on a sheet the importer would reject anyway). Counting a part too many is
 // safe; missing one lets its cells in uncharged. None when either file cannot be parsed.
@@ -181,7 +181,7 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     meter: &CompressedMeter,
     budgets: &Budgets,
-) -> Option<HashSet<String>> {
+) -> Option<HashMap<String, u64>> {
     let mut peek = |name: &str| -> Option<String> {
         let entry = archive.by_name(name).ok()?;
         let bytes = read_part_to_peek(entry.take(PEEK_CAP_BYTES + 1), meter, name, budgets).ok()?;
@@ -222,12 +222,12 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
             targets.insert(id, (kind, target));
         }
     }
-    let mut paths = HashSet::new();
+    let mut paths: HashMap<String, u64> = HashMap::new();
     for id in &sheet_ids {
         if let Some((kind, target)) = targets.get(id.as_str())
             && kind.ends_with("worksheet")
         {
-            paths.insert(part_path(target));
+            *paths.entry(part_path(target)).or_default() += 1;
         }
     }
     Some(paths)

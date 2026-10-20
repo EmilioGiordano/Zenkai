@@ -425,12 +425,15 @@ fn scan_archive<R: Read + Seek>(
         // counted on the same pass and charged to the memory budget cells share
         // with the streaming reader; anything over refuses the file. A sheet the
         // package names under a skipped prefix is still a sheet, never skipped.
-        let count_cells = match &package_sheets {
-            Some(sheets) => sheets.contains(&entry_name),
-            None => entry_name
-                .to_ascii_lowercase()
-                .starts_with("xl/worksheets/"),
+        let loads = match &package_sheets {
+            Some(sheets) => sheets.get(&entry_name).copied().unwrap_or(0),
+            None => u64::from(
+                entry_name
+                    .to_ascii_lowercase()
+                    .starts_with("xl/worksheets/"),
+            ),
         };
+        let count_cells = loads > 0;
         if skipped_part(&entry_name) && !count_cells {
             let entry = archive
                 .by_index(index)
@@ -443,7 +446,7 @@ fn scan_archive<R: Read + Seek>(
         }
         let (_, part, usage) = read_part_if_checked(archive, index, meter, budgets, count_cells)?;
         if count_cells {
-            budgets.check_importer_usage(usage)?;
+            budgets.check_importer_usage(usage.repeated(loads))?;
         }
         inspect(&entry_name, &part)?;
     }
@@ -870,13 +873,22 @@ mod tests {
     }
 
     fn archive_with_package(workbook: &str, rels: &str, entry: &str) -> bool {
-        let sheet = bare_cells(200);
+        archive_with_package_at(workbook, rels, entry, &bare_cells(200), 1_000)
+    }
+
+    fn archive_with_package_at(
+        workbook: &str,
+        rels: &str,
+        entry: &str,
+        sheet: &str,
+        max_cells: u64,
+    ) -> bool {
         let entries = [
             ("xl/workbook.xml", workbook.as_bytes()),
             ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
             (entry, sheet.as_bytes()),
         ];
-        walk_refused(&entries, 1_000)
+        walk_refused(&entries, max_cells)
     }
 
     fn rels_of(items: &[(&str, &str)]) -> String {
@@ -970,6 +982,35 @@ mod tests {
             ];
             assert_eq!(walk_refused(&usual, budget), !peeked, "{size}");
         }
+    }
+
+    #[test]
+    fn many_sheets_naming_one_part_are_charged_for_each_load() {
+        // 200 cells cost 104,000 bytes: one sheet fits this budget, three do not.
+        let cells = bare_cells(200);
+        let load = |sheets: usize| {
+            let names: Vec<(String, String)> = (1..=sheets)
+                .map(|n| (format!("S{n}"), format!("rId{n}")))
+                .collect();
+            let listed: Vec<(&str, &str)> = names
+                .iter()
+                .map(|(a, b)| (a.as_str(), b.as_str()))
+                .collect();
+            let rels: Vec<(&str, &str)> = names
+                .iter()
+                .map(|(_, id)| (id.as_str(), "/data/s1.xml"))
+                .collect();
+            archive_with_package_at(
+                &workbook_of(&listed),
+                &rels_of(&rels),
+                "data/s1.xml",
+                &cells,
+                1_800,
+            )
+        };
+        assert!(!load(1));
+        assert!(load(3));
+        assert!(load(40));
     }
 
     #[test]
