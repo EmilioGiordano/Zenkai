@@ -3,7 +3,8 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::*;
 use zenkai_agent::preferences::{
-    CloseWithUnsaved, ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS, XlsxReaderChoice,
+    CloseWithUnsaved, ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS, MarkdownOpensIn,
+    XlsxReaderChoice,
 };
 use zenkai_agent::settings::{PermissionMode, Settings, ToolCallDisplay};
 use zenkai_i18n::t;
@@ -192,6 +193,25 @@ impl SettingsWindow {
                         |choice, _, cx| {
                             agent_settings::change(cx, move |settings| {
                                 settings.general.close_with_unsaved = choice
+                            })
+                        },
+                        cx,
+                    )
+                    .into_any_element(),
+                );
+            }
+            RowId::MarkdownOpensIn => {
+                let current = settings.general.markdown_opens_in;
+                parts.control = Some(
+                    segmented(
+                        "markdown-opens-in",
+                        MarkdownOpensIn::ALL
+                            .into_iter()
+                            .map(|choice| (choice, choice.label(), choice == current))
+                            .collect(),
+                        |choice, _, cx| {
+                            agent_settings::change(cx, move |settings| {
+                                settings.general.markdown_opens_in = choice
                             })
                         },
                         cx,

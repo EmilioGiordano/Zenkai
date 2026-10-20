@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use zenkai_agent::preferences::MarkdownOpensIn;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
@@ -44,6 +45,15 @@ pub enum ViewMode {
     Preview,
     Split,
     Source,
+}
+
+impl From<MarkdownOpensIn> for ViewMode {
+    fn from(choice: MarkdownOpensIn) -> ViewMode {
+        match choice {
+            MarkdownOpensIn::Preview => ViewMode::Preview,
+            MarkdownOpensIn::Split => ViewMode::Split,
+        }
+    }
 }
 
 impl ViewMode {
