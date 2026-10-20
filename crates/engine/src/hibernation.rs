@@ -72,18 +72,22 @@ impl Workbook {
     // The workbook as it was when `hibernate` returned `kept`, with the same history. It is
     // evaluated in full, as after an open, so a volatile function shows its current value.
     pub fn wake(path: &Path, kept: &Kept) -> Result<Workbook, EngineError> {
-        let payload = read_dump(path, MAX_DUMP_BYTES)?;
+        let (mut file, length) = open_verified(path, MAX_DUMP_BYTES)?;
         run_with_engine_stack(move || {
-            let model =
-                UserModel::from_bytes_with_history(&payload, LANGUAGE).map_err(|error| {
-                    if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
-                        EngineError::TooLarge(error)
-                    } else {
-                        EngineError::BadDump(error)
-                    }
-                })?;
-            // The encoded dump is not needed once decoded; the evaluation below is the peak.
-            drop(payload);
+            // Read and decoded a section at a time: next to the model, only the largest
+            // section is in memory, never the whole dump.
+            let model = UserModel::from_reader_with_history(
+                &mut (&mut file).take(length),
+                length,
+                LANGUAGE,
+            )
+            .map_err(|error| {
+                if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
+                    EngineError::TooLarge(error)
+                } else {
+                    EngineError::BadDump(error)
+                }
+            })?;
             Ok(evaluated_user_model(
                 model,
                 kept.carried.clone(),
@@ -225,8 +229,9 @@ fn short_file() -> EngineError {
     EngineError::BadDump("it is shorter than its header".to_string())
 }
 
-// Reads the file back in chunks and checks its checksum, without holding it whole.
-fn verify_file(path: &Path, cap: u64) -> Result<(), EngineError> {
+// Opens a dump, checks its header and its checksum (reading it in chunks, never whole), and
+// leaves the file at the start of the payload, whose length it returns.
+fn open_verified(path: &Path, cap: u64) -> Result<(fs::File, u64), EngineError> {
     let read_error = |source| EngineError::Read {
         path: path.to_path_buf(),
         source,
@@ -246,37 +251,35 @@ fn verify_file(path: &Path, cap: u64) -> Result<(), EngineError> {
         left -= take as u64;
     }
     if hasher.finalize() != checksum {
-        return Err(EngineError::VerifyFailed(
-            "the dump on disk differs from what was written".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn read_dump(path: &Path, cap: u64) -> Result<Vec<u8>, EngineError> {
-    let read_error = |source| EngineError::Read {
-        path: path.to_path_buf(),
-        source,
-    };
-    let mut file = fs::File::open(path).map_err(read_error)?;
-    let size = file.metadata().map_err(read_error)?.len();
-    let mut header = [0; HEADER_BYTES];
-    file.read_exact(&mut header).map_err(|_| short_file())?;
-    let (declared, checksum) = parse_header(&header, size, cap)?;
-    // `declared` is the size of a file that exists, so this never allocates past the disk.
-    let mut payload = vec![0; usize::try_from(declared).map_err(|_| short_file())?];
-    file.read_exact(&mut payload).map_err(read_error)?;
-    if crc32fast::hash(&payload) != checksum {
         return Err(EngineError::BadDump(
             "its contents do not match their checksum".to_string(),
         ));
     }
-    Ok(payload)
+    file.seek(SeekFrom::Start(HEADER_BYTES as u64))
+        .map_err(read_error)?;
+    Ok((file, declared))
+}
+
+// What a save of the dump checks once it is written.
+fn verify_file(path: &Path, cap: u64) -> Result<(), EngineError> {
+    open_verified(path, cap)
+        .map(|_| ())
+        .map_err(|error| match error {
+            EngineError::BadDump(reason) => EngineError::VerifyFailed(reason),
+            other => other,
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn read_dump(path: &Path, cap: u64) -> Result<Vec<u8>, EngineError> {
+        let (mut file, length) = open_verified(path, cap)?;
+        let mut payload = Vec::new();
+        (&mut file).take(length).read_to_end(&mut payload).unwrap();
+        Ok(payload)
+    }
 
     fn write_bytes(path: &Path, payload: &[u8], cap: u64) -> Result<(), EngineError> {
         write_dump(path, cap, |sink| sink.put(payload))
