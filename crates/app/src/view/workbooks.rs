@@ -3,14 +3,14 @@ use std::time::Instant;
 
 use gpui_kit::*;
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Unsupported, Workbook, XlsxReader, open_xlsx};
+use zenkai_engine::{Stamp, Unsupported, Workbook, XlsxReader, open_xlsx};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace, file_label};
 use crate::agent_settings;
 use crate::document;
-use crate::documents::{Installed, Intent, Loaded, Step};
+use crate::documents::{Installed, Intent, Loaded, Provenance, Step};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::files::{self, FileLoad, LoadFailure};
 use crate::recovery;
@@ -18,9 +18,16 @@ use crate::recovery;
 pub(super) enum LinkLoad {
     Loaded {
         file: Box<FileLoad>,
+        provenance: Provenance,
         // The recovery copy the work was read from, to adopt once the workbook is installed.
         copy: Option<PathBuf>,
         recovery_lost: bool,
+        // The memory dump could not be read, so the work came back from the recovery copy
+        // without its undo history.
+        dump_lost: bool,
+        // The file is not as the workbook last had it: it changed while the workbook was out
+        // of memory, and what loaded is the file as it is now.
+        file_changed: bool,
     },
     Missing,
     Failed(String),
@@ -29,10 +36,43 @@ pub(super) enum LinkLoad {
 // Runs on the background executor. The recovery copy, when there is one, holds the unsaved
 // work and is read instead of the file.
 fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
+    let hibernation = link
+        .rested
+        .as_ref()
+        .and_then(|rested| rested.hibernation.as_ref());
+    let mut dump_lost = false;
+    if let Some(hibernation) = hibernation {
+        match Workbook::wake(&hibernation.dump, &hibernation.kept) {
+            Ok(workbook) => {
+                recovery::remove(&hibernation.dump);
+                return LinkLoad::Loaded {
+                    file: Box::new(FileLoad {
+                        workbook,
+                        unsupported: Vec::new(),
+                        read_only: link.read_only,
+                        origin: link.origin.unwrap_or(FileOrigin::Internet),
+                        reader_fallback: None,
+                    }),
+                    provenance: Provenance::Dump,
+                    copy: None,
+                    recovery_lost: false,
+                    dump_lost: false,
+                    file_changed: false,
+                };
+            }
+            Err(error) => {
+                tracing::warn!(%error, "could not wake a hibernated workbook");
+                dump_lost = true;
+            }
+        }
+    }
     let mut recovery_lost = link.recovery_lost;
     if let Some(copy) = link.recovery.as_ref().filter(|copy| copy.exists()) {
         match open_xlsx(copy) {
             Ok(opened) => {
+                if let Some(hibernation) = hibernation {
+                    recovery::remove(&hibernation.dump);
+                }
                 return LinkLoad::Loaded {
                     file: Box::new(FileLoad {
                         workbook: opened.workbook,
@@ -42,8 +82,11 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
                         origin: FileOrigin::Internet,
                         reader_fallback: None,
                     }),
+                    provenance: Provenance::Recovery,
                     copy: Some(copy.clone()),
                     recovery_lost: false,
+                    dump_lost,
+                    file_changed: false,
                 };
             }
             Err(error) => {
@@ -54,18 +97,34 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
     } else if link.recovery.is_some() {
         recovery_lost = true;
     }
+    if dump_lost {
+        // The file holds none of the unsaved work, so loading it would show the user an older
+        // workbook as if nothing was lost. The link and its dump stay for another try.
+        return LinkLoad::Failed(t!("open.hibernation_lost").to_string());
+    }
     let Some(path) = &link.path else {
         return LinkLoad::Missing;
     };
     match files::load_workbook(path, reader) {
         Ok(file) => LinkLoad::Loaded {
             file: Box::new(file),
+            provenance: Provenance::File,
             copy: None,
             recovery_lost,
+            dump_lost: false,
+            file_changed: changed_while_out_of_memory(link, path),
         },
         Err(LoadFailure::Missing) => LinkLoad::Missing,
         Err(failure) => LinkLoad::Failed(failure_text(&failure)),
     }
+}
+
+// Checked after the read, so a change between the check and the read is never missed.
+fn changed_while_out_of_memory(link: &Link, path: &std::path::Path) -> bool {
+    let Some(rested) = &link.rested else {
+        return false;
+    };
+    Stamp::of(path).is_ok_and(|now| rested.file.changed(now))
 }
 
 pub(super) fn failure_text(failure: &LoadFailure) -> String {
@@ -263,6 +322,17 @@ impl Workspace {
                 .spawn(async move { recovery::remove_with_lock(&file) })
                 .detach();
         }
+        if let Some(Entry::Link(link)) = self.documents.entry(id)
+            && let Some(hibernation) = link
+                .rested
+                .as_ref()
+                .and_then(|rested| rested.hibernation.as_ref())
+        {
+            let dump = hibernation.dump.clone();
+            cx.background_executor()
+                .spawn(async move { recovery::remove(&dump) })
+                .detach();
+        }
         self.documents.close(id);
         self.refuse_orphaned_agent_change(window, cx);
         if was_active {
@@ -399,20 +469,22 @@ impl Workspace {
         match load {
             LinkLoad::Loaded {
                 file,
+                provenance,
                 copy,
                 recovery_lost,
+                dump_lost,
+                file_changed,
             } => {
                 if self.documents.shows_when_loaded(id) {
                     self.park_active(window, cx);
                 }
-                let from_recovery = copy.is_some();
                 let outcome = self.documents.install(Loaded {
                     id,
                     workbook: file.workbook,
                     unsupported: file.unsupported,
                     read_only: file.read_only,
                     origin: file.origin,
-                    from_recovery,
+                    provenance,
                 });
                 self.refuse_orphaned_agent_change(window, cx);
                 if let Some(copy) = copy {
@@ -428,10 +500,20 @@ impl Workspace {
                 match outcome {
                     Installed::OnScreen => {
                         self.present_active(window, cx);
-                        self.announce_loaded(&name, from_recovery, recovery_lost, cx);
+                        self.announce_loaded(&name, provenance, recovery_lost, dump_lost, cx);
                     }
-                    Installed::Background => cx.notify(),
+                    Installed::Background => {
+                        if dump_lost {
+                            let text = t!("notice.hibernation_lost", name = name);
+                            self.notify(Severity::Warning, text, cx);
+                        }
+                        cx.notify();
+                    }
                     Installed::Gone => {}
+                }
+                if file_changed {
+                    let text = t!("notice.file_changed_while_unloaded", name = name);
+                    self.notify(Severity::Warning, text, cx);
                 }
             }
             LinkLoad::Missing => {
@@ -485,18 +567,26 @@ impl Workspace {
     fn announce_loaded(
         &mut self,
         name: &str,
-        from_recovery: bool,
+        provenance: Provenance,
         recovery_lost: bool,
+        dump_lost: bool,
         cx: &mut Context<Self>,
     ) {
-        if recovery_lost {
+        if dump_lost {
+            let text = t!("notice.hibernation_lost", name = name);
+            self.notify(Severity::Warning, text, cx);
+        } else if recovery_lost {
             let text = t!("notice.recovery_lost", name = name);
             self.notify(Severity::Warning, text, cx);
-        } else if from_recovery {
-            let text = t!("notice.recovered", name = name);
-            self.notify(Severity::Warning, text, cx);
         } else {
-            self.announce_opened(None, cx);
+            match provenance {
+                Provenance::Recovery => {
+                    let text = t!("notice.recovered", name = name);
+                    self.notify(Severity::Warning, text, cx);
+                }
+                Provenance::File => self.announce_opened(None, cx),
+                Provenance::Dump => {}
+            }
         }
     }
 
