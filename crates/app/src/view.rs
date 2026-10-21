@@ -1017,12 +1017,12 @@ impl Workspace {
                 let read_only = self.documents.active().is_some_and(|d| d.read_only);
                 if read_only && self.grid.read(cx).editor().is_some() {
                     self.grid.update(cx, |grid, cx| grid.take_edit(cx));
-                    self.notify(Severity::Warning, t!("notice.opened_read_only"), cx);
+                    self.notify(Severity::Warning, t!("notice.read_only_refused"), cx);
                 }
                 cx.notify();
             }
             GridEvent::EditRequested(_) if self.documents.active().is_some_and(|d| d.read_only) => {
-                self.notify(Severity::Warning, t!("notice.opened_read_only"), cx);
+                self.notify(Severity::Warning, t!("notice.read_only_refused"), cx);
             }
             GridEvent::EditRequested(pos) => {
                 // Unknown while a recalculation holds the workbook: editing an empty
@@ -1162,7 +1162,7 @@ impl Workspace {
             return false;
         };
         if document.queue_user_edit(Box::new(edit)).is_err() {
-            self.notify(Severity::Warning, t!("notice.opened_read_only"), cx);
+            self.notify(Severity::Warning, t!("notice.read_only_refused"), cx);
             return false;
         }
         if shown {
