@@ -70,7 +70,7 @@ fn assert_styled_blanks(book: &impl Engine) {
     assert_eq!(book.cell(SHEET, at("D31")).text, "5");
 }
 
-fn blanks_stay_empty(reader: XlsxReader, tail: Option<&str>) {
+fn blanks_stay_empty(reader: XlsxReader, tail: Option<&str>, edited: &str) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("total.xlsx");
     total_row_source(&path);
@@ -82,7 +82,7 @@ fn blanks_stay_empty(reader: XlsxReader, tail: Option<&str>) {
     assert_styled_blanks(&opened.workbook);
 
     let mut book = opened.workbook;
-    book.set_input(SHEET, at("A1"), "edit").unwrap();
+    book.set_input(SHEET, at(edited), "5").unwrap();
     let saved_path = dir.path().join("saved.xlsx");
     save_xlsx(
         book.save_snapshot(&saved_path, SaveTarget::Document)
@@ -97,14 +97,30 @@ const NUMBER_WITH_EMPTY_VALUE_TAIL: &str = r#" t="n"><v></v></c>"#;
 
 #[test]
 fn ironcalc_reader_keeps_styled_blanks_empty() {
-    blanks_stay_empty(XlsxReader::IronCalc, None);
-    blanks_stay_empty(XlsxReader::IronCalc, Some(NUMBER_TAIL));
-    blanks_stay_empty(XlsxReader::IronCalc, Some(NUMBER_WITH_EMPTY_VALUE_TAIL));
+    for edited in ["A1", "D31"] {
+        blanks_stay_empty(XlsxReader::IronCalc, None, edited);
+    }
+    for edited in ["A1", "D31"] {
+        blanks_stay_empty(XlsxReader::IronCalc, Some(NUMBER_TAIL), edited);
+    }
+    for edited in ["A1", "D31"] {
+        blanks_stay_empty(
+            XlsxReader::IronCalc,
+            Some(NUMBER_WITH_EMPTY_VALUE_TAIL),
+            edited,
+        );
+    }
 }
 
 #[test]
 fn fast_reader_keeps_styled_blanks_empty() {
-    blanks_stay_empty(XlsxReader::Fast, None);
-    blanks_stay_empty(XlsxReader::Fast, Some(NUMBER_TAIL));
-    blanks_stay_empty(XlsxReader::Fast, Some(NUMBER_WITH_EMPTY_VALUE_TAIL));
+    for edited in ["A1", "D31"] {
+        blanks_stay_empty(XlsxReader::Fast, None, edited);
+    }
+    for edited in ["A1", "D31"] {
+        blanks_stay_empty(XlsxReader::Fast, Some(NUMBER_TAIL), edited);
+    }
+    for edited in ["A1", "D31"] {
+        blanks_stay_empty(XlsxReader::Fast, Some(NUMBER_WITH_EMPTY_VALUE_TAIL), edited);
+    }
 }
