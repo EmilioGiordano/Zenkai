@@ -192,6 +192,35 @@ fn plain_name(name: &str) -> String {
         .collect()
 }
 
+// Chips go in front of the message, except before a slash command, which must stay first.
+fn message_with_references(references: &[Reference], typed: &str) -> String {
+    if references.is_empty() || typed.trim().is_empty() {
+        return typed.to_string();
+    }
+    let safe = |name: &String| {
+        name.chars()
+            .filter(|c| !name_guard::is_unsafe_char(*c))
+            .collect()
+    };
+    let references: Vec<String> = references
+        .iter()
+        .map(|reference| {
+            Reference {
+                workbook: reference.workbook.as_ref().map(safe),
+                sheet: reference.sheet.as_ref().map(safe),
+                range: reference.range,
+            }
+            .text()
+        })
+        .collect();
+    let references = references.join(" ");
+    if typed.starts_with('/') {
+        format!("{typed} {references}")
+    } else {
+        format!("{references} {typed}")
+    }
+}
+
 fn context_line(workbook: Option<(WorkbookId, String)>, selection: Option<&str>) -> String {
     let Some((id, name)) = workbook else {
         return format!(
@@ -375,20 +404,6 @@ impl ChatPanel {
         }));
     }
 
-    // Chips go in front of the message, except before a slash command, which must stay first.
-    fn message_with_references(&self, typed: &str) -> String {
-        if self.references.is_empty() || typed.trim().is_empty() {
-            return typed.to_string();
-        }
-        let references: Vec<String> = self.references.iter().map(Reference::text).collect();
-        let references = references.join(" ");
-        if typed.starts_with('/') {
-            format!("{typed} {references}")
-        } else {
-            format!("{references} {typed}")
-        }
-    }
-
     pub(super) fn busy(&self) -> bool {
         self.thread.turn() != TurnState::Idle
     }
@@ -427,7 +442,7 @@ impl ChatPanel {
     pub(crate) fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let typed = self.composer.read(cx).value().to_string();
         let mentioned = self.prepare_mentions(&typed, cx);
-        let text = self.message_with_references(&mentioned.text);
+        let text = message_with_references(&self.references, &mentioned.text);
         if !self.thread.submit(text.clone()) {
             return;
         }
@@ -579,7 +594,7 @@ impl ChatPanel {
 mod tests {
     use zenkai_types::WorkbookId;
 
-    use super::{context_line, plain_name};
+    use super::{Reference, context_line, message_with_references, plain_name};
 
     #[test]
     fn the_context_names_the_workbook_sheet_and_selection() {
@@ -612,5 +627,18 @@ mod tests {
     fn plain_name_drops_direction_marks_and_zero_width_characters() {
         let hostile = "a\u{202E}b\u{2066}c\u{200F}d\u{200B}e\u{2028}f\u{FEFF}g\u{061C}h";
         assert_eq!(plain_name(hostile), "abcdefgh");
+    }
+
+    #[test]
+    fn a_hostile_sheet_name_is_cleaned_in_a_sent_message() {
+        let reference = Reference {
+            workbook: None,
+            sheet: Some("Ve\u{202E}ntas".to_string()),
+            range: zenkai_types::Range::parse_a1("A1:B2").unwrap(),
+        };
+        assert_eq!(
+            message_with_references(&[reference], "sum it"),
+            "Ventas!A1:B2 sum it"
+        );
     }
 }
