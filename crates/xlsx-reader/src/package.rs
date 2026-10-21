@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::num::NonZeroU64;
 use std::io::{Cursor, Read, Seek, Write};
+use std::num::NonZeroU64;
 
 use ironcalc::base::expressions::parser::DefinedNameS;
 
 use crate::ReadError;
+use crate::limits::describe_bytes;
 use crate::skipped_part;
 use crate::stream::{Budgets, CompressedMeter, read_part, read_part_to_peek};
 
@@ -175,27 +176,40 @@ pub(crate) fn read_package<R: Read + Seek>(
 // The parts IronCalc's importer loads as worksheets, with how many sheets load each,
 // found the way it finds them but tolerating what `read_package` refuses (two sheets on
 // one part, odd names, a missing attribute on a sheet the importer would reject anyway).
-// Counting a part too many is safe; missing one lets its cells in uncharged. None when
-// either file cannot be parsed. The two files are only peeked at: the walk reads and
-// charges them afterwards. Past the cap the peek gives up (None), so a crafted part
-// never becomes a large DOM here.
+// Counting a part too many is safe; missing one lets its cells in uncharged. The two
+// files are only peeked at: the walk reads and charges them afterwards. A file past the
+// cap is refused, since the sheets it names, and how often, could not be known; a file
+// that is missing or does not parse gives None, as the importer fails on it too.
 pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     meter: &CompressedMeter,
     budgets: &Budgets,
-) -> Option<HashMap<String, NonZeroU64>> {
-    let mut peek = |name: &str| -> Option<String> {
-        let entry = archive.by_name(name).ok()?;
-        let bytes = read_part_to_peek(entry.take(PEEK_CAP_BYTES + 1), meter, name, budgets).ok()?;
+) -> Result<Option<HashMap<String, NonZeroU64>>, ReadError> {
+    let mut peek = |name: &str| -> Result<Option<String>, ReadError> {
+        let Ok(entry) = archive.by_name(name) else {
+            return Ok(None);
+        };
+        let bytes = match read_part_to_peek(entry.take(PEEK_CAP_BYTES + 1), meter, name, budgets) {
+            Ok(bytes) => bytes,
+            Err(ReadError::Unsafe(reason)) => return Err(ReadError::Unsafe(reason)),
+            Err(_) => return Ok(None),
+        };
         if bytes.len() as u64 > PEEK_CAP_BYTES {
-            return None;
+            return Err(ReadError::Unsafe(format!(
+                "{name} is larger than the {} a workbook index may take",
+                describe_bytes(PEEK_CAP_BYTES)
+            )));
         }
-        String::from_utf8(bytes).ok()
+        Ok(String::from_utf8(bytes).ok())
     };
     // The workbook's DOM is gone before the rels' is built, so the two never coexist.
     let sheet_ids: Vec<String> = {
-        let workbook = peek("xl/workbook.xml")?;
-        let workbook = roxmltree::Document::parse(&workbook).ok()?;
+        let Some(workbook) = peek("xl/workbook.xml")? else {
+            return Ok(None);
+        };
+        let Ok(workbook) = roxmltree::Document::parse(&workbook) else {
+            return Ok(None);
+        };
         workbook
             .descendants()
             .filter(|n| n.has_tag_name("sheet"))
@@ -208,8 +222,12 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
             })
             .collect()
     };
-    let rels = peek("xl/_rels/workbook.xml.rels")?;
-    let rels = roxmltree::Document::parse(&rels).ok()?;
+    let Some(rels) = peek("xl/_rels/workbook.xml.rels")? else {
+        return Ok(None);
+    };
+    let Ok(rels) = roxmltree::Document::parse(&rels) else {
+        return Ok(None);
+    };
     let mut targets = HashMap::new();
     for node in rels
         .descendants()
@@ -235,7 +253,7 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
                 .or_insert(NonZeroU64::MIN);
         }
     }
-    Some(paths)
+    Ok(Some(paths))
 }
 
 // The archive IronCalc's own importer reads for everything but the cells: every entry is

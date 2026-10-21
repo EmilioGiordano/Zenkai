@@ -410,12 +410,12 @@ fn scan_archive<R: Read + Seek>(
     budgets: &Budgets,
     inspect: &Inspect<'_>,
 ) -> Result<(), ReadError> {
-    // The importer loads the worksheets the package relationships name, whatever else is
-    // wrong with the package, so those parts are the ones counted. When the package cannot
-    // be peeked at, any part could be named as a sheet, so every part is counted: that can
-    // only over-count. Every part still streams through the caps below, and IronCalc
-    // still decides the file.
-    let package_sheets = importer_worksheet_paths(archive, meter, budgets);
+    // The importer loads the worksheets the package relationships name, so those parts
+    // are the ones counted, once for every sheet naming them. Where the package has no
+    // readable index the importer fails on the file, so every part is counted only as a
+    // guard. Every part still streams through the caps below, and IronCalc still decides
+    // the file.
+    let package_sheets = importer_worksheet_paths(archive, meter, budgets)?;
     for index in 0..archive.len() {
         let entry_name = {
             let entry = archive
@@ -958,7 +958,7 @@ mod tests {
     }
 
     #[test]
-    fn a_workbook_part_past_the_peek_cap_falls_back_to_counting_every_part() {
+    fn a_workbook_part_past_the_peek_cap_is_refused() {
         let cap = package::PEEK_CAP_BYTES as usize;
         // 300,000 cells cost more than this budget, which still holds the 8 MB part's DOM.
         let budget = 2_100_000;
@@ -971,14 +971,15 @@ mod tests {
                 ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
                 ("data/s1.xml", cells.as_bytes()),
             ];
-            // Named by the relationships or not, a part anywhere could be the sheet.
-            assert!(walk_refused(&elsewhere, budget), "{size} {peeked}");
-            // Only the fallback counts the usual folder, where no relationship points.
+            // Past the cap the workbook index cannot say which parts are sheets or how
+            // often, so the file is refused whatever else it holds.
+            assert!(walk_refused(&elsewhere, budget), "{size}");
             let usual = [
                 ("xl/workbook.xml", workbook.as_bytes()),
                 ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
                 ("xl/worksheets/s1.xml", cells.as_bytes()),
             ];
+            // Within the cap only the part the relationships name is a sheet.
             assert_eq!(walk_refused(&usual, budget), !peeked, "{size}");
         }
     }
