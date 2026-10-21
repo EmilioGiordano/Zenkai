@@ -1296,9 +1296,10 @@ impl Workspace {
     }
 
     fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.busy = Some(t!("busy.reading", name = file_label(&path)).into());
+        let read = self
+            .open_loads
+            .start(t!("busy.reading", name = file_label(&path)));
         cx.notify();
-        let label = self.busy.clone().unwrap_or_default();
         let request = self.next_csv_request();
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.clone();
@@ -1312,7 +1313,8 @@ impl Workspace {
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.clear_busy(&label, cx);
+                this.open_loads.finish(read);
+                cx.notify();
                 if this.csv_request != request {
                     return;
                 }
