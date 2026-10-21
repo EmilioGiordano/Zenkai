@@ -210,7 +210,12 @@ impl Document {
         Ok(())
     }
 
-    pub fn queue(&mut self, edit: Edit) {
+    #[cfg(test)]
+    pub fn queue_in_test(&mut self, edit: Edit) {
+        self.queue(edit);
+    }
+
+    fn queue(&mut self, edit: Edit) {
         self.edit_count += 1;
         self.last_edited = Some(Instant::now());
         self.autosave_cancel.store(true, Ordering::Relaxed);

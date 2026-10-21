@@ -867,7 +867,7 @@ mod tests {
     fn a_batch_finishing_in_an_inactive_document_releases_that_document() {
         let mut documents = busy();
         let first = documents.active_id().unwrap();
-        documents.active_mut().unwrap().queue(Box::new(|_| Ok(())));
+        documents.active_mut().unwrap().queue_in_test(Box::new(|_| Ok(())));
         let generation = documents.active().unwrap().generation();
         assert!(documents.active_mut().unwrap().take_batch().is_some());
         open_file(&mut documents, "a.xlsx");
@@ -882,7 +882,7 @@ mod tests {
         let mut documents = busy();
         let before = documents.unsaved_edits();
         assert_eq!(before, [(documents.active_id().unwrap(), 0)]);
-        documents.active_mut().unwrap().queue(Box::new(|_| Ok(())));
+        documents.active_mut().unwrap().queue_in_test(Box::new(|_| Ok(())));
         assert_ne!(documents.unsaved_edits(), before);
     }
 
@@ -932,11 +932,11 @@ mod tests {
         documents
             .get_mut(untitled)
             .unwrap()
-            .queue(Box::new(|_| Ok(())));
+            .queue_in_test(Box::new(|_| Ok(())));
         let a = open_file(&mut documents, "a.xlsx");
         open_file(&mut documents, "b.xlsx");
         assert!(!documents.unload(untitled));
-        documents.get_mut(a).unwrap().queue(Box::new(|_| Ok(())));
+        documents.get_mut(a).unwrap().queue_in_test(Box::new(|_| Ok(())));
         assert!(!documents.unload(a));
     }
 
