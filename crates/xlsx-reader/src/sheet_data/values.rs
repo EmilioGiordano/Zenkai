@@ -60,6 +60,8 @@ impl Scanner<'_, '_> {
                 s,
             },
             ("n", Some(a)) => Cell::new_spill_cell(s, a, SpillValue::Number(number(value))),
+            // A number cell without a value (openpyxl writes t="n" on styled blanks) is empty.
+            ("n", None) if value.is_none_or(str::is_empty) => Cell::EmptyCell { s },
             ("n", None) => Cell::NumberCell {
                 v: number(value),
                 s,
