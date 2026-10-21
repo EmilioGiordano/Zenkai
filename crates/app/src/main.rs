@@ -32,6 +32,7 @@ mod keymap;
 mod language;
 mod logging;
 mod memory;
+mod open_loads;
 mod palette;
 mod panel_width;
 mod pending_save;

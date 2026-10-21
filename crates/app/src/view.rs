@@ -57,6 +57,7 @@ use crate::interface_scale::{self, rem_px};
 use crate::jump::jump_target;
 use crate::keymap;
 use crate::memory;
+use crate::open_loads::OpenLoads;
 use crate::palette;
 use crate::panel_width::{Panel, Resize};
 use crate::pending_save::{AfterJob, JobEnd};
@@ -160,6 +161,7 @@ pub struct Workspace {
     toast_generation: u64,
     busy: Option<SharedString>,
     job_pill: JobPill,
+    open_loads: OpenLoads,
     last_recalc: Option<Duration>,
     diagnostics: bool,
     clipboard_source: Option<InternalClip>,
@@ -314,6 +316,7 @@ impl Workspace {
             toast_generation: 0,
             busy: None,
             job_pill: JobPill::default(),
+            open_loads: OpenLoads::default(),
             last_recalc: None,
             diagnostics: false,
             clipboard_source: None,
@@ -1272,6 +1275,13 @@ impl Workspace {
     pub(crate) fn end_long_job(&mut self, job: LongJob, cx: &mut Context<Self>) {
         self.job_pill.end(job);
         cx.notify();
+    }
+
+    fn busy_label(&self) -> Option<SharedString> {
+        match self.open_loads.label() {
+            Some(label) => Some(label.to_owned().into()),
+            None => self.busy.clone(),
+        }
     }
 
     fn clear_busy(&mut self, label: &str, cx: &mut Context<Self>) {
@@ -3163,8 +3173,7 @@ impl Workspace {
             LongJob::Autosaving => t!("busy.autosaving"),
         });
         let busy = self
-            .busy
-            .clone()
+            .busy_label()
             .filter(|busy| ![t!("busy.calculating"), t!("busy.saving")].contains(&busy.as_ref()))
             .or_else(|| long_job.map(SharedString::from))?;
         let theme = cx.theme();
@@ -3208,13 +3217,13 @@ impl Workspace {
             .overflow_hidden()
             .gap_3()
             .items_center();
-        if let Some(busy) = &self.busy {
+        if let Some(busy) = self.busy_label() {
             left = left.child(
                 div()
                     .min_w_0()
                     .truncate()
                     .text_color(theme.primary)
-                    .child(busy.clone()),
+                    .child(busy),
             );
         } else if let Some(notice) = &self.notice {
             let (icon, color) = match notice.severity {
