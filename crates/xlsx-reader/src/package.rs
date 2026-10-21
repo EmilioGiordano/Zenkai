@@ -171,12 +171,13 @@ pub(crate) fn read_package<R: Read + Seek>(
     })
 }
 
-// The parts IronCalc's importer loads as worksheets, with how many sheets load each, found the way it finds them but
-// tolerating what `read_package` refuses (two sheets on one part, odd names, a missing
-// attribute on a sheet the importer would reject anyway). Counting a part too many is
-// safe; missing one lets its cells in uncharged. None when either file cannot be parsed.
-// The two files are only peeked at: the walk reads and charges them afterwards. Past
-// the cap the peek gives up (None), so a crafted part never becomes a large DOM here.
+// The parts IronCalc's importer loads as worksheets, with how many sheets load each,
+// found the way it finds them but tolerating what `read_package` refuses (two sheets on
+// one part, odd names, a missing attribute on a sheet the importer would reject anyway).
+// Counting a part too many is safe; missing one lets its cells in uncharged. None when
+// either file cannot be parsed. The two files are only peeked at: the walk reads and
+// charges them afterwards. Past the cap the peek gives up (None), so a crafted part
+// never becomes a large DOM here.
 pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     meter: &CompressedMeter,
