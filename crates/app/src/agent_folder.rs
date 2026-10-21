@@ -90,7 +90,7 @@ pub fn spreadsheets_written_since(folder: &Path, since: SystemTime) -> Vec<Found
 // What the sidebar lists after a turn: workbooks and Markdown files.
 pub fn documents_written_since(folder: &Path, since: SystemTime) -> Vec<FoundFile> {
     written_since(folder, since, |path| {
-        is_listed_spreadsheet(path) || DocumentKind::of(path).is_text()
+        is_listed_spreadsheet(path) || !DocumentKind::of(path).is_workbook()
     })
 }
 

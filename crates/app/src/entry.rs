@@ -54,7 +54,9 @@ impl Link {
     pub fn name(&self) -> String {
         match self.kind {
             DocumentKind::Workbook => display_name(self.path.as_deref(), self.untitled),
-            DocumentKind::Markdown => text_name(self.path.as_deref(), self.untitled),
+            DocumentKind::Markdown | DocumentKind::Pdf => {
+                text_name(self.path.as_deref(), self.untitled)
+            }
         }
     }
 }
