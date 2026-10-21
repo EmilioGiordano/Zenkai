@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use ironcalc::base::Model;
 use ironcalc::base::expressions::parser::Node;
@@ -62,6 +63,8 @@ impl SheetJob {
 pub(crate) struct FullPlan {
     parts: Vec<(String, String)>,
     sheets: Vec<SheetJob>,
+    // The file at the target as this workbook last saw it; nothing is copied from it.
+    guard: Option<Arc<SavedFile>>,
 }
 
 enum Plan {
@@ -204,6 +207,7 @@ pub(crate) fn full_plan(model: &Model<'_>, carried: &Carried) -> Result<FullPlan
     Ok(FullPlan {
         parts: package_parts(model)?,
         sheets,
+        guard: None,
     })
 }
 
@@ -333,6 +337,7 @@ pub(crate) fn snapshot(
         Chosen::Full(sheets) => Plan::Full(FullPlan {
             parts: tracing::info_span!("save_package_parts").in_scope(|| package_parts(model))?,
             sheets,
+            guard: slot.current().filter(|saved| saved.path == path),
         }),
     };
     Ok(SaveSnapshot {
@@ -496,18 +501,19 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
             return Err(write_error(&temp)(source));
         }
     };
-    let held = match &plan {
-        Plan::Patch(plan) => Some(plan.base.clone()),
-        Plan::Full(_) => None,
+    let (held, guard) = match &plan {
+        Plan::Patch(plan) => (Some(plan.base.clone()), None),
+        Plan::Full(plan) => (None, plan.guard.clone()),
     };
     let base = held.as_deref();
+    let stamped = base.or(guard.as_deref());
     let mut refused = None;
-    let checked = unchanged(base)
+    let checked = unchanged(stamped)
         .and_then(|()| run_with_engine_stack(|| write_temp(plan, file, &temp, &mut refused)))
         .and_then(|written| {
             tracing::info_span!("save_verify").in_scope(|| verify(&temp, base, &written))
         })
-        .and_then(|()| unchanged(base));
+        .and_then(|()| unchanged(stamped));
     if let Err(error) = checked {
         remove_temp(&temp);
         // A file that cannot be copied from must not keep every later save from working;
@@ -519,10 +525,12 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
                 | EngineError::BaseUnusable { .. }
                 | EngineError::VerifyFailed(_)
         );
+        // A full write copies nothing, so only a changed file makes it forget the stamp.
+        let guard_failed = matches!(error, EngineError::ChangedOnDisk(_));
         if let (Some(held), Some(part)) = (&held, refused) {
             tracing::warn!(%error, %part, "a sheet cannot be spliced; the next save writes it whole");
             slot.refuse_splice(held, part);
-        } else if base.is_some() && base_failed {
+        } else if (base.is_some() && base_failed) || (guard.is_some() && guard_failed) {
             tracing::warn!(%error, "copying from the saved file failed; the next save writes it whole");
             slot.set(None);
         }

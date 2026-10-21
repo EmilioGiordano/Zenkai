@@ -502,3 +502,67 @@ fn styles_laid_out_with_white_space_keep_every_cell_style() {
     assert_eq!(reopened.cell(SheetId(0), pos(0, 2)).style, bold);
     assert_eq!(cells(&reopened), cells(&book));
 }
+
+fn replaced_elsewhere(document: &Path) {
+    let mut other = Source::new();
+    other
+        .add_worksheet()
+        .write_string(0, 0, "replaced")
+        .unwrap();
+    other.save(document).unwrap();
+}
+
+fn restyle(book: &mut Workbook) {
+    let range = Range::new(pos(0, 0), pos(1, 1));
+    book.apply_style(SheetId(0), range, StyleChange::Bold(true))
+        .unwrap();
+}
+
+#[test]
+fn a_full_save_after_an_external_change_is_refused_then_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let (document, mut book) = opened(dir.path());
+    replaced_elsewhere(&document);
+    let theirs = std::fs::read(&document).unwrap();
+    restyle(&mut book);
+    let refused = save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap());
+    assert!(
+        matches!(refused, Err(EngineError::ChangedOnDisk(_))),
+        "{refused:?}"
+    );
+    assert_eq!(std::fs::read(&document).unwrap(), theirs);
+    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    assert_eq!(
+        open_xlsx(&document).unwrap().workbook.sheets().len(),
+        SHEETS.len()
+    );
+}
+
+#[test]
+fn a_full_save_of_an_unchanged_file_succeeds_and_keeps_guarding() {
+    let dir = tempfile::tempdir().unwrap();
+    let (document, mut book) = opened(dir.path());
+    restyle(&mut book);
+    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    restyle(&mut book);
+    book.set_input(SheetId(0), pos(3, 3), "again").unwrap();
+    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    replaced_elsewhere(&document);
+    restyle(&mut book);
+    let refused = save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap());
+    assert!(matches!(refused, Err(EngineError::ChangedOnDisk(_))));
+}
+
+#[test]
+fn a_full_save_as_to_a_new_path_is_not_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (document, mut book) = opened(dir.path());
+    replaced_elsewhere(&document);
+    restyle(&mut book);
+    let target = dir.path().join("copy.xlsx");
+    save_xlsx(book.save_snapshot(&target, SaveTarget::Document).unwrap()).unwrap();
+    assert_eq!(
+        open_xlsx(&target).unwrap().workbook.sheets().len(),
+        SHEETS.len()
+    );
+}
