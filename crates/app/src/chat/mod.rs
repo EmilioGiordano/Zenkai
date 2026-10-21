@@ -192,27 +192,11 @@ fn plain_name(name: &str) -> String {
         .collect()
 }
 
-// Chips go in front of the message, except before a slash command, which must stay first.
 fn message_with_references(references: &[Reference], typed: &str) -> String {
     if references.is_empty() || typed.trim().is_empty() {
         return typed.to_string();
     }
-    let safe = |name: &String| {
-        name.chars()
-            .filter(|c| !name_guard::is_unsafe_char(*c))
-            .collect()
-    };
-    let references: Vec<String> = references
-        .iter()
-        .map(|reference| {
-            Reference {
-                workbook: reference.workbook.as_ref().map(safe),
-                sheet: reference.sheet.as_ref().map(safe),
-                range: reference.range,
-            }
-            .text()
-        })
-        .collect();
+    let references: Vec<String> = references.iter().map(Reference::text).collect();
     let references = references.join(" ");
     if typed.starts_with('/') {
         format!("{typed} {references}")
@@ -630,15 +614,16 @@ mod tests {
     }
 
     #[test]
-    fn a_hostile_sheet_name_is_cleaned_in_a_sent_message() {
+    fn a_safe_reference_is_sent_unchanged_in_front_of_the_message() {
         let reference = Reference {
             workbook: None,
-            sheet: Some("Ve\u{202E}ntas".to_string()),
+            sheet: Some("Ventas".to_string()),
             range: zenkai_types::Range::parse_a1("A1:B2").unwrap(),
         };
         assert_eq!(
-            message_with_references(&[reference], "sum it"),
+            message_with_references(std::slice::from_ref(&reference), "sum it"),
             "Ventas!A1:B2 sum it"
         );
+        assert_eq!(reference.sheet.as_deref(), Some("Ventas"));
     }
 }

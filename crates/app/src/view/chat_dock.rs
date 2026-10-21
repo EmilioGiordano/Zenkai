@@ -235,6 +235,10 @@ impl Workspace {
             sheet: Some(sheet),
             range: self.selection(cx),
         };
+        if !reference.has_safe_names() {
+            self.notify(Severity::Warning, t!("chat.reference.unsafe_name"), cx);
+            return;
+        }
         let panel = self.open_chat(window, cx);
         panel.update(cx, |panel, cx| panel.add_reference(reference, window, cx));
     }
