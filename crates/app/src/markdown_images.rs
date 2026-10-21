@@ -28,7 +28,7 @@ fn definition_urls(text: &str) -> impl Iterator<Item = &str> {
     text.split(['\n', '\r']).filter_map(|line| {
         let rest = line.trim_start_matches(' ').strip_prefix('[')?;
         let (_, after) = rest.split_once("]:")?;
-        let target = after.trim_start().split_whitespace().next()?;
+        let target = after.split_whitespace().next()?;
         Some(target.trim_matches(['<', '>']))
     })
 }
