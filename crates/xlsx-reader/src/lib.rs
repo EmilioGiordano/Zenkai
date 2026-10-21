@@ -24,6 +24,7 @@ mod verify;
 
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
@@ -427,10 +428,10 @@ fn scan_archive<R: Read + Seek>(
         // with the streaming reader; anything over refuses the file. A sheet the
         // package names under a skipped prefix is still a sheet, never skipped.
         let loads = match &package_sheets {
-            Some(sheets) => sheets.get(&entry_name).copied().unwrap_or(0),
-            None => 1,
+            Some(sheets) => sheets.get(&entry_name).copied(),
+            None => Some(NonZeroU64::MIN),
         };
-        let count_cells = loads > 0;
+        let count_cells = loads.is_some();
         if skipped_part(&entry_name) && !count_cells {
             let entry = archive
                 .by_index(index)
@@ -442,7 +443,7 @@ fn scan_archive<R: Read + Seek>(
             continue;
         }
         let (_, part, usage) = read_part_if_checked(archive, index, meter, budgets, count_cells)?;
-        if count_cells {
+        if let Some(loads) = loads {
             budgets.check_importer_usage(usage.repeated(loads))?;
         }
         inspect(&entry_name, &part)?;

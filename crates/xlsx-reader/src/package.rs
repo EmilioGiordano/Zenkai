@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::io::{Cursor, Read, Seek, Write};
 
 use ironcalc::base::expressions::parser::DefinedNameS;
@@ -182,7 +183,7 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     meter: &CompressedMeter,
     budgets: &Budgets,
-) -> Option<HashMap<String, u64>> {
+) -> Option<HashMap<String, NonZeroU64>> {
     let mut peek = |name: &str| -> Option<String> {
         let entry = archive.by_name(name).ok()?;
         let bytes = read_part_to_peek(entry.take(PEEK_CAP_BYTES + 1), meter, name, budgets).ok()?;
@@ -223,12 +224,15 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
             targets.insert(id, (kind, target));
         }
     }
-    let mut paths: HashMap<String, u64> = HashMap::new();
+    let mut paths: HashMap<String, NonZeroU64> = HashMap::new();
     for id in &sheet_ids {
         if let Some((kind, target)) = targets.get(id.as_str())
             && kind.ends_with("worksheet")
         {
-            *paths.entry(part_path(target)).or_default() += 1;
+            paths
+                .entry(part_path(target))
+                .and_modify(|loads| *loads = loads.saturating_add(1))
+                .or_insert(NonZeroU64::MIN);
         }
     }
     Some(paths)
