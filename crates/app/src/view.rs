@@ -1013,7 +1013,17 @@ impl Workspace {
                 self.follow_review(cx);
             }
             GridEvent::ViewportChanged => self.schedule_cell_refresh(window, cx),
-            GridEvent::EditChanged => cx.notify(),
+            GridEvent::EditChanged => {
+                let read_only = self.documents.active().is_some_and(|d| d.read_only);
+                if read_only && self.grid.read(cx).editor().is_some() {
+                    self.grid.update(cx, |grid, cx| grid.take_edit(cx));
+                    self.notify(Severity::Warning, t!("notice.opened_read_only"), cx);
+                }
+                cx.notify();
+            }
+            GridEvent::EditRequested(_) if self.documents.active().is_some_and(|d| d.read_only) => {
+                self.notify(Severity::Warning, t!("notice.opened_read_only"), cx);
+            }
             GridEvent::EditRequested(pos) => {
                 // Unknown while a recalculation holds the workbook: editing an empty
                 // text would clear the cell on Enter.
@@ -1151,8 +1161,10 @@ impl Workspace {
         let Some(document) = self.documents.get_mut(id) else {
             return;
         };
-        document.queue(Box::new(edit));
-        document.dirty = true;
+        if document.queue_user_edit(Box::new(edit)).is_err() {
+            self.notify(Severity::Warning, t!("notice.opened_read_only"), cx);
+            return;
+        }
         if shown {
             window.set_window_title(&document.title());
         }
