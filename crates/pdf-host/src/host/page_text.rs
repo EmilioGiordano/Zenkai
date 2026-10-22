@@ -1,8 +1,8 @@
 use pdfium_render::prelude::*;
 
 use crate::wire::{
-    CharBox, LinkTarget, MAX_CHARS, MAX_LINKS, PageContent, PageIdx, PageLink, PageRect, PageSize,
-    Turn, to_page_rect, web_url,
+    CharBox, LinkTarget, MAX_CHARS, MAX_LINKS, PageContent, PageLink, PageRect, PageSize, Turn,
+    page_within, to_page_rect, web_url,
 };
 
 struct Frame {
@@ -30,13 +30,14 @@ fn frame_of(page: &PdfPage<'_>) -> Frame {
         shown: PageSize {
             width: page.width().value,
             height: page.height().value,
-        },
+        }
+        .sanitized(),
         turn,
     }
 }
 
 fn rect_of(rect: &PdfRect, frame: &Frame) -> PageRect {
-    to_page_rect(
+    let found = to_page_rect(
         (
             rect.left().value,
             rect.bottom().value,
@@ -46,7 +47,8 @@ fn rect_of(rect: &PdfRect, frame: &Frame) -> PageRect {
         frame.origin,
         frame.shown,
         frame.turn,
-    )
+    );
+    found.sanitized()
 }
 
 // The text of a page as chars, for searching. None when the page has no text layer.
@@ -61,7 +63,7 @@ pub fn search_text(page: &PdfPage<'_>) -> Option<Vec<char>> {
     (!chars.is_empty()).then_some(chars)
 }
 
-pub fn read_content(page: &PdfPage<'_>) -> PageContent {
+pub fn read_content(page: &PdfPage<'_>, page_count: usize) -> PageContent {
     let frame = frame_of(page);
     let mut chars = page.text().map_or_else(
         |_| Vec::new(),
@@ -82,18 +84,18 @@ pub fn read_content(page: &PdfPage<'_>) -> PageContent {
     chars.truncate(MAX_CHARS);
     PageContent {
         chars,
-        links: read_links(page, &frame),
+        links: read_links(page, &frame, page_count),
         truncated,
     }
 }
 
-fn read_links(page: &PdfPage<'_>, frame: &Frame) -> Vec<PageLink> {
+fn read_links(page: &PdfPage<'_>, frame: &Frame, page_count: usize) -> Vec<PageLink> {
     page.links()
         .iter()
         .take(MAX_LINKS)
         .filter_map(|link| {
             let rect = rect_of(&link.rect().ok()?, frame);
-            let target = link_target(&link)?;
+            let target = link_target(&link, page_count)?;
             Some(PageLink { rect, target })
         })
         .collect()
@@ -101,20 +103,22 @@ fn read_links(page: &PdfPage<'_>, frame: &Frame) -> Vec<PageLink> {
 
 // Only a jump inside the document or a web address is honoured. Launching a program, opening
 // another file or running a script is dropped, whatever the file asks.
-fn link_target(link: &PdfLink<'_>) -> Option<LinkTarget> {
+fn link_target(link: &PdfLink<'_>, page_count: usize) -> Option<LinkTarget> {
     match link.action() {
         Some(PdfAction::Uri(action)) => action
             .uri()
             .ok()
             .and_then(|uri| web_url(&uri))
             .map(LinkTarget::Web),
-        Some(PdfAction::LocalDestination(action)) => page_target(&action.destination().ok()?),
+        Some(PdfAction::LocalDestination(action)) => {
+            page_target(&action.destination().ok()?, page_count)
+        }
         Some(_) => None,
-        None => page_target(&link.destination()?),
+        None => page_target(&link.destination()?, page_count),
     }
 }
 
-fn page_target(destination: &PdfDestination<'_>) -> Option<LinkTarget> {
-    let page = usize::try_from(destination.page_index().ok()?).ok()?;
-    Some(LinkTarget::Page(PageIdx(page)))
+fn page_target(destination: &PdfDestination<'_>, page_count: usize) -> Option<LinkTarget> {
+    let page = page_within(i64::from(destination.page_index().ok()?), page_count)?;
+    Some(LinkTarget::Page(page))
 }

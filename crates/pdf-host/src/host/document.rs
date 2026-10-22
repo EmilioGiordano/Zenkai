@@ -7,7 +7,7 @@ use super::page_text::{read_content, search_text};
 use crate::textmatch::find_in_page;
 use crate::wire::{
     Bitmap, BrokenFile, DocId, FindMatch, Job, MAX_MATCHES, MAX_PAGES, OpenError, Opened, PageIdx,
-    PageSize, Reply,
+    PageSize, Reply, short_message,
 };
 
 const BYTES_PER_PIXEL: usize = 4;
@@ -80,7 +80,8 @@ pub fn process<'a>(
         }
         Job::Content { page } => {
             let document = documents.get(&doc)?;
-            let content = read_content(&document.pages().get(page_index(*page)?).ok()?);
+            let page_count = usize::try_from(document.pages().len()).unwrap_or(0);
+            let content = read_content(&document.pages().get(page_index(*page)?).ok()?, page_count);
             Some(Reply::Content {
                 page: *page,
                 content,
@@ -138,6 +139,7 @@ fn page_size(rect: PdfRect) -> PageSize {
         width: rect.right().value,
         height: rect.top().value,
     }
+    .sanitized()
 }
 
 fn open_error(error: &PdfiumError, had_password: bool) -> OpenError {
@@ -152,7 +154,9 @@ fn open_error(error: &PdfiumError, had_password: bool) -> OpenError {
         PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::FormatError) => {
             OpenError::Broken(BrokenFile::NotAPdf)
         }
-        PdfiumError::IoError(error) => OpenError::Broken(BrokenFile::Unreadable(error.to_string())),
+        PdfiumError::IoError(error) => {
+            OpenError::Broken(BrokenFile::Unreadable(short_message(error.to_string())))
+        }
         _ => OpenError::Broken(BrokenFile::Other),
     }
 }
@@ -169,7 +173,7 @@ pub(super) fn describe(document: &PdfDocument<'_>) -> Result<Opened, OpenError> 
     Ok(Opened {
         page_count,
         first_page: page_size(first),
-        outline: read_outline(document),
+        outline: read_outline(document, page_count),
     })
 }
 

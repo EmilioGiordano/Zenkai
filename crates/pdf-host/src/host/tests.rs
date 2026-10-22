@@ -107,7 +107,7 @@ fn a_pdf_renders_gives_its_text_and_is_found(pdfium: &Pdfium) {
     assert_eq!(&bitmap.bgra[..4], [255, 255, 255, 255]);
 
     let page = document.pages().get(0).unwrap();
-    let content = read_content(&page);
+    let content = read_content(&page, 2);
     let text: String = content.chars.iter().map(|found| found.ch).collect();
     assert!(text.contains("Hello PDF Hello"), "{text:?}");
     let first = content.chars.iter().find(|found| found.ch == 'H').unwrap();
@@ -153,7 +153,7 @@ fn the_host_loop_answers_open_sizes_render_and_find(pdfium: Pdfium) {
     let mut replies = output.as_slice();
     let mut next = |job: &Job| {
         let frame = read_frame(&mut replies).unwrap().unwrap();
-        decode_reply(&frame, &Expect::of(job)).unwrap()
+        decode_reply(frame, &Expect::of(job)).unwrap()
     };
     let opened = next(&jobs[0]);
     assert!(matches!(opened, Some(Reply::Opened(Ok(ref opened))) if opened.page_count == 2));
@@ -256,11 +256,11 @@ fn without_the_library_the_host_reports_it_on_every_open_and_nothing_else() {
     let mut replies = output.as_slice();
     let first = read_frame(&mut replies).unwrap().unwrap();
     assert!(matches!(
-        decode_reply(&first, &Expect::Open).unwrap(),
+        decode_reply(first, &Expect::Open).unwrap(),
         Some(Reply::Opened(Err(OpenError::LibraryMissing)))
     ));
     let second = read_frame(&mut replies).unwrap().unwrap();
-    assert!(decode_reply(&second, &Expect::Sizes).unwrap().is_none());
+    assert!(decode_reply(second, &Expect::Sizes).unwrap().is_none());
 }
 
 #[test]
@@ -272,4 +272,47 @@ fn the_host_stops_on_a_request_it_cannot_read() {
         Vec::new(),
     );
     assert!(result.is_err());
+}
+
+#[test]
+fn a_request_that_asks_for_too_much_is_refused_and_the_host_goes_on() {
+    let jobs = [
+        Job::Find {
+            search: 1,
+            query: "x".repeat(crate::wire::MAX_QUERY_CHARS + 1),
+            first: PageIdx(0),
+            count: 1,
+        },
+        Job::Open {
+            path: PathBuf::from("a.pdf"),
+            password: Some("p".repeat(crate::wire::MAX_MESSAGE_CHARS + 1)),
+        },
+        Job::Sizes,
+    ];
+    let mut input = Vec::new();
+    for (index, job) in jobs.iter().enumerate() {
+        write_frame(
+            &mut input,
+            &encode_request(index as u64, DocId(1), job).unwrap(),
+        )
+        .unwrap();
+    }
+    let mut output = Vec::new();
+    serve(
+        &Err(OpenError::LibraryMissing),
+        input.as_slice(),
+        &mut output,
+    )
+    .unwrap();
+    let mut replies = output.as_slice();
+    let mut next = |job: &Job| {
+        let frame = read_frame(&mut replies).unwrap().unwrap();
+        decode_reply(frame, &Expect::of(job)).unwrap()
+    };
+    assert!(next(&jobs[0]).is_none());
+    assert!(matches!(
+        next(&jobs[1]),
+        Some(Reply::Opened(Err(OpenError::Broken(BrokenFile::Other))))
+    ));
+    assert!(next(&jobs[2]).is_none());
 }

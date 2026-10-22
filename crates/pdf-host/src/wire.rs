@@ -18,6 +18,8 @@ pub const MAX_MATCHES: usize = 5000;
 pub const MAX_URI_BYTES: usize = 2048;
 pub const MAX_MESSAGE_CHARS: usize = 1000;
 pub const MAX_PAGE_POINTS: f32 = 200_000.0;
+pub const MAX_RECT_POINTS: f32 = 400_000.0;
+pub const MAX_QUERY_CHARS: usize = 1000;
 
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
@@ -35,6 +37,22 @@ impl PageSize {
         width: 612.0,
         height: 792.0,
     };
+
+    // A size the viewer can lay out: a side that is not a positive number becomes a letter
+    // side, and one past the limit is cut to it.
+    pub fn sanitized(self) -> PageSize {
+        let side = |value: f32, fallback: f32| {
+            if value.is_finite() && value > 0.0 {
+                value.min(MAX_PAGE_POINTS)
+            } else {
+                fallback
+            }
+        };
+        PageSize {
+            width: side(self.width, PageSize::LETTER.width),
+            height: side(self.height, PageSize::LETTER.height),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -85,6 +103,24 @@ pub struct PageRect {
 }
 
 impl PageRect {
+    // Keeps a box that pdfium got wrong from reaching the app: a coordinate that is not a
+    // number is zero, and one past the limit is cut to it.
+    pub fn sanitized(self) -> PageRect {
+        let tame = |value: f32| {
+            if value.is_finite() {
+                value.clamp(-MAX_RECT_POINTS, MAX_RECT_POINTS)
+            } else {
+                0.0
+            }
+        };
+        PageRect {
+            left: tame(self.left),
+            top: tame(self.top),
+            right: tame(self.right),
+            bottom: tame(self.bottom),
+        }
+    }
+
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.left && x <= self.right && y >= self.top && y <= self.bottom
     }
@@ -173,6 +209,7 @@ pub struct FindMatch {
     pub span: CharSpan,
 }
 
+#[derive(Clone)]
 pub struct Bitmap {
     pub width: u32,
     pub height: u32,
@@ -223,7 +260,7 @@ pub enum Job {
     Abort,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Reply {
     Opened(Result<Opened, OpenError>),
     Sizes(Vec<PageSize>),
@@ -245,6 +282,23 @@ pub enum Reply {
     },
     // The host is gone; every open document is lost with it.
     Stopped,
+}
+
+// A page number from pdfium, if it names a page of a document of `count` pages.
+pub fn page_within(index: i64, count: usize) -> Option<PageIdx> {
+    usize::try_from(index)
+        .ok()
+        .filter(|index| *index < count)
+        .map(PageIdx)
+}
+
+// Messages that come from the system are cut so they fit what the app accepts.
+pub fn short_message(text: String) -> String {
+    if text.chars().count() <= MAX_MESSAGE_CHARS {
+        text
+    } else {
+        text.chars().take(MAX_MESSAGE_CHARS).collect()
+    }
 }
 
 // The only links a PDF may ask to open: plain web addresses, never a file, script or app.
@@ -344,6 +398,50 @@ mod tests {
         assert!(found.contains(1.0, 2.0));
         assert!(!found.contains(3.1, 1.5));
         assert!(PageRect::default().is_empty());
+    }
+
+    #[test]
+    fn a_page_size_or_box_from_pdfium_is_made_usable() {
+        let size = PageSize {
+            width: 0.0,
+            height: f32::MAX,
+        }
+        .sanitized();
+        assert_eq!(size.width, PageSize::LETTER.width);
+        assert_eq!(size.height, MAX_PAGE_POINTS);
+        let nan = PageSize {
+            width: f32::NAN,
+            height: -3.0,
+        }
+        .sanitized();
+        assert_eq!(nan, PageSize::LETTER);
+        let rect = PageRect {
+            left: f32::NAN,
+            top: -1e9,
+            right: 1e9,
+            bottom: f32::INFINITY,
+        }
+        .sanitized();
+        assert_eq!(rect.left, 0.0);
+        assert_eq!(rect.top, -MAX_RECT_POINTS);
+        assert_eq!(rect.right, MAX_RECT_POINTS);
+        assert_eq!(rect.bottom, 0.0);
+    }
+
+    #[test]
+    fn a_page_number_must_name_a_page_of_the_document() {
+        assert_eq!(page_within(0, 3), Some(PageIdx(0)));
+        assert_eq!(page_within(2, 3), Some(PageIdx(2)));
+        assert_eq!(page_within(3, 3), None);
+        assert_eq!(page_within(-1, 3), None);
+        assert_eq!(page_within(i64::MAX, 3), None);
+    }
+
+    #[test]
+    fn a_long_system_message_is_cut_to_the_limit() {
+        let long = "x".repeat(MAX_MESSAGE_CHARS + 50);
+        assert_eq!(short_message(long).chars().count(), MAX_MESSAGE_CHARS);
+        assert_eq!(short_message("short".to_string()), "short");
     }
 
     #[test]
