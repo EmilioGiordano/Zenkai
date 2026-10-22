@@ -22,6 +22,14 @@ pub(crate) struct Stamp {
 }
 
 impl Stamp {
+    // Matches no file, so a path that could not be stamped is asked about on the next save.
+    pub(crate) fn never_matching() -> Stamp {
+        Stamp {
+            len: u64::MAX,
+            modified: SystemTime::UNIX_EPOCH,
+        }
+    }
+
     pub(crate) fn of(path: &Path) -> io::Result<Stamp> {
         let metadata = std::fs::metadata(path)?;
         Ok(Stamp {

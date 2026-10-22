@@ -479,8 +479,11 @@ fn adopt(slot: &SavedSlot, path: &Path, contents: Contents) {
             }));
         }
         Err(error) => {
-            tracing::warn!(?path, %error, "the next save writes the whole file");
-            slot.set_known(None);
+            tracing::warn!(?path, %error, "the next save asks before replacing the file");
+            slot.set_known(Some(KnownFile {
+                path: path.to_path_buf(),
+                stamp: Stamp::never_matching(),
+            }));
             slot.set(None);
         }
     }
