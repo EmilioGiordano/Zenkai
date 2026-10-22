@@ -772,6 +772,9 @@ mod tests {
         let snapshot = full_snapshot(&mut book, &target, super::SaveTarget::Document);
         super::save_xlsx(snapshot).unwrap();
         assert!(crate::file::open_xlsx(&target).is_ok());
+        changed_by_another_program(&target);
+        let snapshot = full_snapshot(&mut book, &target, super::SaveTarget::Document);
+        assert!(is_changed_on_disk(super::save_xlsx(snapshot)));
     }
 
     #[test]
