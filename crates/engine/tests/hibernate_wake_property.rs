@@ -22,6 +22,9 @@ enum Op {
     Block(usize, i64, i64, Vec<Vec<String>>),
     Clear(usize, i64, i64, i64, i64),
     Fill(usize, i64, i64, i64, i64, bool),
+    FillWith(usize, i64, i64, i64, i64, String),
+    Extend(usize, i64, i64, i64, i64),
+    Sort(usize, i64, i64, i64, i64, bool),
     Bold(usize, i64, i64, i64, i64, bool),
     NumberFormat(usize, i64, i64, i64, i64),
     InsertRows(usize, i64, u32),
@@ -81,6 +84,12 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(s, a, b, c, d)| Op::Clear(s, a, b, c, d)),
         1 => (sheet.clone(), 1..SIDE, 1..SIDE, 1..SIDE, 1..SIDE, any::<bool>())
             .prop_map(|(s, a, b, c, d, down)| Op::Fill(s, a, b, c, d, down)),
+        1 => (sheet.clone(), at.clone(), at.clone(), at.clone(), at.clone(), value())
+            .prop_map(|(s, a, b, c, d, v)| Op::FillWith(s, a, b, c, d, v)),
+        1 => (sheet.clone(), at.clone(), at.clone(), at.clone(), at.clone())
+            .prop_map(|(s, a, b, c, d)| Op::Extend(s, a, b, c, d)),
+        1 => (sheet.clone(), at.clone(), at.clone(), at.clone(), at.clone(), any::<bool>())
+            .prop_map(|(s, a, b, c, d, down)| Op::Sort(s, a, b, c, d, down)),
         2 => (sheet.clone(), at.clone(), at.clone(), at.clone(), at.clone(), any::<bool>())
             .prop_map(|(s, a, b, c, d, on)| Op::Bold(s, a, b, c, d, on)),
         1 => (sheet.clone(), at.clone(), at.clone(), at.clone(), at.clone())
@@ -116,6 +125,19 @@ fn apply(book: &mut Workbook, op: &Op) -> Result<(), EngineError> {
         Op::Clear(s, a, b, c, d) => book.clear(sheet_at(book, *s), range(*a, *b, *c, *d)),
         Op::Fill(s, a, b, c, d, down) => {
             book.fill(sheet_at(book, *s), range(*a, *b, *c, *d), *down)
+        }
+        Op::FillWith(s, a, b, c, d, text) => {
+            let target = range(*a, *b, *c, *d);
+            book.fill_with(sheet_at(book, *s), target.start, text, target)
+        }
+        Op::Extend(s, a, b, c, d) => {
+            let target = range(*a, *b, *c, *d);
+            let source = Range::new(target.start, target.start);
+            book.extend(sheet_at(book, *s), source, target)
+        }
+        Op::Sort(s, a, b, c, d, descending) => {
+            let target = range(*a, *b, *c, *d);
+            book.sort(sheet_at(book, *s), target, target.start.col, *descending)
         }
         Op::Bold(s, a, b, c, d, on) => book.apply_style(
             sheet_at(book, *s),
@@ -346,4 +368,24 @@ fn a_failed_write_leaves_the_workbook_untouched() {
     assert!(book.hibernate(&missing_folder).is_err());
     assert_eq!(snapshot(&book), before);
     book.undo().unwrap();
+}
+
+#[test]
+fn a_fill_with_is_undone_the_same_after_a_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let dump = dir.path().join("book.zkh");
+    let mut steady = Workbook::new_empty().unwrap();
+    let target = range(0, 0, 2, 0);
+    steady
+        .fill_with(SheetId(0), target.start, "=B1*2", target)
+        .unwrap();
+    let mut rested = Workbook::new_empty().unwrap();
+    rested
+        .fill_with(SheetId(0), target.start, "=B1*2", target)
+        .unwrap();
+    hibernate_and_wake(&mut rested, &dump);
+    steady.undo().unwrap();
+    rested.undo().unwrap();
+    assert_eq!(snapshot(&steady), snapshot(&rested));
+    assert_eq!(rested.input(SheetId(0), pos(0, 0)), "");
 }
