@@ -473,7 +473,13 @@ fn read_replies(link: &Link, mut input: impl Read) {
         };
         let Some(pending) = ({
             let mut book = locked(&link.book);
-            let taken = book.pending.remove(&id);
+            // The host serves in order, so a reply for anything but the oldest breaks a rule.
+            let oldest = book.pending.keys().min().copied();
+            let taken = if oldest == Some(id) {
+                book.pending.remove(&id)
+            } else {
+                None
+            };
             if taken.is_some() {
                 book.in_flight = book.in_flight.saturating_sub(1);
                 book.last_reply = Instant::now();
@@ -663,7 +669,7 @@ mod tests {
         )
         .unwrap();
         let answer = |id| encode_reply(id, Some(Reply::Sizes(vec![PageSize::LETTER]))).unwrap();
-        read_replies(&link, stream(&[bad, answer(3), answer(2)]).as_slice());
+        read_replies(&link, stream(&[bad, answer(2), answer(3)]).as_slice());
         assert!(matches!(broken.try_recv(), Ok(Reply::Stopped)));
         assert!(broken.try_recv().is_err());
         assert!(later.try_recv().is_err());
@@ -721,6 +727,18 @@ mod tests {
         stop(&link);
         assert!(matches!(replies.try_recv(), Ok(Reply::Stopped)));
         assert!(requests.is_closed());
+    }
+
+    #[test]
+    fn a_reply_out_of_order_ends_the_reading() {
+        let link = link();
+        let oldest = expect_pending(&link, 1, Expect::Sizes, 10);
+        let newer = expect_pending(&link, 2, Expect::Sizes, 20);
+        let answer = |id| encode_reply(id, Some(Reply::Sizes(vec![PageSize::LETTER]))).unwrap();
+        read_replies(&link, stream(&[answer(2), answer(1)]).as_slice());
+        assert!(oldest.try_recv().is_err());
+        assert!(newer.try_recv().is_err());
+        assert_eq!(locked(&link.book).pending.len(), 2);
     }
 
     #[test]
