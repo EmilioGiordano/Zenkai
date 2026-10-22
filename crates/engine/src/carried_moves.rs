@@ -8,7 +8,7 @@ use crate::sheet_settings::{Indexed, SheetSettings};
 
 // What a row or column move took from one sheet. Exchanged with the sheet's settings by
 // every undo and redo of the move, so the other side of the exchange is what it took next.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Taken {
     pub(crate) rows: Option<Indexed>,
     pub(crate) columns: Option<Indexed>,
@@ -43,7 +43,7 @@ pub(crate) struct LostKind {
     pub(crate) before: Option<u64>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct MoveTaken {
     pub(crate) sheets: Vec<(u32, Taken)>,
     pub(crate) kinds: Vec<LostKind>,
@@ -52,7 +52,7 @@ pub(crate) struct MoveTaken {
 // What each row or column move took, for the undo and redo of that move. The entries line
 // up with the moves in the model's own history, so every move must be its own undo step
 // (the workbook never groups them) and only a new edit empties the redo side.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct Moves {
     undone: Vec<MoveTaken>,
     redone: Vec<MoveTaken>,

@@ -46,6 +46,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   styles to an existing part and keep every existing style index and byte
   (`src/export/styles.rs`; the whole-list writers now share the per-item writers). Tests:
   `src/export/test/test_export.rs`.
+- The xlsx import reads a `t="n"` cell with no value or an empty `<v/>` as an empty cell,
+  not as the number 0, so a styled blank written by openpyxl stays blank
+  (`src/import/worksheets.rs`). Test: `test_number_cell_without_value_is_empty` in
+  `tests/test.rs`.
 
 Zenkai-only, not for upstream:
 
@@ -173,6 +177,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `UserModel::begin_edit_group` and `end_edit_group` join the edits between them into one
   undo step, evaluating once (`src/user_model/fill_formula.rs`, `common.rs`). Tests:
   `src/test/user_model/test_fill_formula.rs`.
+- `UserModel::fill_formula` remembers, for the whole fill, the style a cell gets from a
+  formula's units (by the cell's style and the units' number format), instead of finding
+  it for every cell by scanning every cell format, which clones a full style per entry.
+  The answers are the ones the scan gave, as styles are only appended while a fill runs.
+  Depends on the `fill_formula` patch above (`src/model.rs` `UnitsStyles`,
+  `apply_formula_units`). Tests: `src/test/user_model/test_fill_formula.rs`.
 - The full evaluation lists the cells holding a formula instead of every cell, so a
   workbook of millions of values no longer builds a 12-byte index of each one first
   (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
@@ -191,6 +201,18 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - NOW and TODAY read the clock once per evaluation, as Excel does, so `=NOW()-NOW()` is
   always 0 (`src/model.rs` `evaluation_milliseconds`, `src/incremental.rs`, `src/tz/`).
   Tests: `src/test/test_now.rs`. Stands on its own.
+- `UserModel::to_bytes_with_history` and `UserModel::from_bytes_with_history` write and read the 
+  workbook together with its undo and redo history, which `to_bytes` leaves out. The dump 
+  refuses while an edit group is open or evaluation is paused (`src/user_model/common.rs`).
+  `UserModel::write_with_history` hands the same bytes to a sink one encoded section at a time
+  (each part of the workbook and each worksheet on its own, then the two histories), and
+  `UserModel::from_reader_with_history` reads them back one section at a time, so neither side
+  holds the whole dump.
+  Stands on its own. Tests: `src/test/user_model/test_bytes_with_history.rs`.
+- `UserModel::extend_copied_value` forwards to `Model::extend_copied_value`, so a caller can
+  shift typed text from one cell to another without writing the source cell first and
+  undoing it (`src/user_model/common.rs`). Stands on its own. Tests:
+  `src/test/user_model/test_extend_copied_value.rs`.
 
 Zenkai-only, not for upstream:
 

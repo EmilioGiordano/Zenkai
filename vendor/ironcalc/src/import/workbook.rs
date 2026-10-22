@@ -61,7 +61,12 @@ pub(super) fn load_workbook<R: Read + std::io::Seek>(
         let sheet_id = match node.attribute("localSheetId") {
             Some(s) => {
                 let index = s.parse::<usize>()?;
-                Some(sheets[index].sheet_id)
+                let sheet = sheets.get(index).ok_or_else(|| {
+                    XlsxError::Workbook(format!(
+                        "The defined name {name} is scoped to sheet {index}, past the last sheet"
+                    ))
+                })?;
+                Some(sheet.sheet_id)
             }
             None => None,
         };
@@ -76,4 +81,28 @@ pub(super) fn load_workbook<R: Read + std::io::Seek>(
         worksheets: sheets,
         defined_names,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Cursor, Write};
+
+    use super::load_workbook;
+
+    fn archive_with_workbook(workbook: &str) -> zip::ZipArchive<Cursor<Vec<u8>>> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .start_file("xl/workbook.xml", zip::write::FileOptions::default())
+            .unwrap();
+        writer.write_all(workbook.as_bytes()).unwrap();
+        zip::ZipArchive::new(writer.finish().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_defined_name_scoped_past_the_last_sheet_is_an_error_not_a_panic() {
+        let workbook = "<workbook xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"A\" sheetId=\"1\" r:id=\"rId1\"/></sheets><definedNames><definedName name=\"N\" localSheetId=\"1\">A!$A$1</definedName></definedNames></workbook>";
+        assert!(load_workbook(&mut archive_with_workbook(workbook)).is_err());
+        let inside = workbook.replace("localSheetId=\"1\"", "localSheetId=\"0\"");
+        assert!(load_workbook(&mut archive_with_workbook(&inside)).is_ok());
+    }
 }

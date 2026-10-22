@@ -918,6 +918,54 @@ line 2"
     }
 
     #[test]
+    fn fill_with_is_one_undo_step_that_keeps_earlier_edits() {
+        let mut book = Workbook::new_empty().unwrap();
+        let at = |a1: &str| CellPos::parse_a1(a1).unwrap();
+        book.set_input(SheetId(0), at("C1"), "seed").unwrap();
+        let range = zenkai_types::Range::parse_a1("A1:A3").unwrap();
+        book.fill_with(SheetId(0), at("A1"), "=B1*2", range)
+            .unwrap();
+        book.undo().unwrap();
+        for a1 in ["A1", "A2", "A3"] {
+            assert_eq!(book.input(SheetId(0), at(a1)), "");
+        }
+        assert_eq!(book.input(SheetId(0), at("C1")), "seed");
+        book.redo().unwrap();
+        assert_eq!(book.input(SheetId(0), at("A3")), "=B3*2");
+        book.undo().unwrap();
+        book.undo().unwrap();
+        assert_eq!(book.input(SheetId(0), at("C1")), "");
+    }
+
+    #[test]
+    fn fill_with_puts_in_every_cell_what_typing_it_there_would() {
+        let at = |a1: &str| CellPos::parse_a1(a1).unwrap();
+        let range = zenkai_types::Range::parse_a1("A1:A3").unwrap();
+        for typed in ["1/2/2024", "5%", "007", "'007"] {
+            let mut filled = Workbook::new_empty().unwrap();
+            filled
+                .fill_with(SheetId(0), at("A1"), typed, range)
+                .unwrap();
+            let mut keyed = Workbook::new_empty().unwrap();
+            for a1 in ["A1", "A2", "A3"] {
+                keyed.set_input(SheetId(0), at(a1), typed).unwrap();
+            }
+            for a1 in ["A1", "A2", "A3"] {
+                assert_eq!(
+                    filled.cell(SheetId(0), at(a1)),
+                    keyed.cell(SheetId(0), at(a1)),
+                    "{typed} at {a1}"
+                );
+                assert_eq!(
+                    filled.input(SheetId(0), at(a1)),
+                    keyed.input(SheetId(0), at(a1)),
+                    "{typed} at {a1}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn used_end_follows_every_edit() {
         let mut book = Workbook::new_empty().unwrap();
         let (c5, e9) = (

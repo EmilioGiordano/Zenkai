@@ -28,6 +28,8 @@ pub enum EngineError {
     BaseUnusable { path: PathBuf, reason: String },
     #[error("sheet {} does not exist", .0.0)]
     UnknownSheet(SheetId),
+    #[error("the memory dump of a workbook is unusable: {0}")]
+    BadDump(String),
     #[error("{0}")]
     Rejected(String),
 }

@@ -96,7 +96,7 @@ mod tests {
             plan_write(&write_request(id, entry), &document.sheets).unwrap()
         };
         let document = documents.get_mut(id).unwrap();
-        document.queue(Box::new(move |workbook| plan.apply(workbook)));
+        document.queue_in_test(Box::new(move |workbook| plan.apply(workbook)));
         let (shared, edits) = document.take_batch().unwrap();
         assert!(document::run_batch_serving(&shared, edits, None).is_empty());
         let generation = document.generation();

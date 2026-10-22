@@ -6,12 +6,14 @@ use std::time::{Duration, Instant};
 use zenkai_i18n::t;
 
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Engine, EngineError, SaveSnapshot, SaveTarget, Unsupported, Workbook};
+use zenkai_engine::{
+    Engine, EngineError, Kept, SaveSnapshot, SaveTarget, Stamp, Unsupported, Workbook,
+};
 use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
 use crate::agent_review::Review;
-use crate::entry::display_name;
+use crate::entry::{FileSeen, display_name};
 use crate::files;
 use crate::find::FindBar;
 use crate::pending_save::{AfterJob, JobEnd, PendingSave};
@@ -30,7 +32,12 @@ pub enum FileJob {
     Idle,
     Saving,
     Autosaving,
+    // Being written to disk so it can leave memory; nothing else may start meanwhile.
+    Hibernating,
 }
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReadOnlyRefusal;
 
 pub struct Document {
     pub id: WorkbookId,
@@ -73,6 +80,11 @@ pub struct Document {
     recovery_on_disk: bool,
     // Set by an edit; the running autosave drops its write and leaves the old copy in place.
     autosave_cancel: Arc<AtomicBool>,
+    // The edit count a hibernation failed at, so the same work is not dumped again and again.
+    hibernation_failed_at: Option<u64>,
+    // The file as the workbook last had it, kept while the workbook stands on a copy of its
+    // work (a dump or a recovery copy) so a Save asks before replacing a file that changed.
+    file_guard: Option<FileSeen>,
 }
 
 pub fn labels(kinds: &[Unsupported]) -> String {
@@ -140,6 +152,8 @@ impl Document {
             recovery_stale_since: None,
             recovery_on_disk: false,
             autosave_cancel: Arc::new(AtomicBool::new(false)),
+            hibernation_failed_at: None,
+            file_guard: None,
         }
     }
 
@@ -198,7 +212,21 @@ impl Document {
         self.stale.current()?.cells_in(self.sheet, formulas, ranges)
     }
 
-    pub fn queue(&mut self, edit: Edit) {
+    pub fn queue_user_edit(&mut self, edit: Edit) -> Result<(), ReadOnlyRefusal> {
+        if self.read_only {
+            return Err(ReadOnlyRefusal);
+        }
+        self.queue(edit);
+        self.dirty = true;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn queue_in_test(&mut self, edit: Edit) {
+        self.queue(edit);
+    }
+
+    fn queue(&mut self, edit: Edit) {
         self.edit_count += 1;
         self.last_edited = Some(Instant::now());
         self.autosave_cancel.store(true, Ordering::Relaxed);
@@ -255,6 +283,10 @@ impl Document {
 
     pub fn begin_follow_up(&mut self) -> bool {
         self.pending_save.begin_follow_up()
+    }
+
+    pub fn has_pending_save(&self) -> bool {
+        self.pending_save != PendingSave::None
     }
 
     pub fn clear_pending_save(&mut self) {
@@ -337,6 +369,14 @@ impl Document {
         self.recovery_on_disk
     }
 
+    pub fn hibernation_failed(&mut self) {
+        self.hibernation_failed_at = Some(self.edit_count);
+    }
+
+    pub fn hibernation_was_refused(&self) -> bool {
+        self.hibernation_failed_at == Some(self.edit_count)
+    }
+
     pub fn mark_recovery_adopted(&mut self) {
         self.recovery_on_disk = true;
     }
@@ -365,6 +405,15 @@ impl Document {
     pub fn saved_over_file(&mut self, kept: Vec<Unsupported>) {
         self.unsupported = kept;
         self.restored = false;
+        self.file_guard = None;
+    }
+
+    pub fn file_guard(&self) -> Option<FileSeen> {
+        self.file_guard
+    }
+
+    pub fn guard_file(&mut self, seen: FileSeen) {
+        self.file_guard = Some(seen);
     }
 
     // Before a save is tried: the engine answers for every other case once it has run.
@@ -598,6 +647,18 @@ pub fn write_snapshot_unless(
     )
 }
 
+// Writes the workbook and its history to `dump`; the workbook stays where it is.
+pub fn write_hibernation(shared: &RwLock<Workbook>, dump: &Path) -> Result<Kept, EngineError> {
+    let started = Instant::now();
+    let kept = read_shared(shared).hibernate(dump);
+    let elapsed_ms = started.elapsed().as_millis();
+    match &kept {
+        Ok(_) => tracing::info!(?dump, elapsed_ms, "workbook hibernated"),
+        Err(error) => tracing::warn!(?dump, %error, elapsed_ms, "could not hibernate a workbook"),
+    }
+    kept
+}
+
 fn allows(accepted: &[Unsupported], dropped: &[Unsupported]) -> bool {
     dropped.iter().all(|kind| accepted.contains(kind))
 }
@@ -616,8 +677,16 @@ pub fn save_document_file(
     target: &Path,
     accepted: &[Unsupported],
     changed: ChangedFile,
+    guard: Option<FileSeen>,
     write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
 ) -> Result<DocumentSave, EngineError> {
+    // A workbook that came back from a copy of its work does not hold the file it was opened
+    // from, so the engine cannot tell the file changed; the stamp taken at rest can.
+    if changed == ChangedFile::Ask
+        && guard.is_some_and(|seen| Stamp::of(target).is_ok_and(|now| seen.changed(now)))
+    {
+        return Ok(DocumentSave::BaseChanged);
+    }
     let saved = with_snapshot(
         shared,
         FileJob::Saving,
@@ -760,6 +829,23 @@ mod tests {
             current.settle_save(own, JobEnd::Autosaved),
             AfterJob::SaveAgain
         );
+    }
+
+    #[test]
+    fn a_read_only_document_refuses_user_edits_and_stays_clean() {
+        let mut document = document();
+        document.read_only = true;
+        assert_eq!(document.queue_user_edit(noop()), Err(ReadOnlyRefusal));
+        assert!(!document.dirty);
+        assert!(document.take_batch().is_none());
+    }
+
+    #[test]
+    fn an_editable_document_queues_user_edits_and_turns_dirty() {
+        let mut document = document();
+        assert_eq!(document.queue_user_edit(noop()), Ok(()));
+        assert!(document.dirty);
+        assert!(document.take_batch().is_some());
     }
 
     #[test]
@@ -1012,6 +1098,7 @@ mod tests {
             &target,
             &[],
             ChangedFile::Ask,
+            None,
             zenkai_engine::save_xlsx,
         );
         assert_eq!(asked.unwrap(), DocumentSave::BaseChanged);
@@ -1021,6 +1108,52 @@ mod tests {
             &target,
             &[],
             ChangedFile::Replace,
+            None,
+            zenkai_engine::save_xlsx,
+        );
+        assert!(matches!(replaced, Ok(DocumentSave::Written { .. })));
+        assert_eq!(saved_text(&target), "mine");
+    }
+
+    #[test]
+    fn a_workbook_standing_on_a_copy_asks_before_replacing_a_file_changed_since_it_rested() {
+        use crate::entry::FileSeen;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let copy = dir.path().join("recovery.xlsx");
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_input(SheetId(0), CellPos::default(), "mine")
+            .unwrap();
+        zenkai_engine::save_xlsx(book.save_snapshot(&target, SaveTarget::Document).unwrap())
+            .unwrap();
+        let seen = FileSeen {
+            stamp: Some(Stamp::of(&target).unwrap()),
+            at: std::time::SystemTime::now(),
+        };
+        zenkai_engine::save_xlsx(book.save_snapshot(&copy, SaveTarget::Copy).unwrap()).unwrap();
+        // The workbook came back from the copy, which knows nothing of the file's stamp.
+        let shared = RwLock::new(zenkai_engine::open_xlsx(&copy).unwrap().workbook);
+
+        std::fs::write(&target, b"someone else's work, longer than before").unwrap();
+        let asked = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            Some(seen),
+            zenkai_engine::save_xlsx,
+        );
+        assert_eq!(asked.unwrap(), DocumentSave::BaseChanged);
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            b"someone else's work, longer than before"
+        );
+        let replaced = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Replace,
+            Some(seen),
             zenkai_engine::save_xlsx,
         );
         assert!(matches!(replaced, Ok(DocumentSave::Written { .. })));
@@ -1061,6 +1194,7 @@ mod tests {
             &target,
             &[],
             ChangedFile::Ask,
+            None,
             zenkai_engine::save_xlsx,
         );
         assert_eq!(saved.unwrap(), DocumentSave::Written { kept: Vec::new() });
@@ -1176,6 +1310,7 @@ mod tests {
             &target,
             &[],
             ChangedFile::Ask,
+            None,
             zenkai_engine::save_xlsx,
         );
         assert!(
@@ -1234,6 +1369,7 @@ mod tests {
             &target,
             &[],
             ChangedFile::Ask,
+            None,
             zenkai_engine::save_xlsx,
         );
         assert_eq!(asked.unwrap(), DocumentSave::BaseChanged);
@@ -1243,6 +1379,7 @@ mod tests {
             &target,
             &[],
             ChangedFile::Replace,
+            None,
             zenkai_engine::save_xlsx,
         );
         assert!(matches!(replaced, Ok(DocumentSave::Written { .. })));

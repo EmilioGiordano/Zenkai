@@ -282,6 +282,7 @@ pub fn link_of(
         size: None,
         status: LinkStatus::NotLoaded,
         origin: None,
+        rested: None,
     }
 }
 

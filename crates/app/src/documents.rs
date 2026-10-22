@@ -2,16 +2,18 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Unsupported, Workbook};
+use zenkai_engine::{Kept, Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
-use crate::document::Document;
+use crate::document::{Document, FileJob, SharedWorkbook};
 use crate::entry::{Entry, Link, LinkStatus, Slot};
 use crate::files;
 use crate::spaces::{SpaceId, Spaces};
 
 pub use unsaved::Unsaved;
 
+#[cfg(test)]
+mod hibernation;
 mod restore;
 #[cfg(test)]
 pub(crate) mod session_fuzz;
@@ -63,6 +65,25 @@ pub struct Documents {
     empty_space: SpaceId,
     closed: Vec<PathBuf>,
     spaces: Spaces,
+    // Workbooks that left memory: the last reference to each is dropped by the caller on a
+    // background thread, since freeing a large model takes long enough to stall a frame.
+    retired: Vec<SharedWorkbook>,
+}
+
+// A workbook claimed by `begin_hibernation`, for the job that writes it.
+pub struct Hibernating {
+    pub generation: u64,
+    pub edits: u64,
+    pub workbook: SharedWorkbook,
+}
+
+// What the job wrote, for `finish_hibernation`.
+pub struct Dumped {
+    pub generation: u64,
+    pub edits: u64,
+    pub recovery: PathBuf,
+    pub dump: PathBuf,
+    pub kept: Kept,
 }
 
 pub enum Installed {
@@ -71,18 +92,29 @@ pub enum Installed {
     Gone,
 }
 
+// Where a loaded workbook was read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Provenance {
+    File,
+    // The autosaved copy of unsaved work, which can lack what the file holds.
+    Recovery,
+    // The memory dump of a hibernated workbook: the same workbook, with its undo history.
+    Dump,
+}
+
 pub struct Loaded {
     pub id: WorkbookId,
     pub workbook: Workbook,
     pub unsupported: Vec<Unsupported>,
     pub read_only: bool,
     pub origin: FileOrigin,
-    pub from_recovery: bool,
+    pub provenance: Provenance,
 }
 
 impl Loaded {
     fn into_document(self, link: &Link) -> Document {
-        let unsupported = if self.from_recovery {
+        let from_copy = self.provenance != Provenance::File;
+        let unsupported = if from_copy {
             link.unsupported.clone()
         } else {
             self.unsupported
@@ -95,9 +127,25 @@ impl Loaded {
             link.path.clone(),
             unsupported,
         );
-        document.restored = self.from_recovery;
-        document.read_only = self.read_only || (self.from_recovery && link.read_only);
-        document.dirty = self.from_recovery && link.dirty;
+        document.restored = match self.provenance {
+            Provenance::File => false,
+            Provenance::Recovery => true,
+            Provenance::Dump => link
+                .rested
+                .as_ref()
+                .and_then(|rested| rested.hibernation.as_ref())
+                .is_some_and(|hibernation| hibernation.restored),
+        };
+        document.read_only = self.read_only || (from_copy && link.read_only);
+        document.dirty = from_copy && link.dirty;
+        if from_copy && let Some(rested) = &link.rested {
+            document.guard_file(rested.file);
+        }
+        if self.provenance == Provenance::Dump {
+            // The recovery copy was written from this very work, and the new document has
+            // made no edit yet.
+            document.set_autosaved_at(Some(document.edit_count()));
+        }
         document.origin = link.origin.unwrap_or(self.origin);
         document.view = link.view;
         let last = u32::try_from(document.sheets.len().saturating_sub(1)).unwrap_or(0);
@@ -141,6 +189,7 @@ impl Documents {
             empty_space: space,
             closed: Vec::new(),
             spaces,
+            retired: Vec::new(),
         }
     }
 
@@ -489,11 +538,79 @@ impl Documents {
         };
         match slot {
             Slot::Loaded(document) if document.can_unload() => {
+                let model = document.shared_workbook();
                 *slot = Slot::Link(document.to_link());
+                self.retired.push(model);
                 true
             }
             _ => false,
         }
+    }
+
+    pub fn take_retired(&mut self) -> Vec<SharedWorkbook> {
+        std::mem::take(&mut self.retired)
+    }
+
+    // Workbooks with unsaved work go to disk in two steps, so the write runs in the background:
+    // `begin_hibernation` claims the workbook and `finish_hibernation` swaps it for a link.
+    pub fn begin_hibernation(&mut self, id: WorkbookId) -> Option<Hibernating> {
+        if self.wanted() == Some(id) {
+            return None;
+        }
+        let Some(SlotMut::Other(Slot::Loaded(document))) = self.slot_mut(id) else {
+            return None;
+        };
+        if !document.can_hibernate() {
+            return None;
+        }
+        let workbook = document.begin_file_job(FileJob::Hibernating)?;
+        Some(Hibernating {
+            generation: document.generation(),
+            edits: document.edit_count(),
+            workbook,
+        })
+    }
+
+    // The workbook stays in memory, and is not offered again until it is edited.
+    pub fn abandon_hibernation(&mut self, id: WorkbookId, generation: u64, failed: bool) {
+        if let Some(document) = self.get_mut(id) {
+            document.end_file_job(generation);
+            if failed {
+                document.hibernation_failed();
+            }
+        }
+    }
+
+    // Whether the workbook left memory. If anything changed while the dump was written, the
+    // dump is stale and the workbook stays.
+    pub fn finish_hibernation(&mut self, id: WorkbookId, dumped: Dumped) -> bool {
+        let Dumped {
+            generation,
+            edits,
+            recovery,
+            dump,
+            kept,
+        } = dumped;
+        let on_screen_or_wanted = self.active_id() == Some(id) || self.wanted() == Some(id);
+        let Some(SlotMut::Other(slot)) = self.slot_mut(id) else {
+            self.abandon_hibernation(id, generation, false);
+            return false;
+        };
+        let Slot::Loaded(document) = slot else {
+            return false;
+        };
+        document.end_file_job(generation);
+        if on_screen_or_wanted
+            || document.generation() != generation
+            || document.edit_count() != edits
+            || !document.can_hibernate()
+        {
+            return false;
+        }
+        let model = document.shared_workbook();
+        *slot = Slot::Link(document.to_hibernated_link(recovery, dump, kept));
+        self.retired.push(model);
+        true
     }
 
     // The nearest loaded neighbour takes over, to the right first, so the screen never lands
@@ -867,7 +984,10 @@ mod tests {
     fn a_batch_finishing_in_an_inactive_document_releases_that_document() {
         let mut documents = busy();
         let first = documents.active_id().unwrap();
-        documents.active_mut().unwrap().queue(Box::new(|_| Ok(())));
+        documents
+            .active_mut()
+            .unwrap()
+            .queue_in_test(Box::new(|_| Ok(())));
         let generation = documents.active().unwrap().generation();
         assert!(documents.active_mut().unwrap().take_batch().is_some());
         open_file(&mut documents, "a.xlsx");
@@ -882,7 +1002,10 @@ mod tests {
         let mut documents = busy();
         let before = documents.unsaved_edits();
         assert_eq!(before, [(documents.active_id().unwrap(), 0)]);
-        documents.active_mut().unwrap().queue(Box::new(|_| Ok(())));
+        documents
+            .active_mut()
+            .unwrap()
+            .queue_in_test(Box::new(|_| Ok(())));
         assert_ne!(documents.unsaved_edits(), before);
     }
 
@@ -932,11 +1055,14 @@ mod tests {
         documents
             .get_mut(untitled)
             .unwrap()
-            .queue(Box::new(|_| Ok(())));
+            .queue_in_test(Box::new(|_| Ok(())));
         let a = open_file(&mut documents, "a.xlsx");
         open_file(&mut documents, "b.xlsx");
         assert!(!documents.unload(untitled));
-        documents.get_mut(a).unwrap().queue(Box::new(|_| Ok(())));
+        documents
+            .get_mut(a)
+            .unwrap()
+            .queue_in_test(Box::new(|_| Ok(())));
         assert!(!documents.unload(a));
     }
 
