@@ -21,8 +21,8 @@ use crate::save_parts::PartWriter;
 use crate::save_patch::{PatchPlan, Patched, patch_plan, write_patch};
 use crate::save_sheet::{SheetWriter, prepare};
 use crate::saved::{
-    Contents, KnownFile, Metadata, Remains, SavedFile, SavedSlot, Stamp, Strings, selected_sheet,
-    sheet_prints,
+    Contents, KnownFile, Metadata, Remains, SavedFile, SavedSlot, Stamp, Strings, same_file,
+    selected_sheet, sheet_prints,
 };
 use crate::sheet_copy::copied_sheet;
 use crate::sheet_elements::Relationships;
@@ -438,7 +438,7 @@ fn unchanged(base: Option<&SavedFile>) -> Result<(), EngineError> {
 // A save to the workbook's own file must find it as the workbook last saw it. A file that
 // is gone holds nothing to lose.
 fn target_unchanged(known: Option<&KnownFile>, path: &Path) -> Result<(), EngineError> {
-    let Some(known) = known.filter(|known| known.path == path) else {
+    let Some(known) = known.filter(|known| same_file(&known.path, path)) else {
         return Ok(());
     };
     match Stamp::of(&known.path) {

@@ -126,6 +126,15 @@ pub(crate) struct KnownFile {
     pub(crate) stamp: Stamp,
 }
 
+// Two spellings of one file are one file; a path that does not resolve is only itself, so a
+// Save As to a name that does not exist yet is never taken for the workbook's own file.
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
 #[derive(Default)]
 struct Remembered {
     file: Option<Arc<SavedFile>>,
