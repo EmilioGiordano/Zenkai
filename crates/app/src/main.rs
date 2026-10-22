@@ -39,6 +39,8 @@ mod markdown_pane;
 mod memory;
 mod palette;
 mod panel_width;
+mod pdf;
+mod pdf_tab;
 mod pending_save;
 mod previews;
 mod prompt_gate;

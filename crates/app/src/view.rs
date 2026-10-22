@@ -30,6 +30,7 @@ mod agent_review;
 mod chat_dock;
 mod close_dialog;
 mod closing;
+mod pdfs;
 mod settings_gate;
 mod space_panel;
 mod text_actions;
@@ -63,6 +64,7 @@ use crate::keymap;
 use crate::memory;
 use crate::palette;
 use crate::panel_width::{Panel, Resize};
+use crate::pdf::PdfWorker;
 use crate::pending_save::{AfterJob, JobEnd};
 use crate::previews::TypedPreviews;
 use crate::recent;
@@ -198,6 +200,9 @@ pub struct Workspace {
     sidebar: SidebarState,
     panels: PanelsState,
     text_panes: texts::TextPanes,
+    pdf_panes: pdfs::PdfPanes,
+    pdf_places: pdfs::PdfPlaces,
+    pdf_worker: Option<PdfWorker>,
     text_watch: text_watch::TextWatch,
     lifecycle: Lifecycle,
     #[cfg(windows)]
@@ -351,6 +356,9 @@ impl Workspace {
             sidebar: SidebarState::new(cx),
             panels: PanelsState::new(cx),
             text_panes: texts::TextPanes::new(),
+            pdf_panes: pdfs::PdfPanes::new(),
+            pdf_places: pdfs::PdfPlaces::new(),
+            pdf_worker: None,
             text_watch: text_watch::TextWatch::default(),
             lifecycle: Lifecycle::Running,
             #[cfg(windows)]
@@ -414,6 +422,9 @@ impl Workspace {
         if let Some(text) = self.documents.shown_text() {
             let marker = if text.dirty { "• " } else { "" };
             return format!("{marker}{} - Zenkai", text.name());
+        }
+        if let Some(pdf) = self.documents.shown_pdf() {
+            return format!("{} - Zenkai", pdf.name());
         }
         self.documents
             .active()
@@ -3299,6 +3310,21 @@ impl Workspace {
                 .child(t!("markdown.status.encoding"))
                 .child(saved);
         }
+        if let Some(view) = self
+            .shown_pdf_view()
+            .filter(|view| view.read(cx).is_ready())
+        {
+            let view = view.read(cx);
+            right = right
+                .child(t!("pdf.status.name"))
+                .child(t!(
+                    "pdf.status.page",
+                    page = view.current_page().0 + 1,
+                    total = view.page_count()
+                ))
+                .child(view.zoom_label())
+                .child(t!("status.read_only"));
+        }
         match self.stats.filter(|_| self.documents.active().is_some()) {
             Some(stats) if stats.count > 1 => {
                 if let Some(avg) = stats.average() {
@@ -3324,7 +3350,7 @@ impl Workspace {
         {
             right = right.child(t!("status.read_only"));
         }
-        if self.documents.shown_text().is_none() {
+        if self.documents.shown_text().is_none() && self.documents.shown_pdf().is_none() {
             let zoom = self.grid.read(cx).zoom();
             right = right.child(format!("{:.0}%", zoom * 100.0));
         }
@@ -3430,6 +3456,7 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         interface_scale::apply(window, cx);
+        self.rest_hidden_pdfs(window, cx);
         let root = Self::leave_full_window_for_sheet_commands(v_flex(), cx);
         let theme = cx.theme();
         root.relative()
@@ -3949,6 +3976,8 @@ impl Render for Workspace {
                             self.render_workbook(cx).into_any_element()
                         } else if let Some(entry) = self.shown_pane() {
                             self.render_text(entry.pane.clone(), cx).into_any_element()
+                        } else if let Some(view) = self.shown_pdf_view() {
+                            self.render_pdf(view, cx).into_any_element()
                         } else {
                             self.render_empty(cx).into_any_element()
                         }

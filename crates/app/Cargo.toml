@@ -14,7 +14,9 @@ async-channel = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "=6.0.0"
 gpui-kit = "=0.7.1"
+image = { version = "=0.25.10", default-features = false }
 memory-stats = "1"
+pdfium-render = { version = "=0.9.4", default-features = false, features = ["pdfium_7881", "thread_safe"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sys-locale = "0.3"
