@@ -6,18 +6,20 @@ use std::time::Instant;
 use anyhow::{Context, Result, bail};
 use peak_alloc::PeakAlloc;
 use zenkai_engine::{Engine, SaveTarget, Workbook, open_xlsx, save_xlsx};
-use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
+use zenkai_types::{CellPos, ColIdx, NumberFormat, Range, Rgb, RowIdx, SheetId, StyleChange};
 
 #[global_allocator]
 static PEAK: PeakAlloc = PeakAlloc;
 
 const SHEET: SheetId = SheetId(0);
 const CHUNK_ROWS: u32 = 20_000;
+const DISTINCT_STYLES: u32 = 3_000;
 
 #[derive(Clone, Copy)]
 enum Fill {
     Shared,
     Text,
+    SharedFormatted,
 }
 
 fn pos(row: u32, col: u16) -> CellPos {
@@ -54,11 +56,37 @@ fn numbers(workbook: &mut Workbook, rows: u32) -> Result<()> {
     Ok(())
 }
 
+// Gives the source columns a currency and a percent format, so every filled formula takes
+// the units of what it reads, and the workbook thousands of distinct cell formats, so
+// finding the style a filled cell gets has many to look through.
+fn format_sources(workbook: &mut Workbook, rows: u32) -> Result<()> {
+    let last = rows - 1;
+    workbook.apply_style(
+        SHEET,
+        Range::new(pos(0, 0), pos(last, 0)),
+        StyleChange::NumberFormat(NumberFormat::Currency),
+    )?;
+    workbook.apply_style(
+        SHEET,
+        Range::new(pos(0, 1), pos(last, 1)),
+        StyleChange::NumberFormat(NumberFormat::Percent),
+    )?;
+    for style in 0..DISTINCT_STYLES.min(rows) {
+        workbook.apply_style(
+            SHEET,
+            Range::new(pos(style, 4), pos(style, 4)),
+            StyleChange::Fill(Some(Rgb(style * 977 + 1))),
+        )?;
+    }
+    Ok(())
+}
+
 // Ctrl+D over `rows` rows (`shared`), or Ctrl+Enter, which fills as text, over the same
-// cells (`text`); the two differ by what the formula cost per cell.
+// cells (`text`); the two differ by what the formula cost per cell. `formatted` is
+// Ctrl+D over source columns with number formats, in a workbook with many cell formats.
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let usage = "usage: measure_fill <rows> <shared|text> <saved.xlsx>";
+    let usage = "usage: measure_fill <rows> <shared|text|formatted> <saved.xlsx>";
     let [rows, mode, target] = args.as_slice() else {
         bail!(usage);
     };
@@ -66,6 +94,7 @@ fn main() -> Result<()> {
     let mode = match mode.as_str() {
         "shared" => Fill::Shared,
         "text" => Fill::Text,
+        "formatted" => Fill::SharedFormatted,
         _ => bail!(usage),
     };
     let target = PathBuf::from(target);
@@ -78,13 +107,19 @@ fn main() -> Result<()> {
     let start = Instant::now();
     numbers(&mut workbook, rows)?;
     done("data", start, "");
+    if let Fill::SharedFormatted = mode {
+        begin("format");
+        let start = Instant::now();
+        format_sources(&mut workbook, rows)?;
+        done("format", start, "");
+    }
 
     let formula = "=A1*2+B1";
     let column = Range::new(pos(0, 2), pos(rows - 1, 2));
     begin("fill");
     let start = Instant::now();
     match mode {
-        Fill::Shared => {
+        Fill::Shared | Fill::SharedFormatted => {
             workbook.set_input(SHEET, pos(0, 2), formula)?;
             workbook.fill(SHEET, column, true)?;
         }

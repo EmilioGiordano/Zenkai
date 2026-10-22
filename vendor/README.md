@@ -173,6 +173,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `UserModel::begin_edit_group` and `end_edit_group` join the edits between them into one
   undo step, evaluating once (`src/user_model/fill_formula.rs`, `common.rs`). Tests:
   `src/test/user_model/test_fill_formula.rs`.
+- `UserModel::fill_formula` remembers, for the whole fill, the style a cell gets from a
+  formula's units (by the cell's style and the units' number format), instead of finding
+  it for every cell by scanning every cell format, which clones a full style per entry.
+  The answers are the ones the scan gave, as styles are only appended while a fill runs.
+  Depends on the `fill_formula` patch above (`src/model.rs` `UnitsStyles`,
+  `apply_formula_units`). Tests: `src/test/user_model/test_fill_formula.rs`.
 - The full evaluation lists the cells holding a formula instead of every cell, so a
   workbook of millions of values no longer builds a 12-byte index of each one first
   (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
