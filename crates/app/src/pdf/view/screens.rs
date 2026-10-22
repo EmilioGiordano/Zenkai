@@ -38,6 +38,9 @@ pub(super) fn failure_text(error: &OpenError) -> String {
             t!("pdf.broken.unreadable", reason = reason)
         }
         OpenError::Broken(BrokenFile::NoPages) => t!("pdf.broken.no_pages").to_string(),
+        OpenError::Broken(BrokenFile::TooManyPages) => {
+            t!("pdf.broken.too_many_pages", limit = crate::pdf::MAX_PAGES)
+        }
         OpenError::Broken(BrokenFile::Other) => t!("pdf.broken.other").to_string(),
     }
 }
@@ -277,6 +280,7 @@ mod tests {
             BrokenFile::NotAPdf,
             BrokenFile::Unreadable("access denied".to_string()),
             BrokenFile::NoPages,
+            BrokenFile::TooManyPages,
             BrokenFile::Other,
         ]
         .into_iter()

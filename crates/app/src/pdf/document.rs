@@ -14,6 +14,7 @@ use super::page_text::{read_content, search_text};
 use super::protocol::{Bitmap, BrokenFile, DocId, Job, OpenError, Opened, Reply, Request};
 
 const BYTES_PER_PIXEL: usize = 4;
+pub const MAX_PAGES: usize = 100_000;
 
 // Pdfium is not safe to call from several threads, so one thread owns the library and every
 // open document; the rest of the app talks to it through this channel.
@@ -222,8 +223,12 @@ fn describe(document: &PdfDocument<'_>) -> Result<Opened, OpenError> {
     let first = pages
         .page_size(0)
         .map_err(|_| OpenError::Broken(BrokenFile::NoPages))?;
+    let page_count = usize::try_from(pages.len()).unwrap_or(0);
+    if page_count > MAX_PAGES {
+        return Err(OpenError::Broken(BrokenFile::TooManyPages));
+    }
     Ok(Opened {
-        page_count: usize::try_from(pages.len()).unwrap_or(0),
+        page_count,
         first_page: page_size(first),
         outline: read_outline(document),
     })

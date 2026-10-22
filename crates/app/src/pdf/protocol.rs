@@ -24,6 +24,7 @@ pub enum BrokenFile {
     NotAPdf,
     Unreadable(String),
     NoPages,
+    TooManyPages,
     Other,
 }
 #[derive(Clone, Debug, PartialEq)]
