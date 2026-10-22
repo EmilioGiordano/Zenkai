@@ -10,6 +10,7 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::{PdfView, SideList};
+use crate::actions::{PdfOutlineClose, PdfOutlineNext, PdfOutlineOpen, PdfOutlinePrevious};
 use crate::pdf::cache::BitmapKey;
 use crate::pdf::layout::PageIdx;
 use crate::pdf::protocol::Job;
@@ -47,18 +48,58 @@ impl PdfView {
         }
     }
 
-    pub fn toggle_outline(&mut self, cx: &mut Context<Self>) {
+    pub fn toggle_outline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.outline.is_empty() {
             return;
         }
-        self.side = match self.side {
-            SideList::Thumbnails => SideList::Outline,
-            SideList::Outline => SideList::Thumbnails,
-        };
+        match self.side {
+            SideList::Thumbnails => {
+                self.side = SideList::Outline;
+                self.outline_cursor = self
+                    .outline
+                    .iter()
+                    .rposition(|item| item.page <= self.current_page())
+                    .unwrap_or(0);
+                window.focus(&self.outline_focus, cx);
+            }
+            SideList::Outline => {
+                self.side = SideList::Thumbnails;
+                window.focus(&self.focus, cx);
+            }
+        }
         cx.notify();
     }
 
-    pub(super) fn render_side(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub fn move_outline(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let last = self.outline.len().saturating_sub(1);
+        self.outline_cursor = if forward {
+            (self.outline_cursor + 1).min(last)
+        } else {
+            self.outline_cursor.saturating_sub(1)
+        };
+        self.outline_scroll
+            .scroll_to_item(self.outline_cursor, ScrollStrategy::Nearest);
+        cx.notify();
+    }
+
+    pub fn open_outline_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(item) = self.outline.get(self.outline_cursor) {
+            let page = item.page;
+            self.go_to_page(page, cx);
+            window.focus(&self.focus, cx);
+        }
+    }
+
+    pub fn leave_outline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    pub(super) fn render_side(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let border = cx.theme().border;
         let background = cx.theme().sidebar;
         let showing_outline = self.side == SideList::Outline;
@@ -81,12 +122,14 @@ impl PdfView {
                             } else {
                                 t!("pdf.side.show_outline")
                             })
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_outline(cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.toggle_outline(window, cx)),
+                            ),
                     ),
                 )
             })
             .child(if showing_outline && has_outline {
-                self.render_outline(cx).into_any_element()
+                self.render_outline(window, cx).into_any_element()
             } else {
                 self.render_thumbnails(cx).into_any_element()
             })
@@ -157,16 +200,23 @@ impl PdfView {
         .min_h_0()
     }
 
-    fn render_outline(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        uniform_list(
+    fn render_outline(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let focus = self.outline_focus.clone();
+        let ring = cx.theme().ring;
+        let list = uniform_list(
             "pdf-outline",
             self.outline.len(),
-            cx.processor(|this: &mut PdfView, range: Range<usize>, _, cx| {
-                let hover = cx.theme().list_hover;
+            cx.processor(|this: &mut PdfView, range: Range<usize>, window, cx| {
+                let (hover, selected_background, ring) = {
+                    let theme = cx.theme();
+                    (theme.list_hover, theme.list_active, theme.ring)
+                };
+                let focused = this.outline_focus.contains_focused(window, cx);
                 range
                     .filter_map(|index| {
                         let item = this.outline.get(index)?;
                         let page = item.page;
+                        let at_cursor = index == this.outline_cursor;
                         Some(
                             h_flex()
                                 .id(("pdf-outline-row", index))
@@ -176,6 +226,11 @@ impl PdfView {
                                 .items_center()
                                 .cursor_pointer()
                                 .hover(move |row| row.bg(hover))
+                                .when(at_cursor, |row| {
+                                    row.bg(selected_background).border_l_2().border_color(
+                                        if focused { ring } else { selected_background },
+                                    )
+                                })
                                 .text_sm()
                                 .on_click(
                                     cx.listener(move |this, _, _, cx| this.go_to_page(page, cx)),
@@ -186,7 +241,28 @@ impl PdfView {
                     .collect::<Vec<_>>()
             }),
         )
+        .track_scroll(&self.outline_scroll)
         .flex_1()
-        .min_h_0()
+        .min_h_0();
+        v_flex()
+            .id("pdf-outline-list")
+            .key_context("PdfOutline")
+            .track_focus(&focus)
+            .on_action(cx.listener(|this, _: &PdfOutlineNext, _, cx| this.move_outline(true, cx)))
+            .on_action(
+                cx.listener(|this, _: &PdfOutlinePrevious, _, cx| this.move_outline(false, cx)),
+            )
+            .on_action(cx.listener(|this, _: &PdfOutlineOpen, window, cx| {
+                this.open_outline_item(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &PdfOutlineClose, window, cx| this.leave_outline(window, cx)),
+            )
+            .when(focus.contains_focused(window, cx), |list| {
+                list.border_2().border_color(ring)
+            })
+            .flex_1()
+            .min_h_0()
+            .child(list)
     }
 }
