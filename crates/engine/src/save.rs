@@ -675,4 +675,132 @@ mod tests {
         let reopened = crate::file::open_xlsx(&path).unwrap().workbook;
         assert_eq!(reopened.input(SheetId(0), CellPos::default()), "2");
     }
+
+    fn saved_and_reopened(dir: &std::path::Path) -> (std::path::PathBuf, Workbook) {
+        let path = dir.join("book.xlsx");
+        super::save_xlsx(
+            book()
+                .save_snapshot(&path, super::SaveTarget::Document)
+                .unwrap(),
+        )
+        .unwrap();
+        let reopened = crate::file::open_xlsx(&path).unwrap().workbook;
+        (path, reopened)
+    }
+
+    // Adding a sheet leaves the file with nothing to copy from, so the save writes it whole.
+    fn full_snapshot(
+        book: &mut Workbook,
+        path: &std::path::Path,
+        target: super::SaveTarget,
+    ) -> super::SaveSnapshot {
+        book.add_sheet().unwrap();
+        let snapshot = book.save_snapshot(path, target).unwrap();
+        assert!(matches!(snapshot.plan, super::Plan::Full(_)));
+        snapshot
+    }
+
+    fn changed_by_another_program(path: &std::path::Path) -> Vec<u8> {
+        std::fs::write(path, b"theirs, longer than the stamp it replaces").unwrap();
+        std::fs::read(path).unwrap()
+    }
+
+    fn is_changed_on_disk(saved: Result<(), crate::error::EngineError>) -> bool {
+        matches!(saved, Err(crate::error::EngineError::ChangedOnDisk(_)))
+    }
+
+    #[test]
+    fn a_full_save_over_a_changed_file_is_refused_every_time_until_replace_is_chosen() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut book) = saved_and_reopened(dir.path());
+        let theirs = changed_by_another_program(&path);
+        let snapshot = full_snapshot(&mut book, &path, super::SaveTarget::Document);
+        assert!(is_changed_on_disk(super::save_xlsx(snapshot)));
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+        let again = book
+            .save_snapshot(&path, super::SaveTarget::Document)
+            .unwrap();
+        assert!(is_changed_on_disk(super::save_xlsx(again)));
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+        let replacing = book
+            .save_snapshot(&path, super::SaveTarget::Document)
+            .unwrap()
+            .replacing_changed_file();
+        super::save_xlsx(replacing).unwrap();
+        let next = book
+            .save_snapshot(&path, super::SaveTarget::Document)
+            .unwrap();
+        super::save_xlsx(next).unwrap();
+        assert_eq!(
+            crate::file::open_xlsx(&path)
+                .unwrap()
+                .workbook
+                .sheets()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_full_save_over_an_unchanged_file_is_written_and_stamps_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut book) = saved_and_reopened(dir.path());
+        let snapshot = full_snapshot(&mut book, &path, super::SaveTarget::Document);
+        super::save_xlsx(snapshot).unwrap();
+        let snapshot = full_snapshot(&mut book, &path, super::SaveTarget::Document);
+        super::save_xlsx(snapshot).unwrap();
+        changed_by_another_program(&path);
+        let snapshot = full_snapshot(&mut book, &path, super::SaveTarget::Document);
+        assert!(is_changed_on_disk(super::save_xlsx(snapshot)));
+    }
+
+    #[test]
+    fn a_save_as_to_a_new_path_is_not_guarded_by_the_old_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut book) = saved_and_reopened(dir.path());
+        changed_by_another_program(&path);
+        let target = dir.path().join("copy.xlsx");
+        let snapshot = full_snapshot(&mut book, &target, super::SaveTarget::Document);
+        super::save_xlsx(snapshot).unwrap();
+        assert!(crate::file::open_xlsx(&target).is_ok());
+    }
+
+    #[test]
+    fn another_spelling_of_the_path_is_the_same_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut book) = saved_and_reopened(dir.path());
+        let theirs = changed_by_another_program(&path);
+        let spelled = dir.path().join(".").join("book.xlsx");
+        let snapshot = full_snapshot(&mut book, &spelled, super::SaveTarget::Document);
+        assert!(is_changed_on_disk(super::save_xlsx(snapshot)));
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+    }
+
+    #[test]
+    fn a_file_with_nothing_to_copy_from_is_still_guarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut book) = saved_and_reopened(dir.path());
+        let elsewhere = dir.path().join("elsewhere.xlsx");
+        let probe = book
+            .save_snapshot(&elsewhere, super::SaveTarget::Copy)
+            .unwrap();
+        probe.slot.set(None);
+        let theirs = changed_by_another_program(&path);
+        let snapshot = book
+            .save_snapshot(&path, super::SaveTarget::Document)
+            .unwrap();
+        assert!(matches!(snapshot.plan, super::Plan::Full(_)));
+        assert!(is_changed_on_disk(super::save_xlsx(snapshot)));
+        assert_eq!(std::fs::read(&path).unwrap(), theirs);
+    }
+
+    #[test]
+    fn a_full_save_over_a_deleted_file_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut book) = saved_and_reopened(dir.path());
+        std::fs::remove_file(&path).unwrap();
+        let snapshot = full_snapshot(&mut book, &path, super::SaveTarget::Document);
+        super::save_xlsx(snapshot).unwrap();
+        assert!(crate::file::open_xlsx(&path).is_ok());
+    }
 }

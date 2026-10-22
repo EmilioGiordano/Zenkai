@@ -416,7 +416,7 @@ fn an_undone_edit_copies_every_part() {
 }
 
 #[test]
-fn a_file_changed_on_disk_fails_once_then_is_written_whole() {
+fn a_file_changed_on_disk_is_refused_until_the_save_replaces_it() {
     let dir = tempfile::tempdir().unwrap();
     let (document, mut book) = opened(dir.path());
     let mut other = Source::new();
@@ -431,14 +431,25 @@ fn a_file_changed_on_disk_fails_once_then_is_written_whole() {
         matches!(refused, Err(EngineError::ChangedOnDisk(_))),
         "{refused:?}"
     );
-    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    let theirs = std::fs::read(&document).unwrap();
+    let again = save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap());
+    assert!(
+        matches!(again, Err(EngineError::ChangedOnDisk(_))),
+        "{again:?}"
+    );
+    assert_eq!(std::fs::read(&document).unwrap(), theirs);
+    let replacing = book
+        .save_snapshot(&document, SaveTarget::Document)
+        .unwrap()
+        .replacing_changed_file();
+    save_xlsx(replacing).unwrap();
     let reopened = open_xlsx(&document).unwrap().workbook;
     assert_eq!(reopened.sheets().len(), SHEETS.len());
     assert_eq!(reopened.cell(SheetId(2), pos(0, 0)).text, "mine");
 }
 
 #[test]
-fn a_change_on_disk_after_the_snapshot_fails_the_save_and_the_next_one_works() {
+fn a_change_on_disk_after_the_snapshot_fails_the_save_and_only_a_replace_works() {
     let dir = tempfile::tempdir().unwrap();
     let (document, mut book) = opened(dir.path());
     book.set_input(SheetId(2), pos(0, 0), "mine").unwrap();
@@ -452,7 +463,12 @@ fn a_change_on_disk_after_the_snapshot_fails_the_save_and_the_next_one_works() {
     assert!(save_xlsx(snapshot).is_err());
     let leftovers = std::fs::read_dir(dir.path()).unwrap().count();
     assert_eq!(leftovers, 1, "the temp file is gone");
-    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    assert!(save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).is_err());
+    let replacing = book
+        .save_snapshot(&document, SaveTarget::Document)
+        .unwrap()
+        .replacing_changed_file();
+    save_xlsx(replacing).unwrap();
     let reopened = open_xlsx(&document).unwrap().workbook;
     assert_eq!(reopened.cell(SheetId(2), pos(0, 0)).text, "mine");
 }
@@ -501,67 +517,4 @@ fn styles_laid_out_with_white_space_keep_every_cell_style() {
     let reopened = open_xlsx(&document).unwrap().workbook;
     assert_eq!(reopened.cell(SheetId(0), pos(0, 2)).style, bold);
     assert_eq!(cells(&reopened), cells(&book));
-}
-
-fn replaced_elsewhere(document: &Path) {
-    let mut other = Source::new();
-    other
-        .add_worksheet()
-        .write_string(0, 0, "replaced")
-        .unwrap();
-    other.save(document).unwrap();
-}
-
-fn restyle(book: &mut Workbook) {
-    let range = Range::new(pos(0, 0), pos(1, 1));
-    book.apply_style(SheetId(0), range, StyleChange::Bold(true))
-        .unwrap();
-}
-
-#[test]
-fn a_full_save_after_an_external_change_is_refused_then_written() {
-    let dir = tempfile::tempdir().unwrap();
-    let (document, mut book) = opened(dir.path());
-    replaced_elsewhere(&document);
-    let theirs = std::fs::read(&document).unwrap();
-    restyle(&mut book);
-    let refused = save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap());
-    assert!(
-        matches!(refused, Err(EngineError::ChangedOnDisk(_))),
-        "{refused:?}"
-    );
-    assert_eq!(std::fs::read(&document).unwrap(), theirs);
-    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
-    assert_eq!(
-        open_xlsx(&document).unwrap().workbook.sheets().len(),
-        SHEETS.len()
-    );
-}
-
-#[test]
-fn a_full_save_of_an_unchanged_file_succeeds_and_keeps_guarding() {
-    let dir = tempfile::tempdir().unwrap();
-    let (document, mut book) = opened(dir.path());
-    restyle(&mut book);
-    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
-    restyle(&mut book);
-    book.set_input(SheetId(0), pos(3, 3), "again").unwrap();
-    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
-    replaced_elsewhere(&document);
-    restyle(&mut book);
-    let refused = save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap());
-    assert!(matches!(refused, Err(EngineError::ChangedOnDisk(_))));
-}
-
-#[test]
-fn a_full_save_as_to_a_new_path_is_not_refused() {
-    let dir = tempfile::tempdir().unwrap();
-    let (_document, mut book) = opened(dir.path());
-    restyle(&mut book);
-    let target = dir.path().join("copy.xlsx");
-    save_xlsx(book.save_snapshot(&target, SaveTarget::Document).unwrap()).unwrap();
-    assert_eq!(
-        open_xlsx(&target).unwrap().workbook.sheets().len(),
-        SHEETS.len()
-    );
 }
