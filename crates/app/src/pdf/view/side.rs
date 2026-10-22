@@ -36,7 +36,7 @@ impl PdfView {
             if self.thumbnails.contains(key) || !self.pending_thumbnails.insert(key) {
                 continue;
             }
-            self.send(Job::Render {
+            let sent = self.send_or_stop(Job::Render {
                 page,
                 pixel_width,
                 pixel_height,
@@ -44,6 +44,10 @@ impl PdfView {
                 current: self.thumbnail_token.clone(),
                 generation: self.thumbnail_token.load(Ordering::Relaxed),
             });
+            if !sent {
+                self.pending_thumbnails.remove(&key);
+                return;
+            }
         }
     }
 

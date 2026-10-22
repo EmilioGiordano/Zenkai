@@ -211,6 +211,15 @@ impl PdfView {
         })
     }
 
+    // A reader that has stopped can answer nothing more, so the tab says so instead of waiting.
+    pub(super) fn send_or_stop(&mut self, job: Job) -> bool {
+        let sent = self.send(job);
+        if !sent {
+            self.phase = Phase::Failed(OpenError::LibraryFailed(t!("pdf.worker_stopped").to_string()));
+        }
+        sent
+    }
+
     fn open(&mut self, password: Option<String>) {
         self.phase = Phase::Opening;
         let job = Job::Open {
