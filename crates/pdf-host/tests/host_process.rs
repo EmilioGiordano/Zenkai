@@ -1,3 +1,5 @@
+// The helpers of this test file are not test functions, but they only ever run in tests.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 // These tests start the real zenkai-pdf-host.exe. The ones that read a PDF need pdfium.dll
 // next to the binaries (target/<profile>) and return early without it.
 use std::path::{Path, PathBuf};
@@ -224,4 +226,44 @@ fn a_host_that_answers_with_garbage_is_dropped() {
     let (reply, replies) = channel();
     ask(&client, 1, &reply, open_job(Path::new("a.pdf")));
     assert!(matches!(next(&replies), Reply::Stopped));
+}
+
+// cmd.exe running a long ping reads nothing and says nothing: a host that hangs.
+#[cfg(windows)]
+#[test]
+fn a_host_that_hangs_is_stopped_at_the_deadline_and_replaced() {
+    use zenkai_pdf_host::client::Deadlines;
+
+    let system = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap();
+    let hanging = system.join("System32").join("cmd.exe");
+    let client = PdfClient::new(Some(hanging))
+        .with_arguments(&["/c", "ping -n 60 127.0.0.1 >nul"])
+        .with_deadlines(Deadlines {
+            open: Duration::from_millis(400),
+            other: Duration::from_millis(400),
+        });
+    let (reply, replies) = channel();
+    ask(&client, 1, &reply, open_job(Path::new("a.pdf")));
+    assert!(matches!(next(&replies), Reply::Stopped));
+    ask(&client, 1, &reply, Job::Sizes);
+    assert!(matches!(next(&replies), Reply::Stopped));
+    // The next open starts another process, which hangs and is stopped in turn.
+    ask(&client, 2, &reply, open_job(Path::new("b.pdf")));
+    assert!(matches!(next(&replies), Reply::Stopped));
+}
+
+#[test]
+fn a_host_that_cannot_start_answers_the_waiting_requests() {
+    let client = PdfClient::new(Some(PathBuf::from(
+        r"C:
+osucholderzenkai-pdf-host.exe",
+    )));
+    let (reply, replies) = channel();
+    ask(&client, 1, &reply, open_job(Path::new("a.pdf")));
+    ask(&client, 1, &reply, Job::Sizes);
+    let first = next(&replies);
+    assert!(matches!(
+        first,
+        Reply::Opened(Err(OpenError::HostMissing)) | Reply::Stopped
+    ));
 }
