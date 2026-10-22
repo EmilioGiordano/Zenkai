@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn a_file_with_nothing_to_copy_from_is_still_guarded() {
         let dir = tempfile::tempdir().unwrap();
-        let (path, mut book) = saved_and_reopened(dir.path());
+        let (path, book) = saved_and_reopened(dir.path());
         let elsewhere = dir.path().join("elsewhere.xlsx");
         let probe = book
             .save_snapshot(&elsewhere, super::SaveTarget::Copy)
