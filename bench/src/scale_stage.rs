@@ -5,6 +5,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use zenkai_engine::{Engine, SaveTarget, Workbook, open_xlsx, save_xlsx};
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
 
+use crate::scale_hibernate;
 use crate::scale_memory as mem;
 
 const SHEET: SheetId = SheetId(0);
@@ -24,9 +25,14 @@ pub fn run(args: &[&str]) -> Result<()> {
         ["fill", "--rows", rows] => fill_stage(rows.parse().map_err(|e| anyhow!("bad rows: {e}"))?),
         ["edit-save", file, "--out", out] => edit_save_stage(Path::new(file), Path::new(out)),
         ["save", file, "--out", out] => save_stage(Path::new(file), Path::new(out)),
+        ["hibernate", "--rows", rows, "--out", out] => scale_hibernate::run(
+            rows.parse().map_err(|e| anyhow!("bad rows: {e}"))?,
+            Path::new(out),
+        ),
         _ => bail!(
             "usage: scale-stage open <file> | steady <file> | fill --rows <n> | \
-             edit-save <file> --out <file> | save <file> --out <file>"
+             edit-save <file> --out <file> | save <file> --out <file> | \
+             hibernate --rows <n> --out <dump file>"
         ),
     }
 }

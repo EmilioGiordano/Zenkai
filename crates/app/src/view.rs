@@ -191,6 +191,11 @@ pub struct Workspace {
     memory_sampler: Option<Task<()>>,
     memory_budget_mb: u64,
     last_unload: Option<Instant>,
+    // The workbook being written to disk to leave memory; one at a time, as each needs a copy
+    // of itself in memory while it is encoded.
+    hibernating: Option<WorkbookId>,
+    // Since when the window has been hidden in the tray.
+    hidden_since: Option<Instant>,
     sidebar: SidebarState,
     panels: PanelsState,
     lifecycle: Lifecycle,
@@ -342,6 +347,8 @@ impl Workspace {
             memory_sampler: None,
             memory_budget_mb: memory::budget_mb(),
             last_unload: None,
+            hibernating: None,
+            hidden_since: None,
             sidebar: SidebarState::new(cx),
             panels: PanelsState::new(cx),
             lifecycle: Lifecycle::Running,
@@ -384,7 +391,7 @@ impl Workspace {
                 crate::tray::note_visibility(visibility, cx)
             }),
         );
-        workspace.start_memory_sampler(cx);
+        workspace.start_memory_sampler(window, cx);
         workspace.start_session(initial, window, cx);
         workspace.load_recent(cx);
         workspace
@@ -1653,6 +1660,7 @@ impl Workspace {
                         let reason = match document.file_job() {
                             FileJob::Idle => t!("notice.still_calculating"),
                             FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
+                            FileJob::Hibernating => t!("notice.still_hibernating"),
                         };
                         document.clear_pending_save();
                         this.notify(Severity::Warning, reason, cx);
@@ -1949,6 +1957,7 @@ impl Workspace {
             let reason = match document.file_job() {
                 FileJob::Idle => t!("notice.still_calculating"),
                 FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
+                FileJob::Hibernating => t!("notice.still_hibernating"),
             };
             self.notify(Severity::Warning, reason, cx);
             self.save_ended(id, false, window, cx);
@@ -1956,6 +1965,7 @@ impl Workspace {
         };
         let edits_at_start = document.edit_count();
         let generation = document.generation();
+        let guard = document.file_guard();
         self.busy = Some(t!("busy.saving").into());
         self.start_long_job(LongJob::Saving, cx);
         cx.spawn_in(window, async move |this, cx| {
@@ -1972,6 +1982,7 @@ impl Workspace {
                         &target,
                         overwrite.accepted(),
                         changed,
+                        guard,
                         save_xlsx,
                     )
                     .map(|saved| match saved {

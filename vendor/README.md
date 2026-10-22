@@ -197,6 +197,18 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - NOW and TODAY read the clock once per evaluation, as Excel does, so `=NOW()-NOW()` is
   always 0 (`src/model.rs` `evaluation_milliseconds`, `src/incremental.rs`, `src/tz/`).
   Tests: `src/test/test_now.rs`. Stands on its own.
+- `UserModel::to_bytes_with_history` and `UserModel::from_bytes_with_history` write and read the 
+  workbook together with its undo and redo history, which `to_bytes` leaves out. The dump 
+  refuses while an edit group is open or evaluation is paused (`src/user_model/common.rs`).
+  `UserModel::write_with_history` hands the same bytes to a sink one encoded section at a time
+  (each part of the workbook and each worksheet on its own, then the two histories), and
+  `UserModel::from_reader_with_history` reads them back one section at a time, so neither side
+  holds the whole dump.
+  Stands on its own. Tests: `src/test/user_model/test_bytes_with_history.rs`.
+- `UserModel::extend_copied_value` forwards to `Model::extend_copied_value`, so a caller can
+  shift typed text from one cell to another without writing the source cell first and
+  undoing it (`src/user_model/common.rs`). Stands on its own. Tests:
+  `src/test/user_model/test_extend_copied_value.rs`.
 
 Zenkai-only, not for upstream:
 

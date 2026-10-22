@@ -115,6 +115,7 @@ mod tests {
             status,
             recovery_lost: false,
             origin: None,
+            rested: None,
         }
     }
 
