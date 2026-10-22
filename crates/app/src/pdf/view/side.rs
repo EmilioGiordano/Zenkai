@@ -12,7 +12,7 @@ use zenkai_i18n::t;
 use super::{PdfView, SideList};
 use crate::actions::{PdfOutlineClose, PdfOutlineNext, PdfOutlineOpen, PdfOutlinePrevious};
 use crate::pdf::cache::BitmapKey;
-use crate::pdf::layout::PageIdx;
+use crate::pdf::layout::{PageIdx, render_size};
 use crate::pdf::protocol::Job;
 
 pub(super) const SIDE_WIDTH: f32 = 120.0;
@@ -24,9 +24,8 @@ const OUTLINE_INDENT: f32 = 10.0;
 impl PdfView {
     fn thumbnail_pixels(&self, page: PageIdx) -> (u32, u32) {
         let size = self.size_of(page);
-        let width = (THUMBNAIL_WIDTH * self.device_scale).round().max(1.0);
-        let height = (width * size.height / size.width.max(1.0)).round().max(1.0);
-        (width as u32, height as u32)
+        let height = THUMBNAIL_WIDTH * size.height / size.width.max(1.0);
+        render_size(THUMBNAIL_WIDTH, height, self.device_scale)
     }
 
     fn request_thumbnails(&mut self, range: Range<usize>) {
