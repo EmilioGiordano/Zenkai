@@ -944,8 +944,8 @@ line 2"
             }
             for a1 in ["A1", "A2", "A3"] {
                 assert_eq!(
-                    format!("{:?}", filled.cell(SheetId(0), at(a1))),
-                    format!("{:?}", keyed.cell(SheetId(0), at(a1))),
+                    filled.cell(SheetId(0), at(a1)),
+                    keyed.cell(SheetId(0), at(a1)),
                     "{typed} at {a1}"
                 );
                 assert_eq!(
