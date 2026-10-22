@@ -522,3 +522,42 @@ fn test_comment_and_whitespace_between_rows() {
         expected.worksheets[0].sheet_data
     );
 }
+
+#[test]
+fn test_number_cell_without_value_is_empty() {
+    let bytes = fs::read("tests/example.xlsx").unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let mut last_row = 0;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let mut body = Vec::new();
+        entry.read_to_end(&mut body).unwrap();
+        if name == "xl/worksheets/sheet1.xml" {
+            let text = String::from_utf8(body).unwrap();
+            let row_start = text.rfind("<row r=\"").unwrap() + "<row r=\"".len();
+            let row_end = row_start + text[row_start..].find('"').unwrap();
+            last_row = text[row_start..row_end].parse::<i32>().unwrap();
+            let end = text.rfind("</row>").unwrap();
+            body = format!(
+                "{}<c r=\"ZY{last_row}\" t=\"n\"/><c r=\"ZZ{last_row}\" t=\"n\"><v></v></c>{}",
+                &text[..end],
+                &text[end..]
+            )
+            .into_bytes();
+        }
+        writer
+            .start_file(name, zip::write::FileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer, &body).unwrap();
+    }
+    let edited = writer.finish().unwrap().into_inner();
+    let model = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    for column in [701, 702] {
+        assert_eq!(
+            model.worksheets[0].cell(last_row, column),
+            Some(&ironcalc_base::types::Cell::EmptyCell { s: 0 })
+        );
+    }
+}

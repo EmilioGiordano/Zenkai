@@ -61,6 +61,7 @@ use crate::interface_scale::{self, rem_px};
 use crate::jump::jump_target;
 use crate::keymap;
 use crate::memory;
+use crate::open_loads::OpenLoads;
 use crate::palette;
 use crate::panel_width::{Panel, Resize};
 use crate::pending_save::{AfterJob, JobEnd};
@@ -164,6 +165,7 @@ pub struct Workspace {
     toast_generation: u64,
     busy: Option<SharedString>,
     job_pill: JobPill,
+    open_loads: OpenLoads,
     last_recalc: Option<Duration>,
     diagnostics: bool,
     clipboard_source: Option<InternalClip>,
@@ -195,6 +197,11 @@ pub struct Workspace {
     memory_sampler: Option<Task<()>>,
     memory_budget_mb: u64,
     last_unload: Option<Instant>,
+    // The workbook being written to disk to leave memory; one at a time, as each needs a copy
+    // of itself in memory while it is encoded.
+    hibernating: Option<WorkbookId>,
+    // Since when the window has been hidden in the tray.
+    hidden_since: Option<Instant>,
     sidebar: SidebarState,
     panels: PanelsState,
     text_panes: texts::TextPanes,
@@ -320,6 +327,7 @@ impl Workspace {
             toast_generation: 0,
             busy: None,
             job_pill: JobPill::default(),
+            open_loads: OpenLoads::default(),
             last_recalc: None,
             diagnostics: false,
             clipboard_source: None,
@@ -348,6 +356,8 @@ impl Workspace {
             memory_sampler: None,
             memory_budget_mb: memory::budget_mb(),
             last_unload: None,
+            hibernating: None,
+            hidden_since: None,
             sidebar: SidebarState::new(cx),
             panels: PanelsState::new(cx),
             text_panes: texts::TextPanes::new(),
@@ -392,7 +402,7 @@ impl Workspace {
                 crate::tray::note_visibility(visibility, cx)
             }),
         );
-        workspace.start_memory_sampler(cx);
+        workspace.start_memory_sampler(window, cx);
         workspace.start_session(initial, window, cx);
         workspace.load_recent(cx);
         workspace
@@ -1031,7 +1041,17 @@ impl Workspace {
                 self.follow_review(cx);
             }
             GridEvent::ViewportChanged => self.schedule_cell_refresh(window, cx),
-            GridEvent::EditChanged => cx.notify(),
+            GridEvent::EditChanged => {
+                let read_only = self.documents.active().is_some_and(|d| d.read_only);
+                if read_only && self.grid.read(cx).editor().is_some() {
+                    self.grid.update(cx, |grid, cx| grid.take_edit(cx));
+                    self.notify(Severity::Warning, t!("notice.read_only_refused"), cx);
+                }
+                cx.notify();
+            }
+            GridEvent::EditRequested(_) if self.documents.active().is_some_and(|d| d.read_only) => {
+                self.notify(Severity::Warning, t!("notice.read_only_refused"), cx);
+            }
             GridEvent::EditRequested(pos) => {
                 // Unknown while a recalculation holds the workbook: editing an empty
                 // text would clear the cell on Enter.
@@ -1143,9 +1163,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Workbook) -> Result<(), EngineError> + Send + 'static,
-    ) {
+    ) -> bool {
         if self.prompts.blocks_input() {
-            return;
+            return false;
         }
         // Any edit ends copy mode, as in Excel, so a later paste never reads cells or
         // sheets that changed since the copy.
@@ -1153,9 +1173,9 @@ impl Workspace {
             self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
         }
         let Some(id) = self.documents.active_id() else {
-            return;
+            return false;
         };
-        self.edit_document(id, window, cx, edit);
+        self.edit_document(id, window, cx, edit)
     }
 
     fn edit_document(
@@ -1164,17 +1184,20 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Workbook) -> Result<(), EngineError> + Send + 'static,
-    ) {
+    ) -> bool {
         let shown = self.documents.active_id() == Some(id);
         let Some(document) = self.documents.get_mut(id) else {
-            return;
+            return false;
         };
-        document.queue(Box::new(edit));
-        document.dirty = true;
+        if document.queue_user_edit(Box::new(edit)).is_err() {
+            self.notify(Severity::Warning, t!("notice.read_only_refused"), cx);
+            return false;
+        }
         if shown {
             window.set_window_title(&document.title());
         }
         self.flush_edits(id, cx);
+        true
     }
 
     fn show_typed(&mut self, range: Range, text: &str, cx: &mut Context<Self>) {
@@ -1292,6 +1315,13 @@ impl Workspace {
         cx.notify();
     }
 
+    fn busy_label(&self) -> Option<SharedString> {
+        match self.open_loads.newest_label() {
+            Some(label) => Some(label.to_owned().into()),
+            None => self.busy.clone(),
+        }
+    }
+
     fn clear_busy(&mut self, label: &str, cx: &mut Context<Self>) {
         if self
             .busy
@@ -1304,9 +1334,10 @@ impl Workspace {
     }
 
     fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.busy = Some(t!("busy.reading", name = file_label(&path)).into());
+        let read = self
+            .open_loads
+            .start(t!("busy.reading", name = file_label(&path)));
         cx.notify();
-        let label = self.busy.clone().unwrap_or_default();
         let request = self.next_csv_request();
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.clone();
@@ -1320,7 +1351,8 @@ impl Workspace {
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.clear_busy(&label, cx);
+                this.open_loads.finish(read);
+                cx.notify();
                 if this.csv_request != request {
                     return;
                 }
@@ -1675,6 +1707,7 @@ impl Workspace {
                         let reason = match document.file_job() {
                             FileJob::Idle => t!("notice.still_calculating"),
                             FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
+                            FileJob::Hibernating => t!("notice.still_hibernating"),
                         };
                         document.clear_pending_save();
                         this.notify(Severity::Warning, reason, cx);
@@ -1977,6 +2010,7 @@ impl Workspace {
             let reason = match document.file_job() {
                 FileJob::Idle => t!("notice.still_calculating"),
                 FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
+                FileJob::Hibernating => t!("notice.still_hibernating"),
             };
             self.notify(Severity::Warning, reason, cx);
             self.save_ended(id, false, window, cx);
@@ -1984,6 +2018,7 @@ impl Workspace {
         };
         let edits_at_start = document.edit_count();
         let generation = document.generation();
+        let guard = document.file_guard();
         self.busy = Some(t!("busy.saving").into());
         self.start_long_job(LongJob::Saving, cx);
         cx.spawn_in(window, async move |this, cx| {
@@ -2000,6 +2035,7 @@ impl Workspace {
                         &target,
                         overwrite.accepted(),
                         changed,
+                        guard,
                         save_xlsx,
                     )
                     .map(|saved| match saved {
@@ -2563,18 +2599,26 @@ impl Workspace {
             return;
         }
         match action {
-            StructureEdit::InsertRows => self.edit(window, cx, move |wb| {
-                wb.insert_rows(sheet, selection.start.row, rows)
-            }),
-            StructureEdit::DeleteRows => self.edit(window, cx, move |wb| {
-                wb.delete_rows(sheet, selection.start.row, rows)
-            }),
-            StructureEdit::InsertColumns => self.edit(window, cx, move |wb| {
-                wb.insert_columns(sheet, selection.start.col, cols)
-            }),
-            StructureEdit::DeleteColumns => self.edit(window, cx, move |wb| {
-                wb.delete_columns(sheet, selection.start.col, cols)
-            }),
+            StructureEdit::InsertRows => {
+                self.edit(window, cx, move |wb| {
+                    wb.insert_rows(sheet, selection.start.row, rows)
+                });
+            }
+            StructureEdit::DeleteRows => {
+                self.edit(window, cx, move |wb| {
+                    wb.delete_rows(sheet, selection.start.row, rows)
+                });
+            }
+            StructureEdit::InsertColumns => {
+                self.edit(window, cx, move |wb| {
+                    wb.insert_columns(sheet, selection.start.col, cols)
+                });
+            }
+            StructureEdit::DeleteColumns => {
+                self.edit(window, cx, move |wb| {
+                    wb.delete_columns(sheet, selection.start.col, cols)
+                });
+            }
             StructureEdit::FreezePanes => {
                 let frozen = self
                     .documents
@@ -2998,18 +3042,23 @@ impl Workspace {
         let Some(sheet) = self.active_sheet() else {
             return;
         };
-        if let Some(document) = self.documents.active_mut() {
+        if self.edit(window, cx, move |wb| wb.duplicate_sheet(sheet))
+            && let Some(document) = self.documents.active_mut()
+        {
             document.pending_sheet = Some(SheetId(sheet.0 + 1));
         }
-        self.edit(window, cx, move |wb| wb.duplicate_sheet(sheet));
     }
 
     fn add_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(document) = self.documents.active_mut() else {
+        let Some(document) = self.documents.active() else {
             return;
         };
-        document.pending_sheet = Some(SheetId(u32::try_from(document.sheets.len()).unwrap_or(0)));
-        self.edit(window, cx, |wb| wb.add_sheet().map(|_| ()));
+        let new_sheet = SheetId(u32::try_from(document.sheets.len()).unwrap_or(0));
+        if self.edit(window, cx, |wb| wb.add_sheet().map(|_| ()))
+            && let Some(document) = self.documents.active_mut()
+        {
+            document.pending_sheet = Some(new_sheet);
+        }
     }
 
     fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3146,13 +3195,16 @@ impl Workspace {
             if answer.await == Some(1)
                 && let Err(error) = this.update_in(cx, |this, window, cx| {
                     // Excel shows the sheet that takes the deleted one's place.
-                    let Some(document) = this.documents.active_mut() else {
+                    let Some(document) = this.documents.active() else {
                         return;
                     };
                     let last_after =
                         u32::try_from(document.sheets.len().saturating_sub(2)).unwrap_or(0);
-                    document.pending_sheet = Some(SheetId(sheet.0.min(last_after)));
-                    this.edit(window, cx, move |wb| wb.delete_sheet(sheet));
+                    if this.edit(window, cx, move |wb| wb.delete_sheet(sheet))
+                        && let Some(document) = this.documents.active_mut()
+                    {
+                        document.pending_sheet = Some(SheetId(sheet.0.min(last_after)));
+                    }
                 })
             {
                 tracing::debug!(%error, "workspace closed during delete prompt");
@@ -3165,7 +3217,7 @@ impl Workspace {
         let Some(sheet) = self.active_sheet() else {
             return;
         };
-        let Some(document) = self.documents.active_mut() else {
+        let Some(document) = self.documents.active() else {
             return;
         };
         let last = u32::try_from(document.sheets.len().saturating_sub(1)).unwrap_or(0);
@@ -3177,22 +3229,27 @@ impl Workspace {
         let Some(target) = target else {
             return;
         };
-        document.pending_sheet = Some(SheetId(target));
-        self.edit(window, cx, move |wb| wb.move_sheet(sheet, target));
+        if self.edit(window, cx, move |wb| wb.move_sheet(sheet, target))
+            && let Some(document) = self.documents.active_mut()
+        {
+            document.pending_sheet = Some(SheetId(target));
+        }
     }
 
     // Opening a large file takes seconds; the status bar text alone went unnoticed.
     // Recalculations and saves reach the pill through the job pill, after a delay, so
     // short ones never flash it.
-    fn render_busy(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn render_busy(
+        &self,
+        busy_label: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
         let long_job = self.job_pill.shown(Instant::now()).map(|job| match job {
             LongJob::Saving => t!("busy.saving"),
             LongJob::Calculating => t!("busy.calculating"),
             LongJob::Autosaving => t!("busy.autosaving"),
         });
-        let busy = self
-            .busy
-            .clone()
+        let busy = busy_label
             .filter(|busy| ![t!("busy.calculating"), t!("busy.saving")].contains(&busy.as_ref()))
             .or_else(|| long_job.map(SharedString::from))?;
         let theme = cx.theme();
@@ -3227,7 +3284,11 @@ impl Workspace {
         )
     }
 
-    fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_status(
+        &self,
+        busy: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let access_chip = self.render_access_chip(cx);
         let theme = cx.theme();
         let mut left = h_flex()
@@ -3236,13 +3297,13 @@ impl Workspace {
             .overflow_hidden()
             .gap_3()
             .items_center();
-        if let Some(busy) = &self.busy {
+        if let Some(busy) = busy {
             left = left.child(
                 div()
                     .min_w_0()
                     .truncate()
                     .text_color(theme.primary)
-                    .child(busy.clone()),
+                    .child(busy),
             );
         } else if let Some(notice) = &self.notice {
             let (icon, color) = match notice.severity {
@@ -3373,7 +3434,11 @@ fn format_number(n: f64) -> String {
 }
 
 impl Workspace {
-    fn render_workbook(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_workbook(
+        &self,
+        busy: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         v_flex()
             .flex_1()
             .min_w_0()
@@ -3409,10 +3474,10 @@ impl Workspace {
             )
             .children(self.render_rename(cx))
             .child(self.render_tabs(cx))
-            .child(self.render_status(cx))
+            .child(self.render_status(busy, cx))
     }
 
-    fn render_empty(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_empty(&self, busy: Option<SharedString>, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .flex_1()
             .min_w_0()
@@ -3423,13 +3488,14 @@ impl Workspace {
                 &self.focus,
                 cx,
             )))
-            .child(self.render_status(cx))
+            .child(self.render_status(busy, cx))
     }
 }
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         interface_scale::apply(window, cx);
+        let busy_label = self.busy_label();
         let root = Self::leave_full_window_for_sheet_commands(v_flex(), cx);
         let theme = cx.theme();
         root.relative()
@@ -3484,12 +3550,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ReopenClosedDocument, window, cx| {
                 this.reopen_closed(window, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &Undo, window, cx| this.edit(window, cx, |wb| wb.undo())),
-            )
-            .on_action(
-                cx.listener(|this, _: &Redo, window, cx| this.edit(window, cx, |wb| wb.redo())),
-            )
+            .on_action(cx.listener(|this, _: &Undo, window, cx| {
+                this.edit(window, cx, |wb| wb.undo());
+            }))
+            .on_action(cx.listener(|this, _: &Redo, window, cx| {
+                this.edit(window, cx, |wb| wb.redo());
+            }))
             .on_action(cx.listener(|this, _: &Copy, _, cx| this.copy(false, cx)))
             .on_action(cx.listener(|this, _: &Cut, _, cx| this.copy(true, cx)))
             .on_action(cx.listener(|this, _: &Paste, window, cx| this.paste(window, cx)))
@@ -3946,11 +4012,12 @@ impl Render for Workspace {
                     )
                     .children((!self.chat_fills_window()).then(|| {
                         if self.documents.active().is_some() {
-                            self.render_workbook(cx).into_any_element()
+                            self.render_workbook(busy_label.clone(), cx)
+                                .into_any_element()
                         } else if let Some(entry) = self.shown_pane() {
                             self.render_text(entry.pane.clone(), cx).into_any_element()
                         } else {
-                            self.render_empty(cx).into_any_element()
+                            self.render_empty(busy_label.clone(), cx).into_any_element()
                         }
                     }))
                     .children(self.render_chat(window, cx)),
@@ -3958,7 +4025,7 @@ impl Render for Workspace {
             .children(self.render_palette())
             .children(self.render_theme_picker(cx))
             .children(self.render_search(cx))
-            .children(self.render_busy(cx))
+            .children(self.render_busy(busy_label, cx))
             .children(self.render_toast(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))

@@ -1,11 +1,18 @@
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Seek, Write};
+use std::num::NonZeroU64;
 
 use ironcalc::base::expressions::parser::DefinedNameS;
 
 use crate::ReadError;
+use crate::limits::describe_bytes;
 use crate::skipped_part;
-use crate::stream::{Budgets, CompressedMeter, read_part};
+use crate::stream::{Budgets, CompressedMeter, read_part, read_part_to_peek};
+
+// Excel writes about 150 bytes per sheet in workbook.xml and 200 in its rels, so the
+// 20,000 entries the archive allows fit in 4 MB; 8 MB leaves room for defined names and
+// keeps each DOM near 128 MB at the importer's sixteen times.
+pub(crate) const PEEK_CAP_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(crate) struct WorksheetPart {
     pub(crate) name: String,
@@ -164,6 +171,89 @@ pub(crate) fn read_package<R: Read + Seek>(
         worksheets,
         shared_strings,
     })
+}
+
+// The parts IronCalc's importer loads as worksheets, with how many sheets load each,
+// found the way it finds them but tolerating what `read_package` refuses (two sheets on
+// one part, odd names, a missing attribute on a sheet the importer would reject anyway).
+// Counting a part too many is safe; missing one lets its cells in uncharged. The two
+// files are only peeked at: the walk reads and charges them afterwards. A file past the
+// cap is refused, since the sheets it names, and how often, could not be known; a file
+// that is missing or does not parse gives None, as the importer fails on it too.
+pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    meter: &CompressedMeter,
+    budgets: &Budgets,
+) -> Result<Option<HashMap<String, NonZeroU64>>, ReadError> {
+    let mut peek = |name: &str| -> Result<Option<String>, ReadError> {
+        let Ok(entry) = archive.by_name(name) else {
+            return Ok(None);
+        };
+        let bytes = match read_part_to_peek(entry.take(PEEK_CAP_BYTES + 1), meter, name, budgets) {
+            Ok(bytes) => bytes,
+            Err(ReadError::Unsafe(reason)) => return Err(ReadError::Unsafe(reason)),
+            Err(_) => return Ok(None),
+        };
+        if bytes.len() as u64 > PEEK_CAP_BYTES {
+            return Err(ReadError::Unsafe(format!(
+                "{name} is larger than the {} a workbook index may take",
+                describe_bytes(PEEK_CAP_BYTES)
+            )));
+        }
+        Ok(String::from_utf8(bytes).ok())
+    };
+    // The workbook's DOM is gone before the rels' is built, so the two never coexist.
+    let sheet_ids: Vec<String> = {
+        let Some(workbook) = peek("xl/workbook.xml")? else {
+            return Ok(None);
+        };
+        let Ok(workbook) = roxmltree::Document::parse(&workbook) else {
+            return Ok(None);
+        };
+        workbook
+            .descendants()
+            .filter(|n| n.has_tag_name("sheet"))
+            .filter_map(|node| {
+                node.attribute((
+                    "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+                    "id",
+                ))
+                .map(str::to_string)
+            })
+            .collect()
+    };
+    let Some(rels) = peek("xl/_rels/workbook.xml.rels")? else {
+        return Ok(None);
+    };
+    let Ok(rels) = roxmltree::Document::parse(&rels) else {
+        return Ok(None);
+    };
+    let mut targets = HashMap::new();
+    for node in rels
+        .descendants()
+        .filter(|n| n.has_tag_name("Relationship"))
+    {
+        if let (Some(id), Some(kind), Some(target)) = (
+            node.attribute("Id"),
+            node.attribute("Type"),
+            node.attribute("Target"),
+        ) {
+            // The importer keeps the last relationship of a repeated Id.
+            targets.insert(id, (kind, target));
+        }
+    }
+    let mut paths: HashMap<String, NonZeroU64> = HashMap::new();
+    for id in &sheet_ids {
+        if let Some((kind, target)) = targets.get(id.as_str())
+            && kind.ends_with("worksheet")
+        {
+            paths
+                .entry(part_path(target))
+                .and_modify(|loads| *loads = loads.saturating_add(1))
+                .or_insert(NonZeroU64::MIN);
+        }
+    }
+    Ok(Some(paths))
 }
 
 // The archive IronCalc's own importer reads for everything but the cells: every entry is

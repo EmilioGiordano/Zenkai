@@ -1,7 +1,7 @@
 use std::io::Cursor;
 use std::time::{Duration, Instant};
 
-use ironcalc::base::expressions::types::Area;
+use ironcalc::base::expressions::types::{Area, CellReferenceIndex};
 use ironcalc::base::types::{
     Cell, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
 };
@@ -28,7 +28,7 @@ const MAX_FILL_CELLS: u64 = 1_000_000;
 const STYLE_HISTORY_BYTES_PER_CELL: u64 = 1536;
 const STYLE_HISTORY_BUDGET_BYTES: u64 = 1536 * 1024 * 1024;
 const MAX_STYLED_CELLS: u64 = STYLE_HISTORY_BUDGET_BYTES / STYLE_HISTORY_BYTES_PER_CELL;
-const LANGUAGE: &str = "en";
+pub(crate) const LANGUAGE: &str = "en";
 // Stored widths are in Excel characters and heights in points; these give Excel's pixels.
 const PIXELS_PER_CHAR: f64 = 7.0;
 const CHAR_WIDTH_PADDING: f64 = 5.0;
@@ -171,11 +171,11 @@ pub trait Engine: Send {
 }
 
 pub struct Workbook {
-    model: CachedModel,
-    carried: Carried,
-    saved: SavedSlot,
+    pub(crate) model: CachedModel,
+    pub(crate) carried: Carried,
+    pub(crate) saved: SavedSlot,
     // What the file held when it was opened, for a save that knows nothing newer.
-    opened: Vec<Unsupported>,
+    pub(crate) opened: Vec<Unsupported>,
 }
 
 // What a copy produced: the text Excel and other apps understand, plus the engine's
@@ -691,6 +691,12 @@ impl Workbook {
         profile
     }
 
+    // When the file the workbook came from was last read or written by it; `None` if it
+    // did not come from a file it can copy from.
+    pub fn file_stamp(&self) -> Option<crate::saved::Stamp> {
+        self.saved.current().map(|file| file.stamp)
+    }
+
     // Call on a background thread after building or editing, so the UI thread never walks a sheet.
     pub fn warm_used_areas(&self) {
         for sheet in self.sheets() {
@@ -969,25 +975,31 @@ impl Engine for Workbook {
                 range.cell_count()
             )));
         }
-        self.set_input(sheet, from, text)?;
-        let model = self.model.get_model();
-        let rows = (range.start.row.get()..=range.end.row.get())
-            .map(|row| {
-                (range.start.col.get()..=range.end.col.get())
-                    .map(|col| {
-                        model
-                            .extend_to(
-                                sheet.0,
-                                row_i32(from.row),
-                                col_i32(from.col),
-                                row as i32 + 1,
-                                i32::from(col) + 1,
-                            )
-                            .map_err(rejected)
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        // The typed text is extended, not the cell it would produce, so a date, a percent
+        // or quoted text fills as typed, as in Excel.
+        let source = CellReferenceIndex {
+            sheet: sheet.0,
+            row: row_i32(from.row),
+            column: col_i32(from.col),
+        };
+        let rows = self.model.select_without_invalidation(|model| {
+            (range.start.row.get()..=range.end.row.get())
+                .map(|row| {
+                    (range.start.col.get()..=range.end.col.get())
+                        .map(|col| {
+                            let target = CellReferenceIndex {
+                                sheet: sheet.0,
+                                row: row as i32 + 1,
+                                column: i32::from(col) + 1,
+                            };
+                            model
+                                .extend_copied_value(text, &source, &target)
+                                .map_err(rejected)
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
         self.set_inputs(sheet, range.start, &rows)
     }
 
@@ -1801,7 +1813,15 @@ fn evaluated(
     saved: SavedSlot,
     opened: Vec<Unsupported>,
 ) -> Workbook {
-    let mut model = UserModel::from_model(model);
+    evaluated_user_model(UserModel::from_model(model), carried, saved, opened)
+}
+
+pub(crate) fn evaluated_user_model(
+    mut model: UserModel<'static>,
+    carried: Carried,
+    saved: SavedSlot,
+    opened: Vec<Unsupported>,
+) -> Workbook {
     tracing::info_span!("open_evaluate").in_scope(|| model.evaluate());
     let workbook = Workbook {
         model: CachedModel::new(model),

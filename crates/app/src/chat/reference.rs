@@ -16,6 +16,13 @@ pub struct Reference {
 }
 
 impl Reference {
+    pub fn has_safe_names(&self) -> bool {
+        [&self.workbook, &self.sheet]
+            .into_iter()
+            .flatten()
+            .all(|name| super::name_guard::is_safe_name(name))
+    }
+
     pub fn text(&self) -> String {
         match (&self.workbook, &self.sheet) {
             (Some(workbook), Some(sheet)) => {
@@ -53,6 +60,18 @@ pub fn sheet_range(sheet: &str, range: Range) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reference_with_an_invisible_format_character_is_not_safe() {
+        let reference = |sheet: &str| Reference {
+            workbook: None,
+            sheet: Some(sheet.to_string()),
+            range: range("A1"),
+        };
+        assert!(reference("Ventas").has_safe_names());
+        assert!(!reference("Ve\u{202E}ntas").has_safe_names());
+        assert!(!reference("Ve\u{200B}ntas").has_safe_names());
+    }
 
     fn range(text: &str) -> Range {
         Range::parse_a1(text).unwrap()

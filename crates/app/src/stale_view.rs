@@ -354,7 +354,7 @@ mod tests {
         );
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel::<()>();
-        document.queue(Box::new(move |workbook| {
+        document.queue_in_test(Box::new(move |workbook| {
             let all_new: Vec<Vec<String>> = (0..rows).map(|_| vec!["new".to_string()]).collect();
             workbook.set_inputs(SheetId(0), CellPos::default(), &all_new)?;
             started_tx.send(()).unwrap();
@@ -453,7 +453,7 @@ mod tests {
             None,
             Vec::new(),
         );
-        document.queue(set(0, 0, "new"));
+        document.queue_in_test(set(0, 0, "new"));
         let (shared, edits) = document.take_batch().unwrap();
         assert!(run_batch_serving(&shared, edits, None).is_empty());
         assert!(document.stale_slot().current().is_none());

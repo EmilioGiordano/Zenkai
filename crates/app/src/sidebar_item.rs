@@ -128,6 +128,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            rested: None,
         }
     }
 

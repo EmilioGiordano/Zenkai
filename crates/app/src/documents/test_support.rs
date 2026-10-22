@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use zenkai_engine::Workbook;
 use zenkai_types::WorkbookId;
 
-use super::{Documents, Loaded};
+use super::{Documents, Loaded, Provenance};
 use crate::entry::Entry;
 
 pub fn blank() -> Workbook {
@@ -36,6 +36,6 @@ pub fn loaded(id: WorkbookId) -> Loaded {
         unsupported: Vec::new(),
         read_only: false,
         origin: zenkai_agent::protected_view::FileOrigin::Local,
-        from_recovery: false,
+        provenance: Provenance::File,
     }
 }

@@ -300,6 +300,7 @@ pub fn link_of(
         kind: record.kind,
         mode: record.mode,
         base: record.base,
+        rested: None,
     }
 }
 

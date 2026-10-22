@@ -116,6 +116,7 @@ impl Workspace {
             let (session, restore, leftovers) = cx
                 .background_executor()
                 .spawn(async move {
+                    recovery::remove_dead_dumps(&task_directory);
                     let session = recovery::session_directory()
                         .map_or(Loaded::Absent, |directory| session::load(&directory));
                     (
@@ -765,6 +766,7 @@ impl Workspace {
     pub(super) fn write_session_and_quit(&mut self, plan: ClosePlan, cx: &mut Context<Self>) {
         let session = self.snapshot_session_leaving(&plan, cx);
         let session_directory = recovery::session_directory();
+        let dumps_directory = self.recovery_dir.clone();
         let mut clean: Vec<PathBuf> = self
             .documents
             .iter()
@@ -796,6 +798,9 @@ impl Workspace {
                     };
                     if saved.is_ok() {
                         clean.iter().for_each(|file| recovery::remove(file));
+                        if let Some(directory) = &dumps_directory {
+                            recovery::remove_own_dumps(directory);
+                        }
                     }
                     saved
                 })

@@ -119,7 +119,7 @@ impl Documents {
 #[cfg(test)]
 mod tests {
     use super::super::test_support::*;
-    use super::super::{Installed, Intent};
+    use super::super::{Installed, Intent, Provenance};
     use super::*;
     use crate::entry::{Entry, LinkStatus};
     use crate::session::{FileRecord, ViewRecord};
@@ -380,7 +380,7 @@ mod tests {
             .restore(&session, Some(Path::new("recovery")))
             .unwrap();
         let mut recovered = loaded(id);
-        recovered.from_recovery = true;
+        recovered.provenance = Provenance::Recovery;
         documents.install(recovered);
         let document = documents.active().unwrap();
         assert!(document.dirty);

@@ -5,10 +5,12 @@ use std::path::{Path, PathBuf};
 
 use proptest::prelude::*;
 use zenkai_agent::protected_view::FileOrigin;
+use zenkai_engine::Workbook;
 use zenkai_types::WorkbookId;
 
 use super::test_support::{blank, documents};
-use super::{Documents, Loaded, TextLoad};
+use super::{Documents, Dumped, Loaded, Provenance, TextLoad};
+use crate::document;
 use crate::entry::Entry;
 use crate::session::{self, Loaded as LoadedSession};
 use crate::space_appearance::SpaceAppearance;
@@ -24,6 +26,7 @@ enum Op {
     Save(usize),
     Close(usize),
     Unload(usize),
+    Hibernate(usize),
     Load(usize),
     Quit,
 }
@@ -37,6 +40,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => any::<usize>().prop_map(Op::Save),
         2 => any::<usize>().prop_map(Op::Close),
         2 => any::<usize>().prop_map(Op::Unload),
+        2 => any::<usize>().prop_map(Op::Hibernate),
         2 => any::<usize>().prop_map(Op::Load),
         3 => Just(Op::Quit),
     ]
@@ -81,6 +85,18 @@ impl Model {
         };
         let from_recovery = link.recovery.is_some();
         let kind = link.kind;
+        let hibernation = link
+            .rested
+            .as_ref()
+            .and_then(|rested| rested.hibernation.as_ref());
+        let (workbook, provenance) = match hibernation {
+            Some(hibernation) => (
+                Workbook::wake(&hibernation.dump, &hibernation.kept).unwrap(),
+                Provenance::Dump,
+            ),
+            None if link.recovery.is_some() => (blank(), Provenance::Recovery),
+            None => (blank(), Provenance::File),
+        };
         self.documents.start_loading(id);
         if kind.is_text() {
             self.documents.install_text(TextLoad {
@@ -93,11 +109,11 @@ impl Model {
         }
         self.documents.install(Loaded {
             id,
-            workbook: blank(),
+            workbook,
             unsupported: Vec::new(),
             read_only: false,
             origin: FileOrigin::Local,
-            from_recovery,
+            provenance,
         });
     }
 
@@ -184,6 +200,35 @@ impl Model {
                         "a workbook with unsaved work was unloaded"
                     );
                 }
+            }
+            Op::Hibernate(index) => {
+                let Some(id) = self.pick(*index) else { return };
+                if let Some(document) = self.documents.get_mut(id) {
+                    // The autosave of the app, which hibernation waits for.
+                    document.recovery_written(document.edit_count());
+                }
+                let Some(claim) = self.documents.begin_hibernation(id) else {
+                    return;
+                };
+                std::fs::create_dir_all(&self.recovery_dir).unwrap();
+                let dump = self.recovery_dir.join(format!("dump-{}.zkh", id.0));
+                let kept = document::write_hibernation(&claim.workbook, &dump).unwrap();
+                let copy = self.copy_name(id);
+                let recovery = self.recovery_dir.join(copy);
+                let left = self.documents.finish_hibernation(
+                    id,
+                    Dumped {
+                        generation: claim.generation,
+                        edits: claim.edits,
+                        recovery,
+                        dump,
+                        kept,
+                    },
+                );
+                assert!(
+                    !left || self.unsaved.contains(&id),
+                    "a workbook without unsaved work was hibernated"
+                );
             }
             Op::Load(index) => {
                 if let Some(id) = self.pick(*index) {

@@ -408,7 +408,7 @@ impl Workspace {
         };
         let (sheet, block) = (plan.sheet(), plan.input_block());
         let (done, finished) = async_channel::bounded::<Result<Vec<CellChange>, String>>(1);
-        self.edit_document(id, window, cx, move |workbook| {
+        let accepted = self.edit_document(id, window, cx, move |workbook| {
             let before = block.map(|block| inputs_in(workbook, sheet, block));
             let applied = plan.apply(workbook);
             let outcome = applied
@@ -422,6 +422,10 @@ impl Workspace {
             }
             applied
         });
+        if !accepted {
+            call.respond(Err(ToolError::ReadOnly(ReadOnlyReason::ValuesOnlyFile)));
+            return;
+        }
         self.notify(
             Severity::Info,
             t!("notice.agent_wrote", name = name, description = description),

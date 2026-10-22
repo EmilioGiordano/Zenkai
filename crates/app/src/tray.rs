@@ -86,6 +86,11 @@ impl Tray {
     }
 }
 
+pub fn hidden_to_tray(cx: &App) -> bool {
+    cx.try_global::<Tray>()
+        .is_some_and(|tray| tray.presence == Presence::HiddenToTray)
+}
+
 pub fn installed(cx: &App) -> bool {
     cx.has_global::<Tray>()
 }

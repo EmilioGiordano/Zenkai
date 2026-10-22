@@ -11,6 +11,7 @@ mod reader;
 mod save_losses;
 mod scale;
 mod scale_cases;
+mod scale_hibernate;
 mod scale_memory;
 mod scale_stage;
 

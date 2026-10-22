@@ -253,6 +253,12 @@ pub struct CellIndex {
     pub column: i32,
 }
 
+/// The style a cell gets for a formula's units, by the cell's own style and the units'
+/// number format. A caller writing many formulas keeps one for the whole run: finding a
+/// style scans every cell format, and styles are only ever appended, so an answer
+/// given once stays the answer.
+pub(crate) type UnitsStyles = HashMap<(i32, String), i32>;
+
 impl<'a> Model<'a> {
     pub(crate) fn get_next_variable_id(&mut self) -> usize {
         let id = self.last_variable_id;
@@ -2378,7 +2384,14 @@ impl<'a> Model<'a> {
             if let Some(formula) = self.formula_without_prefix(&value) {
                 let formula_index =
                     self.set_cell_with_formula(sheet, row, column, formula, new_style_index)?;
-                self.apply_formula_units(sheet, row, column, formula_index, new_style_index)?;
+                self.apply_formula_units(
+                    sheet,
+                    row,
+                    column,
+                    formula_index,
+                    new_style_index,
+                    &mut UnitsStyles::new(),
+                )?;
             } else {
                 // The list of currencies is '$', '€' and the local currency
                 let mut currencies = vec!["$", "€"];
@@ -2438,17 +2451,29 @@ impl<'a> Model<'a> {
         column: i32,
         formula_index: i32,
         style_index: i32,
+        styles: &mut UnitsStyles,
     ) -> Result<(), String> {
         let cell = CellReferenceIndex { sheet, row, column };
         let (parsed_formula, _static_result) =
             &self.parsed_formulas[sheet as usize][formula_index as usize];
         if let Some(units) = self.compute_node_units(parsed_formula, &cell) {
-            let new_style_index = self
-                .workbook
-                .styles
-                .get_style_with_format(style_index, &units.get_num_fmt())?;
-            let style = self.workbook.styles.get_style(new_style_index)?;
-            self.set_cell_style(sheet, row, column, &style)?;
+            let key = (style_index, units.get_num_fmt());
+            let new_style_index = match styles.get(&key) {
+                Some(index) => *index,
+                None => {
+                    let with_format = self
+                        .workbook
+                        .styles
+                        .get_style_with_format(style_index, &key.1)?;
+                    let style = self.workbook.styles.get_style(with_format)?;
+                    let index = self.workbook.styles.get_style_index_or_create(&style);
+                    styles.insert(key, index);
+                    index
+                }
+            };
+            self.workbook
+                .worksheet_mut(sheet)?
+                .set_cell_style(row, column, new_style_index)?;
         }
         Ok(())
     }
@@ -2460,6 +2485,7 @@ impl<'a> Model<'a> {
         row: i32,
         column: i32,
         formula_index: i32,
+        styles: &mut UnitsStyles,
     ) -> Result<(), String> {
         self.prepare_cell_for_user_input(sheet, row, column)?;
         let mut style_index = self.get_cell_style_index(sheet, row, column)?;
@@ -2469,10 +2495,13 @@ impl<'a> Model<'a> {
                 .styles
                 .get_style_without_quote_prefix(style_index)?;
         }
-        self.workbook
-            .worksheet_mut(sheet)?
-            .set_cell_with_formula(row, column, formula_index, style_index)?;
-        self.apply_formula_units(sheet, row, column, formula_index, style_index)
+        self.workbook.worksheet_mut(sheet)?.set_cell_with_formula(
+            row,
+            column,
+            formula_index,
+            style_index,
+        )?;
+        self.apply_formula_units(sheet, row, column, formula_index, style_index, styles)
     }
 
     /// Sets an array formula in an area (CSE formula)
