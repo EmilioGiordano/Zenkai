@@ -99,11 +99,15 @@ impl PdfView {
             .child(div().w(rem_px(MESSAGE_WIDTH)).child(content))
     }
 
-    fn no_text_notice(&self, cx: &App) -> Option<AnyElement> {
+    fn text_notice(&self, cx: &App) -> Option<AnyElement> {
         let content = self.contents.get(&self.current_page())?;
-        if content.chars.iter().any(|found| !found.ch.is_whitespace()) {
+        let message = if content.truncated {
+            t!("pdf.text_truncated")
+        } else if content.chars.iter().all(|found| found.ch.is_whitespace()) {
+            t!("pdf.no_text_layer")
+        } else {
             return None;
-        }
+        };
         let theme = cx.theme();
         Some(
             h_flex()
@@ -123,7 +127,7 @@ impl PdfView {
                         .bg(theme.popover)
                         .text_sm()
                         .child(Icon::new(IconName::Info).size_4())
-                        .child(t!("pdf.no_text_layer")),
+                        .child(message),
                 )
                 .into_any_element(),
         )
@@ -133,7 +137,7 @@ impl PdfView {
         let frame = self.frame(cx);
         self.request_visible();
         let weak = cx.entity().downgrade();
-        let notice = self.no_text_notice(cx);
+        let notice = self.text_notice(cx);
         let toolbar = self.render_toolbar(window, cx).into_any_element();
         let side = self.render_side(window, cx).into_any_element();
         let (canvas_background, pointing) = (cx.theme().muted, self.hover.is_some());

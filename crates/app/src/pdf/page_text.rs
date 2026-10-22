@@ -6,6 +6,7 @@ use super::protocol::{
 };
 
 const MAX_LINKS: usize = 2000;
+const MAX_CHARS: usize = 200_000;
 
 struct Frame {
     origin: (f32, f32),
@@ -57,6 +58,7 @@ pub fn search_text(page: &PdfPage<'_>) -> Option<Vec<char>> {
     let chars: Vec<char> = text
         .chars()
         .iter()
+        .take(MAX_CHARS)
         .map(|found| found.unicode_char().unwrap_or(' '))
         .collect();
     (!chars.is_empty()).then_some(chars)
@@ -64,11 +66,12 @@ pub fn search_text(page: &PdfPage<'_>) -> Option<Vec<char>> {
 
 pub fn read_content(page: &PdfPage<'_>) -> PageContent {
     let frame = frame_of(page);
-    let chars = page.text().map_or_else(
+    let mut chars = page.text().map_or_else(
         |_| Vec::new(),
         |text| {
             text.chars()
                 .iter()
+                .take(MAX_CHARS + 1)
                 .map(|found| CharBox {
                     ch: found.unicode_char().unwrap_or(' '),
                     rect: found
@@ -78,9 +81,12 @@ pub fn read_content(page: &PdfPage<'_>) -> PageContent {
                 .collect()
         },
     );
+    let truncated = chars.len() > MAX_CHARS;
+    chars.truncate(MAX_CHARS);
     PageContent {
         chars,
         links: read_links(page, &frame),
+        truncated,
     }
 }
 

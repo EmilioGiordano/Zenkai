@@ -235,6 +235,7 @@ mod tests {
             Arc::new(PageContent {
                 chars: word("ab\u{2}c", 0.0),
                 links: Vec::new(),
+                truncated: false,
             }),
         );
         contents.insert(
@@ -242,6 +243,7 @@ mod tests {
             Arc::new(PageContent {
                 chars: word("xyz", 0.0),
                 links: Vec::new(),
+                truncated: false,
             }),
         );
         let selection = Selection {

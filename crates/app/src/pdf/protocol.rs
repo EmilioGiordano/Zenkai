@@ -121,6 +121,8 @@ pub struct PageLink {
 pub struct PageContent {
     pub chars: Vec<CharBox>,
     pub links: Vec<PageLink>,
+    // The page had more chars than are kept, so search and copy miss the rest.
+    pub truncated: bool,
 }
 
 pub struct Bitmap {
