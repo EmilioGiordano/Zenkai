@@ -35,9 +35,18 @@ pub enum ZoomMode {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PdfPosition {
     pub page: u32,
+    #[serde(deserialize_with = "zoom_or_default")]
     pub zoom: ZoomMode,
+}
+
+// A zoom this version does not know falls back to the default instead of failing the whole
+// session file, which would drop every tab.
+fn zoom_or_default<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<ZoomMode, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -398,6 +407,20 @@ mod tests {
             CANVAS_PADDING - 40.0
         );
         assert_eq!(layout.max_scroll_left(300.0), layout.content_width - 300.0);
+    }
+
+    #[test]
+    fn a_partial_or_unknown_position_reads_with_defaults() {
+        let empty: PdfPosition = serde_json::from_str("{}").unwrap();
+        assert_eq!(empty, PdfPosition::default());
+        let page_only: PdfPosition = serde_json::from_str(r#"{"page":4}"#).unwrap();
+        assert_eq!(page_only.page, 4);
+        assert_eq!(page_only.zoom, ZoomMode::default());
+        let odd: PdfPosition =
+            serde_json::from_str(r#"{"page":2,"zoom":"fit_height"}"#).unwrap();
+        assert_eq!((odd.page, odd.zoom), (2, ZoomMode::default()));
+        let wrong: PdfPosition = serde_json::from_str(r#"{"zoom":{"percent":"x"}}"#).unwrap();
+        assert_eq!(wrong.zoom, ZoomMode::default());
     }
 
     #[test]
