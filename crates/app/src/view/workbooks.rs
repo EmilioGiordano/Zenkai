@@ -731,6 +731,9 @@ mod tests {
             status: LinkStatus::NotLoaded,
             recovery_lost: false,
             origin: Some(FileOrigin::Local),
+            kind: Default::default(),
+            mode: Default::default(),
+            base: None,
             rested: Some(Box::new(Rested {
                 file: FileSeen {
                     stamp: None,
