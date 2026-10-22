@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pdfium_render::prelude::Pdfium;
 
-use super::protocol::OpenError;
+use crate::wire::OpenError;
 
 const LIBRARY_FILE: &str = "pdfium.dll";
 

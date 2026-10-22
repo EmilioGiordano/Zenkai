@@ -1,9 +1,14 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
+use super::document::{describe, process, render};
+use super::library;
+use super::page_text::{read_content, search_text};
 use super::*;
-use crate::pdf::layout::PageSize;
+use crate::codec::{Expect, decode_reply, encode_request};
+use crate::frame::{read_frame, write_frame};
+use crate::textmatch::find_in_page;
+use crate::wire::{BrokenFile, DocId, PageIdx, PageSize};
 
 // Two pages: the first is 200 by 100 points with the text "Hello PDF Hello", the second is
 // blank and 300 by 400. The offsets of the cross-reference table are computed here.
@@ -114,86 +119,75 @@ fn a_pdf_renders_gives_its_text_and_is_found(pdfium: &Pdfium) {
     assert!(search_text(&document.pages().get(1).unwrap()).is_none());
 }
 
-fn the_worker_thread_opens_sizes_renders_and_finds(pdfium: &Pdfium) {
+fn the_host_loop_answers_open_sizes_render_and_find(pdfium: Pdfium) {
     let work = tempfile::tempdir().unwrap();
     let path = write_pdf(work.path(), &tiny_pdf());
-    let (requests, inbox) = async_channel::unbounded();
-    std::thread::scope(|scope| {
-        scope.spawn(|| serve(pdfium, &inbox));
-        let (reply, answers) = async_channel::unbounded();
-        let ask = |job: Job| {
-            requests
-                .send_blocking(Request {
-                    doc: DocId(1),
-                    reply: reply.clone(),
-                    job,
-                })
-                .unwrap();
-            answers.recv_blocking().unwrap()
-        };
-        let opened = ask(Job::Open {
+    let jobs = [
+        Job::Open {
             path,
             password: None,
-        });
-        assert!(matches!(opened, Reply::Opened(Ok(ref opened)) if opened.page_count == 2));
-        let Reply::Sizes(sizes) = ask(Job::Sizes) else {
-            panic!("sizes expected");
-        };
-        assert_eq!(
-            sizes[1],
-            PageSize {
-                width: 300.0,
-                height: 400.0
-            }
-        );
-        let rendered = ask(Job::Render {
+        },
+        Job::Sizes,
+        Job::Render {
             page: PageIdx(1),
             pixel_width: 30,
             pixel_height: 40,
             thumbnail: true,
-            current: Arc::new(AtomicU64::new(0)),
-            generation: 0,
-        });
-        assert!(matches!(
-            rendered,
-            Reply::Rendered {
-                thumbnail: true,
-                bitmap: Some(_),
-                ..
-            }
-        ));
-        let Reply::Found { matches, next, .. } = ask(Job::Find {
+            generation: 9,
+        },
+        Job::Find {
             search: 7,
             query: "PDF".to_string(),
             first: PageIdx(0),
             count: 10,
-        }) else {
-            panic!("found expected");
-        };
-        assert_eq!(matches.len(), 1);
-        assert_eq!(next, None);
-        drop(requests);
-    });
-}
-
-fn a_render_whose_generation_moved_on_is_skipped(pdfium: &Pdfium) {
-    let work = tempfile::tempdir().unwrap();
-    let path = write_pdf(work.path(), &tiny_pdf());
-    let mut documents = HashMap::new();
-    let open = Job::Open {
-        path,
-        password: None,
+        },
+        Job::Close,
+    ];
+    let mut input = Vec::new();
+    for (index, job) in jobs.iter().enumerate() {
+        let frame = encode_request(index as u64, DocId(1), job).unwrap();
+        write_frame(&mut input, &frame).unwrap();
+    }
+    let mut output = Vec::new();
+    serve(&Ok(pdfium), input.as_slice(), &mut output).unwrap();
+    let mut replies = output.as_slice();
+    let mut next = |job: &Job| {
+        let frame = read_frame(&mut replies).unwrap().unwrap();
+        decode_reply(&frame, &Expect::of(job)).unwrap()
     };
-    assert!(process(pdfium, &mut documents, DocId(1), &open).is_some());
-    let stale = Job::Render {
-        page: PageIdx(0),
-        pixel_width: 10,
-        pixel_height: 10,
-        thumbnail: false,
-        current: Arc::new(AtomicU64::new(5)),
-        generation: 4,
+    let opened = next(&jobs[0]);
+    assert!(matches!(opened, Some(Reply::Opened(Ok(ref opened))) if opened.page_count == 2));
+    let Some(Reply::Sizes(sizes)) = next(&jobs[1]) else {
+        panic!("sizes expected");
     };
-    assert!(process(pdfium, &mut documents, DocId(1), &stale).is_none());
+    assert_eq!(
+        sizes[1],
+        PageSize {
+            width: 300.0,
+            height: 400.0
+        }
+    );
+    assert!(matches!(
+        next(&jobs[2]),
+        Some(Reply::Rendered {
+            thumbnail: true,
+            generation: 9,
+            bitmap: Some(_),
+            ..
+        })
+    ));
+    let Some(Reply::Found {
+        matches,
+        next: after,
+        ..
+    }) = next(&jobs[3])
+    else {
+        panic!("found expected");
+    };
+    assert_eq!(matches.len(), 1);
+    assert_eq!(after, None);
+    assert!(next(&jobs[4]).is_none());
+    assert!(read_frame(&mut replies).unwrap().is_none());
 }
 
 fn a_file_that_is_not_a_pdf_or_is_missing_says_so(pdfium: &Pdfium) {
@@ -231,7 +225,51 @@ fn the_real_library_renders_reads_finds_and_reports_bad_files() {
     };
     let pdfium = library::bind_in(&folder).unwrap();
     a_pdf_renders_gives_its_text_and_is_found(&pdfium);
-    the_worker_thread_opens_sizes_renders_and_finds(&pdfium);
-    a_render_whose_generation_moved_on_is_skipped(&pdfium);
     a_file_that_is_not_a_pdf_or_is_missing_says_so(&pdfium);
+    the_host_loop_answers_open_sizes_render_and_find(pdfium);
+}
+
+#[test]
+fn without_the_library_the_host_reports_it_on_every_open_and_nothing_else() {
+    let jobs = [
+        Job::Open {
+            path: PathBuf::from("a.pdf"),
+            password: None,
+        },
+        Job::Sizes,
+    ];
+    let mut input = Vec::new();
+    for (index, job) in jobs.iter().enumerate() {
+        write_frame(
+            &mut input,
+            &encode_request(index as u64, DocId(1), job).unwrap(),
+        )
+        .unwrap();
+    }
+    let mut output = Vec::new();
+    serve(
+        &Err(OpenError::LibraryMissing),
+        input.as_slice(),
+        &mut output,
+    )
+    .unwrap();
+    let mut replies = output.as_slice();
+    let first = read_frame(&mut replies).unwrap().unwrap();
+    assert!(matches!(
+        decode_reply(&first, &Expect::Open).unwrap(),
+        Some(Reply::Opened(Err(OpenError::LibraryMissing)))
+    ));
+    let second = read_frame(&mut replies).unwrap().unwrap();
+    assert!(decode_reply(&second, &Expect::Sizes).unwrap().is_none());
+}
+
+#[test]
+fn the_host_stops_on_a_request_it_cannot_read() {
+    let garbage = b"definitely not a request";
+    let result = serve(
+        &Err(OpenError::LibraryMissing),
+        garbage.as_slice(),
+        Vec::new(),
+    );
+    assert!(result.is_err());
 }

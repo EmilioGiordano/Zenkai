@@ -10013,7 +10013,6 @@ dependencies = [
  "image",
  "interprocess",
  "memory-stats",
- "pdfium-render",
  "png 0.18.1",
  "proptest",
  "raw-window-handle",
@@ -10034,6 +10033,7 @@ dependencies = [
  "zenkai-formats",
  "zenkai-grid",
  "zenkai-i18n",
+ "zenkai-pdf-host",
  "zenkai-types",
 ]
 
@@ -10177,6 +10177,19 @@ dependencies = [
  "zenkai-agent",
  "zenkai-engine",
  "zenkai-types",
+]
+
+[[package]]
+name = "zenkai-pdf-host"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "pdfium-render",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
 ]
 
 [[package]]

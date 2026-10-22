@@ -1,88 +1,20 @@
 use std::collections::HashMap;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::OnceLock;
-use std::sync::atomic::Ordering;
 
-use async_channel::{Receiver, Sender};
 use pdfium_render::prelude::*;
 
-use super::find::{FindMatch, find_in_page};
-use super::layout::{PageIdx, PageSize};
-use super::library;
 use super::outline::read_outline;
 use super::page_text::{read_content, search_text};
-use super::protocol::{Bitmap, BrokenFile, DocId, Job, OpenError, Opened, Reply, Request};
+use crate::textmatch::find_in_page;
+use crate::wire::{
+    Bitmap, BrokenFile, DocId, FindMatch, Job, MAX_MATCHES, MAX_PAGES, OpenError, Opened, PageIdx,
+    PageSize, Reply,
+};
 
 const BYTES_PER_PIXEL: usize = 4;
-pub const MAX_PAGES: usize = 100_000;
 
-// Pdfium is not safe to call from several threads, so one thread owns the library and every
-// open document; the rest of the app talks to it through this channel.
-#[derive(Clone)]
-pub struct PdfWorker {
-    requests: Sender<Request>,
-}
+pub type Documents<'a> = HashMap<DocId, PdfDocument<'a>>;
 
-static SHARED: OnceLock<Result<PdfWorker, OpenError>> = OnceLock::new();
-
-impl PdfWorker {
-    // One worker per process: pdfium binds to its library once, so a second worker could not.
-    pub fn shared() -> Result<PdfWorker, OpenError> {
-        SHARED.get_or_init(PdfWorker::start).clone()
-    }
-
-    fn start() -> Result<PdfWorker, OpenError> {
-        let (requests, receiver) = async_channel::unbounded();
-        std::thread::Builder::new()
-            .name("pdfium".to_string())
-            .spawn(move || run(&receiver))
-            .map_err(|error| OpenError::LibraryFailed(error.to_string()))?;
-        Ok(PdfWorker { requests })
-    }
-
-    pub fn submit(&self, request: Request) -> bool {
-        self.requests.try_send(request).is_ok()
-    }
-}
-
-fn run(requests: &Receiver<Request>) {
-    match library::bind_next_to_exe() {
-        Ok(pdfium) => serve(&pdfium, requests),
-        Err(error) => refuse(&error, requests),
-    }
-}
-
-fn refuse(error: &OpenError, requests: &Receiver<Request>) {
-    while let Ok(request) = requests.recv_blocking() {
-        if matches!(request.job, Job::Open { .. }) {
-            let reply = Reply::Opened(Err(error.clone()));
-            if request.reply.try_send(reply).is_err() {
-                tracing::debug!("the PDF view closed before the library error reached it");
-            }
-        }
-    }
-}
-
-fn serve(pdfium: &Pdfium, requests: &Receiver<Request>) {
-    let mut documents: HashMap<DocId, PdfDocument<'_>> = HashMap::new();
-    while let Ok(request) = requests.recv_blocking() {
-        let Request { doc, reply, job } = request;
-        let answer = catch_unwind(AssertUnwindSafe(|| {
-            process(pdfium, &mut documents, doc, &job)
-        }))
-        .unwrap_or_else(|_| {
-            tracing::error!("pdfium panicked while serving a request");
-            failure_reply(&job)
-        });
-        if let Some(answer) = answer
-            && reply.try_send(answer).is_err()
-        {
-            tracing::debug!("the PDF view closed before its answer arrived");
-        }
-    }
-}
-
-fn failure_reply(job: &Job) -> Option<Reply> {
+pub fn failure_reply(job: &Job) -> Option<Reply> {
     match job {
         Job::Open { .. } => Some(Reply::Opened(Err(OpenError::Broken(BrokenFile::Other)))),
         Job::Render {
@@ -98,13 +30,13 @@ fn failure_reply(job: &Job) -> Option<Reply> {
             generation: *generation,
             bitmap: None,
         }),
-        Job::Sizes | Job::Content { .. } | Job::Find { .. } | Job::Close => None,
+        Job::Sizes | Job::Content { .. } | Job::Find { .. } | Job::Close | Job::Abort => None,
     }
 }
 
-fn process<'a>(
+pub fn process<'a>(
     pdfium: &'a Pdfium,
-    documents: &mut HashMap<DocId, PdfDocument<'a>>,
+    documents: &mut Documents<'a>,
     doc: DocId,
     job: &Job,
 ) -> Option<Reply> {
@@ -135,12 +67,8 @@ fn process<'a>(
             pixel_width,
             pixel_height,
             thumbnail,
-            current,
             generation,
         } => {
-            if current.load(Ordering::Relaxed) != *generation {
-                return None;
-            }
             let document = documents.get(&doc)?;
             Some(Reply::Rendered {
                 page: *page,
@@ -166,7 +94,7 @@ fn process<'a>(
         } => {
             let document = documents.get(&doc)?;
             let total = usize::try_from(document.pages().len()).unwrap_or(0);
-            let end = (first.0 + count).min(total);
+            let end = first.0.saturating_add(*count).min(total);
             let mut matches = Vec::new();
             for index in first.0..end {
                 let Some(chars) = page_index(PageIdx(index))
@@ -183,13 +111,21 @@ fn process<'a>(
                             span,
                         }),
                 );
+                if matches.len() >= MAX_MATCHES {
+                    matches.truncate(MAX_MATCHES);
+                    break;
+                }
             }
+            // The app expects the chunk it asked for, so the next page is where that chunk
+            // ends, even when the matches stopped early at the cap.
+            let asked_end = first.0.saturating_add(*count);
             Some(Reply::Found {
                 search: *search,
                 matches,
-                next: (end < total).then_some(PageIdx(end)),
+                next: (asked_end < total).then_some(PageIdx(asked_end)),
             })
         }
+        Job::Abort => None,
     }
 }
 
@@ -221,7 +157,7 @@ fn open_error(error: &PdfiumError, had_password: bool) -> OpenError {
     }
 }
 
-fn describe(document: &PdfDocument<'_>) -> Result<Opened, OpenError> {
+pub(super) fn describe(document: &PdfDocument<'_>) -> Result<Opened, OpenError> {
     let pages = document.pages();
     let first = pages
         .page_size(0)
@@ -237,7 +173,7 @@ fn describe(document: &PdfDocument<'_>) -> Result<Opened, OpenError> {
     })
 }
 
-fn render(
+pub(super) fn render(
     document: &PdfDocument<'_>,
     page: PageIdx,
     pixel_width: u32,
@@ -262,6 +198,3 @@ fn render(
         bgra,
     })
 }
-
-#[cfg(test)]
-mod tests;

@@ -1,12 +1,8 @@
 use pdfium_render::prelude::*;
 
-use super::layout::PageIdx;
-use super::protocol::OutlineItem;
+use crate::wire::{MAX_OUTLINE_DEPTH, MAX_OUTLINE_ITEMS, MAX_TITLE_CHARS, OutlineItem, PageIdx};
 
-const MAX_ITEMS: usize = 2000;
 const MAX_VISITED: usize = 20_000;
-const MAX_DEPTH: u8 = 8;
-const MAX_TITLE_CHARS: usize = 200;
 
 pub fn read_outline(document: &PdfDocument<'_>) -> Vec<OutlineItem> {
     let mut items = Vec::new();
@@ -23,7 +19,7 @@ fn walk(first: PdfBookmark<'_>, depth: u8, items: &mut Vec<OutlineItem>, visited
     let mut next = Some(first);
     while let Some(bookmark) = next {
         *visited += 1;
-        if items.len() >= MAX_ITEMS || *visited > MAX_VISITED {
+        if items.len() >= MAX_OUTLINE_ITEMS || *visited > MAX_VISITED {
             return;
         }
         if let (Some(title), Some(page)) = (bookmark.title(), page_of(&bookmark)) {
@@ -33,7 +29,7 @@ fn walk(first: PdfBookmark<'_>, depth: u8, items: &mut Vec<OutlineItem>, visited
                 page,
             });
         }
-        if depth < MAX_DEPTH
+        if depth < MAX_OUTLINE_DEPTH
             && let Some(child) = bookmark.first_child()
         {
             walk(child, depth + 1, items, visited);

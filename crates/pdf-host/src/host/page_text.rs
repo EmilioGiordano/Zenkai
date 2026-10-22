@@ -1,12 +1,9 @@
 use pdfium_render::prelude::*;
 
-use super::layout::{PageIdx, PageSize};
-use super::protocol::{
-    CharBox, LinkTarget, PageContent, PageLink, PageRect, Turn, to_page_rect, web_url,
+use crate::wire::{
+    CharBox, LinkTarget, MAX_CHARS, MAX_LINKS, PageContent, PageIdx, PageLink, PageRect, PageSize,
+    Turn, to_page_rect, web_url,
 };
-
-const MAX_LINKS: usize = 2000;
-const MAX_CHARS: usize = 200_000;
 
 struct Frame {
     origin: (f32, f32),
