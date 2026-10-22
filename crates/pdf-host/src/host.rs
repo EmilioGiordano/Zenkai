@@ -3,18 +3,23 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use pdfium_render::prelude::Pdfium;
 
-use crate::codec::{CodecError, decode_request, encode_reply};
+use crate::codec::{CodecError, check_request, decode_request, encode_reply};
 use crate::frame::{FrameError, read_frame, write_frame};
 use crate::wire::{Job, OpenError, Reply};
 
 mod document;
 mod library;
+mod logging;
 mod outline;
 mod page_text;
 #[cfg(test)]
 mod tests;
 
 use document::{Documents, failure_reply, process};
+
+pub fn init_logging() {
+    logging::init();
+}
 
 // A test sets this in the environment of the host it starts, so that the abort request
 // has an effect there and nowhere else.
@@ -50,13 +55,18 @@ pub fn serve(
         if job == Job::Abort && std::env::var_os(ABORT_ENVIRONMENT).is_some() {
             std::process::abort();
         }
-        let reply = match library {
-            Ok(pdfium) => answer(pdfium, &mut documents, doc, &job),
-            Err(error) => {
-                matches!(job, Job::Open { .. }).then(|| Reply::Opened(Err(error.clone())))
+        // A request that asks for too much is refused on its own; the host stays.
+        let reply = if check_request(&job).is_err() {
+            failure_reply(&job)
+        } else {
+            match library {
+                Ok(pdfium) => answer(pdfium, &mut documents, doc, &job),
+                Err(error) => {
+                    matches!(job, Job::Open { .. }).then(|| Reply::Opened(Err(error.clone())))
+                }
             }
         };
-        write_frame(&mut output, &encode_reply(id, reply.as_ref())?)?;
+        write_frame(&mut output, &encode_reply(id, reply)?)?;
     }
     Ok(())
 }

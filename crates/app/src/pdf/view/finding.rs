@@ -5,9 +5,8 @@ use zenkai_i18n::t;
 use super::PdfView;
 use crate::pdf::find::{FindMatch, FindResults};
 use crate::pdf::layout::PageIdx;
-use crate::pdf::protocol::Job;
-use crate::pdf::protocol::PageRect;
 use crate::pdf::selection::line_rects;
+use zenkai_pdf_host::wire::{Job, MAX_QUERY_CHARS, PageRect};
 
 const PAGES_PER_CHUNK: usize = 24;
 const REVEAL_MARGIN: f32 = 48.0;
@@ -85,7 +84,14 @@ impl PdfView {
     }
 
     fn start_search(&mut self, cx: &mut Context<Self>) {
-        let query = self.finder.input.read(cx).value().to_string();
+        let query: String = self
+            .finder
+            .input
+            .read(cx)
+            .value()
+            .chars()
+            .take(MAX_QUERY_CHARS)
+            .collect();
         self.finder.search += 1;
         self.finder.from = self.current_page();
         self.finder.results = FindResults::new(&query);

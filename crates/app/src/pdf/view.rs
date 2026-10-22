@@ -13,10 +13,10 @@ use self::finding::Finder;
 use super::cache::{BITMAP_CAP_BYTES, BitmapCache, BitmapKey};
 use super::find::FindMatch;
 use super::layout::{Layout, PageIdx, PageSize, PdfPosition, Viewport, ZoomMode};
-use super::protocol::{
-    DocId, Job, LinkTarget, OpenError, OutlineItem, PageContent, Reply, Request,
-};
 use super::selection::Selection;
+use zenkai_pdf_host::wire::{
+    DocId, Job, LinkTarget, MAX_MESSAGE_CHARS, OpenError, OutlineItem, PageContent, Reply, Request,
+};
 
 mod finding;
 mod navigation;
@@ -224,7 +224,13 @@ impl PdfView {
     }
 
     fn submit_password(&mut self, cx: &mut Context<Self>) {
-        let password = self.password_input.read(cx).value().to_string();
+        let password: String = self
+            .password_input
+            .read(cx)
+            .value()
+            .chars()
+            .take(MAX_MESSAGE_CHARS)
+            .collect();
         if password.is_empty() {
             return;
         }
