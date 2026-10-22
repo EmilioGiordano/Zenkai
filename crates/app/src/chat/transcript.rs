@@ -167,7 +167,7 @@ impl ChatPanel {
             .rounded_lg()
             .bg(theme.secondary)
             .child(
-                Icon::new(if !DocumentKind::of(&card.path).is_workbook() {
+                Icon::new(if DocumentKind::of(&card.path).is_text() || DocumentKind::of(&card.path).is_pdf() {
                     IconName::FileText
                 } else {
                     IconName::Grid2x2

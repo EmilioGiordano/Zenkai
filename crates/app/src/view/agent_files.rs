@@ -96,7 +96,7 @@ impl Workspace {
             if self
                 .documents
                 .entry(id)
-                .is_some_and(|entry| !entry.kind().is_workbook())
+                .is_some_and(|entry| entry.kind().is_text() || entry.kind().is_pdf())
             {
                 call.respond(Err(ToolError::File(
                     t!("markdown.agent_refused", name = path.relative().display()).to_string(),

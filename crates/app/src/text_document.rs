@@ -44,10 +44,6 @@ impl DocumentKind {
     pub fn is_pdf(self) -> bool {
         self == DocumentKind::Pdf
     }
-
-    pub fn is_workbook(self) -> bool {
-        self == DocumentKind::Workbook
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

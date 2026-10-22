@@ -113,7 +113,8 @@ fn extension(path: &Path) -> Option<String> {
 
 pub fn is_openable(path: &Path) -> bool {
     is_delimited_text(path)
-        || !DocumentKind::of(path).is_workbook()
+        || DocumentKind::of(path).is_text()
+        || DocumentKind::of(path).is_pdf()
         || extension(path)
             .is_some_and(|extension| SPREADSHEET_EXTENSIONS.contains(&extension.as_str()))
 }
