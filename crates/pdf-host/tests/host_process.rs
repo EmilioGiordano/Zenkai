@@ -255,8 +255,7 @@ fn a_host_that_hangs_is_stopped_at_the_deadline_and_replaced() {
 #[test]
 fn a_host_that_cannot_start_answers_the_waiting_requests() {
     let client = PdfClient::new(Some(PathBuf::from(
-        r"C:
-osucholderzenkai-pdf-host.exe",
+        r"C:\no\such\folder\zenkai-pdf-host.exe",
     )));
     let (reply, replies) = channel();
     ask(&client, 1, &reply, open_job(Path::new("a.pdf")));
