@@ -993,7 +993,12 @@ impl Engine for Workbook {
                     })
                     .collect::<Result<Vec<_>, _>>()
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>();
+        // The engine reads the pattern from the cell, so it was written to be read; taking
+        // that write back leaves the fill as the one undo step.
+        let taken_back = self.undo();
+        let rows = rows?;
+        taken_back?;
         self.set_inputs(sheet, range.start, &rows)
     }
 

@@ -910,6 +910,23 @@ line 2"
     }
 
     #[test]
+    fn fill_with_is_one_undo_step() {
+        let mut book = Workbook::new_empty().unwrap();
+        let range = zenkai_types::Range::parse_a1("A1:A3").unwrap();
+        let a1 = CellPos::parse_a1("A1").unwrap();
+        book.fill_with(SheetId(0), a1, "=B1*2", range).unwrap();
+        book.undo().unwrap();
+        for a1 in ["A1", "A2", "A3"] {
+            assert_eq!(book.input(SheetId(0), CellPos::parse_a1(a1).unwrap()), "");
+        }
+        book.redo().unwrap();
+        assert_eq!(
+            book.input(SheetId(0), CellPos::parse_a1("A3").unwrap()),
+            "=B3*2"
+        );
+    }
+
+    #[test]
     fn used_end_follows_every_edit() {
         let mut book = Workbook::new_empty().unwrap();
         let (c5, e9) = (
