@@ -19,12 +19,7 @@ pub fn read_outline(document: &PdfDocument<'_>) -> Vec<OutlineItem> {
 
 // The bookmark tree comes from the file, so its depth and the nodes visited are capped; a loop
 // in it, or a long chain of bookmarks that are skipped, ends at the visit limit.
-fn walk(
-    first: PdfBookmark<'_>,
-    depth: u8,
-    items: &mut Vec<OutlineItem>,
-    visited: &mut usize,
-) {
+fn walk(first: PdfBookmark<'_>, depth: u8, items: &mut Vec<OutlineItem>, visited: &mut usize) {
     let mut next = Some(first);
     while let Some(bookmark) = next {
         *visited += 1;

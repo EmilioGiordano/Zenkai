@@ -268,10 +268,11 @@ mod tests {
 
     #[test]
     fn a_missing_library_says_where_it_should_be() {
-        assert_eq!(
-            failure_text(&OpenError::LibraryMissing),
-            "PDF viewer unavailable: pdfium.dll is missing next to zenkai.exe"
+        let text = failure_text(&OpenError::LibraryMissing);
+        assert!(
+            text.starts_with("PDF viewer unavailable: pdfium.dll is missing next to zenkai.exe")
         );
+        assert!(text.contains("restart Zenkai"));
     }
 
     #[test]

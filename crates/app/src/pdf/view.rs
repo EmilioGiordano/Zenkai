@@ -215,7 +215,9 @@ impl PdfView {
     pub(super) fn send_or_stop(&mut self, job: Job) -> bool {
         let sent = self.send(job);
         if !sent {
-            self.phase = Phase::Failed(OpenError::LibraryFailed(t!("pdf.worker_stopped").to_string()));
+            self.phase = Phase::Failed(OpenError::LibraryFailed(
+                t!("pdf.worker_stopped").to_string(),
+            ));
         }
         sent
     }
