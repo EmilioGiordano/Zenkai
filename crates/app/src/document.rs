@@ -36,6 +36,9 @@ pub enum FileJob {
     Hibernating,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct ReadOnlyRefusal;
+
 pub struct Document {
     pub id: WorkbookId,
     pub space: SpaceId,
@@ -209,7 +212,21 @@ impl Document {
         self.stale.current()?.cells_in(self.sheet, formulas, ranges)
     }
 
-    pub fn queue(&mut self, edit: Edit) {
+    pub fn queue_user_edit(&mut self, edit: Edit) -> Result<(), ReadOnlyRefusal> {
+        if self.read_only {
+            return Err(ReadOnlyRefusal);
+        }
+        self.queue(edit);
+        self.dirty = true;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn queue_in_test(&mut self, edit: Edit) {
+        self.queue(edit);
+    }
+
+    fn queue(&mut self, edit: Edit) {
         self.edit_count += 1;
         self.last_edited = Some(Instant::now());
         self.autosave_cancel.store(true, Ordering::Relaxed);
@@ -808,6 +825,23 @@ mod tests {
             current.settle_save(own, JobEnd::Autosaved),
             AfterJob::SaveAgain
         );
+    }
+
+    #[test]
+    fn a_read_only_document_refuses_user_edits_and_stays_clean() {
+        let mut document = document();
+        document.read_only = true;
+        assert_eq!(document.queue_user_edit(noop()), Err(ReadOnlyRefusal));
+        assert!(!document.dirty);
+        assert!(document.take_batch().is_none());
+    }
+
+    #[test]
+    fn an_editable_document_queues_user_edits_and_turns_dirty() {
+        let mut document = document();
+        assert_eq!(document.queue_user_edit(noop()), Ok(()));
+        assert!(document.dirty);
+        assert!(document.take_batch().is_some());
     }
 
     #[test]

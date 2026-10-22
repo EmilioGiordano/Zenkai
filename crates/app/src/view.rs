@@ -1020,7 +1020,17 @@ impl Workspace {
                 self.follow_review(cx);
             }
             GridEvent::ViewportChanged => self.schedule_cell_refresh(window, cx),
-            GridEvent::EditChanged => cx.notify(),
+            GridEvent::EditChanged => {
+                let read_only = self.documents.active().is_some_and(|d| d.read_only);
+                if read_only && self.grid.read(cx).editor().is_some() {
+                    self.grid.update(cx, |grid, cx| grid.take_edit(cx));
+                    self.notify(Severity::Warning, t!("notice.read_only_refused"), cx);
+                }
+                cx.notify();
+            }
+            GridEvent::EditRequested(_) if self.documents.active().is_some_and(|d| d.read_only) => {
+                self.notify(Severity::Warning, t!("notice.read_only_refused"), cx);
+            }
             GridEvent::EditRequested(pos) => {
                 // Unknown while a recalculation holds the workbook: editing an empty
                 // text would clear the cell on Enter.
@@ -1132,9 +1142,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Workbook) -> Result<(), EngineError> + Send + 'static,
-    ) {
+    ) -> bool {
         if self.prompts.blocks_input() {
-            return;
+            return false;
         }
         // Any edit ends copy mode, as in Excel, so a later paste never reads cells or
         // sheets that changed since the copy.
@@ -1142,9 +1152,9 @@ impl Workspace {
             self.grid.update(cx, |grid, cx| grid.set_marquee(None, cx));
         }
         let Some(id) = self.documents.active_id() else {
-            return;
+            return false;
         };
-        self.edit_document(id, window, cx, edit);
+        self.edit_document(id, window, cx, edit)
     }
 
     fn edit_document(
@@ -1153,17 +1163,20 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
         edit: impl FnOnce(&mut Workbook) -> Result<(), EngineError> + Send + 'static,
-    ) {
+    ) -> bool {
         let shown = self.documents.active_id() == Some(id);
         let Some(document) = self.documents.get_mut(id) else {
-            return;
+            return false;
         };
-        document.queue(Box::new(edit));
-        document.dirty = true;
+        if document.queue_user_edit(Box::new(edit)).is_err() {
+            self.notify(Severity::Warning, t!("notice.read_only_refused"), cx);
+            return false;
+        }
         if shown {
             window.set_window_title(&document.title());
         }
         self.flush_edits(id, cx);
+        true
     }
 
     fn show_typed(&mut self, range: Range, text: &str, cx: &mut Context<Self>) {
@@ -2546,18 +2559,26 @@ impl Workspace {
             return;
         }
         match action {
-            StructureEdit::InsertRows => self.edit(window, cx, move |wb| {
-                wb.insert_rows(sheet, selection.start.row, rows)
-            }),
-            StructureEdit::DeleteRows => self.edit(window, cx, move |wb| {
-                wb.delete_rows(sheet, selection.start.row, rows)
-            }),
-            StructureEdit::InsertColumns => self.edit(window, cx, move |wb| {
-                wb.insert_columns(sheet, selection.start.col, cols)
-            }),
-            StructureEdit::DeleteColumns => self.edit(window, cx, move |wb| {
-                wb.delete_columns(sheet, selection.start.col, cols)
-            }),
+            StructureEdit::InsertRows => {
+                self.edit(window, cx, move |wb| {
+                    wb.insert_rows(sheet, selection.start.row, rows)
+                });
+            }
+            StructureEdit::DeleteRows => {
+                self.edit(window, cx, move |wb| {
+                    wb.delete_rows(sheet, selection.start.row, rows)
+                });
+            }
+            StructureEdit::InsertColumns => {
+                self.edit(window, cx, move |wb| {
+                    wb.insert_columns(sheet, selection.start.col, cols)
+                });
+            }
+            StructureEdit::DeleteColumns => {
+                self.edit(window, cx, move |wb| {
+                    wb.delete_columns(sheet, selection.start.col, cols)
+                });
+            }
             StructureEdit::FreezePanes => {
                 let frozen = self
                     .documents
@@ -2981,18 +3002,23 @@ impl Workspace {
         let Some(sheet) = self.active_sheet() else {
             return;
         };
-        if let Some(document) = self.documents.active_mut() {
+        if self.edit(window, cx, move |wb| wb.duplicate_sheet(sheet))
+            && let Some(document) = self.documents.active_mut()
+        {
             document.pending_sheet = Some(SheetId(sheet.0 + 1));
         }
-        self.edit(window, cx, move |wb| wb.duplicate_sheet(sheet));
     }
 
     fn add_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(document) = self.documents.active_mut() else {
+        let Some(document) = self.documents.active() else {
             return;
         };
-        document.pending_sheet = Some(SheetId(u32::try_from(document.sheets.len()).unwrap_or(0)));
-        self.edit(window, cx, |wb| wb.add_sheet().map(|_| ()));
+        let new_sheet = SheetId(u32::try_from(document.sheets.len()).unwrap_or(0));
+        if self.edit(window, cx, |wb| wb.add_sheet().map(|_| ()))
+            && let Some(document) = self.documents.active_mut()
+        {
+            document.pending_sheet = Some(new_sheet);
+        }
     }
 
     fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3129,13 +3155,16 @@ impl Workspace {
             if answer.await == Some(1)
                 && let Err(error) = this.update_in(cx, |this, window, cx| {
                     // Excel shows the sheet that takes the deleted one's place.
-                    let Some(document) = this.documents.active_mut() else {
+                    let Some(document) = this.documents.active() else {
                         return;
                     };
                     let last_after =
                         u32::try_from(document.sheets.len().saturating_sub(2)).unwrap_or(0);
-                    document.pending_sheet = Some(SheetId(sheet.0.min(last_after)));
-                    this.edit(window, cx, move |wb| wb.delete_sheet(sheet));
+                    if this.edit(window, cx, move |wb| wb.delete_sheet(sheet))
+                        && let Some(document) = this.documents.active_mut()
+                    {
+                        document.pending_sheet = Some(SheetId(sheet.0.min(last_after)));
+                    }
                 })
             {
                 tracing::debug!(%error, "workspace closed during delete prompt");
@@ -3148,7 +3177,7 @@ impl Workspace {
         let Some(sheet) = self.active_sheet() else {
             return;
         };
-        let Some(document) = self.documents.active_mut() else {
+        let Some(document) = self.documents.active() else {
             return;
         };
         let last = u32::try_from(document.sheets.len().saturating_sub(1)).unwrap_or(0);
@@ -3160,8 +3189,11 @@ impl Workspace {
         let Some(target) = target else {
             return;
         };
-        document.pending_sheet = Some(SheetId(target));
-        self.edit(window, cx, move |wb| wb.move_sheet(sheet, target));
+        if self.edit(window, cx, move |wb| wb.move_sheet(sheet, target))
+            && let Some(document) = self.documents.active_mut()
+        {
+            document.pending_sheet = Some(SheetId(target));
+        }
     }
 
     // Opening a large file takes seconds; the status bar text alone went unnoticed.
@@ -3439,12 +3471,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ReopenClosedDocument, window, cx| {
                 this.reopen_closed(window, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &Undo, window, cx| this.edit(window, cx, |wb| wb.undo())),
-            )
-            .on_action(
-                cx.listener(|this, _: &Redo, window, cx| this.edit(window, cx, |wb| wb.redo())),
-            )
+            .on_action(cx.listener(|this, _: &Undo, window, cx| {
+                this.edit(window, cx, |wb| wb.undo());
+            }))
+            .on_action(cx.listener(|this, _: &Redo, window, cx| {
+                this.edit(window, cx, |wb| wb.redo());
+            }))
             .on_action(cx.listener(|this, _: &Copy, _, cx| this.copy(false, cx)))
             .on_action(cx.listener(|this, _: &Cut, _, cx| this.copy(true, cx)))
             .on_action(cx.listener(|this, _: &Paste, window, cx| this.paste(window, cx)))
