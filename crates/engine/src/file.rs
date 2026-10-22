@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::EngineError;
 use crate::preflight;
-use crate::saved::{FileOnDisk, Stamp};
+use crate::saved::{FileOnDisk, KnownFile, Stamp};
 use crate::workbook::Workbook;
 use crate::xlsx_read::{self, XlsxReader};
 
@@ -80,6 +80,12 @@ pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineE
         settings,
         parts,
     } = xlsx_read::read_xlsx_file(path, &name, reader)?;
+    // Even a file saves cannot copy from, or one that changed while it was read, is
+    // remembered by the stamp taken before the read, so a save over it asks first.
+    let known = before.as_ref().ok().map(|stamp| KnownFile {
+        path: path.to_path_buf(),
+        stamp: *stamp,
+    });
     // A file that changed while it was read is never copied from.
     let file = match (parts, before) {
         (Some(parts), Ok(stamp)) if Stamp::of(path).is_ok_and(|after| after == stamp) => {
@@ -89,7 +95,9 @@ pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineE
     };
     let held = &read.unsupported;
     let workbook = tracing::info_span!("open_workbook_build").in_scope(|| {
-        preflight::run_with_engine_stack(|| Workbook::from_file(read.book, settings, file, held))
+        preflight::run_with_engine_stack(|| {
+            Workbook::from_file(read.book, settings, file, known, held)
+        })
     })?;
     Ok(Opened {
         workbook,

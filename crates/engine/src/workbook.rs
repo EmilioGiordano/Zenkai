@@ -14,7 +14,7 @@ use crate::file::Unsupported;
 use crate::model::{CachedModel, HistoryStep, content_cells_within};
 use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
-use crate::saved::{FileOnDisk, SavedSlot};
+use crate::saved::{FileOnDisk, KnownFile, SavedSlot};
 use crate::sheet_settings::{Carried, SheetSettings};
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
@@ -542,11 +542,13 @@ impl Workbook {
         book: ironcalc::base::types::Workbook,
         settings: Vec<SheetSettings>,
         file: Option<FileOnDisk<'_>>,
+        known: Option<KnownFile>,
         opened: &[Unsupported],
     ) -> Result<Workbook, EngineError> {
         let model = tracing::info_span!("open_engine_model").in_scope(|| engine_model(book))?;
         let carried = carried_by_position(&model, settings);
         let saved = SavedSlot::default();
+        saved.set_known(known);
         if let Some(file) = file {
             saved.set(
                 tracing::info_span!("open_saved_parts")

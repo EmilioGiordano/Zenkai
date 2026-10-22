@@ -21,7 +21,8 @@ use crate::save_parts::PartWriter;
 use crate::save_patch::{PatchPlan, Patched, patch_plan, write_patch};
 use crate::save_sheet::{SheetWriter, prepare};
 use crate::saved::{
-    Contents, Metadata, Remains, SavedFile, SavedSlot, Stamp, Strings, selected_sheet, sheet_prints,
+    Contents, KnownFile, Metadata, Remains, SavedFile, SavedSlot, Stamp, Strings, selected_sheet,
+    sheet_prints,
 };
 use crate::sheet_copy::copied_sheet;
 use crate::sheet_elements::Relationships;
@@ -63,8 +64,6 @@ impl SheetJob {
 pub(crate) struct FullPlan {
     parts: Vec<(String, String)>,
     sheets: Vec<SheetJob>,
-    // The file at the target as this workbook last saw it; nothing is copied from it.
-    guard: Option<Arc<SavedFile>>,
 }
 
 enum Plan {
@@ -76,6 +75,9 @@ pub struct SaveSnapshot {
     path: PathBuf,
     plan: Plan,
     slot: SavedSlot,
+    // The file at the workbook's own path as it was last seen, whether or not a save copies
+    // from it, taken with the snapshot so a later save cannot move it under this one.
+    known: Option<Arc<KnownFile>>,
     // For a save to the workbook's own file, what the file will hold, so the next save
     // compares against what was written and never against edits made after the snapshot.
     adoption: Option<Contents>,
@@ -207,7 +209,6 @@ pub(crate) fn full_plan(model: &Model<'_>, carried: &Carried) -> Result<FullPlan
     Ok(FullPlan {
         parts: package_parts(model)?,
         sheets,
-        guard: None,
     })
 }
 
@@ -337,13 +338,13 @@ pub(crate) fn snapshot(
         Chosen::Full(sheets) => Plan::Full(FullPlan {
             parts: tracing::info_span!("save_package_parts").in_scope(|| package_parts(model))?,
             sheets,
-            guard: slot.current().filter(|saved| saved.path == path),
         }),
     };
     Ok(SaveSnapshot {
         path: path.to_path_buf(),
         plan,
         slot: slot.clone(),
+        known: slot.known(),
         adoption,
         restored: carried.restored().clone(),
         seen: carried.restored().seen(),
@@ -434,6 +435,19 @@ fn unchanged(base: Option<&SavedFile>) -> Result<(), EngineError> {
     }
 }
 
+// A save to the workbook's own file must find it as the workbook last saw it. A file that
+// is gone holds nothing to lose.
+fn target_unchanged(known: Option<&KnownFile>, path: &Path) -> Result<(), EngineError> {
+    let Some(known) = known.filter(|known| known.path == path) else {
+        return Ok(());
+    };
+    match Stamp::of(&known.path) {
+        Ok(stamp) if stamp == known.stamp => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        _ => Err(EngineError::ChangedOnDisk(known.path.clone())),
+    }
+}
+
 fn verify(
     temp: &Path,
     base: Option<&SavedFile>,
@@ -445,14 +459,21 @@ fn verify(
 
 fn adopt(slot: &SavedSlot, path: &Path, contents: Contents) {
     match Stamp::of(path) {
-        Ok(stamp) => slot.set(Some(SavedFile {
-            path: path.to_path_buf(),
-            stamp,
-            contents,
-            unspliceable: Vec::new(),
-        })),
+        Ok(stamp) => {
+            slot.set_known(Some(KnownFile {
+                path: path.to_path_buf(),
+                stamp,
+            }));
+            slot.set(Some(SavedFile {
+                path: path.to_path_buf(),
+                stamp,
+                contents,
+                unspliceable: Vec::new(),
+            }));
+        }
         Err(error) => {
             tracing::warn!(?path, %error, "the next save writes the whole file");
+            slot.set_known(None);
             slot.set(None);
         }
     }
@@ -480,6 +501,7 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
         path,
         plan,
         slot,
+        known,
         adoption,
         restored,
         seen,
@@ -501,19 +523,21 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
             return Err(write_error(&temp)(source));
         }
     };
-    let (held, guard) = match &plan {
-        Plan::Patch(plan) => (Some(plan.base.clone()), None),
-        Plan::Full(plan) => (None, plan.guard.clone()),
+    let held = match &plan {
+        Plan::Patch(plan) => Some(plan.base.clone()),
+        Plan::Full(_) => None,
     };
     let base = held.as_deref();
-    let stamped = base.or(guard.as_deref());
     let mut refused = None;
-    let checked = unchanged(stamped)
+    let known = known.as_deref();
+    let checked = unchanged(base)
+        .and_then(|()| target_unchanged(known, &path))
         .and_then(|()| run_with_engine_stack(|| write_temp(plan, file, &temp, &mut refused)))
         .and_then(|written| {
             tracing::info_span!("save_verify").in_scope(|| verify(&temp, base, &written))
         })
-        .and_then(|()| unchanged(stamped));
+        .and_then(|()| unchanged(base))
+        .and_then(|()| target_unchanged(known, &path));
     if let Err(error) = checked {
         remove_temp(&temp);
         // A file that cannot be copied from must not keep every later save from working;
@@ -525,12 +549,11 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
                 | EngineError::BaseUnusable { .. }
                 | EngineError::VerifyFailed(_)
         );
-        // A full write copies nothing, so only a changed file makes it forget the stamp.
-        let guard_failed = matches!(error, EngineError::ChangedOnDisk(_));
         if let (Some(held), Some(part)) = (&held, refused) {
             tracing::warn!(%error, %part, "a sheet cannot be spliced; the next save writes it whole");
             slot.refuse_splice(held, part);
-        } else if (base.is_some() && base_failed) || (guard.is_some() && guard_failed) {
+        } else if (base.is_some() && base_failed) || matches!(error, EngineError::ChangedOnDisk(_))
+        {
             tracing::warn!(%error, "copying from the saved file failed; the next save writes it whole");
             slot.set(None);
         }
