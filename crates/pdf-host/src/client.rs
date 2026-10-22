@@ -15,7 +15,8 @@ use crate::wire::{BrokenFile, DocId, Job, OpenError, PageContent, Reply, Request
 const HOST_FILE: &str = "zenkai-pdf-host.exe";
 const MAX_IN_FLIGHT: usize = 4;
 const SLOT_POLL: Duration = Duration::from_millis(50);
-const WATCH_POLL: Duration = Duration::from_millis(250);
+const KILL_WAIT: Duration = Duration::from_millis(50);
+const KILL_WAITS: u32 = 40;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -56,15 +57,38 @@ struct Pending {
     expect: Expect,
     doc: DocId,
     closes: bool,
-    deadline: Instant,
+    written: Instant,
+    allowed: Duration,
+    // Its document broke a rule; the host still answers it, and the answer is dropped.
+    ignored: bool,
 }
 
-#[derive(Default)]
 struct Book {
     pending: HashMap<u64, Pending>,
     documents: HashMap<DocId, Sender<Reply>>,
     in_flight: usize,
     stopped: bool,
+    last_reply: Instant,
+}
+
+impl Book {
+    fn new() -> Book {
+        Book {
+            pending: HashMap::new(),
+            documents: HashMap::new(),
+            in_flight: 0,
+            stopped: false,
+            last_reply: Instant::now(),
+        }
+    }
+
+    // The host works through its requests one after the other, so only the oldest can be the
+    // one it is busy with. Its time starts when it was written or when the host last answered,
+    // whichever is later: the others waiting behind it have not been given a turn yet.
+    fn due(&self) -> Option<Instant> {
+        let (_, oldest) = self.pending.iter().min_by_key(|(id, _)| **id)?;
+        Some(oldest.written.max(self.last_reply) + oldest.allowed)
+    }
 }
 
 struct Link {
@@ -84,7 +108,7 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl Link {
     fn new(inbox: Receiver<Request>, alive: Arc<AtomicBool>) -> Link {
         Link {
-            book: Mutex::new(Book::default()),
+            book: Mutex::new(Book::new()),
             changed: Condvar::new(),
             alive,
             inbox,
@@ -218,13 +242,22 @@ fn spawn_host(launch: &Launch) -> Result<(Child, ChildStdin, ChildStdout), OpenE
     }
 }
 
+// Kills the host and waits a little for it to go; a host that will not go is left to the system.
 fn kill(child: &mut Child) {
     if let Err(error) = child.kill() {
         tracing::debug!(%error, "the PDF host was already gone");
     }
-    if let Err(error) = child.wait() {
-        tracing::debug!(%error, "could not wait for the PDF host");
+    for _ in 0..KILL_WAITS {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => std::thread::sleep(KILL_WAIT),
+            Err(error) => {
+                tracing::debug!(%error, "could not wait for the PDF host");
+                return;
+            }
+        }
     }
+    tracing::warn!("the PDF host did not exit after being killed");
 }
 
 fn tell(reply: &Sender<Reply>, message: Reply) {
@@ -260,8 +293,13 @@ fn stop(link: &Link) {
         )
     };
     link.changed.notify_all();
-    if let Some(mut child) = locked(&link.child).take() {
+    let child = locked(&link.child).take();
+    if let Some(mut child) = child {
         kill(&mut child);
+    }
+    // Requests that were queued and never written are answered too, or their tabs would wait.
+    while let Ok(request) = link.inbox.try_recv() {
+        tell(&request.reply, Reply::Stopped);
     }
     // A view that has a request in flight and an open document is told once.
     let mut told: Vec<Sender<Reply>> = Vec::new();
@@ -319,11 +357,15 @@ fn run_writer(link: &Arc<Link>, launch: &Launch) {
         stop(link);
         return;
     }
-    write_requests(link, stdin, deadlines);
+    let unsent = write_requests(link, stdin, deadlines);
     stop(link);
+    for request in unsent {
+        tell(&request.reply, Reply::Stopped);
+    }
 }
 
-fn write_requests(link: &Link, stdin: ChildStdin, deadlines: Deadlines) {
+// Returns the requests it took from the queue and never wrote.
+fn write_requests(link: &Link, stdin: ChildStdin, deadlines: Deadlines) -> VecDeque<Request> {
     let mut output = BufWriter::new(stdin);
     let mut queue: VecDeque<Request> = VecDeque::new();
     let mut next_id = 1u64;
@@ -349,7 +391,11 @@ fn write_requests(link: &Link, stdin: ChildStdin, deadlines: Deadlines) {
         {
             let mut book = locked(&link.book);
             if book.stopped {
+                queue.push_front(request);
                 break;
+            }
+            if book.in_flight == 0 {
+                book.last_reply = Instant::now();
             }
             book.in_flight += 1;
             let is_open = matches!(request.job, Job::Open { .. });
@@ -368,14 +414,18 @@ fn write_requests(link: &Link, stdin: ChildStdin, deadlines: Deadlines) {
                     expect: Expect::of(&request.job),
                     doc: request.doc,
                     closes: matches!(request.job, Job::Close),
-                    deadline: Instant::now() + allowed,
+                    written: Instant::now(),
+                    allowed,
+                    ignored: false,
                 },
             );
         }
+        link.changed.notify_all();
         if write_frame(&mut output, &frame).is_err() {
             break;
         }
     }
+    queue
 }
 
 fn refusal(request: &Request) -> Reply {
@@ -426,15 +476,19 @@ fn read_replies(link: &Link, mut input: impl Read) {
             let taken = book.pending.remove(&id);
             if taken.is_some() {
                 book.in_flight = book.in_flight.saturating_sub(1);
+                book.last_reply = Instant::now();
             }
             taken
         }) else {
             return;
         };
         link.changed.notify_all();
+        if pending.ignored {
+            continue;
+        }
         let Ok(decoded) = decode_reply(frame, &pending.expect) else {
             tracing::warn!("a PDF host reply broke the rules; the document is dropped");
-            locked(&link.book).documents.remove(&pending.doc);
+            drop_document(link, pending.doc);
             tell(&pending.reply, Reply::Stopped);
             continue;
         };
@@ -447,6 +501,17 @@ fn read_replies(link: &Link, mut input: impl Read) {
     }
 }
 
+// The document is lost: nothing it still waits for is passed on, though the host will answer it.
+fn drop_document(link: &Link, doc: DocId) {
+    let mut book = locked(&link.book);
+    book.documents.remove(&doc);
+    for pending in book.pending.values_mut() {
+        if pending.doc == doc {
+            pending.ignored = true;
+        }
+    }
+}
+
 // Stops the link when a request has been with the host longer than it may be.
 fn watch(link: &Link) {
     let mut book = locked(&link.book);
@@ -455,19 +520,23 @@ fn watch(link: &Link) {
             return;
         }
         let now = Instant::now();
-        let earliest = book.pending.values().map(|pending| pending.deadline).min();
-        if earliest.is_some_and(|deadline| deadline <= now) {
+        // With nothing pending it sleeps until a request is written; a deadline wakes it itself.
+        let Some(due) = book.due() else {
+            book = link
+                .changed
+                .wait(book)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            continue;
+        };
+        if due <= now {
             drop(book);
             tracing::warn!("the PDF host took too long; it is stopped");
             stop(link);
             return;
         }
-        let wait = earliest.map_or(WATCH_POLL, |deadline| {
-            deadline.saturating_duration_since(now).min(WATCH_POLL)
-        });
         book = link
             .changed
-            .wait_timeout(book, wait)
+            .wait_timeout(book, due - now)
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .0;
     }
@@ -524,7 +593,9 @@ mod tests {
                 expect,
                 doc: DocId(doc),
                 closes: false,
-                deadline: Instant::now() + Duration::from_secs(60),
+                written: Instant::now(),
+                allowed: Duration::from_secs(60),
+                ignored: false,
             },
         );
         replies
@@ -558,6 +629,98 @@ mod tests {
         assert!(!locked(&link.book).stopped);
         assert!(!locked(&link.book).documents.contains_key(&DocId(10)));
         assert!(locked(&link.book).documents.contains_key(&DocId(20)));
+    }
+
+    #[test]
+    fn a_broken_document_ignores_its_other_requests_but_the_host_goes_on() {
+        let link = link();
+        let broken = expect_pending(&link, 1, Expect::Sizes, 10);
+        let later = {
+            let (reply, replies) = async_channel::unbounded();
+            let mut book = locked(&link.book);
+            book.in_flight += 1;
+            book.pending.insert(
+                3,
+                Pending {
+                    reply,
+                    expect: Expect::Sizes,
+                    doc: DocId(10),
+                    closes: false,
+                    written: Instant::now(),
+                    allowed: Duration::from_secs(60),
+                    ignored: false,
+                },
+            );
+            replies
+        };
+        let fine = expect_pending(&link, 2, Expect::Sizes, 20);
+        let bad = encode_reply(
+            1,
+            Some(Reply::Sizes(vec![PageSize {
+                width: 0.0,
+                height: 5.0,
+            }])),
+        )
+        .unwrap();
+        let answer = |id| encode_reply(id, Some(Reply::Sizes(vec![PageSize::LETTER]))).unwrap();
+        read_replies(&link, stream(&[bad, answer(3), answer(2)]).as_slice());
+        assert!(matches!(broken.try_recv(), Ok(Reply::Stopped)));
+        assert!(broken.try_recv().is_err());
+        assert!(later.try_recv().is_err());
+        assert!(matches!(fine.try_recv(), Ok(Reply::Sizes(_))));
+        let book = locked(&link.book);
+        assert!(!book.stopped);
+        assert!(book.pending.is_empty());
+        assert_eq!(book.in_flight, 0);
+    }
+
+    #[test]
+    fn a_request_waits_its_turn_before_its_time_runs() {
+        let link = link();
+        let first = Instant::now();
+        let mut book = locked(&link.book);
+        for (id, allowed) in [(1, 10), (2, 1)] {
+            let (reply, _replies) = async_channel::unbounded();
+            book.pending.insert(
+                id,
+                Pending {
+                    reply,
+                    expect: Expect::Sizes,
+                    doc: DocId(id),
+                    closes: false,
+                    written: first,
+                    allowed: Duration::from_secs(allowed),
+                    ignored: false,
+                },
+            );
+        }
+        book.last_reply = first + Duration::from_secs(5);
+        assert_eq!(book.due(), Some(first + Duration::from_secs(15)));
+        book.pending.remove(&1);
+        assert_eq!(book.due(), Some(first + Duration::from_secs(6)));
+        book.pending.clear();
+        assert_eq!(book.due(), None);
+    }
+
+    #[test]
+    fn stopping_answers_the_requests_still_in_the_queue() {
+        let (requests, inbox) = async_channel::unbounded();
+        let link = Link::new(inbox, Arc::new(AtomicBool::new(true)));
+        let (reply, replies) = async_channel::unbounded();
+        requests
+            .try_send(Request {
+                doc: DocId(1),
+                reply,
+                job: Job::Open {
+                    path: PathBuf::from("a.pdf"),
+                    password: None,
+                },
+                token: None,
+            })
+            .unwrap();
+        stop(&link);
+        assert!(matches!(replies.try_recv(), Ok(Reply::Stopped)));
+        assert!(requests.is_closed());
     }
 
     #[test]
