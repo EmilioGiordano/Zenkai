@@ -40,6 +40,7 @@ mod memory;
 mod palette;
 mod panel_width;
 mod pdf;
+mod pdf_places;
 mod pdf_tab;
 mod pending_save;
 mod previews;
