@@ -703,7 +703,7 @@ mod tests {
             status: LinkStatus::NotLoaded,
             recovery_lost: false,
             origin: Some(FileOrigin::Local),
-            rested: Some(Rested {
+            rested: Some(Box::new(Rested {
                 file: FileSeen {
                     stamp: None,
                     at: SystemTime::now(),
@@ -713,7 +713,7 @@ mod tests {
                     kept,
                     restored: false,
                 }),
-            }),
+            })),
         };
         Setup {
             _dir: dir,
@@ -765,13 +765,13 @@ mod tests {
         setup.link.path = Some(file.clone());
         let stamp = Stamp::of(&file).unwrap();
         let hibernation = setup.link.rested.take().unwrap().hibernation;
-        setup.link.rested = Some(Rested {
+        setup.link.rested = Some(Box::new(Rested {
             file: FileSeen {
                 stamp: Some(stamp),
                 at: SystemTime::now(),
             },
             hibernation,
-        });
+        }));
         let LinkLoad::Loaded { file_changed, .. } = read_link(&setup.link, XlsxReader::Fast) else {
             panic!("the link did not load");
         };
@@ -781,13 +781,13 @@ mod tests {
         std::fs::write(&file, b"second, longer").unwrap();
         setup.link.path = Some(file);
         let hibernation = setup.link.rested.take().unwrap().hibernation;
-        setup.link.rested = Some(Rested {
+        setup.link.rested = Some(Box::new(Rested {
             file: FileSeen {
                 stamp: Some(stamp),
                 at: SystemTime::now(),
             },
             hibernation,
-        });
+        }));
         let LinkLoad::Loaded {
             file_changed,
             provenance,
@@ -845,13 +845,13 @@ mod tests {
         let mut setup = hibernated();
         setup.link.path = Some(path.clone());
         let stamp = Stamp::of(&path).unwrap();
-        setup.link.rested = Some(Rested {
+        setup.link.rested = Some(Box::new(Rested {
             file: FileSeen {
                 stamp: Some(stamp),
                 at: SystemTime::now(),
             },
             hibernation: None,
-        });
+        }));
         assert!(!changed_while_out_of_memory(&setup.link, &path));
         std::fs::write(&path, b"second, longer").unwrap();
         assert!(changed_while_out_of_memory(&setup.link, &path));
@@ -863,13 +863,13 @@ mod tests {
         let path = dir.path().join("book.xlsx");
         std::fs::write(&path, b"first").unwrap();
         let mut setup = hibernated();
-        setup.link.rested = Some(Rested {
+        setup.link.rested = Some(Box::new(Rested {
             file: FileSeen {
                 stamp: None,
                 at: SystemTime::now(),
             },
             hibernation: None,
-        });
+        }));
         assert!(!changed_while_out_of_memory(&setup.link, &path));
         std::thread::sleep(std::time::Duration::from_millis(50));
         std::fs::write(&path, b"second").unwrap();

@@ -38,7 +38,7 @@ pub struct Link {
     pub origin: Option<FileOrigin>,
     // Set while the workbook is out of memory by choice; a link restored from a session or
     // found in a folder never has it.
-    pub rested: Option<Rested>,
+    pub rested: Option<Box<Rested>>,
 }
 
 // The file as the workbook last had it, to tell on the way back whether it changed while the
@@ -207,10 +207,10 @@ impl Document {
             status: LinkStatus::NotLoaded,
             recovery_lost: false,
             origin: Some(self.origin),
-            rested: Some(Rested {
+            rested: Some(Box::new(Rested {
                 file: self.file_seen(),
                 hibernation: None,
-            }),
+            })),
         }
     }
 
@@ -227,14 +227,14 @@ impl Document {
         Link {
             dirty: self.needs_recovery(),
             recovery: Some(recovery),
-            rested: Some(Rested {
+            rested: Some(Box::new(Rested {
                 file: self.file_seen(),
                 hibernation: Some(Hibernation {
                     dump,
                     kept,
                     restored: self.restored,
                 }),
-            }),
+            })),
             ..self.to_link()
         }
     }
