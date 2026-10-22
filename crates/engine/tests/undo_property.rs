@@ -15,6 +15,7 @@ enum Op {
     Block(i64, i64, Vec<Vec<String>>),
     Clear(i64, i64, i64, i64),
     Fill(i64, i64, i64, i64, bool),
+    FillWith(i64, i64, i64, i64, String),
     Bold(i64, i64, i64, i64, bool),
 }
 
@@ -58,6 +59,8 @@ fn op() -> impl Strategy<Value = Op> {
         // (filling from nothing is a no-op that adds no undo step, as in Excel).
         (1..SIDE, 1..SIDE, 1..SIDE, 1..SIDE, any::<bool>())
             .prop_map(|(a, b, c, d, down)| Op::Fill(a, b, c, d, down)),
+        (at.clone(), at.clone(), at.clone(), at.clone(), value())
+            .prop_map(|(a, b, c, d, v)| Op::FillWith(a, b, c, d, v)),
         (at.clone(), at.clone(), at.clone(), at, any::<bool>())
             .prop_map(|(a, b, c, d, on)| Op::Bold(a, b, c, d, on)),
     ]
@@ -80,6 +83,10 @@ fn apply(book: &mut Workbook, op: &Op) -> bool {
             book.clear(SHEET, target)
         }
         Op::Fill(a, b, c, d, down) => book.fill(SHEET, range(*a, *b, *c, *d), *down),
+        Op::FillWith(a, b, c, d, text) => {
+            let target = range(*a, *b, *c, *d);
+            book.fill_with(SHEET, target.start, text, target)
+        }
         Op::Bold(a, b, c, d, on) => {
             book.apply_style(SHEET, range(*a, *b, *c, *d), StyleChange::Bold(*on))
         }
