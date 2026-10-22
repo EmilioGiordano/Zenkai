@@ -88,6 +88,13 @@ pub struct SaveSnapshot {
 }
 
 impl SaveSnapshot {
+    // Only for a save the user chose after being told the file changed: it writes over
+    // whatever the file holds now.
+    pub fn replacing_changed_file(mut self) -> SaveSnapshot {
+        self.known = None;
+        self
+    }
+
     pub fn path(&self) -> &Path {
         &self.path
     }
