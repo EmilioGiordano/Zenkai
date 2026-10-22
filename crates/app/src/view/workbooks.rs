@@ -750,6 +750,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            pdf: Default::default(),
             rested: Some(Box::new(Rested {
                 file: FileSeen {
                     stamp: None,

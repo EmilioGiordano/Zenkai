@@ -152,6 +152,7 @@ impl Workspace {
     pub(super) fn render_pdf(
         &self,
         view: Entity<PdfView>,
+        busy: Option<SharedString>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         v_flex()
@@ -160,7 +161,7 @@ impl Workspace {
             .h_full()
             .children(self.render_held_settings(cx))
             .child(view)
-            .child(self.render_status(cx))
+            .child(self.render_status(busy, cx))
     }
 }
 

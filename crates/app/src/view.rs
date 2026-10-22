@@ -4066,7 +4066,8 @@ impl Render for Workspace {
                             self.render_text(entry.pane.clone(), busy_label.clone(), cx)
                                 .into_any_element()
                         } else if let Some(view) = self.shown_pdf_view() {
-                            self.render_pdf(view, cx).into_any_element()
+                            self.render_pdf(view, busy_label.clone(), cx)
+                                .into_any_element()
                         } else {
                             self.render_empty(busy_label.clone(), cx).into_any_element()
                         }
