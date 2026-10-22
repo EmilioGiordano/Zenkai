@@ -102,7 +102,10 @@ fn a_workbook_that_leaves_memory_is_handed_back_to_be_freed_elsewhere() {
 fn an_edit_while_the_dump_is_written_keeps_the_workbook_in_memory() {
     let (mut documents, id, dir) = with_unsaved_work();
     let (dumped, _) = dump_of(&mut documents, id, &dir).unwrap();
-    documents.get_mut(id).unwrap().queue(Box::new(|_| Ok(())));
+    documents
+        .get_mut(id)
+        .unwrap()
+        .queue_in_test(Box::new(|_| Ok(())));
     assert!(!documents.finish_hibernation(id, dumped));
     assert!(documents.get(id).is_some());
     assert_eq!(documents.get(id).unwrap().file_job(), FileJob::Idle);
@@ -161,7 +164,10 @@ fn only_off_screen_unsaved_work_with_a_current_recovery_copy_is_offered() {
     let active = documents.active_id().unwrap();
     assert!(documents.begin_hibernation(active).is_none());
 
-    documents.get_mut(id).unwrap().queue(Box::new(|_| Ok(())));
+    documents
+        .get_mut(id)
+        .unwrap()
+        .queue_in_test(Box::new(|_| Ok(())));
     let (shared, edits) = documents.get_mut(id).unwrap().take_batch().unwrap();
     assert!(document::run_batch_serving(&shared, edits, None).is_empty());
     let generation = documents.get(id).unwrap().generation();
@@ -190,7 +196,10 @@ fn a_failed_dump_is_not_tried_again_until_the_work_changes() {
     );
     documents.abandon_hibernation(id, claim.generation, true);
     assert!(documents.begin_hibernation(id).is_none());
-    documents.get_mut(id).unwrap().queue(Box::new(|_| Ok(())));
+    documents
+        .get_mut(id)
+        .unwrap()
+        .queue_in_test(Box::new(|_| Ok(())));
     let (shared, edits) = documents.get_mut(id).unwrap().take_batch().unwrap();
     assert!(document::run_batch_serving(&shared, edits, None).is_empty());
     let generation = documents.get(id).unwrap().generation();
