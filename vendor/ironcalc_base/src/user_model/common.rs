@@ -9,7 +9,7 @@ use crate::{
     constants::{LAST_COLUMN, LAST_ROW},
     expressions::{
         parser::CompletionContext,
-        types::Area,
+        types::{Area, CellReferenceIndex},
         utils::{is_valid_column_number, is_valid_row},
     },
     model::{FmtSettings, Model},
@@ -451,6 +451,18 @@ impl<'a> UserModel<'a> {
     /// Returns the internal model
     pub fn get_model(&self) -> &Model<'_> {
         &self.model
+    }
+
+    /// Extends `value`, as typed at `source`, to `target`: a formula is shifted, anything else
+    /// is returned as it is. Unlike [Model::extend_to()] it reads no cell, so nothing has to be
+    /// written to `source` first.
+    pub fn extend_copied_value(
+        &mut self,
+        value: &str,
+        source: &CellReferenceIndex,
+        target: &CellReferenceIndex,
+    ) -> Result<String, String> {
+        self.model.extend_copied_value(value, source, target)
     }
 
     /// Returns the workbook name
