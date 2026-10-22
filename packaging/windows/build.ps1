@@ -14,12 +14,14 @@ try {
     cargo build --profile dist -p zenkai -p zenkai-mcp -j 6
     if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
     $exeDir = Join-Path $root 'target\dist'
+    & (Join-Path $PSScriptRoot 'fetch-pdfium.ps1') -Destination $exeDir
+    if (-not $?) { throw 'fetching pdfium.dll failed' }
 
     $name = "zenkai-$version-windows-x64"
     $staging = Join-Path $dist $name
     if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
     New-Item -ItemType Directory -Force $staging | Out-Null
-    Copy-Item (Join-Path $exeDir 'zenkai.exe'), (Join-Path $exeDir 'zenkai-mcp.exe'), (Join-Path $root 'LICENSE'), (Join-Path $root 'README.md') $staging
+    Copy-Item (Join-Path $exeDir 'zenkai.exe'), (Join-Path $exeDir 'zenkai-mcp.exe'), (Join-Path $exeDir 'pdfium.dll'), (Join-Path $exeDir 'pdfium-LICENSE.txt'), (Join-Path $root 'LICENSE'), (Join-Path $root 'README.md') $staging
     $zip = Join-Path $dist "$name.zip"
     Compress-Archive -Path $staging -DestinationPath $zip -Force
     Remove-Item -Recurse -Force $staging

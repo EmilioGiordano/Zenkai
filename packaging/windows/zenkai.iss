@@ -37,11 +37,13 @@ WizardStyle=modern
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx, .csv and Markdown files"; GroupDescription: "File types:"; Flags: unchecked
+Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx, .csv, Markdown and PDF files"; GroupDescription: "File types:"; Flags: unchecked
 
 [Files]
 Source: "{#ExeDir}\zenkai.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ExeDir}\zenkai-mcp.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeDir}\pdfium-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -65,6 +67,10 @@ Root: HKA; Subkey: "Software\Classes\Zenkai.md\DefaultIcon"; ValueType: string; 
 Root: HKA; Subkey: "Software\Classes\Zenkai.md\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"" ""%1"""; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\.md\OpenWithProgids"; ValueType: string; ValueName: "Zenkai.md"; ValueData: ""; Flags: uninsdeletevalue; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\.markdown\OpenWithProgids"; ValueType: string; ValueName: "Zenkai.md"; ValueData: ""; Flags: uninsdeletevalue; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\Zenkai.pdf"; ValueType: string; ValueName: ""; ValueData: "PDF Document (Zenkai)"; Flags: uninsdeletekey; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\Zenkai.pdf\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"",0"; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\Zenkai.pdf\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"" ""%1"""; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "Zenkai.pdf"; ValueData: ""; Flags: uninsdeletevalue; Tasks: openwith
 
 [Run]
 Filename: "{app}\zenkai.exe"; Description: "{cm:LaunchProgram,Zenkai}"; Flags: nowait postinstall skipifsilent
