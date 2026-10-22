@@ -1,7 +1,7 @@
 use std::io::Cursor;
 use std::time::{Duration, Instant};
 
-use ironcalc::base::expressions::types::Area;
+use ironcalc::base::expressions::types::{Area, CellReferenceIndex};
 use ironcalc::base::types::{
     Cell, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
 };
@@ -975,30 +975,31 @@ impl Engine for Workbook {
                 range.cell_count()
             )));
         }
-        self.set_input(sheet, from, text)?;
-        let model = self.model.get_model();
-        let rows = (range.start.row.get()..=range.end.row.get())
-            .map(|row| {
-                (range.start.col.get()..=range.end.col.get())
-                    .map(|col| {
-                        model
-                            .extend_to(
-                                sheet.0,
-                                row_i32(from.row),
-                                col_i32(from.col),
-                                row as i32 + 1,
-                                i32::from(col) + 1,
-                            )
-                            .map_err(rejected)
-                    })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>();
-        // The engine reads the pattern from the cell, so it was written to be read; taking
-        // that write back leaves the fill as the one undo step.
-        let taken_back = self.undo();
-        let rows = rows?;
-        taken_back?;
+        // The typed text is extended, not the cell it would produce, so a date, a percent
+        // or a leading zero fills as typed, as in Excel.
+        let source = CellReferenceIndex {
+            sheet: sheet.0,
+            row: row_i32(from.row),
+            column: col_i32(from.col),
+        };
+        let rows = self.model.select_without_invalidation(|model| {
+            (range.start.row.get()..=range.end.row.get())
+                .map(|row| {
+                    (range.start.col.get()..=range.end.col.get())
+                        .map(|col| {
+                            let target = CellReferenceIndex {
+                                sheet: sheet.0,
+                                row: row as i32 + 1,
+                                column: i32::from(col) + 1,
+                            };
+                            model
+                                .extend_copied_value(text, &source, &target)
+                                .map_err(rejected)
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
         self.set_inputs(sheet, range.start, &rows)
     }
 
