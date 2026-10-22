@@ -8,6 +8,7 @@ use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, WorkbookId};
 
 use crate::entry::{Link, LinkStatus};
 use crate::panel_width::PanelWidths;
+use crate::pdf::PdfPosition;
 use crate::recovery;
 use crate::space_appearance::{SpaceAppearance, SpaceOverride};
 use crate::spaces::{SpaceColor, SpaceId};
@@ -59,6 +60,8 @@ pub struct FileRecord {
     pub mode: ViewMode,
     #[serde(default)]
     pub base: Option<StampRecord>,
+    #[serde(default)]
+    pub pdf: PdfPosition,
     pub unsupported: Vec<String>,
     pub active: bool,
     pub sheet: u32,
@@ -238,6 +241,7 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         kind: link.kind,
         mode: link.mode,
         base: link.base,
+        pdf: link.pdf,
         unsupported: link
             .unsupported
             .iter()
@@ -300,6 +304,7 @@ pub fn link_of(
         kind: record.kind,
         mode: record.mode,
         base: record.base,
+        pdf: record.pdf,
     }
 }
 
@@ -375,6 +380,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            pdf: Default::default(),
             unsupported: vec!["charts".to_string(), "macros".to_string()],
             active: true,
             sheet: 2,

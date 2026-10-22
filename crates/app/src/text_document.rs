@@ -274,6 +274,7 @@ impl TextDocument {
             kind: self.kind,
             mode: self.mode,
             base: self.stamp.map(Stamp::record),
+            pdf: Default::default(),
         }
     }
 }

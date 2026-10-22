@@ -44,7 +44,7 @@ impl Documents {
         self.before.extend(old.map(Slot::Loaded));
         self.before.append(&mut self.after);
         self.before.push(Slot::Text(Box::new(text)));
-        self.text_shown = Some(id);
+        self.tab_shown = Some(id);
         self.wanted = None;
         id
     }
@@ -82,12 +82,12 @@ impl Documents {
         if !on_screen {
             return Installed::Background;
         }
-        self.show_text(load.id, !blank);
+        self.show_tab(load.id, !blank);
         Installed::OnScreen
     }
 
     // `keep_old` is false only for a blank workbook nobody touched.
-    pub(super) fn show_text(&mut self, id: WorkbookId, keep_old: bool) {
+    pub(super) fn show_tab(&mut self, id: WorkbookId, keep_old: bool) {
         if let Some(mut old) = self.active.take()
             && keep_old
         {
@@ -95,7 +95,7 @@ impl Documents {
             self.before.push(Slot::Loaded(old));
             self.before.append(&mut self.after);
         }
-        self.text_shown = Some(id);
+        self.tab_shown = Some(id);
         self.wanted = None;
     }
 
@@ -144,6 +144,7 @@ mod tests {
                     kind: DocumentKind::Markdown,
                     mode: ViewMode::Source,
                     base: None,
+                    pdf: Default::default(),
                     unsupported: Vec::new(),
                     active,
                     sheet: 0,

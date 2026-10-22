@@ -141,6 +141,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            pdf: Default::default(),
             unsupported: Vec::new(),
             active,
             sheet: 1,

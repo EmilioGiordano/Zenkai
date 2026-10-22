@@ -22,6 +22,7 @@ fn file(path: Option<&str>, recovery: Option<&str>, active: bool) -> FileRecord 
         kind: Default::default(),
         mode: Default::default(),
         base: None,
+        pdf: Default::default(),
         unsupported: vec!["charts".to_string(), "macros".to_string()],
         active,
         sheet: 1,

@@ -87,6 +87,7 @@ impl Documents {
             kind,
             mode,
             base: None,
+            pdf: Default::default(),
         }));
         id
     }

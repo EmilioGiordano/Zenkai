@@ -8,12 +8,14 @@ use zenkai_types::{SheetId, WorkbookId};
 use crate::document::Document;
 use crate::entry::{Entry, Link, LinkStatus, Slot};
 use crate::files;
+use crate::pdf_tab::PdfTab;
 use crate::spaces::{SpaceId, Spaces};
 use crate::text_document::{DocumentKind, TextDocument};
 
 pub use texts::TextLoad;
 pub use unsaved::Unsaved;
 
+mod pdfs;
 mod restore;
 #[cfg(test)]
 pub(crate) mod session_fuzz;
@@ -59,9 +61,9 @@ enum Side {
 pub struct Documents {
     before: Vec<Slot>,
     active: Option<Box<Document>>,
-    // A text tab on screen. It lives in the slots, and the workbook held apart is `None`
+    // A text or PDF tab on screen. It lives in the slots, and the workbook held apart is `None`
     // meanwhile, so everything that reads `active` sees "no workbook on screen".
-    text_shown: Option<WorkbookId>,
+    tab_shown: Option<WorkbookId>,
     after: Vec<Slot>,
     wanted: Option<Want>,
     next_id: u64,
@@ -141,7 +143,7 @@ impl Documents {
         Documents {
             before: Vec::new(),
             active,
-            text_shown: None,
+            tab_shown: None,
             after: Vec::new(),
             wanted: None,
             next_id: 1,
@@ -183,7 +185,7 @@ impl Documents {
             }
         }
         self.wanted = None;
-        self.text_shown = None;
+        self.tab_shown = None;
         id
     }
 
@@ -230,7 +232,11 @@ impl Documents {
         self.active
             .as_ref()
             .map(|a| a.space)
-            .or_else(|| self.shown_text().map(|text| text.space))
+            .or_else(|| {
+                self.tab_shown
+                    .and_then(|id| self.entry(id))
+                    .map(Entry::space)
+            })
             .unwrap_or(self.empty_space)
     }
 
@@ -240,11 +246,11 @@ impl Documents {
 
     // Whatever is on screen, a workbook or a text.
     pub fn shown_id(&self) -> Option<WorkbookId> {
-        self.text_shown.or_else(|| self.active_id())
+        self.tab_shown.or_else(|| self.active_id())
     }
 
     pub fn shown_text(&self) -> Option<&TextDocument> {
-        self.text_shown.and_then(|id| self.text(id))
+        self.tab_shown.and_then(|id| self.text(id))
     }
 
     pub fn text(&self, id: WorkbookId) -> Option<&TextDocument> {
@@ -254,6 +260,21 @@ impl Documents {
     pub fn text_mut(&mut self, id: WorkbookId) -> Option<&mut TextDocument> {
         match self.slot_mut(id)? {
             SlotMut::Other(Slot::Text(text)) => Some(text),
+            _ => None,
+        }
+    }
+
+    pub fn shown_pdf(&self) -> Option<&PdfTab> {
+        self.tab_shown.and_then(|id| self.pdf(id))
+    }
+
+    pub fn pdf(&self, id: WorkbookId) -> Option<&PdfTab> {
+        self.entry(id).and_then(Entry::pdf)
+    }
+
+    pub fn pdf_mut(&mut self, id: WorkbookId) -> Option<&mut PdfTab> {
+        match self.slot_mut(id)? {
+            SlotMut::Other(Slot::Pdf(pdf)) => Some(pdf),
             _ => None,
         }
     }
@@ -372,8 +393,8 @@ impl Documents {
 
     // Only a loaded workbook can be on screen; a link asks for loading with `want`.
     pub fn activate(&mut self, id: WorkbookId) -> bool {
-        if self.text(id).is_some() {
-            self.show_text(id, true);
+        if self.text(id).is_some() || self.pdf(id).is_some() {
+            self.show_tab(id, true);
             return true;
         }
         if let Some(active) = self.active.as_deref_mut().filter(|a| a.id == id) {
@@ -407,7 +428,7 @@ impl Documents {
     fn promote(&mut self, side: Side, index: usize, target: Box<Document>, keep_old: bool) {
         let mut target = target;
         target.last_used = Instant::now();
-        self.text_shown = None;
+        self.tab_shown = None;
         let old = self
             .active
             .replace(target)
@@ -489,7 +510,7 @@ impl Documents {
                 Intent::Switch => true,
                 Intent::Restore => match &self.active {
                     Some(active) => active.is_pristine(),
-                    None => self.text_shown.is_none(),
+                    None => self.tab_shown.is_none(),
                 },
             },
             _ => false,
@@ -596,7 +617,7 @@ impl Documents {
     // Takes what is on screen out of the list, leaving every other slot in `before`, and
     // returns where it was along with its space and path.
     fn take_shown(&mut self) -> Option<(usize, SpaceId, Option<PathBuf>)> {
-        if let Some(id) = self.text_shown.take() {
+        if let Some(id) = self.tab_shown.take() {
             self.before.append(&mut self.after);
             let index = self.before.iter().position(|slot| slot.id() == id)?;
             let removed = self.before.remove(index);
@@ -651,6 +672,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            pdf: Default::default(),
             unsupported: Vec::new(),
             active: false,
             sheet: 0,
