@@ -7,7 +7,7 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace, file_label};
-use crate::documents::{Installed, TextLoad};
+use crate::documents::{Installed, Provenance, TextLoad};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::markdown_pane::{MarkdownPane, PaneEvent, PaneState, folder_of};
 use crate::recovery;
@@ -158,6 +158,7 @@ impl Workspace {
     pub(super) fn render_text(
         &self,
         pane: Entity<MarkdownPane>,
+        busy: Option<SharedString>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         v_flex()
@@ -166,7 +167,7 @@ impl Workspace {
             .h_full()
             .children(self.render_held_settings(cx))
             .child(pane)
-            .child(self.render_status(cx))
+            .child(self.render_status(busy, cx))
     }
 
     pub(super) fn cycle_markdown_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -346,7 +347,12 @@ impl Workspace {
                 match outcome {
                     Installed::OnScreen => {
                         self.present_text(id, window, cx);
-                        self.announce_loaded(&name, from_recovery, recovery_lost, cx);
+                        let provenance = if from_recovery {
+                            Provenance::Recovery
+                        } else {
+                            Provenance::File
+                        };
+                        self.announce_loaded(&name, provenance, recovery_lost, false, cx);
                     }
                     Installed::Background | Installed::Gone => cx.notify(),
                 }

@@ -4015,7 +4015,8 @@ impl Render for Workspace {
                             self.render_workbook(busy_label.clone(), cx)
                                 .into_any_element()
                         } else if let Some(entry) = self.shown_pane() {
-                            self.render_text(entry.pane.clone(), cx).into_any_element()
+                            self.render_text(entry.pane.clone(), busy_label.clone(), cx)
+                                .into_any_element()
                         } else {
                             self.render_empty(busy_label.clone(), cx).into_any_element()
                         }
