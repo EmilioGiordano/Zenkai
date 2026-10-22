@@ -318,6 +318,7 @@ pub fn link_of(
         mode: record.mode,
         base: record.base,
         pdf: record.pdf,
+        rested: None,
     }
 }
 

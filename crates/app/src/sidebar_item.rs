@@ -130,6 +130,7 @@ mod tests {
             mode: Default::default(),
             base: None,
             pdf: Default::default(),
+            rested: None,
         }
     }
 

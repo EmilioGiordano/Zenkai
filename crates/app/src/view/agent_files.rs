@@ -10,9 +10,9 @@ use zenkai_agent::tools::{
 use zenkai_engine::Engine;
 use zenkai_i18n::t;
 
-use super::Workspace;
 use super::agent_calls::Change;
 use super::workbooks::failure_text;
+use super::{Workspace, file_label};
 use crate::agent_folder::FoundFile;
 use crate::agent_settings;
 use crate::document::Document;
@@ -108,6 +108,10 @@ impl Workspace {
             call.respond(Ok(opened(id, Opening::AlreadyOpen, &path, sheets)));
             return;
         }
+        let open = self
+            .open_loads
+            .start(t!("busy.opening", name = file_label(path.path())));
+        cx.notify();
         let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.path().to_path_buf();
@@ -116,6 +120,8 @@ impl Workspace {
                 .spawn(async move { files::load_workbook(&task_path, reader) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
+                this.open_loads.finish(open);
+                cx.notify();
                 let file = match loaded {
                     Ok(file) => file,
                     Err(failure) => {

@@ -266,6 +266,7 @@ impl TextDocument {
             size: None,
             status: LinkStatus::NotLoaded,
             recovery_lost: false,
+            rested: None,
             origin: None,
             kind: self.kind,
             mode: self.mode,

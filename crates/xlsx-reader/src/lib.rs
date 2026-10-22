@@ -24,6 +24,7 @@ mod verify;
 
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
+use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
@@ -40,7 +41,7 @@ pub use styles_part::{STYLES_PART, StyleAppendix, StyleCounts, StylesShape};
 pub use verify::{PartDigest, Written, check_written, check_xml};
 
 use crate::formulas::Names;
-use crate::package::{read_package, stub_archive};
+use crate::package::{importer_worksheet_paths, read_package, stub_archive};
 use crate::parallel::{Job, Open, ReadPlan, SheetStreams, SheetTask};
 use crate::sheet_stream::{StreamedSheet, Tuning, stream_config, stream_worksheet};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, read_part_if_checked};
@@ -409,20 +410,12 @@ fn scan_archive<R: Read + Seek>(
     budgets: &Budgets,
     inspect: &Inspect<'_>,
 ) -> Result<(), ReadError> {
-    // Worksheet paths come from the package relationships, so sheets outside the
-    // usual folder are still counted. When the package itself cannot be read the
-    // usual folder is the fallback; every part still streams through the caps
-    // below, and IronCalc still decides the file.
-    let sheets = read_package(archive, meter, budgets)
-        .ok()
-        .map(|package| {
-            package
-                .worksheets
-                .into_iter()
-                .map(|sheet| sheet.path)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    // The importer loads the worksheets the package relationships name, so those parts
+    // are the ones counted, once for every sheet naming them. Where the package has no
+    // readable index the importer fails on the file, so every part is counted only as a
+    // guard. Every part still streams through the caps below, and IronCalc still decides
+    // the file.
+    let package_sheets = importer_worksheet_paths(archive, meter, budgets)?;
     for index in 0..archive.len() {
         let entry_name = {
             let entry = archive
@@ -430,7 +423,16 @@ fn scan_archive<R: Read + Seek>(
                 .map_err(|e| ReadError::Unreadable(e.to_string()))?;
             entry.name().to_string()
         };
-        if skipped_part(&entry_name) {
+        // Worksheet cells reach IronCalc's reader past this walk, so they are
+        // counted on the same pass and charged to the memory budget cells share
+        // with the streaming reader; anything over refuses the file. A sheet the
+        // package names under a skipped prefix is still a sheet, never skipped.
+        let loads = match &package_sheets {
+            Some(sheets) => sheets.get(&entry_name).copied(),
+            None => Some(NonZeroU64::MIN),
+        };
+        let count_cells = loads.is_some();
+        if skipped_part(&entry_name) && !count_cells {
             let entry = archive
                 .by_index(index)
                 .map_err(|e| ReadError::Unreadable(e.to_string()))?;
@@ -440,16 +442,9 @@ fn scan_archive<R: Read + Seek>(
             inspect(&entry_name, &[])?;
             continue;
         }
-        // Worksheet cells reach IronCalc's reader past this walk, so they are
-        // counted on the same pass and charged to the memory budget cells share
-        // with the streaming reader; anything over refuses the file.
-        let count_cells = sheets.iter().any(|path| path == &entry_name)
-            || entry_name
-                .to_ascii_lowercase()
-                .starts_with("xl/worksheets/");
         let (_, part, usage) = read_part_if_checked(archive, index, meter, budgets, count_cells)?;
-        if count_cells {
-            budgets.check_importer_usage(usage)?;
+        if let Some(loads) = loads {
+            budgets.check_importer_usage(usage.repeated(loads))?;
         }
         inspect(&entry_name, &part)?;
     }
@@ -792,6 +787,255 @@ mod tests {
         let error = scan_archive(&mut archive, &meter, &tiny, &|_, _| Ok(())).unwrap_err();
         assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
         assert!(error.to_string().contains("needs about"), "{error}");
+    }
+
+    // Empty cells are 4 bytes of XML but a full cell each to the budget, so a part of
+    // them trips the cell count long before the DOM charge on its bytes would.
+    fn bare_cells(count: usize) -> String {
+        format!(
+            "<worksheet xmlns=\"{MAIN_NS}\"><sheetData>{}</sheetData></worksheet>",
+            "<c/>".repeat(count)
+        )
+    }
+
+    fn package_naming(target: &str) -> (Vec<u8>, Vec<u8>) {
+        let workbook = format!(
+            "<workbook xmlns=\"{MAIN_NS}\" xmlns:r=\"{REL_NS}\"><sheets><sheet name=\"Data\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>"
+        );
+        let rels = format!(
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{REL_NS}/worksheet\" Target=\"{target}\"/></Relationships>"
+        );
+        (workbook.into_bytes(), rels.into_bytes())
+    }
+
+    fn walk_refused(entries: &[(&str, &[u8])], max_cells: u64) -> bool {
+        let bytes = zipped(entries, false);
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(max_cells));
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
+        match scan_archive(&mut archive, &meter, &budgets, &|_, _| Ok(())) {
+            Ok(()) => false,
+            Err(error) => {
+                assert!(matches!(error, ReadError::Unsafe(_)), "{error}");
+                true
+            }
+        }
+    }
+
+    #[test]
+    fn a_part_the_package_does_not_name_as_a_sheet_is_not_counted_as_one() {
+        let (workbook, rels) = package_naming("worksheets/sheet1.xml");
+        let small = bare_cells(1);
+        let orphan = bare_cells(200);
+        let named = [
+            ("xl/workbook.xml", workbook.as_slice()),
+            ("xl/_rels/workbook.xml.rels", rels.as_slice()),
+            ("xl/worksheets/sheet1.xml", small.as_bytes()),
+        ];
+        let with_orphan = [
+            named.to_vec(),
+            vec![("xl/worksheets/orphan.xml", orphan.as_bytes())],
+        ]
+        .concat();
+        assert!(!walk_refused(&with_orphan, 1_000));
+        let as_the_sheet = [
+            ("xl/workbook.xml", workbook.as_slice()),
+            ("xl/_rels/workbook.xml.rels", rels.as_slice()),
+            ("xl/worksheets/sheet1.xml", orphan.as_bytes()),
+        ];
+        assert!(walk_refused(&as_the_sheet, 1_000));
+    }
+
+    #[test]
+    fn every_way_a_relationship_can_name_a_sheet_is_still_counted() {
+        let sheet = bare_cells(200);
+        // Entry names are matched as written, the way the importer opens them.
+        for (target, entry) in [
+            ("worksheets/sheet1.xml", "xl/worksheets/sheet1.xml"),
+            ("/xl/worksheets/sheet1.xml", "xl/worksheets/sheet1.xml"),
+            ("/data/s1.xml", "data/s1.xml"),
+            ("./worksheets/s1.xml", "xl/./worksheets/s1.xml"),
+            ("worksheets/./s1.xml", "xl/worksheets/./s1.xml"),
+            ("../data/s1.xml", "xl/../data/s1.xml"),
+            ("sheets/s1.dat", "xl/sheets/s1.dat"),
+            ("Worksheets/Sheet1.XML", "xl/Worksheets/Sheet1.XML"),
+        ] {
+            let (workbook, rels) = package_naming(target);
+            let entries = [
+                ("xl/workbook.xml", workbook.as_slice()),
+                ("xl/_rels/workbook.xml.rels", rels.as_slice()),
+                (entry, sheet.as_bytes()),
+            ];
+            assert!(walk_refused(&entries, 1_000), "{target}");
+        }
+    }
+
+    fn archive_with_package(workbook: &str, rels: &str, entry: &str) -> bool {
+        archive_with_package_at(workbook, rels, entry, &bare_cells(200), 1_000)
+    }
+
+    fn archive_with_package_at(
+        workbook: &str,
+        rels: &str,
+        entry: &str,
+        sheet: &str,
+        max_cells: u64,
+    ) -> bool {
+        let entries = [
+            ("xl/workbook.xml", workbook.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+            (entry, sheet.as_bytes()),
+        ];
+        walk_refused(&entries, max_cells)
+    }
+
+    fn rels_of(items: &[(&str, &str)]) -> String {
+        let items: String = items
+            .iter()
+            .map(|(id, target)| {
+                format!(
+                    "<Relationship Id=\"{id}\" Type=\"{REL_NS}/worksheet\" Target=\"{target}\"/>"
+                )
+            })
+            .collect();
+        format!(
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{items}</Relationships>"
+        )
+    }
+
+    fn workbook_of(sheets: &[(&str, &str)]) -> String {
+        let sheets: String = sheets
+            .iter()
+            .enumerate()
+            .map(|(index, (name, id))| {
+                format!(
+                    "<sheet name=\"{name}\" sheetId=\"{}\" r:id=\"{id}\"/>",
+                    index + 1
+                )
+            })
+            .collect();
+        format!(
+            "<workbook xmlns=\"{MAIN_NS}\" xmlns:r=\"{REL_NS}\"><sheets>{sheets}</sheets></workbook>"
+        )
+    }
+
+    #[test]
+    fn sheets_of_a_package_read_package_refuses_are_still_counted() {
+        // Two sheets on one part: read_package refuses it, the importer still loads it.
+        let workbook = workbook_of(&[("A", "rId1"), ("B", "rId2")]);
+        let rels = rels_of(&[("rId1", "/data/s1.xml"), ("rId2", "/data/s1.xml")]);
+        assert!(archive_with_package(&workbook, &rels, "data/s1.xml"));
+        // A '!' in a sheet name is refused by read_package too.
+        let workbook = workbook_of(&[("A!B", "rId1")]);
+        let rels = rels_of(&[("rId1", "/data/s1.xml")]);
+        assert!(archive_with_package(&workbook, &rels, "data/s1.xml"));
+    }
+
+    #[test]
+    fn a_sheet_under_a_skipped_prefix_is_counted_and_an_unnamed_one_is_not() {
+        for prefix in ["drawings", "charts", "media", "pivotCache", "pivotTables"] {
+            let workbook = workbook_of(&[("A", "rId1")]);
+            let rels = rels_of(&[("rId1", &format!("{prefix}/s.xml"))]);
+            let entry = format!("xl/{prefix}/s.xml");
+            assert!(archive_with_package(&workbook, &rels, &entry), "{prefix}");
+            let other = rels_of(&[("rId1", "worksheets/small.xml")]);
+            assert!(!archive_with_package(&workbook, &other, &entry), "{prefix}");
+        }
+    }
+
+    // A workbook part of exactly `size` bytes, padded with a comment.
+    fn workbook_of_size(sheets: &[(&str, &str)], size: usize) -> String {
+        let plain = workbook_of(sheets);
+        let comment = "<!---->".len();
+        let padding = size - plain.len() - comment;
+        let at = plain.find("<sheets>").unwrap();
+        format!(
+            "{}<!--{}-->{}",
+            &plain[..at],
+            "x".repeat(padding),
+            &plain[at..]
+        )
+    }
+
+    #[test]
+    fn a_workbook_part_past_the_peek_cap_is_refused() {
+        let cap = package::PEEK_CAP_BYTES as usize;
+        // 300,000 cells cost more than this budget, which still holds the 8 MB part's DOM.
+        let budget = 2_100_000;
+        let cells = bare_cells(300_000);
+        let rels = rels_of(&[("rId1", "/data/s1.xml")]);
+        for (size, peeked) in [(cap, true), (cap + 1, false)] {
+            let workbook = workbook_of_size(&[("A", "rId1")], size);
+            let elsewhere = [
+                ("xl/workbook.xml", workbook.as_bytes()),
+                ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+                ("data/s1.xml", cells.as_bytes()),
+            ];
+            // Past the cap the workbook index cannot say which parts are sheets or how
+            // often, so the file is refused whatever else it holds.
+            assert!(walk_refused(&elsewhere, budget), "{size}");
+            let usual = [
+                ("xl/workbook.xml", workbook.as_bytes()),
+                ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+                ("xl/worksheets/s1.xml", cells.as_bytes()),
+            ];
+            // Within the cap only the part the relationships name is a sheet.
+            assert_eq!(walk_refused(&usual, budget), !peeked, "{size}");
+        }
+    }
+
+    #[test]
+    fn many_sheets_naming_one_part_are_charged_for_each_load() {
+        // 200 cells cost 104,000 bytes: one sheet fits this budget, three do not.
+        let cells = bare_cells(200);
+        let load = |sheets: usize| {
+            let names: Vec<(String, String)> = (1..=sheets)
+                .map(|n| (format!("S{n}"), format!("rId{n}")))
+                .collect();
+            let listed: Vec<(&str, &str)> = names
+                .iter()
+                .map(|(a, b)| (a.as_str(), b.as_str()))
+                .collect();
+            let rels: Vec<(&str, &str)> = names
+                .iter()
+                .map(|(_, id)| (id.as_str(), "/data/s1.xml"))
+                .collect();
+            archive_with_package_at(
+                &workbook_of(&listed),
+                &rels_of(&rels),
+                "data/s1.xml",
+                &cells,
+                1_800,
+            )
+        };
+        assert!(!load(1));
+        assert!(load(3));
+        assert!(load(40));
+    }
+
+    #[test]
+    fn the_last_of_a_repeated_relationship_id_decides_the_sheet() {
+        let workbook = workbook_of(&[("A", "rId1")]);
+        let rels = rels_of(&[("rId1", "/data/small.xml"), ("rId1", "/data/big.xml")]);
+        assert!(archive_with_package(&workbook, &rels, "data/big.xml"));
+        let rels = rels_of(&[("rId1", "/data/big.xml"), ("rId1", "/data/small.xml")]);
+        assert!(!archive_with_package(&workbook, &rels, "data/big.xml"));
+    }
+
+    #[test]
+    fn without_a_readable_package_every_part_under_the_usual_folder_is_counted() {
+        let sheet = bare_cells(200);
+        for broken in [&b"<workbook"[..], b""] {
+            let entries = [
+                ("xl/workbook.xml", broken),
+                ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+                ("xl/Worksheets/other.xml", sheet.as_bytes()),
+            ];
+            assert!(walk_refused(&entries, 1_000));
+        }
+        let entries = [("xl/worksheets/sheet1.xml", sheet.as_bytes())];
+        assert!(walk_refused(&entries, 1_000));
+        assert!(!walk_refused(&entries, 10_000));
     }
 
     #[test]

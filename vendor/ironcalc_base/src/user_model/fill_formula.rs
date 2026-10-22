@@ -1,7 +1,7 @@
 use crate::{
     constants::{LAST_COLUMN, LAST_ROW},
     expressions::{parser::static_analysis::StaticResult, parser::Node, types::Area},
-    model::Model,
+    model::{Model, UnitsStyles},
     types::Cell,
     user_model::history::Diff,
     UserModel,
@@ -168,10 +168,11 @@ impl UserModel<'_> {
         let cells = (target.row..target.row + target.height).flat_map(|row| {
             (target.column..target.column + target.width).map(move |column| (row, column))
         });
+        let mut styles = UnitsStyles::new();
         for (row, column) in cells {
-            if let Err(error) = self
-                .model
-                .set_user_formula_index(sheet, row, column, formula_index)
+            if let Err(error) =
+                self.model
+                    .set_user_formula_index(sheet, row, column, formula_index, &mut styles)
             {
                 self.restore_cells(target, &old_values)?;
                 return Err(error);

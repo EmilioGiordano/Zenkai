@@ -1,4 +1,5 @@
 use std::io::{Read, Seek};
+use std::num::NonZeroU64;
 
 use ironcalc::base::expressions::utils::{
     is_valid_column_number, is_valid_row, parse_reference_a1,
@@ -149,6 +150,17 @@ impl Usage {
         match route {
             Route::Streaming => ironcalc::base::open_budget::needed_bytes(self.cost()),
             Route::Importer => ironcalc::base::open_budget::importer_needed_bytes(self.cost()),
+        }
+    }
+
+    // The importer builds a part once for every sheet that names it.
+    pub(crate) fn repeated(self, times: NonZeroU64) -> Usage {
+        let times = times.get();
+        Usage {
+            cells: self.cells.saturating_mul(times),
+            formulas: self.formulas.saturating_mul(times),
+            bytes: self.bytes.saturating_mul(times),
+            rows: self.rows.saturating_mul(times),
         }
     }
 

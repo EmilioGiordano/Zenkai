@@ -290,7 +290,7 @@ impl SheetSettings {
 
 // The settings carried for every sheet, by IronCalc's sheet id so they follow a sheet
 // that is renamed or moved.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Carried {
     sheets: HashMap<u32, SheetSettings>,
     taken: Moves,

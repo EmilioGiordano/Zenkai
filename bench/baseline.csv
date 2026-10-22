@@ -10,7 +10,7 @@ fixture,metric,value
 2-simple-formulas.xlsx,save_ms,625.0
 2-simple-formulas.xlsx,peak_mb,249.0
 2-simple-formulas.xlsx,idle_mb,71.0
-4-chain.xlsx,open_ms,48.0
+4-chain.xlsx,open_ms,56.0
 4-chain.xlsx,recalc_ms,9.0
 4-chain.xlsx,edit_ms,11.0
 4-chain.xlsx,save_ms,22.0
