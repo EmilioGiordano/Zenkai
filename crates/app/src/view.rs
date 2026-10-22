@@ -57,6 +57,7 @@ use crate::interface_scale::{self, rem_px};
 use crate::jump::jump_target;
 use crate::keymap;
 use crate::memory;
+use crate::open_loads::OpenLoads;
 use crate::palette;
 use crate::panel_width::{Panel, Resize};
 use crate::pending_save::{AfterJob, JobEnd};
@@ -160,6 +161,7 @@ pub struct Workspace {
     toast_generation: u64,
     busy: Option<SharedString>,
     job_pill: JobPill,
+    open_loads: OpenLoads,
     last_recalc: Option<Duration>,
     diagnostics: bool,
     clipboard_source: Option<InternalClip>,
@@ -319,6 +321,7 @@ impl Workspace {
             toast_generation: 0,
             busy: None,
             job_pill: JobPill::default(),
+            open_loads: OpenLoads::default(),
             last_recalc: None,
             diagnostics: false,
             clipboard_source: None,
@@ -1294,6 +1297,13 @@ impl Workspace {
         cx.notify();
     }
 
+    fn busy_label(&self) -> Option<SharedString> {
+        match self.open_loads.newest_label() {
+            Some(label) => Some(label.to_owned().into()),
+            None => self.busy.clone(),
+        }
+    }
+
     fn clear_busy(&mut self, label: &str, cx: &mut Context<Self>) {
         if self
             .busy
@@ -1306,9 +1316,10 @@ impl Workspace {
     }
 
     fn import_csv(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.busy = Some(t!("busy.reading", name = file_label(&path)).into());
+        let read = self
+            .open_loads
+            .start(t!("busy.reading", name = file_label(&path)));
         cx.notify();
-        let label = self.busy.clone().unwrap_or_default();
         let request = self.next_csv_request();
         cx.spawn_in(window, async move |this, cx| {
             let task_path = path.clone();
@@ -1322,7 +1333,8 @@ impl Workspace {
                 })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.clear_busy(&label, cx);
+                this.open_loads.finish(read);
+                cx.notify();
                 if this.csv_request != request {
                     return;
                 }
@@ -3199,15 +3211,17 @@ impl Workspace {
     // Opening a large file takes seconds; the status bar text alone went unnoticed.
     // Recalculations and saves reach the pill through the job pill, after a delay, so
     // short ones never flash it.
-    fn render_busy(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+    fn render_busy(
+        &self,
+        busy_label: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
         let long_job = self.job_pill.shown(Instant::now()).map(|job| match job {
             LongJob::Saving => t!("busy.saving"),
             LongJob::Calculating => t!("busy.calculating"),
             LongJob::Autosaving => t!("busy.autosaving"),
         });
-        let busy = self
-            .busy
-            .clone()
+        let busy = busy_label
             .filter(|busy| ![t!("busy.calculating"), t!("busy.saving")].contains(&busy.as_ref()))
             .or_else(|| long_job.map(SharedString::from))?;
         let theme = cx.theme();
@@ -3242,7 +3256,11 @@ impl Workspace {
         )
     }
 
-    fn render_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_status(
+        &self,
+        busy: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let access_chip = self.render_access_chip(cx);
         let theme = cx.theme();
         let mut left = h_flex()
@@ -3251,13 +3269,13 @@ impl Workspace {
             .overflow_hidden()
             .gap_3()
             .items_center();
-        if let Some(busy) = &self.busy {
+        if let Some(busy) = busy {
             left = left.child(
                 div()
                     .min_w_0()
                     .truncate()
                     .text_color(theme.primary)
-                    .child(busy.clone()),
+                    .child(busy),
             );
         } else if let Some(notice) = &self.notice {
             let (icon, color) = match notice.severity {
@@ -3371,7 +3389,11 @@ fn format_number(n: f64) -> String {
 }
 
 impl Workspace {
-    fn render_workbook(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_workbook(
+        &self,
+        busy: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         v_flex()
             .flex_1()
             .min_w_0()
@@ -3407,10 +3429,10 @@ impl Workspace {
             )
             .children(self.render_rename(cx))
             .child(self.render_tabs(cx))
-            .child(self.render_status(cx))
+            .child(self.render_status(busy, cx))
     }
 
-    fn render_empty(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_empty(&self, busy: Option<SharedString>, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .flex_1()
             .min_w_0()
@@ -3421,13 +3443,14 @@ impl Workspace {
                 &self.focus,
                 cx,
             )))
-            .child(self.render_status(cx))
+            .child(self.render_status(busy, cx))
     }
 }
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         interface_scale::apply(window, cx);
+        let busy_label = self.busy_label();
         let root = Self::leave_full_window_for_sheet_commands(v_flex(), cx);
         let theme = cx.theme();
         root.relative()
@@ -3933,9 +3956,10 @@ impl Render for Workspace {
                     )
                     .children((!self.chat_fills_window()).then(|| {
                         if self.documents.active().is_some() {
-                            self.render_workbook(cx).into_any_element()
+                            self.render_workbook(busy_label.clone(), cx)
+                                .into_any_element()
                         } else {
-                            self.render_empty(cx).into_any_element()
+                            self.render_empty(busy_label.clone(), cx).into_any_element()
                         }
                     }))
                     .children(self.render_chat(window, cx)),
@@ -3943,7 +3967,7 @@ impl Render for Workspace {
             .children(self.render_palette())
             .children(self.render_theme_picker(cx))
             .children(self.render_search(cx))
-            .children(self.render_busy(cx))
+            .children(self.render_busy(busy_label, cx))
             .children(self.render_toast(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))

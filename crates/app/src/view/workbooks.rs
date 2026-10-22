@@ -366,7 +366,9 @@ impl Workspace {
             self.switch_to(open, window, cx);
             return;
         }
-        self.busy = Some(t!("busy.opening", name = file_label(&path)).into());
+        let load = self
+            .open_loads
+            .start(t!("busy.opening", name = file_label(&path)));
         cx.notify();
         let started = Instant::now();
         let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
@@ -377,7 +379,8 @@ impl Workspace {
                 .spawn(async move { files::load_workbook(&task_path, reader) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.busy = None;
+                this.open_loads.finish(load);
+                cx.notify();
                 match result {
                     Ok(file) => {
                         this.remember_recent(&path, cx);
@@ -446,6 +449,12 @@ impl Workspace {
         let Some(link) = self.documents.start_loading(id) else {
             return;
         };
+        let name = self
+            .documents
+            .entry(id)
+            .map(Entry::name)
+            .unwrap_or_default();
+        let open = self.open_loads.start(t!("busy.opening", name = name));
         cx.notify();
         let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
         cx.spawn_in(window, async move |this, cx| {
@@ -454,6 +463,7 @@ impl Workspace {
                 .spawn(async move { read_link(&link, reader) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
+                this.open_loads.finish(open);
                 this.finish_load(id, load, window, cx)
             });
             if let Err(error) = update {
