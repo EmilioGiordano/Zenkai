@@ -556,8 +556,7 @@ fn a_full_save_of_an_unchanged_file_succeeds_and_keeps_guarding() {
 #[test]
 fn a_full_save_as_to_a_new_path_is_not_refused() {
     let dir = tempfile::tempdir().unwrap();
-    let (document, mut book) = opened(dir.path());
-    replaced_elsewhere(&document);
+    let (_document, mut book) = opened(dir.path());
     restyle(&mut book);
     let target = dir.path().join("copy.xlsx");
     save_xlsx(book.save_snapshot(&target, SaveTarget::Document).unwrap()).unwrap();
