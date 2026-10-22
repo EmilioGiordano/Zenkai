@@ -11,7 +11,7 @@ pub const MAX_PAYLOAD_BYTES: usize = MAX_RENDER_PIXELS as usize * 4 + 1024 * 102
 const MAGIC: [u8; 4] = *b"ZPH1";
 const PREFIX_BYTES: usize = 12;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Frame {
     pub head: Vec<u8>,
     pub payload: Vec<u8>,
