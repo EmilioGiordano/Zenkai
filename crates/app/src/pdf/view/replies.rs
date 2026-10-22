@@ -49,8 +49,9 @@ impl PdfView {
                 page,
                 pixel_width,
                 thumbnail,
+                generation,
                 bitmap,
-            } => self.on_rendered(page, pixel_width, thumbnail, bitmap, window),
+            } => self.on_rendered(page, pixel_width, thumbnail, generation, bitmap, window),
             Reply::Content { page, content } => {
                 self.pending_contents.remove(&page);
                 self.contents.insert(page, Arc::new(content));
@@ -73,9 +74,19 @@ impl PdfView {
         page: PageIdx,
         pixel_width: u32,
         thumbnail: bool,
+        generation: u64,
         bitmap: Option<Bitmap>,
         window: &mut Window,
     ) {
+        let token = if thumbnail {
+            &self.thumbnail_token
+        } else {
+            &self.token
+        };
+        // A render requested before the tab rested or the zoom changed must not come back to life.
+        if token.load(Ordering::Relaxed) != generation {
+            return;
+        }
         let key = BitmapKey { page, pixel_width };
         let (cache, pending) = if thumbnail {
             (&mut self.thumbnails, &mut self.pending_thumbnails)

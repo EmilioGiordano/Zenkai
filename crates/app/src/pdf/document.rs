@@ -89,11 +89,13 @@ fn failure_reply(job: &Job) -> Option<Reply> {
             page,
             pixel_width,
             thumbnail,
+            generation,
             ..
         } => Some(Reply::Rendered {
             page: *page,
             pixel_width: *pixel_width,
             thumbnail: *thumbnail,
+            generation: *generation,
             bitmap: None,
         }),
         Job::Sizes | Job::Content { .. } | Job::Find { .. } | Job::Close => None,
@@ -144,6 +146,7 @@ fn process<'a>(
                 page: *page,
                 pixel_width: *pixel_width,
                 thumbnail: *thumbnail,
+                generation: *generation,
                 bitmap: render(document, *page, *pixel_width, *pixel_height),
             })
         }

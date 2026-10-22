@@ -173,6 +173,7 @@ pub enum Reply {
         page: PageIdx,
         pixel_width: u32,
         thumbnail: bool,
+        generation: u64,
         bitmap: Option<Bitmap>,
     },
     Content {
