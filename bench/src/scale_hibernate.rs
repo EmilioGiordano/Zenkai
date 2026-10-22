@@ -37,7 +37,10 @@ pub fn run(rows: u32, dump: &Path) -> Result<()> {
     let start = Instant::now();
     let kept = workbook.hibernate(dump)?;
     emit("hibernate_ms", ms(start));
-    emit("peak_through_hibernate_commit_mb", mem::to_mb(mem::peak_commit_bytes()?));
+    emit(
+        "peak_through_hibernate_commit_mb",
+        mem::to_mb(mem::peak_commit_bytes()?),
+    );
     emit("dump_mb", mem::to_mb(std::fs::metadata(dump)?.len()));
 
     drop(workbook);
