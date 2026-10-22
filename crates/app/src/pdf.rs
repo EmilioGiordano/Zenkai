@@ -1,16 +1,12 @@
 mod bitmap;
 mod cache;
-mod document;
 mod find;
 pub(crate) mod layout;
-mod library;
-mod outline;
-mod page_text;
 mod protocol;
 mod selection;
 mod view;
 
-pub use document::{MAX_PAGES, PdfWorker};
 pub use layout::PdfPosition;
-pub use protocol::DocId;
+pub use protocol::{DocId, MAX_PAGES};
 pub use view::{PdfEvent, PdfView};
+pub use zenkai_pdf_host::client::PdfClient;

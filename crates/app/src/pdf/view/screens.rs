@@ -29,6 +29,9 @@ fn file_name(path: &std::path::Path) -> String {
 pub(super) fn failure_text(error: &OpenError) -> String {
     match error {
         OpenError::LibraryMissing => t!("pdf.unavailable.missing").to_string(),
+        OpenError::HostMissing => t!("pdf.host_missing").to_string(),
+        OpenError::HostFailed(reason) => t!("pdf.host_failed", reason = reason),
+        OpenError::HostStopped => t!("pdf.host_stopped").to_string(),
         OpenError::LibraryFailed(reason) => t!("pdf.unavailable.failed", reason = reason),
         OpenError::PasswordRequired | OpenError::WrongPassword => {
             t!("pdf.password.title").to_string()

@@ -201,6 +201,7 @@ pub struct Workspace {
     text_panes: texts::TextPanes,
     pdf_panes: pdfs::PdfPanes,
     pdf_places: crate::pdf_places::PdfPlaces,
+    pdf_client: crate::pdf::PdfClient,
     text_watch: text_watch::TextWatch,
     lifecycle: Lifecycle,
     #[cfg(windows)]
@@ -356,6 +357,7 @@ impl Workspace {
             text_panes: texts::TextPanes::new(),
             pdf_panes: pdfs::PdfPanes::new(),
             pdf_places: crate::pdf_places::PdfPlaces::default(),
+            pdf_client: crate::pdf::PdfClient::next_to_exe(),
             text_watch: text_watch::TextWatch::default(),
             lifecycle: Lifecycle::Running,
             #[cfg(windows)]

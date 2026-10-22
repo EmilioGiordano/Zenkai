@@ -9,21 +9,7 @@ const MIN_SCALE: f32 = 0.1;
 const MAX_SCALE: f32 = 8.0;
 const ZOOM_STEPS: [u16; 11] = [25, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500];
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PageIdx(pub usize);
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PageSize {
-    pub width: f32,
-    pub height: f32,
-}
-
-impl PageSize {
-    pub const LETTER: PageSize = PageSize {
-        width: 612.0,
-        height: 792.0,
-    };
-}
+pub use zenkai_pdf_host::wire::{PageIdx, PageSize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

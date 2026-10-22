@@ -83,27 +83,21 @@ impl PdfView {
                 continue;
             }
             self.pending.insert(key);
-            let sent = self.send_or_stop(Job::Render {
-                page: *page,
-                pixel_width,
-                pixel_height,
-                thumbnail: false,
-                current: self.token.clone(),
-                generation: self.token.load(Ordering::Relaxed),
-            });
-            if !sent {
-                self.pending.remove(&key);
-                return;
-            }
+            self.send_with(
+                Job::Render {
+                    page: *page,
+                    pixel_width,
+                    pixel_height,
+                    thumbnail: false,
+                    generation: self.token.load(Ordering::Relaxed),
+                },
+                Some(self.token.clone()),
+            );
         }
         for index in near {
             let page = PageIdx(index);
-            if !self.contents.contains_key(&page)
-                && self.pending_contents.insert(page)
-                && !self.send_or_stop(Job::Content { page })
-            {
-                self.pending_contents.remove(&page);
-                return;
+            if !self.contents.contains_key(&page) && self.pending_contents.insert(page) {
+                self.send(Job::Content { page });
             }
         }
         self.forget_far_contents(&wanted);

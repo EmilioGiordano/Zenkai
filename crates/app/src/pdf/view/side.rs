@@ -36,18 +36,16 @@ impl PdfView {
             if self.thumbnails.contains(key) || !self.pending_thumbnails.insert(key) {
                 continue;
             }
-            let sent = self.send_or_stop(Job::Render {
-                page,
-                pixel_width,
-                pixel_height,
-                thumbnail: true,
-                current: self.thumbnail_token.clone(),
-                generation: self.thumbnail_token.load(Ordering::Relaxed),
-            });
-            if !sent {
-                self.pending_thumbnails.remove(&key);
-                return;
-            }
+            self.send_with(
+                Job::Render {
+                    page,
+                    pixel_width,
+                    pixel_height,
+                    thumbnail: true,
+                    generation: self.thumbnail_token.load(Ordering::Relaxed),
+                },
+                Some(self.thumbnail_token.clone()),
+            );
         }
     }
 

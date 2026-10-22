@@ -12,7 +12,7 @@ use crate::actions::{
 };
 use crate::documents::Installed;
 use crate::pdf::layout::{PageIdx, ZoomMode};
-use crate::pdf::{DocId, PdfEvent, PdfView, PdfWorker};
+use crate::pdf::{DocId, PdfEvent, PdfView};
 
 pub(super) struct PdfPane {
     pub(super) view: Entity<PdfView>,
@@ -35,8 +35,8 @@ impl Workspace {
         else {
             return;
         };
-        let worker = PdfWorker::shared();
-        let view = cx.new(|cx| PdfView::new(DocId(id.0), path, position, worker, window, cx));
+        let client = self.pdf_client.clone();
+        let view = cx.new(|cx| PdfView::new(DocId(id.0), path, position, client, window, cx));
         let events = cx.subscribe_in(
             &view,
             window,

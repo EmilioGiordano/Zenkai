@@ -40,6 +40,7 @@ impl PdfView {
                 });
             }
             Reply::Opened(Err(error)) => self.phase = Phase::Failed(error),
+            Reply::Stopped => self.phase = Phase::Failed(OpenError::HostStopped),
             Reply::Sizes(sizes) => {
                 self.sizes = sizes;
                 self.relayout();

@@ -7,10 +7,10 @@ use async_channel::{Receiver, Sender};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use zenkai_i18n::t;
+use zenkai_pdf_host::client::PdfClient;
 
 use self::finding::Finder;
 use super::cache::{BITMAP_CAP_BYTES, BitmapCache, BitmapKey};
-use super::document::PdfWorker;
 use super::find::FindMatch;
 use super::layout::{Layout, PageIdx, PageSize, PdfPosition, Viewport, ZoomMode};
 use super::protocol::{
@@ -56,7 +56,7 @@ enum SideList {
 pub struct PdfView {
     doc: DocId,
     path: PathBuf,
-    worker: Result<PdfWorker, OpenError>,
+    client: PdfClient,
     replies: Sender<Reply>,
     phase: Phase,
     zoom: ZoomMode,
@@ -103,7 +103,7 @@ impl PdfView {
         doc: DocId,
         path: PathBuf,
         position: PdfPosition,
-        worker: Result<PdfWorker, OpenError>,
+        client: PdfClient,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> PdfView {
@@ -136,7 +136,7 @@ impl PdfView {
         let mut view = PdfView {
             doc,
             path,
-            worker,
+            client,
             replies,
             phase: Phase::Opening,
             zoom: position.zoom,
@@ -200,26 +200,18 @@ impl PdfView {
         }
     }
 
-    fn send(&self, job: Job) -> bool {
-        let Ok(worker) = &self.worker else {
-            return false;
-        };
-        worker.submit(Request {
+    pub(super) fn send(&self, job: Job) {
+        self.send_with(job, None);
+    }
+
+    // Answers come back on the view's own channel, never by waiting here.
+    pub(super) fn send_with(&self, job: Job, token: Option<Arc<AtomicU64>>) {
+        self.client.submit(Request {
             doc: self.doc,
             reply: self.replies.clone(),
             job,
-        })
-    }
-
-    // A reader that has stopped can answer nothing more, so the tab says so instead of waiting.
-    pub(super) fn send_or_stop(&mut self, job: Job) -> bool {
-        let sent = self.send(job);
-        if !sent {
-            self.phase = Phase::Failed(OpenError::LibraryFailed(
-                t!("pdf.worker_stopped").to_string(),
-            ));
-        }
-        sent
+            token,
+        });
     }
 
     fn open(&mut self, password: Option<String>) {
@@ -228,12 +220,7 @@ impl PdfView {
             path: self.path.clone(),
             password,
         };
-        if !self.send(job) {
-            self.phase = Phase::Failed(match &self.worker {
-                Err(error) => error.clone(),
-                Ok(_) => OpenError::LibraryFailed(t!("pdf.worker_stopped").to_string()),
-            });
-        }
+        self.send(job);
     }
 
     fn submit_password(&mut self, cx: &mut Context<Self>) {
