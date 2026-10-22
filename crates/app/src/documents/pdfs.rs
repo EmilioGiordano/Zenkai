@@ -157,6 +157,16 @@ mod tests {
     }
 
     #[test]
+    fn a_pdf_never_unloads_or_hibernates() {
+        let mut documents = documents();
+        let first = open(&mut documents, "a.pdf");
+        open(&mut documents, "b.pdf");
+        assert!(!documents.unload(first));
+        assert!(documents.begin_hibernation(first).is_none());
+        assert!(matches!(documents.entry(first), Some(Entry::Pdf(_))));
+    }
+
+    #[test]
     fn closing_the_shown_pdf_lands_on_a_neighbour_and_remembers_the_file() {
         let mut documents = busy();
         let book = documents.active_id().unwrap();

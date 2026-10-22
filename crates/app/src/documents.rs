@@ -15,9 +15,9 @@ use crate::text_document::{DocumentKind, TextDocument};
 pub use texts::TextLoad;
 pub use unsaved::Unsaved;
 
-mod pdfs;
 #[cfg(test)]
 mod hibernation;
+mod pdfs;
 mod restore;
 #[cfg(test)]
 pub(crate) mod session_fuzz;
