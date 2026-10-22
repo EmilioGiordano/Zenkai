@@ -561,11 +561,17 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
             slot.refuse_splice(held, part);
         } else if (base.is_some() && base_failed) || matches!(error, EngineError::ChangedOnDisk(_))
         {
-            tracing::warn!(%error, "copying from the saved file failed; the next save writes it whole");
+            if base.is_some() {
+                tracing::warn!(%error, "copying from the saved file failed; the next save writes it whole");
+            } else {
+                tracing::warn!(%error, "the file changed on disk; the next save copies nothing from it");
+            }
             slot.set(None);
         }
         return Err(error);
     }
+    // A write by another program between the last check and the rename goes unnoticed: the
+    // check and the rename cannot be one atomic step.
     let renamed = tracing::info_span!("save_rename").in_scope(|| fs::rename(&temp, &path));
     if let Err(source) = renamed {
         remove_temp(&temp);
