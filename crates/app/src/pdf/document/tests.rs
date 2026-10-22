@@ -67,7 +67,6 @@ fn library_folder() -> Option<PathBuf> {
     if library::library_path(&folder).is_file() {
         Some(folder)
     } else {
-        eprintln!("pdfium.dll not found next to the test binaries; skipping");
         None
     }
 }
@@ -78,12 +77,7 @@ fn write_pdf(folder: &Path, bytes: &[u8]) -> PathBuf {
     path
 }
 
-#[test]
-fn a_pdf_renders_gives_its_text_and_is_found() {
-    let Some(folder) = library_folder() else {
-        return;
-    };
-    let pdfium = library::bind_in(&folder).unwrap();
+fn a_pdf_renders_gives_its_text_and_is_found(pdfium: &Pdfium) {
     let work = tempfile::tempdir().unwrap();
     let path = write_pdf(work.path(), &tiny_pdf());
     let document = pdfium.load_pdf_from_file(&path, None).unwrap();
@@ -120,88 +114,77 @@ fn a_pdf_renders_gives_its_text_and_is_found() {
     assert!(search_text(&document.pages().get(1).unwrap()).is_none());
 }
 
-#[test]
-fn the_worker_thread_opens_sizes_renders_and_finds() {
-    let Some(folder) = library_folder() else {
-        return;
-    };
+fn the_worker_thread_opens_sizes_renders_and_finds(pdfium: &Pdfium) {
     let work = tempfile::tempdir().unwrap();
     let path = write_pdf(work.path(), &tiny_pdf());
     let (requests, inbox) = async_channel::unbounded();
-    let handle = std::thread::spawn(move || {
-        let pdfium = library::bind_in(&folder).unwrap();
-        serve(&pdfium, &inbox);
-    });
-    let (reply, answers) = async_channel::unbounded();
-    let ask = |job: Job| {
-        requests
-            .send_blocking(Request {
-                doc: DocId(1),
-                reply: reply.clone(),
-                job,
-            })
-            .unwrap();
-        answers.recv_blocking().unwrap()
-    };
-    let opened = ask(Job::Open {
-        path,
-        password: None,
-    });
-    assert!(matches!(opened, Reply::Opened(Ok(ref opened)) if opened.page_count == 2));
-    let Reply::Sizes(sizes) = ask(Job::Sizes) else {
-        panic!("sizes expected");
-    };
-    assert_eq!(
-        sizes[1],
-        PageSize {
-            width: 300.0,
-            height: 400.0
-        }
-    );
-    let rendered = ask(Job::Render {
-        page: PageIdx(1),
-        pixel_width: 30,
-        pixel_height: 40,
-        thumbnail: true,
-        current: Arc::new(AtomicU64::new(0)),
-        generation: 0,
-    });
-    assert!(matches!(
-        rendered,
-        Reply::Rendered {
+    std::thread::scope(|scope| {
+        scope.spawn(|| serve(pdfium, &inbox));
+        let (reply, answers) = async_channel::unbounded();
+        let ask = |job: Job| {
+            requests
+                .send_blocking(Request {
+                    doc: DocId(1),
+                    reply: reply.clone(),
+                    job,
+                })
+                .unwrap();
+            answers.recv_blocking().unwrap()
+        };
+        let opened = ask(Job::Open {
+            path,
+            password: None,
+        });
+        assert!(matches!(opened, Reply::Opened(Ok(ref opened)) if opened.page_count == 2));
+        let Reply::Sizes(sizes) = ask(Job::Sizes) else {
+            panic!("sizes expected");
+        };
+        assert_eq!(
+            sizes[1],
+            PageSize {
+                width: 300.0,
+                height: 400.0
+            }
+        );
+        let rendered = ask(Job::Render {
+            page: PageIdx(1),
+            pixel_width: 30,
+            pixel_height: 40,
             thumbnail: true,
-            bitmap: Some(_),
-            ..
-        }
-    ));
-    let Reply::Found { matches, next, .. } = ask(Job::Find {
-        search: 7,
-        query: "PDF".to_string(),
-        first: PageIdx(0),
-        count: 10,
-    }) else {
-        panic!("found expected");
-    };
-    assert_eq!(matches.len(), 1);
-    assert_eq!(next, None);
-    drop(requests);
-    handle.join().unwrap();
+            current: Arc::new(AtomicU64::new(0)),
+            generation: 0,
+        });
+        assert!(matches!(
+            rendered,
+            Reply::Rendered {
+                thumbnail: true,
+                bitmap: Some(_),
+                ..
+            }
+        ));
+        let Reply::Found { matches, next, .. } = ask(Job::Find {
+            search: 7,
+            query: "PDF".to_string(),
+            first: PageIdx(0),
+            count: 10,
+        }) else {
+            panic!("found expected");
+        };
+        assert_eq!(matches.len(), 1);
+        assert_eq!(next, None);
+        drop(requests);
+    });
 }
 
-#[test]
-fn a_render_whose_generation_moved_on_is_skipped() {
-    let Some(folder) = library_folder() else {
-        return;
-    };
+fn a_render_whose_generation_moved_on_is_skipped(pdfium: &Pdfium) {
     let work = tempfile::tempdir().unwrap();
     let path = write_pdf(work.path(), &tiny_pdf());
-    let pdfium = library::bind_in(&folder).unwrap();
     let mut documents = HashMap::new();
     let open = Job::Open {
         path,
         password: None,
     };
-    assert!(process(&pdfium, &mut documents, DocId(1), &open).is_some());
+    assert!(process(pdfium, &mut documents, DocId(1), &open).is_some());
     let stale = Job::Render {
         page: PageIdx(0),
         pixel_width: 10,
@@ -210,23 +193,18 @@ fn a_render_whose_generation_moved_on_is_skipped() {
         current: Arc::new(AtomicU64::new(5)),
         generation: 4,
     };
-    assert!(process(&pdfium, &mut documents, DocId(1), &stale).is_none());
+    assert!(process(pdfium, &mut documents, DocId(1), &stale).is_none());
 }
 
-#[test]
-fn a_file_that_is_not_a_pdf_or_is_missing_says_so() {
-    let Some(folder) = library_folder() else {
-        return;
-    };
+fn a_file_that_is_not_a_pdf_or_is_missing_says_so(pdfium: &Pdfium) {
     let work = tempfile::tempdir().unwrap();
     let path = write_pdf(work.path(), b"this is not a pdf at all");
-    let pdfium = library::bind_in(&folder).unwrap();
     let mut documents = HashMap::new();
     let open = Job::Open {
         path,
         password: None,
     };
-    let reply = process(&pdfium, &mut documents, DocId(1), &open);
+    let reply = process(pdfium, &mut documents, DocId(1), &open);
     assert!(matches!(
         reply,
         Some(Reply::Opened(Err(OpenError::Broken(BrokenFile::NotAPdf))))
@@ -235,11 +213,25 @@ fn a_file_that_is_not_a_pdf_or_is_missing_says_so() {
         path: work.path().join("absent.pdf"),
         password: None,
     };
-    let reply = process(&pdfium, &mut documents, DocId(1), &missing);
+    let reply = process(pdfium, &mut documents, DocId(1), &missing);
     assert!(matches!(
         reply,
         Some(Reply::Opened(Err(OpenError::Broken(
             BrokenFile::Unreadable(_)
         ))))
     ));
+}
+
+// Pdfium binds once per process, so the steps that need the real library share one binding
+// and run in turn inside a single test.
+#[test]
+fn the_real_library_renders_reads_finds_and_reports_bad_files() {
+    let Some(folder) = library_folder() else {
+        return;
+    };
+    let pdfium = library::bind_in(&folder).unwrap();
+    a_pdf_renders_gives_its_text_and_is_found(&pdfium);
+    the_worker_thread_opens_sizes_renders_and_finds(&pdfium);
+    a_render_whose_generation_moved_on_is_skipped(&pdfium);
+    a_file_that_is_not_a_pdf_or_is_missing_says_so(&pdfium);
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
 
 use async_channel::{Receiver, Sender};
@@ -21,8 +22,15 @@ pub struct PdfWorker {
     requests: Sender<Request>,
 }
 
+static SHARED: OnceLock<Result<PdfWorker, OpenError>> = OnceLock::new();
+
 impl PdfWorker {
-    pub fn start() -> Result<PdfWorker, OpenError> {
+    // One worker per process: pdfium binds to its library once, so a second worker could not.
+    pub fn shared() -> Result<PdfWorker, OpenError> {
+        SHARED.get_or_init(PdfWorker::start).clone()
+    }
+
+    fn start() -> Result<PdfWorker, OpenError> {
         let (requests, receiver) = async_channel::unbounded();
         std::thread::Builder::new()
             .name("pdfium".to_string())
