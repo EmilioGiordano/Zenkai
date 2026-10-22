@@ -55,3 +55,20 @@ fn extending_a_typed_value_matches_extending_the_cell_that_holds_it() {
     }
     assert!(differing.is_empty(), "{differing:?}");
 }
+
+#[test]
+fn extending_a_formula_above_or_left_of_the_sheet_gives_a_ref_error() {
+    let mut model = new_empty_user_model();
+    let source = CellReferenceIndex {
+        sheet: 0,
+        row: 4,
+        column: 3,
+    };
+    let target = CellReferenceIndex {
+        sheet: 0,
+        row: 1,
+        column: 1,
+    };
+    let result = model.extend_copied_value("=A4", &source, &target).unwrap();
+    assert_eq!(result, "=#REF!");
+}
