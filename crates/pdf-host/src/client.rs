@@ -68,6 +68,7 @@ struct Book {
     documents: HashMap<DocId, Sender<Reply>>,
     in_flight: usize,
     stopped: bool,
+    told: Vec<Sender<Reply>>,
     last_reply: Instant,
 }
 
@@ -78,6 +79,7 @@ impl Book {
             documents: HashMap::new(),
             in_flight: 0,
             stopped: false,
+            told: Vec::new(),
             last_reply: Instant::now(),
         }
     }
@@ -276,21 +278,23 @@ fn is_stale(request: &Request) -> bool {
 }
 
 // Ends the link: nothing more is sent, the host is killed, the queue is closed so the writer
-// ends, and every document that was open learns the host is gone. Safe to call more than once.
-fn stop(link: &Link) {
+// ends, and every view that waits or has a document open learns the host is gone, once.
+// Safe to call more than once; `unsent` are requests the writer took from the queue.
+fn stop(link: &Link, unsent: VecDeque<Request>) {
     link.alive.store(false, Ordering::Release);
     link.inbox.close();
     let (pending, documents) = {
         let mut book = locked(&link.book);
         if book.stopped {
-            return;
+            (HashMap::new(), HashMap::new())
+        } else {
+            book.stopped = true;
+            book.in_flight = 0;
+            (
+                std::mem::take(&mut book.pending),
+                std::mem::take(&mut book.documents),
+            )
         }
-        book.stopped = true;
-        book.in_flight = 0;
-        (
-            std::mem::take(&mut book.pending),
-            std::mem::take(&mut book.documents),
-        )
     };
     link.changed.notify_all();
     let child = locked(&link.child).take();
@@ -298,19 +302,17 @@ fn stop(link: &Link) {
         kill(&mut child);
     }
     // Requests that were queued and never written are answered too, or their tabs would wait.
+    let mut views: Vec<Sender<Reply>> = unsent.into_iter().map(|request| request.reply).collect();
     while let Ok(request) = link.inbox.try_recv() {
-        tell(&request.reply, Reply::Stopped);
+        views.push(request.reply);
     }
-    // A view that has a request in flight and an open document is told once.
-    let mut told: Vec<Sender<Reply>> = Vec::new();
-    for reply in pending
-        .into_values()
-        .map(|pending| pending.reply)
-        .chain(documents.into_values())
-    {
-        if !told.iter().any(|known| known.same_channel(&reply)) {
-            tell(&reply, Reply::Stopped);
-            told.push(reply);
+    views.extend(pending.into_values().map(|pending| pending.reply));
+    views.extend(documents.into_values());
+    let mut book = locked(&link.book);
+    for view in views {
+        if !book.told.iter().any(|known| known.same_channel(&view)) {
+            tell(&view, Reply::Stopped);
+            book.told.push(view);
         }
     }
 }
@@ -346,7 +348,7 @@ fn run_writer(link: &Arc<Link>, launch: &Launch) {
         .name("pdf-host-reader".to_string())
         .spawn(move || {
             read_replies(&reader_link, BufReader::new(stdout));
-            stop(&reader_link);
+            stop(&reader_link, VecDeque::new());
         })
         .and_then(|_| {
             std::thread::Builder::new()
@@ -354,14 +356,11 @@ fn run_writer(link: &Arc<Link>, launch: &Launch) {
                 .spawn(move || watch(&watch_link))
         });
     if readers.is_err() {
-        stop(link);
+        stop(link, VecDeque::new());
         return;
     }
     let unsent = write_requests(link, stdin, deadlines);
-    stop(link);
-    for request in unsent {
-        tell(&request.reply, Reply::Stopped);
-    }
+    stop(link, unsent);
 }
 
 // Returns the requests it took from the queue and never wrote.
@@ -534,7 +533,7 @@ fn watch(link: &Link) {
         if due <= now {
             drop(book);
             tracing::warn!("the PDF host took too long; it is stopped");
-            stop(link);
+            stop(link, VecDeque::new());
             return;
         }
         book = link
@@ -721,7 +720,7 @@ mod tests {
                 token: None,
             })
             .unwrap();
-        stop(&link);
+        stop(&link, VecDeque::new());
         assert!(matches!(replies.try_recv(), Ok(Reply::Stopped)));
         assert!(requests.is_closed());
     }
@@ -748,7 +747,27 @@ mod tests {
         assert!(waiting.try_recv().is_err());
         assert_eq!(locked(&link.book).pending.len(), 1);
         read_replies(&link, b"garbage that is no frame at all".as_slice());
-        stop(&link);
+        stop(&link, VecDeque::new());
+        assert!(matches!(waiting.try_recv(), Ok(Reply::Stopped)));
+        assert!(waiting.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_view_is_told_once_however_many_of_its_requests_were_queued() {
+        let (requests, inbox) = async_channel::unbounded();
+        let link = Link::new(inbox, Arc::new(AtomicBool::new(true)));
+        let waiting = expect_pending(&link, 1, Expect::Sizes, 10);
+        let view = locked(&link.book).documents[&DocId(10)].clone();
+        let request = || Request {
+            doc: DocId(10),
+            reply: view.clone(),
+            job: Job::Close,
+            token: None,
+        };
+        requests.try_send(request()).unwrap();
+        requests.try_send(request()).unwrap();
+        stop(&link, VecDeque::from([request()]));
+        stop(&link, VecDeque::from([request()]));
         assert!(matches!(waiting.try_recv(), Ok(Reply::Stopped)));
         assert!(waiting.try_recv().is_err());
     }
