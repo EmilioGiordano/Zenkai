@@ -135,7 +135,7 @@ impl PdfView {
         let weak = cx.entity().downgrade();
         let notice = self.no_text_notice(cx);
         let toolbar = self.render_toolbar(window, cx).into_any_element();
-        let side = self.render_side(cx).into_any_element();
+        let side = self.render_side(window, cx).into_any_element();
         let (canvas_background, pointing) = (cx.theme().muted, self.hover.is_some());
         let surface = canvas(
             move |bounds, _, cx| {
@@ -239,7 +239,11 @@ impl Render for PdfView {
             .on_action(
                 cx.listener(|this, _: &PdfFitWidth, _, cx| this.set_zoom(ZoomMode::FitWidth, cx)),
             )
-            .on_action(cx.listener(|this, _: &TogglePdfOutline, _, cx| this.toggle_outline(cx)))
+            .on_action(
+                cx.listener(|this, _: &TogglePdfOutline, window, cx| {
+                    this.toggle_outline(window, cx)
+                }),
+            )
             .flex_1()
             .min_w_0()
             .h_full()

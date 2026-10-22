@@ -12,5 +12,5 @@ mod view;
 
 pub use document::PdfWorker;
 pub use layout::PdfPosition;
-pub use protocol::{DocId, OpenError};
+pub use protocol::DocId;
 pub use view::{PdfEvent, PdfView};

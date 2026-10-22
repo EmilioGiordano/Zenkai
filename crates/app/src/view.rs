@@ -64,7 +64,6 @@ use crate::keymap;
 use crate::memory;
 use crate::palette;
 use crate::panel_width::{Panel, Resize};
-use crate::pdf::PdfWorker;
 use crate::pending_save::{AfterJob, JobEnd};
 use crate::previews::TypedPreviews;
 use crate::recent;
@@ -201,8 +200,7 @@ pub struct Workspace {
     panels: PanelsState,
     text_panes: texts::TextPanes,
     pdf_panes: pdfs::PdfPanes,
-    pdf_places: pdfs::PdfPlaces,
-    pdf_worker: Option<PdfWorker>,
+    pdf_places: crate::pdf_places::PdfPlaces,
     text_watch: text_watch::TextWatch,
     lifecycle: Lifecycle,
     #[cfg(windows)]
@@ -357,8 +355,7 @@ impl Workspace {
             panels: PanelsState::new(cx),
             text_panes: texts::TextPanes::new(),
             pdf_panes: pdfs::PdfPanes::new(),
-            pdf_places: pdfs::PdfPlaces::new(),
-            pdf_worker: None,
+            pdf_places: crate::pdf_places::PdfPlaces::default(),
             text_watch: text_watch::TextWatch::default(),
             lifecycle: Lifecycle::Running,
             #[cfg(windows)]
@@ -636,6 +633,9 @@ impl Workspace {
         self.palette = None;
         self.revert_theme_preview(cx);
         if self.find_in_text(false, window, cx) {
+            return;
+        }
+        if self.forward_to_pdf(window, cx, |view, window, cx| view.open_find(window, cx)) {
             return;
         }
         let Some(document) = self.documents.active_mut() else {
@@ -3026,6 +3026,11 @@ impl Workspace {
     fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
         self.revert_theme_preview(cx);
+        if self.forward_to_pdf(window, cx, |view, window, cx| {
+            view.focus_page_input(window, cx)
+        }) {
+            return;
+        }
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("goto.placeholder")));
         let subscription =
             cx.subscribe_in(
@@ -3460,6 +3465,7 @@ impl Render for Workspace {
         let root = Self::leave_full_window_for_sheet_commands(v_flex(), cx);
         let theme = cx.theme();
         root.relative()
+            .map(|root| pdfs::pdf_actions(root, cx))
             .key_context({
                 let mut context = KeyContext::default();
                 context.add("Workspace");
@@ -3517,7 +3523,11 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &Redo, window, cx| this.edit(window, cx, |wb| wb.redo())),
             )
-            .on_action(cx.listener(|this, _: &Copy, _, cx| this.copy(false, cx)))
+            .on_action(cx.listener(|this, _: &Copy, window, cx| {
+                if !this.forward_to_pdf(window, cx, |view, _, cx| view.copy_selection(cx)) {
+                    this.copy(false, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &Cut, _, cx| this.copy(true, cx)))
             .on_action(cx.listener(|this, _: &Paste, window, cx| this.paste(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleBold, window, cx| {
@@ -3720,15 +3730,24 @@ impl Render for Workspace {
                 };
                 this.notify(Severity::Info, message, cx);
             }))
-            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
+            .on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(true, cx)) {
+                    return;
+                }
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() + 0.1, cx));
                 this.refresh_cells(cx);
             }))
-            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
+            .on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(false, cx)) {
+                    return;
+                }
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() - 0.1, cx));
                 this.refresh_cells(cx);
             }))
-            .on_action(cx.listener(|this, _: &ZoomReset, _, cx| {
+            .on_action(cx.listener(|this, _: &ZoomReset, window, cx| {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx)) {
+                    return;
+                }
                 this.grid.update(cx, |g, cx| g.set_zoom(1.0, cx));
                 this.refresh_cells(cx);
             }))

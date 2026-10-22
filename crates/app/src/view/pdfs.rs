@@ -6,8 +6,13 @@ use gpui_kit::*;
 use zenkai_types::WorkbookId;
 
 use super::Workspace;
+use crate::actions::{
+    PdfActualSize, PdfFirstPage, PdfFitPage, PdfFitWidth, PdfLastPage, PdfNextPage,
+    PdfPreviousPage, SelectPdfPage, TogglePdfOutline,
+};
 use crate::documents::Installed;
-use crate::pdf::{DocId, OpenError, PdfEvent, PdfPosition, PdfView, PdfWorker};
+use crate::pdf::layout::{PageIdx, ZoomMode};
+use crate::pdf::{DocId, PdfEvent, PdfView, PdfWorker};
 
 pub(super) struct PdfPane {
     pub(super) view: Entity<PdfView>,
@@ -16,20 +21,7 @@ pub(super) struct PdfPane {
 
 pub(super) type PdfPanes = HashMap<WorkbookId, PdfPane>;
 
-// Where the user was reading each PDF closed or reopened during this run. A tab still open
-// keeps its position in the session instead.
-pub(super) type PdfPlaces = HashMap<PathBuf, PdfPosition>;
-
 impl Workspace {
-    fn pdf_worker(&mut self) -> Result<PdfWorker, OpenError> {
-        if let Some(worker) = &self.pdf_worker {
-            return Ok(worker.clone());
-        }
-        let worker = PdfWorker::start()?;
-        self.pdf_worker = Some(worker.clone());
-        Ok(worker)
-    }
-
     pub(super) fn shown_pdf_view(&self) -> Option<Entity<PdfView>> {
         let id = self.documents.shown_pdf()?.id;
         self.pdf_panes.get(&id).map(|pane| pane.view.clone())
@@ -43,7 +35,7 @@ impl Workspace {
         else {
             return;
         };
-        let worker = self.pdf_worker();
+        let worker = PdfWorker::shared();
         let view = cx.new(|cx| PdfView::new(DocId(id.0), path, position, worker, window, cx));
         let events = cx.subscribe_in(
             &view,
@@ -70,7 +62,7 @@ impl Workspace {
             PdfEvent::Moved(position) => {
                 if let Some(tab) = self.documents.pdf_mut(id) {
                     tab.position = *position;
-                    self.pdf_places.insert(tab.path.clone(), *position);
+                    self.pdf_places.remember(&tab.path, *position);
                 }
                 self.persist_session(cx);
                 cx.notify();
@@ -90,7 +82,7 @@ impl Workspace {
             return;
         }
         self.remember_recent(&path, cx);
-        let position = self.pdf_places.get(&path).copied().unwrap_or_default();
+        let position = self.pdf_places.position_of(&path).unwrap_or_default();
         self.park_active(window, cx);
         let id = self.documents.open_pdf(path, position);
         self.add_pdf_view(id, window, cx);
@@ -170,4 +162,57 @@ impl Workspace {
             .child(view)
             .child(self.render_status(cx))
     }
+}
+
+impl Workspace {
+    // The PDF on screen takes the command when there is one, wherever the keyboard focus is.
+    pub(super) fn forward_to_pdf(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        command: impl FnOnce(&mut PdfView, &mut Window, &mut Context<PdfView>),
+    ) -> bool {
+        let Some(view) = self.shown_pdf_view() else {
+            return false;
+        };
+        view.update(cx, |view, cx| command(view, window, cx));
+        true
+    }
+}
+
+pub(super) fn pdf_actions<E: InteractiveElement>(element: E, cx: &Context<Workspace>) -> E {
+    element
+        .on_action(cx.listener(|this, _: &PdfPreviousPage, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| view.step_page(false, cx));
+        }))
+        .on_action(cx.listener(|this, _: &PdfNextPage, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| view.step_page(true, cx));
+        }))
+        .on_action(cx.listener(|this, _: &PdfFirstPage, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| view.go_to_page(PageIdx(0), cx));
+        }))
+        .on_action(cx.listener(|this, _: &PdfLastPage, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| view.last_page(cx));
+        }))
+        .on_action(cx.listener(|this, _: &SelectPdfPage, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| view.select_page(cx));
+        }))
+        .on_action(cx.listener(|this, _: &PdfFitPage, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| {
+                view.set_zoom(ZoomMode::FitPage, cx)
+            });
+        }))
+        .on_action(cx.listener(|this, _: &PdfFitWidth, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| {
+                view.set_zoom(ZoomMode::FitWidth, cx)
+            });
+        }))
+        .on_action(cx.listener(|this, _: &PdfActualSize, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx));
+        }))
+        .on_action(cx.listener(|this, _: &TogglePdfOutline, window, cx| {
+            this.forward_to_pdf(window, cx, |view, window, cx| {
+                view.toggle_outline(window, cx)
+            });
+        }))
 }
