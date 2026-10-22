@@ -18,7 +18,6 @@ use crate::agent_settings;
 use crate::document::Document;
 use crate::entry::display_name;
 use crate::files::{self, FileLoad};
-use zenkai_i18n::t;
 
 fn sheet_names(document: Option<&Document>) -> Vec<String> {
     document.map_or_else(Vec::new, |document| {
