@@ -48,7 +48,7 @@ impl FindResults {
                 .iter()
                 .position(|found| found.page >= from_page)
                 .or(if self.complete || self.is_full() {
-                    Some(0).filter(|_| !self.matches.is_empty())
+                    (!self.matches.is_empty()).then_some(0)
                 } else {
                     None
                 });

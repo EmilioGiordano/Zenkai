@@ -3,7 +3,7 @@ use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use super::layout::PageIdx;
-use super::protocol::{CharBox, PageContent, PageRect};
+use zenkai_pdf_host::wire::{CharBox, PageContent, PageRect};
 
 // Characters pdfium inserts to mark soft hyphens and line breaks it generated.
 const SOFT_HYPHEN_MARK: char = '\u{2}';

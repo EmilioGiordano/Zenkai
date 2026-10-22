@@ -13,7 +13,7 @@ use super::{PdfView, SideList};
 use crate::actions::{PdfOutlineClose, PdfOutlineNext, PdfOutlineOpen, PdfOutlinePrevious};
 use crate::pdf::cache::BitmapKey;
 use crate::pdf::layout::{PageIdx, render_size};
-use crate::pdf::protocol::Job;
+use zenkai_pdf_host::wire::Job;
 
 pub(super) const SIDE_WIDTH: f32 = 120.0;
 const THUMBNAIL_WIDTH: f32 = 84.0;

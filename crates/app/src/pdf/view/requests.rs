@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering;
 use super::{NEIGHBOURS, PdfView};
 use crate::pdf::cache::BitmapKey;
 use crate::pdf::layout::{Layout, PageIdx, render_size, scale_for};
-use crate::pdf::protocol::Job;
+use zenkai_pdf_host::wire::Job;
 
 impl PdfView {
     // Rebuilds the page positions for the zoom and sizes now known, keeping the page that is

@@ -6,8 +6,8 @@ use gpui_kit::*;
 use super::PdfView;
 use crate::pdf::cache::BitmapKey;
 use crate::pdf::layout::PageIdx;
-use crate::pdf::protocol::PageRect;
 use crate::pdf::selection::line_rects;
+use zenkai_pdf_host::wire::PageRect;
 
 const SHADOW_OFFSET: f32 = 2.0;
 

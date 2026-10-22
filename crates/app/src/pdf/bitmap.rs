@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gpui_kit::RenderImage;
 use image::{Frame, RgbaImage};
 
-use super::protocol::Bitmap;
+use zenkai_pdf_host::wire::Bitmap;
 
 pub struct PageImage {
     pub image: Arc<RenderImage>,

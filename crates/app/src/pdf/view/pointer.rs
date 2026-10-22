@@ -2,8 +2,8 @@ use gpui_kit::*;
 
 use super::{PdfEvent, PdfView};
 use crate::pdf::layout::PageIdx;
-use crate::pdf::protocol::{Job, LinkTarget};
 use crate::pdf::selection::{Selection, TextPos, char_at, selected_text};
+use zenkai_pdf_host::wire::{Job, LinkTarget};
 
 // A point of the canvas in page terms: which page, and where on it in PDF points.
 struct PagePoint {

@@ -17,7 +17,7 @@ use crate::actions::{
 };
 use crate::interface_scale::rem_px;
 use crate::pdf::layout::ZoomMode;
-use crate::pdf::protocol::{BrokenFile, OpenError};
+use zenkai_pdf_host::wire::{BrokenFile, OpenError};
 
 const MESSAGE_WIDTH: f32 = 420.0;
 
@@ -267,7 +267,7 @@ impl Render for PdfView {
 #[cfg(test)]
 mod tests {
     use super::failure_text;
-    use crate::pdf::protocol::{BrokenFile, OpenError};
+    use zenkai_pdf_host::wire::{BrokenFile, OpenError};
 
     #[test]
     fn a_missing_library_says_where_it_should_be() {

@@ -7,7 +7,7 @@ use super::{NEIGHBOURS, PdfView, Phase};
 use crate::pdf::bitmap::to_image;
 use crate::pdf::cache::BitmapKey;
 use crate::pdf::layout::PageIdx;
-use crate::pdf::protocol::{Bitmap, Job, OpenError, Reply};
+use zenkai_pdf_host::wire::{Bitmap, Job, OpenError, Reply};
 
 impl PdfView {
     pub(super) fn on_reply(&mut self, reply: Reply, window: &mut Window, cx: &mut Context<Self>) {
