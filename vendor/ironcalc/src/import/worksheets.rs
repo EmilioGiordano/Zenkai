@@ -367,6 +367,10 @@ fn get_cell_from_excel(
                     }
                 }
             }
+            // A number cell without a value (openpyxl writes t="n" on styled blanks) is empty.
+            "n" if anchor_cell.is_none() && cell_value.is_none_or(str::is_empty) => {
+                Cell::EmptyCell { s: cell_style }
+            }
             "n" => {
                 if let Some(anchor) = anchor_cell {
                     Cell::new_spill_cell(

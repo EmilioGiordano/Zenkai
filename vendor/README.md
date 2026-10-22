@@ -46,6 +46,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   styles to an existing part and keep every existing style index and byte
   (`src/export/styles.rs`; the whole-list writers now share the per-item writers). Tests:
   `src/export/test/test_export.rs`.
+- The xlsx import reads a `t="n"` cell with no value or an empty `<v/>` as an empty cell,
+  not as the number 0, so a styled blank written by openpyxl stays blank
+  (`src/import/worksheets.rs`). Test: `test_number_cell_without_value_is_empty` in
+  `tests/test.rs`.
 
 Zenkai-only, not for upstream:
 
