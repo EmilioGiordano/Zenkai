@@ -976,7 +976,7 @@ impl Engine for Workbook {
             )));
         }
         // The typed text is extended, not the cell it would produce, so a date, a percent
-        // or a leading zero fills as typed, as in Excel.
+        // or quoted text fills as typed, as in Excel.
         let source = CellReferenceIndex {
             sheet: sheet.0,
             row: row_i32(from.row),
