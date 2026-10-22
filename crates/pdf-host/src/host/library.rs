@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use pdfium_render::prelude::Pdfium;
 
-use crate::wire::OpenError;
+use crate::wire::{OpenError, short_message};
 
 const LIBRARY_FILE: &str = "pdfium.dll";
 
@@ -13,8 +13,8 @@ pub fn library_path(directory: &Path) -> PathBuf {
 // Only the folder of the running exe is searched, never the system path or the working
 // directory, so a planted pdfium.dll elsewhere is never loaded.
 pub fn bind_next_to_exe() -> Result<Pdfium, OpenError> {
-    let exe =
-        std::env::current_exe().map_err(|error| OpenError::LibraryFailed(error.to_string()))?;
+    let exe = std::env::current_exe()
+        .map_err(|error| OpenError::LibraryFailed(short_message(error.to_string())))?;
     let directory = exe.parent().ok_or(OpenError::LibraryMissing)?;
     bind_in(directory)
 }
@@ -26,7 +26,7 @@ pub fn bind_in(directory: &Path) -> Result<Pdfium, OpenError> {
     }
     Pdfium::bind_to_library(&path)
         .map(Pdfium::new)
-        .map_err(|error| OpenError::LibraryFailed(error.to_string()))
+        .map_err(|error| OpenError::LibraryFailed(short_message(error.to_string())))
 }
 
 #[cfg(test)]
