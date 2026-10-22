@@ -394,9 +394,6 @@ fn write_requests(link: &Link, stdin: ChildStdin, deadlines: Deadlines) -> VecDe
                 queue.push_front(request);
                 break;
             }
-            if book.in_flight == 0 {
-                book.last_reply = Instant::now();
-            }
             book.in_flight += 1;
             let is_open = matches!(request.job, Job::Open { .. });
             if is_open {
