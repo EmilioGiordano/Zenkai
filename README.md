@@ -90,7 +90,7 @@ Requirements: Windows 10/11, the MSVC build tools (Visual Studio Build Tools wit
 `rust-toolchain.toml` and installs itself on the first build.
 
 ```powershell
-cargo build --release -p zenkai -p zenkai-mcp -j 4
+cargo build --release -p zenkai -p zenkai-mcp -p zenkai-pdf-host -j 4
 .\target\release\zenkai.exe                    # empty workbook
 .\target\release\zenkai.exe path\to\book.xlsx  # open a file
 ```
@@ -98,9 +98,9 @@ cargo build --release -p zenkai -p zenkai-mcp -j 4
 `-j 4` keeps the first build (GPUI is large) from saturating the machine; drop it on a
 dedicated build box. The release binary is `target\release\zenkai.exe`.
 
-PDFs open through `pdfium.dll`, which Zenkai loads from the folder of `zenkai.exe` only.
-Without it everything else works and the PDF tab says the viewer is unavailable. To read
-PDFs from a development build, put the pinned DLL next to the exe:
+PDFs are read by `zenkai-pdf-host.exe`, a separate process, so a crash inside pdfium cannot take Zenkai down. It and `pdfium.dll` are loaded from the folder of `zenkai.exe` only.
+Without either, everything else works and the PDF tab says the viewer is unavailable. To read
+PDFs from a development build, build the host and put the pinned DLL next to the exe:
 
 ```powershell
 powershell -File packaging\windows\fetch-pdfium.ps1 -Destination target\release
@@ -136,7 +136,7 @@ Builds with the `dist` profile (fat LTO, one codegen unit, stripped; slower than
 `--release`, which stays the profile for development and the benchmark) and writes to
 `dist\`:
 
-- `zenkai-<version>-windows-x64.zip`: portable, the exe plus `pdfium.dll`, `LICENSE` and `README.md`.
+- `zenkai-<version>-windows-x64.zip`: portable, the exes plus `pdfium.dll`, `LICENSE` and `README.md`.
 - `zenkai-<version>-windows-x64-setup.exe`: only when `iscc` (Inno Setup 6.3 or later)
   is on PATH. Installs per user without admin rights, adds a Start Menu entry, and
   optionally a desktop icon and an "Open with" entry for `.xlsx`, `.csv`, Markdown and PDF files (it never

@@ -42,6 +42,7 @@ Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx, .csv, Mar
 [Files]
 Source: "{#ExeDir}\zenkai.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ExeDir}\zenkai-mcp.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#ExeDir}\zenkai-pdf-host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ExeDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#ExeDir}\pdfium-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
