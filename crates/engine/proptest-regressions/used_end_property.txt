@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 6b885cd8387d92d11eed6f9252dbecf72cb4c829e68e121d7047d2ee23af3f07 # shrinks to ops = [Undo]
+cc ded303c95baa743465187ae0daffc5988cf7a6eb51cbee443895e1f392782d3f # shrinks to ops = [Block(1, 0, 0, [["=IF(B1>0,SEQUENCE(4),0)", "=SEQUENCE(MAX(1,Sheet1!A1))"], ["0"]]), Bold(0, 0, 0, 0, 0), Block(0, 0, 1, [["=IF(Sheet2!A1>0,SEQUENCE(3),1)"]])]
