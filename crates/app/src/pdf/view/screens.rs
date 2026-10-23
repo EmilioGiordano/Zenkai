@@ -44,7 +44,7 @@ pub(super) fn failure_text(error: &OpenError) -> String {
         OpenError::Broken(BrokenFile::TooManyPages) => {
             t!("pdf.broken.too_many_pages", limit = crate::pdf::MAX_PAGES)
         }
-        OpenError::Broken(BrokenFile::Other) => t!("pdf.broken.other").to_string(),
+        OpenError::Broken(BrokenFile::Other) => t!("pdf.broken.damaged").to_string(),
     }
 }
 
