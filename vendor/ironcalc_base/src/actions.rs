@@ -697,7 +697,8 @@ impl<'a> Model<'a> {
             // ------------------|****|------------------- Case D
             // ---------------------|**********|---------- Case E
             // -----------------------------|*****|------- Case F
-            if column_start < min {
+            // A deletion starting at `min` is Case B or C: Cases D and E would leave max < min.
+            if column_start <= min {
                 if column_end < min {
                     // Case A
                     // We displace all columns
