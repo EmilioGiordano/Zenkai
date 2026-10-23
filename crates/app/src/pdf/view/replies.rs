@@ -17,7 +17,7 @@ impl PdfView {
             Reply::Opened(Ok(opened)) => {
                 self.phase = Phase::Ready;
                 self.page_count = opened.page_count;
-                self.sizes = vec![opened.first_page];
+                self.set_sizes(vec![opened.first_page]);
                 self.outline = opened.outline;
                 self.password_input
                     .update(cx, |input, cx| input.set_value("", window, cx));
@@ -43,7 +43,7 @@ impl PdfView {
             Reply::Opened(Err(error)) => self.phase = Phase::Failed(error),
             Reply::Stopped => self.phase = Phase::Failed(OpenError::HostStopped),
             Reply::Sizes(sizes) => {
-                self.sizes = sizes;
+                self.set_sizes(sizes);
                 self.relayout();
                 self.request_visible();
             }

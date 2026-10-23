@@ -15,6 +15,7 @@ use super::cache::{BITMAP_CAP_BYTES, BitmapCache, BitmapKey};
 use super::find::FindMatch;
 use super::layout::{Layout, PageIdx, PageSize, PdfPosition, Viewport, ZoomMode};
 use super::selection::Selection;
+use super::thumbnail_box;
 use zenkai_pdf_host::wire::{
     DocId, Job, LinkTarget, MAX_MESSAGE_CHARS, OpenError, OutlineItem, PageContent, Reply, Request,
 };
@@ -67,6 +68,7 @@ pub struct PdfView {
     wanted_page: Option<PageIdx>,
     page_count: usize,
     sizes: Vec<PageSize>,
+    thumbnail_ratio: f32,
     outline: Vec<OutlineItem>,
     layout: Layout,
     bounds: Bounds<Pixels>,
@@ -155,6 +157,7 @@ impl PdfView {
             wanted_page: Some(PageIdx(position.page as usize)),
             page_count: 0,
             sizes: Vec::new(),
+            thumbnail_ratio: thumbnail_box::tallest_ratio(&[]),
             outline: Vec::new(),
             layout: Layout::new(&[], 0, 1.0),
             bounds: Bounds::default(),
@@ -261,6 +264,11 @@ impl PdfView {
             width: f32::from(self.bounds.size.width),
             height: f32::from(self.bounds.size.height),
         }
+    }
+
+    fn set_sizes(&mut self, sizes: Vec<PageSize>) {
+        self.thumbnail_ratio = thumbnail_box::tallest_ratio(&sizes);
+        self.sizes = sizes;
     }
 
     fn size_of(&self, page: PageIdx) -> PageSize {
