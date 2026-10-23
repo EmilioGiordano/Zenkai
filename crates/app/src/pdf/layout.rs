@@ -205,6 +205,17 @@ impl Layout {
         best.0
     }
 
+    // The scroll offset in this layout that shows what `scroll_top` showed in `previous`: the
+    // same page at the same distance from its top, in PDF points.
+    pub fn scroll_after_rescale(&self, previous: &Layout, scroll_top: f32) -> f32 {
+        if previous.page_count() == 0 {
+            return 0.0;
+        }
+        let page = previous.page_at(scroll_top);
+        let into_page = (scroll_top - previous.top_of(page)) * self.scale / previous.scale;
+        self.top_of(page) + into_page
+    }
+
     pub fn scroll_to_page(&self, page: PageIdx, viewport_height: f32) -> f32 {
         let top = (self.top_of(page) - CANVAS_PADDING).max(0.0);
         top.min(self.max_scroll_top(viewport_height))
@@ -315,6 +326,22 @@ mod tests {
         assert_eq!(layout.current_page(0.0, 600.0), PageIdx(0));
         assert_eq!(layout.current_page(second - 100.0, 600.0), PageIdx(1));
         assert_eq!(layout.current_page(second + 300.0, 600.0), PageIdx(1));
+    }
+
+    #[test]
+    fn a_rescale_keeps_the_reader_at_the_same_place_in_the_same_page() {
+        let sizes = [PageSize {
+            width: 600.0,
+            height: 800.0,
+        }; 5];
+        let before = Layout::new(&sizes, 5, 1.0);
+        let scroll = before.top_of(PageIdx(2)) + 300.0;
+        let after = Layout::new(&sizes, 5, 0.5);
+        let moved = after.scroll_after_rescale(&before, scroll);
+        assert_eq!(moved, after.top_of(PageIdx(2)) + 150.0);
+        assert_eq!(after.page_at(moved), PageIdx(2));
+        let same = Layout::new(&sizes, 5, 1.0);
+        assert_eq!(same.scroll_after_rescale(&before, scroll), scroll);
     }
 
     #[test]
