@@ -7,10 +7,11 @@ use zenkai_types::WorkbookId;
 
 use super::Workspace;
 use crate::actions::{
-    PdfActualSize, PdfFirstPage, PdfFitPage, PdfFitWidth, PdfLastPage, PdfNextPage,
-    PdfPreviousPage, SelectPdfPage, TogglePdfOutline,
+    NarrowPdfPages, PdfActualSize, PdfFirstPage, PdfFitPage, PdfFitWidth, PdfLastPage, PdfNextPage,
+    PdfPreviousPage, SelectPdfPage, TogglePdfOutline, WidenPdfPages,
 };
 use crate::documents::Installed;
+use crate::panel_width::Resize;
 use crate::pdf::layout::{PageIdx, ZoomMode};
 use crate::pdf::{DocId, PdfEvent, PdfView};
 
@@ -36,9 +37,9 @@ impl Workspace {
             return;
         };
         let client = self.pdf_client.clone();
-        let widths = self.panels.widths;
+        let side_width = self.panels.widths.pdf_width();
         let view =
-            cx.new(|cx| PdfView::new(DocId(id.0), path, position, widths, client, window, cx));
+            cx.new(|cx| PdfView::new(DocId(id.0), path, position, side_width, client, window, cx));
         let events = cx.subscribe_in(
             &view,
             window,
@@ -222,6 +223,14 @@ pub(super) fn pdf_actions<E: InteractiveElement>(element: E, cx: &Context<Worksp
         }))
         .on_action(cx.listener(|this, _: &PdfActualSize, window, cx| {
             this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx));
+        }))
+        .on_action(cx.listener(|this, _: &WidenPdfPages, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| view.step_side(Resize::Wider, cx));
+        }))
+        .on_action(cx.listener(|this, _: &NarrowPdfPages, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| {
+                view.step_side(Resize::Narrower, cx)
+            });
         }))
         .on_action(cx.listener(|this, _: &TogglePdfOutline, window, cx| {
             this.forward_to_pdf(window, cx, |view, window, cx| {

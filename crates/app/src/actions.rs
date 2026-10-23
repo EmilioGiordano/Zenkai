@@ -16,6 +16,8 @@ actions!(
         PdfFitWidth,
         PdfActualSize,
         TogglePdfOutline,
+        WidenPdfPages,
+        NarrowPdfPages,
         ClosePdfFind,
         PdfOutlineNext,
         PdfOutlinePrevious,
