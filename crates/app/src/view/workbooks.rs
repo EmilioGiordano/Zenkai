@@ -751,6 +751,7 @@ mod tests {
             mode: Default::default(),
             base: None,
             pdf: Default::default(),
+            text_zoom: Default::default(),
             rested: Some(Box::new(Rested {
                 file: FileSeen {
                     stamp: None,

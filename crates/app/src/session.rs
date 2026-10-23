@@ -14,6 +14,7 @@ use crate::space_appearance::{SpaceAppearance, SpaceOverride};
 use crate::spaces::{SpaceColor, SpaceId};
 use crate::text_document::{DocumentKind, ViewMode};
 use crate::text_file::StampRecord;
+use crate::text_zoom::TextZoom;
 
 const VERSION: u32 = 1;
 const FILE_NAME: &str = "session.json";
@@ -70,6 +71,8 @@ pub struct FileRecord {
     pub base: Option<StampRecord>,
     #[serde(default)]
     pub pdf: PdfPosition,
+    #[serde(default)]
+    pub text_zoom: TextZoom,
     pub unsupported: Vec<String>,
     pub active: bool,
     pub sheet: u32,
@@ -255,6 +258,7 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         mode: link.mode,
         base: link.base,
         pdf: link.pdf,
+        text_zoom: link.text_zoom,
         unsupported: link
             .unsupported
             .iter()
@@ -318,6 +322,7 @@ pub fn link_of(
         mode: record.mode,
         base: record.base,
         pdf: record.pdf,
+        text_zoom: record.text_zoom,
         rested: None,
     }
 }
@@ -395,6 +400,7 @@ mod tests {
             mode: Default::default(),
             base: None,
             pdf: Default::default(),
+            text_zoom: Default::default(),
             unsupported: vec!["charts".to_string(), "macros".to_string()],
             active: true,
             sheet: 2,
@@ -639,9 +645,11 @@ mod tests {
         let object = value.as_object_mut().unwrap();
         object.remove("kind");
         object.remove("mode");
+        object.remove("text_zoom");
         let old: FileRecord = serde_json::from_value(value).unwrap();
         assert_eq!(old.kind, DocumentKind::Workbook);
         assert_eq!(old.mode, ViewMode::Preview);
+        assert_eq!(old.text_zoom, TextZoom::default());
         assert_eq!(old.base, None);
     }
 
@@ -664,12 +672,14 @@ mod tests {
         text.recovery = Some("autosave-1-2-3.md".to_string());
         text.kind = DocumentKind::Markdown;
         text.mode = ViewMode::Split;
+        text.text_zoom = TextZoom::from(175);
         text.unsupported.clear();
         text.sheet = 0;
         let directory = Path::new("recovery");
         let link = link_of(&text, WorkbookId(4), SpaceId(0), Some(directory));
         assert_eq!(link.kind, DocumentKind::Markdown);
         assert_eq!(link.mode, ViewMode::Split);
+        assert_eq!(link.text_zoom.percent(), 175);
         assert_eq!(link.recovery, Some(directory.join("autosave-1-2-3.md")));
         assert_eq!(record_of(&link, true), text);
     }
