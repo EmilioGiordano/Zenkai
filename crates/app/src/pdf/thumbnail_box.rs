@@ -77,14 +77,14 @@ mod tests {
     #[test]
     fn a_very_tall_page_caps_the_row_ratio_at_two() {
         assert_eq!(tallest_ratio(&[A4, STRIP]), 2.0);
-        assert_eq!(row_height(216.0, 2.0), 400.0 + GAP);
+        assert_eq!(row_height(232.0, 2.0), 400.0 + GAP);
     }
 
     #[test]
     fn a_document_of_slides_gets_short_rows() {
         let ratio = tallest_ratio(&[SLIDE; 5]);
         assert_eq!(ratio, 0.75);
-        assert_eq!(row_height(200.0, ratio), 138.0 + GAP);
+        assert_eq!(row_height(200.0, ratio), 126.0 + GAP);
     }
 
     #[test]
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn a_page_taller_than_the_cap_is_fit_by_height() {
-        let fit = fit(216.0, STRIP);
+        let fit = fit(232.0, STRIP);
         assert_eq!((fit.width, fit.height), (80.0, 400.0));
     }
 
