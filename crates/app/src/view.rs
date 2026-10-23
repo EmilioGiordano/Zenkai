@@ -71,7 +71,7 @@ use crate::recent;
 use crate::recovery;
 use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
-use crate::session::Session;
+use crate::session::{SaveOrder, Session};
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Neighbour;
 use crate::stale_view::StaleRequest;
@@ -218,7 +218,7 @@ pub struct Workspace {
     close_dialog: Option<close_dialog::CloseDialog>,
     prompts: PromptGate,
     saved_session: Option<Session>,
-    unwritten_session: Option<(PathBuf, Session)>,
+    unwritten_session: Option<(PathBuf, Session, SaveOrder)>,
     session_writing: bool,
     cell_refresh: CellRefresh,
     missed: MissedRefreshes,

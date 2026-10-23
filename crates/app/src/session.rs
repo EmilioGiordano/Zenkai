@@ -372,13 +372,32 @@ fn set_aside(file: &Path) -> Loaded {
 }
 
 // Written next to the file and renamed over it, so a crash never leaves half a session.
-// The quit-time write can overlap a background one; both go through the same temp file.
-static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// Taken when a snapshot is made. Writes may run on any thread, so a write whose snapshot is
+// older than one already on disk is skipped instead of overwriting it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SaveOrder(u64);
 
+static NEXT_ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static LAST_WRITTEN: std::sync::Mutex<SaveOrder> = std::sync::Mutex::new(SaveOrder(0));
+
+impl SaveOrder {
+    pub fn next() -> SaveOrder {
+        SaveOrder(NEXT_ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+#[cfg(test)]
 pub fn save(directory: &Path, session: &Session) -> std::io::Result<()> {
-    let _saving = SAVING
+    save_in_order(directory, session, SaveOrder::next())
+}
+
+pub fn save_in_order(directory: &Path, session: &Session, order: SaveOrder) -> std::io::Result<()> {
+    let mut last = LAST_WRITTEN
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if order < *last {
+        return Ok(());
+    }
     std::fs::create_dir_all(directory)?;
     let file = file_in(directory);
     let temp = file.with_extension("json.tmp");
@@ -387,7 +406,9 @@ pub fn save(directory: &Path, session: &Session) -> std::io::Result<()> {
     written.write_all(&bytes)?;
     written.sync_all()?;
     drop(written);
-    std::fs::rename(&temp, &file)
+    std::fs::rename(&temp, &file)?;
+    *last = order;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -564,6 +585,21 @@ mod tests {
             writer.join().unwrap().unwrap();
         }
         assert!(matches!(load(&path), Loaded::Restored(_)));
+    }
+
+    #[test]
+    fn an_older_snapshot_never_overwrites_a_newer_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let older = SaveOrder::next();
+        let newer = SaveOrder::next();
+        let mut kept = session();
+        kept.sidebar_visible = !kept.sidebar_visible;
+        save_in_order(directory.path(), &kept, newer).unwrap();
+        save_in_order(directory.path(), &session(), older).unwrap();
+        let Loaded::Restored(loaded) = load(directory.path()) else {
+            panic!("the session was not restored");
+        };
+        assert_eq!(loaded, kept);
     }
 
     #[test]
