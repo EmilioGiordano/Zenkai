@@ -2,7 +2,7 @@ use crate::panel_width::{KEY_STEP, Resize};
 
 const MINIMUM: f32 = 120.0;
 const ABSOLUTE_MAXIMUM: f32 = 600.0;
-pub const DEFAULT: f32 = MINIMUM;
+pub const DEFAULT: f32 = 200.0;
 
 // The panel may fill half of the PDF view, up to an absolute cap; `view` is the whole view width.
 pub fn limits(view: f32) -> (f32, f32) {
@@ -38,8 +38,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_panel_starts_at_its_minimum_and_never_goes_narrower() {
-        assert_eq!(DEFAULT, 120.0);
+    fn the_panel_starts_at_200_and_never_goes_narrower_than_its_minimum() {
+        assert_eq!(DEFAULT, 200.0);
+        assert_eq!(limits(2000.0).0, 120.0);
         assert_eq!(within(10.0, 1000.0), 120.0);
     }
 
@@ -62,8 +63,8 @@ mod tests {
     #[test]
     fn a_stored_width_out_of_range_or_not_a_number_is_the_default() {
         assert_eq!(stored(300.0), 300.0);
-        assert_eq!(stored(5.0), 120.0);
-        assert_eq!(stored(9000.0), 120.0);
-        assert_eq!(stored(f32::NAN), 120.0);
+        assert_eq!(stored(5.0), 200.0);
+        assert_eq!(stored(9000.0), 200.0);
+        assert_eq!(stored(f32::NAN), 200.0);
     }
 }

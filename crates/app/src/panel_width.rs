@@ -330,8 +330,8 @@ mod tests {
     #[test]
     fn a_stored_pdf_width_out_of_range_falls_back_and_an_old_file_gets_the_default() {
         let bad: PanelWidths = serde_json::from_str(r#"{"pdf": 9000.0}"#).unwrap();
-        assert_eq!(bad.validated().pdf_width(), 120.0);
+        assert_eq!(bad.validated().pdf_width(), 200.0);
         let old: PanelWidths = serde_json::from_str(r#"{"sidebar": 300.0}"#).unwrap();
-        assert_eq!(old.validated().pdf_width(), 120.0);
+        assert_eq!(old.validated().pdf_width(), 200.0);
     }
 }
