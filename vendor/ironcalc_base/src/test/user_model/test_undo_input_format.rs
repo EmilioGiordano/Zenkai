@@ -168,3 +168,30 @@ fn undo_typed_input_into_spill_cell_keeps_its_style() {
     assert_eq!(style.num_fmt, PERCENT);
     assert!(style.font.b);
 }
+
+#[test]
+fn undo_array_formula_over_spill_cell_keeps_its_style() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 3, "5%").unwrap();
+    model.set_user_input(0, 1, 1, "=SEQUENCE(3)").unwrap();
+    model
+        .update_range_style(&area(2, 1, 1, 1), "font.b", "true")
+        .unwrap();
+    let bold = style_index(&model, 2, 1);
+
+    model
+        .set_user_array_formula(0, 2, 1, 2, 1, "=C1+1")
+        .unwrap();
+    let format = num_fmt(&model, 2, 1);
+    assert_ne!(format, "general");
+    assert_eq!(model.get_formatted_cell_value(0, 1, 1).unwrap(), "#SPILL!");
+
+    model.undo().unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 2, 1).unwrap(), "2");
+    assert_eq!(style_index(&model, 2, 1), bold);
+
+    model.redo().unwrap();
+    let style = model.get_cell_style(0, 2, 1).unwrap();
+    assert_eq!(style.num_fmt, format);
+    assert!(style.font.b);
+}
