@@ -4,6 +4,9 @@ actions!(
     zenkai,
     [
         NewWorkbook,
+        CycleMarkdownView,
+        ReloadMarkdown,
+        KeepMarkdownChanges,
         Open,
         Save,
         SaveAs,

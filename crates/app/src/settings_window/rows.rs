@@ -57,6 +57,7 @@ pub enum RowId {
     CloseWindowWithUnsaved,
     Language,
     Autosave,
+    MarkdownOpensIn,
     ColorMode,
     DarkTheme,
     LightTheme,
@@ -88,12 +89,13 @@ pub struct RowInfo {
 }
 
 impl RowId {
-    pub const ALL: [RowId; 25] = [
+    pub const ALL: [RowId; 26] = [
         RowId::RestoreSession,
         RowId::CloseWithUnsaved,
         RowId::CloseWindowWithUnsaved,
         RowId::Language,
         RowId::Autosave,
+        RowId::MarkdownOpensIn,
         RowId::ColorMode,
         RowId::DarkTheme,
         RowId::LightTheme,
@@ -159,6 +161,13 @@ impl RowId {
                 t!("settings.row.autosave"),
                 t!("settings.row.autosave.description"),
                 &["recovery", "backup", "seconds", "interval"],
+            ),
+            RowId::MarkdownOpensIn => row(
+                Section::General,
+                t!("settings.group.markdown"),
+                t!("settings.row.markdown_opens_in"),
+                t!("settings.row.markdown_opens_in.description"),
+                &["markdown", "preview", "split", "source", "md", "open"],
             ),
             RowId::ColorMode => row(
                 Section::Appearance,
@@ -338,6 +347,9 @@ impl RowId {
             RowId::Autosave => {
                 settings.general.autosave_seconds != default.general.autosave_seconds
             }
+            RowId::MarkdownOpensIn => {
+                settings.general.markdown_opens_in != default.general.markdown_opens_in
+            }
             RowId::ColorMode => settings.appearance.mode != default.appearance.mode,
             RowId::DarkTheme => settings.appearance.dark_theme != default.appearance.dark_theme,
             RowId::LightTheme => settings.appearance.light_theme != default.appearance.light_theme,
@@ -381,6 +393,9 @@ impl RowId {
             }
             RowId::Language => settings.language = default.language,
             RowId::Autosave => settings.general.autosave_seconds = default.general.autosave_seconds,
+            RowId::MarkdownOpensIn => {
+                settings.general.markdown_opens_in = default.general.markdown_opens_in
+            }
             RowId::ColorMode => settings.appearance.mode = default.appearance.mode,
             RowId::DarkTheme => settings.appearance.dark_theme = default.appearance.dark_theme,
             RowId::LightTheme => settings.appearance.light_theme = default.appearance.light_theme,
@@ -572,7 +587,8 @@ mod tests {
                 RowId::CloseWithUnsaved,
                 RowId::CloseWindowWithUnsaved,
                 RowId::Language,
-                RowId::Autosave
+                RowId::Autosave,
+                RowId::MarkdownOpensIn
             ]
         );
         assert!(rows(Section::Keyboard, "", false, v).is_empty());

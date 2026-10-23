@@ -4,10 +4,19 @@ use zenkai_types::WorkbookId;
 
 use super::{Documents, Intent};
 use crate::document::Document;
-use crate::entry::Slot;
+use crate::entry::{Entry, Slot};
 use crate::session::{self, Session, SpaceRecord};
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Spaces;
+
+fn has_recovery_copy_to_keep(entry: Entry<'_>) -> bool {
+    entry
+        .loaded()
+        .is_some_and(|document| document.needs_recovery() && document.has_recovery_copy())
+        || entry
+            .text()
+            .is_some_and(|text| text.needs_recovery() && text.has_recovery_copy())
+}
 
 impl Documents {
     // The startup blank joins the first space and stays on screen until the active workbook
@@ -71,7 +80,7 @@ impl Documents {
         recovery_file: impl Fn(WorkbookId) -> Option<PathBuf>,
         discarded: &[WorkbookId],
     ) -> Session {
-        let active = self.wanted().or_else(|| self.active_id());
+        let active = self.wanted().or_else(|| self.shown_id());
         let spaces = self
             .spaces
             .iter()
@@ -89,9 +98,7 @@ impl Documents {
                         if discarded.contains(&link.id) {
                             link.dirty = false;
                             link.recovery = None;
-                        } else if entry.loaded().is_some_and(|document| {
-                            document.needs_recovery() && document.has_recovery_copy()
-                        }) {
+                        } else if has_recovery_copy_to_keep(entry) {
                             link.recovery = recovery_file(link.id);
                         }
                         session::record_of(&link, Some(link.id) == active)
@@ -131,6 +138,9 @@ mod tests {
             untitled: if path.is_none() { 3 } else { 0 },
             dirty: false,
             read_only: false,
+            kind: Default::default(),
+            mode: Default::default(),
+            base: None,
             unsupported: Vec::new(),
             active,
             sheet: 1,

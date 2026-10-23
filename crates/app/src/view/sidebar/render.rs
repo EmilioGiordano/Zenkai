@@ -110,7 +110,7 @@ impl Workspace {
         );
         let paint = Paint {
             focused: self.sidebar.focus.contains_focused(window, cx),
-            active: self.documents.active_id(),
+            active: self.documents.shown_id(),
             spaces: self.documents.spaces().iter().cloned().collect(),
             entity: cx.entity().downgrade(),
         };

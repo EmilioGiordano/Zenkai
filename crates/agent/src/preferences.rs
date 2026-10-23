@@ -31,6 +31,30 @@ pub struct GeneralSettings {
         description = "Seconds between recovery copies of work that is not saved."
     )]
     pub autosave_seconds: u32,
+    #[serde(default)]
+    #[schemars(
+        description = "How a Markdown file opens: \"preview\" shows it rendered, \"split\" shows the source beside the preview."
+    )]
+    pub markdown_opens_in: MarkdownOpensIn,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkdownOpensIn {
+    #[default]
+    Preview,
+    Split,
+}
+
+impl MarkdownOpensIn {
+    pub const ALL: [MarkdownOpensIn; 2] = [MarkdownOpensIn::Preview, MarkdownOpensIn::Split];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            MarkdownOpensIn::Preview => t!("settings.markdown_opens_in.preview"),
+            MarkdownOpensIn::Split => t!("settings.markdown_opens_in.split"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -87,6 +111,7 @@ impl Default for GeneralSettings {
             close_with_unsaved: CloseWithUnsaved::default(),
             close_window_with_unsaved: keep_when_closing_window(),
             autosave_seconds: DEFAULT_AUTOSAVE_SECONDS,
+            markdown_opens_in: MarkdownOpensIn::default(),
         }
     }
 }

@@ -37,7 +37,7 @@ WizardStyle=modern
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx and .csv files"; GroupDescription: "File types:"; Flags: unchecked
+Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx, .csv and Markdown files"; GroupDescription: "File types:"; Flags: unchecked
 
 [Files]
 Source: "{#ExeDir}\zenkai.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -49,7 +49,7 @@ Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Name: "{autoprograms}\Zenkai"; Filename: "{app}\zenkai.exe"
 Name: "{autodesktop}\Zenkai"; Filename: "{app}\zenkai.exe"; Tasks: desktopicon
 
-; Only adds Zenkai to the "Open with" list. The default value of .xlsx and .csv is never
+; Only adds Zenkai to the "Open with" list. The default value of .xlsx, .csv, .md and .markdown is never
 ; written, so the program that opens them by default does not change.
 [Registry]
 Root: HKA; Subkey: "Software\Classes\Zenkai.xlsx"; ValueType: string; ValueName: ""; ValueData: "Excel Workbook (Zenkai)"; Flags: uninsdeletekey; Tasks: openwith
@@ -60,6 +60,11 @@ Root: HKA; Subkey: "Software\Classes\Zenkai.csv"; ValueType: string; ValueName: 
 Root: HKA; Subkey: "Software\Classes\Zenkai.csv\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"",0"; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\Zenkai.csv\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"" ""%1"""; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\.csv\OpenWithProgids"; ValueType: string; ValueName: "Zenkai.csv"; ValueData: ""; Flags: uninsdeletevalue; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\Zenkai.md"; ValueType: string; ValueName: ""; ValueData: "Markdown File (Zenkai)"; Flags: uninsdeletekey; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\Zenkai.md\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"",0"; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\Zenkai.md\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"" ""%1"""; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\.md\OpenWithProgids"; ValueType: string; ValueName: "Zenkai.md"; ValueData: ""; Flags: uninsdeletevalue; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\.markdown\OpenWithProgids"; ValueType: string; ValueName: "Zenkai.md"; ValueData: ""; Flags: uninsdeletevalue; Tasks: openwith
 
 [Run]
 Filename: "{app}\zenkai.exe"; Description: "{cm:LaunchProgram,Zenkai}"; Flags: nowait postinstall skipifsilent

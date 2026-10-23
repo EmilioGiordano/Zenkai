@@ -92,7 +92,7 @@ impl Workspace {
         }
         self.sidebar.visible = true;
         if self.sidebar.cursor.is_none() {
-            self.sidebar.cursor = self.documents.active_id().map(Row::File);
+            self.sidebar.cursor = self.documents.shown_id().map(Row::File);
         }
         window.focus(&self.sidebar.focus, cx);
         cx.notify();
@@ -123,7 +123,7 @@ impl Workspace {
     pub(super) fn delete_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let id = match self.sidebar.cursor {
             Some(Row::File(id)) => Some(id),
-            _ => self.documents.active_id(),
+            _ => self.documents.shown_id(),
         };
         if let Some(id) = id {
             self.delete_file_of(id, window, cx);
@@ -334,7 +334,7 @@ impl Workspace {
     pub(super) fn shift_document(&mut self, side: Neighbour, cx: &mut Context<Self>) {
         let id = match self.sidebar.cursor {
             Some(Row::File(id)) => Some(id),
-            _ => self.documents.active_id(),
+            _ => self.documents.shown_id(),
         };
         let Some(id) = id else {
             return;

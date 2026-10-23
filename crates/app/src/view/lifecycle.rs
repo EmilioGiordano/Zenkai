@@ -9,6 +9,7 @@ use zenkai_engine::{EngineError, SaveTarget, Unsupported, open_xlsx};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
+use super::text_save::write_recovery;
 use super::{Severity, Workspace};
 use crate::autosave::{self, Due};
 use crate::close_prompt::{CloseGoal, ClosePlan};
@@ -23,6 +24,8 @@ use zenkai_agent::settings_file::{self, SettingsPaths};
 use crate::agent_settings;
 use crate::session::{self, Loaded, Session};
 use crate::space_settings;
+use crate::text_disk::Writing;
+use crate::text_file::Format;
 
 const AUTOSAVE_TICK: Duration = Duration::from_secs(1);
 const CLOSE_POLL: Duration = Duration::from_millis(50);
@@ -36,7 +39,15 @@ pub(super) enum Lifecycle {
 
 struct RecoveryBatch {
     writes: Vec<RecoveryWrite>,
+    texts: Vec<TextRecoveryWrite>,
     edits: Vec<(WorkbookId, u64)>,
+}
+
+struct TextRecoveryWrite {
+    id: WorkbookId,
+    text: String,
+    format: Format,
+    target: PathBuf,
 }
 
 struct RecoveryWrite {
@@ -212,6 +223,8 @@ impl Workspace {
         for id in ids {
             self.autosave(id, every, window, cx);
         }
+        self.autosave_texts(every, window, cx);
+        self.watch_texts(window, cx);
     }
 
     fn autosave(
@@ -349,6 +362,10 @@ impl Workspace {
     }
 
     fn load_recovered(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if recovery::is_text(&path) {
+            self.load_recovered_text(path, window, cx);
+            return;
+        }
         cx.spawn_in(window, async move |this, cx| {
             let opened = cx
                 .background_executor()
@@ -460,7 +477,7 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let mut polls = 0;
             let batch = loop {
-                match this.update(cx, |this, _| this.begin_recovery_writes(&plan)) {
+                match this.update(cx, |this, cx| this.begin_recovery_writes(&plan, cx)) {
                     Ok(Some(batch)) => break batch,
                     Ok(None) if polls < CLOSE_POLLS_BEFORE_ASKING => polls += 1,
                     Ok(None) => {
@@ -486,15 +503,20 @@ impl Workspace {
                 }
                 cx.background_executor().timer(CLOSE_POLL).await;
             };
-            let RecoveryBatch { writes, edits } = batch;
+            let RecoveryBatch {
+                writes,
+                texts,
+                edits,
+            } = batch;
+            let text_ids: Vec<WorkbookId> = texts.iter().map(|write| write.id).collect();
             let generations: Vec<(WorkbookId, u64)> = writes
                 .iter()
                 .map(|write| (write.id, write.generation))
                 .collect();
-            let results = cx
+            let (results, text_results) = cx
                 .background_executor()
                 .spawn(async move {
-                    writes
+                    let workbooks = writes
                         .into_iter()
                         .map(|write| {
                             document::write_snapshot(
@@ -505,7 +527,12 @@ impl Workspace {
                                 recovery::write,
                             )
                         })
-                        .collect::<Vec<Result<Vec<Unsupported>, EngineError>>>()
+                        .collect::<Vec<Result<Vec<Unsupported>, EngineError>>>();
+                    let texts = texts
+                        .into_iter()
+                        .map(|write| write_recovery(&write.target, &write.text, write.format))
+                        .collect::<Vec<Result<(), String>>>();
+                    (workbooks, texts)
                 })
                 .await;
             let finished = this.update_in(cx, |this, window, cx| {
@@ -519,6 +546,14 @@ impl Workspace {
                         }
                     }
                 }
+                for (id, result) in text_ids.iter().zip(&text_results) {
+                    if let Some(text) = this.documents.text_mut(*id) {
+                        text.writing = Writing::Idle;
+                        if result.is_ok() {
+                            text.mark_recovery_adopted();
+                        }
+                    }
+                }
                 // Edits made while the copies were written are not in them: write again.
                 if this.unsaved_edits_kept(&plan) != edits {
                     this.lifecycle = Lifecycle::Running;
@@ -528,6 +563,11 @@ impl Workspace {
                 let failures: Vec<String> = results
                     .iter()
                     .filter_map(|result| result.as_ref().err().map(ToString::to_string))
+                    .chain(
+                        text_results
+                            .iter()
+                            .filter_map(|result| result.as_ref().err().cloned()),
+                    )
                     .collect();
                 #[cfg(windows)]
                 if plan.goal == CloseGoal::Hide {
@@ -560,13 +600,17 @@ impl Workspace {
     }
 
     // `None` while a recalculation or an autosave still holds a workbook that needs saving.
-    fn begin_recovery_writes(&mut self, plan: &ClosePlan) -> Option<RecoveryBatch> {
+    fn begin_recovery_writes(&mut self, plan: &ClosePlan, cx: &App) -> Option<RecoveryBatch> {
         // A workbook the plan discards must be idle too: an autosave finishing after its copy
         // was deleted would leave a file the next start offers as crash recovery.
         if self
             .documents
             .iter()
             .any(|document| !plan.keeps(document.id) && document.file_job() != FileJob::Idle)
+            || self
+                .documents
+                .texts()
+                .any(|text| text.writing != Writing::Idle)
         {
             return None;
         }
@@ -574,6 +618,7 @@ impl Workspace {
         let Some(directory) = self.recovery_dir.clone() else {
             return Some(RecoveryBatch {
                 writes: Vec::new(),
+                texts: Vec::new(),
                 edits,
             });
         };
@@ -605,7 +650,33 @@ impl Workspace {
             }
             return None;
         }
-        Some(RecoveryBatch { writes, edits })
+        let mut texts = Vec::new();
+        let kept: Vec<WorkbookId> = self
+            .documents
+            .texts()
+            .filter(|text| text.needs_recovery() && plan.keeps(text.id))
+            .map(|text| text.id)
+            .collect();
+        for id in kept {
+            let Some(entry) = self.text_panes.get(&id) else {
+                continue;
+            };
+            let content = entry.pane.read(cx).text(cx).to_string();
+            if let Some(text) = self.documents.text_mut(id) {
+                text.writing = Writing::Autosaving;
+                texts.push(TextRecoveryWrite {
+                    id,
+                    text: content,
+                    format: text.format,
+                    target: recovery::text_file(&directory, id),
+                });
+            }
+        }
+        Some(RecoveryBatch {
+            writes,
+            texts,
+            edits,
+        })
     }
 
     fn finish_close_with_session(
@@ -624,16 +695,23 @@ impl Workspace {
     // Without a recovery folder, work kept in memory has no copy to come back from.
     pub(super) fn holds_unprotected_work(&self, plan: &ClosePlan) -> bool {
         self.recovery_dir.is_none()
-            && self
+            && (self
                 .documents
                 .iter()
                 .any(|document| document.needs_recovery() && plan.keeps(document.id))
+                || self
+                    .documents
+                    .texts()
+                    .any(|text| text.needs_recovery() && plan.keeps(text.id)))
     }
 
     fn recovery_file_of(&self, id: WorkbookId) -> Option<PathBuf> {
-        self.recovery_dir
-            .as_deref()
-            .map(|directory| recovery::document_file(directory, id))
+        let directory = self.recovery_dir.as_deref()?;
+        Some(if self.documents.text(id).is_some() {
+            recovery::text_file(directory, id)
+        } else {
+            recovery::document_file(directory, id)
+        })
     }
 
     fn snapshot_session(&self, cx: &App) -> Session {
@@ -694,6 +772,12 @@ impl Workspace {
             .iter()
             .filter(|document| !document.needs_recovery() || !plan.keeps(document.id))
             .filter_map(|document| self.recovery_file_of(document.id))
+            .chain(
+                self.documents
+                    .texts()
+                    .filter(|text| !text.needs_recovery() || !plan.keeps(text.id))
+                    .filter_map(|text| self.recovery_file_of(text.id)),
+            )
             .collect();
         clean.extend(
             plan.discard
@@ -788,6 +872,9 @@ mod tests {
             untitled: 1,
             dirty: true,
             read_only: false,
+            kind: Default::default(),
+            mode: Default::default(),
+            base: None,
             unsupported: Vec::new(),
             active: true,
             sheet: 0,

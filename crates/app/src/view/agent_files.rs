@@ -8,6 +8,7 @@ use zenkai_agent::tools::{
     ToolReply, WorkbookId, WorkingFolder,
 };
 use zenkai_engine::Engine;
+use zenkai_i18n::t;
 
 use super::agent_calls::Change;
 use super::workbooks::failure_text;
@@ -17,7 +18,6 @@ use crate::agent_settings;
 use crate::document::Document;
 use crate::entry::display_name;
 use crate::files::{self, FileLoad};
-use zenkai_i18n::t;
 
 fn sheet_names(document: Option<&Document>) -> Vec<String> {
     document.map_or_else(Vec::new, |document| {
@@ -93,6 +93,16 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if let Some(id) = self.documents.find_by_path(path.path()) {
+            if self
+                .documents
+                .entry(id)
+                .is_some_and(|entry| entry.kind().is_text())
+            {
+                call.respond(Err(ToolError::File(
+                    t!("markdown.agent_refused", name = path.relative().display()).to_string(),
+                )));
+                return;
+            }
             self.switch_to(id, window, cx);
             let sheets = sheet_names(self.documents.get(id));
             call.respond(Ok(opened(id, Opening::AlreadyOpen, &path, sheets)));
@@ -197,11 +207,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Vec<FileCard> {
         let mut cards = Vec::new();
+        let mode = self.default_text_mode(cx);
         for file in found {
             if self.documents.find_by_path(&file.path).is_some() {
                 continue;
             }
-            self.documents.add_link(file.path.clone(), Some(file.size));
+            self.documents
+                .add_link(file.path.clone(), Some(file.size), mode);
             cards.push(FileCard {
                 name: display_name(Some(&file.path), 0),
                 place: self.place_in_space(&file.relative),

@@ -73,3 +73,7 @@ local computation); Zenkai's edge is being native: faster start, less memory, lo
     sheet's filter, tables, drawings, comments and pivots on the next save. Excel shifts
     their ranges and anchors instead; doing it means rewriting table, drawing, VML and pivot
     parts. Also keep controls and OLE objects wrapped in mc:AlternateContent.
+
+11. **Markdown outline and heading links.** A `#heading` link inside a Markdown file does
+    nothing today. An outline of the headings, and jumping to one from a link or the outline,
+    would need the preview to expose block positions.

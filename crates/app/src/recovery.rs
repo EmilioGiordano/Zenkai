@@ -8,6 +8,8 @@ pub fn session_directory() -> Option<PathBuf> {
 }
 
 const PREFIX: &str = "autosave-";
+const WORKBOOK_EXTENSION: &str = "xlsx";
+const TEXT_EXTENSION: &str = "md";
 // Not `.xlsx`, so `leftovers` never offers a dump as work to recover: it only holds the undo
 // history of a workbook whose work the autosave copy keeps.
 const DUMP_EXTENSION: &str = "zkh";
@@ -34,7 +36,30 @@ fn session_name() -> &'static str {
 }
 
 pub fn document_file(directory: &Path, id: WorkbookId) -> PathBuf {
-    directory.join(format!("{PREFIX}{}-{}.xlsx", session_name(), id.0))
+    directory.join(format!(
+        "{PREFIX}{}-{}.{WORKBOOK_EXTENSION}",
+        session_name(),
+        id.0
+    ))
+}
+
+pub fn text_file(directory: &Path, id: WorkbookId) -> PathBuf {
+    directory.join(format!(
+        "{PREFIX}{}-{}.{TEXT_EXTENSION}",
+        session_name(),
+        id.0
+    ))
+}
+
+pub fn has_recovery_extension(name: &str) -> bool {
+    [WORKBOOK_EXTENSION, TEXT_EXTENSION]
+        .iter()
+        .any(|extension| name.ends_with(&format!(".{extension}")))
+}
+
+pub fn is_text(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension == TEXT_EXTENSION)
 }
 
 pub fn dump_file(directory: &Path, id: WorkbookId) -> PathBuf {
@@ -86,7 +111,7 @@ fn owner_is_alive(autosave: &Path) -> bool {
 fn is_autosave(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with(PREFIX) && name.ends_with(".xlsx"))
+        .is_some_and(|name| name.starts_with(PREFIX) && has_recovery_extension(name))
 }
 
 pub fn leftovers(directory: &Path) -> Vec<PathBuf> {
@@ -244,6 +269,23 @@ mod tests {
         );
         drop(live_lock);
         assert_eq!(leftovers(dir.path()), vec![live.clone()]);
+    }
+
+    #[test]
+    fn a_text_copy_is_a_leftover_like_a_workbook_copy_and_is_told_apart_by_its_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let _lock = lock_session(dir.path()).unwrap();
+        let own = text_file(dir.path(), WorkbookId(2));
+        assert!(is_text(&own));
+        assert!(!is_text(&document_file(dir.path(), WorkbookId(2))));
+        std::fs::write(&own, "mine").unwrap();
+        let other = dir.path().join("autosave-9-9-1.md");
+        std::fs::write(&other, "left by a crash").unwrap();
+        std::fs::write(dir.path().join("notes.md"), "not ours").unwrap();
+        assert_eq!(leftovers(dir.path()), vec![other.clone()]);
+        remove_with_lock(&other);
+        assert!(leftovers(dir.path()).is_empty());
+        assert!(own.exists());
     }
 
     #[test]

@@ -13,6 +13,7 @@ use zenkai_i18n::t;
 use super::ChatPanel;
 use super::badge::{self, ReferencePlugin};
 use crate::agent_settings::AgentConfig;
+use crate::text_document::DocumentKind;
 
 fn user_bubble(
     text: &str,
@@ -166,10 +167,14 @@ impl ChatPanel {
             .rounded_lg()
             .bg(theme.secondary)
             .child(
-                Icon::new(IconName::Grid2x2)
-                    .size_4()
-                    .flex_shrink_0()
-                    .text_color(theme.success),
+                Icon::new(if DocumentKind::of(&card.path).is_text() {
+                    IconName::FileText
+                } else {
+                    IconName::Grid2x2
+                })
+                .size_4()
+                .flex_shrink_0()
+                .text_color(theme.success),
             )
             .child(
                 v_flex()

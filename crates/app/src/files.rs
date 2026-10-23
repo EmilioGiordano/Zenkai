@@ -11,6 +11,8 @@ use zenkai_formats::{Delimiter, ParsedCsv, parse_csv, read_values, write_csv};
 use zenkai_i18n::t;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
+use crate::text_document::DocumentKind;
+
 pub const SPREADSHEET_EXTENSIONS: [&str; 7] = ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"];
 const REPLACED_EXTENSIONS: [&str; 4] = ["xlsm", "xls", "xlsb", "ods"];
 
@@ -111,6 +113,7 @@ fn extension(path: &Path) -> Option<String> {
 
 pub fn is_openable(path: &Path) -> bool {
     is_delimited_text(path)
+        || DocumentKind::of(path).is_text()
         || extension(path)
             .is_some_and(|extension| SPREADSHEET_EXTENSIONS.contains(&extension.as_str()))
 }

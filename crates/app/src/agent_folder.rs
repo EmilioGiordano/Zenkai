@@ -5,6 +5,7 @@ use zenkai_agent::tools::WorkingFolder;
 use zenkai_i18n::t;
 
 use crate::files;
+use crate::text_document::DocumentKind;
 
 const DEFAULT_FOLDER_NAME: &str = "Zenkai";
 const SCAN_DEPTH: usize = 3;
@@ -82,10 +83,21 @@ pub struct FoundFile {
     pub size: u64,
 }
 
-// Spreadsheets written in the folder since `since`, a few levels deep and a bounded number of
+pub fn spreadsheets_written_since(folder: &Path, since: SystemTime) -> Vec<FoundFile> {
+    written_since(folder, since, is_listed_spreadsheet)
+}
+
+// What the sidebar lists after a turn: workbooks and Markdown files.
+pub fn documents_written_since(folder: &Path, since: SystemTime) -> Vec<FoundFile> {
+    written_since(folder, since, |path| {
+        is_listed_spreadsheet(path) || DocumentKind::of(path).is_text()
+    })
+}
+
+// Files written in the folder since `since`, a few levels deep and a bounded number of
 // entries, so a huge folder cannot stall the scan. Links and junctions are not followed, and
 // Excel's "~$" lock and temp files are skipped. Runs off the UI thread.
-pub fn spreadsheets_written_since(folder: &Path, since: SystemTime) -> Vec<FoundFile> {
+fn written_since(folder: &Path, since: SystemTime, listed: fn(&Path) -> bool) -> Vec<FoundFile> {
     let mut found = Vec::new();
     let mut pending = vec![(folder.to_path_buf(), 0)];
     let mut visited = 0;
@@ -109,7 +121,7 @@ pub fn spreadsheets_written_since(folder: &Path, since: SystemTime) -> Vec<Found
             if kind.is_dir() && depth + 1 < SCAN_DEPTH {
                 pending.push((path, depth + 1));
             } else if kind.is_file()
-                && is_listed_spreadsheet(&path)
+                && listed(&path)
                 && let Ok(metadata) = entry.metadata()
                 && metadata.modified().is_ok_and(|modified| modified >= since)
                 && let Ok(relative) = path.strip_prefix(folder)
@@ -234,6 +246,36 @@ mod tests {
                 PathBuf::from("budget.xlsx"),
                 Path::new("reports").join("data.csv")
             ]
+        );
+    }
+
+    #[test]
+    fn the_listing_after_a_turn_also_finds_markdown_reports() {
+        let temp = tempfile::tempdir().unwrap();
+        let since = SystemTime::now();
+        for name in ["summary.md", "notes.MARKDOWN", "budget.xlsx", "data.json"] {
+            let path = temp.path().join(name);
+            std::fs::write(&path, b"x").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(since + std::time::Duration::from_secs(1))
+                .unwrap();
+        }
+        let names = |found: Vec<FoundFile>| -> Vec<String> {
+            found
+                .into_iter()
+                .map(|file| file.relative.to_string_lossy().into_owned())
+                .collect()
+        };
+        assert_eq!(
+            names(documents_written_since(temp.path(), since)),
+            ["budget.xlsx", "notes.MARKDOWN", "summary.md"]
+        );
+        assert_eq!(
+            names(spreadsheets_written_since(temp.path(), since)),
+            ["budget.xlsx"]
         );
     }
 }

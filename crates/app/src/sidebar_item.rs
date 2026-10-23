@@ -69,6 +69,14 @@ pub fn describe(entry: Entry, active: bool) -> FileItem {
             };
             (meta, state)
         }
+        Entry::Text(text) => {
+            let state = if text.dirty {
+                FileState::Dirty
+            } else {
+                FileState::Ready
+            };
+            (t!("markdown.status.name").to_string(), state)
+        }
         Entry::Link(link) => {
             let state = match link.status {
                 LinkStatus::Loading => FileState::Loading,
@@ -97,6 +105,8 @@ mod tests {
     use zenkai_grid::ViewState;
     use zenkai_types::SheetId;
 
+    use crate::text_document::TextDocument;
+
     use crate::spaces::SpaceId;
 
     fn link(status: LinkStatus) -> Link {
@@ -115,6 +125,9 @@ mod tests {
             status,
             recovery_lost: false,
             origin: None,
+            kind: Default::default(),
+            mode: Default::default(),
+            base: None,
             rested: None,
         }
     }
@@ -153,6 +166,24 @@ mod tests {
         let item = describe(Entry::Link(&loading), false);
         assert_eq!(item.state, FileState::Loading);
         assert_eq!(item.place, "q3, unsaved changes, loading…");
+    }
+
+    #[test]
+    fn a_markdown_tab_names_its_kind_and_shows_unsaved_changes() {
+        let mut text = TextDocument::new(
+            WorkbookId(2),
+            SpaceId(0),
+            0,
+            Some(Path::new("notes").join("plan.md")),
+            crate::text_document::DocumentKind::Markdown,
+            Default::default(),
+        );
+        let clean = describe(Entry::Text(&text), true);
+        assert_eq!(clean.state, FileState::Ready);
+        assert_eq!(clean.name, "plan.md");
+        assert_eq!(clean.place, "notes, Markdown");
+        text.edited();
+        assert_eq!(describe(Entry::Text(&text), false).state, FileState::Dirty);
     }
 
     #[test]

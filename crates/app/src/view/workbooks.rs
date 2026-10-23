@@ -14,6 +14,7 @@ use crate::documents::{Installed, Intent, Loaded, Provenance, Step};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::files::{self, FileLoad, LoadFailure};
 use crate::recovery;
+use crate::text_document::DocumentKind;
 
 pub(super) enum LinkLoad {
     Loaded {
@@ -184,10 +185,10 @@ impl Workspace {
                 self.documents.want(id, Intent::Switch);
                 self.begin_load(id, window, cx);
             }
-            Some(Entry::Loaded(_)) if self.documents.active_id() == Some(id) => {
+            Some(Entry::Loaded(_) | Entry::Text(_)) if self.documents.shown_id() == Some(id) => {
                 self.documents.activate(id);
             }
-            Some(Entry::Loaded(_)) => {
+            Some(Entry::Loaded(_) | Entry::Text(_)) => {
                 self.park_active(window, cx);
                 self.documents.activate(id);
                 self.present_active(window, cx);
@@ -204,7 +205,7 @@ impl Workspace {
         let Some(id) = self.documents.step(step) else {
             return;
         };
-        if self.documents.active_id() == Some(id) {
+        if self.documents.shown_id() == Some(id) {
             return;
         }
         self.switch_to(id, window, cx);
@@ -250,6 +251,10 @@ impl Workspace {
     }
 
     pub(super) fn present_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.documents.shown_text().map(|text| text.id) {
+            self.present_text(id, window, cx);
+            return;
+        }
         let Some(view) = self.documents.active().map(|document| document.view) else {
             self.show_empty(window, cx);
             return;
@@ -277,7 +282,7 @@ impl Workspace {
     }
 
     pub(super) fn close_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(id) = self.documents.active_id() {
+        if let Some(id) = self.documents.shown_id() {
             self.close_document(id, window, cx);
         }
     }
@@ -311,7 +316,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let was_active = self.documents.active_id() == Some(id);
+        let was_active = self.documents.shown_id() == Some(id);
         if was_active {
             self.park_active(window, cx);
         }
@@ -323,8 +328,13 @@ impl Workspace {
                     .as_deref()
                     .map(|directory| recovery::document_file(directory, id))
             }
+            Some(Entry::Text(_)) => self
+                .recovery_dir
+                .as_deref()
+                .map(|directory| recovery::text_file(directory, id)),
             None => None,
         };
+        self.forget_text(id);
         if let Some(file) = recovery_copy {
             cx.background_executor()
                 .spawn(async move { recovery::remove_with_lock(&file) })
@@ -358,6 +368,10 @@ impl Workspace {
 
     pub(crate) fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.show_sheet_beside_chat(cx);
+        if DocumentKind::of(&path).is_text() {
+            self.open_text_file(path, window, cx);
+            return;
+        }
         if files::is_delimited_text(&path) {
             self.import_csv(path, window, cx);
             return;
@@ -456,6 +470,10 @@ impl Workspace {
             .unwrap_or_default();
         let open = self.open_loads.start(t!("busy.opening", name = name));
         cx.notify();
+        if link.kind.is_text() {
+            self.begin_text_load(link, window, cx);
+            return;
+        }
         let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
         cx.spawn_in(window, async move |this, cx| {
             let load = cx
@@ -587,7 +605,7 @@ impl Workspace {
         .detach();
     }
 
-    fn announce_loaded(
+    pub(super) fn announce_loaded(
         &mut self,
         name: &str,
         provenance: Provenance,
@@ -627,7 +645,7 @@ impl Workspace {
                     .clone()
                     .filter(|path| !files::is_remote_or_device(path))
                     .map(|path| (link.id, path)),
-                Entry::Loaded(_) => None,
+                Entry::Loaded(_) | Entry::Text(_) => None,
             })
             .collect();
         for (id, path) in probes {
@@ -713,6 +731,9 @@ mod tests {
             status: LinkStatus::NotLoaded,
             recovery_lost: false,
             origin: Some(FileOrigin::Local),
+            kind: Default::default(),
+            mode: Default::default(),
+            base: None,
             rested: Some(Box::new(Rested {
                 file: FileSeen {
                     stamp: None,

@@ -7,6 +7,7 @@ use super::Documents;
 use crate::entry::{Entry, Link, LinkStatus, Slot};
 use crate::space_appearance::{NewSpaceColor, SpaceOverride};
 use crate::spaces::{Neighbour, SpaceColor, SpaceId, Spaces};
+use crate::text_document::{DocumentKind, ViewMode};
 
 impl Documents {
     pub fn spaces(&self) -> &Spaces {
@@ -65,8 +66,9 @@ impl Documents {
     }
 
     // A file that appeared in the agent's folder, listed in the current space without loading it.
-    pub fn add_link(&mut self, path: PathBuf, size: Option<u64>) -> WorkbookId {
+    pub fn add_link(&mut self, path: PathBuf, size: Option<u64>, mode: ViewMode) -> WorkbookId {
         let id = self.take_id();
+        let kind = DocumentKind::of(&path);
         self.after.push(Slot::Link(Link {
             id,
             space: self.current_space(),
@@ -82,6 +84,9 @@ impl Documents {
             status: LinkStatus::NotLoaded,
             recovery_lost: false,
             origin: None,
+            kind,
+            mode,
+            base: None,
             rested: None,
         }));
         id
