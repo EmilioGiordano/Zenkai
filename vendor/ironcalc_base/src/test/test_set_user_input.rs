@@ -542,3 +542,19 @@ fn input_dates() {
     model.evaluate();
     assert_eq!(model._get_text("A1"), "8/8/2028");
 }
+
+#[test]
+fn input_percentages() {
+    let mut model = new_empty_model();
+    model.set_user_input(0, 1, 1, "5%".to_string()).unwrap();
+    model.set_user_input(0, 2, 1, "5.5%".to_string()).unwrap();
+    model.set_user_input(0, 3, 1, "-5%".to_string()).unwrap();
+    model.evaluate();
+
+    assert_eq!(model._get_text("A1"), "5%");
+    assert_eq!(model.get_style_for_cell(0, 1, 1).unwrap().num_fmt, "0%");
+    assert_eq!(model._get_text("A2"), "5.50%");
+    assert_eq!(model.get_style_for_cell(0, 2, 1).unwrap().num_fmt, "0.00%");
+    assert_eq!(model._get_text("A3"), "-5%");
+    assert_eq!(model.get_style_for_cell(0, 3, 1).unwrap().num_fmt, "0%");
+}

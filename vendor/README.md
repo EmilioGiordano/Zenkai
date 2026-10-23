@@ -241,6 +241,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   undo. Tests: `undo_array_formula_removes_the_cells_that_did_not_exist` and
   `undo_array_formula_inherits_the_row_style_again` in
   `src/test/user_model/test_undo_input_format.rs`.
+- A typed percentage gets Excel's built-in format `0%`, or `0.00%` when it has decimals
+  (ids 9 and 10, so the saved file names no custom format), instead of `#,##0%` and
+  `#,##0.00%` (`src/formatter/format.rs`, `parse_formatted_number`). Stands on its own; the
+  tests of the undo patch above assert its format. Tests:
+  `src/formatter/test/test_parse_formatted_number.rs`, `input_percentages` in
+  `src/test/test_set_user_input.rs`.
 
 Zenkai-only, not for upstream:
 
