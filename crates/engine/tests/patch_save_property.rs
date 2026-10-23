@@ -416,7 +416,7 @@ fn an_undone_edit_copies_every_part() {
 }
 
 #[test]
-fn a_file_changed_on_disk_fails_once_then_is_written_whole() {
+fn a_file_changed_on_disk_is_refused_until_the_save_replaces_it() {
     let dir = tempfile::tempdir().unwrap();
     let (document, mut book) = opened(dir.path());
     let mut other = Source::new();
@@ -431,14 +431,25 @@ fn a_file_changed_on_disk_fails_once_then_is_written_whole() {
         matches!(refused, Err(EngineError::ChangedOnDisk(_))),
         "{refused:?}"
     );
-    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    let theirs = std::fs::read(&document).unwrap();
+    let again = save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap());
+    assert!(
+        matches!(again, Err(EngineError::ChangedOnDisk(_))),
+        "{again:?}"
+    );
+    assert_eq!(std::fs::read(&document).unwrap(), theirs);
+    let replacing = book
+        .save_snapshot(&document, SaveTarget::Document)
+        .unwrap()
+        .replacing_changed_file();
+    save_xlsx(replacing).unwrap();
     let reopened = open_xlsx(&document).unwrap().workbook;
     assert_eq!(reopened.sheets().len(), SHEETS.len());
     assert_eq!(reopened.cell(SheetId(2), pos(0, 0)).text, "mine");
 }
 
 #[test]
-fn a_change_on_disk_after_the_snapshot_fails_the_save_and_the_next_one_works() {
+fn a_change_on_disk_after_the_snapshot_fails_the_save_and_only_a_replace_works() {
     let dir = tempfile::tempdir().unwrap();
     let (document, mut book) = opened(dir.path());
     book.set_input(SheetId(2), pos(0, 0), "mine").unwrap();
@@ -452,7 +463,12 @@ fn a_change_on_disk_after_the_snapshot_fails_the_save_and_the_next_one_works() {
     assert!(save_xlsx(snapshot).is_err());
     let leftovers = std::fs::read_dir(dir.path()).unwrap().count();
     assert_eq!(leftovers, 1, "the temp file is gone");
-    save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
+    assert!(save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).is_err());
+    let replacing = book
+        .save_snapshot(&document, SaveTarget::Document)
+        .unwrap()
+        .replacing_changed_file();
+    save_xlsx(replacing).unwrap();
     let reopened = open_xlsx(&document).unwrap().workbook;
     assert_eq!(reopened.cell(SheetId(2), pos(0, 0)).text, "mine");
 }

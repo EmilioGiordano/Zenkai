@@ -22,6 +22,14 @@ pub struct Stamp {
 }
 
 impl Stamp {
+    // Matches no file, so a path that could not be stamped is asked about on the next save.
+    pub(crate) fn never_matching() -> Stamp {
+        Stamp {
+            len: u64::MAX,
+            modified: SystemTime::UNIX_EPOCH,
+        }
+    }
+
     pub fn modified(&self) -> SystemTime {
         self.modified
     }
@@ -122,31 +130,68 @@ impl SavedFile {
     }
 }
 
+// The file a workbook was opened from or last saved to, whether or not a save can copy
+// from it: a save to that path must find it as it was, or ask.
+#[derive(Clone, Debug)]
+pub(crate) struct KnownFile {
+    pub(crate) path: PathBuf,
+    pub(crate) stamp: Stamp,
+}
+
+// Two spellings of one file are one file; a path that does not resolve is only itself, so a
+// Save As to a name that does not exist yet is never taken for the workbook's own file.
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
+}
+
+#[derive(Debug, Default)]
+struct Remembered {
+    file: Option<Arc<SavedFile>>,
+    known: Option<Arc<KnownFile>>,
+}
+
 #[derive(Clone, Debug, Default)]
-pub(crate) struct SavedSlot(Arc<Mutex<Option<Arc<SavedFile>>>>);
+pub(crate) struct SavedSlot(Arc<Mutex<Remembered>>);
 
 impl SavedSlot {
-    pub(crate) fn current(&self) -> Option<Arc<SavedFile>> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+    fn lock(&self) -> std::sync::MutexGuard<'_, Remembered> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    pub(crate) fn current(&self) -> Option<Arc<SavedFile>> {
+        self.lock().file.clone()
+    }
+
+    // Only the file saves copy from; what is known of the path on disk stays.
     pub(crate) fn set(&self, file: Option<SavedFile>) {
-        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = file.map(Arc::new);
+        self.lock().file = file.map(Arc::new);
+    }
+
+    pub(crate) fn known(&self) -> Option<Arc<KnownFile>> {
+        self.lock().known.clone()
+    }
+
+    pub(crate) fn set_known(&self, known: Option<KnownFile>) {
+        self.lock().known = known.map(Arc::new);
     }
 
     // Keeps the file `base` for later saves, minus the splice of `part`. A slot that holds
     // another file by now is left alone.
     pub(crate) fn refuse_splice(&self, base: &Arc<SavedFile>, part: String) {
-        let mut held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if !held.as_ref().is_some_and(|held| Arc::ptr_eq(held, base)) {
+        let mut held = self.lock();
+        if !held
+            .file
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, base))
+        {
             return;
         }
         let mut unspliceable = base.unspliceable.clone();
         unspliceable.push(part);
-        *held = Some(Arc::new(SavedFile {
+        held.file = Some(Arc::new(SavedFile {
             path: base.path.clone(),
             stamp: base.stamp,
             contents: base.contents.clone(),

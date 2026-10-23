@@ -575,6 +575,10 @@ fn with_snapshot<T: std::fmt::Debug>(
             tracing::warn!(?job, %error, "the file copied from changed, writing it whole");
             read_shared(shared)
                 .save_snapshot(target, kind)
+                .map(|snapshot| match changed {
+                    ChangedFile::Replace => snapshot.replacing_changed_file(),
+                    ChangedFile::Ask => snapshot,
+                })
                 .and_then(&attempt)
         }
         (_, first) => first,
