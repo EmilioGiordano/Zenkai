@@ -1198,7 +1198,7 @@ impl Workspace {
             return false;
         }
         if shown {
-            window.set_window_title(&document.title());
+            window.set_window_title(&self.documents.shown_title());
         }
         self.flush_edits(id, cx);
         true
@@ -2090,7 +2090,7 @@ impl Workspace {
                         document.dirty = edited_meanwhile;
                         fully_saved = !edited_meanwhile;
                         if shown {
-                            window.set_window_title(&document.title());
+                            window.set_window_title(&this.documents.shown_title());
                         }
                         this.notify(Severity::Info, t!("notice.saved"), cx);
                     }

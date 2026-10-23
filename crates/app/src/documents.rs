@@ -5,7 +5,7 @@ use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{Kept, Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
-use crate::document::{Document, FileJob, SharedWorkbook};
+use crate::document::{self, Document, FileJob, SharedWorkbook};
 use crate::entry::{Entry, Link, LinkStatus, Slot};
 use crate::files;
 use crate::pdf_tab::PdfTab;
@@ -301,8 +301,7 @@ impl Documents {
     // What the title bar names: whatever is on screen, with the dirty marker of texts and workbooks.
     pub fn shown_name_with_marker(&self) -> Option<String> {
         if let Some(text) = self.shown_text() {
-            let marker = if text.dirty { "• " } else { "" };
-            return Some(format!("{marker}{}", text.name()));
+            return Some(document::with_dirty_marker(&text.name(), text.dirty));
         }
         if let Some(pdf) = self.shown_pdf() {
             return Some(pdf.name());
@@ -311,8 +310,7 @@ impl Documents {
     }
 
     pub fn shown_title(&self) -> String {
-        self.shown_name_with_marker()
-            .map_or_else(|| "Zenkai".to_string(), |name| format!("{name} - Zenkai"))
+        document::window_title(self.shown_name_with_marker().as_deref())
     }
 
     pub fn shown_text(&self) -> Option<&TextDocument> {

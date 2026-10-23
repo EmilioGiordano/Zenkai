@@ -378,8 +378,8 @@ impl Workspace {
                         this.open_document(opened.workbook, None, opened.unsupported, window, cx);
                     if let Some(document) = this.documents.get_mut(id) {
                         document.dirty = true;
-                        window.set_window_title(&document.title());
                     }
+                    window.set_window_title(&this.documents.shown_title());
                     // Kept as this document's own recovery copy until the work is saved.
                     if let Some(directory) = &this.recovery_dir {
                         match recovery::adopt(&path, &recovery::document_file(directory, id)) {
