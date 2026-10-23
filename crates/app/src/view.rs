@@ -148,9 +148,25 @@ enum Severity {
     Error,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lifetime {
+    UntilReplaced,
+    UntilOpen,
+}
+
 struct Notice {
     severity: Severity,
     text: SharedString,
+    lifetime: Lifetime,
+}
+
+fn clear_on_open(notice: &mut Option<Notice>) {
+    if notice
+        .as_ref()
+        .is_some_and(|notice| notice.lifetime == Lifetime::UntilOpen)
+    {
+        *notice = None;
+    }
 }
 
 pub struct Workspace {
@@ -1037,8 +1053,21 @@ impl Workspace {
         self.notice = Some(Notice {
             severity,
             text: text.into(),
+            lifetime: Lifetime::UntilReplaced,
         });
         cx.notify();
+    }
+
+    fn notify_until_open(
+        &mut self,
+        severity: Severity,
+        text: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.notify(severity, text, cx);
+        if let Some(notice) = &mut self.notice {
+            notice.lifetime = Lifetime::UntilOpen;
+        }
     }
 
     fn on_grid_event(
@@ -4451,5 +4480,32 @@ mod tests {
         grow_wrapped_rows(&mut wb, SHEET, Range::single(a1())).unwrap();
         let height = row_height(&wb, a1().row).unwrap();
         assert!((height - (20.0 * 19.0 + 4.0)).abs() < 1.0, "{height}");
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::{Lifetime, Notice, Severity, clear_on_open};
+
+    fn notice(lifetime: Lifetime) -> Option<Notice> {
+        Some(Notice {
+            severity: Severity::Warning,
+            text: "text".into(),
+            lifetime,
+        })
+    }
+
+    #[test]
+    fn opening_a_file_clears_a_notice_that_lasts_until_then() {
+        let mut current = notice(Lifetime::UntilOpen);
+        clear_on_open(&mut current);
+        assert!(current.is_none());
+    }
+
+    #[test]
+    fn opening_a_file_keeps_a_notice_that_lasts_until_replaced() {
+        let mut current = notice(Lifetime::UntilReplaced);
+        clear_on_open(&mut current);
+        assert!(current.is_some());
     }
 }
