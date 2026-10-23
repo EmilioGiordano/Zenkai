@@ -378,7 +378,8 @@ fn set_aside(file: &Path) -> Loaded {
 pub struct SaveOrder(u64);
 
 static NEXT_ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-static LAST_WRITTEN: std::sync::Mutex<SaveOrder> = std::sync::Mutex::new(SaveOrder(0));
+static LAST_WRITTEN: std::sync::Mutex<std::collections::BTreeMap<PathBuf, SaveOrder>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 impl SaveOrder {
     pub fn next() -> SaveOrder {
@@ -395,11 +396,11 @@ pub fn save_in_order(directory: &Path, session: &Session, order: SaveOrder) -> s
     let mut last = LAST_WRITTEN
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if order < *last {
+    let file = file_in(directory);
+    if last.get(&file).is_some_and(|written| order < *written) {
         return Ok(());
     }
     std::fs::create_dir_all(directory)?;
-    let file = file_in(directory);
     let temp = file.with_extension("json.tmp");
     let bytes = serde_json::to_vec_pretty(session).map_err(std::io::Error::other)?;
     let mut written = std::fs::File::create(&temp)?;
@@ -407,7 +408,7 @@ pub fn save_in_order(directory: &Path, session: &Session, order: SaveOrder) -> s
     written.sync_all()?;
     drop(written);
     std::fs::rename(&temp, &file)?;
-    *last = order;
+    last.insert(file, order);
     Ok(())
 }
 
@@ -600,6 +601,18 @@ mod tests {
             panic!("the session was not restored");
         };
         assert_eq!(loaded, kept);
+    }
+
+    #[test]
+    fn interleaved_orders_for_different_files_both_land() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let older = SaveOrder::next();
+        let newer = SaveOrder::next();
+        save_in_order(first.path(), &session(), newer).unwrap();
+        save_in_order(second.path(), &session(), older).unwrap();
+        assert!(matches!(load(first.path()), Loaded::Restored(_)));
+        assert!(matches!(load(second.path()), Loaded::Restored(_)));
     }
 
     #[test]
