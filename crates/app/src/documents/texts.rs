@@ -258,6 +258,18 @@ mod tests {
     }
 
     #[test]
+    fn the_title_names_the_document_on_screen() {
+        let mut documents = busy();
+        assert_eq!(documents.shown_title(), "• Book1 - Zenkai");
+        let text = open_text(&mut documents, "reports/a.md");
+        assert_eq!(documents.shown_title(), "a.md - Zenkai");
+        documents.text_mut(text).unwrap().edited();
+        assert_eq!(documents.shown_title(), "• a.md - Zenkai");
+        documents.open_pdf(PathBuf::from("reports/b.pdf"), Default::default());
+        assert_eq!(documents.shown_title(), "b.pdf - Zenkai");
+    }
+
+    #[test]
     fn a_text_with_unsaved_edits_is_listed_and_counted_for_recovery() {
         let mut documents = documents();
         let id = open_text(&mut documents, "reports/a.md");

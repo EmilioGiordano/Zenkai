@@ -428,16 +428,7 @@ impl Workspace {
     }
 
     fn window_title(&self) -> String {
-        if let Some(text) = self.documents.shown_text() {
-            let marker = if text.dirty { "• " } else { "" };
-            return format!("{marker}{} - Zenkai", text.name());
-        }
-        if let Some(pdf) = self.documents.shown_pdf() {
-            return format!("{} - Zenkai", pdf.name());
-        }
-        self.documents
-            .active()
-            .map_or_else(|| "Zenkai".to_string(), Document::title)
+        self.documents.shown_title()
     }
 
     fn load_sheet_view(&mut self, cx: &mut Context<Self>) {
@@ -2412,8 +2403,8 @@ impl Workspace {
                         .text_center()
                         .child(
                             self.documents
-                                .active()
-                                .map_or_else(|| "Zenkai".to_string(), Document::name_with_marker),
+                                .shown_name_with_marker()
+                                .unwrap_or_else(|| "Zenkai".to_string()),
                         ),
                 )
                 .child(

@@ -298,6 +298,23 @@ impl Documents {
         self.tab_shown.or_else(|| self.active_id())
     }
 
+    // What the title bar names: whatever is on screen, with the dirty marker of texts and workbooks.
+    pub fn shown_name_with_marker(&self) -> Option<String> {
+        if let Some(text) = self.shown_text() {
+            let marker = if text.dirty { "• " } else { "" };
+            return Some(format!("{marker}{}", text.name()));
+        }
+        if let Some(pdf) = self.shown_pdf() {
+            return Some(pdf.name());
+        }
+        self.active().map(Document::name_with_marker)
+    }
+
+    pub fn shown_title(&self) -> String {
+        self.shown_name_with_marker()
+            .map_or_else(|| "Zenkai".to_string(), |name| format!("{name} - Zenkai"))
+    }
+
     pub fn shown_text(&self) -> Option<&TextDocument> {
         self.tab_shown.and_then(|id| self.text(id))
     }
