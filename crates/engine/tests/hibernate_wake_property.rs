@@ -253,9 +253,20 @@ fn parts(path: &Path) -> BTreeMap<String, Vec<u8>> {
             let mut entry = archive.by_index(index).unwrap();
             let mut content = Vec::new();
             entry.read_to_end(&mut content).unwrap();
+            if entry.name() == "docProps/core.xml" {
+                content = without_save_time(content);
+            }
             (entry.name().to_string(), content)
         })
         .collect()
+}
+
+// Each save stamps the time it ran, and the two saves compared can fall on different seconds.
+fn without_save_time(core: Vec<u8>) -> Vec<u8> {
+    let text = String::from_utf8(core).unwrap();
+    let start = text.find("<dcterms:modified").unwrap();
+    let end = text.find("</dcterms:modified>").unwrap();
+    format!("{}{}", &text[..start], &text[end..]).into_bytes()
 }
 
 fn hibernate_and_wake(book: &mut Workbook, dump: &Path) {
