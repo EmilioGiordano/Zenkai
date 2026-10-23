@@ -2,7 +2,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-const EDGE_HIT_AREA: f32 = 6.0;
+const EDGE_HIT_AREA: f32 = 8.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EdgeSide {
