@@ -165,7 +165,7 @@ impl PdfView {
                         theme.primary,
                         theme.primary_foreground,
                         theme.border,
-                        theme.muted_foreground,
+                        theme.primary.opacity(0.35),
                     )
                 };
                 range
