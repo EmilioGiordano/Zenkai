@@ -65,6 +65,7 @@ mod stats;
 mod text_disk;
 mod text_document;
 mod text_file;
+mod text_zoom;
 mod theme;
 mod theme_list;
 mod theme_palettes;
