@@ -372,7 +372,13 @@ fn set_aside(file: &Path) -> Loaded {
 }
 
 // Written next to the file and renamed over it, so a crash never leaves half a session.
+// The quit-time write can overlap a background one; both go through the same temp file.
+static SAVING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn save(directory: &Path, session: &Session) -> std::io::Result<()> {
+    let _saving = SAVING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     std::fs::create_dir_all(directory)?;
     let file = file_in(directory);
     let temp = file.with_extension("json.tmp");
@@ -542,6 +548,22 @@ mod tests {
                 .with_extension("json.tmp")
                 .exists()
         );
+    }
+
+    #[test]
+    fn saves_from_several_threads_never_trip_over_the_temp_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let writers: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || save(&path, &session()))
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap().unwrap();
+        }
+        assert!(matches!(load(&path), Loaded::Restored(_)));
     }
 
     #[test]
