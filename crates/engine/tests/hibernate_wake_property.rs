@@ -286,53 +286,72 @@ fn save_both(
     (a, b)
 }
 
+fn rests_without_changing(ops: &[Op]) -> Result<(), TestCaseError> {
+    let dir = tempfile::tempdir().unwrap();
+    let (steady_file, rested_file) = (
+        dir.path().join("steady.xlsx"),
+        dir.path().join("rested.xlsx"),
+    );
+    source_file(&steady_file);
+    std::fs::copy(&steady_file, &rested_file).unwrap();
+    let dump = dir.path().join("rested.zkh");
+    let mut steady = open_xlsx(&steady_file).unwrap().workbook;
+    let mut rested = open_xlsx(&rested_file).unwrap().workbook;
+    prop_assert_eq!(snapshot(&steady), snapshot(&rested));
+
+    for op in ops {
+        if matches!(op, Op::Hibernate) {
+            hibernate_and_wake(&mut rested, &dump);
+        }
+        let first = apply(&mut steady, op);
+        let second = apply(&mut rested, op);
+        prop_assert_eq!(describe(&first), describe(&second));
+        prop_assert_eq!(snapshot(&steady), snapshot(&rested), "after {:?}", op);
+    }
+
+    // The whole history, down to the bottom and back up, one step at a time. An undo or
+    // redo with nothing left is a no-op, so a bound past the longest history is enough.
+    hibernate_and_wake(&mut rested, &dump);
+    let steps = ops.len() * 4 + 4;
+    for step in 0..steps {
+        if step == steps / 2 {
+            // With both an undo and a redo side to carry.
+            hibernate_and_wake(&mut rested, &dump);
+        }
+        prop_assert_eq!(describe(&steady.undo()), describe(&rested.undo()));
+        prop_assert_eq!(snapshot(&steady), snapshot(&rested), "undo {}", step);
+    }
+    for step in 0..steps {
+        prop_assert_eq!(describe(&steady.redo()), describe(&rested.redo()));
+        prop_assert_eq!(snapshot(&steady), snapshot(&rested), "redo {}", step);
+    }
+
+    // The same file in both places, whether the save copies from the file or writes it whole.
+    let (a, b) = save_both(&steady, &rested, dir.path(), SaveTarget::Copy);
+    prop_assert_eq!(parts(&a), parts(&b));
+    let (a, b) = save_both(&steady, &rested, dir.path(), SaveTarget::Document);
+    prop_assert_eq!(parts(&a), parts(&b));
+    Ok(())
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 24, ..ProptestConfig::default() })]
 
     #[test]
     fn a_hibernated_workbook_is_the_workbook_it_was(ops in prop::collection::vec(op(), 1..24)) {
-        let dir = tempfile::tempdir().unwrap();
-        let (steady_file, rested_file) = (dir.path().join("steady.xlsx"), dir.path().join("rested.xlsx"));
-        source_file(&steady_file);
-        std::fs::copy(&steady_file, &rested_file).unwrap();
-        let dump = dir.path().join("rested.zkh");
-        let mut steady = open_xlsx(&steady_file).unwrap().workbook;
-        let mut rested = open_xlsx(&rested_file).unwrap().workbook;
-        prop_assert_eq!(snapshot(&steady), snapshot(&rested));
-
-        for op in &ops {
-            if matches!(op, Op::Hibernate) {
-                hibernate_and_wake(&mut rested, &dump);
-            }
-            let first = apply(&mut steady, op);
-            let second = apply(&mut rested, op);
-            prop_assert_eq!(describe(&first), describe(&second));
-            prop_assert_eq!(snapshot(&steady), snapshot(&rested), "after {:?}", op);
-        }
-
-        // The whole history, down to the bottom and back up, one step at a time. An undo or
-        // redo with nothing left is a no-op, so a bound past the longest history is enough.
-        hibernate_and_wake(&mut rested, &dump);
-        let steps = ops.len() * 4 + 4;
-        for step in 0..steps {
-            if step == steps / 2 {
-                // With both an undo and a redo side to carry.
-                hibernate_and_wake(&mut rested, &dump);
-            }
-            prop_assert_eq!(describe(&steady.undo()), describe(&rested.undo()));
-            prop_assert_eq!(snapshot(&steady), snapshot(&rested), "undo {}", step);
-        }
-        for step in 0..steps {
-            prop_assert_eq!(describe(&steady.redo()), describe(&rested.redo()));
-            prop_assert_eq!(snapshot(&steady), snapshot(&rested), "redo {}", step);
-        }
-
-        // The same file in both places, whether the save copies from the file or writes it whole.
-        let (a, b) = save_both(&steady, &rested, dir.path(), SaveTarget::Copy);
-        prop_assert_eq!(parts(&a), parts(&b));
-        let (a, b) = save_both(&steady, &rested, dir.path(), SaveTarget::Document);
-        prop_assert_eq!(parts(&a), parts(&b));
+        rests_without_changing(&ops)?;
     }
+}
+
+#[test]
+fn widths_set_after_a_column_insert_survive_its_undo() {
+    let ops = [
+        Op::MoveSheet(1, 0),
+        Op::InsertColumns(0, 4, 1),
+        Op::ColumnWidth(0, 0, 20),
+        Op::ColumnWidth(0, 4, 20),
+    ];
+    rests_without_changing(&ops).unwrap();
 }
 
 #[test]
