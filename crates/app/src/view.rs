@@ -4278,8 +4278,13 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, changed_file_answers};
+    use super::{
+        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, changed_file_answers, grow_wrapped_rows,
+        widen_for_numbers,
+    };
+    use zenkai_engine::{Engine, Workbook};
     use zenkai_i18n::t;
+    use zenkai_types::{CellPos, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId};
 
     #[test]
     fn changed_file_prompt_defaults_to_cancel() {
@@ -4298,10 +4303,6 @@ mod tests {
             t!("button.save_as")
         );
     }
-
-    use super::{grow_wrapped_rows, widen_for_numbers};
-    use zenkai_engine::{Engine, Workbook};
-    use zenkai_types::{CellPos, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId};
 
     const SHEET: SheetId = SheetId(0);
 
