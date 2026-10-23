@@ -692,11 +692,12 @@ impl<'a> UserModel<'a> {
             .worksheet(sheet)?
             .cell(row, column)
             .cloned();
-        // If it is a spill cell we want to save the old value as None, because the value of a spill cell is determined by the anchor cell
-        let old_value = if matches!(old_value, Some(Cell::SpillCell { .. })) {
-            None
-        } else {
-            old_value
+        // If it is a spill cell we save it as an empty cell with its style, because the value of a spill cell is determined by the anchor cell
+        let old_value = match old_value {
+            Some(cell @ Cell::SpillCell { .. }) => Some(Cell::EmptyCell {
+                s: cell.get_style(),
+            }),
+            old_value => old_value,
         };
         self.model
             .set_user_input(sheet, row, column, value.to_string())?;

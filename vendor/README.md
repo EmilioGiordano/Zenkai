@@ -213,6 +213,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   shift typed text from one cell to another without writing the source cell first and
   undoing it (`src/user_model/common.rs`). Stands on its own. Tests:
   `src/test/user_model/test_extend_copied_value.rs`.
+- Undoing an input typed over a spill cell gives the cell back its own style instead of
+  the one the input gave it; the anchor spills into it again (`src/user_model/common.rs`,
+  `set_user_input`). Stands on its own. Test:
+  `undo_typed_input_into_spill_cell_keeps_its_style` in
+  `src/test/user_model/test_undo_input_format.rs`.
 
 Zenkai-only, not for upstream:
 
