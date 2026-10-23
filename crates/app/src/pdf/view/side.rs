@@ -12,20 +12,32 @@ use zenkai_i18n::t;
 use super::{PdfView, SideList};
 use crate::actions::{PdfOutlineClose, PdfOutlineNext, PdfOutlineOpen, PdfOutlinePrevious};
 use crate::pdf::cache::BitmapKey;
-use crate::pdf::layout::{PageIdx, render_size};
+use crate::pdf::layout::{PageIdx, PageSize, render_size};
 use zenkai_pdf_host::wire::Job;
 
-pub(super) const SIDE_WIDTH: f32 = 120.0;
-const THUMBNAIL_WIDTH: f32 = 84.0;
-const THUMBNAIL_SLOT: f32 = 140.0;
+const THUMBNAIL_MARGIN: f32 = 36.0;
+const THUMBNAIL_LABEL: f32 = 28.0;
 const OUTLINE_ROW: f32 = 28.0;
 const OUTLINE_INDENT: f32 = 10.0;
 
+fn thumbnail_width(side: f32) -> f32 {
+    side - THUMBNAIL_MARGIN
+}
+
+fn thumbnail_height(width: f32, page: PageSize) -> f32 {
+    width * page.height / page.width.max(1.0)
+}
+
+// A slot fits a 3:4 page, so the default side width keeps the original 140 pixel rows.
+fn thumbnail_slot(width: f32) -> f32 {
+    (width * 4.0 / 3.0).round() + THUMBNAIL_LABEL
+}
+
 impl PdfView {
     fn thumbnail_pixels(&self, page: PageIdx) -> (u32, u32) {
-        let size = self.size_of(page);
-        let height = THUMBNAIL_WIDTH * size.height / size.width.max(1.0);
-        render_size(THUMBNAIL_WIDTH, height, self.device_scale)
+        let width = thumbnail_width(self.settled_side);
+        let height = thumbnail_height(width, self.size_of(page));
+        render_size(width, height, self.device_scale)
     }
 
     fn request_thumbnails(&mut self, range: Range<usize>) {
@@ -101,12 +113,15 @@ impl PdfView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let side_width = self.side_width();
+        self.drawn_side = side_width;
         let border = cx.theme().border;
         let background = cx.theme().sidebar;
         let showing_outline = self.side == SideList::Outline;
         let has_outline = !self.outline.is_empty();
         v_flex()
-            .w(px(SIDE_WIDTH))
+            .relative()
+            .w(px(side_width))
             .flex_none()
             .h_full()
             .border_r_1()
@@ -132,15 +147,18 @@ impl PdfView {
             .child(if showing_outline && has_outline {
                 self.render_outline(window, cx).into_any_element()
             } else {
-                self.render_thumbnails(cx).into_any_element()
+                self.render_thumbnails(side_width, cx).into_any_element()
             })
+            .child(self.render_side_edge(window, cx))
     }
 
-    fn render_thumbnails(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_thumbnails(&mut self, side_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let width = thumbnail_width(side_width);
+        let slot = thumbnail_slot(width);
         uniform_list(
             "pdf-thumbnails",
             self.page_count,
-            cx.processor(|this: &mut PdfView, range: Range<usize>, _, cx| {
+            cx.processor(move |this: &mut PdfView, range: Range<usize>, _, cx| {
                 this.request_thumbnails(range.clone());
                 let current = this.current_page();
                 let (ring, muted) = {
@@ -152,14 +170,13 @@ impl PdfView {
                         let page = PageIdx(index);
                         let (pixel_width, _) = this.thumbnail_pixels(page);
                         let image = this.thumbnails.get(BitmapKey { page, pixel_width });
-                        let size = this.size_of(page);
-                        let height = THUMBNAIL_WIDTH * size.height / size.width.max(1.0);
+                        let height = thumbnail_height(width, this.size_of(page));
                         let selected = page == current;
                         v_flex()
                             .id(("pdf-thumbnail", index))
                             .role(Role::Button)
                             .aria_label(t!("pdf.page_aria", page = index + 1))
-                            .h(px(THUMBNAIL_SLOT))
+                            .h(px(slot))
                             .items_center()
                             .justify_center()
                             .gap_1()
@@ -178,8 +195,8 @@ impl PdfView {
                                     })
                                     .child(
                                         div()
-                                            .w(px(THUMBNAIL_WIDTH))
-                                            .h(px(height.min(THUMBNAIL_SLOT - 28.0)))
+                                            .w(px(width))
+                                            .h(px(height.min(slot - THUMBNAIL_LABEL)))
                                             .bg(white())
                                             .children(image.map(|image| {
                                                 img(ImageSource::Render(image)).size_full()
@@ -265,5 +282,31 @@ impl PdfView {
             .flex_1()
             .min_h_0()
             .child(list)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PageSize, thumbnail_height, thumbnail_slot, thumbnail_width};
+
+    #[test]
+    fn the_minimum_side_width_keeps_the_original_thumbnail_geometry() {
+        assert_eq!(thumbnail_width(120.0), 84.0);
+        assert_eq!(thumbnail_slot(84.0), 140.0);
+    }
+
+    #[test]
+    fn thumbnails_keep_the_page_aspect_ratio_as_the_panel_grows() {
+        let page = PageSize {
+            width: 600.0,
+            height: 800.0,
+        };
+        assert_eq!(thumbnail_height(84.0, page), 112.0);
+        assert_eq!(thumbnail_height(168.0, page), 224.0);
+    }
+
+    #[test]
+    fn a_wider_panel_gets_taller_slots() {
+        assert!(thumbnail_slot(thumbnail_width(300.0)) > thumbnail_slot(thumbnail_width(120.0)));
     }
 }

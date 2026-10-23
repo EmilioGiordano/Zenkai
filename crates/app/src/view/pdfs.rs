@@ -36,7 +36,9 @@ impl Workspace {
             return;
         };
         let client = self.pdf_client.clone();
-        let view = cx.new(|cx| PdfView::new(DocId(id.0), path, position, client, window, cx));
+        let widths = self.panels.widths;
+        let view =
+            cx.new(|cx| PdfView::new(DocId(id.0), path, position, widths, client, window, cx));
         let events = cx.subscribe_in(
             &view,
             window,
@@ -68,6 +70,16 @@ impl Workspace {
                 cx.notify();
             }
             PdfEvent::OpenWeb(url) => self.confirm_web_link(url.clone(), window, cx),
+            PdfEvent::SideResized(width) => {
+                self.panels.widths = self.panels.widths.with_pdf_width(*width);
+                for (other, pane) in &self.pdf_panes {
+                    if *other != id {
+                        pane.view
+                            .update(cx, |view, cx| view.set_side_width(*width, cx));
+                    }
+                }
+                self.persist_session(cx);
+            }
         }
     }
 

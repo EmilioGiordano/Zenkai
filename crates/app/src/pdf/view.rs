@@ -14,6 +14,7 @@ use super::cache::{BITMAP_CAP_BYTES, BitmapCache, BitmapKey};
 use super::find::FindMatch;
 use super::layout::{Layout, PageIdx, PageSize, PdfPosition, Viewport, ZoomMode};
 use super::selection::Selection;
+use crate::panel_width::PanelWidths;
 use zenkai_pdf_host::wire::{
     DocId, Job, LinkTarget, MAX_MESSAGE_CHARS, OpenError, OutlineItem, PageContent, Reply, Request,
 };
@@ -26,6 +27,7 @@ mod replies;
 mod requests;
 mod screens;
 mod side;
+mod side_edge;
 mod toolbar;
 
 pub const CONTEXT: &str = "PdfDocument";
@@ -37,6 +39,7 @@ const WHEEL_LINE: f32 = 20.0;
 pub enum PdfEvent {
     Moved(PdfPosition),
     OpenWeb(String),
+    SideResized(f32),
 }
 
 #[derive(Clone)]
@@ -87,6 +90,11 @@ pub struct PdfView {
     page_input: Entity<InputState>,
     password_input: Entity<InputState>,
     side: SideList,
+    widths: PanelWidths,
+    drawn_side: f32,
+    settled_side: f32,
+    side_drag: Option<side_edge::SideDrag>,
+    side_edge_focus: FocusHandle,
     outline_focus: FocusHandle,
     outline_cursor: usize,
     outline_scroll: UniformListScrollHandle,
@@ -103,6 +111,7 @@ impl PdfView {
         doc: DocId,
         path: PathBuf,
         position: PdfPosition,
+        widths: PanelWidths,
         client: PdfClient,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -167,6 +176,11 @@ impl PdfView {
             page_input,
             password_input,
             side: SideList::Thumbnails,
+            widths,
+            drawn_side: 0.0,
+            settled_side: widths.pdf_width(),
+            side_drag: None,
+            side_edge_focus: cx.focus_handle(),
             outline_focus: cx.focus_handle(),
             outline_cursor: 0,
             outline_scroll: UniformListScrollHandle::new(),
