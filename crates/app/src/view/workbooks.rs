@@ -480,10 +480,12 @@ impl Workspace {
             .entry(id)
             .map(Entry::name)
             .unwrap_or_default();
-        let open = self.open_loads.start(t!("busy.opening", name = name));
+        let open = self
+            .open_loads
+            .start_for(link.kind, t!("busy.opening", name = name));
         cx.notify();
         if link.kind.is_text() {
-            self.begin_text_load(link, window, cx);
+            self.begin_text_load(link, open, window, cx);
             return;
         }
         if link.kind.is_pdf() {
@@ -497,7 +499,8 @@ impl Workspace {
                 .spawn(async move { read_link(&link, reader) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.open_loads.finish(open);
+                open.into_iter()
+                    .for_each(|open| this.open_loads.finish(open));
                 this.finish_load(id, load, window, cx)
             });
             if let Err(error) = update {
