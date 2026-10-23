@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui_kit::base::{TextView, h_flex, v_flex};
+use gpui_kit::base::{TextView, TextViewStyle, h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, Toggle, ToggleGroup};
@@ -21,6 +21,7 @@ use crate::text_zoom::TextZoom;
 
 const READING_WIDTH: f32 = 860.0;
 const WHEEL_LINE: f32 = 20.0;
+const HEADING_BASE_PX: f32 = 14.0;
 const MODES: [ViewMode; 3] = [ViewMode::Source, ViewMode::Split, ViewMode::Preview];
 pub const CONTEXT: &str = "MarkdownDocument";
 
@@ -193,17 +194,39 @@ impl MarkdownPane {
         cx.notify();
     }
 
-    fn on_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
-        if !event.modifiers.control {
-            return;
-        }
+    fn zoom_by_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
         let lift = f32::from(event.delta.pixel_delta(px(WHEEL_LINE)).y);
         if lift > 0.0 {
             self.zoom_in(cx);
         } else if lift < 0.0 {
             self.zoom_out(cx);
         }
-        cx.stop_propagation();
+    }
+
+    // Listens in the capture phase so the editor and the preview never see a Ctrl+wheel and
+    // scroll while the text zooms.
+    fn wheel_zoom_listener(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let pane = cx.entity().downgrade();
+        canvas(
+            |bounds, _, _| bounds,
+            move |bounds, _, window, _| {
+                let pane = pane.clone();
+                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, cx| {
+                    if phase != DispatchPhase::Capture
+                        || !event.modifiers.control
+                        || !bounds.contains(&event.position)
+                    {
+                        return;
+                    }
+                    if let Err(error) = pane.update(cx, |pane, cx| pane.zoom_by_wheel(event, cx)) {
+                        tracing::debug!(%error, "markdown pane dropped a zoom wheel");
+                    }
+                    cx.stop_propagation();
+                });
+            },
+        )
+        .absolute()
+        .size_full()
     }
 
     pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -340,7 +363,28 @@ impl MarkdownPane {
             )
     }
 
+    // gpui-component sizes headings, paragraph gaps and code blocks in absolute pixels, so the
+    // text size alone does not scale them.
+    fn zoomed_style(&self, cx: &App) -> TextViewStyle {
+        let factor = self.zoom.factor();
+        let code = cx.theme().mono_font_size * factor;
+        TextViewStyle::from_theme(&gpui_kit::base::Theme::global(cx))
+            .with_paragraph_gap(rems(factor))
+            .with_heading(move |level| {
+                let ems = match level {
+                    1 => 2.0,
+                    2 => 1.5,
+                    3 => 1.25,
+                    4 => 1.125,
+                    _ => 1.0,
+                };
+                StyleRefinement::default().text_size(px(ems * HEADING_BASE_PX * factor))
+            })
+            .with_code_block(StyleRefinement::default().text_size(code))
+    }
+
     fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let zoomed = (!self.zoom.is_default()).then(|| self.zoomed_style(cx));
         let weak = cx.entity().downgrade();
         let folder = self.state.folder.clone();
         let images = self.images.clone();
@@ -366,6 +410,7 @@ impl MarkdownPane {
                     .when(!too_deep, |page| {
                         page.child(
                         TextView::new(&self.preview)
+                            .when_some(zoomed, |view, style| view.style(style))
                             .markdown_extensions(extensions())
                             .selectable(true)
                             .scrollable(true)
@@ -415,7 +460,7 @@ impl Render for MarkdownPane {
             .on_key_down(
                 cx.listener(|this, event, window, cx| this.type_in_preview(event, window, cx)),
             )
-            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_wheel(event, cx)))
+            .relative()
             .flex_1()
             .min_w_0()
             .h_full()
@@ -432,6 +477,7 @@ impl Render for MarkdownPane {
                     .child(self.render_modes(cx)),
             )
             .children(self.render_notice(cx))
+            .child(self.wheel_zoom_listener(cx))
             .child(
                 h_flex()
                     .flex_1()
