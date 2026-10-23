@@ -42,10 +42,6 @@ impl PdfView {
         cx.emit(PdfEvent::SideResized(stored));
         self.thumbnail_scroll
             .scroll_to_item(self.current_page().0, ScrollStrategy::Nearest);
-        if std::mem::take(&mut self.layout_stale) && self.is_ready() {
-            self.relayout();
-            self.request_visible();
-        }
         cx.notify();
     }
 

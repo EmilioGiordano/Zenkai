@@ -14,6 +14,7 @@ impl PdfView {
         if self.page_count == 0 || viewport.width <= 0.0 || viewport.height <= 0.0 {
             return;
         }
+        self.laid_out_for = Some(viewport);
         let wanted = self.wanted_page.take();
         let anchor = wanted.unwrap_or_else(|| self.current_page());
         let scale = scale_for(self.zoom, self.size_of(anchor), viewport);
@@ -27,6 +28,15 @@ impl PdfView {
         };
         self.clamp_scroll();
         self.drop_stale_widths();
+    }
+
+    // The layout follows the reader's width after a side resize whatever order the size
+    // reports and the drag end arrive in.
+    pub(super) fn refit_if_resized(&mut self) {
+        if self.is_ready() && self.side_drag.is_none() && self.laid_out_for != Some(self.viewport())
+        {
+            self.relayout();
+        }
     }
 
     pub(super) fn clamp_scroll(&mut self) {

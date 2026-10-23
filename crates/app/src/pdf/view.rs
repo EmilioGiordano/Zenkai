@@ -94,7 +94,7 @@ pub struct PdfView {
     thumbnail_visible: Range<usize>,
     drawn_side: f32,
     settled_side: Option<f32>,
-    layout_stale: bool,
+    laid_out_for: Option<Viewport>,
     side_drag: Option<side_edge::SideDrag>,
     side_edge_focus: FocusHandle,
     outline_focus: FocusHandle,
@@ -182,7 +182,7 @@ impl PdfView {
             thumbnail_visible: 0..0,
             drawn_side: 0.0,
             settled_side: None,
-            layout_stale: false,
+            laid_out_for: None,
             side_drag: None,
             side_edge_focus: cx.focus_handle(),
             outline_focus: cx.focus_handle(),
@@ -299,7 +299,6 @@ impl PdfView {
         let resized = self.bounds.size != bounds.size;
         self.bounds = bounds;
         if resized && self.is_ready() && self.side_drag.is_some() {
-            self.layout_stale = true;
             cx.notify();
         } else if resized && self.is_ready() {
             self.relayout();

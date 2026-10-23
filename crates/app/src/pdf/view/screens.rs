@@ -140,6 +140,7 @@ impl PdfView {
     }
 
     fn render_reader(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refit_if_resized();
         let frame = self.frame(cx);
         self.request_visible();
         let weak = cx.entity().downgrade();

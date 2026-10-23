@@ -346,6 +346,31 @@ mod tests {
     }
 
     #[test]
+    fn fit_width_refits_to_a_narrower_reader_without_losing_the_place() {
+        let sizes = [PageSize::LETTER; 6];
+        let wide = Viewport {
+            width: 1000.0,
+            height: 700.0,
+        };
+        let narrow = Viewport {
+            width: 500.0,
+            height: 700.0,
+        };
+        let before = Layout::new(
+            &sizes,
+            6,
+            scale_for(ZoomMode::FitWidth, PageSize::LETTER, wide),
+        );
+        let scale = scale_for(ZoomMode::FitWidth, PageSize::LETTER, narrow);
+        let after = Layout::new(&sizes, 6, scale);
+        let scroll = before.top_of(PageIdx(3)) + 100.0;
+        let moved = after.scroll_after_rescale(&before, scroll);
+        assert!(after.width_of(PageIdx(0)) + 2.0 * CANVAS_PADDING <= narrow.width + 0.01);
+        assert_eq!(after.max_scroll_left(narrow.width), 0.0);
+        assert_eq!(after.page_at(moved), PageIdx(3));
+    }
+
+    #[test]
     fn a_rescale_from_an_unusable_scale_leaves_the_scroll_alone() {
         let sizes = [PageSize::LETTER; 3];
         let after = Layout::new(&sizes, 3, 1.0);
