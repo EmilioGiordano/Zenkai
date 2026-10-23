@@ -138,3 +138,30 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn a_spill_shrunk_while_evaluating_reaches_the_cached_end() {
+    let mut book = Workbook::new_empty().unwrap();
+    book.add_sheet().unwrap();
+    book = Workbook::from_xlsx_bytes(&book.to_xlsx().unwrap(), "two sheets").unwrap();
+    let text = |cells: &[&str]| cells.iter().map(|cell| cell.to_string()).collect();
+    let ops = [
+        Op::Block(
+            1,
+            0,
+            0,
+            vec![
+                text(&["=IF(B1>0,SEQUENCE(4),0)", "=SEQUENCE(MAX(1,Sheet1!A1))"]),
+                text(&["0"]),
+            ],
+        ),
+        Op::Bold(0, 0, 0, 0, 0),
+        Op::Block(0, 0, 1, vec![text(&["=IF(Sheet2!A1>0,SEQUENCE(3),1)"])]),
+    ];
+    for op in &ops {
+        apply(&mut book, op);
+        book.warm_used_areas();
+    }
+    assert_eq!(book.used_end(SheetId(0)), pos(2, 1));
+    assert_eq!(Some(book.used_end(SheetId(0))), book.walked_end(SheetId(0)));
+}
