@@ -694,7 +694,7 @@ mod tests {
         text.recovery = Some("autosave-1-2-3.md".to_string());
         text.kind = DocumentKind::Markdown;
         text.mode = ViewMode::Split;
-        text.text_zoom = TextZoom::from(175);
+        text.text_zoom = TextZoom::nearest(175);
         text.unsupported.clear();
         text.sheet = 0;
         let directory = Path::new("recovery");

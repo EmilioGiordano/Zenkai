@@ -1,12 +1,12 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 const STEPS: [u16; 12] = [50, 67, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300];
 const DEFAULT: u16 = 100;
 
 // How much a Markdown tab scales its text. Always one of the preset steps, so a value written
 // by hand or by another version into the session still lands on a size the user can step from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "u16", into = "u16")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(into = "u16")]
 pub struct TextZoom(u16);
 
 impl Default for TextZoom {
@@ -15,14 +15,9 @@ impl Default for TextZoom {
     }
 }
 
-impl From<u16> for TextZoom {
-    fn from(percent: u16) -> TextZoom {
-        let nearest = STEPS
-            .iter()
-            .copied()
-            .min_by_key(|step| step.abs_diff(percent))
-            .unwrap_or(DEFAULT);
-        TextZoom(nearest)
+impl<'de> Deserialize<'de> for TextZoom {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<TextZoom, D::Error> {
+        u16::deserialize(deserializer).map(TextZoom::nearest)
     }
 }
 
@@ -33,6 +28,17 @@ impl From<TextZoom> for u16 {
 }
 
 impl TextZoom {
+    pub fn nearest(percent: u16) -> TextZoom {
+        let step = STEPS.iter().copied().fold(STEPS[0], |best, step| {
+            if step.abs_diff(percent) < best.abs_diff(percent) {
+                step
+            } else {
+                best
+            }
+        });
+        TextZoom(step)
+    }
+
     pub fn percent(self) -> u16 {
         self.0
     }
@@ -92,10 +98,10 @@ mod tests {
 
     #[test]
     fn a_stored_value_off_the_steps_snaps_to_the_nearest() {
-        assert_eq!(TextZoom::from(0).percent(), 50);
-        assert_eq!(TextZoom::from(140).percent(), 150);
-        assert_eq!(TextZoom::from(u16::MAX).percent(), 300);
-        assert!(TextZoom::from(101).is_default());
+        assert_eq!(TextZoom::nearest(0).percent(), 50);
+        assert_eq!(TextZoom::nearest(140).percent(), 150);
+        assert_eq!(TextZoom::nearest(u16::MAX).percent(), 300);
+        assert!(TextZoom::nearest(101).is_default());
     }
 
     #[test]

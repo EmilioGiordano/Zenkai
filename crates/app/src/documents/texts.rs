@@ -153,7 +153,7 @@ mod tests {
                     mode: ViewMode::Source,
                     base: None,
                     pdf: Default::default(),
-                    text_zoom: TextZoom::from(150),
+                    text_zoom: TextZoom::nearest(150),
                     unsupported: Vec::new(),
                     active,
                     sheet: 0,
