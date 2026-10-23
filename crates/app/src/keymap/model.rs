@@ -324,6 +324,19 @@ mod tests {
     }
 
     #[test]
+    fn the_document_zoom_reset_is_listed_and_ctrl_zero_can_move_off_hide_columns() {
+        let model = Model::build();
+        assert!(model.command("zenkai::ResetDocumentZoom").is_some());
+        let effective = model.effective(&overrides_from(
+            json!({ "zenkai::HideColumns": ["ctrl-alt-9"] }),
+        ));
+        assert_eq!(
+            bound(&effective, "zenkai::HideColumns"),
+            [("ctrl-alt-9".to_string(), WORKSPACE)]
+        );
+    }
+
+    #[test]
     fn loading_overrides_rebinds_and_removes_in_the_home_context() {
         let model = Model::build();
         let overrides = overrides_from(json!({
