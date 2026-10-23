@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 
 use gpui_kit::*;
 
+use super::side::thumbnail_kept;
 use super::{NEIGHBOURS, PdfView, Phase};
 use crate::pdf::bitmap::to_image;
 use crate::pdf::cache::BitmapKey;
@@ -105,8 +106,13 @@ impl PdfView {
             self.layout
                 .visible(self.scroll_top, self.bounds.size.height.into(), NEIGHBOURS);
         let bytes = image.bytes;
+        let visible = &self.thumbnail_visible;
         let dropped = cache.insert(key, image.image, bytes, |page| {
-            thumbnail || viewport.contains(&page.0)
+            if thumbnail {
+                thumbnail_kept(visible, page)
+            } else {
+                viewport.contains(&page.0)
+            }
         });
         for old in dropped {
             if let Err(error) = window.drop_image(old) {

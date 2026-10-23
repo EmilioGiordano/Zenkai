@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -89,7 +90,8 @@ pub struct PdfView {
     page_input: Entity<InputState>,
     password_input: Entity<InputState>,
     side: SideList,
-    side_width: f32,
+    stored_side: f32,
+    thumbnail_visible: Range<usize>,
     drawn_side: f32,
     settled_side: Option<f32>,
     layout_stale: bool,
@@ -176,7 +178,8 @@ impl PdfView {
             page_input,
             password_input,
             side: SideList::Thumbnails,
-            side_width,
+            stored_side: side_width,
+            thumbnail_visible: 0..0,
             drawn_side: 0.0,
             settled_side: None,
             layout_stale: false,

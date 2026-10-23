@@ -150,6 +150,20 @@ mod tests {
     }
 
     #[test]
+    fn scrolling_on_drops_bitmaps_left_behind_so_the_cap_holds() {
+        let mut cache = BitmapCache::new(300);
+        for page in 0..20usize {
+            let visible = page.saturating_sub(1)..page + 1;
+            cache.insert(key(page, 100), image(), 100, |kept| {
+                visible.contains(&kept.0)
+            });
+            assert!(cache.used_bytes() <= 300);
+        }
+        assert!(!cache.contains(key(0, 100)));
+        assert!(cache.contains(key(19, 100)));
+    }
+
+    #[test]
     fn replacing_a_bitmap_keeps_the_count_right() {
         let mut cache = BitmapCache::new(1000);
         cache.insert(key(0, 100), image(), 100, |_| false);

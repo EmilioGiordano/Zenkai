@@ -205,11 +205,12 @@ impl Layout {
         best.0
     }
 
-    // The scroll offset in this layout that shows what `scroll_top` showed in `previous`: the
-    // same page at the same distance from its top, in PDF points.
     pub fn scroll_after_rescale(&self, previous: &Layout, scroll_top: f32) -> f32 {
         if previous.page_count() == 0 {
             return 0.0;
+        }
+        if previous.scale.is_nan() || previous.scale <= 0.0 {
+            return scroll_top;
         }
         let page = previous.page_at(scroll_top);
         let into_page = (scroll_top - previous.top_of(page)) * self.scale / previous.scale;
@@ -342,6 +343,16 @@ mod tests {
         assert_eq!(after.page_at(moved), PageIdx(2));
         let same = Layout::new(&sizes, 5, 1.0);
         assert_eq!(same.scroll_after_rescale(&before, scroll), scroll);
+    }
+
+    #[test]
+    fn a_rescale_from_an_unusable_scale_leaves_the_scroll_alone() {
+        let sizes = [PageSize::LETTER; 3];
+        let after = Layout::new(&sizes, 3, 1.0);
+        for scale in [0.0, f32::NAN, -1.0] {
+            let before = Layout::new(&sizes, 3, scale);
+            assert_eq!(after.scroll_after_rescale(&before, 120.0), 120.0);
+        }
     }
 
     #[test]

@@ -33,14 +33,21 @@ fn thumbnail_slot(width: f32) -> f32 {
     (width * 4.0 / 3.0).round() + THUMBNAIL_LABEL
 }
 
+const THUMBNAIL_KEPT_MARGIN: usize = 4;
+
+pub(super) fn thumbnail_kept(visible: &Range<usize>, page: PageIdx) -> bool {
+    page.0 + THUMBNAIL_KEPT_MARGIN >= visible.start && page.0 < visible.end + THUMBNAIL_KEPT_MARGIN
+}
+
 impl PdfView {
     fn thumbnail_pixels(&self, page: PageIdx) -> (u32, u32) {
-        let width = thumbnail_width(self.settled_side.unwrap_or_else(|| self.side_width()));
+        let width = thumbnail_width(self.settled_side.unwrap_or_else(|| self.fitted_side()));
         let height = thumbnail_height(width, self.size_of(page));
         render_size(width, height, self.device_scale)
     }
 
     fn request_thumbnails(&mut self, range: Range<usize>) {
+        self.thumbnail_visible = range.clone();
         for index in range {
             let page = PageIdx(index);
             let (pixel_width, pixel_height) = self.thumbnail_pixels(page);
@@ -113,7 +120,7 @@ impl PdfView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let side_width = self.side_width();
+        let side_width = self.fitted_side();
         self.drawn_side = side_width;
         if self.settled_side.is_none() && self.bounds.size.width > px(0.0) {
             self.settled_side = Some(side_width);
@@ -290,7 +297,9 @@ impl PdfView {
 
 #[cfg(test)]
 mod tests {
-    use super::{PageSize, thumbnail_height, thumbnail_slot, thumbnail_width};
+    use super::{
+        PageIdx, PageSize, thumbnail_height, thumbnail_kept, thumbnail_slot, thumbnail_width,
+    };
 
     #[test]
     fn the_minimum_side_width_keeps_the_original_thumbnail_geometry() {
@@ -311,5 +320,16 @@ mod tests {
     #[test]
     fn a_wider_panel_gets_taller_slots() {
         assert!(thumbnail_slot(thumbnail_width(300.0)) > thumbnail_slot(thumbnail_width(120.0)));
+    }
+
+    #[test]
+    fn only_thumbnails_near_the_visible_rows_are_kept() {
+        let visible = 20..30;
+        assert!(thumbnail_kept(&visible, PageIdx(20)));
+        assert!(thumbnail_kept(&visible, PageIdx(16)));
+        assert!(thumbnail_kept(&visible, PageIdx(33)));
+        assert!(!thumbnail_kept(&visible, PageIdx(15)));
+        assert!(!thumbnail_kept(&visible, PageIdx(34)));
+        assert!(!thumbnail_kept(&(0..0), PageIdx(10)));
     }
 }

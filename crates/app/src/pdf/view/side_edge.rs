@@ -22,22 +22,26 @@ impl PdfView {
         }
     }
 
-    pub(super) fn side_width(&self) -> f32 {
-        side_width::within(self.side_width, self.view_width())
+    pub(super) fn fitted_side(&self) -> f32 {
+        side_width::within(self.stored_side, self.view_width())
     }
 
     pub fn set_side_width(&mut self, width: f32, cx: &mut Context<Self>) {
         let width = side_width::stored(width);
-        if width != self.side_width {
-            self.side_width = width;
-            self.settled_side = Some(self.side_width());
+        if width != self.stored_side {
+            self.stored_side = width;
+            self.settled_side = Some(self.fitted_side());
             cx.notify();
         }
     }
 
     fn settle_side(&mut self, cx: &mut Context<Self>) {
-        self.settled_side = Some(self.side_width());
-        cx.emit(PdfEvent::SideResized(self.side_width));
+        let fitted = self.fitted_side();
+        let stored = self.stored_side;
+        self.settled_side = Some(fitted);
+        cx.emit(PdfEvent::SideResized(stored));
+        self.thumbnail_scroll
+            .scroll_to_item(self.current_page().0, ScrollStrategy::Nearest);
         if std::mem::take(&mut self.layout_stale) && self.is_ready() {
             self.relayout();
             self.request_visible();
@@ -47,20 +51,20 @@ impl PdfView {
 
     pub fn step_side(&mut self, resize: Resize, cx: &mut Context<Self>) {
         self.side_drag = None;
-        self.side_width = side_width::stepped(self.side_width(), resize, self.view_width());
+        self.stored_side = side_width::stepped(self.fitted_side(), resize, self.view_width());
         self.settle_side(cx);
     }
 
     fn restore_side(&mut self, cx: &mut Context<Self>) {
         self.side_drag = None;
-        self.side_width = side_width::DEFAULT;
+        self.stored_side = side_width::DEFAULT;
         self.settle_side(cx);
     }
 
     fn begin_side_drag(&mut self, x: f32) {
         self.side_drag = Some(SideDrag {
             start_x: x,
-            start_width: self.side_width(),
+            start_width: self.fitted_side(),
         });
     }
 
@@ -73,7 +77,7 @@ impl PdfView {
             return;
         }
         let requested = drag.start_width + f32::from(event.position.x) - drag.start_x;
-        self.side_width = side_width::within(requested, self.view_width());
+        self.stored_side = side_width::within(requested, self.view_width());
         cx.notify();
     }
 
@@ -100,7 +104,7 @@ impl PdfView {
             id: "pdf-side-edge",
             label: t!("panel.edge.pdf"),
             side: EdgeSide::Right,
-            width: self.side_width(),
+            width: self.fitted_side(),
             limits: side_width::limits(self.view_width()),
             dragging: self.side_drag.is_some(),
         };
