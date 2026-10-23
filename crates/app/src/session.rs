@@ -465,7 +465,7 @@ mod tests {
 
     #[test]
     fn the_pdf_panel_width_survives_the_session_round_trip() {
-        let widths = PanelWidths::default().pdf_resized(300.0, 2000.0);
+        let widths = PanelWidths::default().with_pdf_width(300.0);
         let text = serde_json::to_string(&session().with_panel_widths(widths)).unwrap();
         let back = serde_json::from_str::<Session>(&text).unwrap();
         assert_eq!(back.panel_widths.pdf_width(), 300.0);

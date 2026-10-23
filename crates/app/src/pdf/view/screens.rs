@@ -161,49 +161,34 @@ impl PdfView {
         )
         .size_full();
         v_flex().flex_1().min_h_0().child(toolbar).child(
-            h_flex()
-                .flex_1()
-                .min_h_0()
-                .on_mouse_move(cx.listener(|this, event, _, cx| this.drag_side(event, cx)))
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| this.end_side_drag(cx)),
-                )
-                .on_mouse_up_out(
-                    MouseButton::Left,
-                    cx.listener(|this, _, _, cx| this.end_side_drag(cx)),
-                )
-                .child(side)
-                .child(
-                    div()
-                        .id("pdf-pages")
-                        .relative()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .bg(canvas_background)
-                        .when(pointing, |canvas| canvas.cursor_pointer())
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, event, window, cx| {
-                                this.on_mouse_down(event, window, cx)
-                            }),
-                        )
-                        .on_mouse_move(
-                            cx.listener(|this, event, _, cx| this.on_mouse_move(event, cx)),
-                        )
-                        .on_mouse_up(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| this.on_mouse_up(cx)),
-                        )
-                        .on_mouse_up_out(
-                            MouseButton::Left,
-                            cx.listener(|this, _, _, cx| this.on_mouse_up(cx)),
-                        )
-                        .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_wheel(event, cx)))
-                        .child(surface)
-                        .children(notice),
-                ),
+            h_flex().flex_1().min_h_0().child(side).child(
+                div()
+                    .id("pdf-pages")
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .bg(canvas_background)
+                    .when(pointing, |canvas| canvas.cursor_pointer())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event, window, cx| {
+                            this.on_mouse_down(event, window, cx)
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event, _, cx| this.on_mouse_move(event, cx)))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.on_mouse_up(cx)),
+                    )
+                    .on_mouse_up_out(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| this.on_mouse_up(cx)),
+                    )
+                    .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_wheel(event, cx)))
+                    .child(surface)
+                    .children(notice),
+            ),
         )
     }
 }
@@ -269,6 +254,16 @@ impl Render for PdfView {
                     this.toggle_outline(window, cx)
                 }),
             )
+            .on_mouse_move(cx.listener(|this, event, _, cx| this.drag_side(event, cx)))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_side_drag(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_side_drag(cx)),
+            )
+            .when(self.resizing_side(), |view| view.cursor_col_resize())
             .flex_1()
             .min_w_0()
             .h_full()

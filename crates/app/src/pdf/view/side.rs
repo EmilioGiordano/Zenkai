@@ -35,7 +35,7 @@ fn thumbnail_slot(width: f32) -> f32 {
 
 impl PdfView {
     fn thumbnail_pixels(&self, page: PageIdx) -> (u32, u32) {
-        let width = thumbnail_width(self.settled_side);
+        let width = thumbnail_width(self.settled_side.unwrap_or_else(|| self.side_width()));
         let height = thumbnail_height(width, self.size_of(page));
         render_size(width, height, self.device_scale)
     }
@@ -115,6 +115,9 @@ impl PdfView {
     ) -> impl IntoElement {
         let side_width = self.side_width();
         self.drawn_side = side_width;
+        if self.settled_side.is_none() && self.bounds.size.width > px(0.0) {
+            self.settled_side = Some(side_width);
+        }
         let border = cx.theme().border;
         let background = cx.theme().sidebar;
         let showing_outline = self.side == SideList::Outline;

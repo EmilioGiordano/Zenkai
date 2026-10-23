@@ -3,6 +3,7 @@ mod cache;
 mod find;
 pub(crate) mod layout;
 mod selection;
+pub(crate) mod side_width;
 mod view;
 
 pub use layout::PdfPosition;

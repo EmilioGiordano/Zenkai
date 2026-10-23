@@ -14,7 +14,6 @@ use super::cache::{BITMAP_CAP_BYTES, BitmapCache, BitmapKey};
 use super::find::FindMatch;
 use super::layout::{Layout, PageIdx, PageSize, PdfPosition, Viewport, ZoomMode};
 use super::selection::Selection;
-use crate::panel_width::PanelWidths;
 use zenkai_pdf_host::wire::{
     DocId, Job, LinkTarget, MAX_MESSAGE_CHARS, OpenError, OutlineItem, PageContent, Reply, Request,
 };
@@ -90,9 +89,10 @@ pub struct PdfView {
     page_input: Entity<InputState>,
     password_input: Entity<InputState>,
     side: SideList,
-    widths: PanelWidths,
+    side_width: f32,
     drawn_side: f32,
-    settled_side: f32,
+    settled_side: Option<f32>,
+    layout_stale: bool,
     side_drag: Option<side_edge::SideDrag>,
     side_edge_focus: FocusHandle,
     outline_focus: FocusHandle,
@@ -111,7 +111,7 @@ impl PdfView {
         doc: DocId,
         path: PathBuf,
         position: PdfPosition,
-        widths: PanelWidths,
+        side_width: f32,
         client: PdfClient,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -176,9 +176,10 @@ impl PdfView {
             page_input,
             password_input,
             side: SideList::Thumbnails,
-            widths,
+            side_width,
             drawn_side: 0.0,
-            settled_side: widths.pdf_width(),
+            settled_side: None,
+            layout_stale: false,
             side_drag: None,
             side_edge_focus: cx.focus_handle(),
             outline_focus: cx.focus_handle(),
@@ -294,7 +295,10 @@ impl PdfView {
         }
         let resized = self.bounds.size != bounds.size;
         self.bounds = bounds;
-        if resized && self.is_ready() {
+        if resized && self.is_ready() && self.side_drag.is_some() {
+            self.layout_stale = true;
+            cx.notify();
+        } else if resized && self.is_ready() {
             self.relayout();
             self.request_visible();
             cx.notify();
