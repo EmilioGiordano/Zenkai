@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui_kit::base::{TextView, TextViewStyle, h_flex, v_flex};
+use gpui_kit::base::{TextView, h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, Toggle, ToggleGroup};
@@ -21,7 +21,6 @@ use crate::text_zoom::TextZoom;
 
 const READING_WIDTH: f32 = 860.0;
 const WHEEL_LINE: f32 = 20.0;
-const HEADING_BASE_PX: f32 = 14.0;
 const MODES: [ViewMode; 3] = [ViewMode::Source, ViewMode::Split, ViewMode::Preview];
 pub const CONTEXT: &str = "MarkdownDocument";
 
@@ -60,6 +59,7 @@ pub struct MarkdownPane {
 }
 
 mod preview;
+mod zoom_style;
 
 use preview::{Images, blocked_image, extensions, verdicts};
 
@@ -363,28 +363,9 @@ impl MarkdownPane {
             )
     }
 
-    // gpui-component sizes headings, paragraph gaps and code blocks in absolute pixels, so the
-    // text size alone does not scale them.
-    fn zoomed_style(&self, cx: &App) -> TextViewStyle {
-        let factor = self.zoom.factor();
-        let code = cx.theme().mono_font_size * factor;
-        TextViewStyle::from_theme(&gpui_kit::base::Theme::global(cx))
-            .with_paragraph_gap(rems(factor))
-            .with_heading(move |level| {
-                let ems = match level {
-                    1 => 2.0,
-                    2 => 1.5,
-                    3 => 1.25,
-                    4 => 1.125,
-                    _ => 1.0,
-                };
-                StyleRefinement::default().text_size(px(ems * HEADING_BASE_PX * factor))
-            })
-            .with_code_block(StyleRefinement::default().text_size(code))
-    }
-
     fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let zoomed = (!self.zoom.is_default()).then(|| self.zoomed_style(cx));
+        let zoomed =
+            (!self.zoom.is_default()).then(|| zoom_style::zoomed(cx.theme(), self.zoom.factor()));
         let weak = cx.entity().downgrade();
         let folder = self.state.folder.clone();
         let images = self.images.clone();
