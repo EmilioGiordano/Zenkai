@@ -3799,21 +3799,27 @@ impl Render for Workspace {
                 this.notify(Severity::Info, message, cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
-                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(true, cx)) {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(true, cx))
+                    || this.forward_to_text(cx, |pane, cx| pane.zoom_in(cx))
+                {
                     return;
                 }
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() + 0.1, cx));
                 this.refresh_cells(cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
-                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(false, cx)) {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(false, cx))
+                    || this.forward_to_text(cx, |pane, cx| pane.zoom_out(cx))
+                {
                     return;
                 }
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() - 0.1, cx));
                 this.refresh_cells(cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomReset, window, cx| {
-                if this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx)) {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx))
+                    || this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx))
+                {
                     return;
                 }
                 this.grid.update(cx, |g, cx| g.set_zoom(1.0, cx));

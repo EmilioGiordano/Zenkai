@@ -88,6 +88,18 @@ impl Workspace {
         self.text_panes.get(&self.documents.shown_text()?.id)
     }
 
+    pub(super) fn forward_to_text(
+        &mut self,
+        cx: &mut Context<Self>,
+        command: impl FnOnce(&mut MarkdownPane, &mut Context<MarkdownPane>),
+    ) -> bool {
+        let Some(entry) = self.shown_pane() else {
+            return false;
+        };
+        entry.pane.update(cx, |pane, cx| command(pane, cx));
+        true
+    }
+
     pub(super) fn text_state(&self, id: WorkbookId) -> PaneState {
         self.documents
             .text(id)
@@ -114,7 +126,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let state = self.text_state(id);
-        let pane = cx.new(|cx| MarkdownPane::new(text, mode, state, window, cx));
+        let zoom = self
+            .documents
+            .text(id)
+            .map_or_else(Default::default, |text| text.zoom);
+        let pane = cx.new(|cx| MarkdownPane::new(text, mode, zoom, state, window, cx));
         let events = cx.subscribe_in(
             &pane,
             window,
@@ -147,6 +163,10 @@ impl Workspace {
             PaneEvent::Moved => cx.notify(),
             PaneEvent::Mode(mode) => {
                 self.documents.set_mode(id, *mode);
+                self.persist_session(cx);
+            }
+            PaneEvent::Zoom(zoom) => {
+                self.documents.set_zoom(id, *zoom);
                 self.persist_session(cx);
             }
             PaneEvent::OpenLink(url) => self.open_document_link(id, url, window, cx),
