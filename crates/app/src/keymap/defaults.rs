@@ -52,6 +52,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("alt-2", PdfFitWidth, Some("PdfDocument")),
         bind("alt-3", PdfActualSize, Some("PdfDocument")),
         bind("ctrl-0", ZoomReset, Some("MarkdownDocument")),
+        bind("ctrl-0", ZoomReset, Some("PdfDocument")),
         bind("alt-o", TogglePdfOutline, Some("PdfDocument")),
         bind("escape", ClosePdfFind, Some("PdfFindBar")),
         bind("down", PdfOutlineNext, Some("PdfOutline")),
@@ -300,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_zero_resets_the_zoom_in_a_markdown_tab_and_hides_columns_elsewhere() {
+    fn ctrl_zero_resets_the_zoom_in_a_markdown_or_pdf_tab_and_hides_columns_elsewhere() {
         let action_in = |context: &str| {
             defaults()
                 .into_iter()
@@ -311,6 +312,10 @@ mod tests {
         };
         assert_eq!(
             action_in("MarkdownDocument"),
+            Some(<ZoomReset as Action>::name_for_type())
+        );
+        assert_eq!(
+            action_in("PdfDocument"),
             Some(<ZoomReset as Action>::name_for_type())
         );
         assert_eq!(
