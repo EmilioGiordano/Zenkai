@@ -179,6 +179,7 @@ impl Workspace {
                     .collect();
                 self.sidebar.visible = session.sidebar_visible;
                 self.panels.widths = session.panel_widths.validated();
+                self.pdf_places = crate::pdf_places::PdfPlaces::from_records(&session.pdf_places);
                 if let Some(active) = self
                     .documents
                     .restore(&session, self.recovery_dir.as_deref())
@@ -720,6 +721,7 @@ impl Workspace {
                 self.recovery_file_of(id)
             })
             .with_panel_widths(self.panels.widths)
+            .with_pdf_places(self.pdf_places.records())
     }
 
     fn snapshot_session_leaving(&self, plan: &ClosePlan, cx: &App) -> Session {
@@ -731,7 +733,8 @@ impl Workspace {
                 |id| self.recovery_file_of(id),
                 &plan.discard,
             )
-            .with_panel_widths(self.panels.widths);
+            .with_panel_widths(self.panels.widths)
+            .with_pdf_places(self.pdf_places.records());
         if plan.start_empty {
             session.without_unsaved_work()
         } else {
@@ -875,6 +878,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            pdf: Default::default(),
             unsupported: Vec::new(),
             active: true,
             sheet: 0,

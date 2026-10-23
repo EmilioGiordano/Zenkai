@@ -12,8 +12,9 @@ use crate::text_disk::{DiskNotice, Writing};
 use crate::text_file::{Format, Stamp};
 
 pub const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
+pub const PDF_EXTENSION: &str = "pdf";
 
-// What a tab holds. Opening, the session and the sidebar dispatch on it; a later PDF or docx
+// What a tab holds. Opening, the session and the sidebar dispatch on it; a later docx
 // viewer adds a variant here and reuses the rest of the plumbing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -21,6 +22,7 @@ pub enum DocumentKind {
     #[default]
     Workbook,
     Markdown,
+    Pdf,
 }
 
 impl DocumentKind {
@@ -30,12 +32,17 @@ impl DocumentKind {
             .map(|extension| extension.to_string_lossy().to_ascii_lowercase());
         match extension.as_deref() {
             Some(extension) if MARKDOWN_EXTENSIONS.contains(&extension) => DocumentKind::Markdown,
+            Some(PDF_EXTENSION) => DocumentKind::Pdf,
             _ => DocumentKind::Workbook,
         }
     }
 
     pub fn is_text(self) -> bool {
         self == DocumentKind::Markdown
+    }
+
+    pub fn is_pdf(self) -> bool {
+        self == DocumentKind::Pdf
     }
 }
 
@@ -264,6 +271,7 @@ impl TextDocument {
             kind: self.kind,
             mode: self.mode,
             base: self.stamp.map(Stamp::record),
+            pdf: Default::default(),
         }
     }
 }
@@ -298,6 +306,15 @@ mod tests {
             DocumentKind::Workbook
         );
         assert_eq!(DocumentKind::of(Path::new("md")), DocumentKind::Workbook);
+        assert_eq!(
+            DocumentKind::of(Path::new("a/Report.PDF")),
+            DocumentKind::Pdf
+        );
+        assert_eq!(DocumentKind::of(Path::new("pdf")), DocumentKind::Workbook);
+        assert_eq!(
+            DocumentKind::of(Path::new("a.pdf.xlsx")),
+            DocumentKind::Workbook
+        );
         assert_eq!(
             DocumentKind::of(Path::new("a.md.xlsx")),
             DocumentKind::Workbook

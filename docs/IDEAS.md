@@ -77,3 +77,9 @@ local computation); Zenkai's edge is being native: faster start, less memory, lo
 11. **Markdown outline and heading links.** A `#heading` link inside a Markdown file does
     nothing today. An outline of the headings, and jumping to one from a link or the outline,
     would need the preview to expose block positions.
+
+12. **Sandbox the PDF host.** `zenkai-pdf-host.exe` already keeps a pdfium crash out of the
+    app, but it runs with the user's rights. Putting it in a job object (no child processes,
+    memory and CPU limits) and starting it at low integrity, or in an AppContainer, would
+    also limit what a pdfium exploit could reach. A watchdog that restarts a host that stops
+    answering belongs with it.

@@ -32,7 +32,12 @@ impl Workspace {
         }
     }
 
-    fn confirm_web_link(&mut self, url: String, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn confirm_web_link(
+        &mut self,
+        url: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let answer = self.ask(
             PromptLevel::Warning,
             t!("markdown.link.web_title"),

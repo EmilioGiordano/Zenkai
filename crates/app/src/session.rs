@@ -8,6 +8,7 @@ use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, WorkbookId};
 
 use crate::entry::{Link, LinkStatus};
 use crate::panel_width::PanelWidths;
+use crate::pdf::PdfPosition;
 use crate::recovery;
 use crate::space_appearance::{SpaceAppearance, SpaceOverride};
 use crate::spaces::{SpaceColor, SpaceId};
@@ -31,7 +32,15 @@ pub struct Session {
     // Tabs reopened as last saved because the previous close discarded their changes.
     #[serde(default)]
     pub reopened_as_saved: u32,
+    #[serde(default)]
+    pub pdf_places: Vec<PdfPlace>,
     pub spaces: Vec<SpaceRecord>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PdfPlace {
+    pub path: String,
+    pub position: PdfPosition,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -59,6 +68,8 @@ pub struct FileRecord {
     pub mode: ViewMode,
     #[serde(default)]
     pub base: Option<StampRecord>,
+    #[serde(default)]
+    pub pdf: PdfPosition,
     pub unsupported: Vec<String>,
     pub active: bool,
     pub sheet: u32,
@@ -91,6 +102,7 @@ impl Session {
             space_appearance: SpaceAppearance::default(),
             panel_widths: PanelWidths::default(),
             reopened_as_saved: 0,
+            pdf_places: Vec::new(),
             spaces,
         }
     }
@@ -100,6 +112,10 @@ impl Session {
             panel_widths,
             ..self
         }
+    }
+
+    pub fn with_pdf_places(self, pdf_places: Vec<PdfPlace>) -> Session {
+        Session { pdf_places, ..self }
     }
 
     pub fn with_reopened_as_saved(self, reopened_as_saved: u32) -> Session {
@@ -238,6 +254,7 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         kind: link.kind,
         mode: link.mode,
         base: link.base,
+        pdf: link.pdf,
         unsupported: link
             .unsupported
             .iter()
@@ -300,6 +317,7 @@ pub fn link_of(
         kind: record.kind,
         mode: record.mode,
         base: record.base,
+        pdf: record.pdf,
         rested: None,
     }
 }
@@ -376,6 +394,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            pdf: Default::default(),
             unsupported: vec!["charts".to_string(), "macros".to_string()],
             active: true,
             sheet: 2,
@@ -401,6 +420,29 @@ mod tests {
                 files: vec![record()],
             }],
         )
+    }
+
+    #[test]
+    fn the_places_in_pdfs_survive_the_session_round_trip() {
+        let place = PdfPlace {
+            path: "a.pdf".to_string(),
+            position: PdfPosition {
+                page: 12,
+                zoom: crate::pdf::layout::ZoomMode::Percent(150),
+            },
+        };
+        let kept = session().with_pdf_places(vec![place.clone()]);
+        let text = serde_json::to_string(&kept).unwrap();
+        let back: Session = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.pdf_places, vec![place]);
+    }
+
+    #[test]
+    fn a_session_without_pdf_places_still_loads() {
+        let mut value = serde_json::to_value(session()).unwrap();
+        value.as_object_mut().unwrap().remove("pdf_places");
+        let back: Session = serde_json::from_value(value).unwrap();
+        assert!(back.pdf_places.is_empty());
     }
 
     #[test]

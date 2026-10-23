@@ -167,11 +167,15 @@ impl ChatPanel {
             .rounded_lg()
             .bg(theme.secondary)
             .child(
-                Icon::new(if DocumentKind::of(&card.path).is_text() {
-                    IconName::FileText
-                } else {
-                    IconName::Grid2x2
-                })
+                Icon::new(
+                    if DocumentKind::of(&card.path).is_text()
+                        || DocumentKind::of(&card.path).is_pdf()
+                    {
+                        IconName::FileText
+                    } else {
+                        IconName::Grid2x2
+                    },
+                )
                 .size_4()
                 .flex_shrink_0()
                 .text_color(theme.success),

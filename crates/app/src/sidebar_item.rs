@@ -77,6 +77,7 @@ pub fn describe(entry: Entry, active: bool) -> FileItem {
             };
             (t!("markdown.status.name").to_string(), state)
         }
+        Entry::Pdf(_) => (t!("pdf.status.name").to_string(), FileState::Ready),
         Entry::Link(link) => {
             let state = match link.status {
                 LinkStatus::Loading => FileState::Loading,
@@ -128,6 +129,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            pdf: Default::default(),
             rested: None,
         }
     }

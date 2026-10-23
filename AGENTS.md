@@ -52,6 +52,9 @@ Design principle: reinvent nothing. Shortcuts, menu names, selection, formula er
 - `agent` (settings, agent tools, MCP bridge) uses `engine` and `types`, never GPUI;
   `app` uses `agent`; `grid` knows neither. `mcp-relay` (the `zenkai-mcp` binary) is
   standalone and depends on no Zenkai crate.
+- `pdf-host` holds the PDF wire format and client the `app` uses, plus the
+  `zenkai-pdf-host` binary, the only code that loads pdfium. PDFs are read in that
+  process so a pdfium crash never takes the app down.
 - Dependencies flow one way: `app` uses `grid`, `engine` and `formats`; `grid` does not
   know the engine; only `engine` knows IronCalc or logisheets. Where `formats` sits
   relative to `engine` is decided in Phase 1 and recorded in `DECISIONS.md`.

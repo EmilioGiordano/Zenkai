@@ -185,10 +185,12 @@ impl Workspace {
                 self.documents.want(id, Intent::Switch);
                 self.begin_load(id, window, cx);
             }
-            Some(Entry::Loaded(_) | Entry::Text(_)) if self.documents.shown_id() == Some(id) => {
+            Some(Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_))
+                if self.documents.shown_id() == Some(id) =>
+            {
                 self.documents.activate(id);
             }
-            Some(Entry::Loaded(_) | Entry::Text(_)) => {
+            Some(Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_)) => {
                 self.park_active(window, cx);
                 self.documents.activate(id);
                 self.present_active(window, cx);
@@ -253,6 +255,10 @@ impl Workspace {
     pub(super) fn present_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.documents.shown_text().map(|text| text.id) {
             self.present_text(id, window, cx);
+            return;
+        }
+        if let Some(id) = self.documents.shown_pdf().map(|pdf| pdf.id) {
+            self.present_pdf(id, window, cx);
             return;
         }
         let Some(view) = self.documents.active().map(|document| document.view) else {
@@ -332,9 +338,11 @@ impl Workspace {
                 .recovery_dir
                 .as_deref()
                 .map(|directory| recovery::text_file(directory, id)),
+            Some(Entry::Pdf(_)) => None,
             None => None,
         };
         self.forget_text(id);
+        self.forget_pdf(id, window, cx);
         if let Some(file) = recovery_copy {
             cx.background_executor()
                 .spawn(async move { recovery::remove_with_lock(&file) })
@@ -370,6 +378,10 @@ impl Workspace {
         self.show_sheet_beside_chat(cx);
         if DocumentKind::of(&path).is_text() {
             self.open_text_file(path, window, cx);
+            return;
+        }
+        if DocumentKind::of(&path).is_pdf() {
+            self.open_pdf_file(path, window, cx);
             return;
         }
         if files::is_delimited_text(&path) {
@@ -472,6 +484,10 @@ impl Workspace {
         cx.notify();
         if link.kind.is_text() {
             self.begin_text_load(link, window, cx);
+            return;
+        }
+        if link.kind.is_pdf() {
+            self.begin_pdf_load(link.id, window, cx);
             return;
         }
         let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
@@ -645,7 +661,7 @@ impl Workspace {
                     .clone()
                     .filter(|path| !files::is_remote_or_device(path))
                     .map(|path| (link.id, path)),
-                Entry::Loaded(_) | Entry::Text(_) => None,
+                Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_) => None,
             })
             .collect();
         for (id, path) in probes {
@@ -734,6 +750,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            pdf: Default::default(),
             rested: Some(Box::new(Rested {
                 file: FileSeen {
                     stamp: None,

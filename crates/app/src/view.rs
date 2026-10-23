@@ -30,6 +30,7 @@ mod agent_review;
 mod chat_dock;
 mod close_dialog;
 mod closing;
+mod pdfs;
 mod settings_gate;
 mod space_panel;
 mod text_actions;
@@ -205,6 +206,9 @@ pub struct Workspace {
     sidebar: SidebarState,
     panels: PanelsState,
     text_panes: texts::TextPanes,
+    pdf_panes: pdfs::PdfPanes,
+    pdf_places: crate::pdf_places::PdfPlaces,
+    pdf_client: crate::pdf::PdfClient,
     text_watch: text_watch::TextWatch,
     lifecycle: Lifecycle,
     #[cfg(windows)]
@@ -361,6 +365,9 @@ impl Workspace {
             sidebar: SidebarState::new(cx),
             panels: PanelsState::new(cx),
             text_panes: texts::TextPanes::new(),
+            pdf_panes: pdfs::PdfPanes::new(),
+            pdf_places: crate::pdf_places::PdfPlaces::default(),
+            pdf_client: crate::pdf::PdfClient::next_to_exe(),
             text_watch: text_watch::TextWatch::default(),
             lifecycle: Lifecycle::Running,
             #[cfg(windows)]
@@ -424,6 +431,9 @@ impl Workspace {
         if let Some(text) = self.documents.shown_text() {
             let marker = if text.dirty { "• " } else { "" };
             return format!("{marker}{} - Zenkai", text.name());
+        }
+        if let Some(pdf) = self.documents.shown_pdf() {
+            return format!("{} - Zenkai", pdf.name());
         }
         self.documents
             .active()
@@ -635,6 +645,9 @@ impl Workspace {
         self.palette = None;
         self.revert_theme_preview(cx);
         if self.find_in_text(false, window, cx) {
+            return;
+        }
+        if self.forward_to_pdf(window, cx, |view, window, cx| view.open_find(window, cx)) {
             return;
         }
         let Some(document) = self.documents.active_mut() else {
@@ -3064,6 +3077,11 @@ impl Workspace {
     fn open_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
         self.revert_theme_preview(cx);
+        if self.forward_to_pdf(window, cx, |view, window, cx| {
+            view.focus_page_input(window, cx)
+        }) {
+            return;
+        }
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("goto.placeholder")));
         let subscription =
             cx.subscribe_in(
@@ -3360,6 +3378,21 @@ impl Workspace {
                 .child(t!("markdown.status.encoding"))
                 .child(saved);
         }
+        if let Some(view) = self
+            .shown_pdf_view()
+            .filter(|view| view.read(cx).is_ready())
+        {
+            let view = view.read(cx);
+            right = right
+                .child(t!("pdf.status.name"))
+                .child(t!(
+                    "pdf.status.page",
+                    page = view.current_page().0 + 1,
+                    total = view.page_count()
+                ))
+                .child(view.zoom_label())
+                .child(t!("status.read_only"));
+        }
         match self.stats.filter(|_| self.documents.active().is_some()) {
             Some(stats) if stats.count > 1 => {
                 if let Some(avg) = stats.average() {
@@ -3385,7 +3418,7 @@ impl Workspace {
         {
             right = right.child(t!("status.read_only"));
         }
-        if self.documents.shown_text().is_none() {
+        if self.documents.shown_text().is_none() && self.documents.shown_pdf().is_none() {
             let zoom = self.grid.read(cx).zoom();
             right = right.child(format!("{:.0}%", zoom * 100.0));
         }
@@ -3495,10 +3528,12 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         interface_scale::apply(window, cx);
+        self.rest_hidden_pdfs(window, cx);
         let busy_label = self.busy_label();
         let root = Self::leave_full_window_for_sheet_commands(v_flex(), cx);
         let theme = cx.theme();
         root.relative()
+            .map(|root| pdfs::pdf_actions(root, cx))
             .key_context({
                 let mut context = KeyContext::default();
                 context.add("Workspace");
@@ -3556,7 +3591,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Redo, window, cx| {
                 this.edit(window, cx, |wb| wb.redo());
             }))
-            .on_action(cx.listener(|this, _: &Copy, _, cx| this.copy(false, cx)))
+            .on_action(cx.listener(|this, _: &Copy, window, cx| {
+                if !this.forward_to_pdf(window, cx, |view, _, cx| view.copy_selection(cx)) {
+                    this.copy(false, cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &Cut, _, cx| this.copy(true, cx)))
             .on_action(cx.listener(|this, _: &Paste, window, cx| this.paste(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleBold, window, cx| {
@@ -3759,15 +3798,24 @@ impl Render for Workspace {
                 };
                 this.notify(Severity::Info, message, cx);
             }))
-            .on_action(cx.listener(|this, _: &ZoomIn, _, cx| {
+            .on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(true, cx)) {
+                    return;
+                }
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() + 0.1, cx));
                 this.refresh_cells(cx);
             }))
-            .on_action(cx.listener(|this, _: &ZoomOut, _, cx| {
+            .on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(false, cx)) {
+                    return;
+                }
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() - 0.1, cx));
                 this.refresh_cells(cx);
             }))
-            .on_action(cx.listener(|this, _: &ZoomReset, _, cx| {
+            .on_action(cx.listener(|this, _: &ZoomReset, window, cx| {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx)) {
+                    return;
+                }
                 this.grid.update(cx, |g, cx| g.set_zoom(1.0, cx));
                 this.refresh_cells(cx);
             }))
@@ -4016,6 +4064,9 @@ impl Render for Workspace {
                                 .into_any_element()
                         } else if let Some(entry) = self.shown_pane() {
                             self.render_text(entry.pane.clone(), busy_label.clone(), cx)
+                                .into_any_element()
+                        } else if let Some(view) = self.shown_pdf_view() {
+                            self.render_pdf(view, busy_label.clone(), cx)
                                 .into_any_element()
                         } else {
                             self.render_empty(busy_label.clone(), cx).into_any_element()
