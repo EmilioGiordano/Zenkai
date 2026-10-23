@@ -558,3 +558,27 @@ fn input_percentages() {
     assert_eq!(model._get_text("A3"), "-5%");
     assert_eq!(model.get_style_for_cell(0, 3, 1).unwrap().num_fmt, "0%");
 }
+
+#[test]
+fn input_percentage_keeps_a_percentage_format_only() {
+    let mut model = new_empty_model();
+    model.set_user_input(0, 1, 1, "5.5%".to_string()).unwrap();
+    let mut style = model.get_style_for_cell(0, 2, 1).unwrap();
+    style.num_fmt = "0.000%".to_string();
+    model.set_cell_style(0, 2, 1, &style).unwrap();
+    style.num_fmt = "0.00".to_string();
+    model.set_cell_style(0, 3, 1, &style).unwrap();
+
+    // further percentage assignments do not change the format
+    model.set_user_input(0, 1, 1, "8%".to_string()).unwrap();
+    model.set_user_input(0, 2, 1, "5%".to_string()).unwrap();
+    model.set_user_input(0, 3, 1, "5%".to_string()).unwrap();
+    model.evaluate();
+
+    assert_eq!(model._get_text("A1"), "8.00%");
+    assert_eq!(model.get_style_for_cell(0, 1, 1).unwrap().num_fmt, "0.00%");
+    assert_eq!(model._get_text("A2"), "5.000%");
+    assert_eq!(model.get_style_for_cell(0, 2, 1).unwrap().num_fmt, "0.000%");
+    assert_eq!(model._get_text("A3"), "5%");
+    assert_eq!(model.get_style_for_cell(0, 3, 1).unwrap().num_fmt, "0%");
+}

@@ -247,6 +247,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   tests of the undo patch above assert its format. Tests:
   `src/formatter/test/test_parse_formatted_number.rs`, `input_percentages` in
   `src/test/test_set_user_input.rs`.
+- A percentage typed into a cell already formatted as a percentage keeps the cell's format,
+  as a date typed into a date-formatted cell already does (`src/model.rs`,
+  `set_user_input`; `is_likely_percent_number_format` in `src/formatter/lexer.rs`). Stands
+  on its own. Tests: `input_percentage_keeps_a_percentage_format_only` in
+  `src/test/test_set_user_input.rs`, `percent_number_formats` in
+  `src/formatter/test/test_general.rs`.
 
 Zenkai-only, not for upstream:
 
