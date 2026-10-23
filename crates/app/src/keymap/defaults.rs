@@ -51,8 +51,8 @@ pub fn defaults() -> Vec<Binding> {
         bind("alt-1", PdfFitPage, Some("PdfDocument")),
         bind("alt-2", PdfFitWidth, Some("PdfDocument")),
         bind("alt-3", PdfActualSize, Some("PdfDocument")),
-        bind("ctrl-0", ZoomReset, Some("MarkdownDocument")),
-        bind("ctrl-0", ZoomReset, Some("PdfDocument")),
+        bind("ctrl-0", ResetDocumentZoom, Some("MarkdownDocument")),
+        bind("ctrl-0", ResetDocumentZoom, Some("PdfDocument")),
         bind("alt-o", TogglePdfOutline, Some("PdfDocument")),
         bind("escape", ClosePdfFind, Some("PdfFindBar")),
         bind("down", PdfOutlineNext, Some("PdfOutline")),
@@ -312,11 +312,11 @@ mod tests {
         };
         assert_eq!(
             action_in("MarkdownDocument"),
-            Some(<ZoomReset as Action>::name_for_type())
+            Some(<ResetDocumentZoom as Action>::name_for_type())
         );
         assert_eq!(
             action_in("PdfDocument"),
-            Some(<ZoomReset as Action>::name_for_type())
+            Some(<ResetDocumentZoom as Action>::name_for_type())
         );
         assert_eq!(
             action_in("Workspace"),

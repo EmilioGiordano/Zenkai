@@ -308,6 +308,22 @@ mod tests {
     }
 
     #[test]
+    fn zoom_reset_stays_rebindable_while_ctrl_zero_resets_a_document_zoom() {
+        let model = Model::build();
+        let command = model
+            .command("zenkai::ZoomReset")
+            .expect("zoom reset is a command");
+        assert!(command.home().is_some());
+        let overrides = overrides_from(json!({ "zenkai::ZoomReset": ["ctrl-alt-9"] }));
+        let effective = model.effective(&overrides);
+        assert_eq!(
+            bound(&effective, "zenkai::ZoomReset"),
+            [("ctrl-alt-9".to_string(), WORKSPACE)]
+        );
+        assert_eq!(bound(&effective, "zenkai::ResetDocumentZoom").len(), 2);
+    }
+
+    #[test]
     fn loading_overrides_rebinds_and_removes_in_the_home_context() {
         let model = Model::build();
         let overrides = overrides_from(json!({

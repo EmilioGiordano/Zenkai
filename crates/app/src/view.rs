@@ -3829,6 +3829,11 @@ impl Render for Workspace {
                 if let Some(sheet) = this.active_sheet() {
                     this.switch_sheet(SheetId(sheet.0 + 1), window, cx);
                 }
+            .on_action(cx.listener(|this, _: &ResetDocumentZoom, window, cx| {
+                if !this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx)) {
+                    this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx));
+                }
+            }))
             }))
             .on_action(cx.listener(|this, _: &PreviousSheet, window, cx| {
                 if let Some(sheet) = this.active_sheet() {

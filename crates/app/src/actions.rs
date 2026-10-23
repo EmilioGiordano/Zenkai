@@ -49,6 +49,7 @@ actions!(
         ZoomIn,
         ZoomOut,
         ZoomReset,
+        ResetDocumentZoom,
         InterfaceLarger,
         InterfaceSmaller,
         InterfaceReset,
