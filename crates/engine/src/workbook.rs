@@ -1645,8 +1645,20 @@ impl Engine for Workbook {
         let rows = i32::try_from(rows).map_err(|e| rejected(e.to_string()))?;
         self.model
             .edit_keeping_cells(|model| {
-                model.set_frozen_rows_count(sheet.0, rows)?;
-                model.set_frozen_columns_count(sheet.0, i32::from(cols))
+                // Paused before the group so closing it does not evaluate: freezing panes
+                // changes no value, and an evaluation would re-roll volatile formulas.
+                let was_paused = model.is_evaluation_paused();
+                model.pause_evaluation();
+                let set = model.begin_edit_group().and_then(|()| {
+                    let frozen = model
+                        .set_frozen_rows_count(sheet.0, rows)
+                        .and_then(|()| model.set_frozen_columns_count(sheet.0, i32::from(cols)));
+                    frozen.and(model.end_edit_group())
+                });
+                if !was_paused {
+                    model.resume_evaluation();
+                }
+                set
             })
             .map_err(rejected)
     }
