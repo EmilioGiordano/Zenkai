@@ -132,6 +132,16 @@ enum StructureEdit {
     FreezePanes,
 }
 
+// Excel asks rows or columns with a dialog for a cell range; without one, a range acts on its rows.
+fn selection_edit(insert: bool, selection: Range) -> StructureEdit {
+    match (selection.rows() == zenkai_types::MAX_ROWS, insert) {
+        (true, true) => StructureEdit::InsertColumns,
+        (true, false) => StructureEdit::DeleteColumns,
+        (false, true) => StructureEdit::InsertRows,
+        (false, false) => StructureEdit::DeleteRows,
+    }
+}
+
 const SAVE_AGAIN_POLL: Duration = Duration::from_millis(50);
 const SAVE_AGAIN_LIMIT: Duration = Duration::from_secs(300);
 // Windows makes the first answer the default button, so Cancel goes first.
@@ -4314,12 +4324,42 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, changed_file_answers, grow_wrapped_rows,
-        widen_for_numbers,
+        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, StructureEdit, changed_file_answers,
+        grow_wrapped_rows, selection_edit, widen_for_numbers,
     };
     use zenkai_engine::{Engine, Workbook};
     use zenkai_i18n::t;
-    use zenkai_types::{CellPos, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId};
+    use zenkai_types::{CellPos, ColIdx, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId};
+
+    #[test]
+    fn insert_and_delete_follow_the_shape_of_the_selection() {
+        let at = |row, col| CellPos::new(RowIdx::clamped(row), ColIdx::clamped(col));
+        let max_row = i64::from(zenkai_types::MAX_ROWS) - 1;
+        let max_col = i64::from(zenkai_types::MAX_COLS) - 1;
+        let column = Range::new(at(0, 2), at(max_row, 3));
+        let row = Range::new(at(4, 0), at(5, max_col));
+        let cells = Range::new(at(1, 1), at(2, 2));
+        assert!(matches!(
+            selection_edit(false, column),
+            StructureEdit::DeleteColumns
+        ));
+        assert!(matches!(
+            selection_edit(true, column),
+            StructureEdit::InsertColumns
+        ));
+        assert!(matches!(
+            selection_edit(false, row),
+            StructureEdit::DeleteRows
+        ));
+        assert!(matches!(
+            selection_edit(true, row),
+            StructureEdit::InsertRows
+        ));
+        assert!(matches!(
+            selection_edit(false, cells),
+            StructureEdit::DeleteRows
+        ));
+    }
 
     #[test]
     fn changed_file_prompt_defaults_to_cancel() {
