@@ -1828,7 +1828,7 @@ impl Workspace {
             self.save_text(id, window, cx);
             return;
         }
-        if self.refuse_during_save_as(id, window, cx) {
+        if self.refuse_during_save_as(id, cx) {
             return;
         }
         let Some(document) = self.documents.get(id) else {
@@ -1907,7 +1907,7 @@ impl Workspace {
     }
 
     fn save_as_dialog(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.begin_save_as(id, window, cx) {
+        if !self.begin_save_as(id, cx) {
             return;
         }
         let Some(document) = self.documents.get(id) else {

@@ -55,24 +55,21 @@ impl Workspace {
     pub(super) fn refuse_during_save_as(
         &mut self,
         id: WorkbookId,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         if !self.save_as_flows.is_pending(id) {
             return false;
         }
         self.notify(Severity::Warning, t!("notice.still_saving"), cx);
-        self.save_ended(id, false, window, cx);
         true
     }
 
     pub(super) fn begin_save_as(
         &mut self,
         id: WorkbookId,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.refuse_during_save_as(id, window, cx) {
+        if self.refuse_during_save_as(id, cx) {
             return false;
         }
         self.save_as_flows.begin(id)

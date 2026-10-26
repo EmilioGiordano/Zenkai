@@ -55,7 +55,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.refuse_during_save_as(id, window, cx) {
+        if self.refuse_during_save_as(id, cx) {
             return;
         }
         let Some(text) = self.documents.text(id) else {
@@ -79,7 +79,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.begin_save_as(id, window, cx) {
+        if !self.begin_save_as(id, cx) {
             return;
         }
         let Some(text) = self.documents.text(id) else {
