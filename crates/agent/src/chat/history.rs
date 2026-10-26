@@ -273,6 +273,44 @@ mod tests {
     }
 
     #[test]
+    fn a_second_damage_keeps_the_first_quarantined_copy() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("history.json");
+        std::fs::write(&path, "{ first").unwrap();
+        History::load_or_quarantine(&path).unwrap();
+        std::fs::write(&path, "{ second").unwrap();
+        History::load_or_quarantine(&path).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.path().join("history.json.bak")).unwrap(),
+            "{ first"
+        );
+        assert_eq!(
+            std::fs::read_to_string(folder.path().join("history.json.1.bak")).unwrap(),
+            "{ second"
+        );
+    }
+
+    #[test]
+    fn a_failed_set_aside_reports_the_error_and_leaves_the_damaged_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("history.json");
+        std::fs::write(&path, "{ damaged").unwrap();
+        let taken = zenkai_types::aside::ASIDE_ATTEMPTS;
+        for attempt in 0..taken {
+            let name = match attempt {
+                0 => "history.json.bak".to_string(),
+                _ => format!("history.json.{attempt}.bak"),
+            };
+            std::fs::write(folder.path().join(name), "earlier").unwrap();
+        }
+        assert!(matches!(
+            History::load_or_quarantine(&path),
+            Err(HistoryError::Write(_))
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ damaged");
+    }
+
+    #[test]
     fn loaded_records_merge_with_newer_ones_without_duplicates() {
         let mut older = History::default();
         older.push(AgentId::new("a"), "old", "w", 1);
