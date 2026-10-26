@@ -36,6 +36,35 @@ pub fn from_excel_date(days: i64) -> Result<NaiveDate, String> {
     Ok(dt + Duration::days(days - 2))
 }
 
+// Maps a date serial number (date part only) to the Excel (year, month, day) it
+// represents, replicating Excel's fictional 29 February 1900 (the "1900
+// leap-year bug"). Returns `None` when the serial is outside
+// `0..=MAXIMUM_DATE_SERIAL_NUMBER`, which Excel reports as `#NUM!`.
+pub(crate) fn excel_serial_to_ymd(serial: i64) -> Option<(i32, u32, u32)> {
+    if !(0..=MAXIMUM_DATE_SERIAL_NUMBER as i64).contains(&serial) {
+        return None;
+    }
+    // Excel renders serial 0 as "0 January 1900"; DAYS360 reads it as day 0 of
+    // January 1900 (not 31 December 1899), which is what makes it antisymmetric.
+    if serial == 0 {
+        return Some((1900, 1, 0));
+    }
+    // Excel's non-existent 29 February 1900 (serial 60).
+    if serial == 60 {
+        return Some((1900, 2, 29));
+    }
+    let date = if serial < 60 {
+        // Below the fictional leap day Excel counts serial 1 as 1900-01-01, so
+        // serial N is N days after 1899-12-31 (serial 0).
+        let base = NaiveDate::from_ymd_opt(1899, 12, 31)?;
+        base + Duration::days(serial)
+    } else {
+        // From 1900-03-01 (serial 61) onwards IronCalc's serials match Excel.
+        from_excel_date(serial).ok()?
+    };
+    Some((date.year(), date.month(), date.day()))
+}
+
 pub fn date_to_serial_number(day: u32, month: u32, year: i32) -> Result<i32, String> {
     match NaiveDate::from_ymd_opt(year, month, day) {
         Some(native_date) => Ok(convert_to_serial_number(native_date)),

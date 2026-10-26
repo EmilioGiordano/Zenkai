@@ -21,36 +21,6 @@ fn last_day_of_feb(year: i32) -> u32 {
     }
 }
 
-// Maps a date serial number (date part only) to the Excel (year, month, day) it
-// represents, replicating Excel's fictional 29 February 1900 (the "1900
-// leap-year bug") so DAYS360 matches Excel for early-1900 serials. Returns
-// `None` when the serial is outside `0..=MAXIMUM_DATE_SERIAL_NUMBER`, which Excel
-// reports as `#NUM!`.
-fn excel_serial_to_ymd(serial: i64) -> Option<(i32, u32, u32)> {
-    if !(0..=MAXIMUM_DATE_SERIAL_NUMBER as i64).contains(&serial) {
-        return None;
-    }
-    // Excel renders serial 0 as "0 January 1900"; DAYS360 reads it as day 0 of
-    // January 1900 (not 31 December 1899), which is what makes it antisymmetric.
-    if serial == 0 {
-        return Some((1900, 1, 0));
-    }
-    // Excel's non-existent 29 February 1900 (serial 60).
-    if serial == 60 {
-        return Some((1900, 2, 29));
-    }
-    let date = if serial < 60 {
-        // Below the fictional leap day Excel counts serial 1 as 1900-01-01, so
-        // serial N is N days after 1899-12-31 (serial 0).
-        let base = chrono::NaiveDate::from_ymd_opt(1899, 12, 31)?;
-        base + chrono::Duration::days(serial)
-    } else {
-        // From 1900-03-01 (serial 61) onwards IronCalc's serials match Excel.
-        from_excel_date(serial).ok()?
-    };
-    Some((date.year(), date.month(), date.day()))
-}
-
 // Converts a raw numeric argument to a date serial (date part) for DAYS360,
 // rounding the time-of-day to the nearest second before discarding it. Excel
 // rolls e.g. 46000.999999 up to 46001 when extracting the date part.
@@ -193,7 +163,7 @@ use crate::{
     constants::EXCEL_DATE_BASE,
     expressions::parser::{ArrayNode, Node},
     expressions::token::Error,
-    formatter::dates::from_excel_date,
+    formatter::dates::{excel_serial_to_ymd, from_excel_date},
     model::Model,
 };
 
