@@ -61,6 +61,9 @@ impl UserModel<'_> {
         area: &Area,
         old_styles: &[Option<i32>],
     ) -> Result<(), String> {
+        if old_styles.len() as i64 != i64::from(area.width) * i64::from(area.height) {
+            return Err("The saved styles do not match the area".to_string());
+        }
         let default_style = self
             .model
             .workbook
