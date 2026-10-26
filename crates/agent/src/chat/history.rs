@@ -153,8 +153,10 @@ impl History {
         match History::load(path) {
             Err(HistoryError::Damaged(error)) => {
                 tracing::warn!(%error, "conversation history is damaged; keeping it as .bak");
-                std::fs::rename(path, path.with_extension("json.bak"))
-                    .map_err(HistoryError::Write)?;
+                let aside = zenkai_types::aside::free_aside_name(path, "bak").ok_or_else(|| {
+                    HistoryError::Write(std::io::Error::other("no free name for the .bak copy"))
+                })?;
+                std::fs::rename(path, aside).map_err(HistoryError::Write)?;
                 Ok(History::default())
             }
             other => other,
