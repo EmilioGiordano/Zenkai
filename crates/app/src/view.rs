@@ -2690,6 +2690,20 @@ impl Workspace {
         }
     }
 
+    // Ctrl+- and Ctrl++ reach the grid while a cell is being typed in; they must not edit the sheet.
+    fn insert_or_delete_selection(
+        &mut self,
+        insert: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.grid.read(cx).editor().is_some() {
+            return;
+        }
+        let edit = selection_edit(insert, self.selection(cx));
+        self.structure_edit(window, cx, edit);
+    }
+
     // With a single cell selected, Excel sorts its current region.
     fn sort(&mut self, descending: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(sheet) = self.active_sheet() else {
@@ -3919,6 +3933,12 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &DeleteColumns, window, cx| {
                 this.structure_edit(window, cx, StructureEdit::DeleteColumns)
+            }))
+            .on_action(cx.listener(|this, _: &InsertSelection, window, cx| {
+                this.insert_or_delete_selection(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DeleteSelection, window, cx| {
+                this.insert_or_delete_selection(false, window, cx)
             }))
             .on_action(cx.listener(|this, _: &FreezePanes, window, cx| {
                 this.structure_edit(window, cx, StructureEdit::FreezePanes)

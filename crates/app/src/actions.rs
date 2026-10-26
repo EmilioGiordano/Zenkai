@@ -121,6 +121,8 @@ actions!(
         DeleteRows,
         InsertColumns,
         DeleteColumns,
+        InsertSelection,
+        DeleteSelection,
         FreezePanes,
         FillDown,
         FillRight,
