@@ -1824,6 +1824,9 @@ impl Workspace {
     }
 
     fn save_document(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.refuse_during_save_as(id, window, cx) {
+            return;
+        }
         if self.documents.text(id).is_some() {
             self.save_text(id, window, cx);
             return;
@@ -1904,7 +1907,11 @@ impl Workspace {
     }
 
     fn save_as_dialog(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.begin_save_as(id, window, cx) {
+            return;
+        }
         let Some(document) = self.documents.get(id) else {
+            self.save_as_flows.finish(id);
             self.save_ended(id, false, window, cx);
             return;
         };
@@ -1943,7 +1950,10 @@ impl Workspace {
             };
             let update = this.update_in(cx, |this, window, cx| match chosen {
                 Some(path) => this.confirm_target(id, path, window, cx),
-                None => this.save_ended(id, false, window, cx),
+                None => {
+                    this.save_as_flows.finish(id);
+                    this.save_ended(id, false, window, cx);
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during save dialog");
@@ -1960,26 +1970,35 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if files::is_delimited_text(&chosen) {
+            self.save_as_flows.finish(id);
             self.export_csv(id, chosen, window, cx);
             return;
         }
         let source = match self.documents.get(id) {
             Some(document) => document.path.clone(),
             None => {
+                self.save_as_flows.finish(id);
                 self.save_ended(id, false, window, cx);
                 return;
             }
         };
+        self.save_as_flows.start_checking(id);
         let path = files::xlsx_target(&chosen);
         let renamed = path != chosen;
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
+            let probed = source.clone();
             let probe = cx
                 .background_executor()
-                .spawn(async move { files::probe_target(source.as_deref(), &target) })
+                .spawn(async move { files::probe_target(probed.as_deref(), &target) })
                 .await;
+            let checked = save_flow::CheckedTarget {
+                path,
+                source,
+                probe,
+            };
             let update = this.update_in(cx, |this, window, cx| {
-                this.decide_target(id, path, renamed, probe, window, cx)
+                this.decide_target(id, renamed, checked, window, cx)
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed while checking the save target");
@@ -1991,16 +2010,25 @@ impl Workspace {
     fn decide_target(
         &mut self,
         id: WorkbookId,
-        path: PathBuf,
         renamed: bool,
-        probe: files::TargetProbe,
+        checked: save_flow::CheckedTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let save_flow::CheckedTarget {
+            path,
+            source,
+            probe,
+        } = checked;
+        self.save_as_flows.finish(id);
         let Some(document) = self.documents.get(id) else {
             self.save_ended(id, false, window, cx);
             return;
         };
+        if !save_flow::source_unchanged(&source, &document.path) {
+            self.save_ended(id, false, window, cx);
+            return;
+        }
         let action = target_action(
             &probe,
             renamed,

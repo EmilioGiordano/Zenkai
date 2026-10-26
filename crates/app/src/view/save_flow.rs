@@ -6,6 +6,7 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
+use crate::files;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum SaveAsStage {
@@ -38,6 +39,12 @@ impl SaveAsFlows {
     pub(super) fn finish(&mut self, id: WorkbookId) {
         self.stages.remove(&id);
     }
+}
+
+pub(super) struct CheckedTarget {
+    pub(super) path: PathBuf,
+    pub(super) source: Option<PathBuf>,
+    pub(super) probe: files::TargetProbe,
 }
 
 pub(super) fn source_unchanged(probed: &Option<PathBuf>, current: &Option<PathBuf>) -> bool {
