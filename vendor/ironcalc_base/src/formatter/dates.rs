@@ -12,7 +12,7 @@ pub const DATE_OUT_OF_RANGE_MESSAGE: &str = "Out of range parameters for date";
 
 // Excel counts a fictitious 29 February 1900 as serial 60, so every earlier date sits one
 // serial lower than the days elapsed since 1899-12-30.
-fn convert_to_serial_number(date: NaiveDate) -> i32 {
+pub(crate) fn convert_to_serial_number(date: NaiveDate) -> i32 {
     let days = date.num_days_from_ce() - EXCEL_DATE_BASE;
     if days < 61 {
         days - 1

@@ -149,6 +149,7 @@ use crate::arithmetic::bcast_idx;
 use crate::constants::MAXIMUM_DATE_SERIAL_NUMBER;
 use crate::constants::MINIMUM_DATE_SERIAL_NUMBER;
 use crate::expressions::types::CellReferenceIndex;
+use crate::formatter::dates::convert_to_serial_number;
 use crate::formatter::dates::date_to_serial_number;
 use crate::formatter::dates::permissive_date_to_serial_number;
 use crate::formatter::dates::DATE_OUT_OF_RANGE_MESSAGE;
@@ -639,12 +640,12 @@ impl<'a> Model<'a> {
             month = 1;
             year += 1;
         }
-        match date_to_serial_number(1, month, year) {
-            Ok(serial_number) => CalcResult::Number(serial_number as f64 - 1.0),
-            Err(message) => CalcResult::Error {
+        match chrono::NaiveDate::from_ymd_opt(year, month, 1) {
+            Some(first) => CalcResult::Number(convert_to_serial_number(first) as f64 - 1.0),
+            None => CalcResult::Error {
                 error: Error::NUM,
                 origin: cell,
-                message,
+                message: DATE_OUT_OF_RANGE_MESSAGE.to_string(),
             },
         }
     }

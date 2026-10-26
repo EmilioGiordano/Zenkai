@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::expressions::utils::parse_reference_a1;
-use crate::formatter::dates::{date_to_serial_number, from_excel_date};
+use crate::formatter::dates::{convert_to_serial_number, from_excel_date};
 use crate::{
     calc_result::CalcResult,
     cell::CellValue,
@@ -818,9 +818,7 @@ impl<'a> Model<'a> {
             Err(_) => return,
         };
 
-        let serial_of = |d: NaiveDate| -> f64 {
-            date_to_serial_number(d.day(), d.month(), d.year()).unwrap_or(0) as f64
-        };
+        let serial_of = |d: NaiveDate| -> f64 { convert_to_serial_number(d) as f64 };
 
         let range: (f64, f64) = match period {
             PeriodType::Yesterday => {
