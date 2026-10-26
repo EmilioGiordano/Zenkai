@@ -303,4 +303,16 @@ mod tests {
             assert_eq!(FormatCategory::of(code), FormatCategory::Custom, "{code}");
         }
     }
+
+    #[test]
+    fn number_with_literal_text_is_custom() {
+        for code in ["0.000\"kg\"", "0.0\" m\"", "#,##0 \"units\"", "0\x"] {
+            assert_eq!(FormatCategory::of(code), FormatCategory::Custom, "{code}");
+        }
+    }
+
+    #[test]
+    fn number_with_colour_tag_is_custom() {
+        assert_eq!(FormatCategory::of("[Blue]0"), FormatCategory::Custom);
+    }
 }
