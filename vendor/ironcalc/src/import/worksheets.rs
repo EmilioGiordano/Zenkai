@@ -17,6 +17,7 @@ use ironcalc_base::{
         ArrayKind, Cell, Col, Color, Comment, DefinedName, Dxf, FormulaValue, Row, SheetState,
         SpillValue, Table, Theme, Worksheet, WorksheetView,
     },
+    LAST_COLUMN,
 };
 use roxmltree::Node;
 use thiserror::Error;
@@ -153,6 +154,12 @@ fn load_columns(ws: Node) -> Result<Vec<Col>, XlsxError> {
             let style = col
                 .attribute("style")
                 .map(|s| s.parse::<i32>().unwrap_or(0));
+            // A range is cut to the sheet and dropped when no column of it is left, so a
+            // damaged file cannot give a range with min > max or outside the sheet.
+            let (min, max) = (min.max(1), max.min(LAST_COLUMN));
+            if min > max {
+                continue;
+            }
             cols.push(Col {
                 min,
                 max,

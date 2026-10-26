@@ -256,7 +256,11 @@ impl<'a> UserModel<'a> {
                                 if (source_sheet == sheet) && seen_cells.contains(&(sr, sc)) {
                                     continue;
                                 }
-                                let _ = ws.cell_clear_contents(sr, sc);
+                                if sr == row && sc == column {
+                                    let _ = ws.cell_clear_contents(sr, sc);
+                                } else {
+                                    let _ = ws.cell_clear_spill(sr, sc);
+                                }
                             }
                         }
                     } else {

@@ -551,3 +551,66 @@ fn chosen_rows_are_written_with_the_caller_s_shared_formulas() {
         )
     );
 }
+
+#[test]
+fn columns_moved_past_the_last_column_are_written_inside_the_sheet() {
+    use ironcalc_base::types::Col;
+
+    let mut model = new_empty_model();
+    let width = |min, max| Col {
+        min,
+        max,
+        width: 20.0,
+        custom_width: true,
+        style: None,
+        hidden: false,
+    };
+    model.workbook.worksheets[0].cols = vec![width(2, 16_383), width(16_384, 16_384)];
+    model.insert_columns(0, 1, 2).unwrap();
+    model.evaluate();
+    let mut written = Vec::new();
+    crate::export::write_worksheet_xml(
+        &mut written,
+        &model.workbook.worksheets[0],
+        &model.parsed_formulas[0],
+        "A1",
+        true,
+    )
+    .unwrap();
+    let written = String::from_utf8(written).unwrap();
+    assert!(
+        written.contains(r#"<cols><col min="4" max="16384" width="20" customWidth="1"/></cols>"#),
+        "{written}"
+    );
+}
+
+#[test]
+fn column_ranges_starting_before_the_first_column_are_written_from_column_one() {
+    use ironcalc_base::types::Col;
+
+    let mut model = new_empty_model();
+    let width = |min, max, width| Col {
+        min,
+        max,
+        width,
+        custom_width: true,
+        style: None,
+        hidden: false,
+    };
+    model.workbook.worksheets[0].cols = vec![width(-3, 2, 20.0), width(-9, 0, 30.0)];
+    model.evaluate();
+    let mut written = Vec::new();
+    crate::export::write_worksheet_xml(
+        &mut written,
+        &model.workbook.worksheets[0],
+        &model.parsed_formulas[0],
+        "A1",
+        true,
+    )
+    .unwrap();
+    let written = String::from_utf8(written).unwrap();
+    assert!(
+        written.contains(r#"<cols><col min="1" max="2" width="20" customWidth="1"/></cols>"#),
+        "{written}"
+    );
+}

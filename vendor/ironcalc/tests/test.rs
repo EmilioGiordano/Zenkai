@@ -561,3 +561,108 @@ fn test_number_cell_without_value_is_empty() {
         );
     }
 }
+
+fn example_with_part_edited(part: &str, edit: impl Fn(String) -> String) -> Vec<u8> {
+    let bytes = fs::read("tests/example.xlsx").unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let mut body = Vec::new();
+        entry.read_to_end(&mut body).unwrap();
+        if name == part {
+            body = edit(String::from_utf8(body).unwrap()).into_bytes();
+        }
+        writer
+            .start_file(name, zip::write::FileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer, &body).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
+#[test]
+fn test_column_ranges_outside_the_sheet() {
+    let edited = example_with_part_edited("xl/worksheets/sheet1.xml", |text| {
+        let start = text.find("<cols>").unwrap();
+        let end = text.find("</cols>").unwrap();
+        format!(
+            "{}<cols>{}</cols>{}",
+            &text[..start],
+            concat!(
+                r#"<col min="5" max="3" width="9"/>"#,
+                r#"<col min="16385" max="16390" width="9"/>"#,
+                r#"<col min="-7" max="0" width="9"/>"#,
+                r#"<col min="0" max="2" width="11"/>"#,
+                r#"<col min="5" max="5" width="38"/>"#,
+                r#"<col min="10" max="20000" width="12"/>"#,
+            ),
+            &text[end + "</cols>".len()..]
+        )
+    });
+    let model = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    let columns: Vec<(i32, i32, f64)> = model.worksheets[0]
+        .cols
+        .iter()
+        .map(|col| (col.min, col.max, col.width))
+        .collect();
+    assert_eq!(columns, [(1, 2, 11.0), (5, 5, 38.0), (10, 16_384, 12.0)]);
+}
+
+#[test]
+fn test_styles_without_cell_style_formats() {
+    let edited = example_with_part_edited("xl/styles.xml", |text| {
+        let start = text.find("<cellStyleXfs").unwrap();
+        let end = text.find("</cellStyleXfs>").unwrap() + "</cellStyleXfs>".len();
+        format!("{}{}", &text[..start], &text[end..])
+    });
+    let model = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    let default_xf = &ironcalc_base::types::Styles::default().cell_style_xfs[0];
+    assert_eq!(model.styles.cell_style_xfs.len(), 4);
+    assert!(model
+        .styles
+        .cell_style_xfs
+        .iter()
+        .all(|xf| xf == default_xf));
+}
+
+#[test]
+fn test_saved_style_references_stay_inside_cell_style_formats() {
+    let edited = example_with_part_edited("xl/styles.xml", |text| {
+        let start = text.find("<cellStyleXfs").unwrap();
+        let end = text.find("</cellStyleXfs>").unwrap() + "</cellStyleXfs>".len();
+        format!("{}{}", &text[..start], &text[end..])
+    });
+    let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    let mut model = Model::from_workbook(workbook, "en").unwrap();
+    model.evaluate();
+    let saved = ironcalc::export::save_xlsx_to_writer(&model, std::io::Cursor::new(Vec::new()))
+        .unwrap()
+        .into_inner();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+    let mut styles = String::new();
+    archive
+        .by_name("xl/styles.xml")
+        .unwrap()
+        .read_to_string(&mut styles)
+        .unwrap();
+
+    let count_start =
+        styles.find("<cellStyleXfs count=\"").unwrap() + "<cellStyleXfs count=\"".len();
+    let count: i32 = styles[count_start..]
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut referenced = 0;
+    let mut rest = styles.as_str();
+    while let Some(at) = rest.find("xfId=\"") {
+        rest = &rest[at + "xfId=\"".len()..];
+        let id: i32 = rest.split('"').next().unwrap().parse().unwrap();
+        assert!(id < count, "xfId {id} is past cellStyleXfs count {count}");
+        referenced += 1;
+    }
+    assert!(referenced > 0);
+}

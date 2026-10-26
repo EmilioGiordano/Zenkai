@@ -50,6 +50,23 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   not as the number 0, so a styled blank written by openpyxl stays blank
   (`src/import/worksheets.rs`). Test: `test_number_cell_without_value_is_empty` in
   `tests/test.rs`.
+- The xlsx import cuts each `<col>` range to columns 1 to 16384 and drops one with no
+  column left, such as `min="5" max="3"`, so a damaged file cannot leave a range that
+  saves as one Excel repairs (`src/import/worksheets.rs`, `load_columns`). Needs the
+  public `LAST_COLUMN` of ironcalc_base. Test: `test_column_ranges_outside_the_sheet` in
+  `tests/test.rs`.
+- The xlsx export writes only the part inside the sheet of a column range that inserting
+  columns moved past column 16384, and skips one moved wholly past it; the model keeps
+  them, so undoing the insert brings them back; a range starting before column 1 is written
+  from column 1 (`src/export/worksheets.rs`). Needs the public `LAST_COLUMN` of
+  ironcalc_base. Tests: `columns_moved_past_the_last_column_are_written_inside_the_sheet`
+  and `column_ranges_starting_before_the_first_column_are_written_from_column_one` in
+  `src/export/test/test_export.rs`.
+- The xlsx import reads a styles part without `cellStyleXfs`, which the schema makes
+  optional, with default records, one per xfId the formats and named styles reference (up to 64,000), instead of
+  panicking on the missing element, so a save leaves no xfId dangling (`src/import/styles.rs`). Tests:
+  `test_styles_without_cell_style_formats` and
+  `test_saved_style_references_stay_inside_cell_style_formats` in `tests/test.rs`.
 
 Zenkai-only, not for upstream:
 
@@ -258,6 +275,18 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   on its own. Tests: `input_percentage_keeps_a_percentage_format_only` in
   `src/test/test_set_user_input.rs`, `percent_number_formats` in
   `src/formatter/test/test_general.rs`.
+- `LAST_COLUMN` is public, so the xlsx import and export of `ironcalc` can keep column
+  ranges inside the sheet (`src/constants.rs`, `src/lib.rs`). Stands on its own.
+- The cells a dynamic array stops spilling into, because it shrinks, is blocked, cleared,
+  overwritten, cut, undone or reset before rows or columns move, are removed instead of
+  left as empty cells, unless they have a style of their own, as in Excel; the empty cells
+  stretched the sheet's dimension and were saved (`Worksheet::cell_clear_spill` in
+  `src/worksheet.rs`, its callers in `src/model.rs`, `src/user_model/undo_redo.rs` and
+  `src/user_model/clipboard.rs`). A re-evaluated spill is still cleared in place and only
+  the cells left past its new range are removed (`Model::remove_cells_left_by_spill`), so a
+  stable spill costs what it did. Clearing an area leaves a position without a cell as it
+  is instead of writing an empty cell there, so deleting a whole spill keeps none of it.
+  Stands on its own. Tests: `src/test/user_model/test_spill_leftover_cells.rs`.
 - Date serials below 61 carry Excel's 1900 labels: serial 1 is 1/1/1900, 60 the fictitious
   2/29/1900 and 0 is 1/0/1900, in number formats and TEXT, DAY, MONTH, YEAR and WEEKDAY,
   and DATE, DATEVALUE and typed dates give those serials back; a typed date before 1/1/1900
