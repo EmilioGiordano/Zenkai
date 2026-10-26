@@ -1845,8 +1845,8 @@ fn reveal_axes(active: CellPos, corner: CellPos) -> (Option<RowIdx>, Option<ColI
 #[cfg(test)]
 mod tests {
     use super::{
-        Direction, reveal_axes, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, cached_ranges, capped_frozen,
-        cycle_within, next_boundary, prev_boundary, shown_contains, typed_preview,
+        Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, cached_ranges, capped_frozen,
+        cycle_within, next_boundary, prev_boundary, reveal_axes, shown_contains, typed_preview,
     };
     use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
