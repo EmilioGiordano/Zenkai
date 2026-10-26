@@ -148,3 +148,11 @@ fn undo_and_redo_of_the_shrink_restore_the_cells() {
     assert_absent(&model, 4..=10, 2);
     assert_eq!(last_row(&model), 3);
 }
+
+#[test]
+fn clearing_all_of_the_anchor_removes_its_spill() {
+    let mut model = sequence_of_ten();
+    model.range_clear_all(&area(1, 2, 1, 1)).unwrap();
+    assert_absent(&model, 1..=10, 2);
+    assert_eq!(last_row(&model), 1);
+}
