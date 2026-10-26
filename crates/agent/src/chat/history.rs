@@ -153,8 +153,10 @@ impl History {
         match History::load(path) {
             Err(HistoryError::Damaged(error)) => {
                 tracing::warn!(%error, "conversation history is damaged; keeping it as .bak");
-                std::fs::rename(path, path.with_extension("json.bak"))
-                    .map_err(HistoryError::Write)?;
+                let aside = zenkai_types::aside::free_aside_name(path, "bak").ok_or_else(|| {
+                    HistoryError::Write(std::io::Error::other("no free name for the .bak copy"))
+                })?;
+                std::fs::rename(path, aside).map_err(HistoryError::Write)?;
                 Ok(History::default())
             }
             other => other,
@@ -270,6 +272,44 @@ mod tests {
             std::fs::read_to_string(path.with_extension("json.bak")).unwrap(),
             "{ nope"
         );
+    }
+
+    #[test]
+    fn a_second_damage_keeps_the_first_quarantined_copy() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("history.json");
+        std::fs::write(&path, "{ first").unwrap();
+        History::load_or_quarantine(&path).unwrap();
+        std::fs::write(&path, "{ second").unwrap();
+        History::load_or_quarantine(&path).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(folder.path().join("history.json.bak")).unwrap(),
+            "{ first"
+        );
+        assert_eq!(
+            std::fs::read_to_string(folder.path().join("history.json.1.bak")).unwrap(),
+            "{ second"
+        );
+    }
+
+    #[test]
+    fn a_failed_set_aside_reports_the_error_and_leaves_the_damaged_file() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("history.json");
+        std::fs::write(&path, "{ damaged").unwrap();
+        let taken = zenkai_types::aside::ASIDE_ATTEMPTS;
+        for attempt in 0..taken {
+            let name = match attempt {
+                0 => "history.json.bak".to_string(),
+                _ => format!("history.json.{attempt}.bak"),
+            };
+            std::fs::write(folder.path().join(name), "earlier").unwrap();
+        }
+        assert!(matches!(
+            History::load_or_quarantine(&path),
+            Err(HistoryError::Write(_))
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ damaged");
     }
 
     #[test]

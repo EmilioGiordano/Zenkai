@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod aside;
+
 use std::fmt;
 
 use schemars::JsonSchema;

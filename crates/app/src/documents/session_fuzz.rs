@@ -107,6 +107,7 @@ proptest! {
                 !session::file_in(folder.path()).exists(),
                 "an unreadable session was left in place to be overwritten by the next close"
             ),
+            Loaded::KeptInPlace => prop_assert!(false, "a free name must exist in a fresh folder"),
             Loaded::Absent => prop_assert!(false, "a file that exists is not absent"),
         }
     }

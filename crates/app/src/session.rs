@@ -95,6 +95,8 @@ pub enum Loaded {
     Restored(Session),
     // Moved aside so the next close does not overwrite it with a blank one.
     Unreadable,
+    // Could not be moved aside, so it stays and no save may replace it.
+    KeptInPlace,
 }
 
 impl Session {
@@ -364,12 +366,25 @@ pub fn load(directory: &Path) -> Loaded {
 }
 
 fn set_aside(file: &Path) -> Loaded {
-    let aside = file.with_extension("json.unreadable");
-    if let Err(error) = std::fs::rename(file, &aside) {
-        tracing::warn!(%error, "could not move the unreadable session file aside");
+    let moved = zenkai_types::aside::free_aside_name(file, "unreadable")
+        .ok_or_else(|| std::io::Error::other("no free name for the .unreadable copy"))
+        .and_then(|aside| std::fs::rename(file, aside));
+    match moved {
+        Ok(()) => Loaded::Unreadable,
+        Err(error) => {
+            tracing::warn!(%error, "could not move the unreadable session file aside");
+            KEPT_IN_PLACE
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(file.to_path_buf());
+            Loaded::KeptInPlace
+        }
     }
-    Loaded::Unreadable
 }
+
+// Files that could not be set aside; a save would replace the only copy, so none is written.
+static KEPT_IN_PLACE: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 // Written next to the file and renamed over it, so a crash never leaves half a session.
 // Taken when a snapshot is made. Writes may run on any thread, so a write whose snapshot is
@@ -397,6 +412,15 @@ pub fn save_in_order(directory: &Path, session: &Session, order: SaveOrder) -> s
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let file = file_in(directory);
+    if KEPT_IN_PLACE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(&file)
+    {
+        return Err(std::io::Error::other(
+            "the unreadable session file could not be set aside and is kept",
+        ));
+    }
     if last.get(&file).is_some_and(|written| order < *written) {
         return Ok(());
     }
@@ -641,6 +665,41 @@ mod tests {
                 .exists()
         );
         assert!(matches!(load(directory.path()), Loaded::Absent));
+    }
+
+    #[test]
+    fn a_second_corrupt_file_keeps_the_first_moved_aside() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = file_in(directory.path());
+        std::fs::write(&file, "{ first").unwrap();
+        load(directory.path());
+        std::fs::write(&file, "{ second").unwrap();
+        load(directory.path());
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("session.json.unreadable")).unwrap(),
+            "{ first"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("session.json.1.unreadable")).unwrap(),
+            "{ second"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_file_that_cannot_be_moved_aside_is_never_overwritten_by_a_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = file_in(directory.path());
+        std::fs::write(&file, "{ damaged").unwrap();
+        for attempt in 0..zenkai_types::aside::ASIDE_ATTEMPTS {
+            let name = match attempt {
+                0 => "session.json.unreadable".to_string(),
+                _ => format!("session.json.{attempt}.unreadable"),
+            };
+            std::fs::write(directory.path().join(name), "earlier").unwrap();
+        }
+        assert!(matches!(load(directory.path()), Loaded::KeptInPlace));
+        assert!(save(directory.path(), &session()).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ damaged");
     }
 
     #[test]
