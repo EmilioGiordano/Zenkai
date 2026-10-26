@@ -50,6 +50,21 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   not as the number 0, so a styled blank written by openpyxl stays blank
   (`src/import/worksheets.rs`). Test: `test_number_cell_without_value_is_empty` in
   `tests/test.rs`.
+- The xlsx import cuts each `<col>` range to columns 1 to 16384 and drops one with no
+  column left, such as `min="5" max="3"`, so a damaged file cannot leave a range that
+  saves as one Excel repairs (`src/import/worksheets.rs`, `load_columns`). Needs the
+  public `LAST_COLUMN` of ironcalc_base. Test: `test_column_ranges_outside_the_sheet` in
+  `tests/test.rs`.
+- The xlsx export writes only the part inside the sheet of a column range that inserting
+  columns moved past column 16384, and skips one moved wholly past it; the model keeps
+  them, so undoing the insert brings them back (`src/export/worksheets.rs`). Needs the
+  public `LAST_COLUMN` of ironcalc_base. Test:
+  `columns_moved_past_the_last_column_are_written_inside_the_sheet` in
+  `src/export/test/test_export.rs`.
+- The xlsx import reads a styles part without `cellStyleXfs`, which the schema makes
+  optional, with the one default record of a new workbook instead of panicking on the
+  missing element (`src/import/styles.rs`). Test: `test_styles_without_cell_style_formats`
+  in `tests/test.rs`.
 
 Zenkai-only, not for upstream:
 
@@ -218,6 +233,8 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   shift typed text from one cell to another without writing the source cell first and
   undoing it (`src/user_model/common.rs`). Stands on its own. Tests:
   `src/test/user_model/test_extend_copied_value.rs`.
+- `LAST_COLUMN` is public, so the xlsx import and export of `ironcalc` can keep column
+  ranges inside the sheet (`src/constants.rs`, `src/lib.rs`). Stands on its own.
 
 Zenkai-only, not for upstream:
 
