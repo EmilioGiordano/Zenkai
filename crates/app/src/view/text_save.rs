@@ -266,7 +266,7 @@ impl Workspace {
             self.save_ended(id, false, window, cx);
             return;
         };
-        if text.writing != Writing::Idle {
+        if text.writing == Writing::Saving {
             self.notify(Severity::Warning, t!("notice.still_saving"), cx);
             self.save_ended(id, false, window, cx);
             return;
@@ -404,7 +404,9 @@ impl Workspace {
                 let Some(text) = this.documents.text_mut(id) else {
                     return;
                 };
-                text.writing = Writing::Idle;
+                if text.writing == Writing::Autosaving {
+                    text.writing = Writing::Idle;
+                }
                 match result {
                     Ok(()) => {
                         text.recovery_written(edits);
