@@ -336,8 +336,8 @@ impl Worksheet {
         self.update_cell(row, column, cell)
     }
 
-    /// Clears a cell a dynamic array no longer spills into. As in Excel, the cell is removed
-    /// unless it has a style of its own, so the used range shrinks with the spill.
+    // As in Excel, a cell a spill leaves survives only as a styled empty cell when it has a
+    // style of its own; otherwise it is removed so the used range shrinks with the spill.
     pub fn cell_clear_spill(&mut self, row: i32, column: i32) -> Result<(), String> {
         let style = self.get_style(row, column);
         if style == self.get_row_column_style(row, column) {
