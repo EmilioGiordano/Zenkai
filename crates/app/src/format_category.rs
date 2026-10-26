@@ -13,9 +13,58 @@ pub enum FormatCategory {
     Custom,
 }
 
+use zenkai_i18n::t;
+
 const CURRENCY_SYMBOLS: [char; 4] = ['$', '€', '£', '¥'];
 
 impl FormatCategory {
+    pub const ALL: [Self; 11] = [
+        Self::General,
+        Self::Number,
+        Self::Currency,
+        Self::Accounting,
+        Self::Date,
+        Self::Time,
+        Self::Percentage,
+        Self::Fraction,
+        Self::Scientific,
+        Self::Text,
+        Self::Custom,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => t!("format.category.general"),
+            Self::Number => t!("format.category.number"),
+            Self::Currency => t!("format.category.currency"),
+            Self::Accounting => t!("format.category.accounting"),
+            Self::Date => t!("format.category.date"),
+            Self::Time => t!("format.category.time"),
+            Self::Percentage => t!("format.category.percentage"),
+            Self::Fraction => t!("format.category.fraction"),
+            Self::Scientific => t!("format.category.scientific"),
+            Self::Text => t!("format.category.text"),
+            Self::Custom => t!("format.category.custom"),
+        }
+    }
+
+    // The code a category click writes; Custom keeps whatever the user typed.
+    pub fn start_code(self) -> Option<&'static str> {
+        match self {
+            Self::General => Some("general"),
+            Self::Number => Some("#,##0.00"),
+            Self::Currency => Some("$#,##0.00"),
+            Self::Accounting => Some("_($* #,##0.00_);_($* (#,##0.00);_($* \"-\"??_);_(@_)"),
+            Self::Date => Some("dd/mm/yyyy"),
+            Self::Time => Some("h:mm:ss"),
+            Self::Percentage => Some("0.00%"),
+            Self::Fraction => Some("# ?/?"),
+            Self::Scientific => Some("0.00E+00"),
+            Self::Text => Some("@"),
+            Self::Custom => None,
+        }
+    }
+
     pub fn of(code: &str) -> Self {
         let code = code.trim();
         if code.is_empty() || code.eq_ignore_ascii_case("general") {
