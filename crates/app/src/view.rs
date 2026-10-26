@@ -30,6 +30,7 @@ mod agent_review;
 mod chat_dock;
 mod close_dialog;
 mod closing;
+mod messages;
 mod notice_card;
 mod notices;
 mod pdfs;
@@ -157,6 +158,7 @@ pub struct Workspace {
     active_style: CellStyle,
     notices: Notices,
     notice_focus: FocusHandle,
+    messages: Option<messages::MessagesPanel>,
     toast: Option<agent_access::Toast>,
     toast_generation: u64,
     busy: Option<SharedString>,
@@ -325,6 +327,7 @@ impl Workspace {
             active_style: CellStyle::default(),
             notices: Notices::default(),
             notice_focus: cx.focus_handle(),
+            messages: None,
             toast: None,
             toast_generation: 0,
             busy: None,
@@ -4043,6 +4046,14 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
             .on_action(
+                cx.listener(|this, _: &ShowMessages, window, cx| this.toggle_messages(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CloseMessages, window, cx| this.close_messages(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NextMessage, _, cx| this.step_message(true, cx)))
+            .on_action(cx.listener(|this, _: &PreviousMessage, _, cx| this.step_message(false, cx)))
+            .on_action(
                 cx.listener(|this, _: &FocusNotice, window, cx| this.focus_notice(window, cx)),
             )
             .on_action(cx.listener(|this, _: &AllowAgentChange, window, cx| {
@@ -4104,6 +4115,7 @@ impl Render for Workspace {
             .children(self.render_busy(busy_label, cx))
             .children(self.render_toast(cx))
             .children(self.render_notice_card(cx))
+            .children(self.render_messages(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
             .children(self.render_close_dialog(cx))

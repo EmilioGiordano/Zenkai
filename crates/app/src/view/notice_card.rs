@@ -17,7 +17,7 @@ const TEXT_MAX_HEIGHT: f32 = 168.0;
 
 pub(super) fn severity_title(severity: Severity) -> SharedString {
     match severity {
-        Severity::Info => SharedString::default(),
+        Severity::Info => t!("notice.title.info").into(),
         Severity::Warning => t!("notice.title.warning").into(),
         Severity::Error => t!("notice.title.error").into(),
     }
@@ -42,6 +42,10 @@ impl Workspace {
     }
 
     pub(super) fn copy_notice(&mut self, cx: &mut Context<Self>) {
+        if self.messages.is_some() {
+            self.copy_selected_message(cx);
+            return;
+        }
         if let Some(card) = self.notices.card() {
             cx.write_to_clipboard(ClipboardItem::new_string(card.text.to_string()));
         }
@@ -55,6 +59,9 @@ impl Workspace {
 
     pub(super) fn render_notice_card(&self, cx: &Context<Self>) -> Option<impl IntoElement> {
         let notice = self.notices.card()?;
+        if self.messages.is_some() {
+            return None;
+        }
         let theme = cx.theme();
         let (icon, color) = severity_icon(notice.severity, theme);
         let title = severity_title(notice.severity);
