@@ -3318,7 +3318,7 @@ impl<'a> Model<'a> {
         }
         for (row, column) in cells_to_clear {
             // we ignore errors here because the cell might have already been cleared as part of an array formula
-            let _ = worksheet.cell_clear_contents(row, column);
+            let _ = worksheet.cell_clear_spill(row, column);
         }
         Ok(())
     }
