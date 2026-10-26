@@ -220,8 +220,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/test/user_model/test_extend_copied_value.rs`.
 - Date serials below 61 carry Excel's 1900 labels: serial 1 is 1/1/1900, 60 the fictitious
   2/29/1900 and 0 is 1/0/1900, in number formats and TEXT, DAY, MONTH, YEAR and WEEKDAY,
-  and DATE, DATEVALUE and typed dates give those serials back (`src/formatter/dates.rs`,
-  `src/formatter/format.rs`, `src/functions/date_and_time.rs`). Serials from 61 on are
+  and DATE, DATEVALUE and typed dates give those serials back; a typed date before 1/1/1900
+  stays text (`src/formatter/dates.rs`, `src/formatter/format.rs`,
+  `src/functions/date_and_time.rs`, `src/conditional_formatting.rs`). Serials from 61 on are
   unchanged. `DATE(1899, 12, 31)` now gives `#NUM!` instead of 1 (Excel reads the year
   as 3799, which neither does). Upstream labels them as Google Sheets does (serial 1 is
   12/31/1899), on purpose, so it may not take this as is. Stands on its own. Tests:
