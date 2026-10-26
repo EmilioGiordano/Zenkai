@@ -100,24 +100,14 @@ impl<'a> UserModel<'a> {
                     old_values,
                 } => {
                     needs_evaluation = true;
-                    // Clear all cells in the array formula range (anchor + spill cells).
+                    // Put back the cells that existed and remove the ones that did not, so
+                    // the style the formula gave them goes too and row and column styles apply again.
                     let ws = self.model.workbook.worksheet_mut(*sheet)?;
-                    for r in *row..*row + *height {
-                        for c in *column..*column + *width {
-                            let _ = ws.cell_clear_contents(r, c);
-                        }
-                    }
-                    // Restore all cells that existed before the array formula was placed.
-                    for (ri, row_vals) in old_values.iter().enumerate() {
-                        for (ci, cell) in row_vals.iter().enumerate() {
-                            if let Some(cell) = cell {
-                                let r = *row + ri as i32;
-                                let c = *column + ci as i32;
-                                self.model.workbook.worksheet_mut(*sheet)?.update_cell(
-                                    r,
-                                    c,
-                                    cell.clone(),
-                                )?;
+                    for (r, row_vals) in (*row..*row + *height).zip(old_values) {
+                        for (c, cell) in (*column..*column + *width).zip(row_vals) {
+                            match cell {
+                                Some(cell) => ws.update_cell(r, c, cell.clone())?,
+                                None => ws.remove_cell(r, c)?,
                             }
                         }
                     }

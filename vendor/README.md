@@ -233,6 +233,19 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   compare it with filling as text. Tests: `src/test/user_model/test_undo_input_format.rs`,
   `undo_removes_filled_cells_that_did_not_exist` in
   `src/test/user_model/test_fill_formula.rs`.
+- Undoing an array formula entered over a spill cell gives the cell back its own style
+  instead of the one the formula gave it; the anchor spills into it again
+  (`src/user_model/common.rs`, `set_user_array_formula`). Stands on its own. Test:
+  `undo_array_formula_over_spill_cell_keeps_its_style` in
+  `src/test/user_model/test_undo_input_format.rs`.
+- Undoing an array formula entered over cells that did not exist removes those cells
+  instead of leaving them empty with the style the formula gave them, so a value typed
+  there later shows no number format from the formula, as in Excel, and row and column
+  styles apply to the cells again (`src/user_model/undo_redo.rs`). Needs the array formula
+  spill cell patch above, or a styled spill cell under the formula loses its style on
+  undo. Tests: `undo_array_formula_removes_the_cells_that_did_not_exist` and
+  `undo_array_formula_inherits_the_row_style_again` in
+  `src/test/user_model/test_undo_input_format.rs`.
 
 Zenkai-only, not for upstream:
 

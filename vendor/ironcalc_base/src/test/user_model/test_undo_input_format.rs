@@ -168,3 +168,83 @@ fn undo_typed_input_into_spill_cell_keeps_its_style() {
     assert_eq!(style.num_fmt, PERCENT);
     assert!(style.font.b);
 }
+
+#[test]
+fn undo_array_formula_over_spill_cell_keeps_its_style() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 3, "5%").unwrap();
+    model.set_user_input(0, 1, 1, "=SEQUENCE(3)").unwrap();
+    model
+        .update_range_style(&area(2, 1, 1, 1), "font.b", "true")
+        .unwrap();
+    let bold = style_index(&model, 2, 1);
+
+    model
+        .set_user_array_formula(0, 2, 1, 2, 1, "=C1+1")
+        .unwrap();
+    let format = num_fmt(&model, 2, 1);
+    assert_ne!(format, "general");
+    assert_eq!(model.get_formatted_cell_value(0, 1, 1).unwrap(), "#SPILL!");
+
+    model.undo().unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 2, 1).unwrap(), "2");
+    assert_eq!(style_index(&model, 2, 1), bold);
+
+    model.redo().unwrap();
+    let style = model.get_cell_style(0, 2, 1).unwrap();
+    assert_eq!(style.num_fmt, format);
+    assert!(style.font.b);
+}
+
+#[test]
+fn undo_array_formula_removes_the_cells_that_did_not_exist() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 1, "5%").unwrap();
+    model
+        .update_range_style(&area(1, 4, 1, 1), "font.b", "true")
+        .unwrap();
+    let bold = style_index(&model, 1, 4);
+    model.set_user_input(0, 2, 4, "7").unwrap();
+    let seven = style_index(&model, 2, 4);
+
+    model
+        .set_user_array_formula(0, 1, 3, 2, 2, "=A1+1")
+        .unwrap();
+    let format = num_fmt(&model, 1, 3);
+    assert_ne!(format, "general");
+
+    model.undo().unwrap();
+    assert!(!has_cell(&model, 1, 3));
+    assert!(!has_cell(&model, 2, 3));
+    assert_eq!(num_fmt(&model, 1, 3), "general");
+    assert_eq!(model.get_cell_content(0, 1, 4).unwrap(), "");
+    assert_eq!(style_index(&model, 1, 4), bold);
+    assert_eq!(model.get_cell_content(0, 2, 4).unwrap(), "7");
+    assert_eq!(style_index(&model, 2, 4), seven);
+
+    model.redo().unwrap();
+    assert_eq!(model.get_cell_content(0, 1, 3).unwrap(), "=A1+1");
+    assert_eq!(num_fmt(&model, 1, 3), format);
+    assert!(model.get_cell_style(0, 1, 4).unwrap().font.b);
+
+    model.undo().unwrap();
+    model.set_user_input(0, 1, 3, "0.5").unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 1, 3).unwrap(), "0.5");
+}
+
+#[test]
+fn undo_array_formula_inherits_the_row_style_again() {
+    let mut model = new_empty_user_model();
+    model
+        .update_range_style(&area(1, 1, LAST_COLUMN, 1), "font.b", "true")
+        .unwrap();
+    let row_style = style_index(&model, 1, 3);
+
+    model.set_user_array_formula(0, 1, 3, 2, 1, "=1+1").unwrap();
+    model.undo().unwrap();
+
+    for column in [3, 4] {
+        assert!(!has_cell(&model, 1, column), "{column}");
+        assert_eq!(style_index(&model, 1, column), row_style, "{column}");
+    }
+}

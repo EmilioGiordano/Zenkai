@@ -2326,11 +2326,12 @@ impl<'a> UserModel<'a> {
             let mut row_vals = Vec::new();
             for c in column..column + width {
                 let cell = ws.cell(r, c).cloned();
-                // SpillCells are transient — restored by re-evaluation, so store as None.
-                let cell = if matches!(cell, Some(Cell::SpillCell { .. })) {
-                    None
-                } else {
-                    cell
+                // SpillCells are transient, restored by re-evaluation, so store them as empty cells with their style.
+                let cell = match cell {
+                    Some(cell @ Cell::SpillCell { .. }) => Some(Cell::EmptyCell {
+                        s: cell.get_style(),
+                    }),
+                    cell => cell,
                 };
                 row_vals.push(cell);
             }
