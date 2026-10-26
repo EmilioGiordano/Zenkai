@@ -29,6 +29,20 @@ impl FormatCategory {
         if let Some(category) = date_or_time(&core) {
             return category;
         }
+        let upper = core.to_ascii_uppercase();
+        if upper.contains("E+") || upper.contains("E-") {
+            return Self::Scientific;
+        }
+        if core.contains('/') {
+            return Self::Fraction;
+        }
+        if core.contains('%') {
+            return if is_plain_number(&core.replace('%', "")) {
+                Self::Percentage
+            } else {
+                Self::Custom
+            };
+        }
         Self::Custom
     }
 }
@@ -44,6 +58,24 @@ fn date_or_time(core: &str) -> Option<FormatCategory> {
         Some(FormatCategory::Date)
     } else {
         None
+    }
+}
+
+// The digit placeholders Excel's Number category offers: 0, 0.00, #,##0 and #,##0.00.
+fn is_plain_number(core: &str) -> bool {
+    let digits: String = core
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '_' | '(' | ')' | '-' | '+') && !CURRENCY_SYMBOLS.contains(c))
+        .collect();
+    let Some(decimals) = digits
+        .strip_prefix("#,##0")
+        .or_else(|| digits.strip_prefix('0'))
+    else {
+        return false;
+    };
+    match decimals.strip_prefix('.') {
+        None => decimals.is_empty(),
+        Some(zeros) => !zeros.is_empty() && zeros.chars().all(|c| c == '0'),
     }
 }
 
@@ -112,5 +144,31 @@ mod tests {
         for code in ["h:mm:ss", "h:mm AM/PM", "[h]:mm:ss", "mm:ss", "[$-409]h:mm:ss AM/PM"] {
             assert_eq!(FormatCategory::of(code), FormatCategory::Time, "{code}");
         }
+    }
+
+    #[test]
+    fn scientific_codes() {
+        for code in ["0.00E+00", "0E+0", "##0.0E+0"] {
+            assert_eq!(FormatCategory::of(code), FormatCategory::Scientific, "{code}");
+        }
+    }
+
+    #[test]
+    fn fraction_codes() {
+        for code in ["# ?/?", "# ??/??", "# ?/8", "# ?/16"] {
+            assert_eq!(FormatCategory::of(code), FormatCategory::Fraction, "{code}");
+        }
+    }
+
+    #[test]
+    fn percentage_decimals_do_not_matter() {
+        for code in ["0%", "0.0%", "0.000%", "0.00%;[Red]-0.00%"] {
+            assert_eq!(FormatCategory::of(code), FormatCategory::Percentage, "{code}");
+        }
+    }
+
+    #[test]
+    fn percent_with_other_tokens_is_custom() {
+        assert_eq!(FormatCategory::of("0.0% ##x"), FormatCategory::Custom);
     }
 }
