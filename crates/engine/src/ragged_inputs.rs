@@ -77,6 +77,44 @@ fn a_wide_first_row_does_not_widen_the_rows_after_it() {
     book.set_inputs(SHEET, CellPos::default(), &rows).unwrap();
 
     assert_eq!(stored_cells(&book), fields);
-    assert_eq!(input(&book, "A2002"), "1999");
-    assert_eq!(input(&book, "B2002"), "");
+    assert_eq!(input(&book, "A2001"), "1999");
+    assert_eq!(input(&book, "B2001"), "");
+}
+
+#[test]
+fn ragged_rows_inside_an_edit_group_stay_one_undo_step() {
+    let mut book = Workbook::new_empty().unwrap();
+    book.set_inputs(SHEET, CellPos::default(), &[row(&["before"])])
+        .unwrap();
+    let origin = CellPos::parse_a1("C1").unwrap();
+    book.as_one_undo_step(|book| {
+        book.set_inputs(SHEET, origin, &[row(&["a", "b"]), row(&["c"])])?;
+        book.set_inputs(SHEET, origin, &[row(&["d"]), row(&["e", "f"])])
+    })
+    .unwrap();
+    assert_eq!(input(&book, "D2"), "f");
+    book.undo().unwrap();
+    assert_eq!(input(&book, "A1"), "before");
+    assert!(book.filled_cells(SHEET).len() == 1);
+}
+
+#[test]
+fn a_rejected_ragged_block_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("array.xlsx");
+    let mut source = rust_xlsxwriter::Workbook::new();
+    source
+        .add_worksheet()
+        .write_array_formula(0, 1, 1, 1, "{=A1:A2*2}")
+        .unwrap();
+    source.save(&path).unwrap();
+    let mut book = crate::file::open_xlsx(&path).unwrap().workbook;
+
+    let before = book.filled_cells(SHEET);
+    let rows = vec![row(&["x"]), row(&["y", "z"])];
+    assert!(book.set_inputs(SHEET, CellPos::default(), &rows).is_err());
+    assert_eq!(book.filled_cells(SHEET), before);
+    assert_eq!(input(&book, "A1"), "");
+    book.undo().unwrap();
+    assert_eq!(book.filled_cells(SHEET), before);
 }
