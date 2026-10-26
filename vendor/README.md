@@ -173,7 +173,8 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   same formula index in each cell, instead of printing, parsing and storing a text per
   cell. It leaves the cells alone and returns false when a reference would leave the sheet
   or invert a range, or the area holds an array or a spill, so the caller fills as text.
-  Undo restores the old cells; redo reads the source cell again (new `Diff::FillFormula`).
+  Undo restores the old cells and removes the ones that did not exist; redo reads the
+  source cell again (new `Diff::FillFormula`).
   `UserModel::begin_edit_group` and `end_edit_group` join the edits between them into one
   undo step, evaluating once (`src/user_model/fill_formula.rs`, `common.rs`). Tests:
   `src/test/user_model/test_fill_formula.rs`.
@@ -218,6 +219,45 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   shift typed text from one cell to another without writing the source cell first and
   undoing it (`src/user_model/common.rs`). Stands on its own. Tests:
   `src/test/user_model/test_extend_copied_value.rs`.
+- Undoing an input typed over a spill cell gives the cell back its own style instead of
+  the one the input gave it; the anchor spills into it again (`src/user_model/common.rs`,
+  `set_user_input`). Stands on its own. Test:
+  `undo_typed_input_into_spill_cell_keeps_its_style` in
+  `src/test/user_model/test_undo_input_format.rs`.
+- Undoing an input written where there was no cell removes the cell instead of leaving
+  it empty with the style the input gave it, so `5%` or a date typed, pasted or filled
+  into an empty cell and undone leaves no number format behind, as in Excel, and row and
+  column styles apply to the cell again (`src/user_model/undo_redo.rs`). Needs the spill
+  cell patch above, or a styled spill cell loses its style on undo. Undoing
+  `fill_formula` removes such cells too (`src/user_model/fill_formula.rs`), as its tests
+  compare it with filling as text. Tests: `src/test/user_model/test_undo_input_format.rs`,
+  `undo_removes_filled_cells_that_did_not_exist` in
+  `src/test/user_model/test_fill_formula.rs`.
+- Undoing an array formula entered over a spill cell gives the cell back its own style
+  instead of the one the formula gave it; the anchor spills into it again
+  (`src/user_model/common.rs`, `set_user_array_formula`). Stands on its own. Test:
+  `undo_array_formula_over_spill_cell_keeps_its_style` in
+  `src/test/user_model/test_undo_input_format.rs`.
+- Undoing an array formula entered over cells that did not exist removes those cells
+  instead of leaving them empty with the style the formula gave them, so a value typed
+  there later shows no number format from the formula, as in Excel, and row and column
+  styles apply to the cells again (`src/user_model/undo_redo.rs`). Needs the array formula
+  spill cell patch above, or a styled spill cell under the formula loses its style on
+  undo. Tests: `undo_array_formula_removes_the_cells_that_did_not_exist` and
+  `undo_array_formula_inherits_the_row_style_again` in
+  `src/test/user_model/test_undo_input_format.rs`.
+- A typed percentage gets Excel's built-in format `0%`, or `0.00%` when it has decimals
+  (ids 9 and 10, so the saved file names no custom format), instead of `#,##0%` and
+  `#,##0.00%` (`src/formatter/format.rs`, `parse_formatted_number`). Stands on its own; the
+  tests of the undo patch above assert its format. Tests:
+  `src/formatter/test/test_parse_formatted_number.rs`, `input_percentages` in
+  `src/test/test_set_user_input.rs`.
+- A percentage typed into a cell already formatted as a percentage keeps the cell's format,
+  as a date typed into a date-formatted cell already does (`src/model.rs`,
+  `set_user_input`; `is_likely_percent_number_format` in `src/formatter/lexer.rs`). Stands
+  on its own. Tests: `input_percentage_keeps_a_percentage_format_only` in
+  `src/test/test_set_user_input.rs`, `percent_number_formats` in
+  `src/formatter/test/test_general.rs`.
 
 Zenkai-only, not for upstream:
 

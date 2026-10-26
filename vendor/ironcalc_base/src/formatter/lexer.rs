@@ -567,3 +567,16 @@ pub fn is_likely_date_number_format(format: &str) -> bool {
         }
     }
 }
+
+pub fn is_likely_percent_number_format(format: &str) -> bool {
+    let mut lexer = Lexer::new(format);
+    loop {
+        let token = lexer.next_token();
+        if token == Token::EOF {
+            return false;
+        }
+        if token == Token::Percent {
+            return true;
+        }
+    }
+}
