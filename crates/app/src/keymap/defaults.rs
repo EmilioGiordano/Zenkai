@@ -349,6 +349,25 @@ mod tests {
     }
 
     #[test]
+    fn the_grid_keeps_ctrl_minus_and_ctrl_plus_for_deleting_and_inserting() {
+        let action_of = |chord: &str, context: &str| {
+            defaults()
+                .into_iter()
+                .find(|binding| binding.chord.as_str() == chord && binding.context == Some(context))
+                .map(|binding| binding.action.name())
+        };
+        let delete = Some(<DeleteSelection as Action>::name_for_type());
+        let insert = Some(<InsertSelection as Action>::name_for_type());
+        assert_eq!(action_of("ctrl--", "Grid"), delete);
+        assert_eq!(action_of("ctrl-+", "Grid"), insert);
+        assert_eq!(action_of("ctrl-shift-=", "Grid"), insert);
+        assert_eq!(
+            action_of("ctrl--", "Workspace"),
+            Some(<ZoomOut as Action>::name_for_type())
+        );
+    }
+
+    #[test]
     fn the_close_dialog_accepts_y_to_save_and_n_to_discard() {
         let dialog_action = |chord: &str| {
             defaults()
