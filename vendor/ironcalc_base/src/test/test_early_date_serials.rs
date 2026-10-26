@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used)]
-
 use crate::{cell::CellValue, test::util::new_empty_model};
 
 // Excel's 1900 date system: serial 1 is 1/1/1900 and serial 60 is the fictitious 2/29/1900.

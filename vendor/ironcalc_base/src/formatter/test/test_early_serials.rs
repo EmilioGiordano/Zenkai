@@ -1,5 +1,4 @@
 #![allow(clippy::unwrap_used)]
-#![allow(clippy::expect_used)]
 
 use crate::{formatter::format::format_number, locale::get_locale};
 
