@@ -95,6 +95,7 @@ impl PendingRecalculation {
                 Diff::SetRowHidden { sheet, row, .. } => self.add_row(model, *sheet, *row),
                 Diff::CellClearFormatting { .. }
                 | Diff::SetCellStyle { .. }
+                | Diff::FillStyle { .. }
                 | Diff::ApplyNamedStyle { .. }
                 | Diff::SetColumnWidth { .. }
                 | Diff::SetColumnHidden { .. }

@@ -7,6 +7,7 @@ mod clipboard;
 mod common;
 mod conditional_formatting;
 mod fill_formula;
+mod fill_style;
 pub(crate) mod history;
 mod named_cell_styles;
 pub(crate) mod recalculation;

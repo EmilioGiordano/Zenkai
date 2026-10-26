@@ -90,6 +90,26 @@ impl<'a> UserModel<'a> {
                         old_values,
                     )?;
                 }
+                Diff::FillStyle {
+                    sheet,
+                    row,
+                    column,
+                    width,
+                    height,
+                    old_styles,
+                    ..
+                } => {
+                    self.restore_styles(
+                        &Area {
+                            sheet: *sheet,
+                            row: *row,
+                            column: *column,
+                            width: *width,
+                            height: *height,
+                        },
+                        old_styles,
+                    )?;
+                }
                 Diff::SetArrayValue {
                     sheet,
                     row,
@@ -668,6 +688,26 @@ impl<'a> UserModel<'a> {
                     {
                         return Err("Cannot fill the formula again".to_string());
                     }
+                }
+                Diff::FillStyle {
+                    sheet,
+                    row,
+                    column,
+                    width,
+                    height,
+                    style_index,
+                    old_styles: _,
+                } => {
+                    self.write_filled_style(
+                        *style_index,
+                        &Area {
+                            sheet: *sheet,
+                            row: *row,
+                            column: *column,
+                            width: *width,
+                            height: *height,
+                        },
+                    )?;
                 }
                 Diff::SetArrayValue {
                     sheet,
