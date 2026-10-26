@@ -31,6 +31,7 @@ use ironcalc_base::{
         utils::number_to_column,
     },
     types::{ArrayFormulaCell, ArrayKind, Cell, FormulaValue, Row, SpillValue, Worksheet},
+    LAST_COLUMN,
 };
 
 use crate::export::conditional_formatting::get_conditional_formatting_xml;
@@ -141,8 +142,13 @@ pub fn write_worksheet_xml<W: Write>(
 
     for col in &worksheet.cols {
         // <col min="4" max="4" width="12" customWidth="1"/>
+        // Inserting columns moves ranges past the last column and keeps them, so undo can
+        // bring them back; only their part inside the sheet is written.
         let min = col.min;
-        let max = col.max;
+        let max = col.max.min(LAST_COLUMN);
+        if min > max {
+            continue;
+        }
         let width = col.width;
         let custom_width = i32::from(col.custom_width);
         let column_style = match col.style {
