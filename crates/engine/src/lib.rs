@@ -11,6 +11,8 @@ mod held;
 mod hibernation;
 mod model;
 mod preflight;
+#[cfg(test)]
+mod ragged_inputs;
 mod rectangles;
 mod row_split;
 mod save;
