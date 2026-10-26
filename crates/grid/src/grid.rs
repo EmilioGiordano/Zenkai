@@ -484,7 +484,8 @@ impl Grid {
     pub fn select(&mut self, active: CellPos, corner: CellPos, cx: &mut Context<Self>) {
         self.tab_start = None;
         self.selection = Selection { active, corner };
-        self.scroll_into_view(corner, cx);
+        let (row, col) = reveal_axes(active, corner);
+        self.reveal(row, col, cx);
         cx.emit(GridEvent::SelectionChanged);
         cx.notify();
     }
@@ -1825,10 +1826,26 @@ fn runs(indices: impl Iterator<Item = u32>) -> Vec<(u32, u32)> {
     runs
 }
 
+// A whole column spans every row and a whole row every column: such a selection is
+// revealed only along the other axis, so the view stays put as in Excel.
+fn reveal_axes(active: CellPos, corner: CellPos) -> (Option<RowIdx>, Option<ColIdx>) {
+    let spans = |a: u32, b: u32, last: u32| a.min(b) == 0 && a.max(b) == last;
+    let whole_column = spans(active.row.get(), corner.row.get(), RowIdx::LAST.get());
+    let whole_row = spans(
+        u32::from(active.col.get()),
+        u32::from(corner.col.get()),
+        u32::from(ColIdx::LAST.get()),
+    );
+    (
+        (!whole_column).then_some(corner.row),
+        (!whole_row).then_some(corner.col),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, cached_ranges, capped_frozen,
+        Direction, reveal_axes, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, cached_ranges, capped_frozen,
         cycle_within, next_boundary, prev_boundary, shown_contains, typed_preview,
     };
     use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
@@ -1845,6 +1862,38 @@ mod tests {
         assert!(!shown_contains(&rows, &cols, pos("A1")));
         assert!(!shown_contains(&rows, &cols, pos("AF541")));
         assert!(!shown_contains(&rows, &cols, pos("A501")));
+    }
+
+    #[test]
+    fn a_whole_column_is_revealed_horizontally_only() {
+        let (row, col) = reveal_axes(CellPos::new(RowIdx::default(), ColIdx::clamped(5)), {
+            CellPos::new(RowIdx::LAST, ColIdx::clamped(5))
+        });
+        assert_eq!(row, None);
+        assert_eq!(col, Some(ColIdx::clamped(5)));
+    }
+
+    #[test]
+    fn a_whole_row_is_revealed_vertically_only() {
+        let (row, col) = reveal_axes(
+            CellPos::new(RowIdx::clamped(7), ColIdx::default()),
+            CellPos::new(RowIdx::clamped(7), ColIdx::LAST),
+        );
+        assert_eq!(row, Some(RowIdx::clamped(7)));
+        assert_eq!(col, None);
+    }
+
+    #[test]
+    fn ordinary_selections_are_revealed_on_both_axes() {
+        let (row, col) = reveal_axes(pos("A1"), pos("C9"));
+        assert_eq!(row, Some(pos("C9").row));
+        assert_eq!(col, Some(pos("C9").col));
+    }
+
+    #[test]
+    fn select_all_is_revealed_on_neither_axis() {
+        let last = CellPos::new(RowIdx::LAST, ColIdx::LAST);
+        assert_eq!(reveal_axes(CellPos::default(), last), (None, None));
     }
 
     #[test]
