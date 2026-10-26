@@ -159,7 +159,7 @@ fn a_rejected_ragged_block_inside_an_edit_group_is_not_half_written() {
 fn short_rows_clear_the_cells_to_their_right() {
     let mut book = Workbook::new_empty().unwrap();
     let filled: Vec<Vec<String>> = (0..4)
-        .map(|r| (0..4).map(|c| format!("{r}{c}")).collect())
+        .map(|r| (0..4).map(|c| format!("r{r}c{c}")).collect())
         .collect();
     book.set_inputs(SHEET, CellPos::default(), &filled).unwrap();
     let before = book.filled_cells(SHEET);
@@ -176,13 +176,13 @@ fn short_rows_clear_the_cells_to_their_right() {
     }
     assert_eq!(input(&book, "A2"), "d");
     assert_eq!(input(&book, "B4"), "f");
-    assert_eq!(input(&book, "D1"), "03");
+    assert_eq!(input(&book, "D1"), "r0c3");
     assert_eq!(input(&book, "A4"), "e");
 
     book.undo().unwrap();
     assert_eq!(book.filled_cells(SHEET), before);
-    assert_eq!(input(&book, "C3"), "22");
-    assert_eq!(input(&book, "B2"), "11");
+    assert_eq!(input(&book, "C3"), "r2c2");
+    assert_eq!(input(&book, "B2"), "r1c1");
 }
 
 #[test]
