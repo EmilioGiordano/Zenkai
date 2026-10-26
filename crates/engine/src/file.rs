@@ -729,7 +729,12 @@ line 2"
     #[test]
     fn autofill_counts_up_from_serial_zero_in_the_source_format() {
         let mut book = Workbook::new_empty().unwrap();
-        let at = |r: i64| CellPos::new(zenkai_types::RowIdx::clamped(r), zenkai_types::ColIdx::clamped(0));
+        let at = |r: i64| {
+            CellPos::new(
+                zenkai_types::RowIdx::clamped(r),
+                zenkai_types::ColIdx::clamped(0),
+            )
+        };
         book.set_inputs(SheetId(0), at(0), &[vec!["0".to_string()]])
             .unwrap();
         let source = zenkai_types::Range::new(at(0), at(0));
