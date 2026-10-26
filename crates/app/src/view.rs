@@ -6,7 +6,6 @@ use std::time::{Duration, Instant};
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -102,7 +101,9 @@ use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::tooltip::Tooltip;
 use lifecycle::Lifecycle;
+use notice_card::{severity_icon, severity_title};
 use notices::{Lifetime, Notices, Severity};
 use panels::PanelsState;
 use search::SearchOverlay;
@@ -3325,21 +3326,30 @@ impl Workspace {
                     .child(busy),
             );
         } else if let Some(notice) = self.notices.status() {
-            let (icon, color) = match notice.severity {
-                Severity::Info => ("ⓘ", theme.muted_foreground),
-                Severity::Warning => ("⚠", theme.warning),
-                Severity::Error => ("✕", theme.danger),
-            };
-            let full_text = notice.text.clone();
+            let (icon, color) = severity_icon(notice.severity, theme);
+            let summary = notice.text.replace('\n', " ");
+            let label = format!("{}: {summary}", severity_title(notice.severity));
             left = left.child(
                 h_flex()
                     .id("status-notice")
+                    .role(Role::Button)
+                    .aria_label(label)
                     .min_w_0()
                     .gap_1()
+                    .items_center()
+                    .cursor_pointer()
                     .text_color(color)
-                    .tooltip(move |window, cx| Tooltip::new(full_text.clone()).build(window, cx))
-                    .child(div().flex_none().child(icon))
-                    .child(div().min_w_0().truncate().child(notice.text.clone())),
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(keymap::labeled(
+                            cx,
+                            t!("palette.show_messages"),
+                            &ShowMessages,
+                        ))
+                        .build(window, cx)
+                    })
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowMessages), cx))
+                    .child(Icon::new(icon).size_3().flex_none())
+                    .child(div().min_w_0().truncate().child(summary)),
             );
         } else {
             left = left.child(
