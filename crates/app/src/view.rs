@@ -323,8 +323,10 @@ enum DelimitedAction {
     ConfirmReplacing,
 }
 
+// The native dialog already warns about an existing file, and a delimited name is never
+// rewritten by Zenkai; only the open source file is confirmed again.
 fn delimited_action(probe: &files::TargetProbe) -> DelimitedAction {
-    if probe.exists || probe.same_as_source {
+    if probe.same_as_source {
         DelimitedAction::ConfirmReplacing
     } else {
         DelimitedAction::Export
@@ -4609,14 +4611,14 @@ mod tests {
     }
 
     #[test]
-    fn delimited_export_asks_before_replacing_any_existing_file() {
+    fn delimited_export_only_asks_again_for_the_open_source_file() {
         let probe = |same_as_source, exists| TargetProbe {
             same_as_source,
             exists,
         };
         assert_eq!(
             delimited_action(&probe(false, true)),
-            DelimitedAction::ConfirmReplacing
+            DelimitedAction::Export
         );
         assert_eq!(
             delimited_action(&probe(true, false)),
