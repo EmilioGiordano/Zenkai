@@ -81,7 +81,11 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::path::PathBuf;
+
+    use zenkai_types::WorkbookId;
+
+    use super::{SaveAsFlows, source_unchanged};
 
     #[test]
     fn a_second_flow_on_the_same_document_is_refused() {

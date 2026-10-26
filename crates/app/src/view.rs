@@ -1824,11 +1824,11 @@ impl Workspace {
     }
 
     fn save_document(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
-        if self.refuse_during_save_as(id, window, cx) {
-            return;
-        }
         if self.documents.text(id).is_some() {
             self.save_text(id, window, cx);
+            return;
+        }
+        if self.refuse_during_save_as(id, window, cx) {
             return;
         }
         let Some(document) = self.documents.get(id) else {
