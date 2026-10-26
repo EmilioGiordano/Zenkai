@@ -910,6 +910,54 @@ mod tests {
         assert_eq!(rows.reach, 7);
     }
 
+    fn column_levels(cols: &str) -> Vec<(u32, u32)> {
+        let settings = read(
+            &sheet(&format!("<cols>{cols}</cols><sheetData/>")),
+            &mut ElementBudget::workbook(),
+        );
+        settings
+            .columns
+            .outline
+            .iter()
+            .map(|(column, outline)| (*column, outline.level))
+            .collect()
+    }
+
+    #[test]
+    fn column_outline_keeps_each_range_of_a_normal_file() {
+        let levels = column_levels(
+            r#"<col min="2" max="3" width="9" outlineLevel="1"/><col min="5" max="5" width="9"/><col min="7" max="8" width="9" outlineLevel="2"/>"#,
+        );
+        assert_eq!(levels, [(2, 1), (3, 1), (7, 2), (8, 2)]);
+    }
+
+    // Excel lets a later <col> replace the columns an earlier one covered.
+    #[test]
+    fn a_later_column_range_replaces_the_outline_of_an_earlier_one() {
+        let levels = column_levels(
+            r#"<col min="1" max="10" width="9" outlineLevel="3"/><col min="4" max="6" width="9"/><col min="9" max="12" width="9" outlineLevel="1"/>"#,
+        );
+        let expected: Vec<(u32, u32)> = [(1, 3), (2, 3), (3, 3), (7, 3), (8, 3)]
+            .into_iter()
+            .chain((9..=12).map(|column| (column, 1)))
+            .collect();
+        assert_eq!(levels, expected);
+    }
+
+    #[test]
+    fn repeated_full_width_columns_cost_work_per_element_not_per_column() {
+        let repeated = r#"<col min="1" max="16384" width="9" outlineLevel="1"/>"#.repeat(200_000);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(column_levels(&repeated).len());
+        });
+        // Billions of inserts would take minutes; the bound is generous for a debug build.
+        let columns = receiver
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap();
+        assert_eq!(columns, 16_384);
+    }
+
     #[test]
     fn moving_rows_before_the_outline_drops_it_and_reports_it() {
         let mut settings = SheetSettings::default();
