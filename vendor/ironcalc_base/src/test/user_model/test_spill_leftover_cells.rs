@@ -61,7 +61,9 @@ fn a_shrinking_spill_removes_the_cells_it_leaves() {
 #[test]
 fn a_cell_with_its_own_style_stays_empty_after_the_spill_leaves() {
     let mut model = new_empty_user_model();
-    model.update_range_style(&area(7, 2, 1, 1), "font.b", "true").unwrap();
+    model
+        .update_range_style(&area(7, 2, 1, 1), "font.b", "true")
+        .unwrap();
     let bold = cell(&model, 7, 2).unwrap().get_style();
     model.set_user_input(0, 1, 1, "10").unwrap();
     model.set_user_input(0, 1, 2, "=SEQUENCE(A1)").unwrap();
@@ -96,7 +98,10 @@ fn a_blocked_spill_removes_its_cells_and_spills_again_once_unblocked() {
     assert_eq!(last_row(&model), 5);
 
     model.range_clear_contents(&area(5, 2, 1, 1)).unwrap();
-    assert_eq!(model.get_formatted_cell_value(0, 10, 2), Ok("10".to_string()));
+    assert_eq!(
+        model.get_formatted_cell_value(0, 10, 2),
+        Ok("10".to_string())
+    );
     model.set_user_input(0, 1, 1, "3").unwrap();
     assert_absent(&model, 4..=10, 2);
     assert_eq!(last_row(&model), 3);
@@ -129,7 +134,9 @@ fn undoing_the_anchor_removes_its_spill() {
 #[test]
 fn deleting_a_column_the_spill_reads_removes_the_cells_it_leaves() {
     let mut model = new_empty_user_model();
-    model.set_user_input(0, 1, 2, "=SEQUENCE(COLUMNS(D1:H1))").unwrap();
+    model
+        .set_user_input(0, 1, 2, "=SEQUENCE(COLUMNS(D1:H1))")
+        .unwrap();
     assert_eq!(last_row(&model), 5);
     model.delete_columns(0, 5, 1).unwrap();
     assert_eq!(model.get_formatted_cell_value(0, 4, 2), Ok("4".to_string()));
@@ -142,7 +149,10 @@ fn undo_and_redo_of_the_shrink_restore_the_cells() {
     let mut model = sequence_of_ten();
     model.set_user_input(0, 1, 1, "3").unwrap();
     model.undo().unwrap();
-    assert_eq!(model.get_formatted_cell_value(0, 10, 2), Ok("10".to_string()));
+    assert_eq!(
+        model.get_formatted_cell_value(0, 10, 2),
+        Ok("10".to_string())
+    );
     assert_eq!(last_row(&model), 10);
     model.redo().unwrap();
     assert_absent(&model, 4..=10, 2);
@@ -168,6 +178,9 @@ fn cutting_the_anchor_removes_its_spill_at_the_source() {
     model
         .paste_from_clipboard(0, (1, 2, 1, 2), &cut.data, true)
         .unwrap();
-    assert_eq!(model.get_formatted_cell_value(0, 10, 4), Ok("10".to_string()));
+    assert_eq!(
+        model.get_formatted_cell_value(0, 10, 4),
+        Ok("10".to_string())
+    );
     assert_absent(&model, 2..=10, 2);
 }
