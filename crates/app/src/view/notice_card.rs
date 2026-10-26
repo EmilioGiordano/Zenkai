@@ -1,12 +1,13 @@
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Theme};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::Workspace;
-use super::notices::Severity;
-use crate::actions::{CopyNotice, DismissNotice};
+use super::notices::{Notice, Severity};
+use crate::actions::{CopyNotice, DismissNotice, ShowMessages};
 use crate::interface_scale::rem_px;
 use crate::keymap;
 
@@ -14,6 +15,16 @@ const CARD_WIDTH: f32 = 420.0;
 pub(super) const STATUS_BAR_HEIGHT: f32 = 26.0;
 pub(super) const EDGE_GAP: f32 = 12.0;
 const TEXT_MAX_HEIGHT: f32 = 168.0;
+const LONG_TEXT_CHARS: usize = 200;
+const LONG_TEXT_LINES: usize = 4;
+
+// The text box scrolls, so a long message is never lost; the button makes sure nobody has
+// to guess that there is more.
+fn needs_show_all(notice: &Notice) -> bool {
+    notice.detail().is_some()
+        || notice.text.chars().count() > LONG_TEXT_CHARS
+        || notice.text.lines().count() > LONG_TEXT_LINES
+}
 
 pub(super) fn severity_title(severity: Severity) -> SharedString {
     match severity {
@@ -145,8 +156,63 @@ impl Workspace {
                                 .overflow_y_scroll()
                                 .text_sm()
                                 .child(notice.text.clone()),
-                        ),
+                        )
+                        .when(needs_show_all(notice), |card| {
+                            card.child(
+                                h_flex().justify_end().child(
+                                    Button::new("notice-show-all")
+                                        .ghost()
+                                        .small()
+                                        .label(t!("notice.show_all"))
+                                        .tooltip(keymap::labeled(
+                                            cx,
+                                            t!("notice.show_all"),
+                                            &ShowMessages,
+                                        ))
+                                        .on_click(|_, window, cx| {
+                                            window.dispatch_action(Box::new(ShowMessages), cx)
+                                        }),
+                                ),
+                            )
+                        }),
                 ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::notices::{Lifetime, Notices, Severity};
+    use super::needs_show_all;
+
+    fn needs(text: &str, detail: Option<&str>) -> bool {
+        let mut notices = Notices::default();
+        notices.post(
+            Severity::Error,
+            text.to_string().into(),
+            detail.map(|detail| detail.to_string().into()),
+            Lifetime::UntilReplaced,
+            "12:00:00".into(),
+        );
+        notices.card().is_some_and(needs_show_all)
+    }
+
+    #[test]
+    fn a_short_message_without_detail_needs_no_button() {
+        assert!(!needs("Could not save a.xlsx.", None));
+    }
+
+    #[test]
+    fn a_long_or_tall_message_or_one_with_detail_offers_show_all() {
+        assert!(needs(&"x".repeat(201), None));
+        assert!(needs(
+            "a
+b
+c
+d
+e",
+            None
+        ));
+        assert!(needs("Short.", Some("data and path")));
     }
 }
