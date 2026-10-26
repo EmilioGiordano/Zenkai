@@ -86,9 +86,12 @@ pub fn date_to_serial_number(day: u32, month: u32, year: i32) -> Result<i32, Str
     if (year, month, day) == (1900, 2, 29) {
         return Ok(60);
     }
+    // Excel keeps a typed date before 1/1/1900 as text, and DATEVALUE rejects it.
     match NaiveDate::from_ymd_opt(year, month, day) {
-        Some(native_date) => Ok(convert_to_serial_number(native_date)),
-        None => Err(DATE_OUT_OF_RANGE_MESSAGE.to_string()),
+        Some(native_date) if is_date_within_range(native_date) => {
+            Ok(convert_to_serial_number(native_date))
+        }
+        _ => Err(DATE_OUT_OF_RANGE_MESSAGE.to_string()),
     }
 }
 
