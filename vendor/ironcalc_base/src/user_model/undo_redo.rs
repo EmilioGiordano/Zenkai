@@ -46,7 +46,7 @@ impl<'a> UserModel<'a> {
                                 if ws.cell(r, c).and_then(Cell::spill_anchor)
                                     == Some((*row, *column))
                                 {
-                                    let _ = ws.cell_clear_contents(r, c);
+                                    let _ = ws.cell_clear_spill(r, c);
                                 }
                             }
                         }
@@ -59,24 +59,13 @@ impl<'a> UserModel<'a> {
                                 .update_cell(*row, *column, value)?;
                         }
                         None => {
-                            if spill_dims.is_some() {
-                                // The spill cells were already cleared above; only
-                                // the anchor itself remains.  range_clear_all would
-                                // re-expand to the full spill range and erase cells
-                                // that were just restored by earlier diffs in this
-                                // same undo operation (e.g. the cut source that
-                                // overlaps the paste target's spill area).
-                                let _ = self
-                                    .model
-                                    .workbook
-                                    .worksheet_mut(*sheet)?
-                                    .cell_clear_contents(*row, *column);
-                            } else {
-                                self.model
-                                    .workbook
-                                    .worksheet_mut(*sheet)?
-                                    .cell_clear_contents(*row, *column)?;
-                            }
+                            // There was no cell: remove it, so the number format the
+                            // input gave it (5%, a date) goes too and row and column
+                            // styles apply again. The spill cells were cleared above.
+                            self.model
+                                .workbook
+                                .worksheet_mut(*sheet)?
+                                .remove_cell(*row, *column)?;
                         }
                     }
                 }
@@ -111,24 +100,14 @@ impl<'a> UserModel<'a> {
                     old_values,
                 } => {
                     needs_evaluation = true;
-                    // Clear all cells in the array formula range (anchor + spill cells).
+                    // Put back the cells that existed and remove the ones that did not, so
+                    // the style the formula gave them goes too and row and column styles apply again.
                     let ws = self.model.workbook.worksheet_mut(*sheet)?;
-                    for r in *row..*row + *height {
-                        for c in *column..*column + *width {
-                            let _ = ws.cell_clear_contents(r, c);
-                        }
-                    }
-                    // Restore all cells that existed before the array formula was placed.
-                    for (ri, row_vals) in old_values.iter().enumerate() {
-                        for (ci, cell) in row_vals.iter().enumerate() {
-                            if let Some(cell) = cell {
-                                let r = *row + ri as i32;
-                                let c = *column + ci as i32;
-                                self.model.workbook.worksheet_mut(*sheet)?.update_cell(
-                                    r,
-                                    c,
-                                    cell.clone(),
-                                )?;
+                    for (r, row_vals) in (*row..*row + *height).zip(old_values) {
+                        for (c, cell) in (*column..*column + *width).zip(row_vals) {
+                            match cell {
+                                Some(cell) => ws.update_cell(r, c, cell.clone())?,
+                                None => ws.remove_cell(r, c)?,
                             }
                         }
                     }

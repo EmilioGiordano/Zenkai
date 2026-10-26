@@ -675,3 +675,38 @@ fn default_open_path_refuses_the_ratio_bomb() {
     .unwrap_err();
     assert!(error.contains("150"), "{error}");
 }
+
+// cellStyleXfs is optional in the schema; IronCalc indexed its first element unchecked.
+#[test]
+fn styles_without_cell_style_formats_open_edit_and_save() {
+    let mut source = rust_xlsxwriter::Workbook::new();
+    source.add_worksheet().write_number(0, 0, 1.0).unwrap();
+    let bytes = source.save_to_buffer().unwrap();
+    let mut styles = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(bytes.clone()))
+        .unwrap()
+        .by_name("xl/styles.xml")
+        .unwrap()
+        .read_to_string(&mut styles)
+        .unwrap();
+    let start = styles.find("<cellStyleXfs").unwrap();
+    let end = styles.find("</cellStyleXfs>").unwrap() + "</cellStyleXfs>".len();
+    styles.replace_range(start..end, "");
+    let bytes = with_replaced_part(bytes, "xl/styles.xml", styles.as_bytes());
+    for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("styles.xlsx");
+        std::fs::write(&path, &bytes).unwrap();
+        let mut book = open_xlsx_with(&path, reader).unwrap().workbook;
+        let a1 = CellPos::parse_a1("A1").unwrap();
+        book.apply_style(
+            SheetId(0),
+            zenkai_types::Range::parse_a1("A1").unwrap(),
+            zenkai_types::StyleChange::Bold(true),
+        )
+        .unwrap();
+        save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
+        let reopened = open_xlsx(&path).unwrap().workbook;
+        assert!(reopened.cell(SheetId(0), a1).style.bold, "{reader:?}");
+    }
+}

@@ -692,11 +692,12 @@ impl<'a> UserModel<'a> {
             .worksheet(sheet)?
             .cell(row, column)
             .cloned();
-        // If it is a spill cell we want to save the old value as None, because the value of a spill cell is determined by the anchor cell
-        let old_value = if matches!(old_value, Some(Cell::SpillCell { .. })) {
-            None
-        } else {
-            old_value
+        // If it is a spill cell we save it as an empty cell with its style, because the value of a spill cell is determined by the anchor cell
+        let old_value = match old_value {
+            Some(cell @ Cell::SpillCell { .. }) => Some(Cell::EmptyCell {
+                s: cell.get_style(),
+            }),
+            old_value => old_value,
         };
         self.model
             .set_user_input(sheet, row, column, value.to_string())?;
@@ -2325,11 +2326,12 @@ impl<'a> UserModel<'a> {
             let mut row_vals = Vec::new();
             for c in column..column + width {
                 let cell = ws.cell(r, c).cloned();
-                // SpillCells are transient — restored by re-evaluation, so store as None.
-                let cell = if matches!(cell, Some(Cell::SpillCell { .. })) {
-                    None
-                } else {
-                    cell
+                // SpillCells are transient, restored by re-evaluation, so store them as empty cells with their style.
+                let cell = match cell {
+                    Some(cell @ Cell::SpillCell { .. }) => Some(Cell::EmptyCell {
+                        s: cell.get_style(),
+                    }),
+                    cell => cell,
                 };
                 row_vals.push(cell);
             }

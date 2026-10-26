@@ -13,6 +13,7 @@ mod test_date_and_time;
 mod test_datedif_leap_month_end;
 mod test_days360_month_end;
 mod test_degrees_radians;
+mod test_early_date_serials;
 mod test_error_propagation;
 mod test_fact_factdouble;
 mod test_fn_accrint;

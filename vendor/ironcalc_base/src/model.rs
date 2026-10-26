@@ -25,7 +25,7 @@ use crate::{
     },
     formatter::{
         format::{format_number, parse_formatted_number},
-        lexer::is_likely_date_number_format,
+        lexer::{is_likely_date_number_format, is_likely_percent_number_format},
     },
     implicit_intersection::implicit_intersection,
     language::{get_default_language, get_language, Language},
@@ -1506,8 +1506,15 @@ impl<'a> Model<'a> {
                     result
                 };
 
-                if let Err(e) = self.set_cells_with_result(cell_reference, &original_cell, &result)
-                {
+                let written = self
+                    .set_cells_with_result(cell_reference, &original_cell, &result)
+                    .and_then(|()| match original_cell.dynamic_range() {
+                        Some(old_range) => {
+                            self.remove_cells_left_by_spill(cell_reference, old_range)
+                        }
+                        None => Ok(()),
+                    });
+                if let Err(e) = written {
                     self.cells.insert(key, CellState::Evaluated);
                     // TODO: I _think_ this can never happen. Maybe we should  refactor things in a way that this is apparent
                     return CalcResult::new_error(Error::ERROR, cell_reference, e);
@@ -2271,7 +2278,11 @@ impl<'a> Model<'a> {
                 for r in row..row + height {
                     for c in column..column + width {
                         // We ignore errors here
-                        let _ = ws.cell_clear_contents(r, c);
+                        if r == row && c == column {
+                            let _ = ws.cell_clear_contents(r, c);
+                        } else {
+                            let _ = ws.cell_clear_spill(r, c);
+                        }
                     }
                 }
             }
@@ -2310,7 +2321,7 @@ impl<'a> Model<'a> {
                             continue;
                         }
                         // We ignore errors here
-                        let _ = ws.cell_clear_contents(r, c);
+                        let _ = ws.cell_clear_spill(r, c);
                     }
                 }
             }
@@ -2407,10 +2418,13 @@ impl<'a> Model<'a> {
                     if let Some(num_fmt) = number_format {
                         // Should not apply the format in the following cases:
                         // - we assign a date to already date-formatted cell
-                        let should_apply_format = !(is_likely_date_number_format(
-                            &self.workbook.styles.get_style(new_style_index)?.num_fmt,
-                        ) && is_likely_date_number_format(&num_fmt));
-                        if should_apply_format {
+                        // - we assign a percentage to already percentage-formatted cell
+                        let cell_num_fmt = self.workbook.styles.get_style(new_style_index)?.num_fmt;
+                        let same_kind = (is_likely_date_number_format(&cell_num_fmt)
+                            && is_likely_date_number_format(&num_fmt))
+                            || (is_likely_percent_number_format(&cell_num_fmt)
+                                && is_likely_percent_number_format(&num_fmt));
+                        if !same_kind {
                             new_style_index = self
                                 .workbook
                                 .styles
@@ -3185,8 +3199,19 @@ impl<'a> Model<'a> {
             for column in range.column..range.column + range.width {
                 let structure = ws.get_cell_structure(row, column)?;
                 match structure {
-                    CellStructure::DynamicFormula { range }
-                    | CellStructure::ArrayFormula { range, .. } => {
+                    CellStructure::DynamicFormula { range } => {
+                        let (width, height) = range;
+                        for r in row..row + height {
+                            for c in column..column + width {
+                                if r == row && c == column {
+                                    let _ = ws.cell_clear_contents(r, c);
+                                } else {
+                                    let _ = ws.cell_clear_spill(r, c);
+                                }
+                            }
+                        }
+                    }
+                    CellStructure::ArrayFormula { range, .. } => {
                         let (width, height) = range;
                         for r in row..row + height {
                             for c in column..column + width {
@@ -3194,6 +3219,9 @@ impl<'a> Model<'a> {
                             }
                         }
                     }
+                    // A position without a cell, such as a spill cell removed above with
+                    // its anchor, stays without one instead of becoming an empty cell.
+                    _ if ws.cell(row, column).is_none() => {}
                     _ => {
                         let _ = ws.cell_clear_contents(row, column);
                     }
@@ -3303,7 +3331,34 @@ impl<'a> Model<'a> {
         }
         for (row, column) in cells_to_clear {
             // we ignore errors here because the cell might have already been cleared as part of an array formula
-            let _ = worksheet.cell_clear_contents(row, column);
+            let _ = worksheet.cell_clear_spill(row, column);
+        }
+        Ok(())
+    }
+
+    // The old spill of a re-evaluated dynamic array was cleared to empty cells; those outside
+    // its new range are removed, so the work follows how much the spill shrank.
+    fn remove_cells_left_by_spill(
+        &mut self,
+        anchor: CellReferenceIndex,
+        (old_width, old_height): (i32, i32),
+    ) -> Result<(), String> {
+        let ws = self.workbook.worksheet_mut(anchor.sheet)?;
+        let (width, height) = ws
+            .cell(anchor.row, anchor.column)
+            .and_then(Cell::dynamic_range)
+            .unwrap_or((1, 1));
+        for r in anchor.row..anchor.row + old_height {
+            let first_left = if r < anchor.row + height {
+                anchor.column + width
+            } else {
+                anchor.column
+            };
+            for c in first_left..anchor.column + old_width {
+                if matches!(ws.cell(r, c), Some(Cell::EmptyCell { .. })) {
+                    ws.cell_clear_spill(r, c)?;
+                }
+            }
         }
         Ok(())
     }
@@ -3344,7 +3399,7 @@ impl<'a> Model<'a> {
                     if r == row && c == column {
                         continue;
                     }
-                    let _ = ws.cell_clear_contents(r, c);
+                    let _ = ws.cell_clear_spill(r, c);
                 }
             }
         }

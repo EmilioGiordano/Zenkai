@@ -1,8 +1,8 @@
 use chrono::Datelike;
-use chrono::Days;
 use chrono::Duration;
 use chrono::Months;
 use chrono::NaiveDate;
+use chrono::Weekday;
 
 use crate::constants::EXCEL_DATE_BASE;
 use crate::constants::MAXIMUM_DATE_SERIAL_NUMBER;
@@ -10,9 +10,15 @@ use crate::constants::MINIMUM_DATE_SERIAL_NUMBER;
 
 pub const DATE_OUT_OF_RANGE_MESSAGE: &str = "Out of range parameters for date";
 
-#[inline]
-fn convert_to_serial_number(date: NaiveDate) -> i32 {
-    date.num_days_from_ce() - EXCEL_DATE_BASE
+// Excel counts a fictitious 29 February 1900 as serial 60, so every earlier date sits one
+// serial lower than the days elapsed since 1899-12-30.
+pub(crate) fn convert_to_serial_number(date: NaiveDate) -> i32 {
+    let days = date.num_days_from_ce() - EXCEL_DATE_BASE;
+    if days < 61 {
+        days - 1
+    } else {
+        days
+    }
 }
 
 fn is_date_within_range(date: NaiveDate) -> bool {
@@ -36,10 +42,54 @@ pub fn from_excel_date(days: i64) -> Result<NaiveDate, String> {
     Ok(dt + Duration::days(days - 2))
 }
 
+// A tuple, not a NaiveDate, because Excel's labels include 0 January 1900 and the
+// fictitious 29 February 1900 (the 1900 leap-year bug), which no real date can hold.
+pub(crate) fn excel_serial_to_ymd(serial: i64) -> Option<(i32, u32, u32)> {
+    if !(0..=MAXIMUM_DATE_SERIAL_NUMBER as i64).contains(&serial) {
+        return None;
+    }
+    // Excel renders serial 0 as "0 January 1900"; DAYS360 reads it as day 0 of
+    // January 1900 (not 31 December 1899), which is what makes it antisymmetric.
+    if serial == 0 {
+        return Some((1900, 1, 0));
+    }
+    // Excel's non-existent 29 February 1900 (serial 60).
+    if serial == 60 {
+        return Some((1900, 2, 29));
+    }
+    let date = if serial < 60 {
+        // Below the fictional leap day Excel counts serial 1 as 1900-01-01, so
+        // serial N is N days after 1899-12-31 (serial 0).
+        let base = NaiveDate::from_ymd_opt(1899, 12, 31)?;
+        base + Duration::days(serial)
+    } else {
+        // From 1900-03-01 (serial 61) onwards IronCalc's serials match Excel.
+        from_excel_date(serial).ok()?
+    };
+    Some((date.year(), date.month(), date.day()))
+}
+
+// Excel names the weekday by the serial alone, so it calls 1900-01-01 (serial 1) a Sunday:
+// the fictitious 29 February 1900 shifts every earlier weekday by one.
+pub(crate) fn excel_serial_weekday(serial: i64) -> Option<Weekday> {
+    if !(0..=MAXIMUM_DATE_SERIAL_NUMBER as i64).contains(&serial) {
+        return None;
+    }
+    let base = NaiveDate::from_ymd_opt(1899, 12, 30)?;
+    Some((base + Duration::days(serial)).weekday())
+}
+
 pub fn date_to_serial_number(day: u32, month: u32, year: i32) -> Result<i32, String> {
+    // Excel's 1900 leap-year bug: it accepts 29 February 1900 as serial 60.
+    if (year, month, day) == (1900, 2, 29) {
+        return Ok(60);
+    }
+    // Excel keeps a typed date before 1/1/1900 as text, and DATEVALUE rejects it.
     match NaiveDate::from_ymd_opt(year, month, day) {
-        Some(native_date) => Ok(convert_to_serial_number(native_date)),
-        None => Err(DATE_OUT_OF_RANGE_MESSAGE.to_string()),
+        Some(native_date) if is_date_within_range(native_date) => {
+            Ok(convert_to_serial_number(native_date))
+        }
+        _ => Err(DATE_OUT_OF_RANGE_MESSAGE.to_string()),
     }
 }
 
@@ -52,10 +102,6 @@ pub fn permissive_date_to_serial_number(day: i32, month: i32, year: i32) -> Resu
     // This function applies that same logic to dates. And does it in the most compatible way as
     // possible.
 
-    // Special case for the minimum date
-    if year == 1899 && month == 12 && day == 31 {
-        return Ok(MINIMUM_DATE_SERIAL_NUMBER);
-    }
     let Some(mut date) = NaiveDate::from_ymd_opt(year, 1, 1) else {
         return Err(DATE_OUT_OF_RANGE_MESSAGE.to_string());
     };
@@ -87,21 +133,13 @@ pub fn permissive_date_to_serial_number(day: i32, month: i32, year: i32) -> Resu
         date
     };
 
-    date = {
-        let day_diff = day - 1;
-        let abs_day = day_diff.unsigned_abs() as u64;
-        if day_diff <= 0 {
-            date = date - Days::new(abs_day);
-        } else {
-            date = date + Days::new(abs_day);
-        }
-        if !is_date_within_range(date) {
-            return Err(DATE_OUT_OF_RANGE_MESSAGE.to_string());
-        }
-        date
-    };
-
-    Ok(convert_to_serial_number(date))
+    // Excel adds the days to the serial of the first of the month, so DATE(1900, 3, 0) is the
+    // fictitious 29 February 1900 (60) and DATE(1900, 1, 0) is serial 0.
+    let serial = convert_to_serial_number(date) as i64 + day as i64 - 1;
+    if !(0..=MAXIMUM_DATE_SERIAL_NUMBER as i64).contains(&serial) {
+        return Err(DATE_OUT_OF_RANGE_MESSAGE.to_string());
+    }
+    Ok(serial as i32)
 }
 
 #[cfg(test)]
@@ -150,9 +188,8 @@ mod tests {
             permissive_date_to_serial_number(31, 12, 9999),
             Ok(MAXIMUM_DATE_SERIAL_NUMBER),
         );
-        assert_eq!(
-            permissive_date_to_serial_number(31, 12, 1899),
-            Ok(MINIMUM_DATE_SERIAL_NUMBER),
-        );
+        assert_eq!(permissive_date_to_serial_number(0, 1, 1900), Ok(0));
+        assert!(permissive_date_to_serial_number(-1, 1, 1900).is_err());
+        assert!(permissive_date_to_serial_number(1, 13, 9999).is_err());
     }
 }
