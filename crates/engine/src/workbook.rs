@@ -17,6 +17,7 @@ use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
 use crate::saved::{FileOnDisk, KnownFile, SavedSlot};
 use crate::sheet_settings::{Carried, SheetSettings};
+use crate::shown_cells::UNREADABLE_CELL;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
     RowIdx, SheetId, SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign, ValueKind,
@@ -862,16 +863,12 @@ impl Engine for Workbook {
     fn cell(&self, sheet: SheetId, pos: CellPos) -> CellView {
         let (row, col) = (row_i32(pos.row), col_i32(pos.col));
         let model = self.model.get_model();
-        let text = match self.model.get_formatted_cell_value(sheet.0, row, col) {
-            Ok(text) => text,
-            Err(error) => {
-                tracing::warn!(%error, %pos, "could not read cell");
-                return CellView {
-                    text: "#ERROR".to_string(),
-                    kind: ValueKind::Error,
-                    ..CellView::default()
-                };
-            }
+        let Some(text) = self.formatted_text(sheet, pos) else {
+            return CellView {
+                text: UNREADABLE_CELL.to_string(),
+                kind: ValueKind::Error,
+                ..CellView::default()
+            };
         };
         let (kind, number) = match model.get_cell_value_by_index(sheet.0, row, col) {
             Ok(ironcalc::base::cell::CellValue::Number(n)) => (ValueKind::Number, Some(n)),
