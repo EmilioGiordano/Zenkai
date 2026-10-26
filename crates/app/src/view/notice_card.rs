@@ -51,7 +51,7 @@ impl Workspace {
             return;
         }
         if let Some(card) = self.notices.card() {
-            cx.write_to_clipboard(ClipboardItem::new_string(card.text.to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string(card.copy_text().to_string()));
         }
     }
 

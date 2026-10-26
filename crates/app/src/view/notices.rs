@@ -22,6 +22,7 @@ pub(super) struct Notice {
     id: u64,
     pub severity: Severity,
     pub text: SharedString,
+    detail: Option<SharedString>,
     pub lifetime: Lifetime,
     pub time: SharedString,
 }
@@ -29,6 +30,14 @@ pub(super) struct Notice {
 impl Notice {
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    pub fn detail(&self) -> Option<&SharedString> {
+        self.detail.as_ref()
+    }
+
+    pub fn copy_text(&self) -> &SharedString {
+        self.detail.as_ref().unwrap_or(&self.text)
     }
 }
 
@@ -47,6 +56,7 @@ impl Notices {
         &mut self,
         severity: Severity,
         text: SharedString,
+        detail: Option<SharedString>,
         lifetime: Lifetime,
         time: SharedString,
     ) {
@@ -54,6 +64,7 @@ impl Notices {
             id: self.next_id,
             severity,
             text,
+            detail,
             lifetime,
             time,
         };
@@ -129,6 +140,7 @@ mod tests {
         notices.post(
             severity,
             text.to_string().into(),
+            None,
             lifetime,
             "12:00:00".into(),
         );
@@ -136,6 +148,29 @@ mod tests {
 
     fn texts(notices: &Notices) -> Vec<String> {
         notices.newest_first().map(|n| n.text.to_string()).collect()
+    }
+
+    #[test]
+    fn a_notice_copies_its_detail_when_it_has_one_and_its_text_otherwise() {
+        let mut notices = Notices::default();
+        post(
+            &mut notices,
+            Severity::Error,
+            "Short",
+            Lifetime::UntilReplaced,
+        );
+        notices.post(
+            Severity::Error,
+            "Could not save a.xlsx".into(),
+            Some("a.xlsx: Access denied (os error 5)".into()),
+            Lifetime::UntilReplaced,
+            "12:00:00".into(),
+        );
+        let copied: Vec<_> = notices
+            .newest_first()
+            .map(|n| n.copy_text().to_string())
+            .collect();
+        assert_eq!(copied, ["a.xlsx: Access denied (os error 5)", "Short"]);
     }
 
     #[test]

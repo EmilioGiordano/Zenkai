@@ -68,7 +68,7 @@ impl Workspace {
 
     fn copy_message(&mut self, id: u64, cx: &mut Context<Self>) {
         if let Some(notice) = self.notices.newest_first().find(|notice| notice.id() == id) {
-            cx.write_to_clipboard(ClipboardItem::new_string(notice.text.to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string(notice.copy_text().to_string()));
         }
     }
 
@@ -126,11 +126,16 @@ impl Workspace {
                     )
                     .child(Icon::new(icon).text_color(color).flex_none())
                     .child(
-                        div()
+                        v_flex()
                             .flex_1()
                             .min_w_0()
-                            .text_sm()
-                            .child(notice.text.clone()),
+                            .child(div().text_sm().child(notice.text.clone()))
+                            .children(notice.detail().map(|detail| {
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.muted_foreground)
+                                    .child(detail.clone())
+                            })),
                     )
                     .child(
                         Button::new(("message-copy", index))
