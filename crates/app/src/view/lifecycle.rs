@@ -756,18 +756,39 @@ impl Workspace {
             return;
         }
         self.saved_session = Some(session.clone());
-        cx.background_executor()
-            .spawn(async move {
-                if let Err(error) = session::save(&directory, &session) {
-                    tracing::warn!(%error, "could not save the session");
-                }
-            })
-            .detach();
+        self.unwritten_session = Some((directory, session, session::SaveOrder::next()));
+        if !self.session_writing {
+            self.session_writing = true;
+            self.write_next_session(cx);
+        }
+    }
+
+    // One background write at a time, always of the latest snapshot, so a burst of changes such
+    // as zoom steps neither queues a write each nor lets an older one land after a newer one.
+    fn write_next_session(&mut self, cx: &mut Context<Self>) {
+        let Some((directory, session, order)) = self.unwritten_session.take() else {
+            self.session_writing = false;
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move {
+                    if let Err(error) = session::save_in_order(&directory, &session, order) {
+                        tracing::warn!(%error, "could not save the session");
+                    }
+                })
+                .await;
+            if let Err(error) = this.update(cx, |this, cx| this.write_next_session(cx)) {
+                tracing::debug!(%error, "the workspace closed during a session write");
+            }
+        })
+        .detach();
     }
 
     // The spaces and links are kept even when unsaved work could not be.
     pub(super) fn write_session_and_quit(&mut self, plan: ClosePlan, cx: &mut Context<Self>) {
         let session = self.snapshot_session_leaving(&plan, cx);
+        let order = session::SaveOrder::next();
         let session_directory = recovery::session_directory();
         let dumps_directory = self.recovery_dir.clone();
         let mut clean: Vec<PathBuf> = self
@@ -796,7 +817,7 @@ impl Workspace {
                 .spawn(async move {
                     // The copies go only once the session no longer points at them.
                     let saved = match session_directory {
-                        Some(directory) => session::save(&directory, &session),
+                        Some(directory) => session::save_in_order(&directory, &session, order),
                         None => Ok(()),
                     };
                     if saved.is_ok() {
@@ -879,6 +900,7 @@ mod tests {
             mode: Default::default(),
             base: None,
             pdf: Default::default(),
+            text_zoom: Default::default(),
             unsupported: Vec::new(),
             active: true,
             sheet: 0,

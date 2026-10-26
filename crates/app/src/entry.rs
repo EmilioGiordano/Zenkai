@@ -13,6 +13,7 @@ use crate::pdf_tab::PdfTab;
 use crate::spaces::SpaceId;
 use crate::text_document::{DocumentKind, TextDocument, ViewMode, text_name};
 use crate::text_file::StampRecord;
+use crate::text_zoom::TextZoom;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkStatus {
@@ -45,6 +46,7 @@ pub struct Link {
     // The disk stamp a text's edits were based on, kept across a restart.
     pub base: Option<StampRecord>,
     pub pdf: PdfPosition,
+    pub text_zoom: TextZoom,
     // Set while the workbook is out of memory by choice; a link restored from a session or
     // found in a folder never has it.
     pub rested: Option<Box<Rested>>,
@@ -270,6 +272,7 @@ impl Document {
             mode: ViewMode::default(),
             base: None,
             pdf: Default::default(),
+            text_zoom: Default::default(),
             rested: Some(Box::new(Rested {
                 file: self.file_seen(),
                 hibernation: None,

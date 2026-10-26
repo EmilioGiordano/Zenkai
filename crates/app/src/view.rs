@@ -71,7 +71,7 @@ use crate::recent;
 use crate::recovery;
 use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
-use crate::session::Session;
+use crate::session::{SaveOrder, Session};
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Neighbour;
 use crate::stale_view::StaleRequest;
@@ -221,6 +221,8 @@ pub struct Workspace {
     close_dialog: Option<close_dialog::CloseDialog>,
     prompts: PromptGate,
     saved_session: Option<Session>,
+    unwritten_session: Option<(PathBuf, Session, SaveOrder)>,
+    session_writing: bool,
     cell_refresh: CellRefresh,
     missed: MissedRefreshes,
     space_panel: Option<space_panel::SpacePanel>,
@@ -379,6 +381,8 @@ impl Workspace {
             close_dialog: None,
             prompts: PromptGate::default(),
             saved_session: None,
+            unwritten_session: None,
+            session_writing: false,
             cell_refresh: CellRefresh::Idle,
             missed: MissedRefreshes::default(),
             space_panel: None,
@@ -3797,25 +3801,36 @@ impl Render for Workspace {
                 this.notify(Severity::Info, message, cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
-                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(true, cx)) {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(true, cx))
+                    || this.forward_to_text(cx, |pane, cx| pane.zoom_in(cx))
+                {
                     return;
                 }
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() + 0.1, cx));
                 this.refresh_cells(cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
-                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(false, cx)) {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(false, cx))
+                    || this.forward_to_text(cx, |pane, cx| pane.zoom_out(cx))
+                {
                     return;
                 }
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() - 0.1, cx));
                 this.refresh_cells(cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomReset, window, cx| {
-                if this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx)) {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx))
+                    || this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx))
+                {
                     return;
                 }
                 this.grid.update(cx, |g, cx| g.set_zoom(1.0, cx));
                 this.refresh_cells(cx);
+            }))
+            .on_action(cx.listener(|this, _: &ResetDocumentZoom, window, cx| {
+                if !this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx)) {
+                    this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx));
+                }
             }))
             .on_action(cx.listener(|this, _: &NextSheet, window, cx| {
                 if let Some(sheet) = this.active_sheet() {

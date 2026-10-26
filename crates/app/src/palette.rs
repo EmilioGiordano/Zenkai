@@ -161,6 +161,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.zoom_in"), ZoomIn),
                 item(t!("palette.zoom_out"), ZoomOut),
                 item(t!("palette.zoom_reset"), ZoomReset),
+                item(t!("palette.reset_document_zoom"), ResetDocumentZoom),
                 item(t!("palette.toggle_formulas"), ToggleFormulas),
                 item(t!("palette.cycle_markdown_view"), CycleMarkdownView),
                 item(t!("palette.reload_markdown"), ReloadMarkdown),

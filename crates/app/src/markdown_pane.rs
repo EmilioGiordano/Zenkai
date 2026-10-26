@@ -17,8 +17,10 @@ use crate::markdown_highlight::{LANGUAGE, MarkdownHighlighter};
 use crate::markdown_images::image_path;
 use crate::text_disk::DiskNotice;
 use crate::text_document::ViewMode;
+use crate::text_zoom::TextZoom;
 
 const READING_WIDTH: f32 = 860.0;
+const WHEEL_LINE: f32 = 20.0;
 const MODES: [ViewMode; 3] = [ViewMode::Source, ViewMode::Split, ViewMode::Preview];
 pub const CONTEXT: &str = "MarkdownDocument";
 
@@ -26,6 +28,7 @@ pub enum PaneEvent {
     Edited,
     Moved,
     Mode(ViewMode),
+    Zoom(TextZoom),
     OpenLink(String),
     Reload,
     KeepMine,
@@ -42,6 +45,7 @@ pub struct MarkdownPane {
     editor: Entity<EditorState>,
     preview: Entity<TextViewState>,
     mode: ViewMode,
+    zoom: TextZoom,
     state: PaneState,
     focus: FocusHandle,
     preview_stale: bool,
@@ -55,6 +59,7 @@ pub struct MarkdownPane {
 }
 
 mod preview;
+mod zoom_style;
 
 use preview::{Images, blocked_image, extensions, verdicts};
 
@@ -64,6 +69,7 @@ impl MarkdownPane {
     pub fn new(
         text: &str,
         mode: ViewMode,
+        zoom: TextZoom,
         state: PaneState,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -103,6 +109,7 @@ impl MarkdownPane {
             editor,
             preview,
             mode,
+            zoom,
             state,
             focus: cx.focus_handle(),
             preview_stale: false,
@@ -164,6 +171,62 @@ impl MarkdownPane {
         self.focus(window, cx);
         cx.emit(PaneEvent::Mode(mode));
         cx.notify();
+    }
+
+    pub fn zoom_in(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom(self.zoom.larger(), cx);
+    }
+
+    pub fn zoom_out(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom(self.zoom.smaller(), cx);
+    }
+
+    pub fn zoom_reset(&mut self, cx: &mut Context<Self>) {
+        self.set_zoom(TextZoom::default(), cx);
+    }
+
+    fn set_zoom(&mut self, zoom: TextZoom, cx: &mut Context<Self>) {
+        if self.zoom == zoom {
+            return;
+        }
+        self.zoom = zoom;
+        cx.emit(PaneEvent::Zoom(zoom));
+        cx.notify();
+    }
+
+    fn zoom_by_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        let lift = f32::from(event.delta.pixel_delta(px(WHEEL_LINE)).y);
+        if lift > 0.0 {
+            self.zoom_in(cx);
+        } else if lift < 0.0 {
+            self.zoom_out(cx);
+        }
+    }
+
+    // Listens in the capture phase so the editor and the preview never see a Ctrl+wheel and
+    // scroll while the text zooms.
+    fn wheel_zoom_listener(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let pane = cx.entity().downgrade();
+        canvas(
+            |bounds, _, _| bounds,
+            move |bounds, _, window, _| {
+                let pane = pane.clone();
+                window.on_mouse_event(move |event: &ScrollWheelEvent, phase, _, cx| {
+                    if phase != DispatchPhase::Capture
+                        || !event.modifiers.control
+                        || !bounds.contains(&event.position)
+                    {
+                        return;
+                    }
+                    if let Err(error) = pane.update(cx, |pane, cx| pane.zoom_by_wheel(event, cx)) {
+                        tracing::debug!(%error, "markdown pane dropped a zoom wheel");
+                    }
+                    cx.stop_propagation();
+                });
+            },
+        )
+        .absolute()
+        .size_full()
     }
 
     pub fn cycle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -283,7 +346,9 @@ impl MarkdownPane {
         )
     }
 
-    fn render_source(&self) -> impl IntoElement {
+    fn render_source(&self, cx: &App) -> impl IntoElement {
+        let zoom = self.zoom;
+        let editor_size = cx.theme().mono_font_size * zoom.factor();
         div()
             .id("markdown-source")
             .flex_1()
@@ -292,12 +357,15 @@ impl MarkdownPane {
             .child(
                 Editor::new(&self.editor)
                     .h(relative(1.))
+                    .when(!zoom.is_default(), |editor| editor.text_size(editor_size))
                     .bordered(false)
                     .aria_label(t!("markdown.editor_label")),
             )
     }
 
     fn render_preview(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let zoomed =
+            (!self.zoom.is_default()).then(|| zoom_style::zoomed(cx.theme(), self.zoom.factor()));
         let weak = cx.entity().downgrade();
         let folder = self.state.folder.clone();
         let images = self.images.clone();
@@ -314,12 +382,16 @@ impl MarkdownPane {
             .child(
                 div()
                     .size_full()
+                    .when(!self.zoom.is_default(), |page| {
+                        page.text_size(rems(self.zoom.factor()))
+                    })
                     .px_6()
                     .py_4()
                     .when(centered, |page| page.max_w(rem_px(READING_WIDTH)).mx_auto())
                     .when(!too_deep, |page| {
                         page.child(
                         TextView::new(&self.preview)
+                            .when_some(zoomed, |view, style| view.style(style))
                             .markdown_extensions(extensions())
                             .selectable(true)
                             .scrollable(true)
@@ -369,6 +441,7 @@ impl Render for MarkdownPane {
             .on_key_down(
                 cx.listener(|this, event, window, cx| this.type_in_preview(event, window, cx)),
             )
+            .relative()
             .flex_1()
             .min_w_0()
             .h_full()
@@ -385,11 +458,12 @@ impl Render for MarkdownPane {
                     .child(self.render_modes(cx)),
             )
             .children(self.render_notice(cx))
+            .child(self.wheel_zoom_listener(cx))
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .when(shows_source, |body| body.child(self.render_source()))
+                    .when(shows_source, |body| body.child(self.render_source(cx)))
                     .when(shows_preview, |body| body.child(self.render_preview(cx))),
             )
     }
