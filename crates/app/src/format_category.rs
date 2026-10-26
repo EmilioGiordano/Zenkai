@@ -71,7 +71,7 @@ impl FormatCategory {
             return Self::General;
         }
         let section = code.split(';').next().unwrap_or(code);
-        let core = without_literals(section);
+        let (core, has_decoration) = without_literals(section);
         if core == "@" {
             return Self::Text;
         }
@@ -95,7 +95,7 @@ impl FormatCategory {
         if core.contains('*') {
             return Self::Accounting;
         }
-        if !is_plain_number(&core) {
+        if has_decoration || !is_plain_number(&core) {
             return Self::Custom;
         }
         if core.contains(CURRENCY_SYMBOLS) {
@@ -141,9 +141,11 @@ fn is_plain_number(core: &str) -> bool {
 }
 
 // Drops quoted text, escapes and bracket tags so only format tokens remain. Currency
-// symbols and elapsed-time tags such as [h] survive as the token they stand for.
-fn without_literals(section: &str) -> String {
+// symbols and elapsed-time tags such as [h] survive as the token they stand for. The flag
+// reports literal text or colour tags, which the Number and Currency presets never carry.
+fn without_literals(section: &str) -> (String, bool) {
     let mut core = String::new();
+    let mut has_decoration = false;
     let mut chars = section.chars();
     while let Some(c) = chars.next() {
         match c {
@@ -151,28 +153,27 @@ fn without_literals(section: &str) -> String {
                 for literal in chars.by_ref().take_while(|&l| l != '"') {
                     if CURRENCY_SYMBOLS.contains(&literal) {
                         core.push(literal);
+                    } else {
+                        has_decoration = true;
                     }
                 }
             }
-            '\\' => {
-                if let Some(literal) = chars.next()
-                    && CURRENCY_SYMBOLS.contains(&literal)
-                {
-                    core.push(literal);
-                }
-            }
+            '\\' => match chars.next() {
+                Some(literal) if CURRENCY_SYMBOLS.contains(&literal) => core.push(literal),
+                _ => has_decoration = true,
+            },
             '[' => {
                 let tag: String = chars.by_ref().take_while(|&t| t != ']').collect();
                 match tag.chars().next() {
                     Some('$') => core.push('$'),
                     Some(elapsed @ ('h' | 'H' | 'm' | 'M' | 's' | 'S')) => core.push(elapsed),
-                    _ => {}
+                    _ => has_decoration = true,
                 }
             }
             _ => core.push(c),
         }
     }
-    core
+    (core, has_decoration)
 }
 
 #[cfg(test)]
@@ -306,7 +307,7 @@ mod tests {
 
     #[test]
     fn number_with_literal_text_is_custom() {
-        for code in ["0.000\"kg\"", "0.0\" m\"", "#,##0 \"units\"", "0\x"] {
+        for code in ["0.000\"kg\"", "0.0\" m\"", "#,##0 \"units\"", "0\\x"] {
             assert_eq!(FormatCategory::of(code), FormatCategory::Custom, "{code}");
         }
     }
