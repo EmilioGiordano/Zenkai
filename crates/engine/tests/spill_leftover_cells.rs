@@ -53,6 +53,17 @@ fn a_shrunk_spill_saves_without_the_cells_it_left() {
 }
 
 #[test]
+fn undo_and_redo_of_the_shrink_move_the_used_end() {
+    let mut book = shrunk_sequence();
+    book.undo().unwrap();
+    assert_eq!(book.cell(SHEET, at("B10")).text, "10");
+    assert_eq!(book.used_end(SHEET), at("B10"));
+    book.redo().unwrap();
+    assert_eq!(book.cell(SHEET, at("B4")).text, "");
+    assert_eq!(book.used_end(SHEET), at("B3"));
+}
+
+#[test]
 fn a_blocked_spill_that_spills_again_shrinks_the_used_range() {
     let mut book = Workbook::new_empty().unwrap();
     book.set_input(SHEET, at("A1"), "10").unwrap();
