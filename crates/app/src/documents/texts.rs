@@ -7,6 +7,7 @@ use super::{Documents, Installed};
 use crate::entry::Slot;
 use crate::text_document::{DocumentKind, TextDocument, ViewMode};
 use crate::text_file::{Format, Stamp};
+use crate::text_zoom::TextZoom;
 
 pub struct TextLoad {
     pub id: WorkbookId,
@@ -73,6 +74,7 @@ impl Documents {
             link.kind,
             link.mode,
         );
+        text.zoom = link.text_zoom;
         text.format = load.format;
         text.stamp = load.stamp;
         if load.from_recovery {
@@ -97,6 +99,12 @@ impl Documents {
         }
         self.tab_shown = Some(id);
         self.wanted = None;
+    }
+
+    pub fn set_zoom(&mut self, id: WorkbookId, zoom: TextZoom) {
+        if let Some(text) = self.text_mut(id) {
+            text.zoom = zoom;
+        }
     }
 
     pub fn set_mode(&mut self, id: WorkbookId, mode: ViewMode) {
@@ -145,6 +153,7 @@ mod tests {
                     mode: ViewMode::Source,
                     base: None,
                     pdf: Default::default(),
+                    text_zoom: TextZoom::nearest(150),
                     unsupported: Vec::new(),
                     active,
                     sheet: 0,
@@ -258,6 +267,20 @@ mod tests {
     }
 
     #[test]
+    fn the_title_names_the_document_on_screen() {
+        let mut documents = busy();
+        assert_eq!(documents.shown_title(), "• Book1 - Zenkai");
+        let text = open_text(&mut documents, "reports/a.md");
+        assert!(documents.active().is_none());
+        assert_eq!(documents.shown_title(), "a.md - Zenkai");
+        documents.text_mut(text).unwrap().edited();
+        assert_eq!(documents.shown_title(), "• a.md - Zenkai");
+        documents.open_pdf(PathBuf::from("reports/b.pdf"), Default::default());
+        assert!(documents.active().is_none());
+        assert_eq!(documents.shown_title(), "b.pdf - Zenkai");
+    }
+
+    #[test]
     fn a_text_with_unsaved_edits_is_listed_and_counted_for_recovery() {
         let mut documents = documents();
         let id = open_text(&mut documents, "reports/a.md");
@@ -298,6 +321,17 @@ mod tests {
     }
 
     #[test]
+    fn a_texts_zoom_goes_to_the_snapshot_and_back_through_its_link() {
+        let mut documents = documents();
+        let id = open_text(&mut documents, "a.md");
+        documents.set_zoom(id, TextZoom::default().larger().larger());
+        let snapshot = documents.snapshot(true, Default::default(), |_| None);
+        assert_eq!(snapshot.spaces[0].files[0].text_zoom.percent(), 125);
+        let link = documents.text(id).unwrap().to_link();
+        assert_eq!(link.text_zoom.percent(), 125);
+    }
+
+    #[test]
     fn a_restored_text_is_a_link_that_remembers_its_mode_until_it_loads() {
         let mut documents = documents();
         let id = restored_text(&mut documents, true);
@@ -324,6 +358,7 @@ mod tests {
         assert!(matches!(outcome, Installed::OnScreen));
         assert_eq!(documents.shown_id(), Some(id));
         assert_eq!(documents.text(id).unwrap().mode, ViewMode::Source);
+        assert_eq!(documents.text(id).unwrap().zoom.percent(), 150);
         assert!(documents.active().is_none());
         assert!(!documents.text(id).unwrap().dirty);
     }

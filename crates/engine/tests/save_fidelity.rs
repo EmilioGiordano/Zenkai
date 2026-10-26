@@ -339,6 +339,28 @@ fn inserting_above_the_outline_drops_it_and_says_so() {
     assert!(dropped(&book).is_empty());
 }
 
+#[test]
+fn deleting_a_column_with_its_own_width_saves_valid_column_ranges() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("layout.xlsx");
+    layout_source(&path);
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    let column_e = ColIdx::new(4).unwrap();
+    book.set_column_width(SheetId(1), column_e, 120.0).unwrap();
+    let widened = book.sizes(SheetId(1));
+    for count in [1, 2] {
+        book.delete_columns(SheetId(1), column_e, count).unwrap();
+        let sheet = part(&book.to_xlsx().unwrap(), "xl/worksheets/sheet2.xml");
+        let document = roxmltree::Document::parse(&sheet).unwrap();
+        for col in document.descendants().filter(|n| n.has_tag_name("col")) {
+            let bound = |name| col.attribute(name).unwrap().parse::<u32>().unwrap();
+            assert!(bound("min") <= bound("max"), "{sheet}");
+        }
+        book.undo().unwrap();
+        assert_eq!(book.sizes(SheetId(1)), widened);
+    }
+}
+
 // Excel writes r:id on <pageSetup> for its printer settings part, which Zenkai does not
 // write; a dangling id makes Excel repair the file.
 #[test]

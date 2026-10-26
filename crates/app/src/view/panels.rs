@@ -1,14 +1,11 @@
-use gpui_kit::component::ActiveTheme;
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::Workspace;
 use crate::actions::*;
 use crate::chat_layout::{ChatLayout, SideSplit};
+use crate::panel_edge::{self, EdgeSide, EdgeState};
 use crate::panel_width::{Direction, KEY_STEP, Panel, PanelWidths, Resize, Shown};
-
-const EDGE_HIT_AREA: f32 = 6.0;
 
 struct Drag {
     panel: Panel,
@@ -203,49 +200,29 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let focus = self.panels.edge_focus(panel);
-        let focused = focus.is_focused(window);
-        let active = self
+        let dragging = self
             .panels
             .dragging
             .as_ref()
             .is_some_and(|drag| drag.panel == panel);
-        let (min, max) = if self.splits_beside_sheet(panel) {
+        let limits = if self.splits_beside_sheet(panel) {
             SideSplit::limits(self.side_by_side_room(window))
         } else {
             panel.limits()
         };
-        let (id, label) = match panel {
-            Panel::Sidebar => ("sidebar-edge", t!("panel.edge.sidebar")),
-            Panel::Chat => ("chat-edge", t!("panel.edge.chat")),
+        let (id, label, side) = match panel {
+            Panel::Sidebar => ("sidebar-edge", t!("panel.edge.sidebar"), EdgeSide::Right),
+            Panel::Chat => ("chat-edge", t!("panel.edge.chat"), EdgeSide::Left),
         };
-        let ring = cx.theme().ring;
-        div()
-            .id(id)
-            .key_context("PanelEdge")
-            .track_focus(&focus)
-            .tab_stop(true)
-            .role(Role::Splitter)
-            .aria_label(label)
-            .aria_orientation(Orientation::Vertical)
-            .aria_numeric_value(f64::from(self.panel_width(panel, window)))
-            .aria_min_numeric_value(f64::from(min))
-            .aria_max_numeric_value(f64::from(max))
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .w(px(EDGE_HIT_AREA))
-            .cursor_col_resize()
-            .map(|edge| match panel {
-                Panel::Sidebar => edge.right_0().border_r_1(),
-                Panel::Chat => edge.left_0().border_l_1(),
-            })
-            .border_color(if active || focused {
-                ring
-            } else {
-                gpui_kit::transparent_black()
-            })
-            .when(focused, |edge| edge.bg(ring.opacity(0.3)))
-            .hover(|edge| edge.border_color(ring))
+        let state = EdgeState {
+            id,
+            label,
+            side,
+            width: self.panel_width(panel, window),
+            limits,
+            dragging,
+        };
+        panel_edge::panel_edge(state, &focus, window, cx)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {

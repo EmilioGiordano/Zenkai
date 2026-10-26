@@ -7,10 +7,11 @@ use zenkai_types::WorkbookId;
 
 use super::Workspace;
 use crate::actions::{
-    PdfActualSize, PdfFirstPage, PdfFitPage, PdfFitWidth, PdfLastPage, PdfNextPage,
-    PdfPreviousPage, SelectPdfPage, TogglePdfOutline,
+    NarrowPdfPages, PdfActualSize, PdfFirstPage, PdfFitPage, PdfFitWidth, PdfLastPage, PdfNextPage,
+    PdfPreviousPage, SelectPdfPage, TogglePdfOutline, WidenPdfPages,
 };
 use crate::documents::Installed;
+use crate::panel_width::Resize;
 use crate::pdf::layout::{PageIdx, ZoomMode};
 use crate::pdf::{DocId, PdfEvent, PdfView};
 
@@ -36,7 +37,9 @@ impl Workspace {
             return;
         };
         let client = self.pdf_client.clone();
-        let view = cx.new(|cx| PdfView::new(DocId(id.0), path, position, client, window, cx));
+        let side_width = self.panels.widths.pdf_width();
+        let view =
+            cx.new(|cx| PdfView::new(DocId(id.0), path, position, side_width, client, window, cx));
         let events = cx.subscribe_in(
             &view,
             window,
@@ -68,6 +71,16 @@ impl Workspace {
                 cx.notify();
             }
             PdfEvent::OpenWeb(url) => self.confirm_web_link(url.clone(), window, cx),
+            PdfEvent::SideResized(width) => {
+                self.panels.widths = self.panels.widths.with_pdf_width(*width);
+                for (other, pane) in &self.pdf_panes {
+                    if *other != id {
+                        pane.view
+                            .update(cx, |view, cx| view.set_side_width(*width, cx));
+                    }
+                }
+                self.persist_session(cx);
+            }
         }
     }
 
@@ -210,6 +223,14 @@ pub(super) fn pdf_actions<E: InteractiveElement>(element: E, cx: &Context<Worksp
         }))
         .on_action(cx.listener(|this, _: &PdfActualSize, window, cx| {
             this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx));
+        }))
+        .on_action(cx.listener(|this, _: &WidenPdfPages, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| view.step_side(Resize::Wider, cx));
+        }))
+        .on_action(cx.listener(|this, _: &NarrowPdfPages, window, cx| {
+            this.forward_to_pdf(window, cx, |view, _, cx| {
+                view.step_side(Resize::Narrower, cx)
+            });
         }))
         .on_action(cx.listener(|this, _: &TogglePdfOutline, window, cx| {
             this.forward_to_pdf(window, cx, |view, window, cx| {

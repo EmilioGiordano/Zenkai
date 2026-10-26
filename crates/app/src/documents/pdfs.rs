@@ -96,6 +96,7 @@ mod tests {
                     mode: Default::default(),
                     base: None,
                     pdf: position,
+                    text_zoom: Default::default(),
                     unsupported: Vec::new(),
                     active,
                     sheet: 0,

@@ -10,6 +10,7 @@ use crate::entry::{Link, LinkStatus};
 use crate::spaces::SpaceId;
 use crate::text_disk::{DiskNotice, Writing};
 use crate::text_file::{Format, Stamp};
+use crate::text_zoom::TextZoom;
 
 pub const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
 pub const PDF_EXTENSION: &str = "pdf";
@@ -111,6 +112,7 @@ pub struct TextDocument {
     pub path: Option<PathBuf>,
     pub kind: DocumentKind,
     pub mode: ViewMode,
+    pub zoom: TextZoom,
     pub dirty: bool,
     pub format: Format,
     pub stamp: Option<Stamp>,
@@ -144,6 +146,7 @@ impl TextDocument {
             path,
             kind,
             mode,
+            zoom: TextZoom::default(),
             dirty: false,
             format: Format::default(),
             stamp: None,
@@ -272,6 +275,7 @@ impl TextDocument {
             mode: self.mode,
             base: self.stamp.map(Stamp::record),
             pdf: Default::default(),
+            text_zoom: self.zoom,
         }
     }
 }

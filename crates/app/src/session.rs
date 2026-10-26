@@ -14,6 +14,7 @@ use crate::space_appearance::{SpaceAppearance, SpaceOverride};
 use crate::spaces::{SpaceColor, SpaceId};
 use crate::text_document::{DocumentKind, ViewMode};
 use crate::text_file::StampRecord;
+use crate::text_zoom::TextZoom;
 
 const VERSION: u32 = 1;
 const FILE_NAME: &str = "session.json";
@@ -70,6 +71,8 @@ pub struct FileRecord {
     pub base: Option<StampRecord>,
     #[serde(default)]
     pub pdf: PdfPosition,
+    #[serde(default)]
+    pub text_zoom: TextZoom,
     pub unsupported: Vec<String>,
     pub active: bool,
     pub sheet: u32,
@@ -255,6 +258,7 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         mode: link.mode,
         base: link.base,
         pdf: link.pdf,
+        text_zoom: link.text_zoom,
         unsupported: link
             .unsupported
             .iter()
@@ -318,6 +322,7 @@ pub fn link_of(
         mode: record.mode,
         base: record.base,
         pdf: record.pdf,
+        text_zoom: record.text_zoom,
         rested: None,
     }
 }
@@ -367,16 +372,44 @@ fn set_aside(file: &Path) -> Loaded {
 }
 
 // Written next to the file and renamed over it, so a crash never leaves half a session.
+// Taken when a snapshot is made. Writes may run on any thread, so a write whose snapshot is
+// older than one already on disk is skipped instead of overwriting it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SaveOrder(u64);
+
+static NEXT_ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static LAST_WRITTEN: std::sync::Mutex<std::collections::BTreeMap<PathBuf, SaveOrder>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+impl SaveOrder {
+    pub fn next() -> SaveOrder {
+        SaveOrder(NEXT_ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+#[cfg(test)]
 pub fn save(directory: &Path, session: &Session) -> std::io::Result<()> {
-    std::fs::create_dir_all(directory)?;
+    save_in_order(directory, session, SaveOrder::next())
+}
+
+pub fn save_in_order(directory: &Path, session: &Session, order: SaveOrder) -> std::io::Result<()> {
+    let mut last = LAST_WRITTEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let file = file_in(directory);
+    if last.get(&file).is_some_and(|written| order < *written) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(directory)?;
     let temp = file.with_extension("json.tmp");
     let bytes = serde_json::to_vec_pretty(session).map_err(std::io::Error::other)?;
     let mut written = std::fs::File::create(&temp)?;
     written.write_all(&bytes)?;
     written.sync_all()?;
     drop(written);
-    std::fs::rename(&temp, &file)
+    std::fs::rename(&temp, &file)?;
+    last.insert(file, order);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -395,6 +428,7 @@ mod tests {
             mode: Default::default(),
             base: None,
             pdf: Default::default(),
+            text_zoom: Default::default(),
             unsupported: vec!["charts".to_string(), "macros".to_string()],
             active: true,
             sheet: 2,
@@ -461,6 +495,14 @@ mod tests {
         let back = serde_json::from_str::<Session>(&text).unwrap();
         assert_eq!(back.panel_widths, widths);
         assert_eq!(back.panel_widths.width_of(Panel::Chat), 600.0);
+    }
+
+    #[test]
+    fn the_pdf_panel_width_survives_the_session_round_trip() {
+        let widths = PanelWidths::default().with_pdf_width(300.0);
+        let text = serde_json::to_string(&session().with_panel_widths(widths)).unwrap();
+        let back = serde_json::from_str::<Session>(&text).unwrap();
+        assert_eq!(back.panel_widths.pdf_width(), 300.0);
     }
 
     #[test]
@@ -536,6 +578,49 @@ mod tests {
                 .with_extension("json.tmp")
                 .exists()
         );
+    }
+
+    #[test]
+    fn saves_from_several_threads_never_trip_over_the_temp_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().to_path_buf();
+        let writers: Vec<_> = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || save(&path, &session()))
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap().unwrap();
+        }
+        assert!(matches!(load(&path), Loaded::Restored(_)));
+    }
+
+    #[test]
+    fn an_older_snapshot_never_overwrites_a_newer_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let older = SaveOrder::next();
+        let newer = SaveOrder::next();
+        let mut kept = session();
+        kept.sidebar_visible = !kept.sidebar_visible;
+        save_in_order(directory.path(), &kept, newer).unwrap();
+        save_in_order(directory.path(), &session(), older).unwrap();
+        let Loaded::Restored(loaded) = load(directory.path()) else {
+            panic!("the session was not restored");
+        };
+        assert_eq!(loaded, kept);
+    }
+
+    #[test]
+    fn interleaved_orders_for_different_files_both_land() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let older = SaveOrder::next();
+        let newer = SaveOrder::next();
+        save_in_order(first.path(), &session(), newer).unwrap();
+        save_in_order(second.path(), &session(), older).unwrap();
+        assert!(matches!(load(first.path()), Loaded::Restored(_)));
+        assert!(matches!(load(second.path()), Loaded::Restored(_)));
     }
 
     #[test]
@@ -639,9 +724,11 @@ mod tests {
         let object = value.as_object_mut().unwrap();
         object.remove("kind");
         object.remove("mode");
+        object.remove("text_zoom");
         let old: FileRecord = serde_json::from_value(value).unwrap();
         assert_eq!(old.kind, DocumentKind::Workbook);
         assert_eq!(old.mode, ViewMode::Preview);
+        assert_eq!(old.text_zoom, TextZoom::default());
         assert_eq!(old.base, None);
     }
 
@@ -664,12 +751,14 @@ mod tests {
         text.recovery = Some("autosave-1-2-3.md".to_string());
         text.kind = DocumentKind::Markdown;
         text.mode = ViewMode::Split;
+        text.text_zoom = TextZoom::nearest(175);
         text.unsupported.clear();
         text.sheet = 0;
         let directory = Path::new("recovery");
         let link = link_of(&text, WorkbookId(4), SpaceId(0), Some(directory));
         assert_eq!(link.kind, DocumentKind::Markdown);
         assert_eq!(link.mode, ViewMode::Split);
+        assert_eq!(link.text_zoom.percent(), 175);
         assert_eq!(link.recovery, Some(directory.join("autosave-1-2-3.md")));
         assert_eq!(record_of(&link, true), text);
     }

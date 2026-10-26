@@ -10,6 +10,7 @@ use super::{Severity, Workspace, file_label};
 use crate::documents::{Installed, Provenance, TextLoad};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::markdown_pane::{MarkdownPane, PaneEvent, PaneState, folder_of};
+use crate::open_loads::OpenId;
 use crate::recovery;
 use crate::text_disk::RecoveredFile;
 use crate::text_document::{DocumentKind, ViewMode};
@@ -88,6 +89,18 @@ impl Workspace {
         self.text_panes.get(&self.documents.shown_text()?.id)
     }
 
+    pub(super) fn forward_to_text(
+        &mut self,
+        cx: &mut Context<Self>,
+        command: impl FnOnce(&mut MarkdownPane, &mut Context<MarkdownPane>),
+    ) -> bool {
+        let Some(entry) = self.shown_pane() else {
+            return false;
+        };
+        entry.pane.update(cx, |pane, cx| command(pane, cx));
+        true
+    }
+
     pub(super) fn text_state(&self, id: WorkbookId) -> PaneState {
         self.documents
             .text(id)
@@ -114,7 +127,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let state = self.text_state(id);
-        let pane = cx.new(|cx| MarkdownPane::new(text, mode, state, window, cx));
+        let zoom = self
+            .documents
+            .text(id)
+            .map_or_else(Default::default, |text| text.zoom);
+        let pane = cx.new(|cx| MarkdownPane::new(text, mode, zoom, state, window, cx));
         let events = cx.subscribe_in(
             &pane,
             window,
@@ -147,6 +164,10 @@ impl Workspace {
             PaneEvent::Moved => cx.notify(),
             PaneEvent::Mode(mode) => {
                 self.documents.set_mode(id, *mode);
+                self.persist_session(cx);
+            }
+            PaneEvent::Zoom(zoom) => {
+                self.documents.set_zoom(id, *zoom);
                 self.persist_session(cx);
             }
             PaneEvent::OpenLink(url) => self.open_document_link(id, url, window, cx),
@@ -270,6 +291,7 @@ impl Workspace {
     pub(super) fn begin_text_load(
         &mut self,
         link: Link,
+        open: Option<OpenId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -280,6 +302,8 @@ impl Workspace {
                 .spawn(async move { read_text_link(&link) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
+                open.into_iter()
+                    .for_each(|open| this.open_loads.finish(open));
                 this.finish_text_load(id, load, window, cx)
             });
             if let Err(error) = update {
@@ -360,7 +384,7 @@ impl Workspace {
             TextLink::Missing => {
                 self.documents.set_link_status(id, LinkStatus::Missing);
                 let text = t!("notice.link_missing", name = name);
-                self.notify(Severity::Warning, text, cx);
+                self.notify_until_open(Severity::Warning, text, cx);
             }
             TextLink::Failed(message) => {
                 self.documents.set_link_status(id, LinkStatus::NotLoaded);

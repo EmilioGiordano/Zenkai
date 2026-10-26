@@ -199,6 +199,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   or remove no cell), so a caller that caches per-sheet facts keeps the ones the step cannot touch
   (`src/user_model/history.rs`, `src/user_model/common.rs`). Stands on its own. Tests:
   `src/test/user_model/test_step_cells.rs`.
+- Deleting columns that start at the first column of a width or style range drops or
+  shrinks that range instead of leaving one whose `max` is below its `min` (written to the
+  file as `<col min="5" max="4">`), as undoing an insert after setting a width did
+  (`src/actions.rs`, `delete_columns`). Stands on its own. Tests:
+  `src/test/test_column_width.rs`.
 - NOW and TODAY read the clock once per evaluation, as Excel does, so `=NOW()-NOW()` is
   always 0 (`src/model.rs` `evaluation_milliseconds`, `src/incremental.rs`, `src/tz/`).
   Tests: `src/test/test_now.rs`. Stands on its own.

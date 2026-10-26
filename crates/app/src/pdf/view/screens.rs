@@ -140,6 +140,7 @@ impl PdfView {
     }
 
     fn render_reader(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refit_if_resized();
         let frame = self.frame(cx);
         self.request_visible();
         let weak = cx.entity().downgrade();
@@ -254,6 +255,16 @@ impl Render for PdfView {
                     this.toggle_outline(window, cx)
                 }),
             )
+            .on_mouse_move(cx.listener(|this, event, _, cx| this.drag_side(event, cx)))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_side_drag(cx)),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.end_side_drag(cx)),
+            )
+            .when(self.resizing_side(), |view| view.cursor_col_resize())
             .flex_1()
             .min_w_0()
             .h_full()

@@ -51,7 +51,11 @@ pub fn defaults() -> Vec<Binding> {
         bind("alt-1", PdfFitPage, Some("PdfDocument")),
         bind("alt-2", PdfFitWidth, Some("PdfDocument")),
         bind("alt-3", PdfActualSize, Some("PdfDocument")),
+        bind("ctrl-0", ResetDocumentZoom, Some("MarkdownDocument")),
+        bind("ctrl-0", ResetDocumentZoom, Some("PdfDocument")),
         bind("alt-o", TogglePdfOutline, Some("PdfDocument")),
+        bind("ctrl-alt-up", WidenPdfPages, Some("PdfDocument")),
+        bind("ctrl-alt-down", NarrowPdfPages, Some("PdfDocument")),
         bind("escape", ClosePdfFind, Some("PdfFindBar")),
         bind("down", PdfOutlineNext, Some("PdfOutline")),
         bind("up", PdfOutlinePrevious, Some("PdfOutline")),
@@ -296,6 +300,49 @@ mod tests {
             .filter(|line| line.starts_with("        bind("))
             .count();
         assert_eq!(defaults().len(), written);
+    }
+
+    #[test]
+    fn ctrl_zero_resets_the_zoom_in_a_markdown_or_pdf_tab_and_hides_columns_elsewhere() {
+        let action_in = |context: &str| {
+            defaults()
+                .into_iter()
+                .find(|binding| {
+                    binding.chord.as_str() == "ctrl-0" && binding.context == Some(context)
+                })
+                .map(|binding| binding.action.name())
+        };
+        assert_eq!(
+            action_in("MarkdownDocument"),
+            Some(<ResetDocumentZoom as Action>::name_for_type())
+        );
+        assert_eq!(
+            action_in("PdfDocument"),
+            Some(<ResetDocumentZoom as Action>::name_for_type())
+        );
+        assert_eq!(
+            action_in("Workspace"),
+            Some(<HideColumns as Action>::name_for_type())
+        );
+    }
+
+    #[test]
+    fn the_zoom_keys_are_bound_for_both_plus_spellings() {
+        let action_of = |chord: &str| {
+            defaults()
+                .into_iter()
+                .find(|binding| {
+                    binding.chord.as_str() == chord && binding.context == Some("Workspace")
+                })
+                .map(|binding| binding.action.name())
+        };
+        let zoom_in = Some(<ZoomIn as Action>::name_for_type());
+        assert_eq!(action_of("ctrl-="), zoom_in);
+        assert_eq!(action_of("ctrl-+"), zoom_in);
+        assert_eq!(
+            action_of("ctrl--"),
+            Some(<ZoomOut as Action>::name_for_type())
+        );
     }
 
     #[test]

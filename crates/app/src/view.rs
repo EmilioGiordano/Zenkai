@@ -71,7 +71,7 @@ use crate::recent;
 use crate::recovery;
 use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
-use crate::session::Session;
+use crate::session::{SaveOrder, Session};
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Neighbour;
 use crate::stale_view::StaleRequest;
@@ -134,6 +134,9 @@ enum StructureEdit {
 
 const SAVE_AGAIN_POLL: Duration = Duration::from_millis(50);
 const SAVE_AGAIN_LIMIT: Duration = Duration::from_secs(300);
+// Windows makes the first answer the default button, so Cancel goes first.
+const CHANGED_FILE_REPLACE: usize = 1;
+const CHANGED_FILE_SAVE_AS: usize = 2;
 const MAX_AUTOSUM_SCAN: usize = 10_000;
 const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
@@ -148,9 +151,25 @@ enum Severity {
     Error,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lifetime {
+    UntilReplaced,
+    UntilOpen,
+}
+
 struct Notice {
     severity: Severity,
     text: SharedString,
+    lifetime: Lifetime,
+}
+
+fn clear_on_open(notice: &mut Option<Notice>) {
+    if notice
+        .as_ref()
+        .is_some_and(|notice| notice.lifetime == Lifetime::UntilOpen)
+    {
+        *notice = None;
+    }
 }
 
 pub struct Workspace {
@@ -218,6 +237,8 @@ pub struct Workspace {
     close_dialog: Option<close_dialog::CloseDialog>,
     prompts: PromptGate,
     saved_session: Option<Session>,
+    unwritten_session: Option<(PathBuf, Session, SaveOrder)>,
+    session_writing: bool,
     cell_refresh: CellRefresh,
     missed: MissedRefreshes,
     space_panel: Option<space_panel::SpacePanel>,
@@ -376,6 +397,8 @@ impl Workspace {
             close_dialog: None,
             prompts: PromptGate::default(),
             saved_session: None,
+            unwritten_session: None,
+            session_writing: false,
             cell_refresh: CellRefresh::Idle,
             missed: MissedRefreshes::default(),
             space_panel: None,
@@ -428,16 +451,7 @@ impl Workspace {
     }
 
     fn window_title(&self) -> String {
-        if let Some(text) = self.documents.shown_text() {
-            let marker = if text.dirty { "• " } else { "" };
-            return format!("{marker}{} - Zenkai", text.name());
-        }
-        if let Some(pdf) = self.documents.shown_pdf() {
-            return format!("{} - Zenkai", pdf.name());
-        }
-        self.documents
-            .active()
-            .map_or_else(|| "Zenkai".to_string(), Document::title)
+        self.documents.shown_title()
     }
 
     fn load_sheet_view(&mut self, cx: &mut Context<Self>) {
@@ -1037,8 +1051,21 @@ impl Workspace {
         self.notice = Some(Notice {
             severity,
             text: text.into(),
+            lifetime: Lifetime::UntilReplaced,
         });
         cx.notify();
+    }
+
+    fn notify_until_open(
+        &mut self,
+        severity: Severity,
+        text: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.notify(severity, text, cx);
+        if let Some(notice) = &mut self.notice {
+            notice.lifetime = Lifetime::UntilOpen;
+        }
     }
 
     fn on_grid_event(
@@ -1207,7 +1234,7 @@ impl Workspace {
             return false;
         }
         if shown {
-            window.set_window_title(&document.title());
+            window.set_window_title(&self.documents.shown_title());
         }
         self.flush_edits(id, cx);
         true
@@ -1978,24 +2005,20 @@ impl Workspace {
             .map(Document::name)
             .unwrap_or_default();
         let answer = self.ask(
-            PromptLevel::Critical,
+            PromptLevel::Warning,
             &t!("save.changed_on_disk_title", name = name),
             Some(t!("save.changed_on_disk_detail")),
-            &[
-                t!("button.replace"),
-                t!("button.save_as"),
-                t!("button.cancel"),
-            ],
+            &changed_file_answers(),
             window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| match choice {
-                Some(0) => {
+                Some(CHANGED_FILE_REPLACE) => {
                     this.save_to(id, path, Some(overwrite), ChangedFile::Replace, window, cx)
                 }
-                Some(1) => this.save_as_dialog(id, window, cx),
+                Some(CHANGED_FILE_SAVE_AS) => this.save_as_dialog(id, window, cx),
                 _ => this.save_ended(id, false, window, cx),
             });
             if let Err(error) = update {
@@ -2099,7 +2122,7 @@ impl Workspace {
                         document.dirty = edited_meanwhile;
                         fully_saved = !edited_meanwhile;
                         if shown {
-                            window.set_window_title(&document.title());
+                            window.set_window_title(&this.documents.shown_title());
                         }
                         this.notify(Severity::Info, t!("notice.saved"), cx);
                     }
@@ -2414,8 +2437,8 @@ impl Workspace {
                         .text_center()
                         .child(
                             self.documents
-                                .active()
-                                .map_or_else(|| "Zenkai".to_string(), Document::name_with_marker),
+                                .shown_name_with_marker()
+                                .unwrap_or_else(|| "Zenkai".to_string()),
                         ),
                 )
                 .child(
@@ -3448,6 +3471,14 @@ impl Workspace {
     }
 }
 
+fn changed_file_answers() -> [PromptButton; 3] {
+    [
+        PromptButton::cancel(t!("button.cancel")),
+        PromptButton::new(t!("button.replace")),
+        PromptButton::new(t!("button.save_as")),
+    ]
+}
+
 fn empty_workbook() -> Workbook {
     Workbook::new_empty().unwrap_or_else(|error| {
         tracing::error!(%error, "could not create an empty workbook");
@@ -3797,25 +3828,36 @@ impl Render for Workspace {
                 this.notify(Severity::Info, message, cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
-                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(true, cx)) {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(true, cx))
+                    || this.forward_to_text(cx, |pane, cx| pane.zoom_in(cx))
+                {
                     return;
                 }
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() + 0.1, cx));
                 this.refresh_cells(cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
-                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(false, cx)) {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(false, cx))
+                    || this.forward_to_text(cx, |pane, cx| pane.zoom_out(cx))
+                {
                     return;
                 }
                 this.grid.update(cx, |g, cx| g.set_zoom(g.zoom() - 0.1, cx));
                 this.refresh_cells(cx);
             }))
             .on_action(cx.listener(|this, _: &ZoomReset, window, cx| {
-                if this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx)) {
+                if this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx))
+                    || this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx))
+                {
                     return;
                 }
                 this.grid.update(cx, |g, cx| g.set_zoom(1.0, cx));
                 this.refresh_cells(cx);
+            }))
+            .on_action(cx.listener(|this, _: &ResetDocumentZoom, window, cx| {
+                if !this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx)) {
+                    this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx));
+                }
             }))
             .on_action(cx.listener(|this, _: &NextSheet, window, cx| {
                 if let Some(sheet) = this.active_sheet() {
@@ -4288,9 +4330,31 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{enter_text, grow_wrapped_rows, widen_for_numbers};
+    use super::{
+        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, changed_file_answers, enter_text,
+        grow_wrapped_rows, widen_for_numbers,
+    };
     use zenkai_engine::{Engine, Workbook};
+    use zenkai_i18n::t;
     use zenkai_types::{CellPos, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId};
+
+    #[test]
+    fn changed_file_prompt_defaults_to_cancel() {
+        let answers = changed_file_answers();
+        assert!(answers[0].is_cancel());
+        assert_eq!(
+            answers.iter().filter(|answer| answer.is_cancel()).count(),
+            1
+        );
+        assert_eq!(
+            answers[CHANGED_FILE_REPLACE].label().as_ref(),
+            t!("button.replace")
+        );
+        assert_eq!(
+            answers[CHANGED_FILE_SAVE_AS].label().as_ref(),
+            t!("button.save_as")
+        );
+    }
 
     const SHEET: SheetId = SheetId(0);
 
@@ -4507,5 +4571,32 @@ mod tests {
         grow_wrapped_rows(&mut wb, SHEET, Range::single(a1())).unwrap();
         let height = row_height(&wb, a1().row).unwrap();
         assert!((height - (20.0 * 19.0 + 4.0)).abs() < 1.0, "{height}");
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::{Lifetime, Notice, Severity, clear_on_open};
+
+    fn notice(lifetime: Lifetime) -> Option<Notice> {
+        Some(Notice {
+            severity: Severity::Warning,
+            text: "text".into(),
+            lifetime,
+        })
+    }
+
+    #[test]
+    fn opening_a_file_clears_a_notice_that_lasts_until_then() {
+        let mut current = notice(Lifetime::UntilOpen);
+        clear_on_open(&mut current);
+        assert!(current.is_none());
+    }
+
+    #[test]
+    fn opening_a_file_keeps_a_notice_that_lasts_until_replaced() {
+        let mut current = notice(Lifetime::UntilReplaced);
+        clear_on_open(&mut current);
+        assert!(current.is_some());
     }
 }

@@ -110,6 +110,15 @@ fn unsupported_label(unsupported: Unsupported) -> &'static str {
     }
 }
 
+pub fn with_dirty_marker(name: &str, dirty: bool) -> String {
+    let marker = if dirty { "• " } else { "" };
+    format!("{marker}{name}")
+}
+
+pub fn window_title(name: Option<&str>) -> String {
+    name.map_or_else(|| "Zenkai".to_string(), |name| format!("{name} - Zenkai"))
+}
+
 impl Document {
     pub fn new(
         id: WorkbookId,
@@ -166,12 +175,7 @@ impl Document {
     }
 
     pub fn name_with_marker(&self) -> String {
-        let marker = if self.dirty { "• " } else { "" };
-        format!("{marker}{}", self.name())
-    }
-
-    pub fn title(&self) -> String {
-        format!("{} - Zenkai", self.name_with_marker())
+        with_dirty_marker(&self.name(), self.dirty)
     }
 
     // The UI thread never waits: `None` means a recalculation holds the write lock.

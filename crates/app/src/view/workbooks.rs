@@ -7,7 +7,7 @@ use zenkai_engine::{Stamp, Unsupported, Workbook, XlsxReader, open_xlsx};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
-use super::{Severity, Workspace, file_label};
+use super::{Severity, Workspace, clear_on_open, file_label};
 use crate::agent_settings;
 use crate::document;
 use crate::documents::{Installed, Intent, Loaded, Provenance, Step};
@@ -253,6 +253,7 @@ impl Workspace {
     }
 
     pub(super) fn present_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        clear_on_open(&mut self.notice);
         if let Some(id) = self.documents.shown_text().map(|text| text.id) {
             self.present_text(id, window, cx);
             return;
@@ -480,10 +481,12 @@ impl Workspace {
             .entry(id)
             .map(Entry::name)
             .unwrap_or_default();
-        let open = self.open_loads.start(t!("busy.opening", name = name));
+        let open = self
+            .open_loads
+            .start_for(link.kind, t!("busy.opening", name = name));
         cx.notify();
         if link.kind.is_text() {
-            self.begin_text_load(link, window, cx);
+            self.begin_text_load(link, open, window, cx);
             return;
         }
         if link.kind.is_pdf() {
@@ -497,7 +500,8 @@ impl Workspace {
                 .spawn(async move { read_link(&link, reader) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.open_loads.finish(open);
+                open.into_iter()
+                    .for_each(|open| this.open_loads.finish(open));
                 this.finish_load(id, load, window, cx)
             });
             if let Err(error) = update {
@@ -576,7 +580,7 @@ impl Workspace {
             LinkLoad::Missing => {
                 self.documents.set_link_status(id, LinkStatus::Missing);
                 let text = t!("notice.link_missing", name = name);
-                self.notify(Severity::Warning, text, cx);
+                self.notify_until_open(Severity::Warning, text, cx);
             }
             LinkLoad::Failed(message) => {
                 self.documents.set_link_status(id, LinkStatus::NotLoaded);
@@ -751,6 +755,7 @@ mod tests {
             mode: Default::default(),
             base: None,
             pdf: Default::default(),
+            text_zoom: Default::default(),
             rested: Some(Box::new(Rested {
                 file: FileSeen {
                     stamp: None,

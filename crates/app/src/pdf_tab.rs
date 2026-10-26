@@ -43,6 +43,7 @@ impl PdfTab {
             mode: ViewMode::default(),
             base: None,
             pdf: self.position,
+            text_zoom: Default::default(),
             rested: None,
         }
     }
