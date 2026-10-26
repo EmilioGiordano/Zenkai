@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 861f8842ebcaf974eddeba539b6d644e2c681a7007ebd81cbd727055dabdc751 # shrinks to ops = [MoveSheet(1, 0), InsertColumns(0, 4, 1), ColumnWidth(0, 0, 20), ColumnWidth(0, 4, 20)]
