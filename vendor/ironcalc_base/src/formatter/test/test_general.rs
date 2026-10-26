@@ -300,3 +300,14 @@ fn test_german_locale() {
     let locale = get_locale("de").expect("");
     assert_eq!(format_number(1234.56, "General", locale).text, "1234,56");
 }
+
+#[test]
+fn percent_number_formats() {
+    use crate::formatter::lexer::is_likely_percent_number_format;
+    assert!(is_likely_percent_number_format("0%"));
+    assert!(is_likely_percent_number_format("#,##0.000%;[Red]-0.000%"));
+    assert!(!is_likely_percent_number_format("general"));
+    assert!(!is_likely_percent_number_format("0.00"));
+    assert!(!is_likely_percent_number_format("0\" %\""));
+    assert!(!is_likely_percent_number_format(r"0\%"));
+}

@@ -137,9 +137,10 @@ fn test_day_small_serial() {
     model.evaluate();
 
     assert_eq!(model._get_text("A1"), *"#NUM!");
-    assert_eq!(model._get_text("A2"), *"#NUM!");
+    // Excel reads serial 0 as 0 January 1900
+    assert_eq!(model._get_text("A2"), *"0");
     // Excel thinks is Feb 29, 1900
-    assert_eq!(model._get_text("A3"), *"28");
+    assert_eq!(model._get_text("A3"), *"29");
 
     // From now on everyone agrees
     assert_eq!(model._get_text("A4"), *"1");
@@ -157,7 +158,7 @@ fn test_month_small_serial() {
     model.evaluate();
 
     assert_eq!(model._get_text("A1"), *"#NUM!");
-    assert_eq!(model._get_text("A2"), *"#NUM!");
+    assert_eq!(model._get_text("A2"), *"1");
     // We agree with Excel here (We are both in Feb)
     assert_eq!(model._get_text("A3"), *"2");
 
@@ -177,7 +178,7 @@ fn test_year_small_serial() {
     model.evaluate();
 
     assert_eq!(model._get_text("A1"), *"#NUM!");
-    assert_eq!(model._get_text("A2"), *"#NUM!");
+    assert_eq!(model._get_text("A2"), *"1900");
 
     assert_eq!(model._get_text("A3"), *"1900");
 
@@ -195,24 +196,25 @@ fn test_date_early_dates() {
 
     model.evaluate();
 
-    // This is 1 in Excel, we agree with Google Docs
+    // Excel's 1900 labels, kept on purpose: serial 1 is 1/1/1900
     assert_eq!(model._get_text("A1"), *"1/1/1900");
     assert_eq!(
         model.get_cell_value_by_ref("Sheet1!A1"),
-        Ok(CellValue::Number(2.0))
+        Ok(CellValue::Number(1.0))
     );
 
-    // 1900 was not a leap year, this is a bug in EXCEL
-    // This would be 60 in Excel
     assert_eq!(model._get_text("A2"), *"2/28/1900");
     assert_eq!(
         model.get_cell_value_by_ref("Sheet1!A2"),
-        Ok(CellValue::Number(60.0))
+        Ok(CellValue::Number(59.0))
     );
 
-    // This does not agree with Excel, instead of mistakenly allowing
-    // for Feb 29, it will auto-wrap to the next day after Feb 28.
-    assert_eq!(model._get_text("B2"), *"3/1/1900");
+    // 1900 was not a leap year, but Excel keeps its 29 February as serial 60
+    assert_eq!(model._get_text("B2"), *"2/29/1900");
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!B2"),
+        Ok(CellValue::Number(60.0))
+    );
 
     // This agrees with Excel from he onward
     assert_eq!(model._get_text("A3"), *"3/1/1900");

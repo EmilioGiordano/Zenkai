@@ -132,6 +132,19 @@ enum StructureEdit {
     FreezePanes,
 }
 
+// Excel asks with a dialog for a plain cell range; without one, only whole rows or columns act.
+fn selection_edit(insert: bool, selection: Range) -> Option<StructureEdit> {
+    let whole_columns = selection.rows() == zenkai_types::MAX_ROWS;
+    let whole_rows = selection.cols() == zenkai_types::MAX_COLS;
+    match (whole_columns, whole_rows, insert) {
+        (true, false, true) => Some(StructureEdit::InsertColumns),
+        (true, false, false) => Some(StructureEdit::DeleteColumns),
+        (false, true, true) => Some(StructureEdit::InsertRows),
+        (false, true, false) => Some(StructureEdit::DeleteRows),
+        _ => None,
+    }
+}
+
 const SAVE_AGAIN_POLL: Duration = Duration::from_millis(50);
 const SAVE_AGAIN_LIMIT: Duration = Duration::from_secs(300);
 // Windows makes the first answer the default button, so Cancel goes first.
@@ -2193,11 +2206,13 @@ impl Workspace {
         };
         let range = self.selection(cx);
         self.edit(window, cx, move |wb| {
-            wb.apply_style(sheet, range, change)?;
-            if matches!(change, StyleChange::NumberFormat(_)) {
-                widen_for_numbers(wb, sheet, range)?;
-            }
-            Ok(())
+            wb.as_one_undo_step(|wb| {
+                wb.apply_style(sheet, range, change)?;
+                if matches!(change, StyleChange::NumberFormat(_)) {
+                    widen_for_numbers(wb, sheet, range)?;
+                }
+                Ok(())
+            })
         });
     }
 
@@ -2680,6 +2695,22 @@ impl Workspace {
         }
     }
 
+    // Ctrl+- and Ctrl++ reach the grid while a cell is being typed in; they must not edit the sheet.
+    fn insert_or_delete_selection(
+        &mut self,
+        insert: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.grid.read(cx).editor().is_some() {
+            return;
+        }
+        match selection_edit(insert, self.selection(cx)) {
+            Some(edit) => self.structure_edit(window, cx, edit),
+            None => self.notify(Severity::Warning, t!("notice.select_rows_or_columns"), cx),
+        }
+    }
+
     // With a single cell selected, Excel sorts its current region.
     fn sort(&mut self, descending: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(sheet) = self.active_sheet() else {
@@ -2725,8 +2756,10 @@ impl Workspace {
             return;
         };
         self.edit(window, cx, move |wb| {
-            wb.set_number_format(sheet, range, &code)?;
-            widen_for_numbers(wb, sheet, range)
+            wb.as_one_undo_step(|wb| {
+                wb.set_number_format(sheet, range, &code)?;
+                widen_for_numbers(wb, sheet, range)
+            })
         });
     }
 
@@ -2747,11 +2780,13 @@ impl Workspace {
         };
         let wrap = !wrapped;
         self.edit(window, cx, move |wb| {
-            wb.apply_style(sheet, range, StyleChange::Wrap(wrap))?;
-            if !wrap {
-                return Ok(());
-            }
-            grow_wrapped_rows(wb, sheet, range)
+            wb.as_one_undo_step(|wb| {
+                wb.apply_style(sheet, range, StyleChange::Wrap(wrap))?;
+                if !wrap {
+                    return Ok(());
+                }
+                grow_wrapped_rows(wb, sheet, range)
+            })
         });
     }
 
@@ -2845,8 +2880,10 @@ impl Workspace {
             return;
         };
         self.edit(window, cx, move |wb| {
-            wb.set_number_format(sheet, range, &code)?;
-            widen_for_numbers(wb, sheet, range)
+            wb.as_one_undo_step(|wb| {
+                wb.set_number_format(sheet, range, &code)?;
+                widen_for_numbers(wb, sheet, range)
+            })
         });
         self.close_format_dialog(window, cx);
     }
@@ -2891,16 +2928,7 @@ impl Workspace {
         if self.active_sheet() == Some(sheet) {
             self.show_typed(Range::single(pos), &text, cx);
         }
-        self.edit(window, cx, move |wb| {
-            // Excel turns on wrap text for a cell typed with a line break.
-            let wraps = text.contains('\n') && !text.starts_with('=');
-            wb.set_input(sheet, pos, &text)?;
-            if wraps {
-                wb.apply_style(sheet, Range::single(pos), StyleChange::Wrap(true))?;
-                grow_wrapped_rows(wb, sheet, Range::single(pos))?;
-            }
-            widen_for_numbers(wb, sheet, Range::single(pos))
-        });
+        self.edit(window, cx, move |wb| enter_text(wb, sheet, pos, &text));
     }
 
     // Editing in the formula bar: Enter or leaving the bar enters the text in the
@@ -3035,10 +3063,7 @@ impl Workspace {
         if !time {
             // An ISO date is recognised and formatted by the engine in one undo step.
             let text = now.format("%Y-%m-%d").to_string();
-            self.edit(window, cx, move |wb| {
-                wb.set_input(sheet, active, &text)?;
-                widen_for_numbers(wb, sheet, Range::single(active))
-            });
+            self.edit(window, cx, move |wb| enter_text(wb, sheet, active, &text));
             return;
         }
         let midnight = now.date().and_hms_opt(0, 0, 0).unwrap_or(now);
@@ -3046,12 +3071,14 @@ impl Workspace {
         let fraction = (now - midnight).num_milliseconds() as f64 / 86_400_000.0;
         let text = fraction.to_string();
         self.edit(window, cx, move |wb| {
-            wb.set_input(sheet, active, &text)?;
-            wb.apply_style(
-                sheet,
-                Range::single(active),
-                StyleChange::NumberFormat(NumberFormat::Time),
-            )
+            wb.as_one_undo_step(|wb| {
+                wb.set_input(sheet, active, &text)?;
+                wb.apply_style(
+                    sheet,
+                    Range::single(active),
+                    StyleChange::NumberFormat(NumberFormat::Time),
+                )
+            })
         });
     }
 
@@ -3910,6 +3937,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &DeleteColumns, window, cx| {
                 this.structure_edit(window, cx, StructureEdit::DeleteColumns)
             }))
+            .on_action(cx.listener(|this, _: &InsertSelection, window, cx| {
+                this.insert_or_delete_selection(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &DeleteSelection, window, cx| {
+                this.insert_or_delete_selection(false, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &FreezePanes, window, cx| {
                 this.structure_edit(window, cx, StructureEdit::FreezePanes)
             }))
@@ -4214,6 +4247,25 @@ fn rgb_of(color: Hsla) -> Rgb {
     Rgb(channel(rgba.r) << 16 | channel(rgba.g) << 8 | channel(rgba.b))
 }
 
+// Typed text with the wrap and widening it brings, as one undo step like Excel.
+fn enter_text(
+    wb: &mut Workbook,
+    sheet: SheetId,
+    pos: CellPos,
+    text: &str,
+) -> Result<(), EngineError> {
+    wb.as_one_undo_step(|wb| {
+        // Excel turns on wrap text for a cell typed with a line break.
+        let wraps = text.contains('\n') && !text.starts_with('=');
+        wb.set_input(sheet, pos, text)?;
+        if wraps {
+            wb.apply_style(sheet, Range::single(pos), StyleChange::Wrap(true))?;
+            grow_wrapped_rows(wb, sheet, Range::single(pos))?;
+        }
+        widen_for_numbers(wb, sheet, Range::single(pos))
+    })
+}
+
 // Excel widens a column that still has the default width when a formatted number or date
 // typed into it would only show as ####. General numbers are shortened when painted
 // instead, and text keeps overflowing.
@@ -4314,12 +4366,43 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, changed_file_answers, grow_wrapped_rows,
-        widen_for_numbers,
+        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, StructureEdit, changed_file_answers,
+        enter_text, grow_wrapped_rows, selection_edit, widen_for_numbers,
     };
     use zenkai_engine::{Engine, Workbook};
     use zenkai_i18n::t;
-    use zenkai_types::{CellPos, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId};
+    use zenkai_types::{CellPos, ColIdx, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId};
+
+    #[test]
+    fn insert_and_delete_follow_the_shape_of_the_selection() {
+        let at = |row, col| CellPos::new(RowIdx::clamped(row), ColIdx::clamped(col));
+        let max_row = i64::from(zenkai_types::MAX_ROWS) - 1;
+        let max_col = i64::from(zenkai_types::MAX_COLS) - 1;
+        let column = Range::new(at(0, 2), at(max_row, 3));
+        let row = Range::new(at(4, 0), at(5, max_col));
+        let cells = Range::new(at(1, 1), at(2, 2));
+        assert!(matches!(
+            selection_edit(false, column),
+            Some(StructureEdit::DeleteColumns)
+        ));
+        assert!(matches!(
+            selection_edit(true, column),
+            Some(StructureEdit::InsertColumns)
+        ));
+        assert!(matches!(
+            selection_edit(false, row),
+            Some(StructureEdit::DeleteRows)
+        ));
+        assert!(matches!(
+            selection_edit(true, row),
+            Some(StructureEdit::InsertRows)
+        ));
+        let sheet = Range::new(at(0, 0), at(max_row, max_col));
+        for insert in [true, false] {
+            assert!(selection_edit(insert, cells).is_none());
+            assert!(selection_edit(insert, sheet).is_none());
+        }
+    }
 
     #[test]
     fn changed_file_prompt_defaults_to_cancel() {
@@ -4364,6 +4447,45 @@ mod tests {
         wb.set_input(SHEET, a1(), "1234.5").unwrap();
         wb.set_number_format(SHEET, Range::single(a1()), format)
             .unwrap();
+    }
+
+    #[test]
+    fn one_undo_takes_back_a_typed_date_and_the_widening_it_caused() {
+        for date in ["1/2/2024", "2024-01-02"] {
+            let mut wb = Workbook::new_empty().unwrap();
+            let before = wb.cell(SHEET, a1());
+            enter_text(&mut wb, SHEET, a1(), date).unwrap();
+            assert!(column_is_widened(&wb), "{date}");
+            let entered = wb.cell(SHEET, a1());
+            let widened = wb.sizes(SHEET);
+
+            let mut control = Workbook::new_empty().unwrap();
+            control
+                .set_column_width(SHEET, a1().col, widened.columns[0].width)
+                .unwrap();
+            control.undo().unwrap();
+
+            wb.undo().unwrap();
+            assert_eq!(wb.cell(SHEET, a1()), before, "{date}");
+            assert_eq!(wb.sizes(SHEET), control.sizes(SHEET), "{date}");
+
+            wb.redo().unwrap();
+            assert_eq!(wb.cell(SHEET, a1()), entered, "{date}");
+            assert_eq!(wb.sizes(SHEET), widened, "{date}");
+
+            wb.undo().unwrap();
+            enter_text(&mut wb, SHEET, a1(), "7").unwrap();
+            assert_eq!(wb.cell(SHEET, a1()).text, "7", "{date}");
+        }
+    }
+
+    #[test]
+    fn a_typed_formula_is_computed_before_its_column_is_widened() {
+        let mut wb = Workbook::new_empty().unwrap();
+        wb.set_number_format(SHEET, Range::single(a1()), "$#,##0.00")
+            .unwrap();
+        enter_text(&mut wb, SHEET, a1(), "=1234.5*1").unwrap();
+        assert!(column_is_widened(&wb));
     }
 
     #[test]

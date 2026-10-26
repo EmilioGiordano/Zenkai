@@ -139,6 +139,8 @@ pub fn table() -> Vec<Group> {
             [
                 item(t!("palette.generate_data"), GenerateData),
                 item(t!("palette.insert_chart"), InsertChart),
+                item(t!("palette.insert_selection"), InsertSelection),
+                item(t!("palette.delete_selection"), DeleteSelection),
                 item(t!("palette.insert_rows"), InsertRows),
                 item(t!("palette.hide_rows"), HideRows),
                 item(t!("palette.unhide_rows"), UnhideRows),

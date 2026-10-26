@@ -44,6 +44,7 @@ pub mod types;
 pub mod worksheet;
 
 pub use crate::constants::COLUMN_WIDTH_FACTOR;
+pub use crate::constants::LAST_COLUMN;
 pub use crate::constants::ROW_HEIGHT_FACTOR;
 
 mod actions;

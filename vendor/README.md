@@ -50,6 +50,23 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   not as the number 0, so a styled blank written by openpyxl stays blank
   (`src/import/worksheets.rs`). Test: `test_number_cell_without_value_is_empty` in
   `tests/test.rs`.
+- The xlsx import cuts each `<col>` range to columns 1 to 16384 and drops one with no
+  column left, such as `min="5" max="3"`, so a damaged file cannot leave a range that
+  saves as one Excel repairs (`src/import/worksheets.rs`, `load_columns`). Needs the
+  public `LAST_COLUMN` of ironcalc_base. Test: `test_column_ranges_outside_the_sheet` in
+  `tests/test.rs`.
+- The xlsx export writes only the part inside the sheet of a column range that inserting
+  columns moved past column 16384, and skips one moved wholly past it; the model keeps
+  them, so undoing the insert brings them back; a range starting before column 1 is written
+  from column 1 (`src/export/worksheets.rs`). Needs the public `LAST_COLUMN` of
+  ironcalc_base. Tests: `columns_moved_past_the_last_column_are_written_inside_the_sheet`
+  and `column_ranges_starting_before_the_first_column_are_written_from_column_one` in
+  `src/export/test/test_export.rs`.
+- The xlsx import reads a styles part without `cellStyleXfs`, which the schema makes
+  optional, with default records, one per xfId the formats and named styles reference (up to 64,000), instead of
+  panicking on the missing element, so a save leaves no xfId dangling (`src/import/styles.rs`). Tests:
+  `test_styles_without_cell_style_formats` and
+  `test_saved_style_references_stay_inside_cell_style_formats` in `tests/test.rs`.
 
 Zenkai-only, not for upstream:
 
@@ -173,7 +190,8 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   same formula index in each cell, instead of printing, parsing and storing a text per
   cell. It leaves the cells alone and returns false when a reference would leave the sheet
   or invert a range, or the area holds an array or a spill, so the caller fills as text.
-  Undo restores the old cells; redo reads the source cell again (new `Diff::FillFormula`).
+  Undo restores the old cells and removes the ones that did not exist; redo reads the
+  source cell again (new `Diff::FillFormula`).
   `UserModel::begin_edit_group` and `end_edit_group` join the edits between them into one
   undo step, evaluating once (`src/user_model/fill_formula.rs`, `common.rs`). Tests:
   `src/test/user_model/test_fill_formula.rs`.
@@ -218,6 +236,67 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   shift typed text from one cell to another without writing the source cell first and
   undoing it (`src/user_model/common.rs`). Stands on its own. Tests:
   `src/test/user_model/test_extend_copied_value.rs`.
+- Undoing an input typed over a spill cell gives the cell back its own style instead of
+  the one the input gave it; the anchor spills into it again (`src/user_model/common.rs`,
+  `set_user_input`). Stands on its own. Test:
+  `undo_typed_input_into_spill_cell_keeps_its_style` in
+  `src/test/user_model/test_undo_input_format.rs`.
+- Undoing an input written where there was no cell removes the cell instead of leaving
+  it empty with the style the input gave it, so `5%` or a date typed, pasted or filled
+  into an empty cell and undone leaves no number format behind, as in Excel, and row and
+  column styles apply to the cell again (`src/user_model/undo_redo.rs`). Needs the spill
+  cell patch above, or a styled spill cell loses its style on undo. Undoing
+  `fill_formula` removes such cells too (`src/user_model/fill_formula.rs`), as its tests
+  compare it with filling as text. Tests: `src/test/user_model/test_undo_input_format.rs`,
+  `undo_removes_filled_cells_that_did_not_exist` in
+  `src/test/user_model/test_fill_formula.rs`.
+- Undoing an array formula entered over a spill cell gives the cell back its own style
+  instead of the one the formula gave it; the anchor spills into it again
+  (`src/user_model/common.rs`, `set_user_array_formula`). Stands on its own. Test:
+  `undo_array_formula_over_spill_cell_keeps_its_style` in
+  `src/test/user_model/test_undo_input_format.rs`.
+- Undoing an array formula entered over cells that did not exist removes those cells
+  instead of leaving them empty with the style the formula gave them, so a value typed
+  there later shows no number format from the formula, as in Excel, and row and column
+  styles apply to the cells again (`src/user_model/undo_redo.rs`). Needs the array formula
+  spill cell patch above, or a styled spill cell under the formula loses its style on
+  undo. Tests: `undo_array_formula_removes_the_cells_that_did_not_exist` and
+  `undo_array_formula_inherits_the_row_style_again` in
+  `src/test/user_model/test_undo_input_format.rs`.
+- A typed percentage gets Excel's built-in format `0%`, or `0.00%` when it has decimals
+  (ids 9 and 10, so the saved file names no custom format), instead of `#,##0%` and
+  `#,##0.00%` (`src/formatter/format.rs`, `parse_formatted_number`). Stands on its own; the
+  tests of the undo patch above assert its format. Tests:
+  `src/formatter/test/test_parse_formatted_number.rs`, `input_percentages` in
+  `src/test/test_set_user_input.rs`.
+- A percentage typed into a cell already formatted as a percentage keeps the cell's format,
+  as a date typed into a date-formatted cell already does (`src/model.rs`,
+  `set_user_input`; `is_likely_percent_number_format` in `src/formatter/lexer.rs`). Stands
+  on its own. Tests: `input_percentage_keeps_a_percentage_format_only` in
+  `src/test/test_set_user_input.rs`, `percent_number_formats` in
+  `src/formatter/test/test_general.rs`.
+- `LAST_COLUMN` is public, so the xlsx import and export of `ironcalc` can keep column
+  ranges inside the sheet (`src/constants.rs`, `src/lib.rs`). Stands on its own.
+- The cells a dynamic array stops spilling into, because it shrinks, is blocked, cleared,
+  overwritten, cut, undone or reset before rows or columns move, are removed instead of
+  left as empty cells, unless they have a style of their own, as in Excel; the empty cells
+  stretched the sheet's dimension and were saved (`Worksheet::cell_clear_spill` in
+  `src/worksheet.rs`, its callers in `src/model.rs`, `src/user_model/undo_redo.rs` and
+  `src/user_model/clipboard.rs`). A re-evaluated spill is still cleared in place and only
+  the cells left past its new range are removed (`Model::remove_cells_left_by_spill`), so a
+  stable spill costs what it did. Clearing an area leaves a position without a cell as it
+  is instead of writing an empty cell there, so deleting a whole spill keeps none of it.
+  Stands on its own. Tests: `src/test/user_model/test_spill_leftover_cells.rs`.
+- Date serials below 61 carry Excel's 1900 labels: serial 1 is 1/1/1900, 60 the fictitious
+  2/29/1900 and 0 is 1/0/1900, in number formats and TEXT, DAY, MONTH, YEAR and WEEKDAY,
+  and DATE, DATEVALUE and typed dates give those serials back; a typed date before 1/1/1900
+  stays text (`src/formatter/dates.rs`, `src/formatter/format.rs`,
+  `src/functions/date_and_time.rs`, `src/conditional_formatting.rs`). Serials from 61 on are
+  unchanged. `DATE(1899, 12, 31)` now gives `#NUM!` instead of 1 (Excel reads the year
+  as 3799, which neither does). Upstream labels them as Google Sheets does (serial 1 is
+  12/31/1899), on purpose, so it may not take this as is. Stands on its own. Tests:
+  `src/formatter/test/test_early_serials.rs`, `src/test/test_early_date_serials.rs`,
+  `src/test/test_date_and_time.rs`.
 
 Zenkai-only, not for upstream:
 
