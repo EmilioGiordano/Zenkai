@@ -2,6 +2,8 @@
 // file, as in Excel.
 #![allow(clippy::unwrap_used)]
 
+use std::io::{Cursor, Read};
+
 use zenkai_engine::{Engine, Workbook};
 use zenkai_types::{CellPos, Range, SheetId};
 
@@ -20,11 +22,34 @@ fn shrunk_sequence() -> Workbook {
     book
 }
 
+fn sheet_xml(xlsx: &[u8]) -> String {
+    let mut archive = zip::ZipArchive::new(Cursor::new(xlsx)).unwrap();
+    let mut xml = String::new();
+    archive
+        .by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut xml)
+        .unwrap();
+    xml
+}
+
 #[test]
 fn a_shrunk_spill_ends_the_used_range_at_its_last_cell() {
     let book = shrunk_sequence();
     assert_eq!(book.cell(SHEET, at("B3")).text, "3");
     assert_eq!(book.used_end(SHEET), at("B3"));
+}
+
+#[test]
+fn a_shrunk_spill_saves_without_the_cells_it_left() {
+    let xlsx = shrunk_sequence().to_xlsx().unwrap();
+    let xml = sheet_xml(&xlsx);
+    assert!(xml.contains(r#"<dimension ref="A1:B3"/>"#), "{xml}");
+    for row in 4..=10 {
+        assert!(!xml.contains(&format!(r#"r="B{row}""#)), "B{row} in {xml}");
+    }
+    let reopened = Workbook::from_xlsx_bytes(&xlsx, "shrunk").unwrap();
+    assert_eq!(reopened.used_end(SHEET), at("B3"));
 }
 
 #[test]
