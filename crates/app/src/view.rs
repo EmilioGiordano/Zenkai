@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,6 +31,9 @@ mod agent_review;
 mod chat_dock;
 mod close_dialog;
 mod closing;
+mod messages;
+mod notice_card;
+mod notices;
 mod pdfs;
 mod settings_gate;
 mod space_panel;
@@ -55,6 +59,7 @@ use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
 use crate::documents::{Documents, Step};
+use crate::failure::{Failure, offer_another_location, save_failure};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
@@ -91,6 +96,7 @@ mod sidebar;
 mod theme_picker;
 mod workbooks;
 use crate::job_pill::{JobPill, LongJob, SHOW_AFTER};
+use gpui_kit::component::Icon;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -100,6 +106,8 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::spinner::Spinner;
 use lifecycle::Lifecycle;
+use notice_card::{STATUS_BAR_HEIGHT, severity_icon, severity_title};
+use notices::{Lifetime, Notices, Severity};
 use panels::PanelsState;
 use search::SearchOverlay;
 use sidebar::SidebarState;
@@ -157,34 +165,6 @@ const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 const MAX_REPLACE_CELLS: usize = 100_000;
 const FONT_SIZES: [u16; 16] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Severity {
-    Info,
-    Warning,
-    Error,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Lifetime {
-    UntilReplaced,
-    UntilOpen,
-}
-
-struct Notice {
-    severity: Severity,
-    text: SharedString,
-    lifetime: Lifetime,
-}
-
-fn clear_on_open(notice: &mut Option<Notice>) {
-    if notice
-        .as_ref()
-        .is_some_and(|notice| notice.lifetime == Lifetime::UntilOpen)
-    {
-        *notice = None;
-    }
-}
-
 pub struct Workspace {
     documents: Documents,
     grid: Entity<Grid>,
@@ -193,7 +173,11 @@ pub struct Workspace {
     stats_job: StatsJob,
     active_input: SharedString,
     active_style: CellStyle,
-    notice: Option<Notice>,
+    notices: Notices,
+    notice_focus: FocusHandle,
+    notice_hovered: bool,
+    notice_focused: Cell<bool>,
+    messages: Option<messages::MessagesPanel>,
     toast: Option<agent_access::Toast>,
     toast_generation: u64,
     busy: Option<SharedString>,
@@ -360,7 +344,11 @@ impl Workspace {
             stats_job: StatsJob::default(),
             active_input: SharedString::default(),
             active_style: CellStyle::default(),
-            notice: None,
+            notices: Notices::default(),
+            notice_focus: cx.focus_handle(),
+            notice_hovered: false,
+            notice_focused: Cell::new(false),
+            messages: None,
             toast: None,
             toast_generation: 0,
             busy: None,
@@ -1061,11 +1049,18 @@ impl Workspace {
         text: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        self.notice = Some(Notice {
-            severity,
-            text: text.into(),
-            lifetime: Lifetime::UntilReplaced,
-        });
+        let id = self.post(severity, text.into(), None, Lifetime::UntilReplaced);
+        self.expire_warning_later(severity, id, cx);
+        cx.notify();
+    }
+
+    fn notify_failure(&mut self, failure: Failure, cx: &mut Context<Self>) {
+        self.post(
+            Severity::Error,
+            failure.text.into(),
+            Some(failure.detail.into()),
+            Lifetime::UntilReplaced,
+        );
         cx.notify();
     }
 
@@ -1075,10 +1070,21 @@ impl Workspace {
         text: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        self.notify(severity, text, cx);
-        if let Some(notice) = &mut self.notice {
-            notice.lifetime = Lifetime::UntilOpen;
-        }
+        let id = self.post(severity, text.into(), None, Lifetime::UntilOpen);
+        self.expire_warning_later(severity, id, cx);
+        cx.notify();
+    }
+
+    fn post(
+        &mut self,
+        severity: Severity,
+        text: SharedString,
+        detail: Option<SharedString>,
+        lifetime: Lifetime,
+    ) -> u64 {
+        let time = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.notices
+            .post(severity, text, detail, lifetime, time.into())
     }
 
     fn on_grid_event(
@@ -2117,11 +2123,7 @@ impl Workspace {
                 });
                 let Some(document) = this.documents.get_mut(id).filter(|_| current) else {
                     if let Err(error) = result {
-                        this.notify(
-                            Severity::Error,
-                            t!("notice.save_failed", path = path.display(), error = error),
-                            cx,
-                        );
+                        this.notify_failure(save_failure(&path, &error), cx);
                     }
                     this.save_ended(id, false, window, cx);
                     return;
@@ -2162,9 +2164,8 @@ impl Workspace {
                     }
                     Err(error) => {
                         let asks_again = document.path.as_ref() == Some(&path);
-                        this.notify(
-                            Severity::Error,
-                            t!("notice.save_failed_pick_another", error = error),
+                        this.notify_failure(
+                            offer_another_location(save_failure(&path, &error)),
                             cx,
                         );
                         this.flush_edits(id, cx);
@@ -3373,22 +3374,31 @@ impl Workspace {
                     .text_color(theme.primary)
                     .child(busy),
             );
-        } else if let Some(notice) = &self.notice {
-            let (icon, color) = match notice.severity {
-                Severity::Info => ("ⓘ", theme.muted_foreground),
-                Severity::Warning => ("⚠", theme.warning),
-                Severity::Error => ("✕", theme.danger),
-            };
-            let full_text = notice.text.clone();
+        } else if let Some(notice) = self.notices.status() {
+            let (icon, color) = severity_icon(notice.severity, theme);
+            let summary = notice.text.replace('\n', " ");
+            let label = format!("{}: {summary}", severity_title(notice.severity));
             left = left.child(
                 h_flex()
                     .id("status-notice")
+                    .role(Role::Button)
+                    .aria_label(label)
                     .min_w_0()
                     .gap_1()
+                    .items_center()
+                    .cursor_pointer()
                     .text_color(color)
-                    .tooltip(move |window, cx| Tooltip::new(full_text.clone()).build(window, cx))
-                    .child(div().flex_none().child(icon))
-                    .child(div().min_w_0().truncate().child(notice.text.clone())),
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(keymap::labeled(
+                            cx,
+                            t!("palette.show_messages"),
+                            &ShowMessages,
+                        ))
+                        .build(window, cx)
+                    })
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowMessages), cx))
+                    .child(Icon::new(icon).size_3().flex_none())
+                    .child(div().min_w_0().truncate().child(summary)),
             );
         } else {
             left = left.child(
@@ -3486,7 +3496,7 @@ impl Workspace {
                 .child(t!("status.last_recalc", value = recalc));
         }
         h_flex()
-            .h(rem_px(26.0))
+            .h(rem_px(STATUS_BAR_HEIGHT))
             .px_3()
             .gap_4()
             .justify_between()
@@ -4096,6 +4106,24 @@ impl Render for Workspace {
                 this.decide_held_settings(HeldDecision::Keep, window, cx)
             }))
             .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.toggle_agent_editing(cx)))
+            .on_action(
+                cx.listener(|this, _: &DismissNotice, window, cx| this.dismiss_notice(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &zenkai_grid::Cancel, window, cx| {
+                this.dismiss_notice(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowMessages, window, cx| this.toggle_messages(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CloseMessages, window, cx| this.close_messages(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NextMessage, _, cx| this.step_message(true, cx)))
+            .on_action(cx.listener(|this, _: &PreviousMessage, _, cx| this.step_message(false, cx)))
+            .on_action(
+                cx.listener(|this, _: &FocusNotice, window, cx| this.focus_notice(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &AllowAgentChange, window, cx| {
                 this.decide_agent_change(Decision::Allow, window, cx)
             }))
@@ -4154,6 +4182,8 @@ impl Render for Workspace {
             .children(self.render_search(cx))
             .children(self.render_busy(busy_label, cx))
             .children(self.render_toast(cx))
+            .children(self.render_notice_card(window, cx))
+            .children(self.render_messages(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
             .children(self.render_close_dialog(cx))
@@ -4637,32 +4667,5 @@ mod tests {
         grow_wrapped_rows(&mut wb, SHEET, Range::single(a1())).unwrap();
         let height = row_height(&wb, a1().row).unwrap();
         assert!((height - (20.0 * 19.0 + 4.0)).abs() < 1.0, "{height}");
-    }
-}
-
-#[cfg(test)]
-mod notice_tests {
-    use super::{Lifetime, Notice, Severity, clear_on_open};
-
-    fn notice(lifetime: Lifetime) -> Option<Notice> {
-        Some(Notice {
-            severity: Severity::Warning,
-            text: "text".into(),
-            lifetime,
-        })
-    }
-
-    #[test]
-    fn opening_a_file_clears_a_notice_that_lasts_until_then() {
-        let mut current = notice(Lifetime::UntilOpen);
-        clear_on_open(&mut current);
-        assert!(current.is_none());
-    }
-
-    #[test]
-    fn opening_a_file_keeps_a_notice_that_lasts_until_replaced() {
-        let mut current = notice(Lifetime::UntilReplaced);
-        clear_on_open(&mut current);
-        assert!(current.is_some());
     }
 }

@@ -175,7 +175,7 @@ pub fn read(path: &Path) -> Result<(Decoded, Option<Stamp>), ReadError> {
 
 // Runs off the UI thread. Returns the stamp of what was written, so the write is not later
 // mistaken for a change made by another program.
-pub fn write(path: &Path, text: &str, format: Format) -> Result<Option<Stamp>, String> {
+pub fn write(path: &Path, text: &str, format: Format) -> Result<Option<Stamp>, EngineError> {
     let bytes = encode(text, format);
     write_atomic(path, &bytes, |written| {
         if decode(written).is_ok() {
@@ -183,8 +183,7 @@ pub fn write(path: &Path, text: &str, format: Format) -> Result<Option<Stamp>, S
         } else {
             Err(EngineError::VerifyFailed(t!("text.not_utf8").to_string()))
         }
-    })
-    .map_err(|error| t!("file.write_failed", path = path.display(), error = error))?;
+    })?;
     Ok(stamp_of(path))
 }
 

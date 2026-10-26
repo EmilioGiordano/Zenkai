@@ -11,12 +11,12 @@ use zenkai_engine::Engine;
 use zenkai_i18n::t;
 
 use super::agent_calls::Change;
-use super::workbooks::failure_text;
 use super::{Workspace, file_label};
 use crate::agent_folder::FoundFile;
 use crate::agent_settings;
 use crate::document::Document;
 use crate::entry::display_name;
+use crate::failure::open_failure;
 use crate::files::{self, FileLoad};
 
 fn sheet_names(document: Option<&Document>) -> Vec<String> {
@@ -125,7 +125,9 @@ impl Workspace {
                 let file = match loaded {
                     Ok(file) => file,
                     Err(failure) => {
-                        return call.respond(Err(ToolError::File(failure_text(&failure))));
+                        return call.respond(Err(ToolError::File(
+                            open_failure(path.path(), &failure).text,
+                        )));
                     }
                 };
                 let id = this.install_agent_opened(file, path.path(), window, cx);

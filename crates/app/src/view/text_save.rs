@@ -2,11 +2,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui_kit::*;
+use zenkai_engine::EngineError;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
 use crate::autosave::{self, Due};
+use crate::failure::{offer_another_location, save_failure};
 use crate::files;
 use crate::job_pill::LongJob;
 use crate::recovery;
@@ -24,7 +26,7 @@ enum Guard {
 enum Written {
     Saved(Option<Stamp>),
     DiskChanged,
-    Failed(String),
+    Failed(EngineError),
 }
 
 fn write_checked(
@@ -239,9 +241,8 @@ impl Workspace {
                     }
                     Written::DiskChanged => this.confirm_changed_text(id, path, window, cx),
                     Written::Failed(error) => {
-                        this.notify(
-                            Severity::Error,
-                            t!("notice.save_failed_pick_another", error = error),
+                        this.notify_failure(
+                            offer_another_location(save_failure(&path, &error)),
                             cx,
                         );
                         let shown = this.documents.shown_id() == Some(id);
@@ -373,7 +374,9 @@ pub(super) fn write_recovery(target: &Path, text: &str, format: Format) -> Resul
         std::fs::create_dir_all(parent)
             .map_err(|error| t!("file.write_failed", path = parent.display(), error = error))?;
     }
-    text_file::write(target, text, format).map(|_| ())
+    text_file::write(target, text, format)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

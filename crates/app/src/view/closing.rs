@@ -1,12 +1,14 @@
 use std::path::Path;
 
 use gpui_kit::*;
+use zenkai_engine::EngineError;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace};
 use crate::close_prompt::{Departure, Next, Purpose, Settled};
 use crate::entry::{Entry, LinkStatus};
+use crate::failure::save_failure;
 
 impl Workspace {
     pub(super) fn begin_departure(
@@ -94,7 +96,7 @@ impl Workspace {
         id: WorkbookId,
         path: &Path,
         sheets: usize,
-        written: Result<(), String>,
+        written: Result<(), EngineError>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -104,7 +106,7 @@ impl Workspace {
             .and_then(|departure| departure.purpose_waiting_on(id));
         self.save_ended(id, false, window, cx);
         match (written, closing) {
-            (Err(error), _) => self.notify(Severity::Error, error, cx),
+            (Err(error), _) => self.notify_failure(save_failure(path, &error), cx),
             (Ok(()), Some(Purpose::Tab(_))) => self.notify(
                 Severity::Warning,
                 t!("close.csv_kept_tab", path = path.display()),

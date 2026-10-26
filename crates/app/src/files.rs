@@ -271,19 +271,19 @@ pub fn sheet_rows(workbook: &Workbook, sheet: SheetId) -> Vec<Vec<String>> {
         .collect()
 }
 
-pub fn write_csv_file(path: &Path, rows: &[Vec<String>]) -> Result<(), String> {
+pub fn write_csv_file(path: &Path, rows: &[Vec<String>]) -> Result<(), EngineError> {
     let delimiter = if extension(path).as_deref() == Some("tsv") {
         Delimiter::Tab
     } else {
         Delimiter::Comma
     };
-    let bytes = write_csv(rows, delimiter).map_err(|e| e.to_string())?;
+    let bytes =
+        write_csv(rows, delimiter).map_err(|error| EngineError::Rejected(error.to_string()))?;
     write_atomic(path, &bytes, |written| {
         parse_csv(written, Some(delimiter))
             .map(|_| ())
             .map_err(|e| EngineError::VerifyFailed(e.to_string()))
     })
-    .map_err(|e| t!("file.write_failed", path = path.display(), error = e))
 }
 
 #[cfg(test)]
