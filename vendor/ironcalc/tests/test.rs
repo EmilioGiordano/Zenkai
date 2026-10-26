@@ -609,3 +609,17 @@ fn test_column_ranges_outside_the_sheet() {
         .collect();
     assert_eq!(columns, [(1, 2, 11.0), (5, 5, 38.0), (10, 16_384, 12.0)]);
 }
+
+#[test]
+fn test_styles_without_cell_style_formats() {
+    let edited = example_with_part_edited("xl/styles.xml", |text| {
+        let start = text.find("<cellStyleXfs").unwrap();
+        let end = text.find("</cellStyleXfs>").unwrap() + "</cellStyleXfs>".len();
+        format!("{}{}", &text[..start], &text[end..])
+    });
+    let model = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    assert_eq!(
+        model.styles.cell_style_xfs,
+        ironcalc_base::types::Styles::default().cell_style_xfs
+    );
+}
