@@ -210,7 +210,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("alt-y", AllowAgentChange, Some("AgentApproval")),
         bind("escape", DenyAgentChange, Some("AgentApproval")),
         bind("ctrl-shift-e", LetAgentsEdit, CONTEXT),
-        bind("ctrl-alt-j", FocusNotice, CONTEXT),
+        bind("ctrl-alt-shift-j", FocusNotice, CONTEXT),
         bind("escape", DismissNotice, Some("NoticeCard")),
         bind("ctrl-c", CopyNotice, Some("NoticeCard")),
         bind("ctrl-shift-j", ShowMessages, CONTEXT),
