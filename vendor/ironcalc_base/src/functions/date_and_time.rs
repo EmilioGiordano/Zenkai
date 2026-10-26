@@ -532,11 +532,6 @@ pub(crate) fn parse_datevalue_text(value: &str) -> Result<i32, String> {
     let month = parse_month_simple(month_str)?;
     let year = parse_year_simple(year_str)?;
 
-    // Excel 1900 leap-year bug: 29-Feb-1900 is treated as serial 60
-    if year == 1900 && month == 2 && day == 29 {
-        return Ok(60);
-    }
-
     match date_to_serial_number(day, month, year) {
         Ok(n) => Ok(n),
         Err(_) => Err("Not a valid date".to_string()),

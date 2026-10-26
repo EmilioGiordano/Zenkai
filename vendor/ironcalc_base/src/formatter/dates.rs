@@ -11,9 +11,15 @@ use crate::constants::MINIMUM_DATE_SERIAL_NUMBER;
 
 pub const DATE_OUT_OF_RANGE_MESSAGE: &str = "Out of range parameters for date";
 
-#[inline]
+// Excel counts a fictitious 29 February 1900 as serial 60, so every earlier date sits one
+// serial lower than the days elapsed since 1899-12-30.
 fn convert_to_serial_number(date: NaiveDate) -> i32 {
-    date.num_days_from_ce() - EXCEL_DATE_BASE
+    let days = date.num_days_from_ce() - EXCEL_DATE_BASE;
+    if days < 61 {
+        days - 1
+    } else {
+        days
+    }
 }
 
 fn is_date_within_range(date: NaiveDate) -> bool {
@@ -77,6 +83,10 @@ pub(crate) fn excel_serial_weekday(serial: i64) -> Option<Weekday> {
 }
 
 pub fn date_to_serial_number(day: u32, month: u32, year: i32) -> Result<i32, String> {
+    // Excel's 1900 leap-year bug: it accepts 29 February 1900 as serial 60.
+    if (year, month, day) == (1900, 2, 29) {
+        return Ok(60);
+    }
     match NaiveDate::from_ymd_opt(year, month, day) {
         Some(native_date) => Ok(convert_to_serial_number(native_date)),
         None => Err(DATE_OUT_OF_RANGE_MESSAGE.to_string()),
