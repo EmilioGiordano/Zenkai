@@ -20,6 +20,7 @@ mod decimals;
 mod document;
 mod documents;
 mod entry;
+mod failure;
 mod file_search;
 mod files;
 mod find;
