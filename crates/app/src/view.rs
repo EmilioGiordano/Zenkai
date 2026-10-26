@@ -132,13 +132,16 @@ enum StructureEdit {
     FreezePanes,
 }
 
-// Excel asks rows or columns with a dialog for a cell range; without one, a range acts on its rows.
-fn selection_edit(insert: bool, selection: Range) -> StructureEdit {
-    match (selection.rows() == zenkai_types::MAX_ROWS, insert) {
-        (true, true) => StructureEdit::InsertColumns,
-        (true, false) => StructureEdit::DeleteColumns,
-        (false, true) => StructureEdit::InsertRows,
-        (false, false) => StructureEdit::DeleteRows,
+// Excel asks with a dialog for a plain cell range; without one, only whole rows or columns act.
+fn selection_edit(insert: bool, selection: Range) -> Option<StructureEdit> {
+    let whole_columns = selection.rows() == zenkai_types::MAX_ROWS;
+    let whole_rows = selection.cols() == zenkai_types::MAX_COLS;
+    match (whole_columns, whole_rows, insert) {
+        (true, false, true) => Some(StructureEdit::InsertColumns),
+        (true, false, false) => Some(StructureEdit::DeleteColumns),
+        (false, true, true) => Some(StructureEdit::InsertRows),
+        (false, true, false) => Some(StructureEdit::DeleteRows),
+        _ => None,
     }
 }
 
@@ -2700,8 +2703,10 @@ impl Workspace {
         if self.grid.read(cx).editor().is_some() {
             return;
         }
-        let edit = selection_edit(insert, self.selection(cx));
-        self.structure_edit(window, cx, edit);
+        match selection_edit(insert, self.selection(cx)) {
+            Some(edit) => self.structure_edit(window, cx, edit),
+            None => self.notify(Severity::Warning, t!("notice.select_rows_or_columns"), cx),
+        }
     }
 
     // With a single cell selected, Excel sorts its current region.
@@ -4361,24 +4366,25 @@ mod tests {
         let cells = Range::new(at(1, 1), at(2, 2));
         assert!(matches!(
             selection_edit(false, column),
-            StructureEdit::DeleteColumns
+            Some(StructureEdit::DeleteColumns)
         ));
         assert!(matches!(
             selection_edit(true, column),
-            StructureEdit::InsertColumns
+            Some(StructureEdit::InsertColumns)
         ));
         assert!(matches!(
             selection_edit(false, row),
-            StructureEdit::DeleteRows
+            Some(StructureEdit::DeleteRows)
         ));
         assert!(matches!(
             selection_edit(true, row),
-            StructureEdit::InsertRows
+            Some(StructureEdit::InsertRows)
         ));
-        assert!(matches!(
-            selection_edit(false, cells),
-            StructureEdit::DeleteRows
-        ));
+        let sheet = Range::new(at(0, 0), at(max_row, max_col));
+        for insert in [true, false] {
+            assert!(selection_edit(insert, cells).is_none());
+            assert!(selection_edit(insert, sheet).is_none());
+        }
     }
 
     #[test]
