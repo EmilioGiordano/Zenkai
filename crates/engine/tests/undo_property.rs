@@ -35,6 +35,7 @@ fn value() -> impl Strategy<Value = String> {
         (0..SIDE, 0..SIDE).prop_map(|(r, c)| format!("=A1+{}", cell_name(r, c))),
         Just("=SUM(A1:C3)".to_string()),
         Just("=1/0".to_string()),
+        Just("=SEQUENCE(MAX(1,MIN(4,A1)))".to_string()),
     ]
 }
 
