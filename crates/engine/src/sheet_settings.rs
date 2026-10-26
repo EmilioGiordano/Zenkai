@@ -712,6 +712,7 @@ fn read_column_outline(sheet: Node, columns: &mut Indexed) {
     let [list] = lists.as_slice() else {
         return;
     };
+    let mut ranges = BTreeMap::new();
     for col in list.children().filter(Node::is_element) {
         let bound = |name: &str| {
             col.attribute(name)
@@ -721,16 +722,54 @@ fn read_column_outline(sheet: Node, columns: &mut Indexed) {
         let (Some(min), Some(max)) = (bound("min"), bound("max")) else {
             continue;
         };
-        // IronCalc cuts each range to the sheet the same way.
+        // IronCalc cuts each range to the sheet and drops it when min > max the same way;
+        // assign_range relies on first <= last to keep the ranges disjoint.
         let first = u32::try_from(min.max(1));
         let last = u32::try_from(max.min(i64::from(MAX_COLUMN)));
         let (Ok(first), Ok(last)) = (first, last) else {
             continue;
         };
+        if first > last {
+            continue;
+        }
         let outline = outline_of(col.attribute("outlineLevel"), col.attribute("collapsed"));
+        let outlined = outline.level > 0 || outline.collapsed;
+        assign_range(&mut ranges, first, last, outlined.then_some(outline));
+    }
+    for (first, (last, outline)) in ranges {
         for index in first..=last {
             columns.add_outline(index, outline);
         }
+    }
+}
+
+// Disjoint ranges keyed by first column. A later <col> replaces what an earlier one set on
+// the columns it covers, as in Excel, so the work per element does not grow with its width.
+fn assign_range(
+    ranges: &mut BTreeMap<u32, (u32, Outline)>,
+    first: u32,
+    last: u32,
+    outline: Option<Outline>,
+) {
+    let covered: Vec<u32> = ranges
+        .range(..=last)
+        .rev()
+        .take_while(|(_, (end, _))| *end >= first)
+        .map(|(start, _)| *start)
+        .collect();
+    for start in covered {
+        let Some((end, kept)) = ranges.remove(&start) else {
+            continue;
+        };
+        if start < first {
+            ranges.insert(start, (first - 1, kept));
+        }
+        if end > last {
+            ranges.insert(last + 1, (end, kept));
+        }
+    }
+    if let Some(outline) = outline {
+        ranges.insert(first, (last, outline));
     }
 }
 
@@ -908,6 +947,81 @@ mod tests {
             .collect();
         assert_eq!(levels, [(3, 2, true), (7, 1, false)]);
         assert_eq!(rows.reach, 7);
+    }
+
+    fn column_levels(cols: &str) -> Vec<(u32, u32)> {
+        let settings = read(
+            &sheet(&format!("<cols>{cols}</cols><sheetData/>")),
+            &mut ElementBudget::workbook(),
+        );
+        settings
+            .columns
+            .outline
+            .iter()
+            .map(|(column, outline)| (*column, outline.level))
+            .collect()
+    }
+
+    #[test]
+    fn column_outline_keeps_each_range_of_a_normal_file() {
+        let levels = column_levels(
+            r#"<col min="2" max="3" width="9" outlineLevel="1"/><col min="5" max="5" width="9"/><col min="7" max="8" width="9" outlineLevel="2"/>"#,
+        );
+        assert_eq!(levels, [(2, 1), (3, 1), (7, 2), (8, 2)]);
+    }
+
+    // Excel lets a later <col> replace the columns an earlier one covered.
+    #[test]
+    fn a_later_column_range_replaces_the_outline_of_an_earlier_one() {
+        let levels = column_levels(
+            r#"<col min="1" max="10" width="9" outlineLevel="3"/><col min="4" max="6" width="9"/><col min="9" max="12" width="9" outlineLevel="1"/>"#,
+        );
+        let expected: Vec<(u32, u32)> = [(1, 3), (2, 3), (3, 3), (7, 3), (8, 3)]
+            .into_iter()
+            .chain((9..=12).map(|column| (column, 1)))
+            .collect();
+        assert_eq!(levels, expected);
+    }
+
+    #[test]
+    fn a_reversed_column_range_is_dropped_and_cuts_nothing() {
+        let levels = column_levels(
+            r#"<col min="1" max="4" width="9" outlineLevel="2"/><col min="3" max="2" width="9"/><col min="9" max="0" width="9" outlineLevel="1"/>"#,
+        );
+        assert_eq!(levels, [(1, 2), (2, 2), (3, 2), (4, 2)]);
+    }
+
+    #[test]
+    fn reversed_column_ranges_cost_work_per_element_not_per_column() {
+        let mut cols = r#"<col min="1" max="16384" width="9" outlineLevel="1"/>"#.to_string();
+        for offset in 1..16_000 {
+            cols.push_str(&format!(
+                r#"<col min="{}" max="{offset}" width="9" outlineLevel="1"/>"#,
+                16_384 - offset
+            ));
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(column_levels(&cols).len());
+        });
+        let columns = receiver
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap();
+        assert_eq!(columns, 16_384);
+    }
+
+    #[test]
+    fn repeated_full_width_columns_cost_work_per_element_not_per_column() {
+        let repeated = r#"<col min="1" max="16384" width="9" outlineLevel="1"/>"#.repeat(200_000);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(column_levels(&repeated).len());
+        });
+        // Billions of inserts would take minutes; the bound is generous for a debug build.
+        let columns = receiver
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap();
+        assert_eq!(columns, 16_384);
     }
 
     #[test]

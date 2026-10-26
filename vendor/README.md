@@ -67,6 +67,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   panicking on the missing element, so a save leaves no xfId dangling (`src/import/styles.rs`). Tests:
   `test_styles_without_cell_style_formats` and
   `test_saved_style_references_stay_inside_cell_style_formats` in `tests/test.rs`.
+- The xlsx import returns an error for a `<cols>` with more `<col>` elements than the sheet
+  has columns, instead of keeping one entry per element: a hostile file could repeat the
+  element millions of times (`src/import/worksheets.rs`). Stands on its own (uses the public
+  `LAST_COLUMN`). Test: `test_column_elements_are_bounded_by_the_columns_of_a_sheet` in
+  `tests/test.rs`.
 
 Zenkai-only, not for upstream:
 
