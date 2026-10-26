@@ -59,24 +59,13 @@ impl<'a> UserModel<'a> {
                                 .update_cell(*row, *column, value)?;
                         }
                         None => {
-                            if spill_dims.is_some() {
-                                // The spill cells were already cleared above; only
-                                // the anchor itself remains.  range_clear_all would
-                                // re-expand to the full spill range and erase cells
-                                // that were just restored by earlier diffs in this
-                                // same undo operation (e.g. the cut source that
-                                // overlaps the paste target's spill area).
-                                let _ = self
-                                    .model
-                                    .workbook
-                                    .worksheet_mut(*sheet)?
-                                    .cell_clear_contents(*row, *column);
-                            } else {
-                                self.model
-                                    .workbook
-                                    .worksheet_mut(*sheet)?
-                                    .cell_clear_contents(*row, *column)?;
-                            }
+                            // There was no cell: remove it, so the number format the
+                            // input gave it (5%, a date) goes too and row and column
+                            // styles apply again. The spill cells were cleared above.
+                            self.model
+                                .workbook
+                                .worksheet_mut(*sheet)?
+                                .remove_cell(*row, *column)?;
                         }
                     }
                 }
