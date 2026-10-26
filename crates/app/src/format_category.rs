@@ -43,7 +43,17 @@ impl FormatCategory {
                 Self::Custom
             };
         }
-        Self::Custom
+        if core.contains('*') {
+            return Self::Accounting;
+        }
+        if !is_plain_number(&core) {
+            return Self::Custom;
+        }
+        if core.contains(CURRENCY_SYMBOLS) {
+            Self::Currency
+        } else {
+            Self::Number
+        }
     }
 }
 
@@ -170,5 +180,44 @@ mod tests {
     #[test]
     fn percent_with_other_tokens_is_custom() {
         assert_eq!(FormatCategory::of("0.0% ##x"), FormatCategory::Custom);
+    }
+
+    #[test]
+    fn accounting_codes() {
+        for code in [
+            "_($* #,##0.00_);_($* (#,##0.00);_($* \"-\"??_);_(@_)",
+            "_(* #,##0_);_(* (#,##0);_(* \"-\"_);_(@_)",
+        ] {
+            assert_eq!(FormatCategory::of(code), FormatCategory::Accounting, "{code}");
+        }
+    }
+
+    #[test]
+    fn currency_codes() {
+        for code in [
+            "$#,##0.00",
+            "$#,##0",
+            "$#,##0.00_);($#,##0.00)",
+            "$#,##0.00_);[Red]($#,##0.00)",
+            "\"$\"#,##0.00",
+            "[$€-407] #,##0.00",
+            "#,##0.00 [$£-809]",
+        ] {
+            assert_eq!(FormatCategory::of(code), FormatCategory::Currency, "{code}");
+        }
+    }
+
+    #[test]
+    fn number_codes() {
+        for code in ["0", "0.00", "#,##0", "#,##0.00", "#,##0.00;[Red]-#,##0.00", "#,##0_);(#,##0)"] {
+            assert_eq!(FormatCategory::of(code), FormatCategory::Number, "{code}");
+        }
+    }
+
+    #[test]
+    fn unknown_codes_are_custom() {
+        for code in ["0000", "000-00-0000", "0.0,,\"M\"", "0.0.0"] {
+            assert_eq!(FormatCategory::of(code), FormatCategory::Custom, "{code}");
+        }
     }
 }
