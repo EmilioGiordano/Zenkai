@@ -266,6 +266,11 @@ impl Workspace {
             self.save_ended(id, false, window, cx);
             return;
         };
+        if text.writing != Writing::Idle {
+            self.notify(Severity::Warning, t!("notice.still_saving"), cx);
+            self.save_ended(id, false, window, cx);
+            return;
+        }
         text.writing = Writing::Saving;
         let (edits, format, known) = (text.edit_count(), text.format, text.stamp);
         self.busy = Some(t!("busy.saving").into());
