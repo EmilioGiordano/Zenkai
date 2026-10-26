@@ -58,6 +58,7 @@ use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
 use crate::documents::{Documents, Step};
+use crate::failure::{Failure, offer_another_location, save_failure};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
@@ -1043,7 +1044,17 @@ impl Workspace {
         text: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        self.post(severity, text.into(), Lifetime::UntilReplaced);
+        self.post(severity, text.into(), None, Lifetime::UntilReplaced);
+        cx.notify();
+    }
+
+    fn notify_failure(&mut self, failure: Failure, cx: &mut Context<Self>) {
+        self.post(
+            Severity::Error,
+            failure.text.into(),
+            Some(failure.detail.into()),
+            Lifetime::UntilReplaced,
+        );
         cx.notify();
     }
 
@@ -1053,13 +1064,20 @@ impl Workspace {
         text: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        self.post(severity, text.into(), Lifetime::UntilOpen);
+        self.post(severity, text.into(), None, Lifetime::UntilOpen);
         cx.notify();
     }
 
-    fn post(&mut self, severity: Severity, text: SharedString, lifetime: Lifetime) {
+    fn post(
+        &mut self,
+        severity: Severity,
+        text: SharedString,
+        detail: Option<SharedString>,
+        lifetime: Lifetime,
+    ) {
         let time = chrono::Local::now().format("%H:%M:%S").to_string();
-        self.notices.post(severity, text, lifetime, time.into());
+        self.notices
+            .post(severity, text, detail, lifetime, time.into());
     }
 
     fn on_grid_event(
@@ -2098,11 +2116,7 @@ impl Workspace {
                 });
                 let Some(document) = this.documents.get_mut(id).filter(|_| current) else {
                     if let Err(error) = result {
-                        this.notify(
-                            Severity::Error,
-                            t!("notice.save_failed", path = path.display(), error = error),
-                            cx,
-                        );
+                        this.notify_failure(save_failure(&path, &error), cx);
                     }
                     this.save_ended(id, false, window, cx);
                     return;
@@ -2143,9 +2157,8 @@ impl Workspace {
                     }
                     Err(error) => {
                         let asks_again = document.path.as_ref() == Some(&path);
-                        this.notify(
-                            Severity::Error,
-                            t!("notice.save_failed_pick_another", error = error),
+                        this.notify_failure(
+                            offer_another_location(save_failure(&path, &error)),
                             cx,
                         );
                         this.flush_edits(id, cx);
