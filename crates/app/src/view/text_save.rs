@@ -6,6 +6,7 @@ use zenkai_engine::EngineError;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
+use super::save_flow::CheckedTarget;
 use super::{Severity, Workspace};
 use crate::autosave::{self, Due};
 use crate::failure::{offer_another_location, save_failure};
@@ -54,6 +55,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.refuse_during_save_as(id, cx) {
+            return;
+        }
         let Some(text) = self.documents.text(id) else {
             self.save_ended(id, false, window, cx);
             return;
@@ -75,7 +79,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.begin_save_as(id, cx) {
+            return;
+        }
         let Some(text) = self.documents.text(id) else {
+            self.save_as_flows.finish(id);
             self.save_ended(id, false, window, cx);
             return;
         };
@@ -102,7 +110,10 @@ impl Workspace {
             };
             let update = this.update_in(cx, |this, window, cx| match path {
                 Some(path) => this.confirm_text_target(id, markdown_target(&path), window, cx),
-                None => this.save_ended(id, false, window, cx),
+                None => {
+                    this.save_as_flows.finish(id);
+                    this.save_ended(id, false, window, cx);
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during save dialog");
@@ -119,18 +130,26 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let Some(text) = self.documents.text(id) else {
+            self.save_as_flows.finish(id);
             self.save_ended(id, false, window, cx);
             return;
         };
         let source = text.path.clone();
+        self.save_as_flows.start_checking(id);
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
+            let probed = source.clone();
             let probe = cx
                 .background_executor()
-                .spawn(async move { files::probe_target(source.as_deref(), &target) })
+                .spawn(async move { files::probe_target(probed.as_deref(), &target) })
                 .await;
+            let checked = CheckedTarget {
+                path,
+                source,
+                probe,
+            };
             let update = this.update_in(cx, |this, window, cx| {
-                this.decide_text_target(id, path, probe, window, cx)
+                this.decide_text_target(id, checked, window, cx)
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed while checking the save target");
@@ -142,12 +161,22 @@ impl Workspace {
     fn decide_text_target(
         &mut self,
         id: WorkbookId,
-        path: PathBuf,
-        probe: files::TargetProbe,
+        checked: CheckedTarget,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.documents.text(id).is_none() {
+        let CheckedTarget {
+            path,
+            source,
+            probe,
+        } = checked;
+        self.save_as_flows.finish(id);
+        let Some(text) = self.documents.text(id) else {
+            self.save_ended(id, false, window, cx);
+            return;
+        };
+        if source != text.path {
+            self.notify(Severity::Warning, t!("save.target_stale"), cx);
             self.save_ended(id, false, window, cx);
             return;
         }
@@ -238,6 +267,11 @@ impl Workspace {
             self.save_ended(id, false, window, cx);
             return;
         };
+        if text.writing == Writing::Saving {
+            self.notify(Severity::Warning, t!("notice.still_saving"), cx);
+            self.save_ended(id, false, window, cx);
+            return;
+        }
         text.writing = Writing::Saving;
         let (edits, format, known) = (text.edit_count(), text.format, text.stamp);
         self.busy = Some(t!("busy.saving").into());
@@ -371,7 +405,9 @@ impl Workspace {
                 let Some(text) = this.documents.text_mut(id) else {
                     return;
                 };
-                text.writing = Writing::Idle;
+                if text.writing == Writing::Autosaving {
+                    text.writing = Writing::Idle;
+                }
                 match result {
                     Ok(()) => {
                         text.recovery_written(edits);
