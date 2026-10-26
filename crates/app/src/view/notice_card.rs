@@ -14,16 +14,58 @@ use crate::keymap;
 const CARD_WIDTH: f32 = 420.0;
 pub(super) const STATUS_BAR_HEIGHT: f32 = 26.0;
 pub(super) const EDGE_GAP: f32 = 12.0;
-const TEXT_MAX_HEIGHT: f32 = 168.0;
 const LONG_TEXT_CHARS: usize = 200;
 const LONG_TEXT_LINES: usize = 4;
 
-// The text box scrolls, so a long message is never lost; the button makes sure nobody has
-// to guess that there is more.
+struct CardText {
+    shown: String,
+    clamped: bool,
+}
+
+// The card never scrolls or cuts a line at its edge: a long message is clamped at a word
+// boundary with an ellipsis, and "Show all" opens the full text.
+fn clamp_text(text: &str) -> CardText {
+    let mut shown = String::new();
+    let mut chars = 0;
+    let mut clamped = false;
+    for (index, line) in text.lines().enumerate() {
+        if index == LONG_TEXT_LINES {
+            clamped = true;
+            break;
+        }
+        if index > 0 {
+            shown.push('\n');
+            chars += 1;
+        }
+        let room = LONG_TEXT_CHARS - chars;
+        if line.chars().count() <= room {
+            chars += line.chars().count();
+            shown.push_str(line);
+            continue;
+        }
+        let end = line
+            .char_indices()
+            .nth(room)
+            .map_or(line.len(), |(end, _)| end);
+        let cut = &line[..end];
+        let kept = if line[end..].starts_with(char::is_whitespace) {
+            cut
+        } else {
+            cut.rfind(char::is_whitespace)
+                .map_or(cut, |space| &cut[..space])
+        };
+        shown.push_str(kept.trim_end());
+        clamped = true;
+        break;
+    }
+    if clamped {
+        shown.push('\u{2026}');
+    }
+    CardText { shown, clamped }
+}
+
 fn needs_show_all(notice: &Notice) -> bool {
-    notice.detail().is_some()
-        || notice.text.chars().count() > LONG_TEXT_CHARS
-        || notice.text.lines().count() > LONG_TEXT_LINES
+    notice.detail().is_some() || clamp_text(&notice.text).clamped
 }
 
 pub(super) fn severity_title(severity: Severity) -> SharedString {
@@ -191,10 +233,8 @@ impl Workspace {
                         .child(
                             div()
                                 .id("notice-card-text")
-                                .max_h(rem_px(TEXT_MAX_HEIGHT))
-                                .overflow_y_scroll()
                                 .text_sm()
-                                .child(notice.text.clone()),
+                                .child(clamp_text(&notice.text).shown),
                         )
                         .when(needs_show_all(notice), |card| {
                             card.child(
@@ -222,7 +262,7 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::super::notices::{Lifetime, Notices, Severity};
-    use super::needs_show_all;
+    use super::{clamp_text, needs_show_all};
 
     fn needs(text: &str, detail: Option<&str>) -> bool {
         let mut notices = Notices::default();
@@ -253,5 +293,39 @@ e",
             None
         ));
         assert!(needs("Short.", Some("data and path")));
+    }
+
+    #[test]
+    fn a_short_text_is_shown_whole() {
+        let text = clamp_text("Could not open a.xlsx: bad.\nSecond line.");
+        assert_eq!(text.shown, "Could not open a.xlsx: bad.\nSecond line.");
+        assert!(!text.clamped);
+    }
+
+    #[test]
+    fn a_long_text_ends_at_a_word_with_an_ellipsis() {
+        let text = clamp_text(&"word ".repeat(60));
+        assert!(text.clamped);
+        assert!(text.shown.ends_with("word\u{2026}"));
+        assert!(text.shown.chars().count() <= 201);
+    }
+
+    #[test]
+    fn a_word_longer_than_the_limit_is_cut_hard() {
+        let text = clamp_text(&"x".repeat(300));
+        assert_eq!(text.shown, format!("{}\u{2026}", "x".repeat(200)));
+    }
+
+    #[test]
+    fn extra_lines_are_dropped_with_an_ellipsis() {
+        let text = clamp_text("a\nb\nc\nd\ne");
+        assert_eq!(text.shown, "a\nb\nc\nd\u{2026}");
+        assert!(text.clamped);
+    }
+
+    #[test]
+    fn a_text_of_exactly_the_limits_is_not_clamped() {
+        assert!(!clamp_text(&"x".repeat(200)).clamped);
+        assert!(!clamp_text("a\nb\nc\nd").clamped);
     }
 }

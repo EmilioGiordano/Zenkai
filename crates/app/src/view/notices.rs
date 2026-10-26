@@ -47,8 +47,11 @@ impl Notice {
 
     pub fn copy_text(&self) -> String {
         match &self.detail {
-            Some(detail) => format!("{}
-{detail}", self.text),
+            Some(detail) => format!(
+                "{}
+{detail}",
+                self.text
+            ),
             None => self.text.to_string(),
         }
     }
@@ -197,10 +200,7 @@ mod tests {
             Lifetime::UntilReplaced,
             "12:00:00".into(),
         );
-        let copied: Vec<_> = notices
-            .newest_first()
-            .map(|n| n.copy_text())
-            .collect();
+        let copied: Vec<_> = notices.newest_first().map(|n| n.copy_text()).collect();
         assert_eq!(
             copied,
             [
