@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::base::{h_flex, v_flex};
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, Icon};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -93,6 +94,7 @@ mod sidebar;
 mod theme_picker;
 mod workbooks;
 use crate::job_pill::{JobPill, LongJob, SHOW_AFTER};
+use gpui_kit::component::Icon;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -101,7 +103,6 @@ use gpui_kit::component::command::{Command, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::tooltip::Tooltip;
 use lifecycle::Lifecycle;
 use notice_card::{STATUS_BAR_HEIGHT, severity_icon, severity_title};
 use notices::{Lifetime, Notices, Severity};
@@ -1047,6 +1048,7 @@ impl Workspace {
         let time = chrono::Local::now().format("%H:%M:%S").to_string();
         self.notices.post(severity, text, lifetime, time.into());
     }
+
     fn on_grid_event(
         &mut self,
         _: &Entity<Grid>,
