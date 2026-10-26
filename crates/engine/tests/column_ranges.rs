@@ -170,3 +170,20 @@ fn invalid_column_ranges_from_a_file_save_without_them_after_an_edit() {
         assert_eq!(columns, [(7, 7, "20".to_string())], "{reader:?}");
     }
 }
+
+#[test]
+fn columns_pushed_past_the_sheet_by_an_insert_are_not_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cols.xlsx");
+    with_columns(
+        &path,
+        r#"<col min="2" max="16383" width="20" customWidth="1"/><col min="16384" max="16384" width="30" customWidth="1"/>"#,
+    );
+    let mut book = open_xlsx_with(&path, XlsxReader::Fast).unwrap().workbook;
+    book.insert_columns(SheetId(0), ColIdx::new(0).unwrap(), 2)
+        .unwrap();
+    let saved = dir.path().join("saved.xlsx");
+    std::fs::write(&saved, book.to_xlsx().unwrap()).unwrap();
+    let reopened = open_xlsx_with(&saved, XlsxReader::Fast).unwrap().workbook;
+    assert_eq!(book.sizes(SheetId(0)), reopened.sizes(SheetId(0)));
+}
