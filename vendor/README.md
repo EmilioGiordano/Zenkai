@@ -277,6 +277,16 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/formatter/test/test_general.rs`.
 - `LAST_COLUMN` is public, so the xlsx import and export of `ironcalc` can keep column
   ranges inside the sheet (`src/constants.rs`, `src/lib.rs`). Stands on its own.
+- The cells a dynamic array stops spilling into, because it shrinks, is blocked, cleared,
+  overwritten, cut, undone or reset before rows or columns move, are removed instead of
+  left as empty cells, unless they have a style of their own, as in Excel; the empty cells
+  stretched the sheet's dimension and were saved (`Worksheet::cell_clear_spill` in
+  `src/worksheet.rs`, its callers in `src/model.rs`, `src/user_model/undo_redo.rs` and
+  `src/user_model/clipboard.rs`). A re-evaluated spill is still cleared in place and only
+  the cells left past its new range are removed (`Model::remove_cells_left_by_spill`), so a
+  stable spill costs what it did. Clearing an area leaves a position without a cell as it
+  is instead of writing an empty cell there, so deleting a whole spill keeps none of it.
+  Stands on its own. Tests: `src/test/user_model/test_spill_leftover_cells.rs`.
 
 Zenkai-only, not for upstream:
 

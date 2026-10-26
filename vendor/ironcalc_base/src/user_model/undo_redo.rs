@@ -46,7 +46,7 @@ impl<'a> UserModel<'a> {
                                 if ws.cell(r, c).and_then(Cell::spill_anchor)
                                     == Some((*row, *column))
                                 {
-                                    let _ = ws.cell_clear_contents(r, c);
+                                    let _ = ws.cell_clear_spill(r, c);
                                 }
                             }
                         }

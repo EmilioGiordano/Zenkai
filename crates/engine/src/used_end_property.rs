@@ -162,6 +162,6 @@ fn a_spill_shrunk_while_evaluating_reaches_the_cached_end() {
         apply(&mut book, op);
         book.warm_used_areas();
     }
-    assert_eq!(book.used_end(SheetId(0)), pos(2, 1));
+    assert_eq!(book.used_end(SheetId(0)), pos(0, 1));
     assert_eq!(Some(book.used_end(SheetId(0))), book.walked_end(SheetId(0)));
 }
