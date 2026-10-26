@@ -45,8 +45,15 @@ impl Notice {
         self.detail.as_ref()
     }
 
-    pub fn copy_text(&self) -> &SharedString {
-        self.detail.as_ref().unwrap_or(&self.text)
+    pub fn copy_text(&self) -> String {
+        match &self.detail {
+            Some(detail) => format!(
+                "{}
+{detail}",
+                self.text
+            ),
+            None => self.text.to_string(),
+        }
     }
 }
 
@@ -193,11 +200,15 @@ mod tests {
             Lifetime::UntilReplaced,
             "12:00:00".into(),
         );
-        let copied: Vec<_> = notices
-            .newest_first()
-            .map(|n| n.copy_text().to_string())
-            .collect();
-        assert_eq!(copied, ["a.xlsx: Access denied (os error 5)", "Short"]);
+        let copied: Vec<_> = notices.newest_first().map(|n| n.copy_text()).collect();
+        assert_eq!(
+            copied,
+            [
+                "Could not save a.xlsx
+a.xlsx: Access denied (os error 5)",
+                "Short"
+            ]
+        );
     }
 
     #[test]

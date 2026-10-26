@@ -68,7 +68,7 @@ impl Workspace {
 
     fn copy_message(&mut self, id: u64, cx: &mut Context<Self>) {
         if let Some(notice) = self.notices.newest_first().find(|notice| notice.id() == id) {
-            cx.write_to_clipboard(ClipboardItem::new_string(notice.copy_text().to_string()));
+            cx.write_to_clipboard(ClipboardItem::new_string(notice.copy_text()));
         }
     }
 
