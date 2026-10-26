@@ -49,7 +49,7 @@ fn is_dynamic(cell: &Cell) -> bool {
     cell.dynamic_range().is_some()
 }
 
-fn position(row: i32, col: i32) -> CellPos {
+pub(crate) fn position(row: i32, col: i32) -> CellPos {
     CellPos::new(
         RowIdx::clamped(i64::from(row) - 1),
         ColIdx::clamped(i64::from(col) - 1),

@@ -6,7 +6,7 @@ use ironcalc::base::types::{ArrayKind, Cell};
 use zenkai_types::{CellPos, Range};
 
 use crate::error::EngineError;
-use crate::model::for_each_within;
+use crate::model::{for_each_within, position};
 use crate::workbook::{col_i32, row_i32};
 
 pub(crate) struct Run<'a> {
@@ -75,13 +75,6 @@ pub(crate) fn plan_inputs<'a>(
 
 fn splits_an_array() -> EngineError {
     EngineError::Rejected("the block would change part of an array formula".to_string())
-}
-
-fn position(row: i32, col: i32) -> CellPos {
-    CellPos::new(
-        zenkai_types::RowIdx::clamped(i64::from(row) - 1),
-        zenkai_types::ColIdx::clamped(i64::from(col) - 1),
-    )
 }
 
 // Mirrors the engine's own refusal to clear part of a Ctrl+Shift+Enter array: it must lie
