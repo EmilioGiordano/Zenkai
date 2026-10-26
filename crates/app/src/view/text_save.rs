@@ -176,6 +176,7 @@ impl Workspace {
             return;
         };
         if !source_unchanged(&source, &text.path) {
+            self.notify(Severity::Warning, t!("save.target_stale"), cx);
             self.save_ended(id, false, window, cx);
             return;
         }

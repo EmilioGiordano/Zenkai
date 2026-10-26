@@ -2026,6 +2026,7 @@ impl Workspace {
             return;
         };
         if !save_flow::source_unchanged(&source, &document.path) {
+            self.notify(Severity::Warning, t!("save.target_stale"), cx);
             self.save_ended(id, false, window, cx);
             return;
         }
