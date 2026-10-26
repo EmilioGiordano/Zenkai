@@ -95,11 +95,10 @@ fn ragged_rows_inside_an_edit_group_stay_one_undo_step() {
     assert_eq!(input(&book, "D2"), "f");
     book.undo().unwrap();
     assert_eq!(input(&book, "A1"), "before");
-    assert!(book.filled_cells(SHEET).len() == 1);
+    assert_eq!(book.filled_cells(SHEET).len(), 1);
 }
 
-#[test]
-fn a_rejected_ragged_block_changes_nothing() {
+fn book_with_an_array_formula() -> Workbook {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("array.xlsx");
     let mut source = rust_xlsxwriter::Workbook::new();
@@ -108,13 +107,100 @@ fn a_rejected_ragged_block_changes_nothing() {
         .write_array_formula(0, 1, 1, 1, "{=A1:A2*2}")
         .unwrap();
     source.save(&path).unwrap();
-    let mut book = crate::file::open_xlsx(&path).unwrap().workbook;
+    crate::file::open_xlsx(&path).unwrap().workbook
+}
 
+fn straddling_block() -> Vec<Vec<String>> {
+    vec![row(&["x"]), row(&["y", "z"])]
+}
+
+#[test]
+fn a_rejected_ragged_block_changes_nothing() {
+    let mut book = book_with_an_array_formula();
     let before = book.filled_cells(SHEET);
-    let rows = vec![row(&["x"]), row(&["y", "z"])];
-    assert!(book.set_inputs(SHEET, CellPos::default(), &rows).is_err());
+    let result = book.set_inputs(SHEET, CellPos::default(), &straddling_block());
+    assert!(result.is_err());
     assert_eq!(book.filled_cells(SHEET), before);
     assert_eq!(input(&book, "A1"), "");
+    assert_eq!(input(&book, "A2"), "");
+}
+
+#[test]
+fn a_rejected_ragged_block_keeps_the_redo_history() {
+    let mut book = book_with_an_array_formula();
+    book.set_input(SHEET, CellPos::parse_a1("D4").unwrap(), "7")
+        .unwrap();
+    book.undo().unwrap();
+    assert!(
+        book.set_inputs(SHEET, CellPos::default(), &straddling_block())
+            .is_err()
+    );
+    book.redo().unwrap();
+    assert_eq!(input(&book, "D4"), "7");
+}
+
+#[test]
+fn a_rejected_ragged_block_inside_an_edit_group_is_not_half_written() {
+    let mut book = book_with_an_array_formula();
+    let before = book.filled_cells(SHEET);
+    let grouped = book.as_one_undo_step(|book| {
+        book.set_input(SHEET, CellPos::parse_a1("D4").unwrap(), "7")?;
+        book.set_inputs(SHEET, CellPos::default(), &straddling_block())
+    });
+    assert!(grouped.is_err());
+    assert_eq!(input(&book, "A1"), "");
+    assert_eq!(input(&book, "A2"), "");
+    assert_eq!(input(&book, "D4"), "7");
     book.undo().unwrap();
     assert_eq!(book.filled_cells(SHEET), before);
+}
+
+#[test]
+fn short_rows_clear_the_cells_to_their_right() {
+    let mut book = Workbook::new_empty().unwrap();
+    let filled: Vec<Vec<String>> = (0..4)
+        .map(|r| (0..4).map(|c| format!("{r}{c}")).collect())
+        .collect();
+    book.set_inputs(SHEET, CellPos::default(), &filled).unwrap();
+    let before = book.filled_cells(SHEET);
+
+    let ragged = vec![
+        row(&["a", "b", "c"]),
+        row(&["d"]),
+        Vec::new(),
+        row(&["e", "f"]),
+    ];
+    book.set_inputs(SHEET, CellPos::default(), &ragged).unwrap();
+    for cleared in ["B2", "C2", "A3", "B3", "C3", "C4"] {
+        assert_eq!(input(&book, cleared), "", "{cleared}");
+    }
+    assert_eq!(input(&book, "A2"), "d");
+    assert_eq!(input(&book, "B4"), "f");
+    assert_eq!(input(&book, "D1"), "03");
+    assert_eq!(input(&book, "A4"), "e");
+
+    book.undo().unwrap();
+    assert_eq!(book.filled_cells(SHEET), before);
+    assert_eq!(input(&book, "C3"), "22");
+    assert_eq!(input(&book, "B2"), "11");
+}
+
+#[test]
+fn alternating_widths_store_only_the_fields_in_the_file() {
+    const WIDTH: usize = 500;
+    const PAIRS: usize = 2_000;
+    let mut rows = Vec::new();
+    for n in 0..PAIRS {
+        rows.push(vec!["w".to_string(); WIDTH]);
+        rows.push(vec![n.to_string()]);
+    }
+    let fields: usize = rows.iter().map(Vec::len).sum();
+
+    let started = std::time::Instant::now();
+    let mut book = Workbook::new_empty().unwrap();
+    book.set_inputs(SHEET, CellPos::default(), &rows).unwrap();
+
+    assert!(started.elapsed() < std::time::Duration::from_secs(60));
+    assert_eq!(stored_cells(&book), fields);
+    assert_eq!(input(&book, "A4000"), "1999");
 }
