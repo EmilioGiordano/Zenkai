@@ -311,6 +311,44 @@ pub(crate) fn col_i32(col: ColIdx) -> i32 {
     i32::from(col.get()) + 1
 }
 
+// Rows of one length written as one engine paste. The engine's TSV reader drops records
+// whose width differs from the first, so a block of rows of mixed lengths is pasted as
+// one run per length, never padded: padding a wide row's block makes the work follow the
+// area, not the fields in it.
+fn paste_run(
+    model: &mut UserModel<'static>,
+    sheet: SheetId,
+    origin: CellPos,
+    rows: &[Vec<String>],
+) -> Result<(), EngineError> {
+    let width = rows[0].len();
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(b'\t')
+        .from_writer(Vec::new());
+    for row in rows {
+        writer
+            .write_record(row)
+            .map_err(|e| rejected(e.to_string()))?;
+    }
+    let tsv = writer
+        .into_inner()
+        .map_err(|e| rejected(e.to_string()))
+        .and_then(|bytes| String::from_utf8(bytes).map_err(|e| rejected(e.to_string())))?;
+    let area = Area {
+        sheet: sheet.0,
+        row: row_i32(origin.row),
+        column: col_i32(origin.col),
+        width: i32::try_from(width).map_err(|e| rejected(e.to_string()))?,
+        height: i32::try_from(rows.len()).map_err(|e| rejected(e.to_string()))?,
+    };
+    let end = CellPos::new(
+        origin.row.offset(rows.len() as i64 - 1),
+        origin.col.offset(width as i64 - 1),
+    );
+    select(model, sheet, Range::new(origin, end))?;
+    model.paste_csv_string(&area, &tsv).map_err(rejected)
+}
+
 fn area(sheet: SheetId, range: Range) -> Area {
     Area {
         sheet: sheet.0,
@@ -909,34 +947,6 @@ impl Engine for Workbook {
         if rows.is_empty() || width == 0 {
             return Ok(());
         }
-        let mut writer = csv::WriterBuilder::new()
-            .delimiter(b'\t')
-            .flexible(true)
-            .from_writer(Vec::new());
-        // The engine's TSV reader drops records whose width differs, so every row is
-        // padded to the full width of the block.
-        let padding = usize::try_from(width).unwrap_or(usize::MAX);
-        for row in rows {
-            let missing = padding.saturating_sub(row.len());
-            let fields = row
-                .iter()
-                .map(String::as_str)
-                .chain(std::iter::repeat_n("", missing));
-            writer
-                .write_record(fields)
-                .map_err(|e| rejected(e.to_string()))?;
-        }
-        let tsv = writer
-            .into_inner()
-            .map_err(|e| rejected(e.to_string()))
-            .and_then(|bytes| String::from_utf8(bytes).map_err(|e| rejected(e.to_string())))?;
-        let area = Area {
-            sheet: sheet.0,
-            row: row_i32(origin.row),
-            column: col_i32(origin.col),
-            width: i32::try_from(width).map_err(|e| rejected(e.to_string()))?,
-            height: i32::try_from(height).map_err(|e| rejected(e.to_string()))?,
-        };
         let end = CellPos::new(
             origin
                 .row
@@ -946,10 +956,44 @@ impl Engine for Workbook {
                 .offset(i64::try_from(width).unwrap_or(i64::MAX) - 1),
         );
         let target = Range::new(origin, end);
-        self.model.write_within(sheet, target, |model| {
-            select(model, sheet, target)?;
-            model.paste_csv_string(&area, &tsv).map_err(rejected)
-        })
+        let (written, applied) = self.model.write_within(sheet, target, |model| {
+            // Inside a caller's edit group the begin fails and the caller ends the group.
+            let own_group = model.begin_edit_group().is_ok();
+            model.pause_evaluation();
+            let mut applied = 0usize;
+            let mut offset = 0u32;
+            let mut written = Ok(());
+            for run in rows.chunk_by(|a, b| a.len() == b.len()) {
+                let run_origin = CellPos::new(origin.row.offset(i64::from(offset)), origin.col);
+                offset += run.len() as u32;
+                if run[0].is_empty() {
+                    continue;
+                }
+                written = paste_run(model, sheet, run_origin, run);
+                if written.is_err() {
+                    break;
+                }
+                applied += 1;
+            }
+            if written.is_ok() {
+                written = select(model, sheet, target);
+            }
+            if own_group {
+                if let Err(error) = model.end_edit_group() {
+                    written = written.and(Err(rejected(error)));
+                }
+            } else {
+                model.resume_evaluation();
+                model.evaluate();
+            }
+            (written, own_group.then_some(applied))
+        });
+        // A run that failed after others were written leaves the group's earlier runs
+        // behind; undo them so a rejected paste changes nothing.
+        if written.is_err() && applied.is_some_and(|applied| applied > 0) {
+            self.undo()?;
+        }
+        written
     }
 
     // Rows of `range` reordered by the `key` column, with Excel's order: numbers, text
