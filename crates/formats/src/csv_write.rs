@@ -177,8 +177,7 @@ mod tests {
                 proptest::collection::vec(
                     proptest::prop_oneof![
                         proptest::strategy::Just(String::new()),
-                        "[a=+@,;|	\"
-    -]{0,4}",
+                        "[a1=+@,;| \t\"\r\n-]{0,4}",
                     ],
                     0..5,
                 ),
