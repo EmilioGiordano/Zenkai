@@ -30,6 +30,7 @@ mod agent_review;
 mod chat_dock;
 mod close_dialog;
 mod closing;
+mod notice_card;
 mod notices;
 mod pdfs;
 mod settings_gate;
@@ -155,6 +156,7 @@ pub struct Workspace {
     active_input: SharedString,
     active_style: CellStyle,
     notices: Notices,
+    notice_focus: FocusHandle,
     toast: Option<agent_access::Toast>,
     toast_generation: u64,
     busy: Option<SharedString>,
@@ -322,6 +324,7 @@ impl Workspace {
             active_input: SharedString::default(),
             active_style: CellStyle::default(),
             notices: Notices::default(),
+            notice_focus: cx.focus_handle(),
             toast: None,
             toast_generation: 0,
             busy: None,
@@ -4035,6 +4038,13 @@ impl Render for Workspace {
                 this.decide_held_settings(HeldDecision::Keep, window, cx)
             }))
             .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.toggle_agent_editing(cx)))
+            .on_action(
+                cx.listener(|this, _: &DismissNotice, window, cx| this.dismiss_notice(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
+            .on_action(
+                cx.listener(|this, _: &FocusNotice, window, cx| this.focus_notice(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &AllowAgentChange, window, cx| {
                 this.decide_agent_change(Decision::Allow, window, cx)
             }))
@@ -4093,6 +4103,7 @@ impl Render for Workspace {
             .children(self.render_search(cx))
             .children(self.render_busy(busy_label, cx))
             .children(self.render_toast(cx))
+            .children(self.render_notice_card(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))
             .children(self.render_close_dialog(cx))
