@@ -41,3 +41,23 @@ fn undo_filled_inputs_leave_no_format_behind() {
     book.redo().unwrap();
     assert_eq!(book.cell(SHEET, at("B2")).text, "5%");
 }
+
+#[test]
+fn undo_typed_dates_leave_no_format_behind() {
+    for date in ["1/2/2024", "2024-01-02"] {
+        let mut book = Workbook::new_empty().unwrap();
+        let before = book.cell(SHEET, at("B3"));
+        book.set_input(SHEET, at("B3"), date).unwrap();
+        assert_ne!(
+            book.cell(SHEET, at("B3")).style.num_fmt,
+            "general",
+            "{date}"
+        );
+
+        book.undo().unwrap();
+        assert_eq!(book.cell(SHEET, at("B3")), before, "{date}");
+
+        book.set_input(SHEET, at("B3"), "7").unwrap();
+        assert_eq!(book.cell(SHEET, at("B3")).text, "7", "{date}");
+    }
+}
