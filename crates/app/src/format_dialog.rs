@@ -7,26 +7,8 @@ use zenkai_i18n::t;
 use zenkai_types::{Range, SheetId};
 
 use crate::actions::{ApplyNumberFormat, CloseFormatDialog};
+use crate::format_category::FormatCategory;
 use crate::interface_scale::rem_px;
-
-// Excel's Format Cells > Number categories, with the code each one starts from.
-pub fn categories() -> [(&'static str, &'static str); 10] {
-    [
-        (t!("format.category.general"), "general"),
-        (t!("format.category.number"), "#,##0.00"),
-        (t!("format.category.currency"), "$#,##0.00"),
-        (
-            t!("format.category.accounting"),
-            "_($* #,##0.00_);_($* (#,##0.00);_($* \"-\"??_);_(@_)",
-        ),
-        (t!("format.category.date"), "dd/mm/yyyy"),
-        (t!("format.category.time"), "h:mm:ss"),
-        (t!("format.category.percentage"), "0.00%"),
-        (t!("format.category.fraction"), "# ?/?"),
-        (t!("format.category.scientific"), "0.00E+00"),
-        (t!("format.category.text"), "@"),
-    ]
-}
 
 pub struct FormatDialog {
     pub code: Entity<InputState>,
@@ -47,9 +29,11 @@ pub fn render(
 ) -> impl IntoElement {
     let theme = cx.theme();
     let current = dialog.code.read(cx).value().to_string();
-    let categories = categories().map(|(label, code)| {
+    let current_category = FormatCategory::of(&current);
+    let categories = FormatCategory::ALL.map(|category| {
         let on_category = on_category.clone();
-        let selected = current == code;
+        let label = category.label();
+        let selected = current_category == category;
         Button::new(label)
             .ghost()
             .label(if selected {
@@ -58,7 +42,11 @@ pub fn render(
                 label.to_string()
             })
             .selected(selected)
-            .on_click(move |_, window, cx| on_category(code, window, cx))
+            .on_click(move |_, window, cx| {
+                if let Some(code) = category.start_code() {
+                    on_category(code, window, cx);
+                }
+            })
     });
     v_flex()
         .key_context("FormatDialog")
