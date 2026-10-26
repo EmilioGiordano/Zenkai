@@ -626,3 +626,43 @@ fn test_styles_without_cell_style_formats() {
         .iter()
         .all(|xf| xf == default_xf));
 }
+
+#[test]
+fn test_saved_style_references_stay_inside_cell_style_formats() {
+    let edited = example_with_part_edited("xl/styles.xml", |text| {
+        let start = text.find("<cellStyleXfs").unwrap();
+        let end = text.find("</cellStyleXfs>").unwrap() + "</cellStyleXfs>".len();
+        format!("{}{}", &text[..start], &text[end..])
+    });
+    let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    let mut model = Model::from_workbook(workbook, "en").unwrap();
+    model.evaluate();
+    let saved = ironcalc::export::save_xlsx_to_writer(&model, std::io::Cursor::new(Vec::new()))
+        .unwrap()
+        .into_inner();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+    let mut styles = String::new();
+    archive
+        .by_name("xl/styles.xml")
+        .unwrap()
+        .read_to_string(&mut styles)
+        .unwrap();
+
+    let count_start =
+        styles.find("<cellStyleXfs count=\"").unwrap() + "<cellStyleXfs count=\"".len();
+    let count: i32 = styles[count_start..]
+        .split('"')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut referenced = 0;
+    let mut rest = styles.as_str();
+    while let Some(at) = rest.find("xfId=\"") {
+        rest = &rest[at + "xfId=\"".len()..];
+        let id: i32 = rest.split('"').next().unwrap().parse().unwrap();
+        assert!(id < count, "xfId {id} is past cellStyleXfs count {count}");
+        referenced += 1;
+    }
+    assert!(referenced > 0);
+}
