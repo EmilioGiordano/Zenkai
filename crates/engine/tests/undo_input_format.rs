@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used)]
 
 use zenkai_engine::{Engine, Workbook};
-use zenkai_types::{CellPos, SheetId};
+use zenkai_types::{CellPos, Range, SheetId};
 
 const SHEET: SheetId = SheetId(0);
 
@@ -60,4 +60,48 @@ fn undo_typed_dates_leave_no_format_behind() {
         book.set_input(SHEET, at("B3"), "7").unwrap();
         assert_eq!(book.cell(SHEET, at("B3")).text, "7", "{date}");
     }
+}
+
+#[test]
+fn one_undo_takes_back_a_date_and_its_column_width_written_as_one_step() {
+    let column = at("B3").col;
+    let mut control = Workbook::new_empty().unwrap();
+    control.set_column_width(SHEET, column, 90.0).unwrap();
+    control.undo().unwrap();
+
+    let mut book = Workbook::new_empty().unwrap();
+    let before = book.cell(SHEET, at("B3"));
+    book.as_one_undo_step(|book| {
+        book.set_input(SHEET, at("B3"), "1/2/2024")?;
+        book.set_column_width(SHEET, column, 90.0)
+    })
+    .unwrap();
+    let written = book.sizes(SHEET);
+
+    book.undo().unwrap();
+    assert_eq!(book.cell(SHEET, at("B3")), before);
+    assert_eq!(book.sizes(SHEET), control.sizes(SHEET));
+
+    book.redo().unwrap();
+    assert_eq!(book.cell(SHEET, at("B3")).text, "1/2/2024");
+    assert_eq!(book.sizes(SHEET), written);
+}
+
+#[test]
+fn a_failed_one_step_edit_keeps_what_it_wrote_as_one_step() {
+    let mut book = Workbook::new_empty().unwrap();
+    let failed = book.as_one_undo_step(|book| {
+        book.set_input(SHEET, at("A1"), "1")?;
+        book.set_input(SHEET, at("A2"), "2")?;
+        book.set_number_format(SHEET, Range::single(at("A1")), &"0".repeat(300))
+    });
+    assert!(failed.is_err());
+
+    book.undo().unwrap();
+    assert_eq!(book.cell(SHEET, at("A1")).text, "");
+    assert_eq!(book.cell(SHEET, at("A2")).text, "");
+
+    book.set_input(SHEET, at("A3"), "3").unwrap();
+    book.undo().unwrap();
+    assert_eq!(book.cell(SHEET, at("A3")).text, "");
 }

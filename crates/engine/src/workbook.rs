@@ -667,6 +667,31 @@ impl Workbook {
         Ok(self.warmed(profile))
     }
 
+    // `edit` must not fill, extend or move rows or columns: a fill opens its own undo step
+    // and the carried row data counts one move per step.
+    pub fn as_one_undo_step<T>(
+        &mut self,
+        edit: impl FnOnce(&mut Workbook) -> Result<T, EngineError>,
+    ) -> Result<T, EngineError> {
+        self.model
+            .edit_keeping_cells(|model| {
+                model.begin_edit_group()?;
+                // A group pauses evaluation; each edit here evaluates as it would alone, so
+                // reads between them (the widening) see computed formula values.
+                model.resume_evaluation();
+                Ok::<(), String>(())
+            })
+            .map_err(rejected)?;
+        let edited = edit(self);
+        let ended = self
+            .model
+            .edit_keeping_cells(|model| model.end_edit_group())
+            .map_err(rejected);
+        let value = edited?;
+        ended?;
+        Ok(value)
+    }
+
     // `undo` and `redo` timed like `set_input_profiled`, for the edit benchmark.
     pub fn undo_profiled(&mut self) -> Result<EditProfile, EngineError> {
         self.step_profiled(HistoryStep::Undo)
