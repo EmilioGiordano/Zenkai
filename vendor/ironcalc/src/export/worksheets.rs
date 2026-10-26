@@ -144,7 +144,7 @@ pub fn write_worksheet_xml<W: Write>(
         // <col min="4" max="4" width="12" customWidth="1"/>
         // Inserting columns moves ranges past the last column and keeps them, so undo can
         // bring them back; only their part inside the sheet is written.
-        let min = col.min;
+        let min = col.min.max(1);
         let max = col.max.min(LAST_COLUMN);
         if min > max {
             continue;
