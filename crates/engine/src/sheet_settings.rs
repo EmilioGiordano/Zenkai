@@ -722,12 +722,16 @@ fn read_column_outline(sheet: Node, columns: &mut Indexed) {
         let (Some(min), Some(max)) = (bound("min"), bound("max")) else {
             continue;
         };
-        // IronCalc cuts each range to the sheet the same way.
+        // IronCalc cuts each range to the sheet and drops it when min > max the same way;
+        // assign_range relies on first <= last to keep the ranges disjoint.
         let first = u32::try_from(min.max(1));
         let last = u32::try_from(max.min(i64::from(MAX_COLUMN)));
         let (Ok(first), Ok(last)) = (first, last) else {
             continue;
         };
+        if first > last {
+            continue;
+        }
         let outline = outline_of(col.attribute("outlineLevel"), col.attribute("collapsed"));
         let outlined = outline.level > 0 || outline.collapsed;
         assign_range(&mut ranges, first, last, outlined.then_some(outline));
@@ -977,6 +981,33 @@ mod tests {
             .chain((9..=12).map(|column| (column, 1)))
             .collect();
         assert_eq!(levels, expected);
+    }
+
+    #[test]
+    fn a_reversed_column_range_is_dropped_and_cuts_nothing() {
+        let levels = column_levels(
+            r#"<col min="1" max="4" width="9" outlineLevel="2"/><col min="3" max="2" width="9"/><col min="9" max="0" width="9" outlineLevel="1"/>"#,
+        );
+        assert_eq!(levels, [(1, 2), (2, 2), (3, 2), (4, 2)]);
+    }
+
+    #[test]
+    fn reversed_column_ranges_cost_work_per_element_not_per_column() {
+        let mut cols = r#"<col min="1" max="16384" width="9" outlineLevel="1"/>"#.to_string();
+        for offset in 1..16_000 {
+            cols.push_str(&format!(
+                r#"<col min="{}" max="{offset}" width="9" outlineLevel="1"/>"#,
+                16_384 - offset
+            ));
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(column_levels(&cols).len());
+        });
+        let columns = receiver
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .unwrap();
+        assert_eq!(columns, 16_384);
     }
 
     #[test]
