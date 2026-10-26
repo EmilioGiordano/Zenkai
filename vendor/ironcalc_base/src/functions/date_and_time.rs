@@ -102,25 +102,21 @@ fn is_feb29_between_consecutive_years(start: chrono::NaiveDate, end: chrono::Nai
 // functions (DAY, MONTH, YEAR, HOUR, MINUTE, SECOND).
 // ---------------------------------------------------------------------------
 
-// Generate DAY / MONTH / YEAR helpers – simply convert the serial number to a
-// NaiveDate and return the requested component as a number.
+// Generate DAY / MONTH / YEAR helpers – convert the serial number to Excel's
+// (year, month, day) and return the requested component as a number.
 macro_rules! date_part_fn {
-    ($name:ident, $method:ident) => {
+    ($name:ident, $part:expr) => {
         pub(crate) fn $name(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
             if args.len() != 1 {
                 return CalcResult::new_args_number_error(cell);
             }
-            // Convert the serial number to a NaiveDate and return the requested
-            // component. Broadcasts element-wise over ranges/arrays. Uses the free
-            // function from_excel_date to avoid borrowing self in the closure.
-            self.apply_number_unary(
-                &args[0],
-                cell,
-                |f| match from_excel_date(f.floor() as i64) {
-                    Ok(date) => Ok(date.$method() as f64),
-                    Err(_) => Err(Error::NUM),
-                },
-            )
+            // Broadcasts element-wise over ranges/arrays.
+            self.apply_number_unary(&args[0], cell, |f| {
+                match excel_serial_to_ymd(f.floor() as i64) {
+                    Some(year_month_day) => Ok(($part)(year_month_day) as f64),
+                    None => Err(Error::NUM),
+                }
+            })
         }
     };
 }
@@ -590,9 +586,9 @@ impl<'a> Model<'a> {
     // -----------------------------------------------------------------------
     // Auto-generated DATE part helpers (DAY / MONTH / YEAR)
     // -----------------------------------------------------------------------
-    date_part_fn!(fn_day, day);
-    date_part_fn!(fn_month, month);
-    date_part_fn!(fn_year, year);
+    date_part_fn!(fn_day, |(_, _, day): (i32, u32, u32)| day);
+    date_part_fn!(fn_month, |(_, month, _): (i32, u32, u32)| month);
+    date_part_fn!(fn_year, |(year, _, _): (i32, u32, u32)| year);
 
     pub(crate) fn fn_eomonth(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         let args_count = args.len();
