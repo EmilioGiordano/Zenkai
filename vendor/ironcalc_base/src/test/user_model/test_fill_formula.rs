@@ -372,3 +372,22 @@ fn assert_same_cells(left: &UserModel, right: &UserModel, message: &str) {
     assert_eq!(left_cells, right_cells, "{message}");
     assert_eq!(left_formulas, right_formulas, "{message}");
 }
+
+#[test]
+fn undo_removes_filled_cells_that_did_not_exist() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 1, "5%").unwrap();
+    model.set_user_input(0, 2, 1, "7%").unwrap();
+    model.set_user_input(0, 1, 2, "=A1").unwrap();
+    let percent = model.get_cell_style(0, 1, 2).unwrap().num_fmt;
+    assert_ne!(percent, "general");
+    assert!(model.fill_formula((1, 2), &area(2, 2, 1, 1)).unwrap());
+    assert_eq!(model.get_cell_style(0, 2, 2).unwrap().num_fmt, percent);
+
+    model.undo().unwrap();
+    let worksheet = model.get_model().workbook.worksheet(0).unwrap();
+    assert!(worksheet.cell(2, 2).is_none());
+
+    model.redo().unwrap();
+    assert_eq!(model.get_cell_style(0, 2, 2).unwrap().num_fmt, percent);
+}

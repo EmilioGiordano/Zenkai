@@ -194,7 +194,7 @@ impl UserModel<'_> {
         for ((row, column), old) in cells.zip(old_values) {
             match old {
                 Some(cell) => worksheet.update_cell(row, column, cell.clone())?,
-                None => worksheet.cell_clear_contents(row, column)?,
+                None => worksheet.remove_cell(row, column)?,
             }
         }
         Ok(())

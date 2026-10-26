@@ -67,7 +67,17 @@ fn numbers() {
 #[test]
 fn percentage() {
     // whole numbers
-    assert_eq!(parse("400%", &["$"]), Ok((4.0, Some("#,##0%".to_string()))));
+    assert_eq!(parse("400%", &["$"]), Ok((4.0, Some("0%".to_string()))));
+    assert_eq!(parse("-5%", &["$"]), Ok((-0.05, Some("0%".to_string()))));
+    assert_eq!(parse("1,000%", &["$"]), Ok((10.0, Some("0%".to_string()))));
+    assert_eq!(
+        parse("5.5%", &["$"]),
+        Ok((0.055, Some("0.00%".to_string())))
+    );
+    assert_eq!(
+        parse("5.125%", &["$"]),
+        Ok((0.05125, Some("0.00%".to_string())))
+    );
     // decimal numbers
     assert_eq!(
         parse("4.456$", &["$"]),
@@ -189,7 +199,7 @@ fn numbers_de() {
 fn percentage_and_currency_de() {
     assert_eq!(
         parse_de("12,5%", &["$"]),
-        Ok((0.125, Some("#,##0.00%".to_string())))
+        Ok((0.125, Some("0.00%".to_string())))
     );
     assert_eq!(
         parse_de("1.234,50€", &["€"]),
@@ -233,7 +243,7 @@ fn numbers_fr() {
 fn percentage_and_currency_fr() {
     assert_eq!(
         parse_fr("12,5%", &["$"]),
-        Ok((0.125, Some("#,##0.00%".to_string())))
+        Ok((0.125, Some("0.00%".to_string())))
     );
     assert_eq!(
         parse_fr("1\u{202f}234,50€", &["€"]),
