@@ -5,8 +5,8 @@
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
-use zenkai_engine::{Engine, XlsxReader, open_xlsx_with};
-use zenkai_types::{ColIdx, SheetId};
+use zenkai_engine::{Engine, SaveTarget, XlsxReader, open_xlsx_with, save_xlsx};
+use zenkai_types::{CellPos, ColIdx, SheetId};
 
 // Zenkai rewrites the saved <cols> only when a column is outlined.
 const OUTLINED_G: &str = r#"<col min="7" max="7" width="20" customWidth="1" outlineLevel="1"/>"#;
@@ -150,5 +150,23 @@ fn an_outlined_range_reaching_past_the_sheet_keeps_its_outline() {
             ),
             "{reader:?} {sheet}"
         );
+    }
+}
+
+#[test]
+fn invalid_column_ranges_from_a_file_save_without_them_after_an_edit() {
+    for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cols.xlsx");
+        with_columns(
+            &path,
+            &format!(r#"{OUTLINED_G}<col min="5" max="3" width="9" customWidth="1"/>"#),
+        );
+        let mut book = open_xlsx_with(&path, reader).unwrap().workbook;
+        book.set_input(SheetId(0), CellPos::parse_a1("B2").unwrap(), "new text")
+            .unwrap();
+        save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
+        let columns = saved_columns(&std::fs::read(&path).unwrap());
+        assert_eq!(columns, [(7, 7, "20".to_string())], "{reader:?}");
     }
 }
