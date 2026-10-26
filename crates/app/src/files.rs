@@ -1,4 +1,5 @@
 use std::path::{Component, Path, PathBuf};
+use std::sync::RwLock;
 use std::time::Instant;
 
 use zenkai_agent::preferences::XlsxReaderChoice;
@@ -11,6 +12,7 @@ use zenkai_formats::{Delimiter, ParsedCsv, parse_csv, read_values, write_csv};
 use zenkai_i18n::t;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
+use crate::document::read_shared;
 use crate::text_document::DocumentKind;
 
 pub const SPREADSHEET_EXTENSIONS: [&str; 7] = ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"];
@@ -286,7 +288,17 @@ pub fn sheet_rows(workbook: &Workbook, sheet: SheetId) -> Vec<Vec<String>> {
         .collect()
 }
 
-pub fn write_csv_file(path: &Path, rows: &[Vec<String>]) -> Result<(), EngineError> {
+// The read lock is held only while the rows are gathered; the write can take far longer.
+pub fn export_sheet_csv(
+    shared: &RwLock<Workbook>,
+    sheet: SheetId,
+    path: &Path,
+) -> Result<(), EngineError> {
+    let rows = sheet_rows(&read_shared(shared), sheet);
+    write_csv_file(path, &rows)
+}
+
+fn write_csv_file(path: &Path, rows: &[Vec<String>]) -> Result<(), EngineError> {
     let delimiter = if extension(path).as_deref() == Some("tsv") {
         Delimiter::Tab
     } else {
