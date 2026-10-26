@@ -297,6 +297,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   12/31/1899), on purpose, so it may not take this as is. Stands on its own. Tests:
   `src/formatter/test/test_early_serials.rs`, `src/test/test_early_date_serials.rs`,
   `src/test/test_date_and_time.rs`.
+- `UserModel::fill_style` gives every cell of an area the whole cell format of one cell, as one
+  undo step, storing the style index once and each cell's old one (8 bytes) instead of a
+  full style per cell (new `Diff::FillStyle`). Stands on its own (`src/user_model/fill_style.rs`).
+  Tests: `src/test/user_model/test_fill_style.rs`.
 
 Zenkai-only, not for upstream:
 
