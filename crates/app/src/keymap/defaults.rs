@@ -214,7 +214,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("escape", DenyAgentChange, Some("AgentApproval")),
         bind("ctrl-shift-e", LetAgentsEdit, CONTEXT),
         bind("ctrl-alt-shift-j", FocusNotice, CONTEXT),
-        bind("escape", DismissNotice, Some("NoticeCard")),
+        bind("escape", DismissNotice, CONTEXT),
         bind("ctrl-c", CopyNotice, Some("NoticeCard")),
         bind("ctrl-shift-j", ShowMessages, CONTEXT),
         bind("escape", CloseMessages, Some("MessagesPanel")),

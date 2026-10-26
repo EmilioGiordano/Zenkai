@@ -4089,6 +4089,9 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &DismissNotice, window, cx| this.dismiss_notice(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &zenkai_grid::Cancel, window, cx| {
+                this.dismiss_notice(window, cx)
+            }))
             .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
             .on_action(
                 cx.listener(|this, _: &ShowMessages, window, cx| this.toggle_messages(window, cx)),

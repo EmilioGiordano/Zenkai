@@ -33,6 +33,10 @@ pub(super) fn severity_icon(severity: Severity, theme: &Theme) -> (IconName, Hsl
 
 impl Workspace {
     pub(super) fn dismiss_notice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.notices.card().is_none() || self.messages.is_some() {
+            cx.propagate();
+            return;
+        }
         let focused = self.notice_focus.contains_focused(window, cx);
         self.notices.dismiss_card();
         if focused {
