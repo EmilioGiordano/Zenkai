@@ -218,6 +218,14 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   shift typed text from one cell to another without writing the source cell first and
   undoing it (`src/user_model/common.rs`). Stands on its own. Tests:
   `src/test/user_model/test_extend_copied_value.rs`.
+- Date serials below 61 carry Excel's 1900 labels: serial 1 is 1/1/1900, 60 the fictitious
+  2/29/1900 and 0 is 1/0/1900, in number formats and TEXT, DAY, MONTH, YEAR and WEEKDAY,
+  and DATE, DATEVALUE and typed dates give those serials back (`src/formatter/dates.rs`,
+  `src/formatter/format.rs`, `src/functions/date_and_time.rs`). Serials from 61 on are
+  unchanged. Upstream labels them as Google Sheets does (serial 1 is 12/31/1899), on
+  purpose, so it may not take this as is. Stands on its own. Tests:
+  `src/formatter/test/test_early_serials.rs`, `src/test/test_early_date_serials.rs`,
+  `src/test/test_date_and_time.rs`.
 
 Zenkai-only, not for upstream:
 
