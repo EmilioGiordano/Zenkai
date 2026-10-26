@@ -700,6 +700,33 @@ line 2"
     }
 
     #[test]
+    fn autofill_counts_early_1900_dates_as_excel() {
+        let mut book = Workbook::new_empty().unwrap();
+        let at = |r: i64| {
+            CellPos::new(
+                zenkai_types::RowIdx::clamped(r),
+                zenkai_types::ColIdx::clamped(0),
+            )
+        };
+        book.set_inputs(SheetId(0), at(0), &[vec!["1900-02-27".to_string()]])
+            .unwrap();
+        let source = zenkai_types::Range::new(at(0), at(0));
+        let target = zenkai_types::Range::new(at(0), at(3));
+        book.extend(SheetId(0), source, target).unwrap();
+        let serials = (0..4)
+            .map(|r| book.cell(SheetId(0), at(r)).number)
+            .collect::<Vec<_>>();
+        assert_eq!(serials, [Some(58.0), Some(59.0), Some(60.0), Some(61.0)]);
+        let texts = (0..4)
+            .map(|r| book.cell(SheetId(0), at(r)).text)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            texts,
+            ["1900-02-27", "1900-02-28", "1900-02-29", "1900-03-01"]
+        );
+    }
+
+    #[test]
     fn sort_orders_rows_like_excel_and_moves_formulas() {
         let mut book = Workbook::new_empty().unwrap();
         let at = |r: i64, c: i64| {
