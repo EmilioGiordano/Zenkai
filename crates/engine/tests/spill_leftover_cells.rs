@@ -76,3 +76,15 @@ fn a_blocked_spill_that_spills_again_shrinks_the_used_range() {
     book.set_input(SHEET, at("A1"), "3").unwrap();
     assert_eq!(book.used_end(SHEET), at("B3"));
 }
+
+#[test]
+fn deleting_a_whole_spill_leaves_only_its_anchor_cleared() {
+    let mut book = Workbook::new_empty().unwrap();
+    book.set_input(SHEET, at("B1"), "=SEQUENCE(10)").unwrap();
+    book.clear(SHEET, Range::new(at("B1"), at("B10"))).unwrap();
+    assert_eq!(book.cell(SHEET, at("B10")).text, "");
+    assert_eq!(book.used_end(SHEET), at("B1"));
+    book.undo().unwrap();
+    assert_eq!(book.cell(SHEET, at("B10")).text, "10");
+    assert_eq!(book.used_end(SHEET), at("B10"));
+}

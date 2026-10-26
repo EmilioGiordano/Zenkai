@@ -184,3 +184,11 @@ fn cutting_the_anchor_removes_its_spill_at_the_source() {
     );
     assert_absent(&model, 2..=10, 2);
 }
+
+#[test]
+fn clearing_the_whole_spill_removes_its_cells() {
+    let mut model = sequence_of_ten();
+    model.range_clear_contents(&area(1, 2, 1, 10)).unwrap();
+    assert_absent(&model, 2..=10, 2);
+    assert_eq!(last_row(&model), 1);
+}
