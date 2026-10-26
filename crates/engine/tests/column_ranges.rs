@@ -1,0 +1,100 @@
+// Column ranges from a file or from an insert must save as ranges Excel accepts: each
+// within 1..=16384 with min <= max, and the valid widths around them kept.
+#![allow(clippy::unwrap_used)]
+
+use std::io::{Cursor, Read, Write};
+use std::path::Path;
+
+use zenkai_engine::{Engine, XlsxReader, open_xlsx_with};
+
+// Zenkai rewrites the saved <cols> only when a column is outlined.
+const OUTLINED_G: &str = r#"<col min="7" max="7" width="20" customWidth="1" outlineLevel="1"/>"#;
+
+fn with_columns(path: &Path, cols: &str) {
+    let mut source = rust_xlsxwriter::Workbook::new();
+    source.add_worksheet().write_number(0, 0, 1.0).unwrap();
+    let bytes = source.save_to_buffer().unwrap();
+    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+    let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = zip::write::FileOptions::default();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).unwrap();
+        let name = entry.name().to_string();
+        let mut body = String::new();
+        entry.read_to_string(&mut body).unwrap();
+        if name == "xl/worksheets/sheet1.xml" {
+            body = body.replacen("<sheetData", &format!("<cols>{cols}</cols><sheetData"), 1);
+        }
+        out.start_file(name, options).unwrap();
+        out.write_all(body.as_bytes()).unwrap();
+    }
+    std::fs::write(path, out.finish().unwrap().into_inner()).unwrap();
+}
+
+fn saved_columns(xlsx: &[u8]) -> Vec<(u32, u32, String)> {
+    let mut archive = zip::ZipArchive::new(Cursor::new(xlsx)).unwrap();
+    let mut sheet = String::new();
+    archive
+        .by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut sheet)
+        .unwrap();
+    let document = roxmltree::Document::parse(&sheet).unwrap();
+    document
+        .descendants()
+        .filter(|n| n.has_tag_name("col"))
+        .map(|col| {
+            let bound = |name| col.attribute(name).unwrap().parse::<u32>().unwrap();
+            let width = col.attribute("width").unwrap().to_string();
+            (bound("min"), bound("max"), width)
+        })
+        .collect()
+}
+
+fn assert_valid(columns: &[(u32, u32, String)]) {
+    for (min, max, _) in columns {
+        assert!(1 <= *min && min <= max && *max <= 16_384, "{columns:?}");
+    }
+}
+
+#[test]
+fn invalid_column_ranges_from_a_file_save_without_them() {
+    let hostile = [
+        r#"<col min="5" max="3" width="9" customWidth="1"/>"#,
+        r#"<col min="16385" max="16390" width="9" customWidth="1"/>"#,
+        r#"<col min="-7" max="0" width="9" customWidth="1"/>"#,
+    ];
+    for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
+        for col in hostile {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("cols.xlsx");
+            with_columns(&path, &format!("{OUTLINED_G}{col}"));
+            let book = open_xlsx_with(&path, reader).unwrap().workbook;
+            let columns = saved_columns(&book.to_xlsx().unwrap());
+            assert_eq!(columns, [(7, 7, "20".to_string())], "{reader:?} {col}");
+        }
+    }
+}
+
+#[test]
+fn column_ranges_reaching_past_the_sheet_keep_their_part_inside_it() {
+    let partial = [
+        (r#"<col min="10" max="20000" width="30" customWidth="1"/>"#, (10, 16_384)),
+        (r#"<col min="0" max="4" width="30" customWidth="1"/>"#, (1, 4)),
+    ];
+    for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
+        for (col, (min, max)) in partial {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("cols.xlsx");
+            with_columns(&path, &format!("{OUTLINED_G}{col}"));
+            let book = open_xlsx_with(&path, reader).unwrap().workbook;
+            let columns = saved_columns(&book.to_xlsx().unwrap());
+            assert_valid(&columns);
+            assert!(
+                columns.contains(&(min, max, "30".to_string())),
+                "{reader:?} {col} {columns:?}"
+            );
+            assert_eq!(columns.len(), 2, "{reader:?} {col} {columns:?}");
+        }
+    }
+}
