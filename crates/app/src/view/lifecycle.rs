@@ -201,11 +201,9 @@ impl Workspace {
             Loaded::Unreadable => {
                 self.notify(Severity::Warning, t!("notice.session_unreadable"), cx)
             }
-            Loaded::KeptInPlace => self.notify(
-                Severity::Warning,
-                t!("notice.session_kept_in_place"),
-                cx,
-            ),
+            Loaded::KeptInPlace => {
+                self.notify(Severity::Warning, t!("notice.session_kept_in_place"), cx)
+            }
             Loaded::Absent => {}
         }
         // Unsaved work the session points to comes back with its workbook; anything else a
