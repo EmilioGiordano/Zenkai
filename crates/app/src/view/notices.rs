@@ -1,14 +1,23 @@
 use std::collections::VecDeque;
+use std::time::Duration;
 
 use gpui_kit::SharedString;
 
 const HISTORY_LIMIT: usize = 20;
+pub(super) const WARNING_LIFETIME: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Severity {
     Info,
     Warning,
     Error,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Expiry {
+    Closed,
+    Held,
+    Gone,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -59,9 +68,10 @@ impl Notices {
         detail: Option<SharedString>,
         lifetime: Lifetime,
         time: SharedString,
-    ) {
+    ) -> u64 {
+        let id = self.next_id;
         let notice = Notice {
-            id: self.next_id,
+            id,
             severity,
             text,
             detail,
@@ -77,6 +87,7 @@ impl Notices {
             self.card = Some(notice.clone());
         }
         self.status = Some(notice);
+        id
     }
 
     pub fn status(&self) -> Option<&Notice> {
@@ -117,6 +128,22 @@ impl Notices {
         }
     }
 
+    // Only a warning times out, and never while the user is reading it.
+    pub fn expire_warning(&mut self, id: u64, held: bool) -> Expiry {
+        let is_that_warning = self
+            .card
+            .as_ref()
+            .is_some_and(|card| card.id == id && card.severity == Severity::Warning);
+        if !is_that_warning {
+            return Expiry::Gone;
+        }
+        if held {
+            return Expiry::Held;
+        }
+        self.dismiss_card();
+        Expiry::Closed
+    }
+
     // The history is kept: it is what the Messages panel shows.
     pub fn clear_on_open(&mut self) {
         let until_open = |notice: &mut Option<Notice>| {
@@ -134,16 +161,16 @@ impl Notices {
 
 #[cfg(test)]
 mod tests {
-    use super::{HISTORY_LIMIT, Lifetime, Notices, Severity};
+    use super::{Expiry, HISTORY_LIMIT, Lifetime, Notices, Severity};
 
-    fn post(notices: &mut Notices, severity: Severity, text: &str, lifetime: Lifetime) {
+    fn post(notices: &mut Notices, severity: Severity, text: &str, lifetime: Lifetime) -> u64 {
         notices.post(
             severity,
             text.to_string().into(),
             None,
             lifetime,
             "12:00:00".into(),
-        );
+        )
     }
 
     fn texts(notices: &Notices) -> Vec<String> {
@@ -171,6 +198,74 @@ mod tests {
             .map(|n| n.copy_text().to_string())
             .collect();
         assert_eq!(copied, ["a.xlsx: Access denied (os error 5)", "Short"]);
+    }
+
+    #[test]
+    fn a_warning_card_closes_when_its_time_is_up() {
+        let mut notices = Notices::default();
+        let id = post(
+            &mut notices,
+            Severity::Warning,
+            "Careful",
+            Lifetime::UntilReplaced,
+        );
+        assert_eq!(notices.expire_warning(id, false), Expiry::Closed);
+        assert!(notices.card().is_none());
+        assert!(notices.status().is_none());
+        assert_eq!(notices.len(), 1);
+    }
+
+    #[test]
+    fn a_warning_card_that_is_hovered_or_focused_stays() {
+        let mut notices = Notices::default();
+        let id = post(
+            &mut notices,
+            Severity::Warning,
+            "Careful",
+            Lifetime::UntilReplaced,
+        );
+        assert_eq!(notices.expire_warning(id, true), Expiry::Held);
+        assert!(notices.card().is_some());
+    }
+
+    #[test]
+    fn an_error_card_never_times_out() {
+        let mut notices = Notices::default();
+        let id = post(
+            &mut notices,
+            Severity::Error,
+            "Disk full",
+            Lifetime::UntilReplaced,
+        );
+        assert_eq!(notices.expire_warning(id, false), Expiry::Gone);
+        assert!(notices.card().is_some());
+    }
+
+    #[test]
+    fn the_timer_of_a_replaced_warning_leaves_the_newer_card_alone() {
+        let mut notices = Notices::default();
+        let old = post(
+            &mut notices,
+            Severity::Warning,
+            "First",
+            Lifetime::UntilReplaced,
+        );
+        post(
+            &mut notices,
+            Severity::Warning,
+            "Second",
+            Lifetime::UntilReplaced,
+        );
+        assert_eq!(notices.expire_warning(old, false), Expiry::Gone);
+        assert_eq!(
+            notices.card().map(|n| n.text.to_string()).as_deref(),
+            Some("Second")
+        );
+    }
+
+    #[test]
+    fn the_warning_lifetime_is_eight_seconds() {
+        assert_eq!(super::WARNING_LIFETIME.as_secs(), 8);
     }
 
     #[test]
