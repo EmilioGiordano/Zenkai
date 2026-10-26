@@ -124,7 +124,9 @@ fn date_or_time(core: &str) -> Option<FormatCategory> {
 fn is_plain_number(core: &str) -> bool {
     let digits: String = core
         .chars()
-        .filter(|c| !matches!(c, ' ' | '_' | '(' | ')' | '-' | '+') && !CURRENCY_SYMBOLS.contains(c))
+        .filter(|c| {
+            !matches!(c, ' ' | '_' | '(' | ')' | '-' | '+') && !CURRENCY_SYMBOLS.contains(c)
+        })
         .collect();
     let Some(decimals) = digits
         .strip_prefix("#,##0")
@@ -193,14 +195,27 @@ mod tests {
 
     #[test]
     fn date_codes() {
-        for code in ["dd/mm/yyyy", "m/d/yyyy", "d-mmm-yy", "mmmm yyyy", "mmm-yy", "yyyy-mm-dd h:mm"] {
+        for code in [
+            "dd/mm/yyyy",
+            "m/d/yyyy",
+            "d-mmm-yy",
+            "mmmm yyyy",
+            "mmm-yy",
+            "yyyy-mm-dd h:mm",
+        ] {
             assert_eq!(FormatCategory::of(code), FormatCategory::Date, "{code}");
         }
     }
 
     #[test]
     fn time_codes() {
-        for code in ["h:mm:ss", "h:mm AM/PM", "[h]:mm:ss", "mm:ss", "[$-409]h:mm:ss AM/PM"] {
+        for code in [
+            "h:mm:ss",
+            "h:mm AM/PM",
+            "[h]:mm:ss",
+            "mm:ss",
+            "[$-409]h:mm:ss AM/PM",
+        ] {
             assert_eq!(FormatCategory::of(code), FormatCategory::Time, "{code}");
         }
     }
@@ -208,7 +223,11 @@ mod tests {
     #[test]
     fn scientific_codes() {
         for code in ["0.00E+00", "0E+0", "##0.0E+0"] {
-            assert_eq!(FormatCategory::of(code), FormatCategory::Scientific, "{code}");
+            assert_eq!(
+                FormatCategory::of(code),
+                FormatCategory::Scientific,
+                "{code}"
+            );
         }
     }
 
@@ -222,7 +241,11 @@ mod tests {
     #[test]
     fn percentage_decimals_do_not_matter() {
         for code in ["0%", "0.0%", "0.000%", "0.00%;[Red]-0.00%"] {
-            assert_eq!(FormatCategory::of(code), FormatCategory::Percentage, "{code}");
+            assert_eq!(
+                FormatCategory::of(code),
+                FormatCategory::Percentage,
+                "{code}"
+            );
         }
     }
 
@@ -237,7 +260,11 @@ mod tests {
             "_($* #,##0.00_);_($* (#,##0.00);_($* \"-\"??_);_(@_)",
             "_(* #,##0_);_(* (#,##0);_(* \"-\"_);_(@_)",
         ] {
-            assert_eq!(FormatCategory::of(code), FormatCategory::Accounting, "{code}");
+            assert_eq!(
+                FormatCategory::of(code),
+                FormatCategory::Accounting,
+                "{code}"
+            );
         }
     }
 
@@ -258,7 +285,14 @@ mod tests {
 
     #[test]
     fn number_codes() {
-        for code in ["0", "0.00", "#,##0", "#,##0.00", "#,##0.00;[Red]-#,##0.00", "#,##0_);(#,##0)"] {
+        for code in [
+            "0",
+            "0.00",
+            "#,##0",
+            "#,##0.00",
+            "#,##0.00;[Red]-#,##0.00",
+            "#,##0_);(#,##0)",
+        ] {
             assert_eq!(FormatCategory::of(code), FormatCategory::Number, "{code}");
         }
     }
