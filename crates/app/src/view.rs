@@ -285,6 +285,36 @@ enum Saved {
     },
 }
 
+#[derive(Debug, PartialEq)]
+enum TargetAction {
+    RefuseOriginal,
+    ConfirmReplacingOriginal,
+    SaveOverOriginal,
+    ConfirmReplacingExisting,
+    SaveNew,
+}
+
+fn target_action(
+    probe: &files::TargetProbe,
+    renamed: bool,
+    never_overwritten: bool,
+    may_lose_unseen_content: bool,
+) -> TargetAction {
+    if probe.same_as_source {
+        if never_overwritten {
+            TargetAction::RefuseOriginal
+        } else if may_lose_unseen_content {
+            TargetAction::ConfirmReplacingOriginal
+        } else {
+            TargetAction::SaveOverOriginal
+        }
+    } else if renamed && probe.exists {
+        TargetAction::ConfirmReplacingExisting
+    } else {
+        TargetAction::SaveNew
+    }
+}
+
 enum Replacing {
     Existing,
     Original(Vec<Unsupported>),
@@ -1930,36 +1960,71 @@ impl Workspace {
             self.export_csv(id, chosen, window, cx);
             return;
         }
+        let source = match self.documents.get(id) {
+            Some(document) => document.path.clone(),
+            None => {
+                self.save_ended(id, false, window, cx);
+                return;
+            }
+        };
+        let path = files::xlsx_target(&chosen);
+        let renamed = path != chosen;
+        cx.spawn_in(window, async move |this, cx| {
+            let target = path.clone();
+            let probe = cx
+                .background_executor()
+                .spawn(async move { files::probe_target(source.as_deref(), &target) })
+                .await;
+            let update = this.update_in(cx, |this, window, cx| {
+                this.decide_target(id, path, renamed, probe, window, cx)
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed while checking the save target");
+            }
+        })
+        .detach();
+    }
+
+    fn decide_target(
+        &mut self,
+        id: WorkbookId,
+        path: PathBuf,
+        renamed: bool,
+        probe: files::TargetProbe,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(document) = self.documents.get(id) else {
             self.save_ended(id, false, window, cx);
             return;
         };
-        let path = files::xlsx_target(&chosen);
-        let renamed = path != chosen;
-        let replaces_source = document
-            .path
-            .as_ref()
-            .is_some_and(|source| files::same_file(source, &path, files::Unresolved::ComparePaths));
-        let never_overwritten = document.is_macro_enabled() || document.read_only;
-        if replaces_source && never_overwritten {
-            self.notify(Severity::Error, t!("save.original_protected"), cx);
-            self.save_ended(id, false, window, cx);
-        } else if replaces_source && document.may_lose_unseen_content() {
-            let lost = document.unsupported.clone();
-            self.confirm_replace(id, path, Replacing::Original(lost), window, cx);
-        } else if replaces_source {
-            self.save_to(
+        let action = target_action(
+            &probe,
+            renamed,
+            document.is_macro_enabled() || document.read_only,
+            document.may_lose_unseen_content(),
+        );
+        match action {
+            TargetAction::RefuseOriginal => {
+                self.notify(Severity::Error, t!("save.original_protected"), cx);
+                self.save_ended(id, false, window, cx);
+            }
+            TargetAction::ConfirmReplacingOriginal => {
+                let lost = document.unsupported.clone();
+                self.confirm_replace(id, path, Replacing::Original(lost), window, cx);
+            }
+            TargetAction::SaveOverOriginal => self.save_to(
                 id,
                 path,
                 Some(Overwrite::Original),
                 ChangedFile::Ask,
                 window,
                 cx,
-            );
-        } else if renamed && path.exists() {
-            self.confirm_replace(id, path, Replacing::Existing, window, cx);
-        } else {
-            self.save_to(id, path, None, ChangedFile::Ask, window, cx);
+            ),
+            TargetAction::ConfirmReplacingExisting => {
+                self.confirm_replace(id, path, Replacing::Existing, window, cx);
+            }
+            TargetAction::SaveNew => self.save_to(id, path, None, ChangedFile::Ask, window, cx),
         }
     }
 
@@ -4397,11 +4462,53 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 mod tests {
     use super::{
         CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, StructureEdit, changed_file_answers,
-        enter_text, grow_wrapped_rows, selection_edit, widen_for_numbers,
+        TargetAction, enter_text, grow_wrapped_rows, selection_edit, target_action,
+        widen_for_numbers,
     };
+    use crate::files::TargetProbe;
     use zenkai_engine::{Engine, Workbook};
     use zenkai_i18n::t;
     use zenkai_types::{CellPos, ColIdx, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId};
+
+    #[test]
+    fn save_as_target_follows_the_probe_in_the_order_excel_asks() {
+        let same = TargetProbe {
+            same_as_source: true,
+            exists: false,
+        };
+        let taken = TargetProbe {
+            same_as_source: false,
+            exists: true,
+        };
+        let free = TargetProbe {
+            same_as_source: false,
+            exists: false,
+        };
+        assert_eq!(
+            target_action(&same, false, true, true),
+            TargetAction::RefuseOriginal
+        );
+        assert_eq!(
+            target_action(&same, false, false, true),
+            TargetAction::ConfirmReplacingOriginal
+        );
+        assert_eq!(
+            target_action(&same, true, false, false),
+            TargetAction::SaveOverOriginal
+        );
+        assert_eq!(
+            target_action(&taken, true, false, false),
+            TargetAction::ConfirmReplacingExisting
+        );
+        assert_eq!(
+            target_action(&taken, false, true, true),
+            TargetAction::SaveNew
+        );
+        assert_eq!(
+            target_action(&free, true, false, false),
+            TargetAction::SaveNew
+        );
+    }
 
     #[test]
     fn insert_and_delete_follow_the_shape_of_the_selection() {
