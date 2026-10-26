@@ -26,7 +26,24 @@ impl FormatCategory {
         if core == "@" {
             return Self::Text;
         }
+        if let Some(category) = date_or_time(&core) {
+            return category;
+        }
         Self::Custom
+    }
+}
+
+fn date_or_time(core: &str) -> Option<FormatCategory> {
+    let lower = core.to_ascii_lowercase();
+    let has = |tokens: &[char]| lower.chars().any(|c| tokens.contains(&c));
+    if has(&['d', 'y']) {
+        Some(FormatCategory::Date)
+    } else if has(&['h', 's', 'a', 'p']) {
+        Some(FormatCategory::Time)
+    } else if has(&['m']) {
+        Some(FormatCategory::Date)
+    } else {
+        None
     }
 }
 
@@ -81,5 +98,19 @@ mod tests {
     fn percent_codes_are_percentage() {
         assert_eq!(FormatCategory::of("0%"), FormatCategory::Percentage);
         assert_eq!(FormatCategory::of("0.00%"), FormatCategory::Percentage);
+    }
+
+    #[test]
+    fn date_codes() {
+        for code in ["dd/mm/yyyy", "m/d/yyyy", "d-mmm-yy", "mmmm yyyy", "mmm-yy", "yyyy-mm-dd h:mm"] {
+            assert_eq!(FormatCategory::of(code), FormatCategory::Date, "{code}");
+        }
+    }
+
+    #[test]
+    fn time_codes() {
+        for code in ["h:mm:ss", "h:mm AM/PM", "[h]:mm:ss", "mm:ss", "[$-409]h:mm:ss AM/PM"] {
+            assert_eq!(FormatCategory::of(code), FormatCategory::Time, "{code}");
+        }
     }
 }
