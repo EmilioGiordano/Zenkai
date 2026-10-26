@@ -21,36 +21,6 @@ fn last_day_of_feb(year: i32) -> u32 {
     }
 }
 
-// Maps a date serial number (date part only) to the Excel (year, month, day) it
-// represents, replicating Excel's fictional 29 February 1900 (the "1900
-// leap-year bug") so DAYS360 matches Excel for early-1900 serials. Returns
-// `None` when the serial is outside `0..=MAXIMUM_DATE_SERIAL_NUMBER`, which Excel
-// reports as `#NUM!`.
-fn excel_serial_to_ymd(serial: i64) -> Option<(i32, u32, u32)> {
-    if !(0..=MAXIMUM_DATE_SERIAL_NUMBER as i64).contains(&serial) {
-        return None;
-    }
-    // Excel renders serial 0 as "0 January 1900"; DAYS360 reads it as day 0 of
-    // January 1900 (not 31 December 1899), which is what makes it antisymmetric.
-    if serial == 0 {
-        return Some((1900, 1, 0));
-    }
-    // Excel's non-existent 29 February 1900 (serial 60).
-    if serial == 60 {
-        return Some((1900, 2, 29));
-    }
-    let date = if serial < 60 {
-        // Below the fictional leap day Excel counts serial 1 as 1900-01-01, so
-        // serial N is N days after 1899-12-31 (serial 0).
-        let base = chrono::NaiveDate::from_ymd_opt(1899, 12, 31)?;
-        base + chrono::Duration::days(serial)
-    } else {
-        // From 1900-03-01 (serial 61) onwards IronCalc's serials match Excel.
-        from_excel_date(serial).ok()?
-    };
-    Some((date.year(), date.month(), date.day()))
-}
-
 // Converts a raw numeric argument to a date serial (date part) for DAYS360,
 // rounding the time-of-day to the nearest second before discarding it. Excel
 // rolls e.g. 46000.999999 up to 46001 when extracting the date part.
@@ -88,10 +58,9 @@ fn days360_eu(start: (i32, u32, u32), end: (i32, u32, u32)) -> f64 {
     (360 * (y2 - y1) + 30 * (m2 as i32 - m1 as i32) + (day2 - day1)) as f64
 }
 
-/// Maps a date to the WEEKDAY number for the given `return_type`.
+/// Maps a weekday to the WEEKDAY number for the given `return_type`.
 /// Returns `Error::VALUE`/`Error::NUM` for an invalid `return_type`.
-fn weekday_number(date: chrono::NaiveDate, return_type: i32) -> Result<f64, Error> {
-    let weekday = date.weekday();
+fn weekday_number(weekday: chrono::Weekday, return_type: i32) -> Result<f64, Error> {
     let num = match return_type {
         1 => weekday.num_days_from_sunday() + 1,
         2 => weekday.number_from_monday(),
@@ -132,25 +101,19 @@ fn is_feb29_between_consecutive_years(start: chrono::NaiveDate, end: chrono::Nai
 // functions (DAY, MONTH, YEAR, HOUR, MINUTE, SECOND).
 // ---------------------------------------------------------------------------
 
-// Generate DAY / MONTH / YEAR helpers – simply convert the serial number to a
-// NaiveDate and return the requested component as a number.
 macro_rules! date_part_fn {
-    ($name:ident, $method:ident) => {
+    ($name:ident, $part:expr) => {
         pub(crate) fn $name(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
             if args.len() != 1 {
                 return CalcResult::new_args_number_error(cell);
             }
-            // Convert the serial number to a NaiveDate and return the requested
-            // component. Broadcasts element-wise over ranges/arrays. Uses the free
-            // function from_excel_date to avoid borrowing self in the closure.
-            self.apply_number_unary(
-                &args[0],
-                cell,
-                |f| match from_excel_date(f.floor() as i64) {
-                    Ok(date) => Ok(date.$method() as f64),
-                    Err(_) => Err(Error::NUM),
-                },
-            )
+            // Broadcasts element-wise over ranges/arrays.
+            self.apply_number_unary(&args[0], cell, |f| {
+                match excel_serial_to_ymd(f.floor() as i64) {
+                    Some(year_month_day) => Ok(($part)(year_month_day) as f64),
+                    None => Err(Error::NUM),
+                }
+            })
         }
     };
 }
@@ -184,6 +147,7 @@ use crate::arithmetic::bcast_idx;
 use crate::constants::MAXIMUM_DATE_SERIAL_NUMBER;
 use crate::constants::MINIMUM_DATE_SERIAL_NUMBER;
 use crate::expressions::types::CellReferenceIndex;
+use crate::formatter::dates::convert_to_serial_number;
 use crate::formatter::dates::date_to_serial_number;
 use crate::formatter::dates::permissive_date_to_serial_number;
 use crate::formatter::dates::DATE_OUT_OF_RANGE_MESSAGE;
@@ -193,7 +157,7 @@ use crate::{
     constants::EXCEL_DATE_BASE,
     expressions::parser::{ArrayNode, Node},
     expressions::token::Error,
-    formatter::dates::from_excel_date,
+    formatter::dates::{excel_serial_to_ymd, excel_serial_weekday, from_excel_date},
     model::Model,
 };
 
@@ -567,11 +531,6 @@ pub(crate) fn parse_datevalue_text(value: &str) -> Result<i32, String> {
     let month = parse_month_simple(month_str)?;
     let year = parse_year_simple(year_str)?;
 
-    // Excel 1900 leap-year bug: 29-Feb-1900 is treated as serial 60
-    if year == 1900 && month == 2 && day == 29 {
-        return Ok(60);
-    }
-
     match date_to_serial_number(day, month, year) {
         Ok(n) => Ok(n),
         Err(_) => Err("Not a valid date".to_string()),
@@ -620,9 +579,9 @@ impl<'a> Model<'a> {
     // -----------------------------------------------------------------------
     // Auto-generated DATE part helpers (DAY / MONTH / YEAR)
     // -----------------------------------------------------------------------
-    date_part_fn!(fn_day, day);
-    date_part_fn!(fn_month, month);
-    date_part_fn!(fn_year, year);
+    date_part_fn!(fn_day, |(_, _, day): (i32, u32, u32)| day);
+    date_part_fn!(fn_month, |(_, month, _): (i32, u32, u32)| month);
+    date_part_fn!(fn_year, |(year, _, _): (i32, u32, u32)| year);
 
     pub(crate) fn fn_eomonth(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         let args_count = args.len();
@@ -679,12 +638,12 @@ impl<'a> Model<'a> {
             month = 1;
             year += 1;
         }
-        match date_to_serial_number(1, month, year) {
-            Ok(serial_number) => CalcResult::Number(serial_number as f64 - 1.0),
-            Err(message) => CalcResult::Error {
+        match chrono::NaiveDate::from_ymd_opt(year, month, 1) {
+            Some(first) => CalcResult::Number(convert_to_serial_number(first) as f64 - 1.0),
+            None => CalcResult::Error {
                 error: Error::NUM,
                 origin: cell,
-                message,
+                message: DATE_OUT_OF_RANGE_MESSAGE.to_string(),
             },
         }
     }
@@ -1521,8 +1480,8 @@ impl<'a> Model<'a> {
         };
         // Broadcasts element-wise over a range/array date argument.
         self.apply_number_unary(&args[0], cell, move |serial| {
-            let date = from_excel_date(serial.floor() as i64).map_err(|_| Error::NUM)?;
-            weekday_number(date, return_type)
+            let weekday = excel_serial_weekday(serial.floor() as i64).ok_or(Error::NUM)?;
+            weekday_number(weekday, return_type)
         })
     }
 
