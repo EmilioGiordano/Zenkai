@@ -101,8 +101,6 @@ fn is_feb29_between_consecutive_years(start: chrono::NaiveDate, end: chrono::Nai
 // functions (DAY, MONTH, YEAR, HOUR, MINUTE, SECOND).
 // ---------------------------------------------------------------------------
 
-// Generate DAY / MONTH / YEAR helpers – convert the serial number to Excel's
-// (year, month, day) and return the requested component as a number.
 macro_rules! date_part_fn {
     ($name:ident, $part:expr) => {
         pub(crate) fn $name(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
