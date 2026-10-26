@@ -134,6 +134,9 @@ enum StructureEdit {
 
 const SAVE_AGAIN_POLL: Duration = Duration::from_millis(50);
 const SAVE_AGAIN_LIMIT: Duration = Duration::from_secs(300);
+// Windows makes the first answer the default button, so Cancel goes first.
+const CHANGED_FILE_REPLACE: usize = 1;
+const CHANGED_FILE_SAVE_AS: usize = 2;
 const MAX_AUTOSUM_SCAN: usize = 10_000;
 const MAX_AUTOFIT_CELLS: usize = 100_000;
 const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
@@ -1978,24 +1981,20 @@ impl Workspace {
             .map(Document::name)
             .unwrap_or_default();
         let answer = self.ask(
-            PromptLevel::Critical,
+            PromptLevel::Warning,
             &t!("save.changed_on_disk_title", name = name),
             Some(t!("save.changed_on_disk_detail")),
-            &[
-                t!("button.replace"),
-                t!("button.save_as"),
-                t!("button.cancel"),
-            ],
+            &changed_file_answers(),
             window,
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| match choice {
-                Some(0) => {
+                Some(CHANGED_FILE_REPLACE) => {
                     this.save_to(id, path, Some(overwrite), ChangedFile::Replace, window, cx)
                 }
-                Some(1) => this.save_as_dialog(id, window, cx),
+                Some(CHANGED_FILE_SAVE_AS) => this.save_as_dialog(id, window, cx),
                 _ => this.save_ended(id, false, window, cx),
             });
             if let Err(error) = update {
@@ -3450,6 +3449,14 @@ impl Workspace {
     }
 }
 
+fn changed_file_answers() -> [PromptButton; 3] {
+    [
+        PromptButton::cancel(t!("button.cancel")),
+        PromptButton::new(t!("button.replace")),
+        PromptButton::new(t!("button.save_as")),
+    ]
+}
+
 fn empty_workbook() -> Workbook {
     Workbook::new_empty().unwrap_or_else(|error| {
         tracing::error!(%error, "could not create an empty workbook");
@@ -4271,9 +4278,31 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{grow_wrapped_rows, widen_for_numbers};
+    use super::{
+        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, changed_file_answers, grow_wrapped_rows,
+        widen_for_numbers,
+    };
     use zenkai_engine::{Engine, Workbook};
+    use zenkai_i18n::t;
     use zenkai_types::{CellPos, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId};
+
+    #[test]
+    fn changed_file_prompt_defaults_to_cancel() {
+        let answers = changed_file_answers();
+        assert!(answers[0].is_cancel());
+        assert_eq!(
+            answers.iter().filter(|answer| answer.is_cancel()).count(),
+            1
+        );
+        assert_eq!(
+            answers[CHANGED_FILE_REPLACE].label().as_ref(),
+            t!("button.replace")
+        );
+        assert_eq!(
+            answers[CHANGED_FILE_SAVE_AS].label().as_ref(),
+            t!("button.save_as")
+        );
+    }
 
     const SHEET: SheetId = SheetId(0);
 
