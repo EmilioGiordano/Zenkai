@@ -425,6 +425,20 @@ mod tests {
     }
 
     #[test]
+    fn a_shrunk_spill_ends_its_sheet_at_its_last_cell() {
+        let mut model = two_filled_sheets();
+        type_at(&mut model, 0, "A1", "10");
+        type_at(&mut model, 0, "B1", "=SEQUENCE(A1)");
+        assert_eq!(
+            model.used_end(SheetId(0)),
+            CellPos::parse_a1("B10").unwrap()
+        );
+        type_at(&mut model, 0, "A1", "3");
+        assert_eq!(model.used_end(SheetId(0)), CellPos::parse_a1("B3").unwrap());
+        assert_cached_ends_match_a_walk(&model);
+    }
+
+    #[test]
     fn an_incremental_edit_keeps_the_end_of_a_sheet_with_a_spill() {
         let mut model = spill_on_the_second_sheet();
         type_at(&mut model, 0, "A1", "2");
