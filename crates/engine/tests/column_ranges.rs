@@ -187,3 +187,15 @@ fn columns_pushed_past_the_sheet_by_an_insert_are_not_shown() {
     let reopened = open_xlsx_with(&saved, XlsxReader::Fast).unwrap().workbook;
     assert_eq!(book.sizes(SheetId(0)), reopened.sizes(SheetId(0)));
 }
+
+#[test]
+fn a_file_repeating_full_width_columns_is_refused_not_expanded() {
+    let cols =
+        r#"<col min="1" max="16384" width="9" customWidth="1" outlineLevel="1"/>"#.repeat(20_000);
+    for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cols.xlsx");
+        with_columns(&path, &cols);
+        assert!(open_xlsx_with(&path, reader).is_err(), "{reader:?}");
+    }
+}
