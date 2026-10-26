@@ -3216,6 +3216,9 @@ impl<'a> Model<'a> {
                             }
                         }
                     }
+                    // A position without a cell, such as a spill cell removed above with
+                    // its anchor, stays without one instead of becoming an empty cell.
+                    _ if ws.cell(row, column).is_none() => {}
                     _ => {
                         let _ = ws.cell_clear_contents(row, column);
                     }
