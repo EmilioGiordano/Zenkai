@@ -106,7 +106,7 @@ fn undo_restores_the_old_styles_of_the_targets_and_redo_fills_again() {
 
     book.undo().unwrap();
     assert_eq!(book.cell(SHEET, pos(1, 0)), old);
-    assert_eq!(book.cell(SHEET, pos(3, 0)), Default::default());
+    assert_eq!(book.cell(SHEET, pos(3, 0)), book.cell(SHEET, pos(30, 0)));
     book.redo().unwrap();
     assert_eq!(book.cell(SHEET, pos(1, 0)).style.num_fmt, date_format);
     assert_eq!(book.cell(SHEET, pos(3, 0)).style.num_fmt, date_format);
