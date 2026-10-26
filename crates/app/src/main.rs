@@ -23,6 +23,7 @@ mod entry;
 mod file_search;
 mod files;
 mod find;
+mod format_category;
 mod format_dialog;
 mod generate_dialog;
 mod interface_scale;
