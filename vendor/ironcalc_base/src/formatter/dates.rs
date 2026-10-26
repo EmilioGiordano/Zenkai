@@ -42,10 +42,8 @@ pub fn from_excel_date(days: i64) -> Result<NaiveDate, String> {
     Ok(dt + Duration::days(days - 2))
 }
 
-// Maps a date serial number (date part only) to the Excel (year, month, day) it
-// represents, replicating Excel's fictional 29 February 1900 (the "1900
-// leap-year bug"). Returns `None` when the serial is outside
-// `0..=MAXIMUM_DATE_SERIAL_NUMBER`, which Excel reports as `#NUM!`.
+// A tuple, not a NaiveDate, because Excel's labels include 0 January 1900 and the
+// fictitious 29 February 1900 (the 1900 leap-year bug), which no real date can hold.
 pub(crate) fn excel_serial_to_ymd(serial: i64) -> Option<(i32, u32, u32)> {
     if !(0..=MAXIMUM_DATE_SERIAL_NUMBER as i64).contains(&serial) {
         return None;
