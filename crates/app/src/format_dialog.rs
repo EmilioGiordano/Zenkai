@@ -65,7 +65,7 @@ pub fn render(
             div()
                 .text_lg()
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(t!("format.title")),
+                .child(t!("format.title", category = current_category.label())),
         )
         .child(
             h_flex()
