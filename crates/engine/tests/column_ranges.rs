@@ -80,8 +80,14 @@ fn invalid_column_ranges_from_a_file_save_without_them() {
 #[test]
 fn column_ranges_reaching_past_the_sheet_keep_their_part_inside_it() {
     let partial = [
-        (r#"<col min="10" max="20000" width="30" customWidth="1"/>"#, (10, 16_384)),
-        (r#"<col min="0" max="4" width="30" customWidth="1"/>"#, (1, 4)),
+        (
+            r#"<col min="10" max="20000" width="30" customWidth="1"/>"#,
+            (10, 16_384),
+        ),
+        (
+            r#"<col min="0" max="4" width="30" customWidth="1"/>"#,
+            (1, 4),
+        ),
     ];
     for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
         for (col, (min, max)) in partial {
