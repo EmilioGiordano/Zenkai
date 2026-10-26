@@ -35,6 +35,7 @@ mod messages;
 mod notice_card;
 mod notices;
 mod pdfs;
+mod save_flow;
 mod settings_gate;
 mod space_panel;
 mod text_actions;
@@ -181,6 +182,7 @@ pub struct Workspace {
     toast: Option<agent_access::Toast>,
     toast_generation: u64,
     busy: Option<SharedString>,
+    save_as_flows: save_flow::SaveAsFlows,
     job_pill: JobPill,
     open_loads: OpenLoads,
     last_recalc: Option<Duration>,
@@ -382,6 +384,7 @@ impl Workspace {
             toast: None,
             toast_generation: 0,
             busy: None,
+            save_as_flows: save_flow::SaveAsFlows::default(),
             job_pill: JobPill::default(),
             open_loads: OpenLoads::default(),
             last_recalc: None,
