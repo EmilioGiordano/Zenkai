@@ -218,6 +218,13 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   shift typed text from one cell to another without writing the source cell first and
   undoing it (`src/user_model/common.rs`). Stands on its own. Tests:
   `src/test/user_model/test_extend_copied_value.rs`.
+- The cells a dynamic array stops spilling into, because it shrinks, is blocked, cleared,
+  overwritten, cut, undone or reset before rows or columns move, are removed instead of
+  left as empty cells, unless they have a style of their own, as in Excel; the empty cells
+  stretched the sheet's dimension and were saved (`Worksheet::cell_clear_spill` in
+  `src/worksheet.rs`, its callers in `src/model.rs`, `src/user_model/undo_redo.rs` and
+  `src/user_model/clipboard.rs`). Stands on its own. Tests:
+  `src/test/user_model/test_spill_leftover_cells.rs`.
 
 Zenkai-only, not for upstream:
 
