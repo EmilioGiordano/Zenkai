@@ -4461,8 +4461,8 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, StructureEdit, changed_file_answers,
-        TargetAction, enter_text, grow_wrapped_rows, selection_edit, target_action,
+        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, StructureEdit, TargetAction,
+        changed_file_answers, enter_text, grow_wrapped_rows, selection_edit, target_action,
         widen_for_numbers,
     };
     use crate::files::TargetProbe;
