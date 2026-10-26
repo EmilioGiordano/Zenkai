@@ -52,3 +52,43 @@ fn day_month_year_of_modern_serials() {
     assert_eq!(model._get_text("A4"), "#NUM!");
     assert_eq!(model._get_text("A5"), "#NUM!");
 }
+
+#[test]
+fn weekday_of_early_serials() {
+    let mut model = new_empty_model();
+    model._set("A1", "=WEEKDAY(0)");
+    model._set("A2", "=WEEKDAY(1)");
+    model._set("A3", "=WEEKDAY(7)");
+    model._set("A4", "=WEEKDAY(59)");
+    model._set("A5", "=WEEKDAY(60)");
+    model._set("A6", "=WEEKDAY(61)");
+    model._set("A7", "=WEEKDAY(45292)");
+    model._set("A8", "=WEEKDAY(0, 2)");
+    model._set("A9", "=WEEKDAY(-1)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "7");
+    assert_eq!(model._get_text("A2"), "1");
+    assert_eq!(model._get_text("A3"), "7");
+    assert_eq!(model._get_text("A4"), "3");
+    assert_eq!(model._get_text("A5"), "4");
+    assert_eq!(model._get_text("A6"), "5");
+    assert_eq!(model._get_text("A7"), "2");
+    assert_eq!(model._get_text("A8"), "6");
+    assert_eq!(model._get_text("A9"), "#NUM!");
+}
+
+#[test]
+fn text_of_early_serials() {
+    let mut model = new_empty_model();
+    model._set("A1", "=TEXT(7, \"m/d/yyyy\")");
+    model._set("A2", "=TEXT(0, \"m/d/yyyy\")");
+    model._set("A3", "=TEXT(60, \"dddd, mmmm d, yyyy\")");
+    model._set("A4", "=TEXT(61, \"m/d/yyyy\")");
+    model._set("A5", "=TEXT(45292, \"m/d/yyyy\")");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "1/7/1900");
+    assert_eq!(model._get_text("A2"), "1/0/1900");
+    assert_eq!(model._get_text("A3"), "Wednesday, February 29, 1900");
+    assert_eq!(model._get_text("A4"), "3/1/1900");
+    assert_eq!(model._get_text("A5"), "1/1/2024");
+}
