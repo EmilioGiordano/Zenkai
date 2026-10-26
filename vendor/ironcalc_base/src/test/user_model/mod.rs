@@ -18,6 +18,7 @@ mod test_dynamic_arrays;
 mod test_evaluation;
 mod test_extend_copied_value;
 mod test_fill_formula;
+mod test_fill_style;
 mod test_fn_formulatext;
 mod test_general;
 mod test_grid_lines;

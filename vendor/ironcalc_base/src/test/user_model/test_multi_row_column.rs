@@ -179,7 +179,13 @@ fn delete_column_undo_redo_restores_cells_and_used_range() {
         model.set_user_input(0, row, 3, &row.to_string()).unwrap();
     }
     let rows_of = |model: &UserModel| {
-        model.get_model().workbook.worksheet(0).unwrap().sheet_data.rows_sorted()
+        model
+            .get_model()
+            .workbook
+            .worksheet(0)
+            .unwrap()
+            .sheet_data
+            .rows_sorted()
     };
     let before = rows_of(&model);
 
@@ -189,7 +195,10 @@ fn delete_column_undo_redo_restores_cells_and_used_range() {
     model.undo().unwrap();
     assert_eq!(rows_of(&model), before);
     for row in 1..=100 {
-        assert_eq!(model.get_formatted_cell_value(0, row, 3).unwrap(), row.to_string());
+        assert_eq!(
+            model.get_formatted_cell_value(0, row, 3).unwrap(),
+            row.to_string()
+        );
     }
 
     model.redo().unwrap();

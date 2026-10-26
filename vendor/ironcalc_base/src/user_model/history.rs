@@ -305,6 +305,17 @@ pub(crate) enum Diff {
         priority_a: u32,
         priority_b: u32,
     },
+    // The style index of `style_index` written over the area; `old_styles` holds each cell's
+    // own style row by row, None where the cell did not exist.
+    FillStyle {
+        sheet: u32,
+        row: i32,
+        column: i32,
+        width: i32,
+        height: i32,
+        style_index: i32,
+        old_styles: Vec<Option<i32>>,
+    },
     // FIXME: we are missing SetViewDiffs
 }
 
@@ -380,6 +391,14 @@ pub(crate) fn step_cells(diff_list: &[Diff]) -> Option<StepCells> {
                 ..
             }
             | Diff::FillFormula {
+                sheet,
+                row,
+                column,
+                width,
+                height,
+                ..
+            }
+            | Diff::FillStyle {
                 sheet,
                 row,
                 column,
