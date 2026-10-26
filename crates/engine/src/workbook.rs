@@ -1243,7 +1243,8 @@ impl Engine for Workbook {
     }
 
     // Ctrl+D / Ctrl+R: the first row (or column) of the target is extended over the rest
-    // with references shifted, and its cells' formats are copied whole, as in Excel; a single row (or column) extends the one above (or left).
+    // with references shifted and its cells' formats copied whole, as in Excel; a single
+    // row (or column) extends the one above (or left).
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError> {
         let source_line = if down {
             if target.rows() == 1 {
