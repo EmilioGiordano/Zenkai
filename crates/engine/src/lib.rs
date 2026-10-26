@@ -9,8 +9,11 @@ mod file;
 mod fingerprint;
 mod held;
 mod hibernation;
+mod inputs_plan;
 mod model;
 mod preflight;
+#[cfg(test)]
+mod ragged_inputs;
 mod rectangles;
 mod row_split;
 mod save;

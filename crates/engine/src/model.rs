@@ -49,7 +49,7 @@ fn is_dynamic(cell: &Cell) -> bool {
     cell.dynamic_range().is_some()
 }
 
-fn position(row: i32, col: i32) -> CellPos {
+pub(crate) fn position(row: i32, col: i32) -> CellPos {
     CellPos::new(
         RowIdx::clamped(i64::from(row) - 1),
         ColIdx::clamped(i64::from(col) - 1),
@@ -88,7 +88,11 @@ fn extent_of(sheet_data: &CellStore) -> Extent {
 }
 
 // Visits the cells of `sheet_data` inside `area`, walking whichever side is smaller.
-fn for_each_within(sheet_data: &CellStore, area: Range, mut visit: impl FnMut(i32, i32, &Cell)) {
+pub(crate) fn for_each_within(
+    sheet_data: &CellStore,
+    area: Range,
+    mut visit: impl FnMut(i32, i32, &Cell),
+) {
     let rows = row_i32(area.start.row)..=row_i32(area.end.row);
     let cols = col_i32(area.start.col)..=col_i32(area.end.col);
     let mut in_row = |row: i32| {

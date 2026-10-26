@@ -609,6 +609,12 @@ impl<'a> UserModel<'a> {
         self.pause_evaluation = true;
     }
 
+    /// Returns true if automatic evaluation is paused, by [UserModel::pause_evaluation] or
+    /// an open edit group.
+    pub fn is_evaluation_paused(&self) -> bool {
+        self.pause_evaluation
+    }
+
     /// Resumes automatic evaluation.
     ///
     /// See also:

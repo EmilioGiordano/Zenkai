@@ -11,6 +11,7 @@ use ironcalc::import::load_from_xlsx_bytes;
 use crate::edit_profile::{EditProfile, RecalcMode};
 use crate::error::EngineError;
 use crate::file::Unsupported;
+use crate::inputs_plan::plan_inputs;
 use crate::model::{CachedModel, HistoryStep, content_cells_within};
 use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
@@ -309,6 +310,44 @@ pub(crate) fn row_i32(row: RowIdx) -> i32 {
 
 pub(crate) fn col_i32(col: ColIdx) -> i32 {
     i32::from(col.get()) + 1
+}
+
+// Rows of one length written as one engine paste. The engine's TSV reader drops records
+// whose width differs from the first, so a block of rows of mixed lengths is pasted as
+// one run per length, never padded: padding a wide row's block makes the work follow the
+// area, not the fields in it.
+fn paste_run(
+    model: &mut UserModel<'static>,
+    sheet: SheetId,
+    origin: CellPos,
+    rows: &[Vec<String>],
+) -> Result<(), EngineError> {
+    let width = rows[0].len();
+    let mut writer = csv::WriterBuilder::new()
+        .delimiter(b'\t')
+        .from_writer(Vec::new());
+    for row in rows {
+        writer
+            .write_record(row)
+            .map_err(|e| rejected(e.to_string()))?;
+    }
+    let tsv = writer
+        .into_inner()
+        .map_err(|e| rejected(e.to_string()))
+        .and_then(|bytes| String::from_utf8(bytes).map_err(|e| rejected(e.to_string())))?;
+    let area = Area {
+        sheet: sheet.0,
+        row: row_i32(origin.row),
+        column: col_i32(origin.col),
+        width: i32::try_from(width).map_err(|e| rejected(e.to_string()))?,
+        height: i32::try_from(rows.len()).map_err(|e| rejected(e.to_string()))?,
+    };
+    let end = CellPos::new(
+        origin.row.offset(rows.len() as i64 - 1),
+        origin.col.offset(width as i64 - 1),
+    );
+    select(model, sheet, Range::new(origin, end))?;
+    model.paste_csv_string(&area, &tsv).map_err(rejected)
 }
 
 fn area(sheet: SheetId, range: Range) -> Area {
@@ -909,34 +948,6 @@ impl Engine for Workbook {
         if rows.is_empty() || width == 0 {
             return Ok(());
         }
-        let mut writer = csv::WriterBuilder::new()
-            .delimiter(b'\t')
-            .flexible(true)
-            .from_writer(Vec::new());
-        // The engine's TSV reader drops records whose width differs, so every row is
-        // padded to the full width of the block.
-        let padding = usize::try_from(width).unwrap_or(usize::MAX);
-        for row in rows {
-            let missing = padding.saturating_sub(row.len());
-            let fields = row
-                .iter()
-                .map(String::as_str)
-                .chain(std::iter::repeat_n("", missing));
-            writer
-                .write_record(fields)
-                .map_err(|e| rejected(e.to_string()))?;
-        }
-        let tsv = writer
-            .into_inner()
-            .map_err(|e| rejected(e.to_string()))
-            .and_then(|bytes| String::from_utf8(bytes).map_err(|e| rejected(e.to_string())))?;
-        let area = Area {
-            sheet: sheet.0,
-            row: row_i32(origin.row),
-            column: col_i32(origin.col),
-            width: i32::try_from(width).map_err(|e| rejected(e.to_string()))?,
-            height: i32::try_from(height).map_err(|e| rejected(e.to_string()))?,
-        };
         let end = CellPos::new(
             origin
                 .row
@@ -946,9 +957,51 @@ impl Engine for Workbook {
                 .offset(i64::try_from(width).unwrap_or(i64::MAX) - 1),
         );
         let target = Range::new(origin, end);
+        let plan = {
+            let sheet_data = &self
+                .model
+                .get_model()
+                .workbook
+                .worksheet(sheet.0)
+                .map_err(|_| EngineError::UnknownSheet(sheet))?
+                .sheet_data;
+            plan_inputs(sheet_data, origin, rows, width as usize)?
+        };
         self.model.write_within(sheet, target, |model| {
-            select(model, sheet, target)?;
-            model.paste_csv_string(&area, &tsv).map_err(rejected)
+            // Inside a caller's edit group the begin fails and the caller ends the group.
+            let own_group = model.begin_edit_group().is_ok();
+            let was_paused = model.is_evaluation_paused();
+            model.pause_evaluation();
+            let mut written = plan.tail.iter().try_for_each(|pos| {
+                model
+                    .range_clear_contents(&Area {
+                        sheet: sheet.0,
+                        row: row_i32(pos.row),
+                        column: col_i32(pos.col),
+                        width: 1,
+                        height: 1,
+                    })
+                    .map_err(rejected)
+            });
+            for run in &plan.runs {
+                if written.is_err() {
+                    break;
+                }
+                written = paste_run(model, sheet, run.origin, run.rows);
+            }
+            if written.is_ok() {
+                written = select(model, sheet, target);
+            }
+            let ended = if own_group {
+                model.end_edit_group().map_err(rejected)
+            } else {
+                if !was_paused {
+                    model.resume_evaluation();
+                    model.evaluate();
+                }
+                Ok(())
+            };
+            written.and(ended)
         })
     }
 
