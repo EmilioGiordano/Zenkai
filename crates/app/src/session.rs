@@ -95,6 +95,8 @@ pub enum Loaded {
     Restored(Session),
     // Moved aside so the next close does not overwrite it with a blank one.
     Unreadable,
+    // Could not be moved aside, so it stays and no save may replace it.
+    KeptInPlace,
 }
 
 impl Session {
@@ -641,6 +643,41 @@ mod tests {
                 .exists()
         );
         assert!(matches!(load(directory.path()), Loaded::Absent));
+    }
+
+    #[test]
+    fn a_second_corrupt_file_keeps_the_first_moved_aside() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = file_in(directory.path());
+        std::fs::write(&file, "{ first").unwrap();
+        load(directory.path());
+        std::fs::write(&file, "{ second").unwrap();
+        load(directory.path());
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("session.json.unreadable")).unwrap(),
+            "{ first"
+        );
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("session.json.1.unreadable")).unwrap(),
+            "{ second"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_file_that_cannot_be_moved_aside_is_never_overwritten_by_a_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = file_in(directory.path());
+        std::fs::write(&file, "{ damaged").unwrap();
+        for attempt in 0..zenkai_types::aside::ASIDE_ATTEMPTS {
+            let name = match attempt {
+                0 => "session.json.unreadable".to_string(),
+                _ => format!("session.json.{attempt}.unreadable"),
+            };
+            std::fs::write(directory.path().join(name), "earlier").unwrap();
+        }
+        assert!(matches!(load(directory.path()), Loaded::KeptInPlace));
+        assert!(save(directory.path(), &session()).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ damaged");
     }
 
     #[test]
