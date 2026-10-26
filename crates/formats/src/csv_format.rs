@@ -15,6 +15,14 @@ pub enum CsvError {
     TooManyCells,
     #[error("the CSV could not be read: {0}")]
     Malformed(String),
+    #[error("the CSV could not be written: {0}")]
+    Write(#[from] std::io::Error),
+}
+
+impl From<csv::Error> for CsvError {
+    fn from(error: csv::Error) -> CsvError {
+        CsvError::Write(error.into())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,40 +191,10 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
     })
 }
 
-// Cells that start like a formula are prefixed so another spreadsheet opening the
-// export shows the text instead of evaluating it (CSV formula injection).
-fn neutralize(text: &str) -> String {
-    match text.chars().next() {
-        Some('=' | '+' | '-' | '@' | '\t' | '\r') if text.parse::<f64>().is_err() => {
-            format!("'{text}")
-        }
-        _ => text.to_string(),
-    }
-}
-
-pub fn write_csv(rows: &[Vec<String>], delimiter: Delimiter) -> Result<Vec<u8>, CsvError> {
-    let mut out = b"\xEF\xBB\xBF".to_vec();
-    {
-        let mut writer = csv::WriterBuilder::new()
-            .delimiter(delimiter.byte())
-            .terminator(csv::Terminator::CRLF)
-            .flexible(true)
-            .from_writer(&mut out);
-        for row in rows {
-            writer
-                .write_record(row.iter().map(|cell| neutralize(cell)))
-                .map_err(|e| CsvError::Malformed(e.to_string()))?;
-        }
-        writer
-            .flush()
-            .map_err(|e| CsvError::Malformed(e.to_string()))?;
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::csv_write::write_csv;
 
     #[test]
     fn refuses_more_columns_than_a_sheet_holds() {
