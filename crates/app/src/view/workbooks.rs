@@ -12,6 +12,7 @@ use crate::agent_settings;
 use crate::document;
 use crate::documents::{Installed, Intent, Loaded, Provenance, Step};
 use crate::entry::{Entry, Link, LinkStatus};
+use crate::failure::open_failure;
 use crate::files::{self, FileLoad, LoadFailure};
 use crate::recovery;
 use crate::text_document::DocumentKind;
@@ -116,7 +117,7 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
             file_changed: changed_while_out_of_memory(link, path),
         },
         Err(LoadFailure::Missing) => LinkLoad::Missing,
-        Err(failure) => LinkLoad::Failed(failure_text(&failure)),
+        Err(failure) => LinkLoad::Failed(open_failure(path, &failure).text),
     }
 }
 
@@ -134,16 +135,6 @@ fn file_changed_since_rest(link: &Link) -> bool {
     link.path
         .as_deref()
         .is_some_and(|path| changed_while_out_of_memory(link, path))
-}
-
-pub(super) fn failure_text(failure: &LoadFailure) -> String {
-    match failure {
-        LoadFailure::Missing => t!("open.not_found").to_string(),
-        LoadFailure::Engine(error) => error.to_string(),
-        LoadFailure::Unreadable { reason, fallback } => {
-            t!("open.unreadable", reason = reason, fallback = fallback)
-        }
-    }
 }
 
 impl Workspace {
@@ -432,12 +423,7 @@ impl Workspace {
                             this.notify(Severity::Info, t!("notice.fast_reader_fallback"), cx);
                         }
                     }
-                    Err(LoadFailure::Missing) => this.notify(
-                        Severity::Error,
-                        t!("open.path_not_found", path = path.display()),
-                        cx,
-                    ),
-                    Err(failure) => this.notify(Severity::Error, failure_text(&failure), cx),
+                    Err(failure) => this.notify_failure(open_failure(&path, &failure), cx),
                 }
             });
             if let Err(error) = update {
