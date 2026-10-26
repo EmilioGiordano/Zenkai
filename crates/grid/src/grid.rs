@@ -484,7 +484,8 @@ impl Grid {
     pub fn select(&mut self, active: CellPos, corner: CellPos, cx: &mut Context<Self>) {
         self.tab_start = None;
         self.selection = Selection { active, corner };
-        self.scroll_into_view(corner, cx);
+        let (row, col) = reveal_axes(active, corner);
+        self.reveal(row, col, cx);
         cx.emit(GridEvent::SelectionChanged);
         cx.notify();
     }
@@ -654,34 +655,42 @@ impl Grid {
     // The new origin is found by the sizes of the lines up to the target, not by how many
     // lines are shown now: wide or tall lines near the target fit fewer than the current ones.
     fn scroll_into_view(&mut self, pos: CellPos, cx: &mut Context<Self>) {
+        self.reveal(Some(pos.row), Some(pos.col), cx);
+    }
+
+    fn reveal(&mut self, row: Option<RowIdx>, col: Option<ColIdx>, cx: &mut Context<Self>) {
         // Second pass: the row header width can change once the first scroll lands.
         for _ in 0..2 {
             let (width, height) = self.viewport_extent();
             let origin = self.scroll_origin();
             let mut top = origin.row;
             let mut left = origin.col;
-            if pos.row.get() >= self.frozen_rows {
-                if pos.row < top {
-                    top = pos.row;
+            if let Some(row) = row
+                && row.get() >= self.frozen_rows
+            {
+                if row < top {
+                    top = row;
                 } else if self
                     .fully_shown_rows()
                     .last()
-                    .is_none_or(|last| pos.row > *last)
+                    .is_none_or(|last| row > *last)
                 {
                     let floor = RowIdx::clamped(i64::from(self.frozen_rows));
-                    top = self.layout.row_ending_at(pos.row, height, floor);
+                    top = self.layout.row_ending_at(row, height, floor);
                 }
             }
-            if pos.col.get() >= self.frozen_cols {
-                if pos.col < left {
-                    left = pos.col;
+            if let Some(col) = col
+                && col.get() >= self.frozen_cols
+            {
+                if col < left {
+                    left = col;
                 } else if self
                     .fully_shown_cols()
                     .last()
-                    .is_none_or(|last| pos.col > *last)
+                    .is_none_or(|last| col > *last)
                 {
                     let floor = ColIdx::clamped(i64::from(self.frozen_cols));
-                    left = self.layout.col_ending_at(pos.col, width, floor);
+                    left = self.layout.col_ending_at(col, width, floor);
                 }
             }
             if (top, left) == (self.top, self.left) {
@@ -1817,11 +1826,27 @@ fn runs(indices: impl Iterator<Item = u32>) -> Vec<(u32, u32)> {
     runs
 }
 
+// A whole column spans every row and a whole row every column: such a selection is
+// revealed only along the other axis, so the view stays put as in Excel.
+fn reveal_axes(active: CellPos, corner: CellPos) -> (Option<RowIdx>, Option<ColIdx>) {
+    let spans = |a: u32, b: u32, last: u32| a.min(b) == 0 && a.max(b) == last;
+    let whole_column = spans(active.row.get(), corner.row.get(), RowIdx::LAST.get());
+    let whole_row = spans(
+        u32::from(active.col.get()),
+        u32::from(corner.col.get()),
+        u32::from(ColIdx::LAST.get()),
+    );
+    (
+        (!whole_column).then_some(corner.row),
+        (!whole_row).then_some(corner.col),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, cached_ranges, capped_frozen,
-        cycle_within, next_boundary, prev_boundary, shown_contains, typed_preview,
+        cycle_within, next_boundary, prev_boundary, reveal_axes, shown_contains, typed_preview,
     };
     use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
@@ -1837,6 +1862,38 @@ mod tests {
         assert!(!shown_contains(&rows, &cols, pos("A1")));
         assert!(!shown_contains(&rows, &cols, pos("AF541")));
         assert!(!shown_contains(&rows, &cols, pos("A501")));
+    }
+
+    #[test]
+    fn a_whole_column_is_revealed_horizontally_only() {
+        let (row, col) = reveal_axes(CellPos::new(RowIdx::default(), ColIdx::clamped(5)), {
+            CellPos::new(RowIdx::LAST, ColIdx::clamped(5))
+        });
+        assert_eq!(row, None);
+        assert_eq!(col, Some(ColIdx::clamped(5)));
+    }
+
+    #[test]
+    fn a_whole_row_is_revealed_vertically_only() {
+        let (row, col) = reveal_axes(
+            CellPos::new(RowIdx::clamped(7), ColIdx::default()),
+            CellPos::new(RowIdx::clamped(7), ColIdx::LAST),
+        );
+        assert_eq!(row, Some(RowIdx::clamped(7)));
+        assert_eq!(col, None);
+    }
+
+    #[test]
+    fn ordinary_selections_are_revealed_on_both_axes() {
+        let (row, col) = reveal_axes(pos("A1"), pos("C9"));
+        assert_eq!(row, Some(pos("C9").row));
+        assert_eq!(col, Some(pos("C9").col));
+    }
+
+    #[test]
+    fn select_all_is_revealed_on_neither_axis() {
+        let last = CellPos::new(RowIdx::LAST, ColIdx::LAST);
+        assert_eq!(reveal_axes(CellPos::default(), last), (None, None));
     }
 
     #[test]
