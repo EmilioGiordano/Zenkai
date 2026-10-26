@@ -1420,9 +1420,11 @@ impl Engine for Workbook {
         let Ok(ws) = self.model.get_model().workbook.worksheet(sheet.0) else {
             return SheetSizes::default();
         };
+        // Inserting columns keeps the ranges it pushes past the sheet, so undo restores them.
         let columns = ws
             .cols
             .iter()
+            .filter(|c| c.min <= i32::from(zenkai_types::MAX_COLS))
             .map(|c| ColumnSpan {
                 first: ColIdx::clamped(i64::from(c.min) - 1),
                 last: ColIdx::clamped(i64::from(c.max) - 1),
