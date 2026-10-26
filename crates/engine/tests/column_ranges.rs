@@ -125,3 +125,30 @@ fn inserting_columns_saves_ranges_inside_the_sheet_and_undo_restores_them() {
     book.redo().unwrap();
     assert_eq!(saved_columns(&book.to_xlsx().unwrap()), columns);
 }
+
+#[test]
+fn an_outlined_range_reaching_past_the_sheet_keeps_its_outline() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cols.xlsx");
+    with_columns(
+        &path,
+        r#"<col min="10" max="20000" width="30" customWidth="1" outlineLevel="2"/>"#,
+    );
+    for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
+        let book = open_xlsx_with(&path, reader).unwrap().workbook;
+        let saved = book.to_xlsx().unwrap();
+        let mut sheet = String::new();
+        zip::ZipArchive::new(Cursor::new(saved))
+            .unwrap()
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet)
+            .unwrap();
+        assert!(
+            sheet.contains(
+                r#"<col min="10" max="16384" width="30" customWidth="1" outlineLevel="2"/>"#
+            ),
+            "{reader:?} {sheet}"
+        );
+    }
+}
