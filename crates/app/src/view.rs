@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -174,6 +175,8 @@ pub struct Workspace {
     active_style: CellStyle,
     notices: Notices,
     notice_focus: FocusHandle,
+    notice_hovered: bool,
+    notice_focused: Cell<bool>,
     messages: Option<messages::MessagesPanel>,
     toast: Option<agent_access::Toast>,
     toast_generation: u64,
@@ -343,6 +346,8 @@ impl Workspace {
             active_style: CellStyle::default(),
             notices: Notices::default(),
             notice_focus: cx.focus_handle(),
+            notice_hovered: false,
+            notice_focused: Cell::new(false),
             messages: None,
             toast: None,
             toast_generation: 0,
@@ -1044,7 +1049,8 @@ impl Workspace {
         text: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        self.post(severity, text.into(), None, Lifetime::UntilReplaced);
+        let id = self.post(severity, text.into(), None, Lifetime::UntilReplaced);
+        self.expire_warning_later(severity, id, cx);
         cx.notify();
     }
 
@@ -1064,7 +1070,8 @@ impl Workspace {
         text: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        self.post(severity, text.into(), None, Lifetime::UntilOpen);
+        let id = self.post(severity, text.into(), None, Lifetime::UntilOpen);
+        self.expire_warning_later(severity, id, cx);
         cx.notify();
     }
 
@@ -1074,10 +1081,10 @@ impl Workspace {
         text: SharedString,
         detail: Option<SharedString>,
         lifetime: Lifetime,
-    ) {
+    ) -> u64 {
         let time = chrono::Local::now().format("%H:%M:%S").to_string();
         self.notices
-            .post(severity, text, detail, lifetime, time.into());
+            .post(severity, text, detail, lifetime, time.into())
     }
 
     fn on_grid_event(
@@ -4175,7 +4182,7 @@ impl Render for Workspace {
             .children(self.render_search(cx))
             .children(self.render_busy(busy_label, cx))
             .children(self.render_toast(cx))
-            .children(self.render_notice_card(cx))
+            .children(self.render_notice_card(window, cx))
             .children(self.render_messages(cx))
             .children(self.render_csv_preview(cx))
             .children(self.render_format_dialog(cx))

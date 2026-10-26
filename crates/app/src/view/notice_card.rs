@@ -6,7 +6,7 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::Workspace;
-use super::notices::{Notice, Severity};
+use super::notices::{Expiry, Notice, Severity, WARNING_LIFETIME};
 use crate::actions::{CopyNotice, DismissNotice, ShowMessages};
 use crate::interface_scale::rem_px;
 use crate::keymap;
@@ -43,6 +43,35 @@ pub(super) fn severity_icon(severity: Severity, theme: &Theme) -> (IconName, Hsl
 }
 
 impl Workspace {
+    pub(super) fn expire_warning_later(
+        &mut self,
+        severity: Severity,
+        id: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if severity != Severity::Warning {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(WARNING_LIFETIME).await;
+                let expiry = this.update(cx, |this, cx| {
+                    let held = this.notice_hovered || this.notice_focused.get();
+                    let expiry = this.notices.expire_warning(id, held);
+                    if expiry == Expiry::Closed {
+                        this.notice_hovered = false;
+                        cx.notify();
+                    }
+                    expiry
+                });
+                if !matches!(expiry, Ok(Expiry::Held)) {
+                    return;
+                }
+            }
+        })
+        .detach();
+    }
+
     pub(super) fn dismiss_notice(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.notices.card().is_none() || self.messages.is_some() {
             cx.propagate();
@@ -50,6 +79,7 @@ impl Workspace {
         }
         let focused = self.notice_focus.contains_focused(window, cx);
         self.notices.dismiss_card();
+        self.notice_hovered = false;
         if focused {
             window.focus(&self.grid.focus_handle(cx), cx);
         }
@@ -72,11 +102,17 @@ impl Workspace {
         }
     }
 
-    pub(super) fn render_notice_card(&self, cx: &Context<Self>) -> Option<impl IntoElement> {
+    pub(super) fn render_notice_card(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> Option<impl IntoElement> {
         let notice = self.notices.card()?;
         if self.messages.is_some() {
             return None;
         }
+        self.notice_focused
+            .set(self.notice_focus.contains_focused(window, cx));
         let theme = cx.theme();
         let (icon, color) = severity_icon(notice.severity, theme);
         let title = severity_title(notice.severity);
@@ -94,6 +130,9 @@ impl Workspace {
                         .id("notice-card")
                         .key_context("NoticeCard")
                         .track_focus(&self.notice_focus)
+                        .on_hover(cx.listener(|this, hovered: &bool, _, _| {
+                            this.notice_hovered = *hovered;
+                        }))
                         .role(Role::Alert)
                         .aria_label(format!("{title}: {}", notice.text))
                         .w_full()
