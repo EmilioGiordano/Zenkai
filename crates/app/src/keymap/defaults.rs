@@ -54,6 +54,8 @@ pub fn defaults() -> Vec<Binding> {
         bind("ctrl-0", ResetDocumentZoom, Some("MarkdownDocument")),
         bind("ctrl-0", ResetDocumentZoom, Some("PdfDocument")),
         bind("alt-o", TogglePdfOutline, Some("PdfDocument")),
+        bind("ctrl-alt-up", WidenPdfPages, Some("PdfDocument")),
+        bind("ctrl-alt-down", NarrowPdfPages, Some("PdfDocument")),
         bind("escape", ClosePdfFind, Some("PdfFindBar")),
         bind("down", PdfOutlineNext, Some("PdfOutline")),
         bind("up", PdfOutlinePrevious, Some("PdfOutline")),

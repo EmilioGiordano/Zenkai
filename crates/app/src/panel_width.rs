@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::pdf::side_width;
+
 pub const GRID_MINIMUM: f32 = 480.0;
 pub const KEY_STEP: f32 = 16.0;
 
@@ -88,6 +90,7 @@ impl PanelWidth {
 pub struct PanelWidths {
     sidebar: PanelWidth,
     chat: PanelWidth,
+    pdf: PanelWidth,
 }
 
 impl Default for PanelWidths {
@@ -95,6 +98,7 @@ impl Default for PanelWidths {
         PanelWidths {
             sidebar: PanelWidth(Panel::Sidebar.default_width()),
             chat: PanelWidth(Panel::Chat.default_width()),
+            pdf: PanelWidth(side_width::DEFAULT),
         }
     }
 }
@@ -111,6 +115,7 @@ impl PanelWidths {
         PanelWidths {
             sidebar: PanelWidth::stored(Panel::Sidebar, self.sidebar.0),
             chat: PanelWidth::stored(Panel::Chat, self.chat.0),
+            pdf: PanelWidth(side_width::stored(self.pdf.0)),
         }
     }
 
@@ -141,7 +146,11 @@ impl PanelWidths {
         let chat = PanelWidth::within(Panel::Chat, self.chat.0, window, sidebar_stored);
         let chat_taken = if shown.chat { chat.0 } else { 0.0 };
         let sidebar = PanelWidth::within(Panel::Sidebar, self.sidebar.0, window, chat_taken);
-        PanelWidths { sidebar, chat }
+        PanelWidths {
+            sidebar,
+            chat,
+            pdf: self.pdf,
+        }
     }
 
     pub fn resized(self, panel: Panel, requested: f32, window: f32, shown: Shown) -> PanelWidths {
@@ -166,6 +175,17 @@ impl PanelWidths {
 
     pub fn restored(self, panel: Panel, window: f32, shown: Shown) -> PanelWidths {
         self.resized(panel, panel.default_width(), window, shown)
+    }
+
+    pub fn pdf_width(self) -> f32 {
+        self.pdf.0
+    }
+
+    pub fn with_pdf_width(self, width: f32) -> PanelWidths {
+        PanelWidths {
+            pdf: PanelWidth(side_width::stored(width)),
+            ..self
+        }
     }
 
     pub fn width_of(self, panel: Panel) -> f32 {
@@ -279,6 +299,7 @@ mod tests {
         let unusable = PanelWidths {
             sidebar: PanelWidth(f32::NAN),
             chat: PanelWidth(f32::INFINITY),
+            pdf: PanelWidth(-1.0),
         };
         assert_eq!(unusable.validated(), PanelWidths::default());
     }
@@ -296,5 +317,21 @@ mod tests {
         let validated = from_file.validated();
         assert_eq!(validated.width_of(Panel::Sidebar), 300.0);
         assert_eq!(validated.width_of(Panel::Chat), 464.0);
+    }
+
+    #[test]
+    fn resizing_the_pdf_panel_leaves_the_other_widths_alone() {
+        let widths = PanelWidths::default().with_pdf_width(300.0);
+        assert_eq!(widths.width_of(Panel::Sidebar), 248.0);
+        assert_eq!(widths.width_of(Panel::Chat), 464.0);
+        assert_eq!(widths.fitted(BIG, BOTH).pdf_width(), 300.0);
+    }
+
+    #[test]
+    fn a_stored_pdf_width_out_of_range_falls_back_and_an_old_file_gets_the_default() {
+        let bad: PanelWidths = serde_json::from_str(r#"{"pdf": 9000.0}"#).unwrap();
+        assert_eq!(bad.validated().pdf_width(), 200.0);
+        let old: PanelWidths = serde_json::from_str(r#"{"sidebar": 300.0}"#).unwrap();
+        assert_eq!(old.validated().pdf_width(), 200.0);
     }
 }

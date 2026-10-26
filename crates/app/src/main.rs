@@ -39,6 +39,7 @@ mod markdown_pane;
 mod memory;
 mod open_loads;
 mod palette;
+mod panel_edge;
 mod panel_width;
 mod pdf;
 mod pdf_places;

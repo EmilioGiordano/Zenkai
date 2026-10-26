@@ -174,6 +174,8 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.pdf_fit_width"), PdfFitWidth),
                 item(t!("palette.pdf_actual_size"), PdfActualSize),
                 item(t!("palette.pdf_toggle_outline"), TogglePdfOutline),
+                item(t!("palette.pdf_widen_pages"), WidenPdfPages),
+                item(t!("palette.pdf_narrow_pages"), NarrowPdfPages),
                 item(t!("palette.interface_larger"), InterfaceLarger),
                 item(t!("palette.interface_smaller"), InterfaceSmaller),
                 item(t!("palette.interface_reset"), InterfaceReset),

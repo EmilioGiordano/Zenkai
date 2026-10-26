@@ -7,22 +7,36 @@ use crate::pdf::layout::{Layout, PageIdx, render_size, scale_for};
 use zenkai_pdf_host::wire::Job;
 
 impl PdfView {
-    // Rebuilds the page positions for the zoom and sizes now known, keeping the page that is
-    // on screen (or the one asked for) where it was.
+    // Rebuilds the page positions for the zoom and sizes now known, keeping the place that is
+    // on screen (or the page asked for) where it was.
     pub(super) fn relayout(&mut self) {
         let viewport = self.viewport();
         if self.page_count == 0 || viewport.width <= 0.0 || viewport.height <= 0.0 {
             return;
         }
-        let anchor = self
-            .wanted_page
-            .take()
-            .unwrap_or_else(|| self.current_page());
+        self.laid_out_for = Some(viewport);
+        let wanted = self.wanted_page.take();
+        let anchor = wanted.unwrap_or_else(|| self.current_page());
         let scale = scale_for(self.zoom, self.size_of(anchor), viewport);
-        self.layout = Layout::new(&self.sizes, self.page_count, scale);
-        self.scroll_top = self.layout.scroll_to_page(anchor, viewport.height);
+        let previous = std::mem::replace(
+            &mut self.layout,
+            Layout::new(&self.sizes, self.page_count, scale),
+        );
+        self.scroll_top = match wanted {
+            Some(page) => self.layout.scroll_to_page(page, viewport.height),
+            None => self.layout.scroll_after_rescale(&previous, self.scroll_top),
+        };
         self.clamp_scroll();
         self.drop_stale_widths();
+    }
+
+    // The layout follows the reader's width after a side resize whatever order the size
+    // reports and the drag end arrive in.
+    pub(super) fn refit_if_resized(&mut self) {
+        if self.is_ready() && self.side_drag.is_none() && self.laid_out_for != Some(self.viewport())
+        {
+            self.relayout();
+        }
     }
 
     pub(super) fn clamp_scroll(&mut self) {

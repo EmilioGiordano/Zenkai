@@ -13,22 +13,30 @@ use super::{PdfView, SideList};
 use crate::actions::{PdfOutlineClose, PdfOutlineNext, PdfOutlineOpen, PdfOutlinePrevious};
 use crate::pdf::cache::BitmapKey;
 use crate::pdf::layout::{PageIdx, render_size};
+use crate::pdf::thumbnail_box;
 use zenkai_pdf_host::wire::Job;
 
-pub(super) const SIDE_WIDTH: f32 = 120.0;
-const THUMBNAIL_WIDTH: f32 = 84.0;
-const THUMBNAIL_SLOT: f32 = 140.0;
+const THUMBNAIL_RADIUS: f32 = 6.0;
+const RING: f32 = 3.0;
+const PILL_OFFSET: f32 = 6.0;
 const OUTLINE_ROW: f32 = 28.0;
 const OUTLINE_INDENT: f32 = 10.0;
 
+const THUMBNAIL_KEPT_MARGIN: usize = 4;
+
+pub(super) fn thumbnail_kept(visible: &Range<usize>, page: PageIdx) -> bool {
+    page.0 + THUMBNAIL_KEPT_MARGIN >= visible.start && page.0 < visible.end + THUMBNAIL_KEPT_MARGIN
+}
+
 impl PdfView {
     fn thumbnail_pixels(&self, page: PageIdx) -> (u32, u32) {
-        let size = self.size_of(page);
-        let height = THUMBNAIL_WIDTH * size.height / size.width.max(1.0);
-        render_size(THUMBNAIL_WIDTH, height, self.device_scale)
+        let side = self.settled_side.unwrap_or_else(|| self.fitted_side());
+        let fit = thumbnail_box::fit(side, self.size_of(page));
+        render_size(fit.width, fit.height, self.device_scale)
     }
 
     fn request_thumbnails(&mut self, range: Range<usize>) {
+        self.thumbnail_visible = range.clone();
         for index in range {
             let page = PageIdx(index);
             let (pixel_width, pixel_height) = self.thumbnail_pixels(page);
@@ -101,12 +109,18 @@ impl PdfView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let side_width = self.fitted_side();
+        self.drawn_side = side_width;
+        if self.settled_side.is_none() && self.bounds.size.width > px(0.0) {
+            self.settled_side = Some(side_width);
+        }
         let border = cx.theme().border;
         let background = cx.theme().sidebar;
         let showing_outline = self.side == SideList::Outline;
         let has_outline = !self.outline.is_empty();
         v_flex()
-            .w(px(SIDE_WIDTH))
+            .relative()
+            .w(px(side_width))
             .flex_none()
             .h_full()
             .border_r_1()
@@ -132,65 +146,113 @@ impl PdfView {
             .child(if showing_outline && has_outline {
                 self.render_outline(window, cx).into_any_element()
             } else {
-                self.render_thumbnails(cx).into_any_element()
+                self.render_thumbnails(side_width, cx).into_any_element()
             })
+            .child(self.render_side_edge(window, cx))
     }
 
-    fn render_thumbnails(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_thumbnails(&mut self, side_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let row = thumbnail_box::row_height(side_width, self.thumbnail_ratio);
         uniform_list(
             "pdf-thumbnails",
             self.page_count,
-            cx.processor(|this: &mut PdfView, range: Range<usize>, _, cx| {
+            cx.processor(move |this: &mut PdfView, range: Range<usize>, _, cx| {
                 this.request_thumbnails(range.clone());
                 let current = this.current_page();
-                let (ring, muted) = {
+                let (primary, primary_text, border, hover_ring) = {
                     let theme = cx.theme();
-                    (theme.primary, theme.muted_foreground)
+                    (
+                        theme.primary,
+                        theme.primary_foreground,
+                        theme.border,
+                        theme.primary.opacity(0.35),
+                    )
                 };
                 range
                     .map(|index| {
                         let page = PageIdx(index);
                         let (pixel_width, _) = this.thumbnail_pixels(page);
                         let image = this.thumbnails.get(BitmapKey { page, pixel_width });
-                        let size = this.size_of(page);
-                        let height = THUMBNAIL_WIDTH * size.height / size.width.max(1.0);
+                        let fit = thumbnail_box::fit(side_width, this.size_of(page));
                         let selected = page == current;
-                        v_flex()
+                        let group = SharedString::from(format!("pdf-thumbnail-{index}"));
+                        h_flex()
                             .id(("pdf-thumbnail", index))
                             .role(Role::Button)
                             .aria_label(t!("pdf.page_aria", page = index + 1))
-                            .h(px(THUMBNAIL_SLOT))
+                            .group(group.clone())
+                            .h(px(row))
+                            .w_full()
                             .items_center()
                             .justify_center()
-                            .gap_1()
                             .cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.go_to_page(PageIdx(index), cx)
                             }))
                             .child(
                                 div()
-                                    .border_2()
-                                    .rounded_sm()
-                                    .border_color(if selected {
-                                        ring
-                                    } else {
-                                        gpui_kit::transparent_black()
-                                    })
+                                    .relative()
+                                    .w(px(fit.width))
+                                    .h(px(fit.height))
+                                    .flex_none()
                                     .child(
                                         div()
-                                            .w(px(THUMBNAIL_WIDTH))
-                                            .h(px(height.min(THUMBNAIL_SLOT - 28.0)))
+                                            .size_full()
+                                            .rounded(px(THUMBNAIL_RADIUS))
+                                            .overflow_hidden()
+                                            .border_1()
+                                            .border_color(border)
+                                            .shadow_sm()
                                             .bg(white())
                                             .children(image.map(|image| {
                                                 img(ImageSource::Render(image)).size_full()
                                             })),
+                                    )
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .top(px(-RING))
+                                            .left(px(-RING))
+                                            .w(px(fit.width + 2.0 * RING))
+                                            .h(px(fit.height + 2.0 * RING))
+                                            .rounded(px(THUMBNAIL_RADIUS + RING))
+                                            .border(px(RING))
+                                            .border_color(if selected {
+                                                primary
+                                            } else {
+                                                gpui_kit::transparent_black()
+                                            })
+                                            .when(!selected, |ring| {
+                                                ring.group_hover(group, move |ring| {
+                                                    ring.border_color(hover_ring)
+                                                })
+                                            }),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .absolute()
+                                            .bottom(px(PILL_OFFSET))
+                                            .left_0()
+                                            .right_0()
+                                            .justify_center()
+                                            .child(
+                                                div()
+                                                    .px(px(8.0))
+                                                    .rounded_full()
+                                                    .text_xs()
+                                                    .bg(if selected {
+                                                        primary
+                                                    } else {
+                                                        hsla(0.0, 0.0, 0.0, 0.65)
+                                                    })
+                                                    .text_color(if selected {
+                                                        primary_text
+                                                    } else {
+                                                        white()
+                                                    })
+                                                    .child(format!("{}", index + 1)),
+                                            ),
                                     ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child(format!("{}", index + 1)),
                             )
                     })
                     .collect::<Vec<_>>()
@@ -265,5 +327,21 @@ impl PdfView {
             .flex_1()
             .min_h_0()
             .child(list)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PageIdx, thumbnail_kept};
+
+    #[test]
+    fn only_thumbnails_near_the_visible_rows_are_kept() {
+        let visible = 20..30;
+        assert!(thumbnail_kept(&visible, PageIdx(20)));
+        assert!(thumbnail_kept(&visible, PageIdx(16)));
+        assert!(thumbnail_kept(&visible, PageIdx(33)));
+        assert!(!thumbnail_kept(&visible, PageIdx(15)));
+        assert!(!thumbnail_kept(&visible, PageIdx(34)));
+        assert!(!thumbnail_kept(&(0..0), PageIdx(10)));
     }
 }

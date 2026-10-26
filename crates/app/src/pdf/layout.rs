@@ -205,6 +205,18 @@ impl Layout {
         best.0
     }
 
+    pub fn scroll_after_rescale(&self, previous: &Layout, scroll_top: f32) -> f32 {
+        if previous.page_count() == 0 {
+            return 0.0;
+        }
+        if previous.scale.is_nan() || previous.scale <= 0.0 {
+            return scroll_top;
+        }
+        let page = previous.page_at(scroll_top);
+        let into_page = (scroll_top - previous.top_of(page)) * self.scale / previous.scale;
+        self.top_of(page) + into_page
+    }
+
     pub fn scroll_to_page(&self, page: PageIdx, viewport_height: f32) -> f32 {
         let top = (self.top_of(page) - CANVAS_PADDING).max(0.0);
         top.min(self.max_scroll_top(viewport_height))
@@ -315,6 +327,57 @@ mod tests {
         assert_eq!(layout.current_page(0.0, 600.0), PageIdx(0));
         assert_eq!(layout.current_page(second - 100.0, 600.0), PageIdx(1));
         assert_eq!(layout.current_page(second + 300.0, 600.0), PageIdx(1));
+    }
+
+    #[test]
+    fn a_rescale_keeps_the_reader_at_the_same_place_in_the_same_page() {
+        let sizes = [PageSize {
+            width: 600.0,
+            height: 800.0,
+        }; 5];
+        let before = Layout::new(&sizes, 5, 1.0);
+        let scroll = before.top_of(PageIdx(2)) + 300.0;
+        let after = Layout::new(&sizes, 5, 0.5);
+        let moved = after.scroll_after_rescale(&before, scroll);
+        assert_eq!(moved, after.top_of(PageIdx(2)) + 150.0);
+        assert_eq!(after.page_at(moved), PageIdx(2));
+        let same = Layout::new(&sizes, 5, 1.0);
+        assert_eq!(same.scroll_after_rescale(&before, scroll), scroll);
+    }
+
+    #[test]
+    fn fit_width_refits_to_a_narrower_reader_without_losing_the_place() {
+        let sizes = [PageSize::LETTER; 6];
+        let wide = Viewport {
+            width: 1000.0,
+            height: 700.0,
+        };
+        let narrow = Viewport {
+            width: 500.0,
+            height: 700.0,
+        };
+        let before = Layout::new(
+            &sizes,
+            6,
+            scale_for(ZoomMode::FitWidth, PageSize::LETTER, wide),
+        );
+        let scale = scale_for(ZoomMode::FitWidth, PageSize::LETTER, narrow);
+        let after = Layout::new(&sizes, 6, scale);
+        let scroll = before.top_of(PageIdx(3)) + 100.0;
+        let moved = after.scroll_after_rescale(&before, scroll);
+        assert!(after.width_of(PageIdx(0)) + 2.0 * CANVAS_PADDING <= narrow.width + 0.01);
+        assert_eq!(after.max_scroll_left(narrow.width), 0.0);
+        assert_eq!(after.page_at(moved), PageIdx(3));
+    }
+
+    #[test]
+    fn a_rescale_from_an_unusable_scale_leaves_the_scroll_alone() {
+        let sizes = [PageSize::LETTER; 3];
+        let after = Layout::new(&sizes, 3, 1.0);
+        for scale in [0.0, f32::NAN, -1.0] {
+            let before = Layout::new(&sizes, 3, scale);
+            assert_eq!(after.scroll_after_rescale(&before, 120.0), 120.0);
+        }
     }
 
     #[test]

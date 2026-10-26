@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 
 use gpui_kit::*;
 
+use super::side::thumbnail_kept;
 use super::{NEIGHBOURS, PdfView, Phase};
 use crate::pdf::bitmap::to_image;
 use crate::pdf::cache::BitmapKey;
@@ -16,7 +17,7 @@ impl PdfView {
             Reply::Opened(Ok(opened)) => {
                 self.phase = Phase::Ready;
                 self.page_count = opened.page_count;
-                self.sizes = vec![opened.first_page];
+                self.set_sizes(vec![opened.first_page]);
                 self.outline = opened.outline;
                 self.password_input
                     .update(cx, |input, cx| input.set_value("", window, cx));
@@ -42,7 +43,7 @@ impl PdfView {
             Reply::Opened(Err(error)) => self.phase = Phase::Failed(error),
             Reply::Stopped => self.phase = Phase::Failed(OpenError::HostStopped),
             Reply::Sizes(sizes) => {
-                self.sizes = sizes;
+                self.set_sizes(sizes);
                 self.relayout();
                 self.request_visible();
             }
@@ -105,8 +106,13 @@ impl PdfView {
             self.layout
                 .visible(self.scroll_top, self.bounds.size.height.into(), NEIGHBOURS);
         let bytes = image.bytes;
+        let visible = &self.thumbnail_visible;
         let dropped = cache.insert(key, image.image, bytes, |page| {
-            thumbnail || viewport.contains(&page.0)
+            if thumbnail {
+                thumbnail_kept(visible, page)
+            } else {
+                viewport.contains(&page.0)
+            }
         });
         for old in dropped {
             if let Err(error) = window.drop_image(old) {

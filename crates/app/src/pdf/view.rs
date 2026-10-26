@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -14,6 +15,7 @@ use super::cache::{BITMAP_CAP_BYTES, BitmapCache, BitmapKey};
 use super::find::FindMatch;
 use super::layout::{Layout, PageIdx, PageSize, PdfPosition, Viewport, ZoomMode};
 use super::selection::Selection;
+use super::thumbnail_box;
 use zenkai_pdf_host::wire::{
     DocId, Job, LinkTarget, MAX_MESSAGE_CHARS, OpenError, OutlineItem, PageContent, Reply, Request,
 };
@@ -26,6 +28,7 @@ mod replies;
 mod requests;
 mod screens;
 mod side;
+mod side_edge;
 mod toolbar;
 
 pub const CONTEXT: &str = "PdfDocument";
@@ -37,6 +40,7 @@ const WHEEL_LINE: f32 = 20.0;
 pub enum PdfEvent {
     Moved(PdfPosition),
     OpenWeb(String),
+    SideResized(f32),
 }
 
 #[derive(Clone)]
@@ -64,6 +68,7 @@ pub struct PdfView {
     wanted_page: Option<PageIdx>,
     page_count: usize,
     sizes: Vec<PageSize>,
+    thumbnail_ratio: f32,
     outline: Vec<OutlineItem>,
     layout: Layout,
     bounds: Bounds<Pixels>,
@@ -87,6 +92,13 @@ pub struct PdfView {
     page_input: Entity<InputState>,
     password_input: Entity<InputState>,
     side: SideList,
+    stored_side: f32,
+    thumbnail_visible: Range<usize>,
+    drawn_side: f32,
+    settled_side: Option<f32>,
+    laid_out_for: Option<Viewport>,
+    side_drag: Option<side_edge::SideDrag>,
+    side_edge_focus: FocusHandle,
     outline_focus: FocusHandle,
     outline_cursor: usize,
     outline_scroll: UniformListScrollHandle,
@@ -103,6 +115,7 @@ impl PdfView {
         doc: DocId,
         path: PathBuf,
         position: PdfPosition,
+        side_width: f32,
         client: PdfClient,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -144,6 +157,7 @@ impl PdfView {
             wanted_page: Some(PageIdx(position.page as usize)),
             page_count: 0,
             sizes: Vec::new(),
+            thumbnail_ratio: thumbnail_box::tallest_ratio(&[]),
             outline: Vec::new(),
             layout: Layout::new(&[], 0, 1.0),
             bounds: Bounds::default(),
@@ -167,6 +181,13 @@ impl PdfView {
             page_input,
             password_input,
             side: SideList::Thumbnails,
+            stored_side: side_width,
+            thumbnail_visible: 0..0,
+            drawn_side: 0.0,
+            settled_side: None,
+            laid_out_for: None,
+            side_drag: None,
+            side_edge_focus: cx.focus_handle(),
             outline_focus: cx.focus_handle(),
             outline_cursor: 0,
             outline_scroll: UniformListScrollHandle::new(),
@@ -245,6 +266,11 @@ impl PdfView {
         }
     }
 
+    fn set_sizes(&mut self, sizes: Vec<PageSize>) {
+        self.thumbnail_ratio = thumbnail_box::tallest_ratio(&sizes);
+        self.sizes = sizes;
+    }
+
     fn size_of(&self, page: PageIdx) -> PageSize {
         self.sizes
             .get(page.0)
@@ -280,7 +306,9 @@ impl PdfView {
         }
         let resized = self.bounds.size != bounds.size;
         self.bounds = bounds;
-        if resized && self.is_ready() {
+        if resized && self.is_ready() && self.side_drag.is_some() {
+            cx.notify();
+        } else if resized && self.is_ready() {
             self.relayout();
             self.request_visible();
             cx.notify();
