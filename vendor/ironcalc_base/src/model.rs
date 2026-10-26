@@ -3189,8 +3189,19 @@ impl<'a> Model<'a> {
             for column in range.column..range.column + range.width {
                 let structure = ws.get_cell_structure(row, column)?;
                 match structure {
-                    CellStructure::DynamicFormula { range }
-                    | CellStructure::ArrayFormula { range, .. } => {
+                    CellStructure::DynamicFormula { range } => {
+                        let (width, height) = range;
+                        for r in row..row + height {
+                            for c in column..column + width {
+                                if r == row && c == column {
+                                    let _ = ws.cell_clear_contents(r, c);
+                                } else {
+                                    let _ = ws.cell_clear_spill(r, c);
+                                }
+                            }
+                        }
+                    }
+                    CellStructure::ArrayFormula { range, .. } => {
                         let (width, height) = range;
                         for r in row..row + height {
                             for c in column..column + width {
