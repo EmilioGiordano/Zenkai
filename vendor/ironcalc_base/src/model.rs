@@ -2271,7 +2271,11 @@ impl<'a> Model<'a> {
                 for r in row..row + height {
                     for c in column..column + width {
                         // We ignore errors here
-                        let _ = ws.cell_clear_contents(r, c);
+                        if r == row && c == column {
+                            let _ = ws.cell_clear_contents(r, c);
+                        } else {
+                            let _ = ws.cell_clear_spill(r, c);
+                        }
                     }
                 }
             }
