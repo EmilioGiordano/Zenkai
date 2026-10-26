@@ -715,14 +715,20 @@ fn read_column_outline(sheet: Node, columns: &mut Indexed) {
     for col in list.children().filter(Node::is_element) {
         let bound = |name: &str| {
             col.attribute(name)
-                .and_then(|raw| valid(Value::Int(1, MAX_COLUMN), raw))
-                .and_then(|n| n.parse::<u32>().ok())
+                .and_then(|raw| raw.parse::<i32>().ok())
+                .map(i64::from)
         };
         let (Some(min), Some(max)) = (bound("min"), bound("max")) else {
             continue;
         };
+        // IronCalc cuts each range to the sheet the same way.
+        let first = u32::try_from(min.max(1));
+        let last = u32::try_from(max.min(i64::from(MAX_COLUMN)));
+        let (Ok(first), Ok(last)) = (first, last) else {
+            continue;
+        };
         let outline = outline_of(col.attribute("outlineLevel"), col.attribute("collapsed"));
-        for index in min..=max {
+        for index in first..=last {
             columns.add_outline(index, outline);
         }
     }
