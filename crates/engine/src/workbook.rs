@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use ironcalc::base::expressions::types::{Area, CellReferenceIndex};
 use ironcalc::base::types::{
-    Cell, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
+    Cell, CellType, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
 };
 use ironcalc::base::{BorderArea, ClipboardData, Model, Recalculation, UserModel};
 use ironcalc::import::load_from_xlsx_bytes;
@@ -873,12 +873,15 @@ impl Engine for Workbook {
                 };
             }
         };
+        let stored_type = model
+            .workbook
+            .worksheet(sheet.0)
+            .map(|worksheet| worksheet.cell(row, col).map(Cell::get_type));
+        let is_error = matches!(stored_type, Ok(Some(CellType::ErrorValue)));
         let (kind, number) = match model.get_cell_value_by_index(sheet.0, row, col) {
             Ok(ironcalc::base::cell::CellValue::Number(n)) => (ValueKind::Number, Some(n)),
             Ok(ironcalc::base::cell::CellValue::Boolean(_)) => (ValueKind::Bool, None),
-            Ok(ironcalc::base::cell::CellValue::String(s)) if s.starts_with('#') => {
-                (ValueKind::Error, None)
-            }
+            Ok(ironcalc::base::cell::CellValue::String(_)) if is_error => (ValueKind::Error, None),
             Ok(ironcalc::base::cell::CellValue::String(_)) => (ValueKind::Text, None),
             _ => (ValueKind::Empty, None),
         };
