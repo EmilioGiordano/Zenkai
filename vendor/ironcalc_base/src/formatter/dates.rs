@@ -3,6 +3,7 @@ use chrono::Days;
 use chrono::Duration;
 use chrono::Months;
 use chrono::NaiveDate;
+use chrono::Weekday;
 
 use crate::constants::EXCEL_DATE_BASE;
 use crate::constants::MAXIMUM_DATE_SERIAL_NUMBER;
@@ -63,6 +64,16 @@ pub(crate) fn excel_serial_to_ymd(serial: i64) -> Option<(i32, u32, u32)> {
         from_excel_date(serial).ok()?
     };
     Some((date.year(), date.month(), date.day()))
+}
+
+// Excel names the weekday by the serial alone, so it calls 1900-01-01 (serial 1) a Sunday:
+// the fictitious 29 February 1900 shifts every earlier weekday by one.
+pub(crate) fn excel_serial_weekday(serial: i64) -> Option<Weekday> {
+    if !(0..=MAXIMUM_DATE_SERIAL_NUMBER as i64).contains(&serial) {
+        return None;
+    }
+    let base = NaiveDate::from_ymd_opt(1899, 12, 30)?;
+    Some((base + Duration::days(serial)).weekday())
 }
 
 pub fn date_to_serial_number(day: u32, month: u32, year: i32) -> Result<i32, String> {

@@ -1,9 +1,8 @@
-use chrono::Datelike;
 
 use crate::{locale::Locale, number_format::to_precision};
 
 use super::{
-    dates::{date_to_serial_number, from_excel_date},
+    dates::{date_to_serial_number, excel_serial_to_ymd, excel_serial_weekday},
     parser::{ParsePart, Parser, TextToken},
 };
 
@@ -171,7 +170,9 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
             let hours = (time_fract * 24.0).floor();
             let minutes = ((time_fract * 24.0 - hours) * 60.0).floor();
             let seconds = ((((time_fract * 24.0 - hours) * 60.0) - minutes) * 60.0).round();
-            let date = from_excel_date(value as i64).ok();
+            let serial = value.floor() as i64;
+            let date = excel_serial_to_ymd(serial);
+            let weekday = excel_serial_weekday(serial);
             for token in tokens {
                 match token {
                     TextToken::Literal(c) => {
@@ -196,8 +197,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                     TextToken::Digit(_) => {}
                     TextToken::Period => {}
                     TextToken::Day => match date {
-                        Some(date) => {
-                            let day = date.day() as usize;
+                        Some((_, _, day)) => {
                             text = format!("{text}{day}");
                         }
                         None => {
@@ -219,12 +219,12 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                                 }
                             }
                         };
-                        let day = date.day() as usize;
+                        let (_, _, day) = date;
                         text = format!("{text}{day:02}");
                     }
                     TextToken::DayNameShort => {
-                        let date = match date {
-                            Some(d) => d,
+                        let weekday = match weekday {
+                            Some(w) => w,
                             None => {
                                 return Formatted {
                                     text: "#VALUE!".to_owned(),
@@ -233,15 +233,15 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                                 }
                             }
                         };
-                        let mut day = date.weekday().number_from_monday() as usize;
+                        let mut day = weekday.number_from_monday() as usize;
                         if day == 7 {
                             day = 0;
                         }
                         text = format!("{}{}", text, locale.dates.day_names_short[day]);
                     }
                     TextToken::DayName => {
-                        let date = match date {
-                            Some(d) => d,
+                        let weekday = match weekday {
+                            Some(w) => w,
                             None => {
                                 return Formatted {
                                     text: "#VALUE!".to_owned(),
@@ -250,7 +250,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                                 }
                             }
                         };
-                        let mut day = date.weekday().number_from_monday() as usize;
+                        let mut day = weekday.number_from_monday() as usize;
                         if day == 7 {
                             day = 0;
                         }
@@ -267,7 +267,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                                 }
                             }
                         };
-                        let month = date.month() as usize;
+                        let month = date.1 as usize;
                         text = format!("{text}{month}");
                     }
                     TextToken::MonthPadded => {
@@ -281,7 +281,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                                 }
                             }
                         };
-                        let month = date.month() as usize;
+                        let month = date.1 as usize;
                         text = format!("{text}{month:02}");
                     }
                     TextToken::MonthNameShort => {
@@ -295,7 +295,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                                 }
                             }
                         };
-                        let month = date.month() as usize;
+                        let month = date.1 as usize;
                         text = format!("{}{}", text, locale.dates.months_short[month - 1]);
                     }
                     TextToken::MonthName => {
@@ -309,7 +309,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                                 }
                             }
                         };
-                        let month = date.month() as usize;
+                        let month = date.1 as usize;
                         text = format!("{}{}", text, locale.dates.months[month - 1]);
                     }
                     TextToken::MonthLetter => {
@@ -323,7 +323,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                                 }
                             }
                         };
-                        let month = date.month() as usize;
+                        let month = date.1 as usize;
                         let months_letter = &locale.dates.months_letter[month - 1];
                         text = format!("{text}{months_letter}");
                     }
@@ -338,7 +338,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                                 }
                             }
                         };
-                        text = format!("{}{}", text, date.format("%y"));
+                        text = format!("{text}{:02}", date.0 % 100);
                     }
                     TextToken::Year => {
                         let date = match date {
@@ -351,7 +351,7 @@ pub fn format_number(value_original: f64, format: &str, locale: &Locale) -> Form
                                 }
                             }
                         };
-                        text = format!("{}{}", text, date.year());
+                        text = format!("{text}{}", date.0);
                     }
                     TextToken::Hour => {
                         let mut hour = hours as i32;
