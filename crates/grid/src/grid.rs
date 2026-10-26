@@ -654,34 +654,42 @@ impl Grid {
     // The new origin is found by the sizes of the lines up to the target, not by how many
     // lines are shown now: wide or tall lines near the target fit fewer than the current ones.
     fn scroll_into_view(&mut self, pos: CellPos, cx: &mut Context<Self>) {
+        self.reveal(Some(pos.row), Some(pos.col), cx);
+    }
+
+    fn reveal(&mut self, row: Option<RowIdx>, col: Option<ColIdx>, cx: &mut Context<Self>) {
         // Second pass: the row header width can change once the first scroll lands.
         for _ in 0..2 {
             let (width, height) = self.viewport_extent();
             let origin = self.scroll_origin();
             let mut top = origin.row;
             let mut left = origin.col;
-            if pos.row.get() >= self.frozen_rows {
-                if pos.row < top {
-                    top = pos.row;
+            if let Some(row) = row
+                && row.get() >= self.frozen_rows
+            {
+                if row < top {
+                    top = row;
                 } else if self
                     .fully_shown_rows()
                     .last()
-                    .is_none_or(|last| pos.row > *last)
+                    .is_none_or(|last| row > *last)
                 {
                     let floor = RowIdx::clamped(i64::from(self.frozen_rows));
-                    top = self.layout.row_ending_at(pos.row, height, floor);
+                    top = self.layout.row_ending_at(row, height, floor);
                 }
             }
-            if pos.col.get() >= self.frozen_cols {
-                if pos.col < left {
-                    left = pos.col;
+            if let Some(col) = col
+                && col.get() >= self.frozen_cols
+            {
+                if col < left {
+                    left = col;
                 } else if self
                     .fully_shown_cols()
                     .last()
-                    .is_none_or(|last| pos.col > *last)
+                    .is_none_or(|last| col > *last)
                 {
                     let floor = ColIdx::clamped(i64::from(self.frozen_cols));
-                    left = self.layout.col_ending_at(pos.col, width, floor);
+                    left = self.layout.col_ending_at(col, width, floor);
                 }
             }
             if (top, left) == (self.top, self.left) {
