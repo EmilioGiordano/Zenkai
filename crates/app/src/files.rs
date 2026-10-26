@@ -59,6 +59,21 @@ pub fn same_file(a: &Path, b: &Path, unresolved: Unresolved) -> bool {
     }
 }
 
+pub struct TargetProbe {
+    pub same_as_source: bool,
+    pub exists: bool,
+}
+
+// Filesystem questions about a Save As target; blocks on a slow share, so call it off the UI thread.
+pub fn probe_target(source: Option<&Path>, target: &Path) -> TargetProbe {
+    let same_as_source =
+        source.is_some_and(|source| same_file(source, target, Unresolved::ComparePaths));
+    TargetProbe {
+        same_as_source,
+        exists: !same_as_source && target.exists(),
+    }
+}
+
 pub fn is_remote_or_device(path: &Path) -> bool {
     matches!(
         path.components().next(),
@@ -404,5 +419,24 @@ mod tests {
             &dir.path().join("Other.xlsx"),
             Unresolved::ComparePaths
         ));
+    }
+
+    #[test]
+    fn probing_a_target_tells_the_source_from_another_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("Book.xlsx");
+        let other = dir.path().join("Other.xlsx");
+        std::fs::write(&source, b"x").unwrap();
+        std::fs::write(&other, b"x").unwrap();
+        let spelled = dir.path().join(".").join("Book.xlsx");
+
+        let same = probe_target(Some(&source), &spelled);
+        assert!(same.same_as_source && !same.exists);
+        let existing = probe_target(Some(&source), &other);
+        assert!(!existing.same_as_source && existing.exists);
+        let fresh = probe_target(Some(&source), &dir.path().join("New.xlsx"));
+        assert!(!fresh.same_as_source && !fresh.exists);
+        let unsaved = probe_target(None, &other);
+        assert!(!unsaved.same_as_source && unsaved.exists);
     }
 }

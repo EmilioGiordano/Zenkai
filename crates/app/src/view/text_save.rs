@@ -122,15 +122,40 @@ impl Workspace {
             self.save_ended(id, false, window, cx);
             return;
         };
-        let same = text
-            .path
-            .as_ref()
-            .is_some_and(|source| files::same_file(source, &path, files::Unresolved::ComparePaths));
-        if same {
+        let source = text.path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let target = path.clone();
+            let probe = cx
+                .background_executor()
+                .spawn(async move { files::probe_target(source.as_deref(), &target) })
+                .await;
+            let update = this.update_in(cx, |this, window, cx| {
+                this.decide_text_target(id, path, probe, window, cx)
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed while checking the save target");
+            }
+        })
+        .detach();
+    }
+
+    fn decide_text_target(
+        &mut self,
+        id: WorkbookId,
+        path: PathBuf,
+        probe: files::TargetProbe,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.documents.text(id).is_none() {
+            self.save_ended(id, false, window, cx);
+            return;
+        }
+        if probe.same_as_source {
             self.write_text(id, path, Guard::InPlace, window, cx);
             return;
         }
-        if !path.exists() {
+        if !probe.exists {
             self.write_text(id, path, Guard::Chosen, window, cx);
             return;
         }
