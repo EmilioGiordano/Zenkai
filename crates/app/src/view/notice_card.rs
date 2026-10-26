@@ -11,8 +11,8 @@ use crate::interface_scale::rem_px;
 use crate::keymap;
 
 const CARD_WIDTH: f32 = 420.0;
-const STATUS_BAR_HEIGHT: f32 = 26.0;
-const EDGE_GAP: f32 = 12.0;
+pub(super) const STATUS_BAR_HEIGHT: f32 = 26.0;
+pub(super) const EDGE_GAP: f32 = 12.0;
 const TEXT_MAX_HEIGHT: f32 = 168.0;
 
 pub(super) fn severity_title(severity: Severity) -> SharedString {

@@ -103,7 +103,7 @@ use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use lifecycle::Lifecycle;
-use notice_card::{severity_icon, severity_title};
+use notice_card::{STATUS_BAR_HEIGHT, severity_icon, severity_title};
 use notices::{Lifetime, Notices, Severity};
 use panels::PanelsState;
 use search::SearchOverlay;
@@ -3447,7 +3447,7 @@ impl Workspace {
                 .child(t!("status.last_recalc", value = recalc));
         }
         h_flex()
-            .h(rem_px(26.0))
+            .h(rem_px(STATUS_BAR_HEIGHT))
             .px_3()
             .gap_4()
             .justify_between()

@@ -6,14 +6,12 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::Workspace;
-use super::notice_card::{severity_icon, severity_title};
+use super::notice_card::{EDGE_GAP, STATUS_BAR_HEIGHT, severity_icon, severity_title};
 use crate::actions::CloseMessages;
 use crate::interface_scale::rem_px;
 
 const PANEL_WIDTH: f32 = 480.0;
 const PANEL_MAX_HEIGHT: f32 = 420.0;
-const STATUS_BAR_HEIGHT: f32 = 26.0;
-const EDGE_GAP: f32 = 12.0;
 const TIME_WIDTH: f32 = 60.0;
 
 pub(super) struct MessagesPanel {
