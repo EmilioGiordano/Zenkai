@@ -1461,7 +1461,7 @@ impl<'a> Model<'a> {
                                 })
                                 .unwrap_or(false);
                             if is_own_spill {
-                                let _ = ws.cell_clear_contents(r, c);
+                                let _ = ws.cell_clear_spill(r, c);
                             }
                         }
                     }

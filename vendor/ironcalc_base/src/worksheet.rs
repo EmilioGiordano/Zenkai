@@ -336,6 +336,18 @@ impl Worksheet {
         self.update_cell(row, column, cell)
     }
 
+    /// Clears a cell a dynamic array no longer spills into. As in Excel, the cell is removed
+    /// unless it has a style of its own, so the used range shrinks with the spill.
+    pub fn cell_clear_spill(&mut self, row: i32, column: i32) -> Result<(), String> {
+        let style = self.get_style(row, column);
+        if style == self.get_row_column_style(row, column) {
+            self.sheet_data.remove(row, column);
+            Ok(())
+        } else {
+            self.cell_clear_contents_with_style(row, column, style)
+        }
+    }
+
     pub fn set_frozen_rows(&mut self, frozen_rows: i32) -> Result<(), String> {
         if frozen_rows < 0 {
             return Err("Frozen rows cannot be negative".to_string());
