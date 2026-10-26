@@ -6,6 +6,7 @@ use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
 use zenkai_engine::{Engine, XlsxReader, open_xlsx_with};
+use zenkai_types::{ColIdx, SheetId};
 
 // Zenkai rewrites the saved <cols> only when a column is outlined.
 const OUTLINED_G: &str = r#"<col min="7" max="7" width="20" customWidth="1" outlineLevel="1"/>"#;
@@ -97,4 +98,24 @@ fn column_ranges_reaching_past_the_sheet_keep_their_part_inside_it() {
             assert_eq!(columns.len(), 2, "{reader:?} {col} {columns:?}");
         }
     }
+}
+
+#[test]
+fn inserting_columns_saves_ranges_inside_the_sheet_and_undo_restores_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cols.xlsx");
+    with_columns(
+        &path,
+        r#"<col min="2" max="16383" width="20" customWidth="1"/><col min="16384" max="16384" width="30" customWidth="1"/>"#,
+    );
+    let mut book = open_xlsx_with(&path, XlsxReader::Fast).unwrap().workbook;
+    let before = book.sizes(SheetId(0));
+    book.insert_columns(SheetId(0), ColIdx::new(0).unwrap(), 2)
+        .unwrap();
+    let columns = saved_columns(&book.to_xlsx().unwrap());
+    assert_eq!(columns, [(4, 16_384, "20".to_string())]);
+    book.undo().unwrap();
+    assert_eq!(book.sizes(SheetId(0)), before);
+    book.redo().unwrap();
+    assert_eq!(saved_columns(&book.to_xlsx().unwrap()), columns);
 }
