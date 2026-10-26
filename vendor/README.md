@@ -223,8 +223,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   left as empty cells, unless they have a style of their own, as in Excel; the empty cells
   stretched the sheet's dimension and were saved (`Worksheet::cell_clear_spill` in
   `src/worksheet.rs`, its callers in `src/model.rs`, `src/user_model/undo_redo.rs` and
-  `src/user_model/clipboard.rs`). Stands on its own. Tests:
-  `src/test/user_model/test_spill_leftover_cells.rs`.
+  `src/user_model/clipboard.rs`). A re-evaluated spill is still cleared in place and only
+  the cells left past its new range are removed (`Model::remove_cells_left_by_spill`), so a
+  stable spill costs what it did. Clearing an area leaves a position without a cell as it
+  is instead of writing an empty cell there, so deleting a whole spill keeps none of it.
+  Stands on its own. Tests: `src/test/user_model/test_spill_leftover_cells.rs`.
 
 Zenkai-only, not for upstream:
 
