@@ -11,6 +11,7 @@ use ironcalc::import::load_from_xlsx_bytes;
 use crate::edit_profile::{EditProfile, RecalcMode};
 use crate::error::EngineError;
 use crate::file::Unsupported;
+use crate::inputs_plan::plan_inputs;
 use crate::model::{CachedModel, HistoryStep, content_cells_within};
 use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
@@ -956,44 +957,52 @@ impl Engine for Workbook {
                 .offset(i64::try_from(width).unwrap_or(i64::MAX) - 1),
         );
         let target = Range::new(origin, end);
-        let (written, applied) = self.model.write_within(sheet, target, |model| {
+        let plan = {
+            let sheet_data = &self
+                .model
+                .get_model()
+                .workbook
+                .worksheet(sheet.0)
+                .map_err(|_| EngineError::UnknownSheet(sheet))?
+                .sheet_data;
+            plan_inputs(sheet_data, origin, rows, width as usize)?
+        };
+        self.model.write_within(sheet, target, |model| {
             // Inside a caller's edit group the begin fails and the caller ends the group.
             let own_group = model.begin_edit_group().is_ok();
+            let was_paused = model.is_evaluation_paused();
             model.pause_evaluation();
-            let mut applied = 0usize;
-            let mut offset = 0u32;
-            let mut written = Ok(());
-            for run in rows.chunk_by(|a, b| a.len() == b.len()) {
-                let run_origin = CellPos::new(origin.row.offset(i64::from(offset)), origin.col);
-                offset += run.len() as u32;
-                if run[0].is_empty() {
-                    continue;
-                }
-                written = paste_run(model, sheet, run_origin, run);
+            let mut written = plan.tail.iter().try_for_each(|pos| {
+                model
+                    .range_clear_contents(&Area {
+                        sheet: sheet.0,
+                        row: row_i32(pos.row),
+                        column: col_i32(pos.col),
+                        width: 1,
+                        height: 1,
+                    })
+                    .map_err(rejected)
+            });
+            for run in &plan.runs {
                 if written.is_err() {
                     break;
                 }
-                applied += 1;
+                written = paste_run(model, sheet, run.origin, run.rows);
             }
             if written.is_ok() {
                 written = select(model, sheet, target);
             }
-            if own_group {
-                if let Err(error) = model.end_edit_group() {
-                    written = written.and(Err(rejected(error)));
-                }
+            let ended = if own_group {
+                model.end_edit_group().map_err(rejected)
             } else {
-                model.resume_evaluation();
-                model.evaluate();
-            }
-            (written, own_group.then_some(applied))
-        });
-        // A run that failed after others were written leaves the group's earlier runs
-        // behind; undo them so a rejected paste changes nothing.
-        if written.is_err() && applied.is_some_and(|applied| applied > 0) {
-            self.undo()?;
-        }
-        written
+                if !was_paused {
+                    model.resume_evaluation();
+                    model.evaluate();
+                }
+                Ok(())
+            };
+            written.and(ended)
+        })
     }
 
     // Rows of `range` reordered by the `key` column, with Excel's order: numbers, text
