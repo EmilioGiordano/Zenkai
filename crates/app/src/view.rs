@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::base::{h_flex, v_flex};
-use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
