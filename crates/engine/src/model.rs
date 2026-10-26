@@ -179,8 +179,9 @@ impl CachedModel {
         result
     }
 
-    // For edits that add or remove no cell: clearing values, row and column sizes, hidden
-    // lines, frozen panes.
+    // For edits that add or remove no cell, other than the spill of a cleared dynamic array,
+    // which a full evaluation follows: clearing values, row and column sizes, hidden lines,
+    // frozen panes.
     pub(crate) fn edit_keeping_cells<T>(
         &mut self,
         edit: impl FnOnce(&mut UserModel<'static>) -> T,
@@ -275,8 +276,8 @@ impl CachedModel {
 
     // `None` when the sheet must be walked again: a sheet that had no cells may still hold
     // empty rows, which the walk counts. A full evaluation may spill a dynamic array written
-    // here and shrink it again, leaving empty cells past its final range that the walk
-    // counts, so after one the caller drops a sheet this marks as holding spills.
+    // here past this end or shrink one inside it, so after one the caller drops a sheet
+    // this marks as holding spills.
     fn grown(&self, sheet: SheetId, areas: &[Range], extent: Extent) -> Option<Extent> {
         let last = extent.last?;
         let ws = self.model.get_model().workbook.worksheet(sheet.0).ok()?;
@@ -416,10 +417,11 @@ mod tests {
         assert!(model.cache().contains_key(&SheetId(0)));
         type_at(&mut model, 0, "B1", "=IF(Sheet2!A1>0,SEQUENCE(3),1)");
         assert_eq!(model.get_formatted_cell_value(0, 1, 2).unwrap(), "#SPILL!");
-        // B1 spills before the evaluation restarts and blocks it; its old spill stays as
-        // empty cells, which the walk counts.
-        assert_eq!(model.walked_end(SheetId(0)), CellPos::parse_a1("B3"));
-        assert_eq!(model.used_end(SheetId(0)), CellPos::parse_a1("B3").unwrap());
+        assert!(!model.cache().contains_key(&SheetId(0)));
+        // B1 spills before the evaluation restarts and blocks it; blocking removes the
+        // cells it had spilled into.
+        assert_eq!(model.walked_end(SheetId(0)), CellPos::parse_a1("B1"));
+        assert_eq!(model.used_end(SheetId(0)), CellPos::parse_a1("B1").unwrap());
     }
 
     #[test]
