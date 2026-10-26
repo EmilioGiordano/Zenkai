@@ -243,5 +243,9 @@ actions!(
         DismissNotice,
         CopyNotice,
         FocusNotice,
+        ShowMessages,
+        CloseMessages,
+        NextMessage,
+        PreviousMessage,
     ]
 );

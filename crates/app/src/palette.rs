@@ -188,6 +188,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.select_theme"), SelectTheme),
                 item(t!("palette.toggle_theme"), ToggleTheme),
                 item(t!("palette.toggle_diagnostics"), ToggleDiagnostics),
+                item(t!("palette.show_messages"), ShowMessages),
                 item(t!("palette.focus_notice"), FocusNotice),
                 item(t!("palette.dismiss_notice"), DismissNotice),
                 item(t!("palette.copy_notice"), CopyNotice),
