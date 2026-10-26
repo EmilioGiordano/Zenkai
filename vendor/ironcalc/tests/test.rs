@@ -610,6 +610,27 @@ fn test_column_ranges_outside_the_sheet() {
     assert_eq!(columns, [(1, 2, 11.0), (5, 5, 38.0), (10, 16_384, 12.0)]);
 }
 
+fn example_with_columns(count: usize) -> Vec<u8> {
+    example_with_part_edited("xl/worksheets/sheet1.xml", |text| {
+        let start = text.find("<cols>").unwrap();
+        let end = text.find("</cols>").unwrap();
+        format!(
+            "{}<cols>{}</cols>{}",
+            &text[..start],
+            r#"<col min="1" max="16384" width="9"/>"#.repeat(count),
+            &text[end + "</cols>".len()..]
+        )
+    })
+}
+
+#[test]
+fn test_column_elements_are_bounded_by_the_columns_of_a_sheet() {
+    let model = load_from_xlsx_bytes(&example_with_columns(16_384), "home", "en", "UTC").unwrap();
+    assert_eq!(model.worksheets[0].cols.len(), 16_384);
+    let refused = load_from_xlsx_bytes(&example_with_columns(16_385), "home", "en", "UTC");
+    assert!(refused.is_err());
+}
+
 #[test]
 fn test_styles_without_cell_style_formats() {
     let edited = example_with_part_edited("xl/styles.xml", |text| {
