@@ -1770,9 +1770,15 @@ fn split_trailing_number(text: &str) -> Option<(String, u64, usize)> {
     Some((prefix.to_string(), number.parse().ok()?, digits))
 }
 
-// Excel serial (days since 1899-12-30) to yyyy-mm-dd, by the civil-from-days algorithm.
+// Excel serial to yyyy-mm-dd, by the civil-from-days algorithm on days since 1899-12-30.
 fn iso_date(serial: i64) -> String {
-    let days = serial - 25_569 + 719_468;
+    // Excel keeps a fictitious 29 February 1900 as serial 60, so earlier serials are one day
+    // short of the days elapsed; the engine reads this text back as serial 60.
+    if serial == 60 {
+        return "1900-02-29".to_string();
+    }
+    let elapsed = if serial < 60 { serial + 1 } else { serial };
+    let days = elapsed - 25_569 + 719_468;
     let era = days.div_euclid(146_097);
     let day_of_era = days.rem_euclid(146_097);
     let year_of_era =
