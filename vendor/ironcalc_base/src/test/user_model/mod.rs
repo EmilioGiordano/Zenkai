@@ -42,6 +42,7 @@ mod test_spill_leftover_cells;
 mod test_step_cells;
 mod test_styles;
 mod test_to_from_bytes;
+mod test_undo_input_format;
 mod test_undo_redo;
 mod test_user_input_dates_quote;
 mod test_view;

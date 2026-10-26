@@ -61,6 +61,8 @@ fn value() -> impl Strategy<Value = String> {
     prop_oneof![
         Just(String::new()),
         (-50i32..50).prop_map(|n| n.to_string()),
+        // Inputs that also set a number format on the cell.
+        prop::sample::select(vec!["5%", "2024-01-15", "$5"]).prop_map(str::to_string),
         "[a-z]{1,4}",
         (0..SIDE, 0..SIDE).prop_map(|(r, c)| format!("=A1+{}", cell_name(r, c))),
         Just("=SUM(A1:C3)".to_string()),
