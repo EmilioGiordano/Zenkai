@@ -58,10 +58,9 @@ fn days360_eu(start: (i32, u32, u32), end: (i32, u32, u32)) -> f64 {
     (360 * (y2 - y1) + 30 * (m2 as i32 - m1 as i32) + (day2 - day1)) as f64
 }
 
-/// Maps a date to the WEEKDAY number for the given `return_type`.
+/// Maps a weekday to the WEEKDAY number for the given `return_type`.
 /// Returns `Error::VALUE`/`Error::NUM` for an invalid `return_type`.
-fn weekday_number(date: chrono::NaiveDate, return_type: i32) -> Result<f64, Error> {
-    let weekday = date.weekday();
+fn weekday_number(weekday: chrono::Weekday, return_type: i32) -> Result<f64, Error> {
     let num = match return_type {
         1 => weekday.num_days_from_sunday() + 1,
         2 => weekday.number_from_monday(),
@@ -159,7 +158,7 @@ use crate::{
     constants::EXCEL_DATE_BASE,
     expressions::parser::{ArrayNode, Node},
     expressions::token::Error,
-    formatter::dates::{excel_serial_to_ymd, from_excel_date},
+    formatter::dates::{excel_serial_to_ymd, excel_serial_weekday, from_excel_date},
     model::Model,
 };
 
@@ -1487,8 +1486,8 @@ impl<'a> Model<'a> {
         };
         // Broadcasts element-wise over a range/array date argument.
         self.apply_number_unary(&args[0], cell, move |serial| {
-            let date = from_excel_date(serial.floor() as i64).map_err(|_| Error::NUM)?;
-            weekday_number(date, return_type)
+            let weekday = excel_serial_weekday(serial.floor() as i64).ok_or(Error::NUM)?;
+            weekday_number(weekday, return_type)
         })
     }
 
