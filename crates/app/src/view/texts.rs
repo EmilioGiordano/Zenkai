@@ -10,6 +10,7 @@ use super::{Severity, Workspace, file_label};
 use crate::documents::{Installed, Provenance, TextLoad};
 use crate::entry::{Entry, Link, LinkStatus};
 use crate::markdown_pane::{MarkdownPane, PaneEvent, PaneState, folder_of};
+use crate::open_loads::OpenId;
 use crate::recovery;
 use crate::text_disk::RecoveredFile;
 use crate::text_document::{DocumentKind, ViewMode};
@@ -290,6 +291,7 @@ impl Workspace {
     pub(super) fn begin_text_load(
         &mut self,
         link: Link,
+        open: Option<OpenId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -300,6 +302,8 @@ impl Workspace {
                 .spawn(async move { read_text_link(&link) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
+                open.into_iter()
+                    .for_each(|open| this.open_loads.finish(open));
                 this.finish_text_load(id, load, window, cx)
             });
             if let Err(error) = update {
