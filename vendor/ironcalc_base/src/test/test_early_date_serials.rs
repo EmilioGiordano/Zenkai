@@ -174,3 +174,47 @@ fn typed_early_dates_store_excel_serials() {
         assert_eq!(model._get_text(cell), text, "{cell}");
     }
 }
+
+#[test]
+fn typed_dates_before_1900_stay_text() {
+    let mut model = new_empty_model();
+    model._set("A1", "1899-12-31");
+    model._set("A2", "12/31/1899");
+    model._set("A3", "=DATEVALUE(\"12/31/1899\")");
+    model._set("A4", "12/31/9999");
+    model.evaluate();
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A1"),
+        Ok(CellValue::String("1899-12-31".to_string()))
+    );
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A2"),
+        Ok(CellValue::String("12/31/1899".to_string()))
+    );
+    assert_eq!(model._get_text("A3"), "#VALUE!");
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A4"),
+        Ok(CellValue::Number(2958465.0))
+    );
+}
+
+#[test]
+fn eomonth_reaches_the_last_and_first_months() {
+    let mut model = new_empty_model();
+    model._set("A1", "=EOMONTH(2958465, 0)");
+    model._set("A2", "=EOMONTH(2958435, 0)");
+    model._set("A3", "=EOMONTH(61, -2)");
+    model.evaluate();
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A1"),
+        Ok(CellValue::Number(2958465.0))
+    );
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A2"),
+        Ok(CellValue::Number(2958465.0))
+    );
+    assert_eq!(
+        model.get_cell_value_by_ref("Sheet1!A3"),
+        Ok(CellValue::Number(31.0))
+    );
+}
