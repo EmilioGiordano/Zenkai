@@ -331,6 +331,7 @@ impl Workbook {
         rest: Range,
         lines: Vec<(Option<CellPos>, Range)>,
         number_formats: &[(Range, String)],
+        style_sources: &[(CellPos, Range)],
         text_at: impl Fn(&Model, CellPos) -> Result<String, EngineError>,
     ) -> Result<(), EngineError> {
         self.model.edit_keeping_cells(|model| {
@@ -344,6 +345,18 @@ impl Workbook {
                     self.model
                         .write_within(sheet, *line, |model| {
                             model.update_range_style(&area(sheet, *line), "num_fmt", code)
+                        })
+                        .map_err(rejected)
+                })
+            })
+            .and_then(|()| {
+                style_sources.iter().try_for_each(|(source, line)| {
+                    self.model
+                        .write_within(sheet, *line, |model| {
+                            model.fill_style(
+                                (row_i32(source.row), col_i32(source.col)),
+                                &area(sheet, *line),
+                            )
                         })
                         .map_err(rejected)
                 })
@@ -1151,36 +1164,43 @@ impl Engine for Workbook {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        self.fill_lines(sheet, rest, lines_to_fill, &date_formats, |model, pos| {
-            let (row, col) = (pos.row.get(), pos.col.get());
-            let (line, step) = if down {
-                (col - source.start.col.get(), row - source.start.row.get())
-            } else {
-                (
-                    u16::try_from(row - source.start.row.get()).unwrap_or(0),
-                    u32::from(col - source.start.col.get()),
-                )
-            };
-            if let Some(Some(series)) = lines.get(usize::from(line)) {
-                return Ok(series.at(f64::from(step)));
-            }
-            let (from_row, from_col) = if down {
-                let offset = (row - source.start.row.get()) % source_rows;
-                (source.start.row.get() + offset, u32::from(col))
-            } else {
-                let offset = (u32::from(col) - u32::from(source.start.col.get())) % source_cols;
-                (row, u32::from(source.start.col.get()) + offset)
-            };
-            model
-                .extend_to(
-                    sheet.0,
-                    from_row as i32 + 1,
-                    from_col as i32 + 1,
-                    row_i32(pos.row),
-                    col_i32(pos.col),
-                )
-                .map_err(rejected)
-        })
+        self.fill_lines(
+            sheet,
+            rest,
+            lines_to_fill,
+            &date_formats,
+            &[],
+            |model, pos| {
+                let (row, col) = (pos.row.get(), pos.col.get());
+                let (line, step) = if down {
+                    (col - source.start.col.get(), row - source.start.row.get())
+                } else {
+                    (
+                        u16::try_from(row - source.start.row.get()).unwrap_or(0),
+                        u32::from(col - source.start.col.get()),
+                    )
+                };
+                if let Some(Some(series)) = lines.get(usize::from(line)) {
+                    return Ok(series.at(f64::from(step)));
+                }
+                let (from_row, from_col) = if down {
+                    let offset = (row - source.start.row.get()) % source_rows;
+                    (source.start.row.get() + offset, u32::from(col))
+                } else {
+                    let offset = (u32::from(col) - u32::from(source.start.col.get())) % source_cols;
+                    (row, u32::from(source.start.col.get()) + offset)
+                };
+                model
+                    .extend_to(
+                        sheet.0,
+                        from_row as i32 + 1,
+                        from_col as i32 + 1,
+                        row_i32(pos.row),
+                        col_i32(pos.col),
+                    )
+                    .map_err(rejected)
+            },
+        )
     }
 
     fn copy(&mut self, sheet: SheetId, range: Range) -> Result<Copied, EngineError> {
@@ -1223,7 +1243,7 @@ impl Engine for Workbook {
     }
 
     // Ctrl+D / Ctrl+R: the first row (or column) of the target is extended over the rest
-    // with references shifted; a single row (or column) extends the one above (or left).
+    // with references shifted, and its cells' formats are copied whole, as in Excel; a single row (or column) extends the one above (or left).
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError> {
         let source_line = if down {
             if target.rows() == 1 {
@@ -1256,7 +1276,7 @@ impl Engine for Workbook {
                 rest.cell_count()
             )));
         }
-        let lines = if down {
+        let lines: Vec<(Option<CellPos>, Range)> = if down {
             (rest.start.col.get()..=rest.end.col.get())
                 .map(|col| {
                     let col = ColIdx::clamped(i64::from(col));
@@ -1281,7 +1301,11 @@ impl Engine for Workbook {
                 })
                 .collect()
         };
-        self.fill_lines(sheet, rest, lines, &[], |model, pos| {
+        let style_sources: Vec<(CellPos, Range)> = lines
+            .iter()
+            .filter_map(|(source, line)| source.map(|source| (source, *line)))
+            .collect();
+        self.fill_lines(sheet, rest, lines, &[], &style_sources, |model, pos| {
             let (from_row, from_col) = if down {
                 (source_line, u32::from(pos.col.get()))
             } else {
