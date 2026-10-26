@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
-use crate::test::util::new_empty_model;
+use crate::{cell::CellValue, test::util::new_empty_model};
 
 // Excel's 1900 date system: serial 1 is 1/1/1900 and serial 60 is the fictitious 2/29/1900.
 fn excel_year_month_day(serial: u32) -> (u32, u32, u32) {
@@ -91,4 +91,86 @@ fn text_of_early_serials() {
     assert_eq!(model._get_text("A3"), "Wednesday, February 29, 1900");
     assert_eq!(model._get_text("A4"), "3/1/1900");
     assert_eq!(model._get_text("A5"), "1/1/2024");
+}
+
+#[test]
+fn date_of_early_days() {
+    let mut model = new_empty_model();
+    let cases = [
+        ("DATE(1900, 1, 1)", "1"),
+        ("DATE(1900, 1, 7)", "7"),
+        ("DATE(1900, 1, 31)", "31"),
+        ("DATE(1900, 2, 1)", "32"),
+        ("DATE(1900, 2, 28)", "59"),
+        ("DATE(1900, 2, 29)", "60"),
+        ("DATE(1900, 3, 0)", "60"),
+        ("DATE(1900, 3, 1)", "61"),
+        ("DATE(1900, 1, 0)", "0"),
+        ("DATE(1900, 1, -1)", "#NUM!"),
+        ("DATE(1900, 1, 60)", "60"),
+        ("DATE(1900, 1, 61)", "61"),
+        ("DATE(1900, 2, 30)", "61"),
+        ("DATE(1900, 4, -30)", "61"),
+        ("DATE(1900, 4, -31)", "60"),
+        ("DATE(1900, 4, -32)", "59"),
+        ("DATE(2024, 1, 1)", "45292"),
+        ("DATE(2024, 2, 30)", "45352"),
+        ("DATE(9999, 12, 31)", "2958465"),
+        ("DATE(9999, 12, 32)", "#NUM!"),
+    ];
+    for (row, (date, _)) in cases.iter().enumerate() {
+        model._set(&format!("A{}", row + 1), &format!("=TEXT({date}, \"0\")"));
+    }
+    model.evaluate();
+    for (row, (date, expected)) in cases.iter().enumerate() {
+        assert_eq!(
+            model._get_text(&format!("A{}", row + 1)),
+            *expected,
+            "{date}"
+        );
+    }
+}
+
+#[test]
+fn datevalue_of_early_days() {
+    let mut model = new_empty_model();
+    model._set("A1", "=DATEVALUE(\"1/1/1900\")");
+    model._set("A2", "=DATEVALUE(\"2/28/1900\")");
+    model._set("A3", "=DATEVALUE(\"2/29/1900\")");
+    model._set("A4", "=DATEVALUE(\"3/1/1900\")");
+    model._set("A5", "=DATEVALUE(\"1/1/2024\")");
+    model._set("A6", "=DATEVALUE(\"2/30/1900\")");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "1");
+    assert_eq!(model._get_text("A2"), "59");
+    assert_eq!(model._get_text("A3"), "60");
+    assert_eq!(model._get_text("A4"), "61");
+    assert_eq!(model._get_text("A5"), "45292");
+    assert_eq!(model._get_text("A6"), "#VALUE!");
+}
+
+#[test]
+fn typed_early_dates_store_excel_serials() {
+    let mut model = new_empty_model();
+    model._set("A1", "1/7/1900");
+    model._set("A2", "2/28/1900");
+    model._set("A3", "2/29/1900");
+    model._set("A4", "3/1/1900");
+    model._set("A5", "1/1/2024");
+    model.evaluate();
+    let expected = [
+        ("A1", 7.0, "1/7/1900"),
+        ("A2", 59.0, "2/28/1900"),
+        ("A3", 60.0, "2/29/1900"),
+        ("A4", 61.0, "3/1/1900"),
+        ("A5", 45292.0, "1/1/2024"),
+    ];
+    for (cell, serial, text) in expected {
+        assert_eq!(
+            model.get_cell_value_by_ref(&format!("Sheet1!{cell}")),
+            Ok(CellValue::Number(serial)),
+            "{cell}"
+        );
+        assert_eq!(model._get_text(cell), text, "{cell}");
+    }
 }
