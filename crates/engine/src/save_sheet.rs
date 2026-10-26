@@ -301,7 +301,8 @@ fn outline_columns(sheet: &str, outline: &BTreeMap<u32, Outline>) -> Result<Stri
             .split_once(&format!(r#" max="{max}""#))
             .map(|(_, rest)| rest.trim_end_matches("/>"))
             .ok_or_else(|| format!("unexpected column element: {col}"))?;
-        // Imported ranges are not validated, so the walk visits outlined columns only.
+        // The exporter writes 1 <= min <= max <= 16384, but a range can span the whole
+        // sheet, so the walk visits outlined columns only.
         let mut starts = BTreeSet::from([min]);
         for index in outline.range(min..=max).map(|(index, _)| *index) {
             starts.insert(index);
