@@ -384,7 +384,7 @@ impl Workspace {
             TextLink::Missing => {
                 self.documents.set_link_status(id, LinkStatus::Missing);
                 let text = t!("notice.link_missing", name = name);
-                self.notify(Severity::Warning, text, cx);
+                self.notify_until_open(Severity::Warning, text, cx);
             }
             TextLink::Failed(message) => {
                 self.documents.set_link_status(id, LinkStatus::NotLoaded);

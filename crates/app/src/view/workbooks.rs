@@ -7,7 +7,7 @@ use zenkai_engine::{Stamp, Unsupported, Workbook, XlsxReader, open_xlsx};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
-use super::{Severity, Workspace, file_label};
+use super::{Severity, Workspace, clear_on_open, file_label};
 use crate::agent_settings;
 use crate::document;
 use crate::documents::{Installed, Intent, Loaded, Provenance, Step};
@@ -253,6 +253,7 @@ impl Workspace {
     }
 
     pub(super) fn present_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        clear_on_open(&mut self.notice);
         if let Some(id) = self.documents.shown_text().map(|text| text.id) {
             self.present_text(id, window, cx);
             return;
@@ -579,7 +580,7 @@ impl Workspace {
             LinkLoad::Missing => {
                 self.documents.set_link_status(id, LinkStatus::Missing);
                 let text = t!("notice.link_missing", name = name);
-                self.notify(Severity::Warning, text, cx);
+                self.notify_until_open(Severity::Warning, text, cx);
             }
             LinkLoad::Failed(message) => {
                 self.documents.set_link_status(id, LinkStatus::NotLoaded);
