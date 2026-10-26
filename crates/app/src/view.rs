@@ -30,6 +30,7 @@ mod agent_review;
 mod chat_dock;
 mod close_dialog;
 mod closing;
+mod notices;
 mod pdfs;
 mod settings_gate;
 mod space_panel;
@@ -100,6 +101,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt, PopupMenu};
 use gpui_kit::component::spinner::Spinner;
 use lifecycle::Lifecycle;
+use notices::{Lifetime, Notices, Severity};
 use panels::PanelsState;
 use search::SearchOverlay;
 use sidebar::SidebarState;
@@ -144,34 +146,6 @@ const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 const MAX_REPLACE_CELLS: usize = 100_000;
 const FONT_SIZES: [u16; 16] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Severity {
-    Info,
-    Warning,
-    Error,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Lifetime {
-    UntilReplaced,
-    UntilOpen,
-}
-
-struct Notice {
-    severity: Severity,
-    text: SharedString,
-    lifetime: Lifetime,
-}
-
-fn clear_on_open(notice: &mut Option<Notice>) {
-    if notice
-        .as_ref()
-        .is_some_and(|notice| notice.lifetime == Lifetime::UntilOpen)
-    {
-        *notice = None;
-    }
-}
-
 pub struct Workspace {
     documents: Documents,
     grid: Entity<Grid>,
@@ -180,7 +154,7 @@ pub struct Workspace {
     stats_job: StatsJob,
     active_input: SharedString,
     active_style: CellStyle,
-    notice: Option<Notice>,
+    notices: Notices,
     toast: Option<agent_access::Toast>,
     toast_generation: u64,
     busy: Option<SharedString>,
@@ -347,7 +321,7 @@ impl Workspace {
             stats_job: StatsJob::default(),
             active_input: SharedString::default(),
             active_style: CellStyle::default(),
-            notice: None,
+            notices: Notices::default(),
             toast: None,
             toast_generation: 0,
             busy: None,
@@ -1048,11 +1022,7 @@ impl Workspace {
         text: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        self.notice = Some(Notice {
-            severity,
-            text: text.into(),
-            lifetime: Lifetime::UntilReplaced,
-        });
+        self.post(severity, text.into(), Lifetime::UntilReplaced);
         cx.notify();
     }
 
@@ -1062,12 +1032,14 @@ impl Workspace {
         text: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        self.notify(severity, text, cx);
-        if let Some(notice) = &mut self.notice {
-            notice.lifetime = Lifetime::UntilOpen;
-        }
+        self.post(severity, text.into(), Lifetime::UntilOpen);
+        cx.notify();
     }
 
+    fn post(&mut self, severity: Severity, text: SharedString, lifetime: Lifetime) {
+        let time = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.notices.post(severity, text, lifetime, time.into());
+    }
     fn on_grid_event(
         &mut self,
         _: &Entity<Grid>,
@@ -3346,7 +3318,7 @@ impl Workspace {
                     .text_color(theme.primary)
                     .child(busy),
             );
-        } else if let Some(notice) = &self.notice {
+        } else if let Some(notice) = self.notices.status() {
             let (icon, color) = match notice.severity {
                 Severity::Info => ("ⓘ", theme.muted_foreground),
                 Severity::Warning => ("⚠", theme.warning),
@@ -4515,32 +4487,5 @@ mod tests {
         grow_wrapped_rows(&mut wb, SHEET, Range::single(a1())).unwrap();
         let height = row_height(&wb, a1().row).unwrap();
         assert!((height - (20.0 * 19.0 + 4.0)).abs() < 1.0, "{height}");
-    }
-}
-
-#[cfg(test)]
-mod notice_tests {
-    use super::{Lifetime, Notice, Severity, clear_on_open};
-
-    fn notice(lifetime: Lifetime) -> Option<Notice> {
-        Some(Notice {
-            severity: Severity::Warning,
-            text: "text".into(),
-            lifetime,
-        })
-    }
-
-    #[test]
-    fn opening_a_file_clears_a_notice_that_lasts_until_then() {
-        let mut current = notice(Lifetime::UntilOpen);
-        clear_on_open(&mut current);
-        assert!(current.is_none());
-    }
-
-    #[test]
-    fn opening_a_file_keeps_a_notice_that_lasts_until_replaced() {
-        let mut current = notice(Lifetime::UntilReplaced);
-        clear_on_open(&mut current);
-        assert!(current.is_some());
     }
 }
