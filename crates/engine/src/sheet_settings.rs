@@ -712,6 +712,7 @@ fn read_column_outline(sheet: Node, columns: &mut Indexed) {
     let [list] = lists.as_slice() else {
         return;
     };
+    let mut ranges = BTreeMap::new();
     for col in list.children().filter(Node::is_element) {
         let bound = |name: &str| {
             col.attribute(name)
@@ -728,9 +729,43 @@ fn read_column_outline(sheet: Node, columns: &mut Indexed) {
             continue;
         };
         let outline = outline_of(col.attribute("outlineLevel"), col.attribute("collapsed"));
+        let outlined = outline.level > 0 || outline.collapsed;
+        assign_range(&mut ranges, first, last, outlined.then_some(outline));
+    }
+    for (first, (last, outline)) in ranges {
         for index in first..=last {
             columns.add_outline(index, outline);
         }
+    }
+}
+
+// Disjoint ranges keyed by first column. A later <col> replaces what an earlier one set on
+// the columns it covers, as in Excel, so the work per element does not grow with its width.
+fn assign_range(
+    ranges: &mut BTreeMap<u32, (u32, Outline)>,
+    first: u32,
+    last: u32,
+    outline: Option<Outline>,
+) {
+    let covered: Vec<u32> = ranges
+        .range(..=last)
+        .rev()
+        .take_while(|(_, (end, _))| *end >= first)
+        .map(|(start, _)| *start)
+        .collect();
+    for start in covered {
+        let Some((end, kept)) = ranges.remove(&start) else {
+            continue;
+        };
+        if start < first {
+            ranges.insert(start, (first - 1, kept));
+        }
+        if end > last {
+            ranges.insert(last + 1, (end, kept));
+        }
+    }
+    if let Some(outline) = outline {
+        ranges.insert(first, (last, outline));
     }
 }
 
