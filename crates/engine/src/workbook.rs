@@ -330,13 +330,24 @@ impl Workbook {
         sheet: SheetId,
         rest: Range,
         lines: Vec<(Option<CellPos>, Range)>,
+        number_formats: &[(Range, String)],
         text_at: impl Fn(&Model, CellPos) -> Result<String, EngineError>,
     ) -> Result<(), EngineError> {
         self.model.edit_keeping_cells(|model| {
             select(model, sheet, rest)?;
             model.begin_edit_group().map_err(rejected)
         })?;
-        let filled = self.fill_lines_in_group(sheet, lines, text_at);
+        let filled = self
+            .fill_lines_in_group(sheet, lines, text_at)
+            .and_then(|()| {
+                number_formats.iter().try_for_each(|(line, code)| {
+                    self.model
+                        .write_within(sheet, *line, |model| {
+                            model.update_range_style(&area(sheet, *line), "num_fmt", code)
+                        })
+                        .map_err(rejected)
+                })
+            });
         let ended = self
             .model
             .edit_keeping_cells(|model| model.end_edit_group())
@@ -483,7 +494,10 @@ impl Workbook {
             })
             .collect::<Option<Vec<f64>>>();
         if let Some(serials) = dates {
-            return Some(Series::Dates(Trend::fit_or_step(&serials)));
+            return Some(Series::Dates {
+                trend: Trend::fit_or_step(&serials),
+                format: cells[0].1.style.num_fmt.clone(),
+            });
         }
         if let Some(values) = cells
             .iter()
@@ -1089,7 +1103,30 @@ impl Engine for Workbook {
                 })
                 .collect()
         };
-        self.fill_lines(sheet, rest, lines_to_fill, |model, pos| {
+        let date_formats = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, series)| match series {
+                Some(Series::Dates { format, .. }) => {
+                    let line = if down {
+                        let col = source.start.col.offset(index as i64);
+                        Range::new(
+                            CellPos::new(rest.start.row, col),
+                            CellPos::new(rest.end.row, col),
+                        )
+                    } else {
+                        let row = source.start.row.offset(index as i64);
+                        Range::new(
+                            CellPos::new(row, rest.start.col),
+                            CellPos::new(row, rest.end.col),
+                        )
+                    };
+                    Some((line, format.clone()))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        self.fill_lines(sheet, rest, lines_to_fill, &date_formats, |model, pos| {
             let (row, col) = (pos.row.get(), pos.col.get());
             let (line, step) = if down {
                 (col - source.start.col.get(), row - source.start.row.get())
@@ -1219,7 +1256,7 @@ impl Engine for Workbook {
                 })
                 .collect()
         };
-        self.fill_lines(sheet, rest, lines, |model, pos| {
+        self.fill_lines(sheet, rest, lines, &[], |model, pos| {
             let (from_row, from_col) = if down {
                 (source_line, u32::from(pos.col.get()))
             } else {
@@ -1723,7 +1760,10 @@ impl Trend {
 #[derive(Clone, Debug)]
 enum Series {
     Numbers(Trend),
-    Dates(Trend),
+    Dates {
+        trend: Trend,
+        format: String,
+    },
     Text {
         prefix: String,
         width: usize,
@@ -1739,9 +1779,10 @@ impl Series {
                 let rounded = (trend.at(step) * 1e12).round() / 1e12;
                 format!("{rounded}")
             }
-            // Written as an ISO date, which the engine reads back as a date.
-            Series::Dates(trend) => {
-                iso_date(trend.at(step).round().clamp(0.0, MAX_DATE_SERIAL) as i64)
+            // Written as the serial and given the source's date format afterwards: no typed
+            // text reads back as serial 0, which Excel shows as 1/0/1900.
+            Series::Dates { trend, .. } => {
+                format!("{}", trend.at(step).round().clamp(0.0, MAX_DATE_SERIAL))
             }
             Series::Text {
                 prefix,
@@ -1768,31 +1809,6 @@ fn split_trailing_number(text: &str) -> Option<(String, u64, usize)> {
     }
     let (prefix, number) = text.split_at(text.len() - digits);
     Some((prefix.to_string(), number.parse().ok()?, digits))
-}
-
-// Excel serial to yyyy-mm-dd, by the civil-from-days algorithm on days since 1899-12-30.
-fn iso_date(serial: i64) -> String {
-    // Excel keeps a fictitious 29 February 1900 as serial 60, so earlier serials are one day
-    // short of the days elapsed; the engine reads this text back as serial 60.
-    if serial == 60 {
-        return "1900-02-29".to_string();
-    }
-    let elapsed = if serial < 60 { serial + 1 } else { serial };
-    let days = elapsed - 25_569 + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}")
 }
 
 pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
