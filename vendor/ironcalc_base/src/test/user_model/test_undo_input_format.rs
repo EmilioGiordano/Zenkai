@@ -5,7 +5,7 @@ use crate::expressions::types::Area;
 use crate::test::user_model::util::new_empty_user_model;
 use crate::UserModel;
 
-const PERCENT: &str = "#,##0%";
+const PERCENT: &str = "0%";
 
 fn area(row: i32, column: i32, width: i32, height: i32) -> Area {
     Area {

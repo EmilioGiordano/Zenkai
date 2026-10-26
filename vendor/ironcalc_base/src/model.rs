@@ -25,7 +25,7 @@ use crate::{
     },
     formatter::{
         format::{format_number, parse_formatted_number},
-        lexer::is_likely_date_number_format,
+        lexer::{is_likely_date_number_format, is_likely_percent_number_format},
     },
     implicit_intersection::implicit_intersection,
     language::{get_default_language, get_language, Language},
@@ -2407,10 +2407,13 @@ impl<'a> Model<'a> {
                     if let Some(num_fmt) = number_format {
                         // Should not apply the format in the following cases:
                         // - we assign a date to already date-formatted cell
-                        let should_apply_format = !(is_likely_date_number_format(
-                            &self.workbook.styles.get_style(new_style_index)?.num_fmt,
-                        ) && is_likely_date_number_format(&num_fmt));
-                        if should_apply_format {
+                        // - we assign a percentage to already percentage-formatted cell
+                        let cell_num_fmt = self.workbook.styles.get_style(new_style_index)?.num_fmt;
+                        let same_kind = (is_likely_date_number_format(&cell_num_fmt)
+                            && is_likely_date_number_format(&num_fmt))
+                            || (is_likely_percent_number_format(&cell_num_fmt)
+                                && is_likely_percent_number_format(&num_fmt));
+                        if !same_kind {
                             new_style_index = self
                                 .workbook
                                 .styles

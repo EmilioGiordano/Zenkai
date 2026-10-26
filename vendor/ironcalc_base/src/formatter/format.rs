@@ -831,13 +831,11 @@ pub(crate) fn parse_formatted_number(
         if options.is_scientific {
             return Ok((f / 100.0, Some(scientific_format.to_string())));
         }
-        // We ignore the separator
+        // Excel's built-in percentage formats (ids 9 and 10), as Excel gives "5%" and "5.5%"
         if options.decimal_digits > 0 {
-            // Percentage format with decimals
-            return Ok((f / 100.0, Some("#,##0.00%".to_string())));
+            return Ok((f / 100.0, Some("0.00%".to_string())));
         }
-        // Percentage format standard
-        return Ok((f / 100.0, Some("#,##0%".to_string())));
+        return Ok((f / 100.0, Some("0%".to_string())));
     }
 
     // check if it is a currency in currencies
