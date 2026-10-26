@@ -19,7 +19,7 @@ pub(crate) const DEFAULT_WINDOW_HEIGHT: i64 = 600;
 pub(crate) const DEFAULT_WINDOW_WIDTH: i64 = 800;
 
 /// Maximum number of columns
-pub(crate) const LAST_COLUMN: i32 = 16_384;
+pub const LAST_COLUMN: i32 = 16_384;
 
 /// Maximum number of rows
 pub(crate) const LAST_ROW: i32 = 1_048_576;
