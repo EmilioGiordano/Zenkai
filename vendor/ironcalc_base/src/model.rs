@@ -2310,7 +2310,7 @@ impl<'a> Model<'a> {
                             continue;
                         }
                         // We ignore errors here
-                        let _ = ws.cell_clear_contents(r, c);
+                        let _ = ws.cell_clear_spill(r, c);
                     }
                 }
             }
