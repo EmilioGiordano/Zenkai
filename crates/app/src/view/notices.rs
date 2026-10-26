@@ -404,6 +404,28 @@ a.xlsx: Access denied (os error 5)",
     }
 
     #[test]
+    fn a_warning_that_times_out_keeps_a_newer_status_line() {
+        let mut notices = Notices::default();
+        let id = post(
+            &mut notices,
+            Severity::Warning,
+            "Careful",
+            Lifetime::UntilReplaced,
+        );
+        post(
+            &mut notices,
+            Severity::Info,
+            "Saved",
+            Lifetime::UntilReplaced,
+        );
+        assert_eq!(notices.expire_warning(id, false), Expiry::Closed);
+        assert_eq!(
+            notices.status().map(|n| n.text.to_string()).as_deref(),
+            Some("Saved")
+        );
+    }
+
+    #[test]
     fn opening_a_file_clears_what_lasts_until_then_and_keeps_the_history() {
         let mut notices = Notices::default();
         post(
