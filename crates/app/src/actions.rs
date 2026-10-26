@@ -240,5 +240,8 @@ actions!(
         FocusToolCalls,
         RecordShortcutKeys,
         ResetAllShortcuts,
+        DismissNotice,
+        CopyNotice,
+        FocusNotice,
     ]
 );
