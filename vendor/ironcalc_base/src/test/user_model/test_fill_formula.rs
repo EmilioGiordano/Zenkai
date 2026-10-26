@@ -326,6 +326,19 @@ fn a_group_of_edits_is_one_undo_step() {
 }
 
 #[test]
+fn evaluation_is_paused_by_a_pause_or_a_group() {
+    let mut model = new_empty_user_model();
+    assert!(!model.is_evaluation_paused());
+    model.pause_evaluation();
+    assert!(model.is_evaluation_paused());
+    model.resume_evaluation();
+    model.begin_edit_group().unwrap();
+    assert!(model.is_evaluation_paused());
+    model.end_edit_group().unwrap();
+    assert!(!model.is_evaluation_paused());
+}
+
+#[test]
 fn an_empty_group_leaves_no_undo_step() {
     let mut model = new_empty_user_model();
     model.begin_edit_group().unwrap();

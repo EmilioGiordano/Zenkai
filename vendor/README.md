@@ -301,6 +301,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   undo step, storing the style index once and each cell's old one (8 bytes) instead of a
   full style per cell (new `Diff::FillStyle`). Stands on its own (`src/user_model/fill_style.rs`).
   Tests: `src/test/user_model/test_fill_style.rs`.
+- `UserModel::is_evaluation_paused` says whether evaluation is paused, by a pause or an open
+  edit group, so a caller that pauses it for a batch of edits can leave it as it found it.
+  Stands on its own (`src/user_model/common.rs`). Test: `evaluation_is_paused_by_a_pause_or_a_group`
+  in `src/test/user_model/test_fill_formula.rs`.
 
 Zenkai-only, not for upstream:
 
