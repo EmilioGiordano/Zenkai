@@ -618,8 +618,11 @@ fn test_styles_without_cell_style_formats() {
         format!("{}{}", &text[..start], &text[end..])
     });
     let model = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
-    assert_eq!(
-        model.styles.cell_style_xfs,
-        ironcalc_base::types::Styles::default().cell_style_xfs
-    );
+    let default_xf = &ironcalc_base::types::Styles::default().cell_style_xfs[0];
+    assert_eq!(model.styles.cell_style_xfs.len(), 4);
+    assert!(model
+        .styles
+        .cell_style_xfs
+        .iter()
+        .all(|xf| xf == default_xf));
 }

@@ -10,6 +10,9 @@ use crate::error::XlsxError;
 
 use super::util::{get_attribute, get_bool, get_bool_false, get_color_indexed, get_number};
 
+// Excel allows at most 64,000 cell formats, so no real file references a style format past it.
+const MAX_PADDED_CELL_STYLE_XFS: i32 = 64_000;
+
 /// Reads the workbook's `<colors><indexedColors>` palette override (OOXML §18.8.27) from the
 /// styleSheet root as `#RRGGBB` strings positioned by index. Returns `None` when the file
 /// supplies no override (the common case), so callers keep the legacy default indexed palette.
@@ -302,12 +305,6 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
             apply_fill,
         });
     }
-    // cellStyleXfs is optional; without it the styles rest on the default record, as in a
-    // new workbook, so the xfId 0 of every format and named style is still found.
-    if cell_style_xfs.is_empty() {
-        cell_style_xfs.push(CellStyleXfs::default());
-    }
-
     let mut cell_styles = Vec::new();
     let mut style_names = HashMap::new();
     let cell_style_nodes = style_sheet
@@ -417,6 +414,20 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
             quote_prefix,
             alignment,
         });
+    }
+
+    // cellStyleXfs is optional; without it every format and named style rests on the default
+    // record, as in a new workbook, up to the highest xfId they reference so none dangles.
+    // The padding is capped so a hostile xfId cannot ask for gigabytes.
+    if cell_style_xfs.is_empty() {
+        let referenced = cell_xfs
+            .iter()
+            .map(|xf| xf.xf_id)
+            .chain(cell_styles.iter().map(|style| style.xf_id))
+            .max()
+            .unwrap_or(0)
+            .clamp(0, MAX_PADDED_CELL_STYLE_XFS - 1);
+        cell_style_xfs.resize_with(referenced as usize + 1, CellStyleXfs::default);
     }
 
     let dxfs = load_dxfs(style_sheet, theme, indexed)?;
