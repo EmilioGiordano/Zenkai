@@ -632,6 +632,23 @@ fn test_column_elements_are_bounded_by_the_columns_of_a_sheet() {
 }
 
 #[test]
+fn test_whitespace_between_column_elements_does_not_count_against_the_bound() {
+    let edited = example_with_part_edited("xl/worksheets/sheet1.xml", |text| {
+        let start = text.find("<cols>").unwrap();
+        let end = text.find("</cols>").unwrap();
+        format!(
+            "{}<cols>{}</cols>{}",
+            &text[..start],
+            "
+  <col min=\"1\" max=\"16384\" width=\"9\"/>".repeat(16_384),
+            &text[end + "</cols>".len()..]
+        )
+    });
+    let model = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    assert_eq!(model.worksheets[0].cols.len(), 16_384);
+}
+
+#[test]
 fn test_styles_without_cell_style_formats() {
     let edited = example_with_part_edited("xl/styles.xml", |text| {
         let start = text.find("<cellStyleXfs").unwrap();
