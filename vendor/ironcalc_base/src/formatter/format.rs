@@ -1,4 +1,3 @@
-
 use crate::{locale::Locale, number_format::to_precision};
 
 use super::{

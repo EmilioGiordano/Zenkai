@@ -39,7 +39,10 @@ fn day_month_year_of_modern_serials() {
     let mut model = new_empty_model();
     model._set("A1", "=YEAR(45351)&\"-\"&MONTH(45351)&\"-\"&DAY(45351)");
     model._set("A2", "=YEAR(36526)&\"-\"&MONTH(36526)&\"-\"&DAY(36526)");
-    model._set("A3", "=YEAR(2958465)&\"-\"&MONTH(2958465)&\"-\"&DAY(2958465)");
+    model._set(
+        "A3",
+        "=YEAR(2958465)&\"-\"&MONTH(2958465)&\"-\"&DAY(2958465)",
+    );
     model._set("A4", "=DAY(-1)");
     model._set("A5", "=DAY(2958466)");
     model.evaluate();
