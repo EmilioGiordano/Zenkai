@@ -561,3 +561,51 @@ fn test_number_cell_without_value_is_empty() {
         );
     }
 }
+
+fn example_with_part_edited(part: &str, edit: impl Fn(String) -> String) -> Vec<u8> {
+    let bytes = fs::read("tests/example.xlsx").unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let mut body = Vec::new();
+        entry.read_to_end(&mut body).unwrap();
+        if name == part {
+            body = edit(String::from_utf8(body).unwrap()).into_bytes();
+        }
+        writer
+            .start_file(name, zip::write::FileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer, &body).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
+#[test]
+fn test_column_ranges_outside_the_sheet() {
+    let edited = example_with_part_edited("xl/worksheets/sheet1.xml", |text| {
+        let start = text.find("<cols>").unwrap();
+        let end = text.find("</cols>").unwrap();
+        format!(
+            "{}<cols>{}</cols>{}",
+            &text[..start],
+            concat!(
+                r#"<col min="5" max="3" width="9"/>"#,
+                r#"<col min="16385" max="16390" width="9"/>"#,
+                r#"<col min="-7" max="0" width="9"/>"#,
+                r#"<col min="0" max="2" width="11"/>"#,
+                r#"<col min="5" max="5" width="38"/>"#,
+                r#"<col min="10" max="20000" width="12"/>"#,
+            ),
+            &text[end + "</cols>".len()..]
+        )
+    });
+    let model = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    let columns: Vec<(i32, i32, f64)> = model.worksheets[0]
+        .cols
+        .iter()
+        .map(|col| (col.min, col.max, col.width))
+        .collect();
+    assert_eq!(columns, [(1, 2, 11.0), (5, 5, 38.0), (10, 16_384, 12.0)]);
+}
