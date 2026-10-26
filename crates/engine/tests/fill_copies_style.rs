@@ -111,3 +111,21 @@ fn undo_restores_the_old_styles_of_the_targets_and_redo_fills_again() {
     assert_eq!(book.cell(SHEET, pos(1, 0)).style.num_fmt, date_format);
     assert_eq!(book.cell(SHEET, pos(3, 0)).style.num_fmt, date_format);
 }
+
+#[test]
+fn undoing_a_fill_over_cells_that_did_not_exist_leaves_no_value_or_style() {
+    let mut book = Workbook::new_empty().unwrap();
+    book.set_input(SHEET, pos(0, 0), "3/15/2024").unwrap();
+    book.apply_style(SHEET, column(0, 0, 0), StyleChange::Bold(true))
+        .unwrap();
+    book.fill(SHEET, column(0, 3, 0), true).unwrap();
+    book.undo().unwrap();
+    for row in 1..4 {
+        assert_eq!(book.input(SHEET, pos(row, 0)), "", "row {row}");
+        assert_eq!(
+            book.cell(SHEET, pos(row, 0)),
+            book.cell(SHEET, pos(30, 0)),
+            "row {row}"
+        );
+    }
+}
