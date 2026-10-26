@@ -57,14 +57,16 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `tests/test.rs`.
 - The xlsx export writes only the part inside the sheet of a column range that inserting
   columns moved past column 16384, and skips one moved wholly past it; the model keeps
-  them, so undoing the insert brings them back (`src/export/worksheets.rs`). Needs the
-  public `LAST_COLUMN` of ironcalc_base. Test:
-  `columns_moved_past_the_last_column_are_written_inside_the_sheet` in
+  them, so undoing the insert brings them back; a range starting before column 1 is written
+  from column 1 (`src/export/worksheets.rs`). Needs the public `LAST_COLUMN` of
+  ironcalc_base. Tests: `columns_moved_past_the_last_column_are_written_inside_the_sheet`
+  and `column_ranges_starting_before_the_first_column_are_written_from_column_one` in
   `src/export/test/test_export.rs`.
 - The xlsx import reads a styles part without `cellStyleXfs`, which the schema makes
-  optional, with the one default record of a new workbook instead of panicking on the
-  missing element (`src/import/styles.rs`). Test: `test_styles_without_cell_style_formats`
-  in `tests/test.rs`.
+  optional, with default records, one per xfId the formats and named styles reference (up to 64,000), instead of
+  panicking on the missing element, so a save leaves no xfId dangling (`src/import/styles.rs`). Tests:
+  `test_styles_without_cell_style_formats` and
+  `test_saved_style_references_stay_inside_cell_style_formats` in `tests/test.rs`.
 
 Zenkai-only, not for upstream:
 
