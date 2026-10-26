@@ -727,6 +727,27 @@ line 2"
     }
 
     #[test]
+    fn autofill_counts_up_from_serial_zero_in_the_source_format() {
+        let mut book = Workbook::new_empty().unwrap();
+        let at = |r: i64| CellPos::new(zenkai_types::RowIdx::clamped(r), zenkai_types::ColIdx::clamped(0));
+        book.set_inputs(SheetId(0), at(0), &[vec!["0".to_string()]])
+            .unwrap();
+        let source = zenkai_types::Range::new(at(0), at(0));
+        book.set_number_format(SheetId(0), source, "m/d/yyyy")
+            .unwrap();
+        let target = zenkai_types::Range::new(at(0), at(3));
+        book.extend(SheetId(0), source, target).unwrap();
+        let serials = (0..4)
+            .map(|r| book.cell(SheetId(0), at(r)).number)
+            .collect::<Vec<_>>();
+        assert_eq!(serials, [Some(0.0), Some(1.0), Some(2.0), Some(3.0)]);
+        let texts = (0..4)
+            .map(|r| book.cell(SheetId(0), at(r)).text)
+            .collect::<Vec<_>>();
+        assert_eq!(texts, ["1/0/1900", "1/1/1900", "1/2/1900", "1/3/1900"]);
+    }
+
+    #[test]
     fn sort_orders_rows_like_excel_and_moves_formulas() {
         let mut book = Workbook::new_empty().unwrap();
         let at = |r: i64, c: i64| {
