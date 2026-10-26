@@ -142,6 +142,12 @@ fn load_columns(ws: Node) -> Result<Vec<Col>, XlsxError> {
         .filter(|n| n.has_tag_name("cols"))
         .collect::<Vec<Node>>();
     if columns.len() == 1 {
+        // Excel writes at most one <col> per column, so more cannot come from a real file.
+        if columns[0].children().count() > LAST_COLUMN as usize {
+            return Err(XlsxError::Workbook(format!(
+                "the sheet has more than {LAST_COLUMN} <col> elements"
+            )));
+        }
         for col in columns[0].children() {
             let min = get_attribute(&col, "min")?;
             let min = min.parse::<i32>()?;
