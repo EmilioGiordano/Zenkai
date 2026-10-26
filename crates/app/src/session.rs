@@ -366,12 +366,25 @@ pub fn load(directory: &Path) -> Loaded {
 }
 
 fn set_aside(file: &Path) -> Loaded {
-    let aside = file.with_extension("json.unreadable");
-    if let Err(error) = std::fs::rename(file, &aside) {
-        tracing::warn!(%error, "could not move the unreadable session file aside");
+    let moved = zenkai_types::aside::free_aside_name(file, "unreadable")
+        .ok_or_else(|| std::io::Error::other("no free name for the .unreadable copy"))
+        .and_then(|aside| std::fs::rename(file, aside));
+    match moved {
+        Ok(()) => Loaded::Unreadable,
+        Err(error) => {
+            tracing::warn!(%error, "could not move the unreadable session file aside");
+            KEPT_IN_PLACE
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(file.to_path_buf());
+            Loaded::KeptInPlace
+        }
     }
-    Loaded::Unreadable
 }
+
+// Files that could not be set aside; a save would replace the only copy, so none is written.
+static KEPT_IN_PLACE: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 // Written next to the file and renamed over it, so a crash never leaves half a session.
 // Taken when a snapshot is made. Writes may run on any thread, so a write whose snapshot is
@@ -399,6 +412,15 @@ pub fn save_in_order(directory: &Path, session: &Session, order: SaveOrder) -> s
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let file = file_in(directory);
+    if KEPT_IN_PLACE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .contains(&file)
+    {
+        return Err(std::io::Error::other(
+            "the unreadable session file could not be set aside and is kept",
+        ));
+    }
     if last.get(&file).is_some_and(|written| order < *written) {
         return Ok(());
     }
