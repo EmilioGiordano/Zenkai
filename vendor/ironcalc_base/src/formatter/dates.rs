@@ -1,5 +1,4 @@
 use chrono::Datelike;
-use chrono::Days;
 use chrono::Duration;
 use chrono::Months;
 use chrono::NaiveDate;
@@ -102,10 +101,6 @@ pub fn permissive_date_to_serial_number(day: i32, month: i32, year: i32) -> Resu
     // This function applies that same logic to dates. And does it in the most compatible way as
     // possible.
 
-    // Special case for the minimum date
-    if year == 1899 && month == 12 && day == 31 {
-        return Ok(MINIMUM_DATE_SERIAL_NUMBER);
-    }
     let Some(mut date) = NaiveDate::from_ymd_opt(year, 1, 1) else {
         return Err(DATE_OUT_OF_RANGE_MESSAGE.to_string());
     };
@@ -137,21 +132,13 @@ pub fn permissive_date_to_serial_number(day: i32, month: i32, year: i32) -> Resu
         date
     };
 
-    date = {
-        let day_diff = day - 1;
-        let abs_day = day_diff.unsigned_abs() as u64;
-        if day_diff <= 0 {
-            date = date - Days::new(abs_day);
-        } else {
-            date = date + Days::new(abs_day);
-        }
-        if !is_date_within_range(date) {
-            return Err(DATE_OUT_OF_RANGE_MESSAGE.to_string());
-        }
-        date
-    };
-
-    Ok(convert_to_serial_number(date))
+    // Excel adds the days to the serial of the first of the month, so DATE(1900, 3, 0) is the
+    // fictitious 29 February 1900 (60) and DATE(1900, 1, 0) is serial 0.
+    let serial = convert_to_serial_number(date) as i64 + day as i64 - 1;
+    if !(0..=MAXIMUM_DATE_SERIAL_NUMBER as i64).contains(&serial) {
+        return Err(DATE_OUT_OF_RANGE_MESSAGE.to_string());
+    }
+    Ok(serial as i32)
 }
 
 #[cfg(test)]
@@ -200,9 +187,8 @@ mod tests {
             permissive_date_to_serial_number(31, 12, 9999),
             Ok(MAXIMUM_DATE_SERIAL_NUMBER),
         );
-        assert_eq!(
-            permissive_date_to_serial_number(31, 12, 1899),
-            Ok(MINIMUM_DATE_SERIAL_NUMBER),
-        );
+        assert_eq!(permissive_date_to_serial_number(0, 1, 1900), Ok(0));
+        assert!(permissive_date_to_serial_number(-1, 1, 1900).is_err());
+        assert!(permissive_date_to_serial_number(1, 13, 9999).is_err());
     }
 }
