@@ -6,7 +6,7 @@ use zenkai_engine::EngineError;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
-use super::save_flow::{CheckedTarget, source_unchanged};
+use super::save_flow::CheckedTarget;
 use super::{Severity, Workspace};
 use crate::autosave::{self, Due};
 use crate::failure::{offer_another_location, save_failure};
@@ -175,7 +175,7 @@ impl Workspace {
             self.save_ended(id, false, window, cx);
             return;
         };
-        if !source_unchanged(&source, &text.path) {
+        if source != text.path {
             self.notify(Severity::Warning, t!("save.target_stale"), cx);
             self.save_ended(id, false, window, cx);
             return;

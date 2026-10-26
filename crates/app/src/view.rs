@@ -2025,7 +2025,7 @@ impl Workspace {
             self.save_ended(id, false, window, cx);
             return;
         };
-        if !save_flow::source_unchanged(&source, &document.path) {
+        if source != document.path {
             self.notify(Severity::Warning, t!("save.target_stale"), cx);
             self.save_ended(id, false, window, cx);
             return;

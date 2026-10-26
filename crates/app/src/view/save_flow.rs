@@ -47,16 +47,8 @@ pub(super) struct CheckedTarget {
     pub(super) probe: files::TargetProbe,
 }
 
-pub(super) fn source_unchanged(probed: &Option<PathBuf>, current: &Option<PathBuf>) -> bool {
-    probed == current
-}
-
 impl Workspace {
-    pub(super) fn refuse_during_save_as(
-        &mut self,
-        id: WorkbookId,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub(super) fn refuse_during_save_as(&mut self, id: WorkbookId, cx: &mut Context<Self>) -> bool {
         if !self.save_as_flows.is_pending(id) {
             return false;
         }
@@ -64,11 +56,7 @@ impl Workspace {
         true
     }
 
-    pub(super) fn begin_save_as(
-        &mut self,
-        id: WorkbookId,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub(super) fn begin_save_as(&mut self, id: WorkbookId, cx: &mut Context<Self>) -> bool {
         if self.refuse_during_save_as(id, cx) {
             return false;
         }
@@ -78,11 +66,9 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use zenkai_types::WorkbookId;
 
-    use super::{SaveAsFlows, source_unchanged};
+    use super::SaveAsFlows;
 
     #[test]
     fn a_second_flow_on_the_same_document_is_refused() {
@@ -103,15 +89,5 @@ mod tests {
         flows.finish(id);
         assert!(!flows.is_pending(id));
         assert!(flows.begin(id));
-    }
-
-    #[test]
-    fn a_changed_source_is_detected() {
-        let a = Some(PathBuf::from("a.xlsx"));
-        let b = Some(PathBuf::from("b.xlsx"));
-        assert!(source_unchanged(&a, &a));
-        assert!(source_unchanged(&None, &None));
-        assert!(!source_unchanged(&a, &b));
-        assert!(!source_unchanged(&None, &a));
     }
 }
