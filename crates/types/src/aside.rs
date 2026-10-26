@@ -16,5 +16,6 @@ pub fn free_aside_name(file: &Path, extension: &str) -> Option<PathBuf> {
             candidate.push(format!(".{extension}"));
             file.with_file_name(candidate)
         })
-        .find(|candidate| !candidate.exists())
+        // A name whose existence cannot be checked counts as taken: rename would replace it.
+        .find(|candidate| matches!(candidate.try_exists(), Ok(false)))
 }
