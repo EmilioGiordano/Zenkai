@@ -317,8 +317,23 @@ fn target_action(
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum DelimitedAction {
+    Export,
+    ConfirmReplacing,
+}
+
+fn delimited_action(probe: &files::TargetProbe) -> DelimitedAction {
+    if probe.exists || probe.same_as_source {
+        DelimitedAction::ConfirmReplacing
+    } else {
+        DelimitedAction::Export
+    }
+}
+
 enum Replacing {
     Existing,
+    ExistingExport,
     Original(Vec<Unsupported>),
 }
 
@@ -1979,11 +1994,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if files::is_delimited_text(&chosen) {
-            self.save_as_flows.finish(id);
-            self.export_csv(id, chosen, window, cx);
-            return;
-        }
         let source = match self.documents.get(id) {
             Some(document) => document.path.clone(),
             None => {
@@ -1993,7 +2003,12 @@ impl Workspace {
             }
         };
         self.save_as_flows.start_checking(id);
-        let path = files::xlsx_target(&chosen);
+        let delimited = files::is_delimited_text(&chosen);
+        let path = if delimited {
+            chosen.clone()
+        } else {
+            files::xlsx_target(&chosen)
+        };
         let renamed = path != chosen;
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
@@ -2008,13 +2023,47 @@ impl Workspace {
                 probe,
             };
             let update = this.update_in(cx, |this, window, cx| {
-                this.decide_target(id, renamed, checked, window, cx)
+                if delimited {
+                    this.decide_export(id, checked, window, cx)
+                } else {
+                    this.decide_target(id, renamed, checked, window, cx)
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed while checking the save target");
             }
         })
         .detach();
+    }
+
+    fn decide_export(
+        &mut self,
+        id: WorkbookId,
+        checked: save_flow::CheckedTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let save_flow::CheckedTarget {
+            path,
+            source,
+            probe,
+        } = checked;
+        self.save_as_flows.finish(id);
+        let Some(document) = self.documents.get(id) else {
+            self.save_ended(id, false, window, cx);
+            return;
+        };
+        if source != document.path {
+            self.notify(Severity::Warning, t!("save.target_stale"), cx);
+            self.save_ended(id, false, window, cx);
+            return;
+        }
+        match delimited_action(&probe) {
+            DelimitedAction::Export => self.export_csv(id, path, window, cx),
+            DelimitedAction::ConfirmReplacing => {
+                self.confirm_replace(id, path, Replacing::ExistingExport, window, cx);
+            }
+        }
     }
 
     fn decide_target(
@@ -2078,8 +2127,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let exports = matches!(replacing, Replacing::ExistingExport);
         let (title, detail, overwrite) = match replacing {
-            Replacing::Existing => (
+            Replacing::Existing | Replacing::ExistingExport => (
                 t!("save.replace_existing_title"),
                 t!("save.replace_existing_detail", path = path.display()),
                 None,
@@ -2104,7 +2154,9 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| {
-                if choice == Some(1) {
+                if choice == Some(1) && exports {
+                    this.export_csv(id, path, window, cx)
+                } else if choice == Some(1) {
                     this.save_to(id, path, overwrite, ChangedFile::Ask, window, cx)
                 } else {
                     this.save_ended(id, false, window, cx)
@@ -4507,9 +4559,9 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, StructureEdit, TargetAction,
-        changed_file_answers, enter_text, grow_wrapped_rows, selection_edit, target_action,
-        widen_for_numbers,
+        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, DelimitedAction, StructureEdit, TargetAction,
+        changed_file_answers, delimited_action, enter_text, grow_wrapped_rows, selection_edit,
+        target_action, widen_for_numbers,
     };
     use crate::files::TargetProbe;
     use zenkai_engine::{Engine, Workbook};
@@ -4553,6 +4605,26 @@ mod tests {
         assert_eq!(
             target_action(&free, true, false, false),
             TargetAction::SaveNew
+        );
+    }
+
+    #[test]
+    fn delimited_export_asks_before_replacing_any_existing_file() {
+        let probe = |same_as_source, exists| TargetProbe {
+            same_as_source,
+            exists,
+        };
+        assert_eq!(
+            delimited_action(&probe(false, true)),
+            DelimitedAction::ConfirmReplacing
+        );
+        assert_eq!(
+            delimited_action(&probe(true, false)),
+            DelimitedAction::ConfirmReplacing
+        );
+        assert_eq!(
+            delimited_action(&probe(false, false)),
+            DelimitedAction::Export
         );
     }
 
