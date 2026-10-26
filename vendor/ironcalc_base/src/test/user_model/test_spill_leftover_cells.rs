@@ -156,3 +156,18 @@ fn clearing_all_of_the_anchor_removes_its_spill() {
     assert_absent(&model, 1..=10, 2);
     assert_eq!(last_row(&model), 1);
 }
+
+#[test]
+fn cutting_the_anchor_removes_its_spill_at_the_source() {
+    let mut model = new_empty_user_model();
+    model.set_user_input(0, 1, 2, "=SEQUENCE(10)").unwrap();
+    model.set_selected_cell(1, 2).unwrap();
+    model.set_selected_range(1, 2, 1, 2).unwrap();
+    let cut = model.copy_to_clipboard().unwrap();
+    model.set_selected_cell(1, 4).unwrap();
+    model
+        .paste_from_clipboard(0, (1, 2, 1, 2), &cut.data, true)
+        .unwrap();
+    assert_eq!(model.get_formatted_cell_value(0, 10, 4), Ok("10".to_string()));
+    assert_absent(&model, 2..=10, 2);
+}
