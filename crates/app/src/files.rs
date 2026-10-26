@@ -422,7 +422,10 @@ mod tests {
                     (at(4, 4), "-x"),
                 ],
             ),
-            ("one column.csv", vec![(at(0, 0), "top"), (at(3, 0), "bottom")]),
+            (
+                "one column.csv",
+                vec![(at(0, 0), "top"), (at(3, 0), "bottom")],
+            ),
             ("tabs.tsv", vec![(at(0, 1), "a\tb"), (at(2, 0), "=1/0")]),
             ("empty.csv", vec![]),
         ];
