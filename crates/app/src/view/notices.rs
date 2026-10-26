@@ -26,6 +26,12 @@ pub(super) struct Notice {
     pub time: SharedString,
 }
 
+impl Notice {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
 // Info goes to the status bar only. A warning or an error also gets a card that stays
 // until it is dismissed or replaced, so an unread problem survives a later "Saved".
 #[derive(Default)]
@@ -76,6 +82,15 @@ impl Notices {
 
     pub fn len(&self) -> usize {
         self.history.len()
+    }
+
+    pub fn index_of(&self, id: Option<u64>) -> usize {
+        id.and_then(|id| self.newest_first().position(|notice| notice.id == id))
+            .unwrap_or(0)
+    }
+
+    pub fn id_at(&self, index: usize) -> Option<u64> {
+        self.newest_first().nth(index).map(Notice::id)
     }
 
     pub fn dismiss_card(&mut self) {
@@ -274,5 +289,36 @@ mod tests {
         notices.clear_on_open();
         assert!(notices.card().is_some());
         assert!(notices.status().is_some());
+    }
+
+    #[test]
+    fn the_selection_follows_its_notice_when_newer_ones_arrive() {
+        let mut notices = Notices::default();
+        post(&mut notices, Severity::Info, "a", Lifetime::UntilReplaced);
+        post(&mut notices, Severity::Info, "b", Lifetime::UntilReplaced);
+        let selected = notices.id_at(1);
+        post(&mut notices, Severity::Info, "c", Lifetime::UntilReplaced);
+        assert_eq!(notices.index_of(selected), 2);
+    }
+
+    #[test]
+    fn a_selection_dropped_by_the_cap_falls_back_to_the_newest() {
+        let mut notices = Notices::default();
+        post(
+            &mut notices,
+            Severity::Info,
+            "first",
+            Lifetime::UntilReplaced,
+        );
+        let selected = notices.id_at(0);
+        for index in 0..HISTORY_LIMIT {
+            post(
+                &mut notices,
+                Severity::Info,
+                &index.to_string(),
+                Lifetime::UntilReplaced,
+            );
+        }
+        assert_eq!(notices.index_of(selected), 0);
     }
 }

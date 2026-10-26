@@ -19,7 +19,7 @@ const TIME_WIDTH: f32 = 60.0;
 pub(super) struct MessagesPanel {
     focus: FocusHandle,
     scroll: ScrollHandle,
-    selected: usize,
+    selected: Option<u64>,
 }
 
 impl Workspace {
@@ -33,7 +33,7 @@ impl Workspace {
         self.messages = Some(MessagesPanel {
             focus,
             scroll: ScrollHandle::new(),
-            selected: 0,
+            selected: None,
         });
         cx.notify();
     }
@@ -47,48 +47,54 @@ impl Workspace {
     }
 
     pub(super) fn step_message(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let last = self.notices.len().saturating_sub(1);
         let Some(panel) = &mut self.messages else {
             return;
         };
-        panel.selected = if forward {
-            (panel.selected + 1).min(last)
+        let current = self.notices.index_of(panel.selected);
+        let next = if forward {
+            (current + 1).min(self.notices.len().saturating_sub(1))
         } else {
-            panel.selected.saturating_sub(1)
+            current.saturating_sub(1)
         };
-        panel.scroll.scroll_to_item(panel.selected);
+        panel.selected = self.notices.id_at(next);
+        panel.scroll.scroll_to_item(next);
         cx.notify();
     }
 
-    fn select_message(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn select_message(&mut self, id: u64, cx: &mut Context<Self>) {
         if let Some(panel) = &mut self.messages {
-            panel.selected = index;
+            panel.selected = Some(id);
             cx.notify();
         }
     }
 
-    fn copy_message(&mut self, index: usize, cx: &mut Context<Self>) {
-        if let Some(notice) = self.notices.newest_first().nth(index) {
+    fn copy_message(&mut self, id: u64, cx: &mut Context<Self>) {
+        if let Some(notice) = self.notices.newest_first().find(|notice| notice.id() == id) {
             cx.write_to_clipboard(ClipboardItem::new_string(notice.text.to_string()));
         }
     }
 
     pub(super) fn copy_selected_message(&mut self, cx: &mut Context<Self>) {
-        if let Some(panel) = &self.messages {
-            self.copy_message(panel.selected, cx);
+        let Some(panel) = &self.messages else {
+            return;
+        };
+        if let Some(id) = self.notices.id_at(self.notices.index_of(panel.selected)) {
+            self.copy_message(id, cx);
         }
     }
 
     pub(super) fn render_messages(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let panel = self.messages.as_ref()?;
         let theme = cx.theme();
+        let chosen = self.notices.index_of(panel.selected);
         let rows: Vec<_> = self
             .notices
             .newest_first()
             .enumerate()
             .map(|(index, notice)| {
                 let (icon, color) = severity_icon(notice.severity, theme);
-                let selected = index == panel.selected;
+                let selected = index == chosen;
+                let id = notice.id();
                 h_flex()
                     .id(("message", index))
                     .role(Role::ListBoxOption)
@@ -111,7 +117,7 @@ impl Workspace {
                         theme.transparent
                     })
                     .when(selected, |row| row.bg(theme.accent))
-                    .on_click(cx.listener(move |this, _, _, cx| this.select_message(index, cx)))
+                    .on_click(cx.listener(move |this, _, _, cx| this.select_message(id, cx)))
                     .child(
                         div()
                             .w(rem_px(TIME_WIDTH))
@@ -134,9 +140,7 @@ impl Workspace {
                             .small()
                             .icon(IconName::Copy)
                             .accessibility_label(t!("notice.copy"))
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.copy_message(index, cx)),
-                            ),
+                            .on_click(cx.listener(move |this, _, _, cx| this.copy_message(id, cx))),
                     )
             })
             .collect();
