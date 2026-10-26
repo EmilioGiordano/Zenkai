@@ -276,9 +276,8 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     let mut cell_style_xfs = Vec::new();
     let cell_style_xfs_nodes = style_sheet
         .children()
-        .filter(|n| n.has_tag_name("cellStyleXfs"))
-        .collect::<Vec<Node>>()[0];
-    for xfs in cell_style_xfs_nodes.children() {
+        .find(|n| n.has_tag_name("cellStyleXfs"));
+    for xfs in cell_style_xfs_nodes.iter().flat_map(|n| n.children()) {
         let num_fmt_id = get_number(xfs, "numFmtId");
         let font_id = get_number(xfs, "fontId");
         let fill_id = get_number(xfs, "fillId");
@@ -302,6 +301,11 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
             apply_font,
             apply_fill,
         });
+    }
+    // cellStyleXfs is optional; without it the styles rest on the default record, as in a
+    // new workbook, so the xfId 0 of every format and named style is still found.
+    if cell_style_xfs.is_empty() {
+        cell_style_xfs.push(CellStyleXfs::default());
     }
 
     let mut cell_styles = Vec::new();
