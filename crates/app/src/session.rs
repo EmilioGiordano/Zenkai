@@ -7,7 +7,7 @@ use zenkai_engine::Unsupported;
 use zenkai_grid::{Selection, ViewState};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, WorkbookId};
 
-use crate::entry::{Link, LinkStatus};
+use crate::entry::{FileSeen, Link, LinkStatus, Rested};
 use crate::panel_width::PanelWidths;
 use crate::pdf::PdfPosition;
 use crate::recovery;
@@ -262,7 +262,17 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         kind: link.kind,
         mode: link.mode,
         base: link.base,
-        file_modified: link.file_modified,
+        file_modified: link
+            .path
+            .as_ref()
+            .zip(link.recovery.as_ref())
+            .and(link.rested.as_ref())
+            .map(|rested| {
+                rested
+                    .file
+                    .stamp
+                    .map_or(rested.file.at, |stamp| stamp.modified())
+            }),
         pdf: link.pdf,
         text_zoom: link.text_zoom,
         unsupported: link
@@ -327,10 +337,17 @@ pub fn link_of(
         kind: record.kind,
         mode: record.mode,
         base: record.base,
-        file_modified: record.file_modified,
         pdf: record.pdf,
         text_zoom: record.text_zoom,
-        rested: None,
+        rested: record.file_modified.map(|modified| {
+            Box::new(Rested {
+                file: FileSeen {
+                    stamp: None,
+                    at: modified,
+                },
+                hibernation: None,
+            })
+        }),
     }
 }
 

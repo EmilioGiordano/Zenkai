@@ -436,22 +436,29 @@ mod tests {
         assert!(guard.changed(zenkai_engine::Stamp::of(&target).unwrap()));
     }
 
+    fn recorded(documents: &Documents) -> FileRecord {
+        let mut link = documents.active().unwrap().to_link();
+        link.recovery = Some(PathBuf::from("recovery").join("autosave-1-2-3.xlsx"));
+        session::record_of(&link, true)
+    }
+
     #[test]
     fn a_restored_guard_survives_a_second_snapshot_and_restore() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("a.xlsx");
         std::fs::write(&target, b"original").unwrap();
         let seen = std::fs::metadata(&target).unwrap().modified().unwrap();
-        let first = restored_from_recovery(Some(seen));
-        let records = snapshot_files(&first, &[]);
-        let record = records
-            .into_iter()
-            .find(|r| r.path.as_deref() == Some("a.xlsx"))
-            .unwrap();
+        let record = recorded(&restored_from_recovery(Some(seen)));
         assert_eq!(record.file_modified, Some(seen));
 
-        let second = restored_from_recovery(record.file_modified);
-        let guard = second.active().unwrap().file_guard().unwrap();
+        let link = session::link_of(
+            &record,
+            WorkbookId(1),
+            SpaceId(0),
+            Some(Path::new("recovery")),
+        );
+        let guard = link.rested.unwrap().file;
+        assert!(!guard.changed(zenkai_engine::Stamp::of(&target).unwrap()));
         std::fs::File::options()
             .write(true)
             .open(&target)
@@ -480,9 +487,8 @@ mod tests {
         let opened = zenkai_engine::open_xlsx(&target).unwrap().workbook;
         let mut documents = documents();
         documents.open(opened, Some(target.clone()), Vec::new());
-        let records = snapshot_files(&documents, &[]);
         let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
-        assert!(records.iter().any(|r| r.file_modified == Some(modified)));
+        assert_eq!(recorded(&documents).file_modified, Some(modified));
     }
 
     #[test]

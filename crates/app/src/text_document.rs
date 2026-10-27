@@ -274,7 +274,6 @@ impl TextDocument {
             kind: self.kind,
             mode: self.mode,
             base: self.stamp.map(Stamp::record),
-            file_modified: None,
             pdf: Default::default(),
             text_zoom: self.zoom,
         }

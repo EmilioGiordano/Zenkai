@@ -740,7 +740,6 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
-            file_modified: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
             rested: Some(Box::new(Rested {
