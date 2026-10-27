@@ -424,8 +424,8 @@ fn scan_archive<R: Read + Seek>(
     // are the ones counted, once for every sheet naming them. Where the package has no
     // readable index the importer fails on the file, so every part is counted only as a
     // guard. A comments part is counted for every relationship that names it, as the
-    // importer keeps a copy per sheet. Every part still streams through the caps below, and IronCalc still decides
-    // the file.
+    // importer keeps a copy per sheet. Every part still streams through the caps below,
+    // and IronCalc still decides the file.
     let package_sheets = importer_worksheet_paths(archive, meter, budgets)?;
     let comment_loads = match &package_sheets {
         Some(sheets) => importer_comment_loads(archive, meter, budgets, sheets)?,
