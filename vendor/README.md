@@ -310,6 +310,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   edit group, so a caller that pauses it for a batch of edits can leave it as it found it.
   Stands on its own (`src/user_model/common.rs`). Test: `evaluation_is_paused_by_a_pause_or_a_group`
   in `src/test/user_model/test_fill_formula.rs`.
+- A formula that makes a dynamic array anchor evaluate, when an earlier anchor reads it
+  through that formula, gets the `#SPILL!` or `#CALC!` the anchor stores when its array
+  cannot be written, instead of the array's first value (`src/model.rs`, `evaluate_cell`).
+  Stands on its own. Tests: `src/test/dynamic_evaluation/test_blocked_spill_reads.rs`.
 
 Zenkai-only, not for upstream:
 
