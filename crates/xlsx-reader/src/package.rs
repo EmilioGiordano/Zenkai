@@ -185,26 +185,9 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
     meter: &CompressedMeter,
     budgets: &Budgets,
 ) -> Result<Option<HashMap<String, NonZeroU64>>, ReadError> {
-    let mut peek = |name: &str| -> Result<Option<String>, ReadError> {
-        let Ok(entry) = archive.by_name(name) else {
-            return Ok(None);
-        };
-        let bytes = match read_part_to_peek(entry.take(PEEK_CAP_BYTES + 1), meter, name, budgets) {
-            Ok(bytes) => bytes,
-            Err(ReadError::Unsafe(reason)) => return Err(ReadError::Unsafe(reason)),
-            Err(_) => return Ok(None),
-        };
-        if bytes.len() as u64 > PEEK_CAP_BYTES {
-            return Err(ReadError::Unsafe(format!(
-                "{name} is larger than the {} a workbook index may take",
-                describe_bytes(PEEK_CAP_BYTES)
-            )));
-        }
-        Ok(String::from_utf8(bytes).ok())
-    };
     // The workbook's DOM is gone before the rels' is built, so the two never coexist.
     let sheet_ids: Vec<String> = {
-        let Some(workbook) = peek("xl/workbook.xml")? else {
+        let Some(workbook) = peek_part(archive, "xl/workbook.xml", meter, budgets)? else {
             return Ok(None);
         };
         let Ok(workbook) = roxmltree::Document::parse(&workbook) else {
@@ -222,7 +205,7 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
             })
             .collect()
     };
-    let Some(rels) = peek("xl/_rels/workbook.xml.rels")? else {
+    let Some(rels) = peek_part(archive, "xl/_rels/workbook.xml.rels", meter, budgets)? else {
         return Ok(None);
     };
     let Ok(rels) = roxmltree::Document::parse(&rels) else {
@@ -254,6 +237,75 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
         }
     }
     Ok(Some(paths))
+}
+
+fn peek_part<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+    meter: &CompressedMeter,
+    budgets: &Budgets,
+) -> Result<Option<String>, ReadError> {
+    let Ok(entry) = archive.by_name(name) else {
+        return Ok(None);
+    };
+    let bytes = match read_part_to_peek(entry.take(PEEK_CAP_BYTES + 1), meter, name, budgets) {
+        Ok(bytes) => bytes,
+        Err(ReadError::Unsafe(reason)) => return Err(ReadError::Unsafe(reason)),
+        Err(_) => return Ok(None),
+    };
+    if bytes.len() as u64 > PEEK_CAP_BYTES {
+        return Err(ReadError::Unsafe(format!(
+            "{name} is larger than the {} a workbook index may take",
+            describe_bytes(PEEK_CAP_BYTES)
+        )));
+    }
+    Ok(String::from_utf8(bytes).ok())
+}
+
+// The comments parts the importer loads, with how many times: once for every comments
+// relationship of every load of a sheet, each load keeping its own copy. Targets are
+// resolved the way the importer does, its first two characters replaced by the sheet's
+// base folder. A relationships part that is missing or does not parse is skipped, as the
+// importer fails on it too.
+pub(crate) fn importer_comment_loads<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    meter: &CompressedMeter,
+    budgets: &Budgets,
+    sheets: &HashMap<String, NonZeroU64>,
+) -> Result<HashMap<String, NonZeroU64>, ReadError> {
+    let mut loads: HashMap<String, u64> = HashMap::new();
+    for (sheet, sheet_loads) in sheets {
+        let Some((base, file)) = sheet.split_once("/worksheets/") else {
+            continue;
+        };
+        let rels_name = format!("{base}/worksheets/_rels/{file}.rels");
+        let Some(rels) = peek_part(archive, &rels_name, meter, budgets)? else {
+            continue;
+        };
+        let Ok(rels) = roxmltree::Document::parse(&rels) else {
+            continue;
+        };
+        for node in rels
+            .descendants()
+            .filter(|n| n.has_tag_name("Relationship"))
+        {
+            let (Some(kind), Some(target)) = (node.attribute("Type"), node.attribute("Target"))
+            else {
+                continue;
+            };
+            if !kind.ends_with("comments") || !target.is_char_boundary(2) {
+                continue;
+            }
+            let mut target = target.to_string();
+            target.replace_range(..2, base);
+            let count = loads.entry(target).or_default();
+            *count = count.saturating_add(sheet_loads.get());
+        }
+    }
+    Ok(loads
+        .into_iter()
+        .filter_map(|(path, count)| NonZeroU64::new(count).map(|count| (path, count)))
+        .collect())
 }
 
 // The archive IronCalc's own importer reads for everything but the cells: every entry is
