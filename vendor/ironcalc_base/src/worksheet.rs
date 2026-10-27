@@ -445,10 +445,8 @@ impl Worksheet {
         self.set_column_width_and_style(column, width, hidden, style)
     }
 
-    /// Gives a column back the width of `old`, the entry that covered it before its width
-    /// was set, keeping its current style and hidden state. With no entry, the column's
-    /// own entry is removed, or reset to the default width when it carries a style or is
-    /// hidden.
+    // Only the width is restored: style and hidden state may have changed since. A column
+    // with no previous entry keeps one only while it carries a style or is hidden.
     pub(crate) fn restore_column_width(
         &mut self,
         column: i32,
