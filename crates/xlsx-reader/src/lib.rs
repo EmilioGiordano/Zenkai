@@ -1039,7 +1039,7 @@ mod tests {
     }
 
     // One 4,000 byte comments part costs 64,000 bytes of DOM; the budget holds 70,000.
-    fn commented_sheets_refused(sheets: usize, shared: bool) -> bool {
+    fn commented_sheets_refused(sheets: usize, shared: bool, max_cells: u64) -> bool {
         let names: Vec<(String, String)> = (1..=sheets)
             .map(|n| (format!("S{n}"), format!("rId{n}")))
             .collect();
@@ -1092,20 +1092,21 @@ mod tests {
         for name in &comment_names {
             entries.push((name.as_str(), comments.as_bytes()));
         }
-        walk_refused(&entries, 1_000)
+        walk_refused(&entries, max_cells)
     }
 
     #[test]
     fn many_sheets_naming_one_comments_part_are_charged_for_each_load() {
-        assert!(!commented_sheets_refused(1, true));
-        assert!(commented_sheets_refused(3, true));
-        assert!(commented_sheets_refused(40, true));
+        assert!(!commented_sheets_refused(1, true, 1_000));
+        assert!(commented_sheets_refused(3, true, 1_000));
+        assert!(commented_sheets_refused(40, true, 1_000));
     }
 
     #[test]
     fn a_comments_part_per_sheet_is_charged_once() {
-        assert!(!commented_sheets_refused(1, false));
-        assert!(!commented_sheets_refused(3, false));
+        assert!(!commented_sheets_refused(1, false, 1_000));
+        assert!(!commented_sheets_refused(3, false, 1_000));
+        assert!(!commented_sheets_refused(40, false, 10_000));
     }
 
     #[test]
