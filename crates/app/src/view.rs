@@ -1633,25 +1633,39 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(document) = self.documents.get(id) else {
+        let Some(document) = self.documents.get_mut(id) else {
             self.save_ended(id, false, window, cx);
             return;
         };
-        let Some(workbook) = document.workbook() else {
+        let (sheet, sheets) = (document.sheet, document.sheets.len());
+        let Some(shared) = document.begin_file_job(FileJob::Saving) else {
+            let reason = file_job_refusal(document.file_job());
+            self.notify(Severity::Warning, reason, cx);
             self.save_ended(id, false, window, cx);
-            self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
             return;
         };
-        let rows = files::sheet_rows(&workbook, document.sheet);
-        let sheets = document.sheets.len();
+        let generation = document.generation();
+        self.busy = Some(t!("busy.saving").into());
+        self.start_long_job(LongJob::Saving, cx);
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
             let written = cx
                 .background_executor()
-                .spawn(async move { files::write_csv_file(&target, &rows) })
+                .spawn(async move { files::export_sheet_csv(&shared, sheet, &target) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.csv_export_ended(id, &path, sheets, written, window, cx)
+                this.clear_busy(t!("busy.saving"), cx);
+                this.end_long_job(LongJob::Saving, cx);
+                let mut follow_up = AfterJob::Nothing;
+                if let Some(document) = this.documents.get_mut(id) {
+                    document.end_file_job(generation);
+                    // A save pressed meanwhile still owes the workbook file: a CSV is not it.
+                    follow_up = document.settle_save(generation, JobEnd::Autosaved);
+                }
+                this.csv_export_ended(id, &path, sheets, written, window, cx);
+                if follow_up == AfterJob::SaveAgain {
+                    this.save_again(id, window, cx);
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during export");
@@ -1796,11 +1810,7 @@ impl Workspace {
                         if started.elapsed() < SAVE_AGAIN_LIMIT {
                             return true;
                         }
-                        let reason = match document.file_job() {
-                            FileJob::Idle => t!("notice.still_calculating"),
-                            FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
-                            FileJob::Hibernating => t!("notice.still_hibernating"),
-                        };
+                        let reason = file_job_refusal(document.file_job());
                         document.clear_pending_save();
                         this.notify(Severity::Warning, reason, cx);
                         return false;
@@ -2159,11 +2169,7 @@ impl Workspace {
             return;
         };
         let Some(shared) = document.begin_file_job(FileJob::Saving) else {
-            let reason = match document.file_job() {
-                FileJob::Idle => t!("notice.still_calculating"),
-                FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
-                FileJob::Hibernating => t!("notice.still_hibernating"),
-            };
+            let reason = file_job_refusal(document.file_job());
             self.notify(Severity::Warning, reason, cx);
             self.save_ended(id, false, window, cx);
             return;
@@ -3604,6 +3610,14 @@ impl Workspace {
             .border_color(theme.status_bar_border)
             .child(left)
             .child(right)
+    }
+}
+
+fn file_job_refusal(job: FileJob) -> &'static str {
+    match job {
+        FileJob::Idle => t!("notice.still_calculating"),
+        FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
+        FileJob::Hibernating => t!("notice.still_hibernating"),
     }
 }
 

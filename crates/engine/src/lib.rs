@@ -25,6 +25,8 @@ mod saved;
 mod sheet_copy;
 mod sheet_elements;
 mod sheet_settings;
+mod shown_cells;
+mod streamed_write;
 mod style_growth;
 mod table_headers;
 #[cfg(test)]
@@ -39,6 +41,8 @@ pub use hibernation::{Kept, MAX_DUMP_BYTES};
 pub use preflight::run_with_engine_stack;
 pub use save::{SaveSnapshot, SaveTarget, save_xlsx, write_xlsx_unverified};
 pub use saved::Stamp;
+pub use shown_cells::ShownCells;
+pub use streamed_write::write_atomic_streaming;
 pub use workbook::{Copied, Engine, Workbook, format_preview};
 pub use xlsx_read::{
     ListedSheet, ReadBook, ReaderComparison, XlsxReader, compare_readers, read_xlsx_bytes,
