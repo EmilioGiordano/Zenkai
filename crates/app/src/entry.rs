@@ -57,7 +57,8 @@ pub struct Link {
 
 // The file as the workbook last had it, to tell on the way back whether it changed while the
 // workbook was out of memory. The stamp is the engine's, taken when the file was last read or
-// written; without one, a file modified after `at` is taken as changed.
+// written; without one, `at` is the file's modified time as the workbook knew it, or when it
+// last looked, and a file modified after it is taken as changed.
 #[derive(Clone, Copy, Debug)]
 pub struct FileSeen {
     pub stamp: Option<Stamp>,
@@ -274,16 +275,25 @@ impl Document {
             kind: DocumentKind::Workbook,
             mode: ViewMode::default(),
             base: None,
-            file_modified: self
-                .workbook()
-                .and_then(|workbook| workbook.file_stamp())
-                .map(|stamp| stamp.modified()),
+            file_modified: self.file_modified(),
             pdf: Default::default(),
             text_zoom: Default::default(),
             rested: Some(Box::new(Rested {
                 file: self.file_seen(),
                 hibernation: None,
             })),
+        }
+    }
+
+    // A restored workbook stands on a recovery copy, whose own stamp says nothing about the
+    // file, so the guard it was restored with is what carries on.
+    fn file_modified(&self) -> Option<SystemTime> {
+        match self.file_guard() {
+            Some(guard) => Some(guard.stamp.map_or(guard.at, |stamp| stamp.modified())),
+            None => self
+                .workbook()
+                .and_then(|workbook| workbook.file_stamp())
+                .map(|stamp| stamp.modified()),
         }
     }
 

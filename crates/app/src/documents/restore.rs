@@ -437,6 +437,31 @@ mod tests {
     }
 
     #[test]
+    fn a_restored_guard_survives_a_second_snapshot_and_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("a.xlsx");
+        std::fs::write(&target, b"original").unwrap();
+        let seen = std::fs::metadata(&target).unwrap().modified().unwrap();
+        let first = restored_from_recovery(Some(seen));
+        let records = snapshot_files(&first, &[]);
+        let record = records
+            .into_iter()
+            .find(|r| r.path.as_deref() == Some("a.xlsx"))
+            .unwrap();
+        assert_eq!(record.file_modified, Some(seen));
+
+        let second = restored_from_recovery(record.file_modified);
+        let guard = second.active().unwrap().file_guard().unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&target)
+            .unwrap()
+            .set_modified(seen + std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(guard.changed(zenkai_engine::Stamp::of(&target).unwrap()));
+    }
+
+    #[test]
     fn a_record_without_a_file_stamp_restores_unguarded() {
         let documents = restored_from_recovery(None);
         assert!(documents.active().unwrap().file_guard().is_none());
