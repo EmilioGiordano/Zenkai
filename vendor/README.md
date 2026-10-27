@@ -80,6 +80,9 @@ Zenkai-only, not for upstream:
 - The path-only `ironcalc` dev-dependency with the `mock_time` feature, which the published
   crate strips from `Cargo.toml`. Without it the generated tests compare templates holding
   `NOW()` and `TODAY()` against today's clock and fail as the date moves.
+- `zip` without default features, only `deflate` and `time`: an xlsx never uses zstd,
+  bzip2 or AES entries, and the zstd crates zip 0.6 pulls in carry RUSTSEC-2026-0403 and
+  RUSTSEC-2026-0410.
 
 ## ironcalc_base 0.8.3
 
