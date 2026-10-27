@@ -605,15 +605,18 @@ impl Grid {
         }
     }
 
-    fn page(&mut self, down: bool, cx: &mut Context<Self>) {
+    fn page(&mut self, down: bool, extend: bool, cx: &mut Context<Self>) {
         let lines = i64::from(self.visible_rows().saturating_sub(1).max(1));
         let delta = if down { lines } else { -lines };
         self.top = self.shifted_row(self.top, delta);
-        let pos = CellPos::new(
-            self.shifted_row(self.selection.active.row, delta),
-            self.selection.active.col,
-        );
-        self.select(pos, pos, cx);
+        let moving = if extend {
+            self.selection.corner
+        } else {
+            self.selection.active
+        };
+        let landed = self.shifted_row(moving.row, delta);
+        let selection = moved_selection(self.selection, extend, CellPos::new(landed, moving.col));
+        self.select(selection.active, selection.corner, cx);
         self.viewport_changed(cx);
     }
 
@@ -1494,17 +1497,16 @@ impl Render for Grid {
             .on_action(
                 cx.listener(|g, _: &JumpSelectRight, _, cx| g.jump(Direction::Right, true, cx)),
             )
-            .on_action(cx.listener(|g, _: &RowStart, _, cx| g.row_start(cx)))
-            .on_action(cx.listener(|g, _: &SheetStart, _, cx| {
-                let origin = CellPos::default();
-                g.select(origin, origin, cx);
-            }))
-            .on_action(cx.listener(|g, _: &SheetEnd, _, cx| {
-                cx.emit(GridEvent::EndRequested { extend: false });
-                g.dragging = false;
-            }))
-            .on_action(cx.listener(|g, _: &PageDown, _, cx| g.page(true, cx)))
-            .on_action(cx.listener(|g, _: &PageUp, _, cx| g.page(false, cx)))
+            .on_action(cx.listener(|g, _: &RowStart, _, cx| g.row_start(false, cx)))
+            .on_action(cx.listener(|g, _: &SelectRowStart, _, cx| g.row_start(true, cx)))
+            .on_action(cx.listener(|g, _: &SheetStart, _, cx| g.sheet_start(false, cx)))
+            .on_action(cx.listener(|g, _: &SelectSheetStart, _, cx| g.sheet_start(true, cx)))
+            .on_action(cx.listener(|g, _: &SheetEnd, _, cx| g.sheet_end(false, cx)))
+            .on_action(cx.listener(|g, _: &SelectSheetEnd, _, cx| g.sheet_end(true, cx)))
+            .on_action(cx.listener(|g, _: &PageDown, _, cx| g.page(true, false, cx)))
+            .on_action(cx.listener(|g, _: &PageUp, _, cx| g.page(false, false, cx)))
+            .on_action(cx.listener(|g, _: &SelectPageDown, _, cx| g.page(true, true, cx)))
+            .on_action(cx.listener(|g, _: &SelectPageUp, _, cx| g.page(false, true, cx)))
             .on_action(cx.listener(|g, _: &SelectAll, _, cx| g.select_all(cx)))
             .on_action(cx.listener(|g, _: &SelectColumn, _, cx| {
                 let col = g.selection.active.col;
@@ -1718,14 +1720,30 @@ impl Grid {
         cx.emit(GridEvent::Jump { direction, extend });
     }
 
-    fn row_start(&mut self, cx: &mut Context<Self>) {
+    fn row_start(&mut self, extend: bool, cx: &mut Context<Self>) {
         if let Some(editor) = &mut self.editor {
             editor.caret = 0;
             cx.notify();
             return;
         }
-        let pos = CellPos::new(self.selection.active.row, ColIdx::default());
-        self.select(pos, pos, cx);
+        let moving = if extend {
+            self.selection.corner
+        } else {
+            self.selection.active
+        };
+        let target = CellPos::new(moving.row, ColIdx::default());
+        let selection = moved_selection(self.selection, extend, target);
+        self.select(selection.active, selection.corner, cx);
+    }
+
+    fn sheet_start(&mut self, extend: bool, cx: &mut Context<Self>) {
+        let selection = moved_selection(self.selection, extend, CellPos::default());
+        self.select(selection.active, selection.corner, cx);
+    }
+
+    fn sheet_end(&mut self, extend: bool, cx: &mut Context<Self>) {
+        cx.emit(GridEvent::EndRequested { extend });
+        self.dragging = false;
     }
 }
 
@@ -1734,6 +1752,20 @@ pub const MAX_TYPED_PREVIEW_CELLS: u64 = 10_000;
 // walk panes that cannot be seen, as Excel stops them at the window size.
 const MAX_FROZEN_ROWS: u32 = 200;
 const MAX_FROZEN_COLS: u16 = 100;
+
+fn moved_selection(selection: Selection, extend: bool, target: CellPos) -> Selection {
+    if extend {
+        Selection {
+            active: selection.active,
+            corner: target,
+        }
+    } else {
+        Selection {
+            active: target,
+            corner: target,
+        }
+    }
+}
 
 fn shown_contains(rows: &[RowIdx], cols: &[ColIdx], pos: CellPos) -> bool {
     rows.binary_search(&pos.row).is_ok() && cols.binary_search(&pos.col).is_ok()
@@ -1845,8 +1877,9 @@ fn reveal_axes(active: CellPos, corner: CellPos) -> (Option<RowIdx>, Option<ColI
 #[cfg(test)]
 mod tests {
     use super::{
-        Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, cached_ranges, capped_frozen,
-        cycle_within, next_boundary, prev_boundary, reveal_axes, shown_contains, typed_preview,
+        Direction, GridCell, MAX_FROZEN_COLS, MAX_FROZEN_ROWS, Selection, cached_ranges,
+        capped_frozen, cycle_within, moved_selection, next_boundary, prev_boundary, reveal_axes,
+        shown_contains, typed_preview,
     };
     use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 
@@ -1894,6 +1927,39 @@ mod tests {
     fn select_all_is_revealed_on_neither_axis() {
         let last = CellPos::new(RowIdx::LAST, ColIdx::LAST);
         assert_eq!(reveal_axes(CellPos::default(), last), (None, None));
+    }
+
+    fn selection(active: &str, corner: &str) -> Selection {
+        Selection {
+            active: pos(active),
+            corner: pos(corner),
+        }
+    }
+
+    #[test]
+    fn a_plain_move_collapses_the_selection_onto_the_target() {
+        let moved = moved_selection(selection("B2", "D4"), false, pos("A1"));
+        assert_eq!(moved, selection("A1", "A1"));
+    }
+
+    #[test]
+    fn an_extended_move_keeps_the_anchor_and_moves_the_corner() {
+        let moved = moved_selection(selection("C5", "E7"), true, pos("A1"));
+        assert_eq!(moved, selection("C5", "A1"));
+    }
+
+    #[test]
+    fn extending_to_the_row_start_keeps_the_corner_row() {
+        let from = selection("C5", "E7");
+        let target = CellPos::new(from.corner.row, ColIdx::default());
+        assert_eq!(moved_selection(from, true, target), selection("C5", "A7"));
+    }
+
+    #[test]
+    fn extending_to_the_used_end_keeps_the_anchor() {
+        let moved = moved_selection(selection("B2", "B2"), true, pos("F40"));
+        assert_eq!(moved, selection("B2", "F40"));
+        assert_eq!(moved.range(), Range::new(pos("B2"), pos("F40")));
     }
 
     #[test]
