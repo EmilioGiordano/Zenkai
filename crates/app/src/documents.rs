@@ -6,7 +6,7 @@ use zenkai_engine::{Kept, Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
 use crate::document::{self, Document, FileJob, SharedWorkbook};
-use crate::entry::{Entry, Link, LinkStatus, Slot};
+use crate::entry::{Entry, FileSeen, Link, LinkStatus, Slot};
 use crate::files;
 use crate::pdf_tab::PdfTab;
 use crate::spaces::{SpaceId, Spaces};
@@ -146,8 +146,15 @@ impl Loaded {
         };
         document.read_only = self.read_only || (from_copy && link.read_only);
         document.dirty = from_copy && link.dirty;
-        if from_copy && let Some(rested) = &link.rested {
-            document.guard_file(rested.file);
+        if from_copy {
+            if let Some(rested) = &link.rested {
+                document.guard_file(rested.file);
+            } else if let Some(modified) = link.file_modified {
+                document.guard_file(FileSeen {
+                    stamp: None,
+                    at: modified,
+                });
+            }
         }
         if self.provenance == Provenance::Dump {
             // The recovery copy was written from this very work, and the new document has
@@ -804,6 +811,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            file_modified: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
             unsupported: Vec::new(),

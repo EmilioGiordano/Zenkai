@@ -42,6 +42,7 @@ impl PdfTab {
             kind: DocumentKind::Pdf,
             mode: ViewMode::default(),
             base: None,
+            file_modified: None,
             pdf: self.position,
             text_zoom: Default::default(),
             rested: None,

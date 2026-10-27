@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use zenkai_engine::Unsupported;
@@ -69,6 +70,8 @@ pub struct FileRecord {
     pub mode: ViewMode,
     #[serde(default)]
     pub base: Option<StampRecord>,
+    #[serde(default)]
+    pub file_modified: Option<SystemTime>,
     #[serde(default)]
     pub pdf: PdfPosition,
     #[serde(default)]
@@ -259,6 +262,7 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         kind: link.kind,
         mode: link.mode,
         base: link.base,
+        file_modified: link.file_modified,
         pdf: link.pdf,
         text_zoom: link.text_zoom,
         unsupported: link
@@ -323,6 +327,7 @@ pub fn link_of(
         kind: record.kind,
         mode: record.mode,
         base: record.base,
+        file_modified: record.file_modified,
         pdf: record.pdf,
         text_zoom: record.text_zoom,
         rested: None,
@@ -451,6 +456,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            file_modified: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
             unsupported: vec!["charts".to_string(), "macros".to_string()],
@@ -784,11 +790,13 @@ mod tests {
         object.remove("kind");
         object.remove("mode");
         object.remove("text_zoom");
+        object.remove("file_modified");
         let old: FileRecord = serde_json::from_value(value).unwrap();
         assert_eq!(old.kind, DocumentKind::Workbook);
         assert_eq!(old.mode, ViewMode::Preview);
         assert_eq!(old.text_zoom, TextZoom::default());
         assert_eq!(old.base, None);
+        assert_eq!(old.file_modified, None);
     }
 
     #[test]

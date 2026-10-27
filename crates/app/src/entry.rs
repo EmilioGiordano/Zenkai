@@ -45,6 +45,9 @@ pub struct Link {
     pub mode: ViewMode,
     // The disk stamp a text's edits were based on, kept across a restart.
     pub base: Option<StampRecord>,
+    // When the workbook's file was last modified as the workbook knew it, kept across a restart
+    // so a restore from a recovery copy still asks before replacing a file changed since.
+    pub file_modified: Option<SystemTime>,
     pub pdf: PdfPosition,
     pub text_zoom: TextZoom,
     // Set while the workbook is out of memory by choice; a link restored from a session or
@@ -271,6 +274,10 @@ impl Document {
             kind: DocumentKind::Workbook,
             mode: ViewMode::default(),
             base: None,
+            file_modified: self
+                .workbook()
+                .and_then(|workbook| workbook.file_stamp())
+                .map(|stamp| stamp.modified()),
             pdf: Default::default(),
             text_zoom: Default::default(),
             rested: Some(Box::new(Rested {

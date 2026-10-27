@@ -95,6 +95,7 @@ mod tests {
                     kind: DocumentKind::Pdf,
                     mode: Default::default(),
                     base: None,
+                    file_modified: None,
                     pdf: position,
                     text_zoom: Default::default(),
                     unsupported: Vec::new(),

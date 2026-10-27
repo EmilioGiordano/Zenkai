@@ -87,6 +87,7 @@ impl Documents {
             kind,
             mode,
             base: None,
+            file_modified: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
             rested: None,
