@@ -310,6 +310,13 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   edit group, so a caller that pauses it for a batch of edits can leave it as it found it.
   Stands on its own (`src/user_model/common.rs`). Test: `evaluation_is_paused_by_a_pause_or_a_group`
   in `src/test/user_model/test_fill_formula.rs`.
+- Undoing a column width gives the column back the width and custom flag of the entry that
+  covered it, or removes the column's entry when none did, instead of writing the width
+  `get_column_width` reported: the default for a column without a custom width, which
+  left an entry behind, and 0 for a hidden one, which kept it at zero once shown again
+  (`Diff::SetColumnWidth` in `src/user_model/history.rs`, `Worksheet::restore_column_width`).
+  The bitcode encoding of the history changes. Stands on its own. Tests:
+  `src/test/test_column_width.rs`.
 
 Zenkai-only, not for upstream:
 

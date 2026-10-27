@@ -445,6 +445,43 @@ impl Worksheet {
         self.set_column_width_and_style(column, width, hidden, style)
     }
 
+    /// Gives a column back the width of `old`, the entry that covered it before its width
+    /// was set, keeping its current style and hidden state. With no entry, the column's
+    /// own entry is removed, or reset to the default width when it carries a style or is
+    /// hidden.
+    pub(crate) fn restore_column_width(
+        &mut self,
+        column: i32,
+        old: Option<&Col>,
+    ) -> Result<(), String> {
+        let style = self.get_column_style(column)?;
+        let hidden = self.is_column_hidden(column)?;
+        let width = self.get_actual_column_width(column)?;
+        self.set_column_width_and_style(column, width, hidden, style)?;
+        let Some(index) = self
+            .cols
+            .iter()
+            .position(|c| c.min == column && c.max == column)
+        else {
+            return Ok(());
+        };
+        match old {
+            Some(old) => {
+                self.cols[index].width = old.width;
+                self.cols[index].custom_width = old.custom_width;
+            }
+            None if style.is_none() && !hidden => {
+                self.cols.remove(index);
+            }
+            None => {
+                self.cols[index].width =
+                    constants::DEFAULT_COLUMN_WIDTH / constants::COLUMN_WIDTH_FACTOR;
+                self.cols[index].custom_width = false;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn set_column_width_and_style(
         &mut self,
         column: i32,

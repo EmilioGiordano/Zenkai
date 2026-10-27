@@ -137,7 +137,11 @@ impl<'a> UserModel<'a> {
                     column,
                     new_value: _,
                     old_value,
-                } => self.model.set_column_width(*sheet, *column, *old_value)?,
+                } => self
+                    .model
+                    .workbook
+                    .worksheet_mut(*sheet)?
+                    .restore_column_width(*column, old_value.as_ref())?,
                 Diff::SetColumnHidden {
                     sheet,
                     column,

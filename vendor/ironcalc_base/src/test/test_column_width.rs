@@ -221,7 +221,13 @@ fn test_delete_column_with_its_own_width_undo_redo() {
 }
 
 fn columns(model: &UserModel) -> Vec<Col> {
-    model.get_model().workbook.worksheet(0).unwrap().cols.clone()
+    model
+        .get_model()
+        .workbook
+        .worksheet(0)
+        .unwrap()
+        .cols
+        .clone()
 }
 
 #[test]

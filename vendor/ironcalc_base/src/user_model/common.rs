@@ -1566,7 +1566,14 @@ impl<'a> UserModel<'a> {
     ) -> Result<(), String> {
         let mut diff_list = Vec::new();
         for column in column_start..=column_end {
-            let old_value = self.model.get_column_width(sheet, column)?;
+            let old_value = self
+                .model
+                .workbook
+                .worksheet(sheet)?
+                .cols
+                .iter()
+                .find(|c| c.min <= column && column <= c.max)
+                .cloned();
             diff_list.push(Diff::SetColumnWidth {
                 sheet,
                 column,
