@@ -11,14 +11,6 @@ fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)
 }
 
-fn last_day_of_feb(year: i32) -> u32 {
-    if is_leap_year(year) {
-        29
-    } else {
-        28
-    }
-}
-
 // Converts a raw numeric argument to a date serial (date part) for DAYS360,
 // rounding the time-of-day to the nearest second before discarding it. Excel
 // rolls e.g. 46000.999999 up to 46001 when extracting the date part.
@@ -37,7 +29,7 @@ fn days360_us(start: (i32, u32, u32), end: (i32, u32, u32)) -> f64 {
     let mut day1 = day1 as i32;
     let mut day2 = day2 as i32;
 
-    if day1 == 31 || (m1 == 2 && day1 == last_day_of_feb(y1) as i32) {
+    if day1 == 31 || (m1 == 2 && day1 == excel_days_in_month(y1, 2) as i32) {
         day1 = 30;
     }
     if day2 == 31 && day1 == 30 {
