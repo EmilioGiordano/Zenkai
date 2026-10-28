@@ -15,13 +15,13 @@ const FILL_OPACITY: f32 = 0.14;
 const EDGE_OPACITY: f32 = 0.4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ChipState {
+pub(super) enum ChipState {
     CanEdit,
     ReadOnlyFile,
     ReadOnlyPlan,
 }
 
-fn chip_state(document: &Document, permission: PermissionMode) -> ChipState {
+pub(super) fn chip_state(document: &Document, permission: PermissionMode) -> ChipState {
     match agent_routing::access(document, permission) {
         AgentAccess::Editable => ChipState::CanEdit,
         AgentAccess::ReadOnly(ReadOnlyReason::Settings) => ChipState::ReadOnlyPlan,
