@@ -118,7 +118,10 @@ fn apply(book: &mut Workbook, op: &Op) -> bool {
 }
 
 fn snapshot(book: &Workbook) -> Vec<String> {
-    let mut cells = vec![format!("{:?}", book.sizes(SHEET))];
+    let mut sizes = book.sizes(SHEET);
+    // Undo can re-add a row entry out of order; the order carries no meaning.
+    sizes.rows.sort_by_key(|(row, _)| *row);
+    let mut cells = vec![format!("{:?}", sizes)];
     for row in 0..SIDE + 2 {
         for col in 0..SIDE + 2 {
             let at = pos(row, col);

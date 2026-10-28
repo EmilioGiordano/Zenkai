@@ -1567,7 +1567,7 @@ impl Engine for Workbook {
             .filter(|c| c.min <= i32::from(zenkai_types::MAX_COLS))
             // IronCalc's own entries (a whole-column style) carry its default width without
             // customWidth and draw at the grid default; any other stored width is the file's.
-            .filter(|c| c.hidden || c.custom_width || c.width != IRONCALC_DEFAULT_CHARS)
+            .filter(|c| c.hidden || !c.has_default_width())
             .map(|c| ColumnSpan {
                 first: ColIdx::clamped(i64::from(c.min) - 1),
                 last: ColIdx::clamped(i64::from(c.max) - 1),
@@ -1578,8 +1578,7 @@ impl Engine for Workbook {
                 },
             })
             .collect();
-        // Undo can re-add a row entry out of order; sizes are reported by row.
-        let mut rows: Vec<(RowIdx, f32)> = ws
+        let rows = ws
             .rows
             .iter()
             .filter(|r| r.custom_height || r.hidden)
@@ -1592,7 +1591,6 @@ impl Engine for Workbook {
                 (RowIdx::clamped(i64::from(r.r) - 1), height)
             })
             .collect();
-        rows.sort_by_key(|(row, _)| *row);
         SheetSizes { columns, rows }
     }
 
