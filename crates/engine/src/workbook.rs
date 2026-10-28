@@ -19,8 +19,9 @@ use crate::saved::{FileOnDisk, KnownFile, SavedSlot};
 use crate::sheet_settings::{Carried, SheetSettings};
 use crate::shown_cells::UNREADABLE_CELL;
 use zenkai_types::{
-    BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
-    RowIdx, SheetId, SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign, ValueKind,
+    BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, DefinedName, HAlign,
+    Range, Rgb, RowIdx, SheetId, SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign,
+    ValueKind,
 };
 
 const LOCALE: &str = "en";
@@ -163,6 +164,7 @@ pub trait Engine: Send {
     -> Result<(), EngineError>;
     fn merged(&self, sheet: SheetId) -> Vec<Range>;
     fn used_end(&self, sheet: SheetId) -> CellPos;
+    fn defined_names(&self) -> Vec<DefinedName>;
     fn filled_cells(&self, sheet: SheetId) -> Vec<CellPos>;
     fn add_sheet(&mut self) -> Result<SheetId, EngineError>;
     fn duplicate_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError>;
@@ -1750,6 +1752,21 @@ impl Engine for Workbook {
         self.model.used_end(sheet)
     }
 
+    fn defined_names(&self) -> Vec<DefinedName> {
+        // The raw list: the display form re-parses every formula against all names.
+        self.model
+            .get_model()
+            .workbook
+            .get_defined_names_with_scope()
+            .into_iter()
+            .map(|(name, scope, refers_to)| DefinedName {
+                name,
+                scope: scope.map(SheetId),
+                refers_to,
+            })
+            .collect()
+    }
+
     fn add_sheet(&mut self) -> Result<SheetId, EngineError> {
         self.model.new_sheet().map_err(rejected)?;
         let count = self.model.get_worksheets_properties().len();
@@ -2009,5 +2026,41 @@ mod tests {
     fn any_other_import_error_stays_an_invalid_file() {
         let error = read_error(XlsxError::Workbook("bad sheet".to_string()));
         assert!(matches!(error, EngineError::InvalidFile(_)));
+    }
+
+    #[test]
+    fn hundreds_of_defined_names_are_all_listed_with_their_target() {
+        let mut book = Workbook::new_empty().unwrap();
+        let sheet = book.sheets()[0].name.clone();
+        for index in 0..300 {
+            let target = format!("{sheet}!$A${}", index + 1);
+            book.model
+                .new_defined_name(&format!("Name{index}"), None, &target)
+                .unwrap();
+        }
+        let names = book.defined_names();
+        assert_eq!(names.len(), 300);
+        for (index, listed) in names.iter().enumerate() {
+            assert_eq!(listed.name, format!("Name{index}"));
+            assert_eq!(listed.scope, None);
+            assert!(listed.refers_to.ends_with(&format!("$A${}", index + 1)));
+        }
+    }
+
+    #[test]
+    fn defined_names_list_their_scope_and_target() {
+        let mut book = Workbook::new_empty().unwrap();
+        let sheet = book.sheets()[0].name.clone();
+        book.model
+            .new_defined_name("Total", None, &format!("{sheet}!$B$2:$B$9"))
+            .unwrap();
+        book.model
+            .new_defined_name("Local", Some(0), &format!("{sheet}!$A$1"))
+            .unwrap();
+        let names = book.defined_names();
+        let find = |name: &str| names.iter().find(|n| n.name == name).unwrap();
+        assert_eq!(find("Total").scope, None);
+        assert_eq!(find("Local").scope, Some(SheetId(0)));
+        assert!(find("Total").refers_to.ends_with("$B$2:$B$9"));
     }
 }

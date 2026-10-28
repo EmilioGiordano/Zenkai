@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
 pub mod aside;
+mod go_to;
+
+pub use go_to::{DefinedName, GoToTarget, parse_go_to};
 
 use std::fmt;
 
