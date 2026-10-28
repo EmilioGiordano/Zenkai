@@ -76,7 +76,7 @@ pub(crate) fn add_months_to_ymd(
     (year, month, day): (i32, u32, u32),
     months: i64,
 ) -> Option<(i32, u32, u32)> {
-    let month_index = year as i64 * 12 + (month as i64 - 1) + months;
+    let month_index = (year as i64 * 12 + (month as i64 - 1)).checked_add(months)?;
     let new_year = i32::try_from(month_index.div_euclid(12)).ok()?;
     let new_month = month_index.rem_euclid(12) as u32 + 1;
     Some((
