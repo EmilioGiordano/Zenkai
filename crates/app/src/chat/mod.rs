@@ -21,6 +21,7 @@ mod menus;
 mod model_search;
 mod name_guard;
 mod permissions;
+mod recovery;
 pub(crate) mod reference;
 mod reference_scan;
 mod render;
@@ -465,7 +466,10 @@ impl ChatPanel {
             ask.cancel();
         }
         match &self.live {
-            Some(live) if live.ready => live.handle.cancel(),
+            Some(live) if live.ready => {
+                live.handle.cancel();
+                self.watch_stop(cx);
+            }
             _ => {
                 self.epoch += 1;
                 self.queued = None;
