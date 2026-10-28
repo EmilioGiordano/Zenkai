@@ -719,12 +719,12 @@ impl<'a> UserModel<'a> {
 
         let line_count = value.split('\n').count() as f64;
         let row_height = self.model.get_row_height(sheet, row)?;
-        let old_row = self.model.workbook.worksheet(sheet)?.row_entry(row);
         // This is in sync with the front-end auto fit row
         let font_size = style.font.sz as f64;
         let line_height = font_size * 1.5;
         let cell_height = (line_count - 1.0) * line_height + 8.0 + font_size;
         if cell_height > row_height {
+            let old_row = self.model.workbook.worksheet(sheet)?.row_entry(row);
             diff_list.push(Diff::SetRowHeight {
                 sheet,
                 row,
