@@ -3553,7 +3553,22 @@ impl Workspace {
                         .text_color(theme.popover_foreground)
                         .shadow_md()
                         .child(indicator)
-                        .child(busy),
+                        .child(busy)
+                        .when(self.open_loads.newest_cancellable(), |pill| {
+                            pill.child(
+                                Button::new("cancel-open")
+                                    .small()
+                                    .label(t!("button.cancel"))
+                                    .tooltip(keymap::labeled(
+                                        cx,
+                                        t!("palette.cancel_open"),
+                                        &CancelOpen,
+                                    ))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.cancel_open(cx);
+                                    })),
+                            )
+                        }),
                 ),
         )
     }
@@ -3871,6 +3886,9 @@ impl Render for Workspace {
                 }
                 if self.chart.is_some() {
                     context.add("ChartOpen");
+                }
+                if self.open_loads.newest_cancellable() {
+                    context.add("Opening");
                 }
                 context
             })
@@ -4391,8 +4409,15 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &DismissNotice, window, cx| this.dismiss_notice(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &CancelOpen, _, cx| {
+                if !this.cancel_open(cx) {
+                    cx.propagate();
+                }
+            }))
             .on_action(cx.listener(|this, _: &zenkai_grid::Cancel, window, cx| {
-                this.dismiss_notice(window, cx)
+                if !this.cancel_open(cx) {
+                    this.dismiss_notice(window, cx)
+                }
             }))
             .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
             .on_action(

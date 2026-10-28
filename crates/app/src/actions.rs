@@ -252,6 +252,7 @@ actions!(
         RecordShortcutKeys,
         ResetAllShortcuts,
         DismissNotice,
+        CancelOpen,
         CopyNotice,
         FocusNotice,
         ShowMessages,

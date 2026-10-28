@@ -216,6 +216,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.show_messages"), ShowMessages),
                 item(t!("palette.focus_notice"), FocusNotice),
                 item(t!("palette.dismiss_notice"), DismissNotice),
+                item(t!("palette.cancel_open"), CancelOpen),
                 item(t!("palette.copy_notice"), CopyNotice),
                 item(t!("palette.toggle_sidebar"), ToggleSidebar),
                 item(t!("palette.cycle_space_color"), CycleSpaceColor),
