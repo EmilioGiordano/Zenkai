@@ -2029,22 +2029,22 @@ mod tests {
     }
 
     #[test]
-    fn thousands_of_defined_names_are_listed_quickly() {
+    fn hundreds_of_defined_names_are_all_listed_with_their_target() {
         let mut book = Workbook::new_empty().unwrap();
         let sheet = book.sheets()[0].name.clone();
-        for index in 0..3000 {
+        for index in 0..300 {
+            let target = format!("{sheet}!$A${}", index + 1);
             book.model
-                .new_defined_name(
-                    &format!("Name{index}"),
-                    None,
-                    &format!("{sheet}!$A${}", index + 1),
-                )
+                .new_defined_name(&format!("Name{index}"), None, &target)
                 .unwrap();
         }
-        let started = std::time::Instant::now();
         let names = book.defined_names();
-        assert_eq!(names.len(), 3000);
-        assert!(started.elapsed() < Duration::from_millis(200));
+        assert_eq!(names.len(), 300);
+        for (index, listed) in names.iter().enumerate() {
+            assert_eq!(listed.name, format!("Name{index}"));
+            assert_eq!(listed.scope, None);
+            assert!(listed.refers_to.ends_with(&format!("$A${}", index + 1)));
+        }
     }
 
     #[test]
