@@ -1,5 +1,6 @@
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ironcalc::base::types::Workbook as Book;
 use zenkai_xlsx_reader::{ReadError, SheetLinks, list_sheets, workbook_differences};
@@ -17,6 +18,7 @@ pub(crate) fn engine_error(error: ReadError) -> EngineError {
         ReadError::Unreadable(reason) | ReadError::Unsupported(reason) => {
             EngineError::InvalidFile(reason)
         }
+        ReadError::Cancelled => EngineError::Cancelled,
     }
 }
 use crate::preflight::run_with_engine_stack;
@@ -107,6 +109,7 @@ pub(crate) fn read_xlsx_file(
     path: &Path,
     name: &str,
     reader: XlsxReader,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<FileRead, EngineError> {
     let read_error = |source| EngineError::Read {
         path: path.to_path_buf(),
@@ -120,13 +123,17 @@ pub(crate) fn read_xlsx_file(
     match reader {
         XlsxReader::IronCalc => {
             let bytes = std::fs::read(path).map_err(read_error)?;
+            check_not_cancelled(cancel)?;
             let read = read_xlsx_bytes(&bytes, name, XlsxReader::IronCalc)?;
             let settings = read_settings(&bytes)?;
             Ok(finish(read, settings))
         }
         XlsxReader::Fast => {
-            match tracing::info_span!("open_read_file").in_scope(|| read_streaming(path, name)) {
+            match tracing::info_span!("open_read_file")
+                .in_scope(|| read_streaming(path, name, cancel))
+            {
                 Ok(read) => Ok(read),
+                Err(ReadError::Cancelled) => Err(EngineError::Cancelled),
                 Err(ReadError::Unsafe(reason)) => Err(EngineError::refused(reason)),
                 Err(error) => {
                     let bytes = std::fs::read(path).map_err(read_error)?;
@@ -145,11 +152,19 @@ pub(crate) fn read_xlsx_file(
         }
         XlsxReader::Shadow => {
             let bytes = std::fs::read(path).map_err(read_error)?;
+            check_not_cancelled(cancel)?;
             let read = read_xlsx_bytes(&bytes, name, XlsxReader::Shadow)?;
             let settings = read_settings(&bytes)?;
             Ok(finish(read, settings))
         }
     }
+}
+
+pub(crate) fn check_not_cancelled(cancel: &AtomicBool) -> Result<(), EngineError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(EngineError::Cancelled);
+    }
+    Ok(())
 }
 
 // The IronCalc fallback is never a way past the limits: one walk streams every
@@ -171,6 +186,7 @@ fn fallback_to_ironcalc(bytes: &[u8], name: &str, declined: &ReadError) -> Outco
         );
         return Err(match limited {
             ReadError::Unsafe(_) => EngineError::Unsafe(message),
+            ReadError::Cancelled => EngineError::Cancelled,
             ReadError::Unreadable(_) | ReadError::Unsupported(_) => {
                 EngineError::InvalidFile(message)
             }
@@ -214,11 +230,17 @@ fn take_unsupported(found: Found) -> Result<Vec<Unsupported>, EngineError> {
     Ok(kinds(&found))
 }
 
-fn read_streaming(path: &Path, name: &str) -> Result<FileRead, ReadError> {
+fn read_streaming(
+    path: &Path,
+    name: &str,
+    cancel: &Arc<AtomicBool>,
+) -> Result<FileRead, ReadError> {
     let found: Found = Mutex::new(Vec::new());
     let inspect = |part: &str, data: &[u8]| inspect_part(&found, part, data);
     let opened = tracing::info_span!("open_read_streaming")
-        .in_scope(|| run_with_engine_stack(|| Ok(read_book_streaming(path, name, &inspect))))
+        .in_scope(|| {
+            run_with_engine_stack(|| Ok(read_book_streaming(path, name, &inspect, cancel)))
+        })
         .map_err(|error| ReadError::Unsupported(error.to_string()))??;
     let found = found
         .into_inner()
