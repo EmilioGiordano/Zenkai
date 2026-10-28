@@ -301,10 +301,20 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   stays text (`src/formatter/dates.rs`, `src/formatter/format.rs`,
   `src/functions/date_and_time.rs`, `src/conditional_formatting.rs`). Serials from 61 on are
   unchanged. `DATE(1899, 12, 31)` now gives `#NUM!` instead of 1 (Excel reads the year
-  as 3799, which neither does). Upstream labels them as Google Sheets does (serial 1 is
+  as 3799, which neither does; the next entry fixes that). Upstream labels them as Google Sheets does (serial 1 is
   12/31/1899), on purpose, so it may not take this as is. Stands on its own. Tests:
   `src/formatter/test/test_early_serials.rs`, `src/test/test_early_date_serials.rs`,
   `src/test/test_date_and_time.rs`.
+- Every other date function reads serials 0 to 60 with the same Excel labels: EDATE, EOMONTH,
+  WEEKNUM, ISOWEEKNUM, YEARFRAC, DATEDIF, the day counting of NETWORKDAYS, WORKDAY and their
+  `.INTL` variants (weekday from the serial, holidays matched by serial), and the financial
+  functions through `from_excel_date`, which now maps serials 1 to 59 to Excel's 1900 dates
+  (it returns an error for 0 and 60, which no real date can hold, so financial functions give
+  `#NUM!` there). New helpers `ymd_to_excel_serial`, `excel_days_in_month` and
+  `add_months_to_ymd` in `src/formatter/dates.rs`. `DATE` adds 1900 to a year from 0 to 1899,
+  so `DATE(99, 1, 1)` is 1/1/1999 and `DATE(1899, 12, 31)` is 12/31/3799. Depends on the
+  entry above. Upstream may not take it as is for the same reason. Tests:
+  `src/test/test_early_serial_date_functions.rs`.
 - `UserModel::fill_style` gives every cell of an area the whole cell format of one cell, as one
   undo step, storing the style index once and each cell's old one (8 bytes) instead of a
   full style per cell (new `Diff::FillStyle`). Stands on its own (`src/user_model/fill_style.rs`).
