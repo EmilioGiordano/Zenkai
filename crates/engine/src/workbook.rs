@@ -37,7 +37,6 @@ const CHAR_WIDTH_PADDING: f64 = 5.0;
 const PIXELS_PER_POINT: f64 = 4.0 / 3.0;
 // IronCalc's setter takes its own pixels: characters times this factor.
 const COLUMN_WIDTH_FACTOR: f64 = 9.0;
-const IRONCALC_DEFAULT_CHARS: f64 = 10.0;
 // And its row height setter takes points times this factor.
 const ROW_HEIGHT_FACTOR: f64 = 1.5625;
 // Excel's last date, 9999-12-31.

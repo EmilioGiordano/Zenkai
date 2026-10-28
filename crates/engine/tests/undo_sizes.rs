@@ -230,3 +230,10 @@ fn a_file_column_width_without_custom_width_draws_and_saves_as_stored() {
     let reopened = open_xlsx(&saved).unwrap().workbook;
     assert_eq!(width(&reopened), Some(opened));
 }
+
+#[test]
+fn a_width_dragged_to_ironcalcs_default_stays_that_width() {
+    let mut book = Workbook::new_empty().unwrap();
+    book.set_column_width(SHEET, column(1), 75.0).unwrap();
+    assert_eq!(book.sizes(SHEET).columns[0].width, 75.0);
+}

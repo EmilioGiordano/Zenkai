@@ -456,7 +456,16 @@ impl Worksheet {
     pub fn set_column_width(&mut self, column: i32, width: f64) -> Result<(), String> {
         let style = self.get_column_style(column)?;
         let hidden = self.is_column_hidden(column)?;
-        self.set_column_width_and_style(column, width, hidden, style)
+        self.set_column_width_and_style(column, width, hidden, style)?;
+        // A width the user sets stays custom even when it equals the default.
+        if let Some(entry) = self
+            .cols
+            .iter_mut()
+            .find(|c| c.min == column && c.max == column)
+        {
+            entry.custom_width = true;
+        }
+        Ok(())
     }
 
     pub fn set_column_hidden(&mut self, column: i32, hidden: bool) -> Result<(), String> {
@@ -471,10 +480,9 @@ impl Worksheet {
             self.cols.retain(|c| {
                 !(c.min == column
                     && c.max == column
-                    && !c.custom_width
                     && !c.hidden
                     && c.style.is_none()
-                    && c.width * constants::COLUMN_WIDTH_FACTOR == constants::DEFAULT_COLUMN_WIDTH)
+                    && c.has_default_width())
             });
         }
         Ok(())
