@@ -328,7 +328,8 @@ impl ChatPanel {
         }
     }
 
-    // The Settings page can change what agents may do while the chat is open.
+    // Only a changed permission counts: an unrelated edit must not undo a lowering the agent
+    // reported for this session.
     pub(super) fn follow_setting(&mut self, cx: &mut Context<Self>) {
         let setting = cx
             .global::<crate::agent_settings::AgentConfig>()
@@ -336,7 +337,8 @@ impl ChatPanel {
             .current
             .agents
             .permission;
-        if self.access.setting() != setting {
+        if self.seen_permission != setting {
+            self.seen_permission = setting;
             self.access = Access::from_setting(setting);
             self.sync_mode(cx);
         }
