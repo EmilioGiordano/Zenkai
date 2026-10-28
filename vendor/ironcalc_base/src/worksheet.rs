@@ -430,30 +430,20 @@ impl Worksheet {
         self.rows.iter().find(|r| r.r == row).cloned()
     }
 
-    // Only the height is restored: style and hidden state may have changed since. A row
-    // with no previous entry keeps one only while it carries a style or is hidden.
+    // Only the height is restored. Undo runs in reverse order, so the entry set_row_height
+    // makes here is the one the edit being undone made: a row with no old entry had no
+    // style or hidden state, and loses the entry.
     pub(crate) fn restore_row_height(&mut self, row: i32, old: Option<&Row>) -> Result<(), String> {
         let current = self.row_height(row)?;
         self.set_row_height(row, current)?;
-        let Some(index) = self.rows.iter().position(|r| r.r == row) else {
-            return Ok(());
-        };
         match old {
             Some(old) => {
-                self.rows[index].height = old.height;
-                self.rows[index].custom_height = old.custom_height;
+                for r in self.rows.iter_mut().filter(|r| r.r == row) {
+                    r.height = old.height;
+                    r.custom_height = old.custom_height;
+                }
             }
-            None if self.rows[index].s == 0
-                && !self.rows[index].custom_format
-                && !self.rows[index].hidden =>
-            {
-                self.rows.remove(index);
-            }
-            None => {
-                self.rows[index].height =
-                    constants::DEFAULT_ROW_HEIGHT / constants::ROW_HEIGHT_FACTOR;
-                self.rows[index].custom_height = false;
-            }
+            None => self.rows.retain(|r| r.r != row),
         }
         Ok(())
     }
