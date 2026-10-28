@@ -272,11 +272,6 @@ pub fn defaults() -> Vec<Binding> {
         bind("tab", FocusNextToolCall, Some("ToolRow")),
         bind("shift-tab", FocusPreviousToolCall, Some("ToolRow")),
         bind("alt-r", FocusToolCalls, Some("AgentChat")),
-        bind(
-            "shift-tab",
-            CycleChatPermission,
-            Some("ChatComposer > Input"),
-        ),
         bind("down", SlashNext, Some("Slash > Input")),
         bind("up", SlashPrevious, Some("Slash > Input")),
         bind("tab", SlashAccept, Some("Slash > Input")),
