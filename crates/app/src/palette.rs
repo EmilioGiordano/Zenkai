@@ -278,6 +278,10 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.let_agents_edit"), LetAgentsEdit),
                 item(t!("palette.record_shortcut_keys"), RecordShortcutKeys),
                 item(t!("palette.reset_all_shortcuts"), ResetAllShortcuts),
+                item(
+                    t!("palette.restart_to_apply_language"),
+                    RestartToApplyLanguage,
+                ),
             ],
         ),
     ]
