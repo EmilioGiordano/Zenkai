@@ -198,6 +198,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("shift-f11", NewSheet, CONTEXT),
         bind("ctrl-shift-d", ToggleDiagnostics, CONTEXT),
         bind("alt-f1", InsertChart, CONTEXT),
+        bind("escape", CloseChart, Some("ChartOpen")),
         bind("ctrl-f", Find, CONTEXT),
         bind("ctrl-h", Replace, CONTEXT),
         bind("ctrl-shift-p", TogglePalette, CONTEXT),
@@ -419,6 +420,22 @@ mod tests {
         assert_eq!(
             action_of("ctrl--", "Workspace"),
             Some(<ZoomOut as Action>::name_for_type())
+        );
+    }
+
+    #[test]
+    fn escape_closes_the_chart_panel_in_the_chart_open_context() {
+        let action_in = |context: &str| {
+            defaults()
+                .into_iter()
+                .find(|binding| {
+                    binding.chord.as_str() == "escape" && binding.context == Some(context)
+                })
+                .map(|binding| binding.action.name())
+        };
+        assert_eq!(
+            action_in("ChartOpen"),
+            Some(<CloseChart as Action>::name_for_type())
         );
     }
 

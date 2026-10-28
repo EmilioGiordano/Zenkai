@@ -3869,6 +3869,9 @@ impl Render for Workspace {
                 if self.prompts.blocks_input() {
                     context.add(PROMPT_OPEN_CONTEXT);
                 }
+                if self.chart.is_some() {
+                    context.add("ChartOpen");
+                }
                 context
             })
             // A file dropped on the window opens like File > Open.
