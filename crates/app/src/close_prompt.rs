@@ -33,6 +33,8 @@ impl Age {
 pub enum CloseGoal {
     #[default]
     Quit,
+    // Quits, then starts the app again so a setting read only at startup takes effect.
+    Restart,
     // The window goes to the tray and every workbook stays in memory.
     #[cfg(windows)]
     Hide,
@@ -40,7 +42,25 @@ pub enum CloseGoal {
 
 impl CloseGoal {
     pub fn keeps_running(self) -> bool {
-        self != CloseGoal::Quit
+        !matches!(self, CloseGoal::Quit | CloseGoal::Restart)
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            CloseGoal::Quit => 3,
+            CloseGoal::Restart => 2,
+            #[cfg(windows)]
+            CloseGoal::Hide => 1,
+        }
+    }
+
+    // Quit beats Restart beats Hide, so a later request can only make a close stronger.
+    pub fn outranking(self, other: CloseGoal) -> CloseGoal {
+        if other.rank() > self.rank() {
+            other
+        } else {
+            self
+        }
     }
 }
 
@@ -81,6 +101,11 @@ impl Choices {
 
     pub fn closing_to(self, goal: CloseGoal) -> Choices {
         Choices { goal, ..self }
+    }
+
+    // A restart brings the session back whatever the reopen choice or setting says.
+    pub fn starts_empty(&self) -> bool {
+        !self.reopen && self.goal != CloseGoal::Restart
     }
 
     pub fn items(&self) -> &[Unsaved] {
@@ -211,6 +236,32 @@ impl Departure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stronger_goal_always_wins_the_merge() {
+        use CloseGoal::{Quit, Restart};
+        assert_eq!(Restart.outranking(Quit), Quit);
+        assert_eq!(Quit.outranking(Restart), Quit);
+        assert_eq!(Restart.outranking(Restart), Restart);
+        assert_eq!(Quit.outranking(Quit), Quit);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn hide_is_the_weakest_goal() {
+        use CloseGoal::{Hide, Quit, Restart};
+        assert_eq!(Hide.outranking(Restart), Restart);
+        assert_eq!(Hide.outranking(Quit), Quit);
+        assert_eq!(Restart.outranking(Hide), Restart);
+        assert_eq!(Quit.outranking(Hide), Quit);
+    }
+
+    #[test]
+    fn a_restart_never_starts_empty() {
+        let choices = Choices::new(Vec::new(), false);
+        assert!(choices.clone().starts_empty());
+        assert!(!choices.closing_to(CloseGoal::Restart).starts_empty());
+    }
 
     fn unsaved(id: u64, name: &str) -> Unsaved {
         Unsaved {

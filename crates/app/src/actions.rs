@@ -245,6 +245,7 @@ actions!(
         FocusToolCalls,
         RecordShortcutKeys,
         ResetAllShortcuts,
+        RestartToApplyLanguage,
         DismissNotice,
         CopyNotice,
         FocusNotice,
