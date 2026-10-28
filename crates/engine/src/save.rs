@@ -598,15 +598,7 @@ mod tests {
     fn a_leftover_temp_file_does_not_block_a_save() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("book.xlsx");
-        let leftovers: Vec<_> = (0..16)
-            .map(|count| {
-                dir.path()
-                    .join(format!("~$book.xlsx.{}.{count}.tmp", std::process::id()))
-            })
-            .collect();
-        for leftover in &leftovers {
-            std::fs::write(leftover, b"theirs").unwrap();
-        }
+        let leftovers = crate::file::Leftovers::plant(dir.path(), "book.xlsx");
         super::save_xlsx(
             book()
                 .save_snapshot(&path, super::SaveTarget::Document)
@@ -616,9 +608,8 @@ mod tests {
         let reopened = crate::file::open_xlsx(&path).unwrap().workbook;
         let b1 = CellPos::parse_a1("B1").unwrap();
         assert_eq!(reopened.cell(SheetId(0), b1).text, "6");
-        for leftover in &leftovers {
-            assert_eq!(std::fs::read(leftover).unwrap(), b"theirs");
-        }
+        assert!(leftovers.collided());
+        leftovers.assert_untouched();
     }
 
     #[test]

@@ -140,21 +140,14 @@ mod tests {
     fn a_leftover_temp_does_not_block_the_write_and_is_not_touched() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.csv");
-        let pid = std::process::id();
-        let leftover_names: Vec<_> = (0..16)
-            .map(|count| dir.path().join(format!("~$out.csv.{pid}.{count}.tmp")))
-            .collect();
-        for leftover in &leftover_names {
-            fs::write(leftover, b"theirs").unwrap();
-        }
+        let leftovers = crate::file::Leftovers::plant(dir.path(), "out.csv");
         write_atomic_streaming(&path, |out| {
             out.write_all(b"new").unwrap();
             Ok(())
         })
         .unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"new");
-        for leftover in &leftover_names {
-            assert_eq!(fs::read(leftover).unwrap(), b"theirs");
-        }
+        assert!(leftovers.collided());
+        leftovers.assert_untouched();
     }
 }

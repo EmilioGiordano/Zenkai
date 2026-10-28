@@ -228,6 +228,9 @@ fn sibling_temp(path: &Path, suffix: &str) -> PathBuf {
 
 const TEMP_ATTEMPTS: u32 = 32;
 
+#[cfg(test)]
+const PLANTED_LEFTOVERS: u64 = 16;
+
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // A killed save leaves its temp file behind. Every attempt takes a fresh name and
@@ -261,6 +264,43 @@ fn create_temp_counting(
         path: path.to_path_buf(),
         source: std::io::ErrorKind::AlreadyExists.into(),
     }))
+}
+
+// Plants leftovers over the names the next attempts would take, so a test that saves
+// right after it collides; `collided` says whether the counter moved past them.
+#[cfg(test)]
+pub(crate) struct Leftovers {
+    paths: Vec<PathBuf>,
+    first: u64,
+}
+
+#[cfg(test)]
+impl Leftovers {
+    pub(crate) fn plant(dir: &Path, file_name: &str) -> Self {
+        let first = TEMP_COUNTER.load(Ordering::Relaxed);
+        let paths = (first..first + PLANTED_LEFTOVERS)
+            .map(|count| {
+                sibling_temp(
+                    &dir.join(file_name),
+                    &format!("{}.{count}", std::process::id()),
+                )
+            })
+            .collect::<Vec<_>>();
+        for path in &paths {
+            fs::write(path, b"theirs").unwrap();
+        }
+        Self { paths, first }
+    }
+
+    pub(crate) fn collided(&self) -> bool {
+        TEMP_COUNTER.load(Ordering::Relaxed) > self.first
+    }
+
+    pub(crate) fn assert_untouched(&self) {
+        for path in &self.paths {
+            assert_eq!(fs::read(path).unwrap(), b"theirs");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -355,11 +395,11 @@ mod tests {
     fn a_leftover_temp_does_not_block_write_atomic() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("book.xlsx");
-        let leftover = planted(dir.path(), 0);
-        fs::write(&leftover, b"theirs").unwrap();
+        let leftovers = Leftovers::plant(dir.path(), "book.xlsx");
         write_atomic(&path, b"new", |_| Ok(())).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"new");
-        assert_eq!(fs::read(&leftover).unwrap(), b"theirs");
+        assert!(leftovers.collided());
+        leftovers.assert_untouched();
     }
 
     #[test]
