@@ -4,6 +4,7 @@ use crate::constants::{LAST_COLUMN, LAST_ROW};
 use crate::expressions::parser::ArrayNode;
 use crate::expressions::types::CellReferenceIndex;
 use crate::implicit_intersection::implicit_intersection;
+use crate::lookup_indexes::{Equality, SearchFrom, Vector};
 use crate::{
     calc_result::CalcResult, expressions::parser::Node, expressions::token::Error, model::Model,
     utils::ParsedReference,
@@ -97,6 +98,36 @@ impl LookupTable {
         (0..self.rows())
             .map(|row| self.get(model, row, 0, cell))
             .collect()
+    }
+
+    /// Finds `lookup_value` in the first column of the table (VLOOKUP) or in its first
+    /// row (HLOOKUP), as `lookup_index` does.
+    fn find(
+        &self,
+        model: &mut Model,
+        lookup_value: &CalcResult,
+        is_sorted: bool,
+        in_first_column: bool,
+        cell: CellReferenceIndex,
+    ) -> Option<usize> {
+        if let (false, LookupTable::Range { left, .. }) = (is_sorted, self) {
+            let vector = if in_first_column {
+                Vector::down(*left, self.rows())
+            } else {
+                Vector::across(*left, self.columns())
+            };
+            if let Some(found) =
+                model.indexed_position(vector, Equality::Lookup, lookup_value, SearchFrom::First)
+            {
+                return found;
+            }
+        }
+        let search_vector = if in_first_column {
+            self.first_column(model, cell)
+        } else {
+            self.first_row(model, cell)
+        };
+        lookup_index(lookup_value, &search_vector, is_sorted)
     }
 }
 
@@ -407,6 +438,22 @@ impl<'a> Model<'a> {
             1
         };
         let match_range = self.evaluate_node_in_context(&args[1], cell);
+        if let (0, CalcResult::Range { left, right }) = (match_type, &match_range) {
+            let indexed = Vector::from_range(*left, *right).and_then(|vector| {
+                self.indexed_position(vector, Equality::Match, &target, SearchFrom::First)
+            });
+            match indexed {
+                Some(Some(position)) => return CalcResult::Number(position as f64 + 1.0),
+                Some(None) => {
+                    return CalcResult::Error {
+                        error: Error::NA,
+                        origin: cell,
+                        message: "Not found".to_string(),
+                    }
+                }
+                None => {}
+            }
+        }
 
         // MATCH operates on a vector (a single row or single column). We
         // materialize the second argument, be it a range reference or an array
@@ -529,8 +576,7 @@ impl<'a> Model<'a> {
             };
         }
         // We look for `lookup_value` in the first row of the table
-        let search_vector = table.first_row(self, cell);
-        match lookup_index(&lookup_value, &search_vector, is_sorted) {
+        match table.find(self, &lookup_value, is_sorted, false, cell) {
             Some(column) => table.get(self, row_index - 1, column as i32, cell),
             None => CalcResult::Error {
                 error: Error::NA,
@@ -593,8 +639,7 @@ impl<'a> Model<'a> {
             };
         }
         // We look for `lookup_value` in the first column of the table
-        let search_vector = table.first_column(self, cell);
-        match lookup_index(&lookup_value, &search_vector, is_sorted) {
+        match table.find(self, &lookup_value, is_sorted, true, cell) {
             Some(row) => table.get(self, row as i32, column_index - 1, cell),
             None => CalcResult::Error {
                 error: Error::NA,
