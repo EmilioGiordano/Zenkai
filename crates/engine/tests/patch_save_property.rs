@@ -494,7 +494,7 @@ fn replace_part(file: &Path, name: &str, edit: impl Fn(String) -> String) {
 }
 
 #[test]
-fn styles_laid_out_with_white_space_keep_every_cell_style() {
+fn styles_laid_out_with_white_space_are_copied_and_keep_every_cell_style() {
     let dir = tempfile::tempdir().unwrap();
     let document = dir.path().join("book.xlsx");
     base_file(&document);
@@ -507,10 +507,9 @@ fn styles_laid_out_with_white_space_keep_every_cell_style() {
     let bold = book.cell(SheetId(0), pos(0, 2)).style;
     book.set_input(SheetId(2), pos(0, 0), "kiwi").unwrap();
     save_xlsx(book.save_snapshot(&document, SaveTarget::Document).unwrap()).unwrap();
-    // IronCalc counts the white space between styles as styles of its own, so a sheet it
-    // writes would point at other styles than the copied part holds: the file is written
-    // whole.
-    assert_ne!(
+    // The import counts only style elements, so the indented part still matches the styles
+    // the sheets point at and is copied as it was.
+    assert_eq!(
         raw_part(&document, UNTOUCHED_PART),
         raw_part(&base, UNTOUCHED_PART)
     );
