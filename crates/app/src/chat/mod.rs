@@ -26,7 +26,7 @@ pub(crate) mod reference;
 mod reference_scan;
 mod render;
 mod sent_books;
-pub(crate) mod session_rows;
+mod session_rows;
 mod sessions;
 mod slash;
 mod startup;
