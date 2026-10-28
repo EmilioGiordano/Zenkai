@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::EngineError;
 use crate::preflight;
@@ -173,11 +174,9 @@ pub fn write_atomic(
     bytes: &[u8],
     verify: impl Fn(&[u8]) -> Result<(), EngineError>,
 ) -> Result<(), EngineError> {
-    let temp = temp_path(path);
-    if let Err(source) = write_new(&temp, bytes) {
-        if source.kind() != std::io::ErrorKind::AlreadyExists {
-            remove_temp(&temp);
-        }
+    let (file, temp) = create_temp(path)?;
+    if let Err(source) = write_new(file, bytes) {
+        remove_temp(&temp);
         return Err(EngineError::Write { path: temp, source });
     }
     let verified = fs::read(&temp)
@@ -204,11 +203,7 @@ pub fn write_atomic(
     Ok(())
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)?;
+fn write_new(mut file: fs::File, bytes: &[u8]) -> std::io::Result<()> {
     file.write_all(bytes)?;
     file.sync_all()
 }
@@ -220,11 +215,52 @@ pub(crate) fn remove_temp(temp: &Path) {
 }
 
 pub(crate) fn temp_path(path: &Path) -> PathBuf {
+    sibling_temp(path, &std::process::id().to_string())
+}
+
+fn sibling_temp(path: &Path, suffix: &str) -> PathBuf {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "book.xlsx".to_string());
-    path.with_file_name(format!("~${name}.{}.tmp", std::process::id()))
+    path.with_file_name(format!("~${name}.{suffix}.tmp"))
+}
+
+const TEMP_ATTEMPTS: u32 = 32;
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+// A killed save leaves its temp file behind. Every attempt takes a fresh name and
+// `create_new` still refuses a file we did not create, so a leftover is skipped, never
+// reused or deleted.
+pub(crate) fn create_temp(path: &Path) -> Result<(fs::File, PathBuf), EngineError> {
+    create_temp_counting(path, &TEMP_COUNTER)
+}
+
+fn create_temp_counting(
+    path: &Path,
+    counter: &AtomicU64,
+) -> Result<(fs::File, PathBuf), EngineError> {
+    let mut last = None;
+    for _ in 0..TEMP_ATTEMPTS {
+        let count = counter.fetch_add(1, Ordering::Relaxed);
+        let temp = sibling_temp(path, &format!("{}.{count}", std::process::id()));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => return Ok((file, temp)),
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
+                last = Some(EngineError::Write { path: temp, source });
+            }
+            Err(source) => return Err(EngineError::Write { path: temp, source }),
+        }
+    }
+    Err(last.unwrap_or_else(|| EngineError::Write {
+        path: path.to_path_buf(),
+        source: std::io::ErrorKind::AlreadyExists.into(),
+    }))
 }
 
 #[cfg(test)]
@@ -280,6 +316,50 @@ mod tests {
         assert_eq!(reopened.workbook.input(SheetId(0), a2), "=A1*21");
         let leftovers = fs::read_dir(dir.path()).unwrap().count();
         assert_eq!(leftovers, 1, "temp file left behind");
+    }
+
+    fn planted(dir: &Path, count: u64) -> PathBuf {
+        dir.join(format!("~$book.xlsx.{}.{count}.tmp", std::process::id()))
+    }
+
+    #[test]
+    fn a_leftover_temp_is_skipped_and_left_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        for count in 0..3 {
+            fs::write(planted(dir.path(), count), b"theirs").unwrap();
+        }
+        let (_file, temp) = create_temp_counting(&path, &AtomicU64::new(0)).unwrap();
+        assert_eq!(temp, planted(dir.path(), 3));
+        for count in 0..3 {
+            assert_eq!(fs::read(planted(dir.path(), count)).unwrap(), b"theirs");
+        }
+    }
+
+    #[test]
+    fn temp_attempts_are_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        for count in 0..u64::from(TEMP_ATTEMPTS) {
+            fs::write(planted(dir.path(), count), b"theirs").unwrap();
+        }
+        let failed = create_temp_counting(&path, &AtomicU64::new(0));
+        assert!(matches!(
+            failed,
+            Err(EngineError::Write { ref source, .. })
+                if source.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+    }
+
+    #[test]
+    fn a_leftover_temp_does_not_block_write_atomic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        let leftover = planted(dir.path(), 0);
+        fs::write(&leftover, b"theirs").unwrap();
+        write_atomic(&path, b"new", |_| Ok(())).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(fs::read(&leftover).unwrap(), b"theirs");
     }
 
     #[test]

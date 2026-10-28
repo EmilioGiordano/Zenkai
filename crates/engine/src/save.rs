@@ -13,7 +13,7 @@ use zenkai_xlsx_reader::Written;
 
 use crate::carried_moves::{Counts, Restored};
 use crate::error::EngineError;
-use crate::file::{Unsupported, remove_temp, temp_path};
+use crate::file::{Unsupported, create_temp, remove_temp};
 use crate::fingerprint::{SheetPrint, book_print};
 use crate::held::Held;
 use crate::preflight::run_with_engine_stack;
@@ -517,22 +517,8 @@ pub fn save_xlsx(snapshot: SaveSnapshot) -> Result<(), EngineError> {
         seen,
         fate: _,
     } = snapshot;
-    let temp = temp_path(&path);
-    let created = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp);
-    let file = match created {
-        Ok(file) => BufWriter::new(file),
-        // Another save of the same file owns that temp file.
-        Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
-            return Err(write_error(&temp)(source));
-        }
-        Err(source) => {
-            remove_temp(&temp);
-            return Err(write_error(&temp)(source));
-        }
-    };
+    let (file, temp) = create_temp(&path)?;
+    let file = BufWriter::new(file);
     let held = match &plan {
         Plan::Patch(plan) => Some(plan.base.clone()),
         Plan::Full(_) => None,
@@ -606,6 +592,33 @@ mod tests {
         book.set_inputs(SheetId(0), CellPos::default(), &rows)
             .unwrap();
         book
+    }
+
+    #[test]
+    fn a_leftover_temp_file_does_not_block_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("book.xlsx");
+        let leftovers: Vec<_> = (0..16)
+            .map(|count| {
+                dir.path()
+                    .join(format!("~$book.xlsx.{}.{count}.tmp", std::process::id()))
+            })
+            .collect();
+        for leftover in &leftovers {
+            std::fs::write(leftover, b"theirs").unwrap();
+        }
+        super::save_xlsx(
+            book()
+                .save_snapshot(&path, super::SaveTarget::Document)
+                .unwrap(),
+        )
+        .unwrap();
+        let reopened = crate::file::open_xlsx(&path).unwrap().workbook;
+        let b1 = CellPos::parse_a1("B1").unwrap();
+        assert_eq!(reopened.cell(SheetId(0), b1).text, "6");
+        for leftover in &leftovers {
+            assert_eq!(std::fs::read(leftover).unwrap(), b"theirs");
+        }
     }
 
     #[test]

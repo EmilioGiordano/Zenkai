@@ -3,7 +3,7 @@ use std::io::{self, BufWriter, Write};
 use std::path::Path;
 
 use crate::error::EngineError;
-use crate::file::{remove_temp, temp_path};
+use crate::file::{create_temp, remove_temp};
 
 struct Counted<W> {
     inner: W,
@@ -28,15 +28,7 @@ pub fn write_atomic_streaming(
     path: &Path,
     write: impl FnOnce(&mut dyn Write) -> Result<(), EngineError>,
 ) -> Result<(), EngineError> {
-    let temp = temp_path(path);
-    let file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
-        .map_err(|source| EngineError::Write {
-            path: temp.clone(),
-            source,
-        })?;
+    let (file, temp) = create_temp(path)?;
     let mut counted = Counted {
         inner: BufWriter::new(file),
         bytes: 0,
@@ -131,10 +123,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.csv");
         fs::write(&path, b"old").unwrap();
-        let temp = temp_path(&path);
         let failed = write_atomic_streaming(&path, |out| {
             out.write_all(b"new").unwrap();
             out.flush().unwrap();
+            let temp = dir.path().join(&leftovers(dir.path())[0]);
             let mut intruder = fs::OpenOptions::new().append(true).open(&temp).unwrap();
             intruder.write_all(b"extra").unwrap();
             Ok(())
@@ -145,14 +137,24 @@ mod tests {
     }
 
     #[test]
-    fn a_temp_left_by_someone_else_is_neither_used_nor_removed() {
+    fn a_leftover_temp_does_not_block_the_write_and_is_not_touched() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("out.csv");
-        let temp = temp_path(&path);
-        fs::write(&temp, b"theirs").unwrap();
-        let failed = write_atomic_streaming(&path, |_| Ok(()));
-        assert!(matches!(failed, Err(EngineError::Write { .. })));
-        assert_eq!(fs::read(&temp).unwrap(), b"theirs");
-        assert!(!path.exists());
+        let pid = std::process::id();
+        let leftover_names: Vec<_> = (0..16)
+            .map(|count| dir.path().join(format!("~$out.csv.{pid}.{count}.tmp")))
+            .collect();
+        for leftover in &leftover_names {
+            fs::write(leftover, b"theirs").unwrap();
+        }
+        write_atomic_streaming(&path, |out| {
+            out.write_all(b"new").unwrap();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        for leftover in &leftover_names {
+            assert_eq!(fs::read(leftover).unwrap(), b"theirs");
+        }
     }
 }
