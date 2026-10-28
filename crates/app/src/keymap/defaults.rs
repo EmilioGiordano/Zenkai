@@ -1,9 +1,18 @@
 use gpui_kit::Action;
+use zenkai_grid::{
+    Cancel, ConfirmDown, ConfirmInSelection, ConfirmLeft, ConfirmRight, ConfirmUp, CycleReference,
+    DeleteBackward, DeleteForward, EditCell, InsertLineBreak, JumpDown, JumpLeft, JumpRight,
+    JumpSelectDown, JumpSelectLeft, JumpSelectRight, JumpSelectUp, JumpUp, MoveDown, MoveLeft,
+    MoveRight, MoveUp, PageDown, PageUp, RowStart, SelectAll, SelectColumn, SelectDown, SelectLeft,
+    SelectPageDown, SelectPageUp, SelectRight, SelectRow, SelectRowStart, SelectSheetEnd,
+    SelectSheetStart, SelectUp, SheetEnd, SheetStart,
+};
 
 use super::chord::Chord;
 use crate::actions::*;
 
 const CONTEXT: Option<&str> = Some("Workspace");
+const GRID: Option<&str> = Some("Grid");
 
 pub struct Binding {
     pub chord: Chord,
@@ -27,6 +36,46 @@ fn bind(keys: &'static str, action: impl Action, context: Option<&'static str>) 
 
 pub fn defaults() -> Vec<Binding> {
     [
+        bind("up", MoveUp, GRID),
+        bind("down", MoveDown, GRID),
+        bind("left", MoveLeft, GRID),
+        bind("right", MoveRight, GRID),
+        bind("shift-up", SelectUp, GRID),
+        bind("shift-down", SelectDown, GRID),
+        bind("shift-left", SelectLeft, GRID),
+        bind("shift-right", SelectRight, GRID),
+        bind("ctrl-up", JumpUp, GRID),
+        bind("ctrl-down", JumpDown, GRID),
+        bind("ctrl-left", JumpLeft, GRID),
+        bind("ctrl-right", JumpRight, GRID),
+        bind("ctrl-shift-up", JumpSelectUp, GRID),
+        bind("ctrl-shift-down", JumpSelectDown, GRID),
+        bind("ctrl-shift-left", JumpSelectLeft, GRID),
+        bind("ctrl-shift-right", JumpSelectRight, GRID),
+        bind("home", RowStart, GRID),
+        bind("ctrl-home", SheetStart, GRID),
+        bind("ctrl-end", SheetEnd, GRID),
+        bind("pageup", PageUp, GRID),
+        bind("pagedown", PageDown, GRID),
+        bind("shift-home", SelectRowStart, GRID),
+        bind("ctrl-shift-home", SelectSheetStart, GRID),
+        bind("ctrl-shift-end", SelectSheetEnd, GRID),
+        bind("shift-pageup", SelectPageUp, GRID),
+        bind("shift-pagedown", SelectPageDown, GRID),
+        bind("ctrl-a", SelectAll, GRID),
+        bind("ctrl-space", SelectColumn, GRID),
+        bind("shift-space", SelectRow, GRID),
+        bind("f2", EditCell, GRID),
+        bind("f4", CycleReference, GRID),
+        bind("alt-enter", InsertLineBreak, GRID),
+        bind("enter", ConfirmDown, GRID),
+        bind("ctrl-enter", ConfirmInSelection, GRID),
+        bind("shift-enter", ConfirmUp, GRID),
+        bind("tab", ConfirmRight, GRID),
+        bind("shift-tab", ConfirmLeft, GRID),
+        bind("escape", Cancel, GRID),
+        bind("delete", DeleteForward, GRID),
+        bind("backspace", DeleteBackward, GRID),
         bind("ctrl-n", NewWorkbook, CONTEXT),
         bind("ctrl-o", Open, CONTEXT),
         bind("ctrl-s", Save, CONTEXT),
@@ -92,9 +141,9 @@ pub fn defaults() -> Vec<Binding> {
         bind("ctrl-=", ZoomIn, CONTEXT),
         bind("ctrl-+", ZoomIn, CONTEXT),
         bind("ctrl--", ZoomOut, CONTEXT),
-        bind("ctrl--", DeleteSelection, Some("Grid")),
-        bind("ctrl-+", InsertSelection, Some("Grid")),
-        bind("ctrl-shift-=", InsertSelection, Some("Grid")),
+        bind("ctrl--", DeleteSelection, GRID),
+        bind("ctrl-+", InsertSelection, GRID),
+        bind("ctrl-shift-=", InsertSelection, GRID),
         bind("ctrl-9", HideRows, CONTEXT),
         bind("ctrl-0", HideColumns, CONTEXT),
         bind("ctrl-(", UnhideRows, CONTEXT),
@@ -373,6 +422,25 @@ mod tests {
             action_of("ctrl--", "Workspace"),
             Some(<ZoomOut as Action>::name_for_type())
         );
+    }
+
+    #[test]
+    fn the_grid_keys_are_in_the_defaults_with_the_grid_context() {
+        let bound = |chord: &str, action: &dyn Action| {
+            defaults().into_iter().any(|binding| {
+                binding.chord.as_str() == chord
+                    && binding.context == Some("Grid")
+                    && binding.action.name() == action.name()
+            })
+        };
+        assert!(bound("ctrl-a", &SelectAll));
+        assert!(bound("ctrl-space", &SelectColumn));
+        assert!(bound("shift-space", &SelectRow));
+        assert!(bound("f2", &EditCell));
+        assert!(bound("f4", &CycleReference));
+        assert!(bound("alt-enter", &InsertLineBreak));
+        assert!(bound("enter", &ConfirmDown));
+        assert!(bound("ctrl-end", &SheetEnd));
     }
 
     #[test]
