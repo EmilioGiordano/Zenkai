@@ -272,6 +272,27 @@ pub(crate) fn result_matches_regex(calc_result: &CalcResult, reg: &regex::Regex)
     }
 }
 
+/// Returns the test an exact match with wildcards applies to each value: text cells only,
+/// case insensitive, with `*`, `?` and `~` as in Excel.
+pub(crate) fn wildcard_matcher(pattern: &str) -> Box<dyn Fn(&CalcResult) -> bool> {
+    let pattern = pattern.to_lowercase();
+    if !has_wildcards(&pattern) {
+        // Without wildcards the anchored regex only tests the lowercase texts for equality.
+        return Box::new(move |x| match x {
+            CalcResult::String(s) => cmp_lowercase(s, &pattern) == Ordering::Equal,
+            _ => false,
+        });
+    }
+    match from_wildcard_to_regex(&pattern, true) {
+        Ok(reg) => Box::new(move |x| result_matches_regex(x, &reg)),
+        Err(_) => Box::new(|_| false),
+    }
+}
+
+pub(crate) fn has_wildcards(text: &str) -> bool {
+    text.contains(['*', '?', '~'])
+}
+
 // The same as `value.to_lowercase().as_str().cmp(target)`, without allocating per cell.
 fn cmp_lowercase(value: &str, target: &str) -> Ordering {
     if value.is_ascii() {
@@ -525,7 +546,8 @@ pub(crate) fn build_criteria<'a>(value: &'a CalcResult, locale: &'a Locale) -> C
 
 #[cfg(test)]
 mod tests {
-    use super::cmp_lowercase;
+    use super::{cmp_lowercase, from_wildcard_to_regex, result_matches_regex, wildcard_matcher};
+    use crate::calc_result::CalcResult;
 
     #[test]
     fn cmp_lowercase_matches_lowercasing_a_copy() {
@@ -551,5 +573,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn text_without_wildcards_matches_as_the_regex_does() {
+        let texts = [
+            "",
+            "P0098",
+            "p0098",
+            "p0098 ",
+            "a.b",
+            "a+b",
+            "(x)",
+            "line
+break",
+            "Straße",
+            "STRASSE",
+            "İstanbul",
+            "i̇stanbul",
+            "ΟΔΟΣ",
+            "οδος",
+            "οδοσ",
+            "日本",
+        ];
+        let others = [
+            CalcResult::EmptyCell,
+            CalcResult::Number(98.0),
+            CalcResult::Boolean(false),
+        ];
+        for pattern in texts {
+            let regex = from_wildcard_to_regex(&pattern.to_lowercase(), true).unwrap();
+            let matcher = wildcard_matcher(pattern);
+            for text in texts {
+                let value = CalcResult::String(text.to_string());
+                assert_eq!(
+                    matcher(&value),
+                    result_matches_regex(&value, &regex),
+                    "{pattern} against {text}"
+                );
+            }
+            for value in &others {
+                assert!(!matcher(value));
+            }
+        }
+    }
+
+    #[test]
+    fn text_with_wildcards_still_uses_them() {
+        let text = |s: &str| CalcResult::String(s.to_string());
+        assert!(wildcard_matcher("p*8")(&text("P0098")));
+        assert!(wildcard_matcher("p?098")(&text("P0098")));
+        assert!(!wildcard_matcher("p~*")(&text("P0098")));
+        assert!(wildcard_matcher("p~*")(&text("P*")));
+        assert!(wildcard_matcher("a~b")(&text("ab")));
     }
 }

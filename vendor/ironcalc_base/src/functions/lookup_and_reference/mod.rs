@@ -10,7 +10,7 @@ use crate::{
 };
 
 use super::binary_search::binary_search_on_array;
-use super::util::{compare_values, from_wildcard_to_regex, result_matches_regex, values_are_equal};
+use super::util::{compare_values, values_are_equal, wildcard_matcher};
 
 mod address_areas;
 mod choosecols_chooserows;
@@ -118,11 +118,7 @@ fn lookup_index(
     } else {
         let result_matches: Box<dyn Fn(&CalcResult) -> bool> =
             if let CalcResult::String(s) = lookup_value {
-                if let Ok(reg) = from_wildcard_to_regex(&s.to_lowercase(), true) {
-                    Box::new(move |x| result_matches_regex(x, &reg))
-                } else {
-                    Box::new(move |_| false)
-                }
+                wildcard_matcher(s)
             } else {
                 let lookup_value = lookup_value.clone();
                 Box::new(move |x| compare_values(x, &lookup_value) == 0)
@@ -449,11 +445,7 @@ impl<'a> Model<'a> {
                 // We apply linear search
                 let result_matches: Box<dyn Fn(&CalcResult) -> bool> =
                     if let CalcResult::String(s) = &target {
-                        if let Ok(reg) = from_wildcard_to_regex(&s.to_lowercase(), true) {
-                            Box::new(move |x| result_matches_regex(x, &reg))
-                        } else {
-                            Box::new(move |_| false)
-                        }
+                        wildcard_matcher(s)
                     } else {
                         Box::new(move |x| values_are_equal(x, &target))
                     };
