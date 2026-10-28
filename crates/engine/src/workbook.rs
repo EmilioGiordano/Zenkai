@@ -1578,7 +1578,8 @@ impl Engine for Workbook {
                 },
             })
             .collect();
-        let rows = ws
+        // Undo can re-add a row entry out of order; sizes are reported by row.
+        let mut rows: Vec<(RowIdx, f32)> = ws
             .rows
             .iter()
             .filter(|r| r.custom_height || r.hidden)
@@ -1591,6 +1592,7 @@ impl Engine for Workbook {
                 (RowIdx::clamped(i64::from(r.r) - 1), height)
             })
             .collect();
+        rows.sort_by_key(|(row, _)| *row);
         SheetSizes { columns, rows }
     }
 
