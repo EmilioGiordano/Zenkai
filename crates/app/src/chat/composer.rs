@@ -130,6 +130,7 @@ impl ChatPanel {
         h_flex()
             .id(SharedString::from(format!("slash-{index}")))
             .role(Role::ListBoxOption)
+            .aria_selected(selected)
             .h(rem_px(32.0))
             .px_2p5()
             .gap_2p5()
