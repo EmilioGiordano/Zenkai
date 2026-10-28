@@ -800,6 +800,13 @@ impl Workspace {
         });
     }
 
+    fn close_chart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.chart = None;
+        let focus = self.grid.focus_handle(cx);
+        window.focus(&focus, cx);
+        cx.notify();
+    }
+
     fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(document) = self.documents.active_mut() {
             document.find = None;
@@ -4164,10 +4171,7 @@ impl Render for Workspace {
                     this.export_chart_svg(window, cx)
                 }),
             )
-            .on_action(cx.listener(|this, _: &CloseChart, _, cx| {
-                this.chart = None;
-                cx.notify();
-            }))
+            .on_action(cx.listener(|this, _: &CloseChart, window, cx| this.close_chart(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleDiagnostics, _, cx| {
                 this.diagnostics = !this.diagnostics;
                 cx.notify();
