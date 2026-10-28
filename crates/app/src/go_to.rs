@@ -178,6 +178,18 @@ mod tests {
     }
 
     #[test]
+    fn names_scoped_to_a_hidden_or_missing_sheet_are_unknown() {
+        let hidden = [name("Rate", Some(3), "Sheet1!$A$1")];
+        let missing = [name("Rate", Some(9), "Sheet1!$A$1")];
+        for names in [&hidden, &missing] {
+            assert_eq!(
+                go("Rate", names),
+                Err(GoToError::UnknownName("Rate".to_string()))
+            );
+        }
+    }
+
+    #[test]
     fn names_that_are_not_ranges_are_refused() {
         let names = [
             name("Pi", None, "3.14159"),
