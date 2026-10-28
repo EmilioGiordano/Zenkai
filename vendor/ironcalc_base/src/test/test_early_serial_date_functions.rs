@@ -151,3 +151,39 @@ fn date_adds_1900_to_years_below_1900() {
         ("=DATE(-1,1,1)", "#NUM!"),
     ]);
 }
+
+#[test]
+fn month_arithmetic_rejects_huge_month_counts() {
+    assert_formulas(&[
+        ("=EDATE(1,1E19)", "#NUM!"),
+        ("=EDATE(1,-1E19)", "#NUM!"),
+        ("=EOMONTH(1,1E19)", "#NUM!"),
+        ("=EOMONTH(1,-1E19)", "#NUM!"),
+        ("=EDATE(45292,9223372036854775807)", "#NUM!"),
+    ]);
+}
+
+#[test]
+fn eomonth_past_the_last_date_is_an_error() {
+    assert_formulas(&[
+        ("=EOMONTH(2958465,0)", "2958465"),
+        ("=EOMONTH(2958465,1)", "#NUM!"),
+        ("=EOMONTH(2958000,1)", "#NUM!"),
+    ]);
+}
+
+#[test]
+fn days360_uses_the_excel_february_of_1900() {
+    // 2/28/1900 is not a month end in Excel's calendar, 2/29/1900 is.
+    assert_formulas(&[("=DAYS360(59,91)", "33"), ("=DAYS360(60,91)", "30")]);
+}
+
+// Derived from the serial weekday rules, to confirm in Excel.
+#[test]
+fn week_numbers_of_serial_zero_and_month_end_before_1900() {
+    assert_formulas(&[
+        ("=ISOWEEKNUM(0)", "52"),
+        ("=WEEKNUM(0,21)", "52"),
+        ("=EOMONTH(1,-1)", "0"),
+    ]);
+}
