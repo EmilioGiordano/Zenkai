@@ -6,7 +6,7 @@ use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
 use zenkai_engine::{Engine, SaveTarget, XlsxReader, open_xlsx_with, save_xlsx};
-use zenkai_types::{CellPos, ColIdx, SheetId};
+use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
 
 // Zenkai rewrites the saved <cols> only when a column is outlined.
 const OUTLINED_G: &str = r#"<col min="7" max="7" width="20" customWidth="1" outlineLevel="1"/>"#;
@@ -197,5 +197,50 @@ fn a_file_repeating_full_width_columns_is_refused_not_expanded() {
         let path = dir.path().join("cols.xlsx");
         with_columns(&path, &cols);
         assert!(open_xlsx_with(&path, reader).is_err(), "{reader:?}");
+    }
+}
+
+fn sheet_xml(xlsx: Vec<u8>) -> String {
+    let mut sheet = String::new();
+    zip::ZipArchive::new(Cursor::new(xlsx))
+        .unwrap()
+        .by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut sheet)
+        .unwrap();
+    sheet
+}
+
+// Hiding and showing a default-width column drops the model's entry for it; the outline
+// is Zenkai's and must still be written, and survive a reopen.
+#[test]
+fn hiding_and_showing_an_outlined_default_width_column_keeps_its_outline() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cols.xlsx");
+    with_columns(
+        &path,
+        r#"<col min="3" max="3" width="10" outlineLevel="1" collapsed="1"/>"#,
+    );
+    let outlined = r#"outlineLevel="1" collapsed="1"/>"#;
+    for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
+        let mut book = open_xlsx_with(&path, reader).unwrap().workbook;
+        let column = Range::new(
+            CellPos::parse_a1("C1").unwrap(),
+            CellPos::new(RowIdx::clamped(i64::MAX), ColIdx::new(2).unwrap()),
+        );
+        book.set_columns_hidden(SheetId(0), column, true).unwrap();
+        book.set_columns_hidden(SheetId(0), column, false).unwrap();
+        let saved = book.to_xlsx().unwrap();
+        let sheet = sheet_xml(saved.clone());
+        assert!(
+            sheet.contains(r#"<col min="3" max="3""#),
+            "{reader:?} {sheet}"
+        );
+        assert!(sheet.contains(outlined), "{reader:?} {sheet}");
+        let again = dir.path().join("saved.xlsx");
+        std::fs::write(&again, saved).unwrap();
+        let reopened = open_xlsx_with(&again, reader).unwrap().workbook;
+        let sheet = sheet_xml(reopened.to_xlsx().unwrap());
+        assert!(sheet.contains(outlined), "{reader:?} {sheet}");
     }
 }
