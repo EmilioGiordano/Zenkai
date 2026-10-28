@@ -326,9 +326,14 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/test/test_column_width.rs`.
 - Showing a column that was hidden without a prior entry drops the entry hiding made (default
   width, no custom width, no style), so undoing a hide leaves no entry behind
-  (`Worksheet::set_column_hidden`). Stands on its own. Tests: `src/test/test_column_width.rs`.
+  (`Worksheet::set_column_hidden`). Adds `Col::has_default_width`, the test for that entry.
+  Stands on its own. Tests: `src/test/test_column_width.rs`.
+- `Worksheet::set_column_style` keeps the width of a hidden column (`get_actual_column_width`,
+  not `get_column_width`, which reports 0 for it), and `Worksheet::set_column_width` marks the
+  entry `custom_width` even at the default width, so a width the user sets is never read as
+  IronCalc's own default entry. Stand on their own. Tests: `src/test/test_column_width.rs`.
 - Undoing a row height restores the entry the row had, or removes the row's entry when it
-  had none and carries no style or hidden state, instead of writing back the height
+  had none, instead of writing back the height
   `get_row_height` reported (`Diff::SetRowHeight` in `src/user_model/history.rs`,
   `Worksheet::restore_row_height`). The bitcode encoding of the history changes. Stands on
   its own. Tests: `src/test/test_row_height.rs`.
