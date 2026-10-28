@@ -2,6 +2,7 @@ use std::num::NonZero;
 use std::thread;
 
 use crate::document::contents_of;
+use zenkai_agent::status_summary::SummaryItem;
 use zenkai_engine::{Engine, Workbook};
 use zenkai_types::{CellPos, Contents, Range, RowIdx, SheetId};
 
@@ -47,6 +48,8 @@ pub struct SelectionStats {
     pub count: u64,
     pub numbers: u64,
     pub sum: f64,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
 }
 
 impl SelectionStats {
@@ -55,11 +58,32 @@ impl SelectionStats {
             count: self.count + other.count,
             numbers: self.numbers + other.numbers,
             sum: self.sum + other.sum,
+            min: extreme(self.min, other.min, f64::min),
+            max: extreme(self.max, other.max, f64::max),
         }
     }
 
     pub fn average(&self) -> Option<f64> {
         (self.numbers > 0).then(|| self.sum / self.numbers as f64)
+    }
+
+    // Count covers every non-empty cell, errors and text included; the rest need numbers.
+    pub fn value(&self, item: SummaryItem) -> Option<f64> {
+        match item {
+            SummaryItem::Count => Some(self.count as f64),
+            SummaryItem::Average => self.average(),
+            SummaryItem::NumericalCount => (self.numbers > 0).then_some(self.numbers as f64),
+            SummaryItem::Min => self.min,
+            SummaryItem::Max => self.max,
+            SummaryItem::Sum => (self.numbers > 0).then_some(self.sum),
+        }
+    }
+}
+
+fn extreme(a: Option<f64>, b: Option<f64>, pick: fn(f64, f64) -> f64) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(pick(a, b)),
+        (a, b) => a.or(b),
     }
 }
 
@@ -119,6 +143,8 @@ fn tally(band: Range, contents: &(impl Fn(CellPos) -> Contents + Sync)) -> Selec
                 stats.count += 1;
                 stats.numbers += 1;
                 stats.sum += n;
+                stats.min = extreme(stats.min, Some(n), f64::min);
+                stats.max = extreme(stats.max, Some(n), f64::max);
             }
             Contents::NonNumeric => stats.count += 1,
         }
@@ -152,6 +178,60 @@ mod tests {
             .unwrap();
         let stats = compute(&workbook, SheetId(0), Range::parse_a1("A1:A10").unwrap()).unwrap();
         assert_eq!((stats.count, stats.sum), (10, 55.0));
+    }
+
+    fn tallied(cells: &[Contents]) -> SelectionStats {
+        let band = Range::parse_a1(&format!("A1:A{}", cells.len())).unwrap();
+        tally(band, &|pos: CellPos| cells[pos.row.get() as usize])
+    }
+
+    #[test]
+    fn numbers_text_and_errors_are_counted_like_excel() {
+        let stats = tallied(&[
+            Contents::Number(4.0),
+            Contents::NonNumeric,
+            Contents::Empty,
+            Contents::Number(-2.0),
+            Contents::NonNumeric,
+        ]);
+        let value = |item| stats.value(item);
+        assert_eq!(value(SummaryItem::Count), Some(4.0));
+        assert_eq!(value(SummaryItem::NumericalCount), Some(2.0));
+        assert_eq!(value(SummaryItem::Sum), Some(2.0));
+        assert_eq!(value(SummaryItem::Average), Some(1.0));
+        assert_eq!(value(SummaryItem::Min), Some(-2.0));
+        assert_eq!(value(SummaryItem::Max), Some(4.0));
+    }
+
+    #[test]
+    fn without_numbers_only_count_has_a_value() {
+        let stats = tallied(&[Contents::NonNumeric, Contents::Empty, Contents::NonNumeric]);
+        assert_eq!(stats.value(SummaryItem::Count), Some(2.0));
+        for item in [
+            SummaryItem::Average,
+            SummaryItem::NumericalCount,
+            SummaryItem::Min,
+            SummaryItem::Max,
+            SummaryItem::Sum,
+        ] {
+            assert_eq!(stats.value(item), None, "{item:?}");
+        }
+    }
+
+    #[test]
+    fn an_empty_selection_has_no_values() {
+        let stats = tallied(&[Contents::Empty, Contents::Empty]);
+        assert_eq!(stats.value(SummaryItem::Count), Some(0.0));
+        assert_eq!(stats.value(SummaryItem::Min), None);
+    }
+
+    #[test]
+    fn bands_merge_their_extremes() {
+        let low = tallied(&[Contents::Number(3.0), Contents::Number(5.0)]);
+        let high = tallied(&[Contents::Number(-1.0), Contents::NonNumeric]);
+        let merged = low.merge(high).merge(SelectionStats::default());
+        assert_eq!((merged.min, merged.max), (Some(-1.0), Some(5.0)));
+        assert_eq!((merged.count, merged.numbers), (4, 3));
     }
 
     #[test]
