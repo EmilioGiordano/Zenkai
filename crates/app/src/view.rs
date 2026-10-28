@@ -51,6 +51,7 @@ use zenkai_agent::settings::{HeldChange, PermissionMode};
 
 use crate::actions::*;
 use crate::agent_settings::{self, AgentConfig, HeldDecision};
+use crate::auto_sum;
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
 use crate::chat_layout::{ChatLayout, ChatLayoutState};
@@ -3179,6 +3180,7 @@ impl Workspace {
     }
 
     // Alt+= proposes =SUM over the numbers right above (or to the left), in edit mode.
+    // With a range selected it writes the totals directly, in one undo step.
     fn auto_sum(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(workbook) = self.documents.active().and_then(Document::workbook) else {
             return;
@@ -3190,6 +3192,21 @@ impl Workspace {
         let Some(contents) = document::contents_of(&workbook, sheet) else {
             return;
         };
+        let selection = self.selection(cx);
+        if selection.start != selection.end {
+            let totals = auto_sum::totals(selection, |pos| contents(pos).is_filled());
+            drop(contents);
+            drop(workbook);
+            self.edit(window, cx, move |wb| {
+                wb.as_one_undo_step(|wb| {
+                    for total in &totals {
+                        wb.set_input(sheet, total.target, &format!("=SUM({})", total.sum))?;
+                    }
+                    Ok(())
+                })
+            });
+            return;
+        }
         let is_number = |pos: CellPos| matches!(contents(pos), Contents::Number(_));
         let run = |direction: Direction| {
             let mut first = None;
