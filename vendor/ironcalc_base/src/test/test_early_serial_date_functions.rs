@@ -168,7 +168,7 @@ fn eomonth_past_the_last_date_is_an_error() {
     assert_formulas(&[
         ("=EOMONTH(2958465,0)", "2958465"),
         ("=EOMONTH(2958465,1)", "#NUM!"),
-        ("=EOMONTH(2958000,1)", "#NUM!"),
+        ("=EOMONTH(2958000,16)", "#NUM!"),
     ]);
 }
 
