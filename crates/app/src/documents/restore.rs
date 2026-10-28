@@ -469,6 +469,14 @@ mod tests {
     }
 
     #[test]
+    fn a_file_time_before_1970_does_not_stop_the_session_from_saving() {
+        let before_1970 = std::time::UNIX_EPOCH - std::time::Duration::from_secs(1);
+        let record = recorded(&restored_from_recovery(Some(before_1970)));
+        assert_eq!(record.file_modified, None);
+        serde_json::to_vec(&record).unwrap();
+    }
+
+    #[test]
     fn a_record_without_a_file_stamp_restores_unguarded() {
         let documents = restored_from_recovery(None);
         assert!(documents.active().unwrap().file_guard().is_none());
