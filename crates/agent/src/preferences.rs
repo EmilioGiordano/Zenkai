@@ -2,6 +2,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use zenkai_i18n::t;
 
+use crate::status_summary::StatusSummary;
+
 pub const MIN_AUTOSAVE_SECONDS: u32 = 10;
 pub const MAX_AUTOSAVE_SECONDS: u32 = 600;
 pub const AUTOSAVE_STEP_SECONDS: u32 = 10;
@@ -36,6 +38,8 @@ pub struct GeneralSettings {
         description = "How a Markdown file opens: \"preview\" shows it rendered, \"split\" shows the source beside the preview."
     )]
     pub markdown_opens_in: MarkdownOpensIn,
+    #[serde(default)]
+    pub status_summary: StatusSummary,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -112,6 +116,7 @@ impl Default for GeneralSettings {
             close_window_with_unsaved: keep_when_closing_window(),
             autosave_seconds: DEFAULT_AUTOSAVE_SECONDS,
             markdown_opens_in: MarkdownOpensIn::default(),
+            status_summary: StatusSummary::default(),
         }
     }
 }
