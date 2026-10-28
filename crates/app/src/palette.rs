@@ -227,6 +227,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.permission_automatic"), PermissionAutomatic),
                 item(t!("palette.toggle_external_agents"), ToggleExternalAgents),
                 item(t!("palette.chat.toggle"), ToggleAgentChat),
+                item(t!("palette.chat.focus"), FocusAgentChat),
                 item(t!("palette.chat.cycle_layout"), CycleChatLayout),
                 item(t!("palette.chat.toggle_full_window"), ToggleChatFullWindow),
                 item(t!("palette.chat.dock"), DockChat),

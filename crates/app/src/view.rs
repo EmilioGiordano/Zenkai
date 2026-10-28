@@ -4185,6 +4185,9 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &ToggleAgentChat, window, cx| this.toggle_chat(window, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &FocusAgentChat, window, cx| this.focus_chat(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &CycleChatLayout, window, cx| {
                 this.change_chat_layout(ChatLayoutState::cycled, window, cx)
             }))

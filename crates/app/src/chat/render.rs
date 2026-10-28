@@ -77,6 +77,7 @@ impl Render for ChatPanel {
         let root = v_flex()
             .id("agent-chat")
             .key_context(context)
+            .track_focus(&self.focus)
             .size_full()
             .bg(sidebar)
             .text_color(foreground)

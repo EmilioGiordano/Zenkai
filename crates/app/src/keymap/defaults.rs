@@ -239,6 +239,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("tab", FocusNextControl, Some("GenerateDialog")),
         bind("shift-tab", FocusPreviousControl, Some("GenerateDialog")),
         bind("ctrl-j", ToggleAgentChat, CONTEXT),
+        bind("ctrl-shift-l", FocusAgentChat, CONTEXT),
         bind("ctrl-alt-w", CycleChatLayout, CONTEXT),
         bind("ctrl-alt-f", ToggleChatFullWindow, CONTEXT),
         bind("ctrl-alt-right", WidenSidebar, CONTEXT),

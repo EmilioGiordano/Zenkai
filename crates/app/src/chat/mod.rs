@@ -115,6 +115,7 @@ struct Gate {
 
 pub struct ChatPanel {
     workspace: WeakEntity<Workspace>,
+    focus: FocusHandle,
     endpoint: ToolEndpoint,
     composer: Entity<TextareaState>,
     scroll: ScrollHandle,
@@ -296,6 +297,7 @@ impl ChatPanel {
         let (history_saves, history_queue) = async_channel::unbounded();
         let mut panel = ChatPanel {
             workspace,
+            focus: cx.focus_handle(),
             endpoint,
             composer,
             scroll: ScrollHandle::new(),
@@ -350,6 +352,10 @@ impl ChatPanel {
         };
         panel.load_history(history_queue, cx);
         panel
+    }
+
+    pub fn has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.focus.contains_focused(window, cx)
     }
 
     pub fn focus_composer(&self, window: &mut Window, cx: &mut Context<Self>) {
