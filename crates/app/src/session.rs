@@ -272,7 +272,9 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
                     .file
                     .stamp
                     .map_or(rested.file.at, |stamp| stamp.modified())
-            }),
+            })
+            // serde cannot write a time before 1970; such a file restores unguarded instead.
+            .filter(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).is_ok()),
         pdf: link.pdf,
         text_zoom: link.text_zoom,
         unsupported: link
