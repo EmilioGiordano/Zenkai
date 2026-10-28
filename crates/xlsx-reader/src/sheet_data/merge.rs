@@ -66,6 +66,7 @@ impl SheetCells {
         self.formula_cells.append(&mut piece.formula_cells);
         self.events.append(&mut piece.events);
         self.jobs.append(&mut piece.jobs);
+        self.highest_style = self.highest_style.max(piece.highest_style);
         self.cell_count += piece.cell_count;
         self.job_bytes += piece.job_bytes;
         if piece.first_row != 0 {
