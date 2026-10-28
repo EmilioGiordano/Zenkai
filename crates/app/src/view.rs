@@ -209,6 +209,7 @@ pub struct Workspace {
     generate: Option<generate::GenerateSession>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
+    name_box_focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
     recovery_dir: Option<PathBuf>,
     rename: Option<(Entity<InputState>, Subscription)>,
@@ -344,7 +345,7 @@ enum Replacing {
 
 impl Workspace {
     pub fn new(initial: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
-        let grid = cx.new(Grid::new);
+        let grid = cx.new(|cx| Grid::new(t!("grid.sheet_label").into(), cx));
         let subscription = cx.subscribe_in(&grid, window, Self::on_grid_event);
         let colors = toolbar::ColorPickers {
             font: cx.new(|cx| ColorPickerState::new(window, cx)),
@@ -425,6 +426,7 @@ impl Workspace {
             generate: None,
             colors,
             focus: cx.focus_handle(),
+            name_box_focus: cx.focus_handle(),
             session_lock: None,
             recovery_dir: None,
             rename: None,
@@ -2658,6 +2660,8 @@ impl Workspace {
                     .into_any_element(),
                 None => div()
                     .id("name-box")
+                    .track_focus(&self.name_box_focus)
+                    .tab_stop(true)
                     .role(Role::Button)
                     .aria_label(t!("grid.name_box_label", name = name))
                     .w(rem_px(96.0))
@@ -2671,6 +2675,11 @@ impl Workspace {
                     .text_sm()
                     .cursor_text()
                     .on_click(cx.listener(|this, _, window, cx| this.open_go_to(window, cx)))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.open_go_to(window, cx);
+                        }
+                    }))
                     .child(name)
                     .into_any_element(),
             })
@@ -2785,6 +2794,9 @@ impl Workspace {
             .child(
                 div()
                     .id("add-sheet")
+                    .role(Role::Button)
+                    .aria_label(t!("sheet.add"))
+                    .tab_stop(true)
                     .px_3()
                     .text_color(theme.muted_foreground)
                     .cursor_pointer()
