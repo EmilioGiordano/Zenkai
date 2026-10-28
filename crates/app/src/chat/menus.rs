@@ -73,6 +73,10 @@ pub(super) fn popover(
         .shadow_lg()
 }
 
+fn toggled(on: bool) -> Toggled {
+    if on { Toggled::True } else { Toggled::False }
+}
+
 pub(super) struct Item {
     pub id: SharedString,
     pub name: SharedString,
@@ -87,6 +91,7 @@ pub(super) fn item(item: Item, cx: &App) -> Stateful<Div> {
         .id(item.id)
         .role(Role::MenuItemRadio)
         .aria_label(item.name.clone())
+        .aria_toggled(toggled(item.checked))
         .gap_2p5()
         .items_start()
         .px_2p5()
@@ -464,6 +469,7 @@ impl ChatPanel {
                     .id(SharedString::from(format!("effort-{}", choice.value)))
                     .role(Role::RadioButton)
                     .aria_label(choice.label.clone())
+                    .aria_toggled(toggled(current))
                     .flex_1()
                     .min_w_0()
                     .py_1()
