@@ -89,6 +89,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("ctrl-$", FormatCurrency, CONTEXT),
         bind("ctrl-%", FormatPercent, CONTEXT),
         bind("ctrl-#", FormatDate, CONTEXT),
+        bind("ctrl-·", FormatDate, CONTEXT),
         bind("ctrl-=", ZoomIn, CONTEXT),
         bind("ctrl-+", ZoomIn, CONTEXT),
         bind("ctrl--", ZoomOut, CONTEXT),
@@ -298,7 +299,7 @@ pub fn defaults() -> Vec<Binding> {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::Action;
+    use gpui_kit::{Action, KeybindingKeystroke, Keystroke, Modifiers};
 
     use super::*;
 
@@ -410,5 +411,35 @@ mod tests {
             dialog_action("n"),
             Some(<DiscardCloseDialog as Action>::name_for_type())
         );
+    }
+
+    // Windows reports Shift+digit as the shifted character with no shift flag, so the
+    // chord must name that character. The symbols are what each layout types.
+    #[test]
+    fn every_number_format_has_a_chord_windows_types_on_the_us_and_spanish_layouts() {
+        let typed = |key: &str| Keystroke {
+            modifiers: Modifiers::control(),
+            key: key.to_string(),
+            key_char: Some(key.to_string()),
+        };
+        let matches = |key: &str, action: &str| {
+            defaults().into_iter().any(|binding| {
+                binding.action.name() == action
+                    && Keystroke::parse(binding.chord.as_str()).is_ok_and(|chord| {
+                        typed(key).should_match(&KeybindingKeystroke::from_keystroke(chord))
+                    })
+            })
+        };
+        let cases = [
+            ("~", <FormatGeneral as Action>::name_for_type()),
+            ("!", <FormatNumber as Action>::name_for_type()),
+            ("$", <FormatCurrency as Action>::name_for_type()),
+            ("%", <FormatPercent as Action>::name_for_type()),
+            ("#", <FormatDate as Action>::name_for_type()),
+            ("·", <FormatDate as Action>::name_for_type()),
+        ];
+        for (key, action) in cases {
+            assert!(matches(key, action), "Ctrl+{key} does not reach {action}");
+        }
     }
 }
