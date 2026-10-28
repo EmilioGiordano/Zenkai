@@ -152,6 +152,7 @@ mod tests {
                     kind: DocumentKind::Markdown,
                     mode: ViewMode::Source,
                     base: None,
+                    file_modified: None,
                     pdf: Default::default(),
                     text_zoom: TextZoom::nearest(150),
                     unsupported: Vec::new(),

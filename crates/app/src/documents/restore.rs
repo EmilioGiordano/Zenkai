@@ -141,6 +141,7 @@ mod tests {
             kind: Default::default(),
             mode: Default::default(),
             base: None,
+            file_modified: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
             unsupported: Vec::new(),
@@ -389,6 +390,113 @@ mod tests {
         assert_eq!(document.unsupported, [Unsupported::Charts]);
         assert!(document.may_lose_unseen_content());
         assert_eq!(document.path.as_deref(), Some(Path::new("a.xlsx")));
+    }
+
+    fn restored_from_recovery(modified: Option<std::time::SystemTime>) -> Documents {
+        let mut record = file(Some("a.xlsx"), true);
+        record.dirty = true;
+        record.file_modified = modified;
+        let session = Session::new(
+            false,
+            vec![SpaceRecord {
+                name: "Q3".to_string(),
+                collapsed: false,
+                color: Default::default(),
+                appearance: Default::default(),
+                files: vec![record],
+            }],
+        );
+        let mut documents = documents();
+        let id = documents
+            .restore(&session, Some(Path::new("recovery")))
+            .unwrap();
+        let mut recovered = loaded(id);
+        recovered.provenance = Provenance::Recovery;
+        documents.install(recovered);
+        documents
+    }
+
+    #[test]
+    fn a_workbook_restored_from_recovery_is_guarded_by_the_file_stamp_its_edits_stood_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("a.xlsx");
+        std::fs::write(&target, b"original").unwrap();
+        let seen = std::fs::metadata(&target).unwrap().modified().unwrap();
+        let documents = restored_from_recovery(Some(seen));
+        let guard = documents.active().unwrap().file_guard().unwrap();
+        assert!(!guard.changed(zenkai_engine::Stamp::of(&target).unwrap()));
+
+        let later = seen + std::time::Duration::from_secs(5);
+        std::fs::File::options()
+            .write(true)
+            .open(&target)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        assert!(guard.changed(zenkai_engine::Stamp::of(&target).unwrap()));
+    }
+
+    fn recorded(documents: &Documents) -> FileRecord {
+        let mut link = documents.active().unwrap().to_link();
+        link.recovery = Some(PathBuf::from("recovery").join("autosave-1-2-3.xlsx"));
+        session::record_of(&link, true)
+    }
+
+    #[test]
+    fn a_restored_guard_survives_a_second_snapshot_and_restore() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("a.xlsx");
+        std::fs::write(&target, b"original").unwrap();
+        let seen = std::fs::metadata(&target).unwrap().modified().unwrap();
+        let record = recorded(&restored_from_recovery(Some(seen)));
+        assert_eq!(record.file_modified, Some(seen));
+
+        let link = session::link_of(
+            &record,
+            WorkbookId(1),
+            SpaceId(0),
+            Some(Path::new("recovery")),
+        );
+        let guard = link.rested.unwrap().file;
+        assert!(!guard.changed(zenkai_engine::Stamp::of(&target).unwrap()));
+        std::fs::File::options()
+            .write(true)
+            .open(&target)
+            .unwrap()
+            .set_modified(seen + std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(guard.changed(zenkai_engine::Stamp::of(&target).unwrap()));
+    }
+
+    #[test]
+    fn a_file_time_before_1970_does_not_stop_the_session_from_saving() {
+        let before_1970 = std::time::UNIX_EPOCH - std::time::Duration::from_secs(1);
+        let record = recorded(&restored_from_recovery(Some(before_1970)));
+        assert_eq!(record.file_modified, None);
+        serde_json::to_vec(&record).unwrap();
+    }
+
+    #[test]
+    fn a_record_without_a_file_stamp_restores_unguarded() {
+        let documents = restored_from_recovery(None);
+        assert!(documents.active().unwrap().file_guard().is_none());
+    }
+
+    #[test]
+    fn the_stamp_of_a_workbook_opened_from_a_file_is_recorded_in_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("a.xlsx");
+        let book = blank();
+        zenkai_engine::save_xlsx(
+            book.save_snapshot(&target, zenkai_engine::SaveTarget::Document)
+                .unwrap(),
+        )
+        .unwrap();
+        let opened = zenkai_engine::open_xlsx(&target).unwrap().workbook;
+        let mut documents = documents();
+        documents.open(opened, Some(target.clone()), Vec::new());
+        let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
+        assert_eq!(recorded(&documents).file_modified, Some(modified));
     }
 
     #[test]

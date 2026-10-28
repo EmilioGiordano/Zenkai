@@ -54,7 +54,8 @@ pub struct Link {
 
 // The file as the workbook last had it, to tell on the way back whether it changed while the
 // workbook was out of memory. The stamp is the engine's, taken when the file was last read or
-// written; without one, a file modified after `at` is taken as changed.
+// written; without one, `at` is the file's modified time as the workbook knew it, or when it
+// last looked, and a file modified after it is taken as changed.
 #[derive(Clone, Copy, Debug)]
 pub struct FileSeen {
     pub stamp: Option<Stamp>,
@@ -280,11 +281,13 @@ impl Document {
         }
     }
 
+    // A restored workbook stands on a recovery copy, whose own stamp says nothing about the
+    // file, so the guard it was restored with is what carries on.
     fn file_seen(&self) -> FileSeen {
-        FileSeen {
+        self.file_guard().unwrap_or_else(|| FileSeen {
             stamp: self.workbook().and_then(|workbook| workbook.file_stamp()),
             at: SystemTime::now(),
-        }
+        })
     }
 
     // The link a workbook with unsaved work becomes when it goes to disk. Its recovery copy
