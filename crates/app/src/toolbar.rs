@@ -26,6 +26,7 @@ fn tool(
         .ghost()
         .compact()
         .icon(icon)
+        .accessibility_label(tooltip)
         .tooltip(keymap::labeled(cx, tooltip, &action))
         .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
 }
@@ -89,6 +90,7 @@ fn interface_size(cx: &App) -> Option<impl IntoElement> {
                                         Button::new("interface-smaller")
                                             .compact()
                                             .icon(IconName::Minus)
+                                            .accessibility_label(t!("interface.smaller"))
                                             .tooltip(t!("interface.smaller"))
                                             .on_click(|_, window, cx| {
                                                 window.dispatch_action(
@@ -107,6 +109,7 @@ fn interface_size(cx: &App) -> Option<impl IntoElement> {
                                         Button::new("interface-larger")
                                             .compact()
                                             .icon(IconName::Plus)
+                                            .accessibility_label(t!("interface.larger"))
                                             .tooltip(t!("interface.larger"))
                                             .on_click(|_, window, cx| {
                                                 window.dispatch_action(
