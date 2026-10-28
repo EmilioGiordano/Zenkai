@@ -121,7 +121,8 @@ fn undoing_a_hide_on_a_column_without_an_entry_leaves_no_entry() {
     let dir = tempfile::tempdir().unwrap();
     let mut book = Workbook::new_empty().unwrap();
     let before = before(&book, dir.path());
-    book.set_columns_hidden(SHEET, whole_column(4), true).unwrap();
+    book.set_columns_hidden(SHEET, whole_column(4), true)
+        .unwrap();
     assert_eq!(book.sizes(SHEET).columns[0].width, 0.0);
     book.undo().unwrap();
     assert_restored(&book, dir.path(), &before);
@@ -132,8 +133,10 @@ fn showing_a_column_hidden_without_an_entry_draws_and_saves_the_default() {
     let dir = tempfile::tempdir().unwrap();
     let mut book = Workbook::new_empty().unwrap();
     let before = before(&book, dir.path());
-    book.set_columns_hidden(SHEET, whole_column(4), true).unwrap();
-    book.set_columns_hidden(SHEET, whole_column(4), false).unwrap();
+    book.set_columns_hidden(SHEET, whole_column(4), true)
+        .unwrap();
+    book.set_columns_hidden(SHEET, whole_column(4), false)
+        .unwrap();
     assert_restored(&book, dir.path(), &before);
 }
 
@@ -157,8 +160,10 @@ fn an_unhidden_styled_column_saves_and_reopens_at_the_default_width() {
     let mut book = Workbook::new_empty().unwrap();
     book.apply_style(SHEET, whole_column(4), StyleChange::Bold(true))
         .unwrap();
-    book.set_columns_hidden(SHEET, whole_column(4), true).unwrap();
-    book.set_columns_hidden(SHEET, whole_column(4), false).unwrap();
+    book.set_columns_hidden(SHEET, whole_column(4), true)
+        .unwrap();
+    book.set_columns_hidden(SHEET, whole_column(4), false)
+        .unwrap();
     let path = dir.path().join("styled.xlsx");
     save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
     let reopened = open_xlsx(&path).unwrap().workbook;
@@ -177,7 +182,8 @@ fn undoing_a_row_height_leaves_no_row_entry_where_there_was_none() {
     let mut book = Workbook::new_empty().unwrap();
     let before = before(&book, dir.path());
     assert!(before.sizes.rows.is_empty());
-    book.set_row_height(SHEET, RowIdx::clamped(3), 40.0).unwrap();
+    book.set_row_height(SHEET, RowIdx::clamped(3), 40.0)
+        .unwrap();
     assert_eq!(book.sizes(SHEET).rows.len(), 1);
     book.undo().unwrap();
     assert_restored(&book, dir.path(), &before);
