@@ -27,6 +27,8 @@ use std::io::{BufReader, Cursor, Read, Seek};
 use std::num::NonZeroU64;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ironcalc::base::types::Workbook;
 
@@ -58,6 +60,8 @@ pub enum ReadError {
     Unreadable(String),
     #[error("the file uses something this reader leaves to IronCalc: {0}")]
     Unsupported(String),
+    #[error("the file is no longer being read")]
+    Cancelled,
 }
 
 pub type Inspect<'a> = dyn Fn(&str, &[u8]) -> Result<(), ReadError> + Sync + 'a;
@@ -97,6 +101,18 @@ pub fn read_xlsx_file(
     timezone: &str,
     inspect: &Inspect<'_>,
 ) -> Result<OpenedBook, ReadError> {
+    read_xlsx_file_cancellable(path, name, locale, timezone, inspect, &Arc::default())
+}
+
+// Setting `cancel` stops the read at the next chunk or phase boundary with `Cancelled`.
+pub fn read_xlsx_file_cancellable(
+    path: &Path,
+    name: &str,
+    locale: &str,
+    timezone: &str,
+    inspect: &Inspect<'_>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<OpenedBook, ReadError> {
     let open = || {
         let file = File::open(path).map_err(|e| ReadError::Unreadable(e.to_string()))?;
         let meter = CompressedMeter::new();
@@ -104,7 +120,15 @@ pub fn read_xlsx_file(
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
         Ok((archive, meter))
     };
-    read_from(&open, &ReadPlan::detect(), name, locale, timezone, inspect)
+    read_from(
+        &open,
+        &ReadPlan::detect(),
+        name,
+        locale,
+        timezone,
+        inspect,
+        cancel,
+    )
 }
 
 pub fn read_xlsx(
@@ -131,7 +155,15 @@ fn read_xlsx_planned(
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
         Ok((archive, meter))
     };
-    read_from(&open, plan, name, locale, timezone, inspect)
+    read_from(
+        &open,
+        plan,
+        name,
+        locale,
+        timezone,
+        inspect,
+        &Arc::default(),
+    )
 }
 
 // Worksheets stream on several threads, which share the memory budget, so the cell that
@@ -144,8 +176,9 @@ fn read_from<R: Read + Seek>(
     locale: &str,
     timezone: &str,
     inspect: &Inspect<'_>,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<OpenedBook, ReadError> {
-    match read_planned(open, plan, name, locale, timezone, inspect) {
+    match read_planned(open, plan, name, locale, timezone, inspect, cancel) {
         Err(ReadError::Unsafe(_)) if !plan.is_serial() => read_planned(
             open,
             &plan.single_threaded(),
@@ -153,11 +186,14 @@ fn read_from<R: Read + Seek>(
             locale,
             timezone,
             inspect,
+            cancel,
         ),
         other => other,
     }
 }
 
+// Whatever fails once a cancel is requested is the cancel: workers stop quietly, which
+// the main thread would otherwise report as a missing part and hand to the fallback.
 fn read_planned<R: Read + Seek>(
     open: &Open<'_, R>,
     plan: &ReadPlan,
@@ -165,11 +201,34 @@ fn read_planned<R: Read + Seek>(
     locale: &str,
     timezone: &str,
     inspect: &Inspect<'_>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<OpenedBook, ReadError> {
+    match read_phases(open, plan, name, locale, timezone, inspect, cancel) {
+        Err(_) if cancel.load(Ordering::Relaxed) => Err(ReadError::Cancelled),
+        other => other,
+    }
+}
+
+fn check_not_cancelled(cancel: &AtomicBool) -> Result<(), ReadError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(ReadError::Cancelled);
+    }
+    Ok(())
+}
+
+fn read_phases<R: Read + Seek>(
+    open: &Open<'_, R>,
+    plan: &ReadPlan,
+    name: &str,
+    locale: &str,
+    timezone: &str,
+    inspect: &Inspect<'_>,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<OpenedBook, ReadError> {
     let (mut archive, meter) = open()?;
     let meter = &meter;
     tracing::info_span!("open_check_archive").in_scope(|| limits::check_archive(&mut archive))?;
-    let budgets = Budgets::with_cells(plan.cells);
+    let budgets = Budgets::with_cells(plan.cells).with_stop(cancel.clone());
     let package = tracing::info_span!("open_read_package")
         .in_scope(|| read_package(&mut archive, meter, &budgets))?;
 
@@ -217,6 +276,7 @@ fn read_planned<R: Read + Seek>(
         sheets
     })?;
     drop(entries_span);
+    check_not_cancelled(cancel)?;
 
     let mut replaced = std::collections::HashMap::new();
     let mut cells = Vec::with_capacity(sheets.len());
@@ -237,6 +297,7 @@ fn read_planned<R: Read + Seek>(
     let stub = tracing::info_span!("open_stub_archive")
         .in_scope(|| stub_archive(&mut archive, &replaced))?;
     drop(replaced);
+    check_not_cancelled(cancel)?;
 
     let mut workbook = tracing::info_span!("open_ironcalc_load").in_scope(|| {
         guarded(|| {
@@ -255,6 +316,7 @@ fn read_planned<R: Read + Seek>(
             "IronCalc read a different list of sheets".to_string(),
         ));
     }
+    check_not_cancelled(cancel)?;
     let worksheet_paths: Vec<String> = package
         .worksheets
         .iter()
@@ -295,8 +357,9 @@ fn read_planned<R: Read + Seek>(
         .map(|(part, cells)| (part.name.as_str(), cells.jobs.as_slice()))
         .collect();
     let converted = tracing::info_span!("open_convert_formulas")
-        .in_scope(|| formulas::convert(&jobs, &names))?;
+        .in_scope(|| formulas::convert(&jobs, &names, cancel))?;
     drop(jobs);
+    check_not_cancelled(cancel)?;
     tracing::info_span!("open_fill")
         .in_scope(|| {
             guarded(|| {
@@ -831,6 +894,57 @@ mod tests {
             "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{REL_NS}/worksheet\" Target=\"{target}\"/></Relationships>"
         );
         (workbook.into_bytes(), rels.into_bytes())
+    }
+
+    fn read_with_flag(bytes: &[u8], cancel: &Arc<AtomicBool>) -> Result<OpenedBook, ReadError> {
+        let open = || {
+            let meter = CompressedMeter::new();
+            let archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes)))
+                .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+            Ok((archive, meter))
+        };
+        read_from(
+            &open,
+            &ReadPlan::detect(),
+            "Book",
+            "en",
+            "UTC",
+            &|_, _| Ok(()),
+            cancel,
+        )
+    }
+
+    #[test]
+    fn a_raised_cancel_stops_the_read_before_any_workbook_is_built() {
+        let (workbook, rels) = package_naming("worksheets/sheet1.xml");
+        let sheet = sheet_with_cells(50);
+        let bytes = zipped(
+            &[
+                ("xl/workbook.xml", workbook.as_slice()),
+                ("xl/_rels/workbook.xml.rels", rels.as_slice()),
+                ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+            ],
+            false,
+        );
+        let cancel = Arc::new(AtomicBool::new(true));
+        let error = read_with_flag(&bytes, &cancel).err();
+        assert!(matches!(error, Some(ReadError::Cancelled)), "{error:?}");
+    }
+
+    #[test]
+    fn a_read_that_is_not_cancelled_never_reports_a_cancel() {
+        let (workbook, rels) = package_naming("worksheets/sheet1.xml");
+        let sheet = sheet_with_cells(50);
+        let bytes = zipped(
+            &[
+                ("xl/workbook.xml", workbook.as_slice()),
+                ("xl/_rels/workbook.xml.rels", rels.as_slice()),
+                ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+            ],
+            false,
+        );
+        let error = read_with_flag(&bytes, &Arc::default()).err();
+        assert!(!matches!(error, Some(ReadError::Cancelled)), "{error:?}");
     }
 
     fn walk_refused(entries: &[(&str, &[u8])], max_cells: u64) -> bool {
