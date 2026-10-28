@@ -67,6 +67,17 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   panicking on the missing element, so a save leaves no xfId dangling (`src/import/styles.rs`). Tests:
   `test_styles_without_cell_style_formats` and
   `test_saved_style_references_stay_inside_cell_style_formats` in `tests/test.rs`.
+- The xlsx import reads a styles part whose `fonts`, `fills`, `borders`, `cellXfs` or
+  `cellStyles` list is missing or empty with the records of a new workbook (Calibri 11, the
+  two default fills, one border, one format, the "Normal" style), instead of panicking on the
+  first element. Font, fill, border and xfId references past their list, and cell, row and
+  column style indices past `cellXfs`, read as the first record. Only element nodes count as
+  records, so indented XML shifts nothing (`src/import/styles.rs`, `src/import/worksheets.rs`).
+  Stands on its own. Tests: `test_styles_with_empty_or_missing_lists_use_default_records`,
+  `test_style_references_past_the_lists_fall_back_to_the_first_record`,
+  `test_cell_row_and_column_styles_past_cell_xfs_are_read_as_default`,
+  `test_indented_styles_part_keeps_record_indices` and
+  `test_default_records_for_missing_lists_use_excels_names` in `tests/test.rs`.
 - The xlsx import returns an error for a `<cols>` with more `<col>` elements than the sheet
   has columns, instead of keeping one entry per element: a hostile file could repeat the
   element millions of times (`src/import/worksheets.rs`). Stands on its own (uses the public
@@ -301,10 +312,22 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   stays text (`src/formatter/dates.rs`, `src/formatter/format.rs`,
   `src/functions/date_and_time.rs`, `src/conditional_formatting.rs`). Serials from 61 on are
   unchanged. `DATE(1899, 12, 31)` now gives `#NUM!` instead of 1 (Excel reads the year
-  as 3799, which neither does). Upstream labels them as Google Sheets does (serial 1 is
+  as 3799, which neither does; the next entry fixes that). Upstream labels them as Google Sheets does (serial 1 is
   12/31/1899), on purpose, so it may not take this as is. Stands on its own. Tests:
   `src/formatter/test/test_early_serials.rs`, `src/test/test_early_date_serials.rs`,
   `src/test/test_date_and_time.rs`.
+- Every other date function reads serials 0 to 60 with the same Excel labels: EDATE, EOMONTH,
+  WEEKNUM, ISOWEEKNUM, YEARFRAC, DATEDIF, the day counting of NETWORKDAYS, WORKDAY and their
+  `.INTL` variants (weekday from the serial, holidays matched by serial), and the financial
+  functions through `from_excel_date`, which now maps serials 1 to 59 to Excel's 1900 dates
+  (it returns an error for 0 and 60, which no real date can hold, so financial functions give
+  `#NUM!` there). Known deviation: the bond functions' February month-end checks use real leap
+  years, so they treat 2/28/1900 as a month end where Excel does not (a `NaiveDate` cannot hold
+  2/29/1900). New helpers `ymd_to_excel_serial`, `excel_days_in_month` and
+  `add_months_to_ymd` in `src/formatter/dates.rs`. `DATE` adds 1900 to a year from 0 to 1899,
+  so `DATE(99, 1, 1)` is 1/1/1999 and `DATE(1899, 12, 31)` is 12/31/3799. Depends on the
+  entry above. Upstream may not take it as is for the same reason. Tests:
+  `src/test/test_early_serial_date_functions.rs`.
 - `UserModel::fill_style` gives every cell of an area the whole cell format of one cell, as one
   undo step, storing the style index once and each cell's old one (8 bytes) instead of a
   full style per cell (new `Diff::FillStyle`). Stands on its own (`src/user_model/fill_style.rs`).
@@ -324,6 +347,19 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   (`Diff::SetColumnWidth` in `src/user_model/history.rs`, `Worksheet::restore_column_width`).
   The bitcode encoding of the history changes. Stands on its own. Tests:
   `src/test/test_column_width.rs`.
+- Showing a column that was hidden without a prior entry drops the entry hiding made (default
+  width, no custom width, no style), so undoing a hide leaves no entry behind
+  (`Worksheet::set_column_hidden`). Adds `Col::has_default_width`, the test for that entry.
+  Stands on its own. Tests: `src/test/test_column_width.rs`.
+- `Worksheet::set_column_style` keeps the width of a hidden column (`get_actual_column_width`,
+  not `get_column_width`, which reports 0 for it), and `Worksheet::set_column_width` marks the
+  entry `custom_width` even at the default width, so a width the user sets is never read as
+  IronCalc's own default entry. Stand on their own. Tests: `src/test/test_column_width.rs`.
+- Undoing a row height restores the entry the row had, or removes the row's entry when it
+  had none, instead of writing back the height
+  `get_row_height` reported (`Diff::SetRowHeight` in `src/user_model/history.rs`,
+  `Worksheet::restore_row_height`). The bitcode encoding of the history changes. Stands on
+  its own. Tests: `src/test/test_row_height.rs`.
 
 Zenkai-only, not for upstream:
 

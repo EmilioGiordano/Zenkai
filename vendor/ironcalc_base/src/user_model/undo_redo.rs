@@ -164,7 +164,11 @@ impl<'a> UserModel<'a> {
                     row,
                     new_value: _,
                     old_value,
-                } => self.model.set_row_height(*sheet, *row, *old_value)?,
+                } => self
+                    .model
+                    .workbook
+                    .worksheet_mut(*sheet)?
+                    .restore_row_height(*row, old_value.as_ref())?,
                 Diff::RangeClearContents {
                     sheet,
                     row,

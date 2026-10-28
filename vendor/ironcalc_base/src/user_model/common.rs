@@ -724,11 +724,12 @@ impl<'a> UserModel<'a> {
         let line_height = font_size * 1.5;
         let cell_height = (line_count - 1.0) * line_height + 8.0 + font_size;
         if cell_height > row_height {
+            let old_row = self.model.workbook.worksheet(sheet)?.row_entry(row);
             diff_list.push(Diff::SetRowHeight {
                 sheet,
                 row,
                 new_value: cell_height,
-                old_value: row_height,
+                old_value: old_row,
             });
             self.model.set_row_height(sheet, row, cell_height)?;
         }
@@ -1724,7 +1725,7 @@ impl<'a> UserModel<'a> {
     ) -> Result<(), String> {
         let mut diff_list = Vec::new();
         for row in row_start..=row_end {
-            let old_value = self.model.get_row_height(sheet, row)?;
+            let old_value = self.model.workbook.worksheet(sheet)?.row_entry(row);
             diff_list.push(Diff::SetRowHeight {
                 sheet,
                 row,

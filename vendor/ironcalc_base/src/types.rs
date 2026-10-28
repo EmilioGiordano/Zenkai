@@ -227,6 +227,16 @@ pub struct Col {
     pub style: Option<i32>,
 }
 
+impl Col {
+    /// True for the entry IronCalc itself makes for a column nobody sized: the default
+    /// width, not marked as custom.
+    pub fn has_default_width(&self) -> bool {
+        !self.custom_width
+            && self.width
+                == crate::constants::DEFAULT_COLUMN_WIDTH / crate::constants::COLUMN_WIDTH_FACTOR
+    }
+}
+
 /// Cell type enum matching Excel TYPE() function values.
 #[derive(Debug, Eq, PartialEq)]
 pub enum CellType {

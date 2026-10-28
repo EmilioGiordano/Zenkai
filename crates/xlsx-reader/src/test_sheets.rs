@@ -222,6 +222,12 @@ pub(crate) fn workbook_with_entries(sheets: &[Vec<u8>], extra: &[(&str, &[u8])])
     for (row, text) in (1..).zip(["one", "two", "three"]) {
         model.set_user_input(0, row, 1, text.to_string()).unwrap();
     }
+    // The generated cells use styles 0 to 2, so the workbook needs that many formats.
+    let mut style = model.get_style_for_cell(0, 1, 1).unwrap();
+    style.font.b = true;
+    model.set_cell_style(0, 1, 1, &style).unwrap();
+    style.font.i = true;
+    model.set_cell_style(0, 2, 1, &style).unwrap();
     for _ in 1..sheets.len() {
         model.new_sheet();
     }

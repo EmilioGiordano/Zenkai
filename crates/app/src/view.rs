@@ -87,6 +87,7 @@ use crate::start_view;
 use crate::stats::{self, SelectionStats, StatsJob};
 use crate::theme;
 use crate::toolbar;
+use zenkai_agent::status_summary::{StatusSummary, SummaryItem};
 
 mod budget;
 mod generate;
@@ -3659,12 +3660,16 @@ impl Workspace {
         }
         match self.stats.filter(|_| self.documents.active().is_some()) {
             Some(stats) if stats.count > 1 => {
-                if let Some(avg) = stats.average() {
-                    right = right
-                        .child(t!("status.average", value = format_number(avg)))
-                        .child(t!("status.sum", value = format_number(stats.sum)));
+                let chosen = &cx.global::<AgentConfig>().settings().general.status_summary;
+                for item in chosen.items() {
+                    if let Some(value) = stats.value(*item) {
+                        right = right.child(format!(
+                            "{}: {}",
+                            summary_label(*item),
+                            format_number(value)
+                        ));
+                    }
                 }
-                right = right.child(t!("status.count", value = stats.count));
             }
             None if self.documents.active().is_some() => {
                 right = right.child(t!("status.selection_too_large"))
@@ -3710,7 +3715,16 @@ impl Workspace {
             .border_t_1()
             .border_color(theme.status_bar_border)
             .child(left)
-            .child(right)
+            .child(right.id("status-summary").context_menu({
+                let chosen = cx
+                    .global::<AgentConfig>()
+                    .settings()
+                    .general
+                    .status_summary
+                    .clone();
+                let grid_focus = self.grid.focus_handle(cx);
+                move |menu, _, _| summary_menu(menu, &chosen, grid_focus.clone())
+            }))
     }
 }
 
@@ -3735,6 +3749,41 @@ fn empty_workbook() -> Workbook {
         tracing::error!(%error, "could not create an empty workbook");
         std::process::exit(1)
     })
+}
+
+fn summary_label(item: SummaryItem) -> &'static str {
+    match item {
+        SummaryItem::Average => t!("status.summary.average"),
+        SummaryItem::Count => t!("status.summary.count"),
+        SummaryItem::NumericalCount => t!("status.summary.numerical_count"),
+        SummaryItem::Min => t!("status.summary.min"),
+        SummaryItem::Max => t!("status.summary.max"),
+        SummaryItem::Sum => t!("status.summary.sum"),
+    }
+}
+
+// Excel's status bar menu: the checked figures are the ones shown.
+fn summary_menu(menu: PopupMenu, chosen: &StatusSummary, grid_focus: FocusHandle) -> PopupMenu {
+    let entry = |menu: PopupMenu, item: SummaryItem, action: Box<dyn Action>| {
+        menu.menu_with_check(summary_label(item), chosen.contains(item), action)
+    };
+    let menu = menu.action_context(grid_focus);
+    let menu = entry(menu, SummaryItem::Average, Box::new(ToggleSummaryAverage));
+    let menu = entry(menu, SummaryItem::Count, Box::new(ToggleSummaryCount));
+    let menu = entry(
+        menu,
+        SummaryItem::NumericalCount,
+        Box::new(ToggleSummaryNumericalCount),
+    );
+    let menu = entry(menu, SummaryItem::Min, Box::new(ToggleSummaryMin));
+    let menu = entry(menu, SummaryItem::Max, Box::new(ToggleSummaryMax));
+    entry(menu, SummaryItem::Sum, Box::new(ToggleSummarySum))
+}
+
+fn toggle_summary_item(item: SummaryItem, cx: &mut App) {
+    agent_settings::change(cx, move |settings| {
+        settings.general.status_summary = settings.general.status_summary.toggled(item);
+    });
 }
 
 fn format_number(n: f64) -> String {
@@ -3960,6 +4009,24 @@ impl Render for Workspace {
             )
             .on_action(cx.listener(|this, _: &UnhideColumns, window, cx| {
                 this.hide(false, false, window, cx)
+            }))
+            .on_action(cx.listener(|_, _: &ToggleSummaryAverage, _, cx| {
+                toggle_summary_item(SummaryItem::Average, cx)
+            }))
+            .on_action(cx.listener(|_, _: &ToggleSummaryCount, _, cx| {
+                toggle_summary_item(SummaryItem::Count, cx)
+            }))
+            .on_action(cx.listener(|_, _: &ToggleSummaryNumericalCount, _, cx| {
+                toggle_summary_item(SummaryItem::NumericalCount, cx)
+            }))
+            .on_action(cx.listener(|_, _: &ToggleSummaryMin, _, cx| {
+                toggle_summary_item(SummaryItem::Min, cx)
+            }))
+            .on_action(cx.listener(|_, _: &ToggleSummaryMax, _, cx| {
+                toggle_summary_item(SummaryItem::Max, cx)
+            }))
+            .on_action(cx.listener(|_, _: &ToggleSummarySum, _, cx| {
+                toggle_summary_item(SummaryItem::Sum, cx)
             }))
             .on_action(cx.listener(|this, _: &ToggleFormulas, _, cx| {
                 this.show_formulas = !this.show_formulas;

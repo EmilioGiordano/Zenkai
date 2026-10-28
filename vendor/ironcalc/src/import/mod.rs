@@ -167,6 +167,7 @@ fn load_xlsx_from_reader<R: Read + std::io::Seek>(
         &mut shared_strings,
         &theme,
         &mut styles.dxfs,
+        styles.cell_xfs.len(),
     )?;
     // reparse formulas in defined names, since they may refer to sheets and tables that have been loaded
     let worksheet_names = worksheets

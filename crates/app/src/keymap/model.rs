@@ -11,6 +11,7 @@ use crate::palette;
 
 const WORKSPACE: Option<&str> = Some("Workspace");
 const SETTINGS_WINDOW: Option<&str> = Some("SettingsWindow");
+const GRID: Option<&str> = Some("Grid");
 
 // Commands that give agents more power. A settings.json edit must not be able to put one
 // under a key the user presses for something else.
@@ -215,7 +216,7 @@ fn editability_of(name: &str, defaults: &[Binding]) -> Editability {
     let roots = distinct(
         own.iter()
             .copied()
-            .filter(|context| *context == WORKSPACE || *context == SETTINGS_WINDOW),
+            .filter(|context| [WORKSPACE, SETTINGS_WINDOW, GRID].contains(context)),
     );
     if !roots.is_empty() {
         Editability::Editable { home: roots }

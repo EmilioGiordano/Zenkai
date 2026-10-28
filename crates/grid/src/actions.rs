@@ -1,4 +1,4 @@
-use gpui_kit::{App, KeyBinding, actions};
+use gpui_kit::actions;
 
 actions!(
     grid,
@@ -45,50 +45,3 @@ actions!(
         DeleteBackward,
     ]
 );
-
-const CONTEXT: Option<&str> = Some("Grid");
-
-pub fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("up", MoveUp, CONTEXT),
-        KeyBinding::new("down", MoveDown, CONTEXT),
-        KeyBinding::new("left", MoveLeft, CONTEXT),
-        KeyBinding::new("right", MoveRight, CONTEXT),
-        KeyBinding::new("shift-up", SelectUp, CONTEXT),
-        KeyBinding::new("shift-down", SelectDown, CONTEXT),
-        KeyBinding::new("shift-left", SelectLeft, CONTEXT),
-        KeyBinding::new("shift-right", SelectRight, CONTEXT),
-        KeyBinding::new("ctrl-up", JumpUp, CONTEXT),
-        KeyBinding::new("ctrl-down", JumpDown, CONTEXT),
-        KeyBinding::new("ctrl-left", JumpLeft, CONTEXT),
-        KeyBinding::new("ctrl-right", JumpRight, CONTEXT),
-        KeyBinding::new("ctrl-shift-up", JumpSelectUp, CONTEXT),
-        KeyBinding::new("ctrl-shift-down", JumpSelectDown, CONTEXT),
-        KeyBinding::new("ctrl-shift-left", JumpSelectLeft, CONTEXT),
-        KeyBinding::new("ctrl-shift-right", JumpSelectRight, CONTEXT),
-        KeyBinding::new("home", RowStart, CONTEXT),
-        KeyBinding::new("ctrl-home", SheetStart, CONTEXT),
-        KeyBinding::new("ctrl-end", SheetEnd, CONTEXT),
-        KeyBinding::new("pageup", PageUp, CONTEXT),
-        KeyBinding::new("pagedown", PageDown, CONTEXT),
-        KeyBinding::new("shift-home", SelectRowStart, CONTEXT),
-        KeyBinding::new("ctrl-shift-home", SelectSheetStart, CONTEXT),
-        KeyBinding::new("ctrl-shift-end", SelectSheetEnd, CONTEXT),
-        KeyBinding::new("shift-pageup", SelectPageUp, CONTEXT),
-        KeyBinding::new("shift-pagedown", SelectPageDown, CONTEXT),
-        KeyBinding::new("ctrl-a", SelectAll, CONTEXT),
-        KeyBinding::new("ctrl-space", SelectColumn, CONTEXT),
-        KeyBinding::new("shift-space", SelectRow, CONTEXT),
-        KeyBinding::new("f2", EditCell, CONTEXT),
-        KeyBinding::new("f4", CycleReference, CONTEXT),
-        KeyBinding::new("alt-enter", InsertLineBreak, CONTEXT),
-        KeyBinding::new("enter", ConfirmDown, CONTEXT),
-        KeyBinding::new("ctrl-enter", ConfirmInSelection, CONTEXT),
-        KeyBinding::new("shift-enter", ConfirmUp, CONTEXT),
-        KeyBinding::new("tab", ConfirmRight, CONTEXT),
-        KeyBinding::new("shift-tab", ConfirmLeft, CONTEXT),
-        KeyBinding::new("escape", Cancel, CONTEXT),
-        KeyBinding::new("delete", DeleteForward, CONTEXT),
-        KeyBinding::new("backspace", DeleteBackward, CONTEXT),
-    ]);
-}
