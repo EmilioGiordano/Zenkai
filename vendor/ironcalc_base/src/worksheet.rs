@@ -442,7 +442,20 @@ impl Worksheet {
             .get_actual_column_width(column)
             .unwrap_or(constants::DEFAULT_COLUMN_WIDTH);
         let style = self.get_column_style(column)?;
-        self.set_column_width_and_style(column, width, hidden, style)
+        self.set_column_width_and_style(column, width, hidden, style)?;
+        if !hidden && style.is_none() {
+            // Hiding a column that had no entry made one at the default width; showing it
+            // again drops that entry, as Excel writes no `<col>` for a default column.
+            self.cols.retain(|c| {
+                !(c.min == column
+                    && c.max == column
+                    && !c.custom_width
+                    && !c.hidden
+                    && c.style.is_none()
+                    && c.width * constants::COLUMN_WIDTH_FACTOR == constants::DEFAULT_COLUMN_WIDTH)
+            });
+        }
+        Ok(())
     }
 
     // Only the width is restored: style and hidden state may have changed since. A column

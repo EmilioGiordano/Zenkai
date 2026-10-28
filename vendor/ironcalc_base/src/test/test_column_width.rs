@@ -295,3 +295,46 @@ fn undo_width_of_a_styled_column_keeps_its_style() {
     model.undo().unwrap();
     assert_eq!(columns(&model), styled);
 }
+
+#[test]
+fn undo_hiding_a_column_without_an_entry_leaves_no_entry() {
+    let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
+    model.set_columns_hidden(0, 5, 5, true).unwrap();
+    assert!(columns(&model)[0].hidden);
+    model.undo().unwrap();
+    assert!(columns(&model).is_empty());
+    model.redo().unwrap();
+    assert!(columns(&model)[0].hidden);
+}
+
+#[test]
+fn unhiding_a_column_that_was_never_sized_leaves_no_entry() {
+    let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
+    model.set_columns_hidden(0, 5, 5, true).unwrap();
+    model.set_columns_hidden(0, 5, 5, false).unwrap();
+    assert!(columns(&model).is_empty());
+}
+
+#[test]
+fn unhiding_a_sized_or_styled_column_keeps_its_entry() {
+    let mut model = UserModel::new_empty("model", "en", "UTC", "en").unwrap();
+    model.set_columns_width(0, 2, 2, 140.0).unwrap();
+    model.set_columns_hidden(0, 2, 2, true).unwrap();
+    model.set_columns_hidden(0, 2, 2, false).unwrap();
+    assert_eq!(columns(&model).len(), 1);
+    assert_eq!(model.get_column_width(0, 2), Ok(140.0));
+
+    let column = Area {
+        sheet: 0,
+        row: 1,
+        column: 4,
+        width: 1,
+        height: LAST_ROW,
+    };
+    model.update_range_style(&column, "font.b", "true").unwrap();
+    model.set_columns_hidden(0, 4, 4, true).unwrap();
+    model.set_columns_hidden(0, 4, 4, false).unwrap();
+    assert!(columns(&model)
+        .iter()
+        .any(|c| c.min == 4 && c.style.is_some()));
+}
