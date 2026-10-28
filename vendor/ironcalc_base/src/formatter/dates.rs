@@ -26,6 +26,9 @@ fn is_date_within_range(date: NaiveDate) -> bool {
         && convert_to_serial_number(date) <= MAXIMUM_DATE_SERIAL_NUMBER
 }
 
+// Serials 0 and 60 are Excel labels with no real date (0 January 1900, the fictitious
+// 29 February 1900), so they are errors here; the date functions that accept them go through
+// `excel_serial_to_ymd` instead.
 pub fn from_excel_date(days: i64) -> Result<NaiveDate, String> {
     if days < MINIMUM_DATE_SERIAL_NUMBER as i64 {
         return Err(format!(
@@ -37,9 +40,50 @@ pub fn from_excel_date(days: i64) -> Result<NaiveDate, String> {
             "Excel date must be less than {MAXIMUM_DATE_SERIAL_NUMBER}"
         ));
     };
+    if days == 60 {
+        return Err("Excel serial 60 is the fictitious 29 February 1900".to_string());
+    }
+    if days < 60 {
+        #[allow(clippy::expect_used)]
+        let dt = NaiveDate::from_ymd_opt(1899, 12, 31).expect("problem with chrono::NaiveDate");
+        return Ok(dt + Duration::days(days));
+    }
     #[allow(clippy::expect_used)]
     let dt = NaiveDate::from_ymd_opt(1900, 1, 1).expect("problem with chrono::NaiveDate");
     Ok(dt + Duration::days(days - 2))
+}
+
+// Excel's calendar has a 29 February 1900 (see `excel_serial_to_ymd`).
+pub(crate) fn excel_days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        2 if year == 1900 => 29,
+        2 if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+// Inverse of `excel_serial_to_ymd`. Like Excel, the day is added to the serial of the first
+// of the month, so (1900, 2, 29) is 60 and (1900, 1, 0) is 0.
+pub(crate) fn ymd_to_excel_serial(year: i32, month: u32, day: u32) -> Option<i64> {
+    let first = NaiveDate::from_ymd_opt(year, month, 1)?;
+    Some(convert_to_serial_number(first) as i64 + day as i64 - 1)
+}
+
+// Moves a (year, month, day) by whole months, clamping the day to the target month's length.
+pub(crate) fn add_months_to_ymd(
+    (year, month, day): (i32, u32, u32),
+    months: i64,
+) -> Option<(i32, u32, u32)> {
+    let month_index = year as i64 * 12 + (month as i64 - 1) + months;
+    let new_year = i32::try_from(month_index.div_euclid(12)).ok()?;
+    let new_month = month_index.rem_euclid(12) as u32 + 1;
+    Some((
+        new_year,
+        new_month,
+        day.min(excel_days_in_month(new_year, new_month)),
+    ))
 }
 
 // A tuple, not a NaiveDate, because Excel's labels include 0 January 1900 and the
