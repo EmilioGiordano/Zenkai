@@ -4,7 +4,7 @@ use gpui_kit::*;
 use zenkai_agent::chat::thread::{Entry, NoticeKind, TurnEnd, TurnState};
 use zenkai_i18n::t;
 
-use super::{ChatPanel, closed};
+use super::{ChatPanel, Link, Start, closed};
 
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
@@ -42,6 +42,27 @@ impl ChatPanel {
         .detach();
     }
 
+    pub(super) fn reloadable_session(&self) -> Option<String> {
+        self.live_session
+            .clone()
+            .filter(|_| self.state.can_resume())
+    }
+
+    pub(crate) fn can_restart_agent(&self) -> bool {
+        self.live.is_none()
+            && self.link == Link::Idle
+            && (self.failed_prompt.is_some() || self.restart_session.is_some())
+    }
+
+    pub(crate) fn restart_agent(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_restart_agent() {
+            return;
+        }
+        self.problem = None;
+        self.begin(Start::Switch, window, cx);
+        cx.notify();
+    }
+
     fn end_overdue_stop(&mut self, stopped_epoch: u64, cx: &mut Context<Self>) {
         if !stop_overdue(self.thread.turn(), stopped_epoch, self.epoch) {
             return;
@@ -50,6 +71,7 @@ impl ChatPanel {
             self.list_files_written(since, cx);
         }
         self.epoch += 1;
+        self.restart_session = self.reloadable_session();
         self.end_session(cx);
         self.finish_turn(TurnEnd::Cancelled, cx);
         self.thread

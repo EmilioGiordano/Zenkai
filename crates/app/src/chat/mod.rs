@@ -136,6 +136,8 @@ pub struct ChatPanel {
     problem: Option<Problem>,
     // The prompt of the last turn that failed, so Retry can send it again.
     failed_prompt: Option<String>,
+    // The agent session of a conversation whose process was ended, to reload on Restart agent.
+    restart_session: Option<String>,
     turn_started: Option<Instant>,
     // Wall-clock start of the turn, to find the files the agent wrote during it.
     turn_began: Option<SystemTime>,
@@ -318,6 +320,7 @@ impl ChatPanel {
             gate: None,
             problem: None,
             failed_prompt: None,
+            restart_session: None,
             turn_started: None,
             turn_began: None,
             state: AgentState::default(),
@@ -454,6 +457,7 @@ impl ChatPanel {
         cx: &mut Context<Self>,
     ) {
         self.failed_prompt = None;
+        self.restart_session = None;
         self.turn_started = Some(Instant::now());
         self.turn_began = Some(SystemTime::now());
         self.problem = None;
@@ -519,6 +523,7 @@ impl ChatPanel {
         self.resume_backup = None;
         self.problem = None;
         self.failed_prompt = None;
+        self.restart_session = None;
         self.turn_started = None;
         self.state = AgentState {
             selects: std::mem::take(&mut self.state.selects),

@@ -151,6 +151,24 @@ impl ChatPanel {
         self.resume(&row, window, cx);
     }
 
+    pub(super) fn load_session(&mut self, session: String, title: Option<String>) {
+        for ask in self.permissions.drain(..) {
+            ask.cancel();
+        }
+        let old_title = std::mem::replace(&mut self.title, title);
+        self.resume_backup = Some(Backup {
+            thread: std::mem::take(&mut self.thread),
+            texts: std::mem::take(&mut self.texts),
+            title: old_title,
+        });
+        self.problem = None;
+        self.live_session = Some(session.clone());
+        self.pending_record = None;
+        if let Some(live) = &self.live {
+            live.handle.resume(session);
+        }
+    }
+
     pub(super) fn resume(&mut self, row: &Row, window: &mut Window, cx: &mut Context<Self>) {
         self.pending_resume = None;
         let settings = cx.global::<AgentConfig>().state.current.clone();
@@ -174,21 +192,7 @@ impl ChatPanel {
                     cx.notify();
                     return;
                 }
-                for ask in self.permissions.drain(..) {
-                    ask.cancel();
-                }
-                let old_title = self.title.replace(title);
-                self.resume_backup = Some(Backup {
-                    thread: std::mem::take(&mut self.thread),
-                    texts: std::mem::take(&mut self.texts),
-                    title: old_title,
-                });
-                self.problem = None;
-                self.live_session = Some(session.clone());
-                self.pending_record = None;
-                if let Some(live) = &self.live {
-                    live.handle.resume(session.clone());
-                }
+                self.load_session(session.clone(), Some(title));
             }
             Source::Local => {
                 self.new_conversation(window, cx);

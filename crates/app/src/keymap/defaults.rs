@@ -260,6 +260,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("alt-p", CycleChatPermission, Some("AgentChat")),
         bind("alt-c", CopyLoginCommand, Some("AgentChat")),
         bind("alt-shift-r", RetryAgentTurn, Some("AgentChat")),
+        bind("alt-shift-a", RestartAgent, Some("AgentChat")),
         bind("ctrl-shift-h", ShowChatSessions, CONTEXT),
         bind("alt-m", PickChatModel, Some("AgentChat")),
         bind("ctrl-.", PickChatPermission, Some("AgentChat")),

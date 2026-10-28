@@ -211,6 +211,7 @@ actions!(
         SendChatMessage,
         StopAgentTurn,
         RetryAgentTurn,
+        RestartAgent,
         LeaveAgentChat,
         NewAgentConversation,
         AddSelectionToChat,

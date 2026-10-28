@@ -88,6 +88,9 @@ impl Render for ChatPanel {
             .on_action(
                 cx.listener(|this, _: &RetryAgentTurn, window, cx| this.retry_turn(window, cx)),
             )
+            .on_action(
+                cx.listener(|this, _: &RestartAgent, window, cx| this.restart_agent(window, cx)),
+            )
             .on_action(cx.listener(|_, _: &LeaveAgentChat, _, cx| cx.emit(ChatEvent::Leave)))
             .on_action(cx.listener(|this, _: &CycleChatAgent, window, cx| {
                 this.toggle_agent_menu(window, cx)
