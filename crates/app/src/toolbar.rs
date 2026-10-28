@@ -220,6 +220,7 @@ pub fn render(style: &CellStyle, colors: &ColorPickers, cx: &App) -> impl IntoEl
                 .ghost()
                 .compact()
                 .icon(IconName::Grid2x2)
+                .accessibility_label(t!("toolbar.borders"))
                 .tooltip(t!("toolbar.borders"))
                 .dropdown_menu(|menu, _, _| {
                     menu.menu(t!("toolbar.border_bottom"), Box::new(BorderBottom))

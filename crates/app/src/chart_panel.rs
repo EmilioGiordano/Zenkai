@@ -80,6 +80,7 @@ fn button(
         .ghost()
         .compact()
         .icon(icon)
+        .accessibility_label(tooltip)
         .tooltip(tooltip)
         .on_click(move |_, window, cx| window.dispatch_action(action.boxed_clone(), cx))
 }
