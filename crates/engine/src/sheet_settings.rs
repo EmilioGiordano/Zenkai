@@ -235,6 +235,25 @@ impl SheetSettings {
         *self == SheetSettings::default()
     }
 
+    // The width Excel gives a column with no <col>: defaultColWidth, else baseColWidth
+    // (8) plus the 3/7 character Excel adds for padding, which is its 8.43.
+    pub fn default_column_width(&self) -> String {
+        if let Some(width) = self.format_attribute("defaultColWidth") {
+            return width.to_string();
+        }
+        let base: f64 = self
+            .format_attribute("baseColWidth")
+            .and_then(|base| base.parse().ok())
+            .unwrap_or(8.0);
+        format!("{:.2}", base + 3.0 / 7.0)
+    }
+
+    fn format_attribute(&self, name: &str) -> Option<&str> {
+        let format = self.format.as_deref()?;
+        let (_, rest) = format.split_once(&format!(" {name}=\""))?;
+        rest.split_once('"').map(|(value, _)| value)
+    }
+
     pub fn format_element(&self) -> String {
         let (rows, columns) = (self.rows.max_level(), self.columns.max_level());
         if self.format.is_none() && rows == 0 && columns == 0 {
@@ -904,6 +923,24 @@ mod tests {
         format!(
             r#"<?xml version="1.0"?><worksheet xmlns="{MAIN}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{inner}</worksheet>"#
         )
+    }
+
+    #[test]
+    fn default_column_width_follows_the_sheet_format() {
+        let width = |format: Option<&str>| {
+            SheetSettings {
+                format: format.map(str::to_string),
+                ..SheetSettings::default()
+            }
+            .default_column_width()
+        };
+        assert_eq!(width(None), "8.43");
+        assert_eq!(width(Some(r#" baseColWidth="8""#)), "8.43");
+        assert_eq!(width(Some(r#" baseColWidth="10""#)), "10.43");
+        assert_eq!(
+            width(Some(r#" baseColWidth="10" defaultColWidth="12.5""#)),
+            "12.5"
+        );
     }
 
     #[test]

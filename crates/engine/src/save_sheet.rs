@@ -23,7 +23,6 @@ const MAX_HEIGHT: f64 = 409.5;
 const PIECE_BYTES: usize = 64 * 1024;
 const SHEET_DATA: &str = "<sheetData>";
 const MAX_COLUMN: u32 = 16_384;
-const DEFAULT_COLUMN_CHARS: u32 = 10;
 const SHEET_DATA_END: &str = "</sheetData>";
 
 fn other(message: impl Into<String>) -> io::Error {
@@ -264,7 +263,12 @@ fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<Stri
     if settings.columns.outline.is_empty() {
         return Ok(head);
     }
-    outline_columns(&head, &settings.columns.outline).map_err(other)
+    outline_columns(
+        &head,
+        &settings.columns.outline,
+        &settings.default_column_width(),
+    )
+    .map_err(other)
 }
 
 // `tail` starts with </sheetData>; IronCalc writes <mergeCells>, <conditionalFormatting>
@@ -288,7 +292,11 @@ fn write_tail(out: &mut impl Write, tail: &str, settings: &SheetSettings) -> io:
 // Each exported <col min max .../> is split where the outline changes inside its range.
 // An outlined column the model writes no <col> for (IronCalc drops the entry of a default
 // column) gets its own, so hiding and showing a column keeps its outline.
-fn outline_columns(sheet: &str, outline: &BTreeMap<u32, Outline>) -> Result<String, String> {
+fn outline_columns(
+    sheet: &str,
+    outline: &BTreeMap<u32, Outline>,
+    default_width: &str,
+) -> Result<String, String> {
     let (open, close) = match (sheet.find("<cols>"), sheet.find("</cols>")) {
         (Some(open), Some(close)) => (open + "<cols>".len(), close),
         _ => {
@@ -298,6 +306,7 @@ fn outline_columns(sheet: &str, outline: &BTreeMap<u32, Outline>) -> Result<Stri
             return outline_columns(
                 &format!("{}<cols></cols>{}", &sheet[..at], &sheet[at..]),
                 outline,
+                default_width,
             );
         }
     };
@@ -348,9 +357,7 @@ fn outline_columns(sheet: &str, outline: &BTreeMap<u32, Outline>) -> Result<Stri
         if !covered && !extra.is_empty() && (1..=MAX_COLUMN).contains(index) {
             columns.push((
                 *index,
-                format!(
-                    r#"<col min="{index}" max="{index}" width="{DEFAULT_COLUMN_CHARS}"{extra}/>"#
-                ),
+                format!(r#"<col min="{index}" max="{index}" width="{default_width}"{extra}/>"#),
             ));
         }
     }
@@ -483,7 +490,7 @@ mod tests {
         let sheet = r#"<a><cols><col min="1" max="4" width="9" customWidth="1"/></cols></a>"#;
         let outline = BTreeMap::from([(2, level(1, false)), (3, level(1, false))]);
         assert_eq!(
-            outline_columns(sheet, &outline).unwrap(),
+            outline_columns(sheet, &outline, "8.43").unwrap(),
             r#"<a><cols><col min="1" max="1" width="9" customWidth="1"/><col min="2" max="3" width="9" customWidth="1" outlineLevel="1"/><col min="4" max="4" width="9" customWidth="1"/></cols></a>"#
         );
     }
@@ -493,8 +500,8 @@ mod tests {
         let sheet = r#"<a><cols><col min="1" max="1" width="9" customWidth="1"/><col min="5" max="5" width="9" customWidth="1"/></cols><sheetData></sheetData></a>"#;
         let outline = BTreeMap::from([(3, level(1, false))]);
         assert_eq!(
-            outline_columns(sheet, &outline).unwrap(),
-            r#"<a><cols><col min="1" max="1" width="9" customWidth="1"/><col min="3" max="3" width="10" outlineLevel="1"/><col min="5" max="5" width="9" customWidth="1"/></cols><sheetData></sheetData></a>"#
+            outline_columns(sheet, &outline, "8.43").unwrap(),
+            r#"<a><cols><col min="1" max="1" width="9" customWidth="1"/><col min="3" max="3" width="8.43" outlineLevel="1"/><col min="5" max="5" width="9" customWidth="1"/></cols><sheetData></sheetData></a>"#
         );
     }
 
@@ -503,8 +510,8 @@ mod tests {
         let sheet = r#"<a><sheetData></sheetData></a>"#;
         let outline = BTreeMap::from([(3, level(1, false))]);
         assert_eq!(
-            outline_columns(sheet, &outline).unwrap(),
-            r#"<a><cols><col min="3" max="3" width="10" outlineLevel="1"/></cols><sheetData></sheetData></a>"#
+            outline_columns(sheet, &outline, "8.43").unwrap(),
+            r#"<a><cols><col min="3" max="3" width="8.43" outlineLevel="1"/></cols><sheetData></sheetData></a>"#
         );
     }
 }
