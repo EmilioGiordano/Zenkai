@@ -37,6 +37,7 @@ const CHAR_WIDTH_PADDING: f64 = 5.0;
 const PIXELS_PER_POINT: f64 = 4.0 / 3.0;
 // IronCalc's setter takes its own pixels: characters times this factor.
 const COLUMN_WIDTH_FACTOR: f64 = 9.0;
+const IRONCALC_DEFAULT_CHARS: f64 = 10.0;
 // And its row height setter takes points times this factor.
 const ROW_HEIGHT_FACTOR: f64 = 1.5625;
 // Excel's last date, 9999-12-31.
@@ -1565,9 +1566,9 @@ impl Engine for Workbook {
             .cols
             .iter()
             .filter(|c| c.min <= i32::from(zenkai_types::MAX_COLS))
-            // IronCalc ignores the width of an entry without customWidth (a whole-column
-            // style, a column hidden then shown), so it draws at the grid default.
-            .filter(|c| c.hidden || c.custom_width)
+            // IronCalc's own entries (a whole-column style) carry its default width without
+            // customWidth and draw at the grid default; any other stored width is the file's.
+            .filter(|c| c.hidden || c.custom_width || c.width != IRONCALC_DEFAULT_CHARS)
             .map(|c| ColumnSpan {
                 first: ColIdx::clamped(i64::from(c.min) - 1),
                 last: ColIdx::clamped(i64::from(c.max) - 1),

@@ -5,7 +5,7 @@
     reason = "a failed unwrap in a test is a failed test"
 )]
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use rust_xlsxwriter::Workbook as Source;
@@ -187,4 +187,46 @@ fn undoing_a_row_height_leaves_no_row_entry_where_there_was_none() {
     assert_eq!(book.sizes(SHEET).rows.len(), 1);
     book.undo().unwrap();
     assert_restored(&book, dir.path(), &before);
+}
+
+fn without_custom_width(source: &Path, target: &Path) {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(source).unwrap()).unwrap();
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(target).unwrap());
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        if entry.name() == "xl/worksheets/sheet1.xml" {
+            let text = String::from_utf8(bytes).unwrap();
+            assert!(text.contains(" customWidth=\"1\""));
+            bytes = text.replace(" customWidth=\"1\"", "").into_bytes();
+        }
+        writer
+            .start_file(entry.name(), zip::write::FileOptions::default())
+            .unwrap();
+        writer.write_all(&bytes).unwrap();
+    }
+    writer.finish().unwrap();
+}
+
+// Excel honours a column's width attribute whether or not customWidth is set.
+#[test]
+fn a_file_column_width_without_custom_width_draws_and_saves_as_stored() {
+    let dir = tempfile::tempdir().unwrap();
+    let plain = dir.path().join("plain.xlsx");
+    without_custom_width(&source(dir.path()), &plain);
+    let book = open_xlsx(&plain).unwrap().workbook;
+    let width = |book: &Workbook| {
+        book.sizes(SHEET)
+            .columns
+            .iter()
+            .find(|span| span.first == column(2))
+            .map(|span| span.width)
+    };
+    let opened = width(&book).unwrap();
+    assert!(opened > 100.0, "{opened}");
+    let saved = dir.path().join("saved.xlsx");
+    save_xlsx(book.save_snapshot(&saved, SaveTarget::Document).unwrap()).unwrap();
+    let reopened = open_xlsx(&saved).unwrap().workbook;
+    assert_eq!(width(&reopened), Some(opened));
 }
