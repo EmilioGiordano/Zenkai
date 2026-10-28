@@ -343,6 +343,10 @@ enum Replacing {
     Original(Vec<Unsupported>),
 }
 
+fn activates_button(event: &KeyDownEvent) -> bool {
+    matches!(event.keystroke.key.as_str(), "enter" | "space")
+}
+
 impl Workspace {
     pub fn new(initial: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
         let grid = cx.new(|cx| Grid::new(t!("grid.sheet_label").into(), cx));
@@ -2676,7 +2680,7 @@ impl Workspace {
                     .cursor_text()
                     .on_click(cx.listener(|this, _, window, cx| this.open_go_to(window, cx)))
                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        if activates_button(event) {
                             this.open_go_to(window, cx);
                         }
                     }))
@@ -2801,6 +2805,11 @@ impl Workspace {
                     .text_color(theme.muted_foreground)
                     .cursor_pointer()
                     .child("+")
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if activates_button(event) {
+                            this.add_sheet(window, cx);
+                        }
+                    }))
                     .on_click(cx.listener(|this, _, window, cx| this.add_sheet(window, cx))),
             )
     }
