@@ -109,7 +109,6 @@ fn main() {
         .with_assets(assets::ZenkaiAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
-            zenkai_grid::bind_keys(cx);
             keymap::init(cx);
             theme::init(cx);
             interface_scale::init(cx);
