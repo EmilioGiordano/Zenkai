@@ -719,6 +719,7 @@ impl<'a> UserModel<'a> {
 
         let line_count = value.split('\n').count() as f64;
         let row_height = self.model.get_row_height(sheet, row)?;
+        let old_row = self.model.workbook.worksheet(sheet)?.row_entry(row);
         // This is in sync with the front-end auto fit row
         let font_size = style.font.sz as f64;
         let line_height = font_size * 1.5;
@@ -728,7 +729,7 @@ impl<'a> UserModel<'a> {
                 sheet,
                 row,
                 new_value: cell_height,
-                old_value: row_height,
+                old_value: old_row,
             });
             self.model.set_row_height(sheet, row, cell_height)?;
         }
@@ -1724,7 +1725,7 @@ impl<'a> UserModel<'a> {
     ) -> Result<(), String> {
         let mut diff_list = Vec::new();
         for row in row_start..=row_end {
-            let old_value = self.model.get_row_height(sheet, row)?;
+            let old_value = self.model.workbook.worksheet(sheet)?.row_entry(row);
             diff_list.push(Diff::SetRowHeight {
                 sheet,
                 row,

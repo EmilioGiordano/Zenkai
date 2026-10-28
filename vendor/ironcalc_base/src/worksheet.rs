@@ -426,6 +426,38 @@ impl Worksheet {
         Ok(())
     }
 
+    pub(crate) fn row_entry(&self, row: i32) -> Option<Row> {
+        self.rows.iter().find(|r| r.r == row).cloned()
+    }
+
+    // Only the height is restored: style and hidden state may have changed since. A row
+    // with no previous entry keeps one only while it carries a style or is hidden.
+    pub(crate) fn restore_row_height(&mut self, row: i32, old: Option<&Row>) -> Result<(), String> {
+        let current = self.row_height(row)?;
+        self.set_row_height(row, current)?;
+        let Some(index) = self.rows.iter().position(|r| r.r == row) else {
+            return Ok(());
+        };
+        match old {
+            Some(old) => {
+                self.rows[index].height = old.height;
+                self.rows[index].custom_height = old.custom_height;
+            }
+            None if self.rows[index].s == 0
+                && !self.rows[index].custom_format
+                && !self.rows[index].hidden =>
+            {
+                self.rows.remove(index);
+            }
+            None => {
+                self.rows[index].height =
+                    constants::DEFAULT_ROW_HEIGHT / constants::ROW_HEIGHT_FACTOR;
+                self.rows[index].custom_height = false;
+            }
+        }
+        Ok(())
+    }
+
     /// Changes the width of a column.
     ///   * If the column does not a have a width we simply add it
     ///   * If it has, it might be part of a range and we need to split the range.
