@@ -1934,8 +1934,45 @@ impl Series {
 }
 
 fn is_date_format(code: &str) -> bool {
-    let lower = code.to_ascii_lowercase();
-    lower != "general" && (lower.contains('d') || lower.contains('y'))
+    use ironcalc::base::formatter::parser::{ParsePart, Parser, TextToken};
+    let mut parser = Parser::new(code);
+    parser.parse();
+    let Some(ParsePart::Date(part)) = parser.parts.first() else {
+        return false;
+    };
+    // The parser reads "mm" before any time unit as a month, so a part with a time unit
+    // counts as a date only when it also has a day, a year or a month name.
+    let mut has_time_unit = false;
+    let mut has_month_number = false;
+    for token in &part.tokens {
+        match token {
+            TextToken::Day
+            | TextToken::DayPadded
+            | TextToken::DayNameShort
+            | TextToken::DayName
+            | TextToken::MonthNameShort
+            | TextToken::MonthName
+            | TextToken::MonthLetter
+            | TextToken::YearShort
+            | TextToken::Year => return true,
+            TextToken::Month | TextToken::MonthPadded => has_month_number = true,
+            TextToken::Hour
+            | TextToken::HourPadded
+            | TextToken::Minute
+            | TextToken::MinutePadded
+            | TextToken::Second
+            | TextToken::SecondPadded
+            | TextToken::ElapsedHour
+            | TextToken::ElapsedHourPadded
+            | TextToken::ElapsedMinute
+            | TextToken::ElapsedMinutePadded
+            | TextToken::ElapsedSecond
+            | TextToken::ElapsedSecondPadded
+            | TextToken::AMPM => has_time_unit = true,
+            _ => {}
+        }
+    }
+    has_month_number && !has_time_unit
 }
 
 // "Item 007" splits into ("Item ", 7, 3); text without trailing digits does not split.
@@ -2017,6 +2054,36 @@ mod tests {
     use super::*;
     use ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX;
     use ironcalc::error::XlsxError;
+
+    #[test]
+    fn date_formats_ignore_quoted_escaped_and_bracketed_letters() {
+        for code in [
+            "m/d/yyyy",
+            "[$-409]d-mmm-yy",
+            "YYYY-MM-DD",
+            "dddd, mmmm d",
+            "mm",
+            "d/m/yyyy h:mm",
+        ] {
+            assert!(is_date_format(code), "{code}");
+        }
+        for code in [
+            "General",
+            "0",
+            "0\" days\"",
+            "0;[Red]0",
+            r"\d0",
+            "[Red]0.00",
+            "[>100]0",
+            "h:mm:ss",
+            "mm:ss",
+            "h:mm AM/PM",
+            "[mm]:ss",
+            "[h]:mm",
+        ] {
+            assert!(!is_date_format(code), "{code}");
+        }
+    }
 
     #[test]
     fn a_budget_refusal_reaches_the_user_as_plain_text() {
