@@ -72,6 +72,7 @@ impl Render for ChatPanel {
             .children(self.render_agent_change(cx))
             .children(self.render_gate(cx))
             .children(self.render_problem(cx))
+            .children(self.render_recovery())
             .children(self.render_status(cx));
         let chat_view = self.view == View::Chat;
         let root = v_flex()
@@ -84,6 +85,9 @@ impl Render for ChatPanel {
             .border_color(border)
             .on_action(cx.listener(|this, _: &SendChatMessage, window, cx| this.send(window, cx)))
             .on_action(cx.listener(|this, _: &StopAgentTurn, _, cx| this.stop(cx)))
+            .on_action(
+                cx.listener(|this, _: &RetryAgentTurn, window, cx| this.retry_turn(window, cx)),
+            )
             .on_action(cx.listener(|_, _: &LeaveAgentChat, _, cx| cx.emit(ChatEvent::Leave)))
             .on_action(cx.listener(|this, _: &CycleChatAgent, window, cx| {
                 this.toggle_agent_menu(window, cx)

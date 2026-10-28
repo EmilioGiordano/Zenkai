@@ -26,6 +26,9 @@ impl ChatPanel {
         }
         let seconds = self.elapsed_seconds();
         if self.busy() {
+            if matches!(end, TurnEnd::Failed(_)) {
+                self.failed_prompt = super::recovery::last_prompt(self.thread.entries());
+            }
             self.thread.end_turn(end, seconds);
         } else if let TurnEnd::Failed(text) = end {
             self.thread.notice(NoticeKind::Error, &text);

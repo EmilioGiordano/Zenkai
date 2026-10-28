@@ -140,6 +140,22 @@ impl ChatPanel {
         )
     }
 
+    pub(super) fn render_recovery(&self) -> Option<impl IntoElement> {
+        if self.busy() || self.failed_prompt.is_none() {
+            return None;
+        }
+        Some(
+            h_flex().gap_2().child(
+                Button::new("retry-turn")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Redo2)
+                    .label(t!("chat.retry"))
+                    .on_click(|_, window, cx| window.dispatch_action(Box::new(RetryAgentTurn), cx)),
+            ),
+        )
+    }
+
     pub(super) fn render_status(&self, cx: &App) -> Option<impl IntoElement> {
         let theme = cx.theme();
         let text = match &self.link {

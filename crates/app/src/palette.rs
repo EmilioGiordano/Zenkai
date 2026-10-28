@@ -238,6 +238,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.chat.new_conversation"), NewAgentConversation),
                 item(t!("palette.chat.send"), SendChatMessage),
                 item(t!("palette.chat.stop"), StopAgentTurn),
+                item(t!("palette.chat.retry"), RetryAgentTurn),
                 item(t!("palette.chat.switch_agent"), CycleChatAgent),
                 item(t!("palette.chat.change_permission"), CycleChatPermission),
                 item(t!("palette.chat.close_menu"), CloseChatMenu),

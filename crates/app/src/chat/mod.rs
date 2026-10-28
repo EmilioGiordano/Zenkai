@@ -134,6 +134,8 @@ pub struct ChatPanel {
     editing_blocked: Option<ToolCallId>,
     gate: Option<Gate>,
     problem: Option<Problem>,
+    // The prompt of the last turn that failed, so Retry can send it again.
+    failed_prompt: Option<String>,
     turn_started: Option<Instant>,
     // Wall-clock start of the turn, to find the files the agent wrote during it.
     turn_began: Option<SystemTime>,
@@ -315,6 +317,7 @@ impl ChatPanel {
             editing_blocked: None,
             gate: None,
             problem: None,
+            failed_prompt: None,
             turn_started: None,
             turn_began: None,
             state: AgentState::default(),
@@ -437,15 +440,26 @@ impl ChatPanel {
         self.forget_mentions();
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
+        let context = self
+            .prompt_context(cx)
+            .map(|line| mention_picker::with_notes(line, &mentioned.notes));
+        self.start_turn(text, context, window, cx);
+    }
+
+    pub(super) fn start_turn(
+        &mut self,
+        text: String,
+        context: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.failed_prompt = None;
         self.turn_started = Some(Instant::now());
         self.turn_began = Some(SystemTime::now());
         self.problem = None;
         self.set_view(View::Chat, cx);
         self.menu = None;
         self.remember_conversation(&text, cx);
-        let context = self
-            .prompt_context(cx)
-            .map(|line| mention_picker::with_notes(line, &mentioned.notes));
         match &self.live {
             Some(live) if live.ready => live.handle.prompt(text, context),
             _ => {
@@ -504,6 +518,7 @@ impl ChatPanel {
         self.gate = None;
         self.resume_backup = None;
         self.problem = None;
+        self.failed_prompt = None;
         self.turn_started = None;
         self.state = AgentState {
             selects: std::mem::take(&mut self.state.selects),

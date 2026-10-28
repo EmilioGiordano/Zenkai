@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gpui_kit::*;
-use zenkai_agent::chat::thread::{NoticeKind, TurnEnd, TurnState};
+use zenkai_agent::chat::thread::{Entry, NoticeKind, TurnEnd, TurnState};
 use zenkai_i18n::t;
 
 use super::{ChatPanel, closed};
@@ -12,7 +12,27 @@ fn stop_overdue(turn: TurnState, stopped_epoch: u64, epoch: u64) -> bool {
     turn == TurnState::Cancelling && stopped_epoch == epoch
 }
 
+pub(super) fn last_prompt(entries: &[Entry]) -> Option<String> {
+    entries.iter().rev().find_map(|entry| match entry {
+        Entry::User(text) => Some(text.clone()),
+        _ => None,
+    })
+}
+
 impl ChatPanel {
+    pub(crate) fn retry_turn(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = self.failed_prompt.clone() else {
+            return;
+        };
+        if !self.thread.submit(text.clone()) {
+            return;
+        }
+        let book = self.active_workbook(cx).map(|(_, name)| name);
+        self.sent_books.record(book);
+        let context = self.prompt_context(cx);
+        self.start_turn(text, context, window, cx);
+    }
+
     pub(super) fn watch_stop(&self, cx: &mut Context<Self>) {
         let epoch = self.epoch;
         cx.spawn(async move |this, cx| {
@@ -40,8 +60,9 @@ impl ChatPanel {
 
 #[cfg(test)]
 mod tests {
-    use super::stop_overdue;
+    use super::{last_prompt, stop_overdue};
     use zenkai_agent::chat::thread::TurnState;
+    use zenkai_agent::chat::thread::{Entry, NoticeKind};
 
     #[test]
     fn a_stop_the_agent_never_answered_is_overdue() {
@@ -56,5 +77,23 @@ mod tests {
     #[test]
     fn a_stop_from_an_earlier_conversation_is_not_overdue() {
         assert!(!stop_overdue(TurnState::Cancelling, 3, 4));
+    }
+
+    #[test]
+    fn the_prompt_to_retry_is_the_last_one_the_user_sent() {
+        let entries = [
+            Entry::User("first".to_string()),
+            Entry::User("second".to_string()),
+            Entry::Notice {
+                kind: NoticeKind::Error,
+                text: "failed".to_string(),
+            },
+        ];
+        assert_eq!(last_prompt(&entries), Some("second".to_string()));
+    }
+
+    #[test]
+    fn without_a_user_message_there_is_nothing_to_retry() {
+        assert_eq!(last_prompt(&[]), None);
     }
 }
