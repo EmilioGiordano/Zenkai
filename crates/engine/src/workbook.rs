@@ -1935,7 +1935,25 @@ impl Series {
 
 fn is_date_format(code: &str) -> bool {
     use ironcalc::base::formatter::parser::{ParsePart, Parser, TextToken};
-    let mut parser = Parser::new(code);
+    // The lexer reads only lowercase d, m and y; Excel accepts "YYYY-MM-DD" too. Brackets
+    // keep their case because "Color 3" and "[H]" are read as written.
+    let mut inside_brackets = false;
+    let lowered: String = code
+        .chars()
+        .map(|c| {
+            match c {
+                '[' => inside_brackets = true,
+                ']' => inside_brackets = false,
+                _ => {}
+            }
+            if inside_brackets {
+                c
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
+        .collect();
+    let mut parser = Parser::new(&lowered);
     parser.parse();
     let Some(ParsePart::Date(part)) = parser.parts.first() else {
         return false;
