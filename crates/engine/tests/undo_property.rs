@@ -18,6 +18,9 @@ enum Op {
     FillWith(i64, i64, i64, i64, String),
     Bold(i64, i64, i64, i64, bool),
     Width(i64, f32),
+    HideColumn(i64, bool),
+    Height(i64, f32),
+    HideRow(i64, bool),
 }
 
 fn pos(row: i64, col: i64) -> CellPos {
@@ -72,6 +75,13 @@ fn op() -> impl Strategy<Value = Op> {
             prop::sample::select(vec![0.0f32, 30.0, 64.0, 75.0, 140.0])
         )
             .prop_map(|(c, pixels)| Op::Width(c, pixels)),
+        (0..SIDE, any::<bool>()).prop_map(|(c, hidden)| Op::HideColumn(c, hidden)),
+        (
+            0..SIDE,
+            prop::sample::select(vec![0.0f32, 20.0, 40.0, 100.0])
+        )
+            .prop_map(|(r, pixels)| Op::Height(r, pixels)),
+        (0..SIDE, any::<bool>()).prop_map(|(r, hidden)| Op::HideRow(r, hidden)),
     ]
 }
 
@@ -100,6 +110,9 @@ fn apply(book: &mut Workbook, op: &Op) -> bool {
             book.apply_style(SHEET, range(*a, *b, *c, *d), StyleChange::Bold(*on))
         }
         Op::Width(c, pixels) => book.set_column_width(SHEET, ColIdx::clamped(*c), *pixels),
+        Op::HideColumn(c, hidden) => book.set_columns_hidden(SHEET, range(0, *c, 0, *c), *hidden),
+        Op::Height(r, pixels) => book.set_row_height(SHEET, RowIdx::clamped(*r), *pixels),
+        Op::HideRow(r, hidden) => book.set_rows_hidden(SHEET, range(*r, 0, *r, 0), *hidden),
     };
     result.is_ok()
 }
