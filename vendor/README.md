@@ -310,7 +310,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `.INTL` variants (weekday from the serial, holidays matched by serial), and the financial
   functions through `from_excel_date`, which now maps serials 1 to 59 to Excel's 1900 dates
   (it returns an error for 0 and 60, which no real date can hold, so financial functions give
-  `#NUM!` there). New helpers `ymd_to_excel_serial`, `excel_days_in_month` and
+  `#NUM!` there). Known deviation: the bond functions' February month-end checks use real leap
+  years, so they treat 2/28/1900 as a month end where Excel does not (a `NaiveDate` cannot hold
+  2/29/1900). New helpers `ymd_to_excel_serial`, `excel_days_in_month` and
   `add_months_to_ymd` in `src/formatter/dates.rs`. `DATE` adds 1900 to a year from 0 to 1899,
   so `DATE(99, 1, 1)` is 1/1/1999 and `DATE(1899, 12, 31)` is 12/31/3799. Depends on the
   entry above. Upstream may not take it as is for the same reason. Tests:
