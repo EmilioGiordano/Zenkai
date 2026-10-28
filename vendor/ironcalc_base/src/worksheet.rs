@@ -99,7 +99,7 @@ impl Worksheet {
 
     pub fn set_column_style(&mut self, column: i32, style_index: i32) -> Result<(), String> {
         let width = self
-            .get_column_width(column)
+            .get_actual_column_width(column)
             .unwrap_or(constants::DEFAULT_COLUMN_WIDTH);
         let hidden = self.is_column_hidden(column)?;
         self.set_column_width_and_style(column, width, hidden, Some(style_index))
@@ -426,6 +426,28 @@ impl Worksheet {
         Ok(())
     }
 
+    pub(crate) fn row_entry(&self, row: i32) -> Option<Row> {
+        self.rows.iter().find(|r| r.r == row).cloned()
+    }
+
+    // Only the height is restored. Undo runs in reverse order, so the entry set_row_height
+    // makes here is the one the edit being undone made: a row with no old entry had no
+    // style or hidden state, and loses the entry.
+    pub(crate) fn restore_row_height(&mut self, row: i32, old: Option<&Row>) -> Result<(), String> {
+        let current = self.row_height(row)?;
+        self.set_row_height(row, current)?;
+        match old {
+            Some(old) => {
+                for r in self.rows.iter_mut().filter(|r| r.r == row) {
+                    r.height = old.height;
+                    r.custom_height = old.custom_height;
+                }
+            }
+            None => self.rows.retain(|r| r.r != row),
+        }
+        Ok(())
+    }
+
     /// Changes the width of a column.
     ///   * If the column does not a have a width we simply add it
     ///   * If it has, it might be part of a range and we need to split the range.
@@ -434,7 +456,16 @@ impl Worksheet {
     pub fn set_column_width(&mut self, column: i32, width: f64) -> Result<(), String> {
         let style = self.get_column_style(column)?;
         let hidden = self.is_column_hidden(column)?;
-        self.set_column_width_and_style(column, width, hidden, style)
+        self.set_column_width_and_style(column, width, hidden, style)?;
+        // A width the user sets stays custom even when it equals the default.
+        if let Some(entry) = self
+            .cols
+            .iter_mut()
+            .find(|c| c.min == column && c.max == column)
+        {
+            entry.custom_width = true;
+        }
+        Ok(())
     }
 
     pub fn set_column_hidden(&mut self, column: i32, hidden: bool) -> Result<(), String> {
@@ -442,7 +473,19 @@ impl Worksheet {
             .get_actual_column_width(column)
             .unwrap_or(constants::DEFAULT_COLUMN_WIDTH);
         let style = self.get_column_style(column)?;
-        self.set_column_width_and_style(column, width, hidden, style)
+        self.set_column_width_and_style(column, width, hidden, style)?;
+        if !hidden && style.is_none() {
+            // Hiding a column that had no entry made one at the default width; showing it
+            // again drops that entry, as Excel writes no `<col>` for a default column.
+            self.cols.retain(|c| {
+                !(c.min == column
+                    && c.max == column
+                    && !c.hidden
+                    && c.style.is_none()
+                    && c.has_default_width())
+            });
+        }
+        Ok(())
     }
 
     // Only the width is restored: style and hidden state may have changed since. A column

@@ -22,6 +22,7 @@ const MAX_HEIGHT: f64 = 409.5;
 // a row start tag is never split.
 const PIECE_BYTES: usize = 64 * 1024;
 const SHEET_DATA: &str = "<sheetData>";
+const MAX_COLUMN: u32 = 16_384;
 const SHEET_DATA_END: &str = "</sheetData>";
 
 fn other(message: impl Into<String>) -> io::Error {
@@ -262,7 +263,12 @@ fn with_head_settings(head: String, settings: &SheetSettings) -> io::Result<Stri
     if settings.columns.outline.is_empty() {
         return Ok(head);
     }
-    outline_columns(&head, &settings.columns.outline).map_err(other)
+    outline_columns(
+        &head,
+        &settings.columns.outline,
+        &settings.default_column_width(),
+    )
+    .map_err(other)
 }
 
 // `tail` starts with </sheetData>; IronCalc writes <mergeCells>, <conditionalFormatting>
@@ -284,12 +290,28 @@ fn write_tail(out: &mut impl Write, tail: &str, settings: &SheetSettings) -> io:
 }
 
 // Each exported <col min max .../> is split where the outline changes inside its range.
-fn outline_columns(sheet: &str, outline: &BTreeMap<u32, Outline>) -> Result<String, String> {
-    let (Some(open), Some(close)) = (sheet.find("<cols>"), sheet.find("</cols>")) else {
-        return Ok(sheet.to_string());
+// An outlined column the model writes no <col> for (IronCalc drops the entry of a default
+// column) gets its own, so hiding and showing a column keeps its outline.
+fn outline_columns(
+    sheet: &str,
+    outline: &BTreeMap<u32, Outline>,
+    default_width: &str,
+) -> Result<String, String> {
+    let (open, close) = match (sheet.find("<cols>"), sheet.find("</cols>")) {
+        (Some(open), Some(close)) => (open + "<cols>".len(), close),
+        _ => {
+            let at = sheet
+                .find(SHEET_DATA)
+                .ok_or_else(|| "the written sheet has no data".to_string())?;
+            return outline_columns(
+                &format!("{}<cols></cols>{}", &sheet[..at], &sheet[at..]),
+                outline,
+                default_width,
+            );
+        }
     };
-    let open = open + "<cols>".len();
-    let mut columns = String::new();
+    let mut columns: Vec<(u32, String)> = Vec::new();
+    let mut written: BTreeMap<u32, u32> = BTreeMap::new();
     for col in sheet[open..close].split_inclusive("/>") {
         let bound = |name| {
             attribute(col, name)
@@ -297,6 +319,7 @@ fn outline_columns(sheet: &str, outline: &BTreeMap<u32, Outline>) -> Result<Stri
                 .ok_or_else(|| format!("unexpected column element: {col}"))
         };
         let (min, max) = (bound("min")?, bound("max")?);
+        written.insert(min, max);
         let rest = col
             .split_once(&format!(r#" max="{max}""#))
             .map(|(_, rest)| rest.trim_end_matches("/>"))
@@ -318,12 +341,28 @@ fn outline_columns(sheet: &str, outline: &BTreeMap<u32, Outline>) -> Result<Stri
             }
             let last = next.map_or(max, |next| next - 1);
             let extra = current.map(|o| o.attributes()).unwrap_or_default();
-            columns.push_str(&format!(
-                r#"<col min="{first}" max="{last}"{rest}{extra}/>"#
+            columns.push((
+                first,
+                format!(r#"<col min="{first}" max="{last}"{rest}{extra}/>"#),
             ));
             first = last.saturating_add(1);
         }
     }
+    for (index, level) in outline {
+        let covered = written
+            .range(..=*index)
+            .next_back()
+            .is_some_and(|(_, max)| index <= max);
+        let extra = level.attributes();
+        if !covered && !extra.is_empty() && (1..=MAX_COLUMN).contains(index) {
+            columns.push((
+                *index,
+                format!(r#"<col min="{index}" max="{index}" width="{default_width}"{extra}/>"#),
+            ));
+        }
+    }
+    columns.sort_by_key(|(first, _)| *first);
+    let columns: String = columns.into_iter().map(|(_, col)| col).collect();
     Ok(format!("{}{columns}{}", &sheet[..open], &sheet[close..]))
 }
 
@@ -451,8 +490,28 @@ mod tests {
         let sheet = r#"<a><cols><col min="1" max="4" width="9" customWidth="1"/></cols></a>"#;
         let outline = BTreeMap::from([(2, level(1, false)), (3, level(1, false))]);
         assert_eq!(
-            outline_columns(sheet, &outline).unwrap(),
+            outline_columns(sheet, &outline, "8.43").unwrap(),
             r#"<a><cols><col min="1" max="1" width="9" customWidth="1"/><col min="2" max="3" width="9" customWidth="1" outlineLevel="1"/><col min="4" max="4" width="9" customWidth="1"/></cols></a>"#
+        );
+    }
+
+    #[test]
+    fn an_outlined_column_without_an_entry_gets_one_in_column_order() {
+        let sheet = r#"<a><cols><col min="1" max="1" width="9" customWidth="1"/><col min="5" max="5" width="9" customWidth="1"/></cols><sheetData></sheetData></a>"#;
+        let outline = BTreeMap::from([(3, level(1, false))]);
+        assert_eq!(
+            outline_columns(sheet, &outline, "8.43").unwrap(),
+            r#"<a><cols><col min="1" max="1" width="9" customWidth="1"/><col min="3" max="3" width="8.43" outlineLevel="1"/><col min="5" max="5" width="9" customWidth="1"/></cols><sheetData></sheetData></a>"#
+        );
+    }
+
+    #[test]
+    fn a_sheet_without_columns_gets_them_for_its_outline() {
+        let sheet = r#"<a><sheetData></sheetData></a>"#;
+        let outline = BTreeMap::from([(3, level(1, false))]);
+        assert_eq!(
+            outline_columns(sheet, &outline, "8.43").unwrap(),
+            r#"<a><cols><col min="3" max="3" width="8.43" outlineLevel="1"/></cols><sheetData></sheetData></a>"#
         );
     }
 }

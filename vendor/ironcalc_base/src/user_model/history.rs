@@ -108,7 +108,8 @@ pub(crate) enum Diff {
         sheet: u32,
         row: i32,
         new_value: f64,
-        old_value: f64,
+        // The row entry the row had, if any; undo restores only its height.
+        old_value: Option<Row>,
     },
     SetRowHidden {
         sheet: u32,

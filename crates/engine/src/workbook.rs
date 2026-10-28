@@ -1567,6 +1567,9 @@ impl Engine for Workbook {
             .cols
             .iter()
             .filter(|c| c.min <= i32::from(zenkai_types::MAX_COLS))
+            // IronCalc's own entries (a whole-column style) carry its default width without
+            // customWidth and draw at the grid default; any other stored width is the file's.
+            .filter(|c| c.hidden || !c.has_default_width())
             .map(|c| ColumnSpan {
                 first: ColIdx::clamped(i64::from(c.min) - 1),
                 last: ColIdx::clamped(i64::from(c.max) - 1),
