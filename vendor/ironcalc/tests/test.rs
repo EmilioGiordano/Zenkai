@@ -562,6 +562,49 @@ fn test_number_cell_without_value_is_empty() {
     }
 }
 
+#[test]
+fn test_formula_without_cached_value_is_unevaluated() {
+    let last_row = std::cell::Cell::new(0);
+    let edited = example_with_part_edited("xl/worksheets/sheet1.xml", |text| {
+        let row_start = text.rfind("<row r=\"").unwrap() + "<row r=\"".len();
+        let row_end = row_start + text[row_start..].find('"').unwrap();
+        let row = text[row_start..row_end].parse::<i32>().unwrap();
+        last_row.set(row);
+        let end = text.rfind("</row>").unwrap();
+        let cells = [
+            format!("<c r=\"ZW{row}\"><v>2</v></c>"),
+            format!("<c r=\"ZX{row}\"><f>ZW{row}*3</f></c>"),
+            format!("<c r=\"ZY{row}\"><f>ZX{row}+1</f><v/></c>"),
+            format!("<c r=\"ZZ{row}\" t=\"x\"><f>1+1</f></c>"),
+        ];
+        format!("{}{}{}", &text[..end], cells.concat(), &text[end..])
+    });
+    let last_row = last_row.get();
+    let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    let cell = |column| workbook.worksheets[0].cell(last_row, column).cloned();
+    assert!(matches!(
+        cell(700),
+        Some(ironcalc_base::types::Cell::CellFormula {
+            v: ironcalc_base::types::FormulaValue::Unevaluated,
+            ..
+        })
+    ));
+    assert!(matches!(
+        cell(702),
+        Some(ironcalc_base::types::Cell::CellFormula {
+            v: ironcalc_base::types::FormulaValue::Error(_),
+            ..
+        })
+    ));
+
+    let mut model = Model::from_workbook(workbook, "en").unwrap();
+    model.evaluate();
+    let value = |column| model.get_formatted_cell_value(0, last_row, column).unwrap();
+    assert_eq!(value(700), "6");
+    assert_eq!(value(701), "7");
+    assert_eq!(value(702), "2");
+}
+
 fn example_with_part_edited(part: &str, edit: impl Fn(String) -> String) -> Vec<u8> {
     let bytes = fs::read("tests/example.xlsx").unwrap();
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();

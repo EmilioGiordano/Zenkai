@@ -452,7 +452,6 @@ fn get_cell_from_excel(
             }
             "d" => {
                 // Not implemented
-                println!("Invalid type (d) in {sheet_name}!{cell_ref}");
                 Cell::ErrorCell {
                     ei: Error::NIMPL,
                     s: cell_style,
@@ -472,7 +471,6 @@ fn get_cell_from_excel(
             "empty" => Cell::EmptyCell { s: cell_style },
             _ => {
                 // error
-                println!("Unexpected type ({cell_type}) in {sheet_name}!{cell_ref}");
                 Cell::ErrorCell {
                     ei: Error::ERROR,
                     s: cell_style,
@@ -525,7 +523,6 @@ fn get_cell_from_excel(
             }
             "s" => {
                 // Not implemented
-                println!("Invalid type (s) in {sheet_name}!{cell_ref}");
                 make_cell(FormulaValue::error(
                     Error::NIMPL,
                     format!("{sheet_name}!{cell_ref}"),
@@ -540,7 +537,6 @@ fn get_cell_from_excel(
             }
             "d" => {
                 // Not implemented
-                println!("Invalid type (d) in {sheet_name}!{cell_ref}");
                 make_cell(FormulaValue::error(
                     Error::NIMPL,
                     format!("{sheet_name}!{cell_ref}"),
@@ -553,9 +549,11 @@ fn get_cell_from_excel(
                     rich_text_inline.unwrap_or("".to_string()),
                 ))
             }
+            // A formula written without a cached value (openpyxl and other generators)
+            // stays unevaluated until the next evaluation computes it.
+            "empty" => make_cell(FormulaValue::Unevaluated),
             _ => {
                 // error
-                println!("Unexpected type ({cell_type}) in {sheet_name}!{cell_ref}");
                 make_cell(FormulaValue::error(
                     Error::ERROR,
                     format!("{sheet_name}!{cell_ref}"),
