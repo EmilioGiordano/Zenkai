@@ -201,15 +201,15 @@ impl Workspace {
         if self.chat.open && focused {
             self.close_chat(window, cx);
         } else {
-            self.focus_chat(window, cx);
+            self.open_chat(window, cx);
         }
     }
 
-    pub(super) fn focus_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_chat(window, cx);
-    }
-
-    fn open_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ChatPanel> {
+    pub(super) fn open_chat(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ChatPanel> {
         let panel = self.chat_panel(window, cx);
         if !panel.read(cx).has_focus(window, cx) {
             self.chat.return_focus = window.focused(cx).map(|focus| focus.downgrade());
