@@ -76,6 +76,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.previous_workbook"), PreviousDocument),
                 item(t!("palette.save"), Save),
                 item(t!("palette.save_as"), SaveAs),
+                item(t!("palette.cancel_export"), CancelExport),
                 item(t!("palette.close_window"), CloseWindow),
                 item(t!("palette.quit"), Quit),
             ],

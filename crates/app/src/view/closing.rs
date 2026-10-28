@@ -106,6 +106,9 @@ impl Workspace {
             .and_then(|departure| departure.purpose_waiting_on(id));
         self.save_ended(id, false, window, cx);
         match (written, closing) {
+            (Err(EngineError::Cancelled), _) => {
+                self.notify(Severity::Info, t!("notice.export_cancelled"), cx)
+            }
             (Err(error), _) => self.notify_failure(save_failure(path, &error), cx),
             (Ok(()), Some(Purpose::Tab(_))) => self.notify(
                 Severity::Warning,

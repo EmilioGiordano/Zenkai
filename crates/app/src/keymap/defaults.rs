@@ -32,6 +32,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("ctrl-s", Save, CONTEXT),
         bind("f12", SaveAs, CONTEXT),
         bind("ctrl-shift-s", SaveAs, CONTEXT),
+        bind("ctrl-alt-.", CancelExport, CONTEXT),
         bind("alt-f4", CloseWindow, CONTEXT),
         bind("ctrl-shift-q", Quit, CONTEXT),
         bind("ctrl-z", Undo, CONTEXT),
