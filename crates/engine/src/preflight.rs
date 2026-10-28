@@ -210,6 +210,7 @@ mod tests {
         });
         assert_eq!(result.unwrap(), "4096");
     }
+
     #[test]
     fn engine_thread_panic_becomes_an_error() {
         let result: Result<(), EngineError> = run_with_engine_stack(|| panic!("simulated"));
