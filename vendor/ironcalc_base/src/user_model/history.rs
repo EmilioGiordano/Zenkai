@@ -95,7 +95,8 @@ pub(crate) enum Diff {
         sheet: u32,
         column: i32,
         new_value: f64,
-        old_value: f64,
+        // The column entry that covered the column, if any; undo restores only its width.
+        old_value: Option<Col>,
     },
     SetColumnHidden {
         sheet: u32,

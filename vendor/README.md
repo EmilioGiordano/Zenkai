@@ -317,6 +317,13 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   through that formula, gets the `#SPILL!` or `#CALC!` the anchor stores when its array
   cannot be written, instead of the array's first value (`src/model.rs`, `evaluate_cell`).
   Stands on its own. Tests: `src/test/dynamic_evaluation/test_blocked_spill_reads.rs`.
+- Undoing a column width gives the column back the width and custom flag of the entry that
+  covered it, or removes the column's entry when none did, instead of writing the width
+  `get_column_width` reported: the default for a column without a custom width, which
+  left an entry behind, and 0 for a hidden one, which kept it at zero once shown again
+  (`Diff::SetColumnWidth` in `src/user_model/history.rs`, `Worksheet::restore_column_width`).
+  The bitcode encoding of the history changes. Stands on its own. Tests:
+  `src/test/test_column_width.rs`.
 
 Zenkai-only, not for upstream:
 

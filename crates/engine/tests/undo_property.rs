@@ -17,6 +17,7 @@ enum Op {
     Fill(i64, i64, i64, i64, bool),
     FillWith(i64, i64, i64, i64, String),
     Bold(i64, i64, i64, i64, bool),
+    Width(i64, f32),
 }
 
 fn pos(row: i64, col: i64) -> CellPos {
@@ -66,6 +67,11 @@ fn op() -> impl Strategy<Value = Op> {
             .prop_map(|(a, b, c, d, v)| Op::FillWith(a, b, c, d, v)),
         (at.clone(), at.clone(), at.clone(), at, any::<bool>())
             .prop_map(|(a, b, c, d, on)| Op::Bold(a, b, c, d, on)),
+        (
+            0..SIDE,
+            prop::sample::select(vec![0.0f32, 30.0, 64.0, 75.0, 140.0])
+        )
+            .prop_map(|(c, pixels)| Op::Width(c, pixels)),
     ]
 }
 
@@ -93,12 +99,13 @@ fn apply(book: &mut Workbook, op: &Op) -> bool {
         Op::Bold(a, b, c, d, on) => {
             book.apply_style(SHEET, range(*a, *b, *c, *d), StyleChange::Bold(*on))
         }
+        Op::Width(c, pixels) => book.set_column_width(SHEET, ColIdx::clamped(*c), *pixels),
     };
     result.is_ok()
 }
 
 fn snapshot(book: &Workbook) -> Vec<String> {
-    let mut cells = Vec::new();
+    let mut cells = vec![format!("{:?}", book.sizes(SHEET))];
     for row in 0..SIDE + 2 {
         for col in 0..SIDE + 2 {
             let at = pos(row, col);
