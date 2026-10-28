@@ -64,6 +64,7 @@ use crate::failure::{Failure, offer_another_location, save_failure};
 use crate::files;
 use crate::find::{self, FindBar, FindResults};
 use crate::format_dialog::{self, FormatDialog};
+use crate::go_to::{self, GoToError};
 use crate::interface_scale::{self, rem_px};
 use crate::jump::jump_target;
 use crate::keymap;
@@ -3299,16 +3300,7 @@ impl Workspace {
                     InputEvent::PressEnter { .. } => {
                         let target = input.read(cx).value().to_string();
                         this.close_go_to(window, cx);
-                        match Range::parse_a1(&target) {
-                            Some(range) => {
-                                this.grid.update(cx, |grid, cx| grid.show_range(range, cx))
-                            }
-                            None => this.notify(
-                                Severity::Warning,
-                                t!("notice.not_a_reference", target = target),
-                                cx,
-                            ),
-                        }
+                        this.go_to_target(&target, window, cx);
                     }
                     InputEvent::Blur => this.close_go_to(window, cx),
                     _ => {}
@@ -3318,6 +3310,37 @@ impl Workspace {
         window.focus(&focus, cx);
         self.go_to = Some((input, subscription));
         cx.notify();
+    }
+
+    fn go_to_target(&mut self, target: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(document) = self.documents.active() else {
+            return;
+        };
+        let (current, sheets) = (document.sheet, document.sheets.clone());
+        let names = if go_to::needs_names(target) {
+            let read = document.workbook().map(|workbook| workbook.defined_names());
+            let Some(names) = read else {
+                self.notify(Severity::Warning, t!("notice.go_to_busy"), cx);
+                return;
+            };
+            names
+        } else {
+            Vec::new()
+        };
+        match go_to::resolve(target, current, &sheets, &names) {
+            Ok((sheet, range)) => {
+                self.switch_sheet(sheet, window, cx);
+                self.grid.update(cx, |grid, cx| grid.show_range(range, cx));
+            }
+            Err(error) => {
+                let message = match error {
+                    GoToError::NotAReference => t!("notice.not_a_reference", target = target),
+                    GoToError::UnknownSheet(sheet) => t!("notice.unknown_sheet", sheet = sheet),
+                    GoToError::UnknownName(name) => t!("notice.unknown_name", name = name),
+                };
+                self.notify(Severity::Warning, message, cx);
+            }
+        }
     }
 
     fn close_go_to(&mut self, window: &mut Window, cx: &mut Context<Self>) {
