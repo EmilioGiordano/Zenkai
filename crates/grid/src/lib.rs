@@ -12,7 +12,7 @@ mod paint;
 mod paint_failure;
 mod scrollbar;
 
-pub use actions::{Cancel, CycleReference, DeleteForward, bind_keys};
+pub use actions::*;
 pub use grid::{
     Direction, EditMode, Editor, Grid, GridCell, GridEvent, MAX_TYPED_PREVIEW_CELLS, Selection,
     SheetView, ViewState, step, typed_preview,

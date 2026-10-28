@@ -2,6 +2,8 @@ use gpui_kit::component::command::{CommandGroup, CommandItem};
 use gpui_kit::*;
 use zenkai_i18n::t;
 
+use zenkai_grid::{CycleReference, EditCell, InsertLineBreak, SelectAll, SelectColumn, SelectRow};
+
 use crate::actions::*;
 
 pub struct Entry {
@@ -101,6 +103,12 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.insert_date"), InsertDate),
                 item(t!("palette.insert_time"), InsertTime),
                 item(t!("palette.go_to"), GoTo),
+                item(t!("palette.select_all"), SelectAll),
+                item(t!("palette.select_column"), SelectColumn),
+                item(t!("palette.select_row"), SelectRow),
+                item(t!("palette.edit_cell"), EditCell),
+                item(t!("palette.cycle_reference"), CycleReference),
+                item(t!("palette.insert_line_break"), InsertLineBreak),
                 item(t!("palette.select_region"), SelectCurrentRegion),
                 item(t!("palette.pdf_select_page"), SelectPdfPage),
             ],
@@ -139,6 +147,12 @@ pub fn table() -> Vec<Group> {
             [
                 item(t!("palette.generate_data"), GenerateData),
                 item(t!("palette.insert_chart"), InsertChart),
+                item(t!("palette.chart_column"), ChartColumn),
+                item(t!("palette.chart_line"), ChartLine),
+                item(t!("palette.chart_pie"), ChartPie),
+                item(t!("palette.export_chart_svg"), ExportChartSvg),
+                item(t!("palette.copy_chart_mermaid"), CopyChartMermaid),
+                item(t!("palette.close_chart"), CloseChart),
                 item(t!("palette.insert_selection"), InsertSelection),
                 item(t!("palette.delete_selection"), DeleteSelection),
                 item(t!("palette.insert_rows"), InsertRows),
