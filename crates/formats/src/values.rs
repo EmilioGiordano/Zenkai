@@ -118,10 +118,13 @@ fn sheet_cells<RS: std::io::Read + std::io::Seek>(
     Ok(())
 }
 
-fn into_blocks(mut cells: Vec<(u32, u32, String)>) -> Result<Vec<Block>, ValuesError> {
+fn into_blocks(
+    mut cells: Vec<(u32, u32, String)>,
+    allocated: &mut usize,
+    max_allocated: usize,
+) -> Result<Vec<Block>, ValuesError> {
     cells.sort_by_key(|(row, col, _)| (*row, *col));
     let mut blocks: Vec<Block> = Vec::new();
-    let mut allocated = 0usize;
     let mut index = 0;
     while index < cells.len() {
         let (row, first_col) = (cells[index].0, cells[index].1);
@@ -133,8 +136,8 @@ fn into_blocks(mut cells: Vec<(u32, u32, String)>) -> Result<Vec<Block>, ValuesE
             end += 1;
         }
         let width = (cells[end - 1].1 - first_col + 1) as usize;
-        allocated += width;
-        if allocated > MAX_ALLOCATED_CELLS {
+        *allocated += width;
+        if *allocated > max_allocated {
             return Err(ValuesError::TooLarge);
         }
         let mut run = vec![String::new(); width];
@@ -162,13 +165,18 @@ fn into_blocks(mut cells: Vec<(u32, u32, String)>) -> Result<Vec<Block>, ValuesE
 pub fn read_values(path: &Path) -> Result<Vec<SheetValues>, ValuesError> {
     let mut workbook = open_workbook_auto(path).map_err(unreadable)?;
     let mut sheets = Vec::new();
+    let mut allocated = 0usize;
     let mut sink = Cells {
         cells: Vec::new(),
         total: 0,
     };
     for name in workbook.sheet_names() {
         sheet_cells(&mut workbook, &name, &mut sink)?;
-        let blocks = into_blocks(std::mem::take(&mut sink.cells))?;
+        let blocks = into_blocks(
+            std::mem::take(&mut sink.cells),
+            &mut allocated,
+            MAX_ALLOCATED_CELLS,
+        )?;
         sheets.push(SheetValues { name, blocks });
     }
     Ok(sheets)
@@ -194,7 +202,7 @@ mod tests {
             (1_048_575, 16_383, "z".to_string()),
             (0, 1, "b".to_string()),
         ];
-        let blocks = into_blocks(cells).unwrap();
+        let blocks = into_blocks(cells, &mut 0, MAX_ALLOCATED_CELLS).unwrap();
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].rows, vec![vec!["a".to_string(), "b".to_string()]]);
         assert_eq!(
@@ -208,7 +216,7 @@ mod tests {
         let cells: Vec<_> = (0..50_000u32)
             .map(|i| (i * 2, (i * 997) % 16_384, "x".to_string()))
             .collect();
-        let blocks = into_blocks(cells).unwrap();
+        let blocks = into_blocks(cells, &mut 0, MAX_ALLOCATED_CELLS).unwrap();
         let allocated: usize = blocks.iter().flat_map(|b| &b.rows).map(Vec::len).sum();
         assert_eq!(allocated, 50_000);
     }
@@ -218,8 +226,19 @@ mod tests {
         let cells: Vec<_> = (0..100u32)
             .flat_map(|r| (0..5u32).map(move |c| (r, c, format!("{r}-{c}"))))
             .collect();
-        let blocks = into_blocks(cells).unwrap();
+        let blocks = into_blocks(cells, &mut 0, MAX_ALLOCATED_CELLS).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].rows.len(), 100);
+    }
+
+    #[test]
+    fn allocation_cap_spans_all_sheets() {
+        let sheet = || vec![(0, 0, "a".to_string()), (0, 1, "b".to_string())];
+        let mut allocated = 0;
+        into_blocks(sheet(), &mut allocated, 3).unwrap();
+        assert!(matches!(
+            into_blocks(sheet(), &mut allocated, 3),
+            Err(ValuesError::TooLarge)
+        ));
     }
 }
