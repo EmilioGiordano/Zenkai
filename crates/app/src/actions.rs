@@ -211,6 +211,8 @@ actions!(
         LeavePanelEdge,
         SendChatMessage,
         StopAgentTurn,
+        RetryAgentTurn,
+        RestartAgent,
         LeaveAgentChat,
         NewAgentConversation,
         AddSelectionToChat,

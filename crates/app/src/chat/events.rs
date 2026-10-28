@@ -26,6 +26,9 @@ impl ChatPanel {
         }
         let seconds = self.elapsed_seconds();
         if self.busy() {
+            if matches!(end, TurnEnd::Failed(_)) {
+                self.failed_prompt = super::recovery::last_prompt(self.thread.entries());
+            }
             self.thread.end_turn(end, seconds);
         } else if let TurnEnd::Failed(text) = end {
             self.thread.notice(NoticeKind::Error, &text);
@@ -74,6 +77,10 @@ impl ChatPanel {
                 });
                 self.link = Link::Ready(agent.into());
                 self.apply_choices(cx);
+                let reload = self
+                    .restart_session
+                    .take()
+                    .filter(|_| self.queued.is_none() && self.state.can_resume());
                 if let Some(live) = &mut self.live {
                     live.ready = true;
                     if self.state.abilities.list_sessions {
@@ -82,6 +89,9 @@ impl ChatPanel {
                     if let Some((text, context)) = self.queued.take() {
                         live.handle.prompt(text, context);
                     }
+                }
+                if let Some(session) = reload {
+                    self.load_session(session, self.title.clone());
                 }
                 if resume_ready {
                     cx.emit(ChatEvent::ResumeSession);
@@ -120,6 +130,7 @@ impl ChatPanel {
                     self.require_sign_in(cx);
                 }
                 self.pending_resume = None;
+                self.restart_session = self.reloadable_session();
                 self.end_session(cx);
                 self.finish_turn(TurnEnd::Failed(error.to_string()), cx);
             }

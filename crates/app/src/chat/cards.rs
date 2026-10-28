@@ -140,6 +140,42 @@ impl ChatPanel {
         )
     }
 
+    pub(super) fn render_recovery(&self) -> Option<impl IntoElement> {
+        let retry = !self.busy() && self.failed_prompt.is_some() && self.restart_session.is_none();
+        let restart = self.can_restart_agent();
+        if !retry && !restart {
+            return None;
+        }
+        Some(
+            h_flex()
+                .gap_2()
+                .when(retry, |row| {
+                    row.child(
+                        Button::new("retry-turn")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Redo2)
+                            .label(t!("chat.retry"))
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(RetryAgentTurn), cx)
+                            }),
+                    )
+                })
+                .when(restart, |row| {
+                    row.child(
+                        Button::new("restart-agent")
+                            .ghost()
+                            .small()
+                            .icon(IconName::RefreshCw)
+                            .label(t!("chat.restart_agent"))
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(RestartAgent), cx)
+                            }),
+                    )
+                }),
+        )
+    }
+
     pub(super) fn render_status(&self, cx: &App) -> Option<impl IntoElement> {
         let theme = cx.theme();
         let text = match &self.link {
