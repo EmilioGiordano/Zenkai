@@ -43,7 +43,7 @@ use zenkai_agent::chat::history::{History, RecordId};
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
 use zenkai_agent::chat::state::{AgentState, Select};
 use zenkai_agent::chat::thread::{Entry, MessageId, Thread, ToolCallId, TurnState};
-use zenkai_agent::settings::AgentId;
+use zenkai_agent::settings::{AgentId, PermissionMode};
 use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
 
@@ -116,6 +116,7 @@ struct Gate {
 
 pub struct ChatPanel {
     workspace: WeakEntity<Workspace>,
+    focus: FocusHandle,
     endpoint: ToolEndpoint,
     composer: Entity<TextareaState>,
     scroll: ScrollHandle,
@@ -162,6 +163,7 @@ pub struct ChatPanel {
     remembered_selects: BTreeMap<AgentId, Vec<Select>>,
     pending_agent: Option<agent_menu::PendingAgent>,
     access: Access,
+    seen_permission: PermissionMode,
     model_choice: Option<String>,
     effort_choice: Option<String>,
     mode_synced: bool,
@@ -303,6 +305,7 @@ impl ChatPanel {
         let (history_saves, history_queue) = async_channel::unbounded();
         let mut panel = ChatPanel {
             workspace,
+            focus: cx.focus_handle(),
             endpoint,
             composer,
             scroll: ScrollHandle::new(),
@@ -341,6 +344,7 @@ impl ChatPanel {
             access: Access::from_setting(
                 cx.global::<AgentConfig>().state.current.agents.permission,
             ),
+            seen_permission: cx.global::<AgentConfig>().state.current.agents.permission,
             model_choice: None,
             effort_choice: None,
             mode_synced: false,
@@ -360,6 +364,10 @@ impl ChatPanel {
         };
         panel.load_history(history_queue, cx);
         panel
+    }
+
+    pub fn has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.focus.contains_focused(window, cx)
     }
 
     pub fn focus_composer(&self, window: &mut Window, cx: &mut Context<Self>) {

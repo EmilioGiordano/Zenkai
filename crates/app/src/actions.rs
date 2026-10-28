@@ -195,6 +195,7 @@ actions!(
         SaveGenerateHeaders,
         AddGenerateColumn,
         ToggleAgentChat,
+        FocusAgentChat,
         CycleChatLayout,
         ToggleChatFullWindow,
         DockChat,
