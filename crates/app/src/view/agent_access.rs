@@ -7,7 +7,9 @@ use zenkai_agent::protected_view::FileOrigin;
 use zenkai_i18n::t;
 
 use super::Workspace;
+use super::agent_chip::{ChipState, chip_state};
 use crate::actions::LetAgentsEdit;
+use crate::agent_settings::AgentConfig;
 use crate::assets::{LOCK_MARK, LOCK_OPEN_MARK};
 use crate::interface_scale::rem_px;
 use crate::keymap;
@@ -17,7 +19,7 @@ const TOAST_TOP: f32 = 96.0;
 
 pub(super) struct Toast {
     generation: u64,
-    editable: bool,
+    state: ChipState,
     file: String,
 }
 
@@ -54,6 +56,7 @@ impl Workspace {
     }
 
     fn announce_agent_access(&mut self, cx: &mut Context<Self>) {
+        let permission = cx.global::<AgentConfig>().state.current.agents.permission;
         let Some(document) = self.documents.active() else {
             return;
         };
@@ -67,7 +70,7 @@ impl Workspace {
         let generation = self.toast_generation;
         self.toast = Some(Toast {
             generation,
-            editable: agents_can_edit(document.origin),
+            state: chip_state(document, permission),
             file: document.name(),
         });
         cx.spawn(async move |this, cx| {
@@ -95,18 +98,22 @@ impl Workspace {
         let theme = cx.theme();
         let keys = keymap::shortcut(cx, &LetAgentsEdit)
             .unwrap_or_else(|| t!("palette.let_agents_edit").to_string());
-        let (mark, title, hint) = if toast.editable {
-            (
+        let (mark, title, hint) = match toast.state {
+            ChipState::CanEdit => (
                 LOCK_OPEN_MARK,
                 t!("toast.agents_can_edit", file = toast.file),
                 t!("toast.agents_can_edit.hint", keys = keys),
-            )
-        } else {
-            (
+            ),
+            ChipState::ReadOnlyFile => (
                 LOCK_MARK,
                 t!("toast.agents_read_only", file = toast.file),
                 t!("toast.agents_read_only.hint", keys = keys),
-            )
+            ),
+            ChipState::ReadOnlyPlan => (
+                LOCK_MARK,
+                t!("toast.agents_read_only_plan", file = toast.file),
+                t!("toast.agents_read_only_plan.hint").to_string(),
+            ),
         };
         Some(
             div()

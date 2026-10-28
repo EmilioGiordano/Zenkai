@@ -11,6 +11,7 @@ use zenkai_types::{CellPos, CellStyle, ColIdx, Range, RowIdx, ValueKind};
 use crate::actions::*;
 use crate::autocomplete;
 use crate::cell_cache;
+use crate::fill_handle;
 use crate::formula_refs;
 use crate::layout::Layout;
 use crate::paint::{self, Frame};
@@ -160,8 +161,6 @@ struct EdgeDrag {
 const RESIZE_GRIP: f32 = 4.0;
 const MIN_COLUMN_WIDTH: f32 = 8.0;
 const MIN_ROW_HEIGHT: f32 = 4.0;
-
-const FILL_GRIP: f32 = 4.0;
 
 pub struct Grid {
     focus: FocusHandle,
@@ -916,29 +915,24 @@ impl Grid {
         else {
             return false;
         };
-        let x = f32::from(position.x - self.bounds.origin.x) / self.zoom;
-        let y = f32::from(position.y - self.bounds.origin.y) / self.zoom;
-        (x - right).abs() <= FILL_GRIP && (y - bottom).abs() <= FILL_GRIP
+        let pointer = (
+            f32::from(position.x - self.bounds.origin.x),
+            f32::from(position.y - self.bounds.origin.y),
+        );
+        fill_handle::on_handle(pointer, (right * self.zoom, bottom * self.zoom), self.zoom)
     }
 
-    // Excel extends down when the pointer passes the last row, else right when it
-    // passes the last column; up and left are not supported yet.
-    fn fill_target_for(&self, pos: CellPos) -> Range {
-        let source = self.selection.range();
-        if pos.row > source.end.row {
-            Range::new(source.start, CellPos::new(pos.row, source.end.col))
-        } else if pos.col > source.end.col {
-            Range::new(source.start, CellPos::new(source.end.row, pos.col))
-        } else {
-            source
-        }
-    }
-
-    fn finish_fill_drag(&mut self, cx: &mut Context<Self>) {
-        let Some(target) = self.fill_target.take() else {
+    // The release position decides the target, so a drag that moved once or not at all
+    // between press and release still fills where it ended.
+    fn finish_fill_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(last) = self.fill_target.take() else {
             return;
         };
         let source = self.selection.range();
+        let target = match self.hit(position) {
+            Hit::Cell(pos) => fill_handle::target_for(source, pos),
+            _ => last,
+        };
         if target != source {
             cx.emit(GridEvent::FillRequested { source, target });
             self.select(target.start, target.end, cx);
@@ -1138,11 +1132,11 @@ impl Grid {
         }
         if self.fill_target.is_some() {
             if event.pressed_button != Some(MouseButton::Left) {
-                self.finish_fill_drag(cx);
+                self.finish_fill_drag(event.position, cx);
                 return;
             }
             if let Hit::Cell(pos) = self.hit(event.position) {
-                let target = self.fill_target_for(pos);
+                let target = fill_handle::target_for(self.selection.range(), pos);
                 if self.fill_target != Some(target) {
                     self.fill_target = Some(target);
                     cx.notify();
@@ -1630,11 +1624,11 @@ impl Render for Grid {
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|g, _: &MouseUpEvent, _, cx| {
+                cx.listener(|g, event: &MouseUpEvent, _, cx| {
                     g.dragging = false;
                     g.end_scroll_drag(cx);
                     g.finish_edge_drag(cx);
-                    g.finish_fill_drag(cx);
+                    g.finish_fill_drag(event.position, cx);
                 }),
             )
             .on_scroll_wheel(cx.listener(Self::on_scroll))

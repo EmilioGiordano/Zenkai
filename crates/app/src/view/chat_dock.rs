@@ -30,6 +30,7 @@ pub(super) struct ChatDock {
     layout: ChatLayoutState,
     pub(super) synced_change: Option<(u64, bool)>,
     events: Option<Subscription>,
+    return_focus: Option<WeakFocusHandle>,
 }
 
 macro_rules! leave_full_window_before {
@@ -165,7 +166,7 @@ impl Workspace {
         panel
     }
 
-    pub(super) fn render_chat_toggle(&self, cx: &App) -> impl IntoElement {
+    pub(super) fn render_chat_toggle(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let label = if self.chat.open {
             t!("chat.hide.tooltip")
         } else {
@@ -178,24 +179,41 @@ impl Workspace {
                 .icon(IconName::PanelRight)
                 .selected(self.chat.open)
                 .tooltip(keymap::labeled(cx, label, &ToggleAgentChat))
-                .on_click(|event, window, cx| {
-                    if sidebar::is_primary_click(event) {
-                        window.dispatch_action(ToggleAgentChat.boxed_clone(), cx)
+                .on_click(cx.listener(|this, event, window, cx| {
+                    if !sidebar::is_primary_click(event) {
+                        return;
                     }
-                }),
+                    if this.chat.open {
+                        this.close_chat(window, cx);
+                    } else {
+                        this.open_chat(window, cx);
+                    }
+                })),
         )
     }
 
     pub(super) fn toggle_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.chat.open {
+        let focused = self
+            .chat
+            .panel
+            .as_ref()
+            .is_some_and(|panel| panel.read(cx).has_focus(window, cx));
+        if self.chat.open && focused {
             self.close_chat(window, cx);
         } else {
             self.open_chat(window, cx);
         }
     }
 
-    fn open_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<ChatPanel> {
+    pub(super) fn open_chat(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<ChatPanel> {
         let panel = self.chat_panel(window, cx);
+        if !panel.read(cx).has_focus(window, cx) {
+            self.chat.return_focus = window.focused(cx).map(|focus| focus.downgrade());
+        }
         self.chat.open = true;
         self.sync_chat_change(cx);
         panel.update(cx, |panel, cx| {
@@ -216,7 +234,12 @@ impl Workspace {
         if waiting {
             self.notify(Severity::Warning, t!("chat.waiting_for_answer"), cx);
         }
-        let focus = self.grid.focus_handle(cx);
+        let focus = self
+            .chat
+            .return_focus
+            .take()
+            .and_then(|focus| focus.upgrade())
+            .unwrap_or_else(|| self.grid.focus_handle(cx));
         window.focus(&focus, cx);
         cx.notify();
     }

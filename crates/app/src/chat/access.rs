@@ -4,11 +4,11 @@ use zenkai_i18n::t;
 
 // What the user lets the agent do. Only these three exist: an agent's bypass or auto modes are
 // never offered, and no mode id outside these lists is ever sent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum Access {
+    Plan,
     AskBeforeWriting,
     EditAutomatically,
-    Plan,
 }
 
 impl Access {
@@ -50,6 +50,11 @@ impl Access {
             Access::AskBeforeWriting => PermissionMode::AskBeforeWrite,
             Access::EditAutomatically => PermissionMode::Automatic,
         }
+    }
+
+    // An agent's own report may only take access away; raising it is the user's call.
+    pub fn lowered_by(self, reported: Access) -> Option<Access> {
+        (reported < self).then_some(reported)
     }
 
     pub fn from_session_mode(mode: &str) -> Option<Access> {
@@ -146,6 +151,23 @@ mod tests {
         assert_eq!(Access::Plan.setting(), PermissionMode::ReadOnly);
         for access in Access::ALL {
             assert_eq!(Access::from_setting(access.setting()), access);
+        }
+    }
+
+    #[test]
+    fn an_agent_report_can_lower_access_but_never_raise_it() {
+        use Access::*;
+        assert_eq!(EditAutomatically.lowered_by(Plan), Some(Plan));
+        assert_eq!(
+            EditAutomatically.lowered_by(AskBeforeWriting),
+            Some(AskBeforeWriting)
+        );
+        assert_eq!(AskBeforeWriting.lowered_by(Plan), Some(Plan));
+        assert_eq!(Plan.lowered_by(AskBeforeWriting), None);
+        assert_eq!(Plan.lowered_by(EditAutomatically), None);
+        assert_eq!(AskBeforeWriting.lowered_by(EditAutomatically), None);
+        for access in Access::ALL {
+            assert_eq!(access.lowered_by(access), None);
         }
     }
 

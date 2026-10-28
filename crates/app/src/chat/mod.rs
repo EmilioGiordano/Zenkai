@@ -21,6 +21,7 @@ mod menus;
 mod model_search;
 mod name_guard;
 mod permissions;
+mod recovery;
 pub(crate) mod reference;
 mod reference_scan;
 mod render;
@@ -41,8 +42,8 @@ use gpui_kit::*;
 use zenkai_agent::chat::history::{History, RecordId};
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
 use zenkai_agent::chat::state::{AgentState, Select};
-use zenkai_agent::chat::thread::{Entry, MessageId, Thread, ToolCallId, TurnEnd, TurnState};
-use zenkai_agent::settings::AgentId;
+use zenkai_agent::chat::thread::{Entry, MessageId, Thread, ToolCallId, TurnState};
+use zenkai_agent::settings::{AgentId, PermissionMode};
 use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
 
@@ -115,6 +116,7 @@ struct Gate {
 
 pub struct ChatPanel {
     workspace: WeakEntity<Workspace>,
+    focus: FocusHandle,
     endpoint: ToolEndpoint,
     composer: Entity<TextareaState>,
     scroll: ScrollHandle,
@@ -133,6 +135,12 @@ pub struct ChatPanel {
     editing_blocked: Option<ToolCallId>,
     gate: Option<Gate>,
     problem: Option<Problem>,
+    // The prompt of the last turn that failed, so Retry can send it again.
+    failed_prompt: Option<String>,
+    // The agent session of a conversation whose process was ended, to reload on Restart agent.
+    restart_session: Option<String>,
+    // Counts Stop presses, so a grace timer only acts on the stop that started it.
+    stops: u64,
     turn_started: Option<Instant>,
     // Wall-clock start of the turn, to find the files the agent wrote during it.
     turn_began: Option<SystemTime>,
@@ -155,6 +163,7 @@ pub struct ChatPanel {
     remembered_selects: BTreeMap<AgentId, Vec<Select>>,
     pending_agent: Option<agent_menu::PendingAgent>,
     access: Access,
+    seen_permission: PermissionMode,
     model_choice: Option<String>,
     effort_choice: Option<String>,
     mode_synced: bool,
@@ -296,6 +305,7 @@ impl ChatPanel {
         let (history_saves, history_queue) = async_channel::unbounded();
         let mut panel = ChatPanel {
             workspace,
+            focus: cx.focus_handle(),
             endpoint,
             composer,
             scroll: ScrollHandle::new(),
@@ -314,6 +324,9 @@ impl ChatPanel {
             editing_blocked: None,
             gate: None,
             problem: None,
+            failed_prompt: None,
+            restart_session: None,
+            stops: 0,
             turn_started: None,
             turn_began: None,
             state: AgentState::default(),
@@ -331,6 +344,7 @@ impl ChatPanel {
             access: Access::from_setting(
                 cx.global::<AgentConfig>().state.current.agents.permission,
             ),
+            seen_permission: cx.global::<AgentConfig>().state.current.agents.permission,
             model_choice: None,
             effort_choice: None,
             mode_synced: false,
@@ -350,6 +364,10 @@ impl ChatPanel {
         };
         panel.load_history(history_queue, cx);
         panel
+    }
+
+    pub fn has_focus(&self, window: &Window, cx: &App) -> bool {
+        self.focus.contains_focused(window, cx)
     }
 
     pub fn focus_composer(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -436,15 +454,27 @@ impl ChatPanel {
         self.forget_mentions();
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
+        let context = self
+            .prompt_context(cx)
+            .map(|line| mention_picker::with_notes(line, &mentioned.notes));
+        self.restart_session = None;
+        self.start_turn(text, context, window, cx);
+    }
+
+    pub(super) fn start_turn(
+        &mut self,
+        text: String,
+        context: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.failed_prompt = None;
         self.turn_started = Some(Instant::now());
         self.turn_began = Some(SystemTime::now());
         self.problem = None;
         self.set_view(View::Chat, cx);
         self.menu = None;
         self.remember_conversation(&text, cx);
-        let context = self
-            .prompt_context(cx)
-            .map(|line| mention_picker::with_notes(line, &mentioned.notes));
         match &self.live {
             Some(live) if live.ready => live.handle.prompt(text, context),
             _ => {
@@ -465,13 +495,12 @@ impl ChatPanel {
             ask.cancel();
         }
         match &self.live {
-            Some(live) if live.ready => live.handle.cancel(),
+            Some(live) if live.ready => {
+                live.handle.cancel();
+                self.watch_stop(cx);
+            }
             _ => {
-                self.epoch += 1;
-                self.queued = None;
-                self.gate = None;
-                self.end_session(cx);
-                self.finish_turn(TurnEnd::Cancelled, cx);
+                self.end_stopped_turn(cx);
             }
         }
         cx.notify();
@@ -500,6 +529,8 @@ impl ChatPanel {
         self.gate = None;
         self.resume_backup = None;
         self.problem = None;
+        self.failed_prompt = None;
+        self.restart_session = None;
         self.turn_started = None;
         self.state = AgentState {
             selects: std::mem::take(&mut self.state.selects),

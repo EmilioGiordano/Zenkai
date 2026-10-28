@@ -73,6 +73,10 @@ pub(super) fn popover(
         .shadow_lg()
 }
 
+fn toggled(on: bool) -> Toggled {
+    if on { Toggled::True } else { Toggled::False }
+}
+
 pub(super) struct Item {
     pub id: SharedString,
     pub name: SharedString,
@@ -87,6 +91,7 @@ pub(super) fn item(item: Item, cx: &App) -> Stateful<Div> {
         .id(item.id)
         .role(Role::MenuItemRadio)
         .aria_label(item.name.clone())
+        .aria_toggled(toggled(item.checked))
         .gap_2p5()
         .items_start()
         .px_2p5()
@@ -323,7 +328,8 @@ impl ChatPanel {
         }
     }
 
-    // The Settings page can change what agents may do while the chat is open.
+    // Only a changed permission counts: an unrelated edit must not undo a lowering the agent
+    // reported for this session.
     pub(super) fn follow_setting(&mut self, cx: &mut Context<Self>) {
         let setting = cx
             .global::<crate::agent_settings::AgentConfig>()
@@ -331,7 +337,8 @@ impl ChatPanel {
             .current
             .agents
             .permission;
-        if self.access.setting() != setting {
+        if self.seen_permission != setting {
+            self.seen_permission = setting;
             self.access = Access::from_setting(setting);
             self.sync_mode(cx);
         }
@@ -359,8 +366,7 @@ impl ChatPanel {
         self.mode_synced = true;
     }
 
-    // The label follows the agent's own mode changes, such as leaving plan mode once the user
-    // approved its plan.
+    // Only for this session: the persistent setting and the MCP bridge keep what the user chose.
     pub(super) fn follow_agent_mode(&mut self, cx: &mut Context<Self>) {
         if !self.mode_synced {
             return;
@@ -369,8 +375,9 @@ impl ChatPanel {
             .state
             .select(ConfigKind::Mode)
             .and_then(|modes| Access::from_session_mode(&modes.current));
-        if let Some(access) = reported.filter(|access| *access != self.access) {
-            self.set_access(access, cx);
+        if let Some(access) = reported.and_then(|reported| self.access.lowered_by(reported)) {
+            self.access = access;
+            cx.notify();
         }
     }
 
@@ -464,6 +471,7 @@ impl ChatPanel {
                     .id(SharedString::from(format!("effort-{}", choice.value)))
                     .role(Role::RadioButton)
                     .aria_label(choice.label.clone())
+                    .aria_toggled(toggled(current))
                     .flex_1()
                     .min_w_0()
                     .py_1()
