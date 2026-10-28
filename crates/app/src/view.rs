@@ -54,7 +54,6 @@ use crate::agent_settings::{self, AgentConfig, HeldDecision};
 use crate::auto_sum;
 use crate::chart::{self, ChartKind};
 use crate::chart_panel::{self, ChartPanel};
-use crate::chat::session_rows::format_size;
 use crate::chat_layout::{ChatLayout, ChatLayoutState};
 use crate::clipboard;
 use crate::close_prompt::{CloseGoal, Departure};
@@ -82,6 +81,7 @@ use crate::recovery;
 use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
 use crate::session::{SaveOrder, Session};
+use crate::sidebar_item::human_size;
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Neighbour;
 use crate::stale_view::StaleRequest;
@@ -1687,7 +1687,11 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let gathered = cx
                 .background_executor()
-                .spawn(async move { files::gather_export(&shared, sheet) })
+                .spawn(async move {
+                    let shown = files::gather_export(&shared, sheet)?;
+                    let size = ExportSize::of(&shown);
+                    Ok::<_, EngineError>((shown, size))
+                })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(t!("busy.saving"), cx);
@@ -1700,10 +1704,10 @@ impl Workspace {
                 };
                 match gathered {
                     Err(error) => this.export_ended(export, Err(error), window, cx),
-                    Ok(shown) if ExportSize::of(&shown).needs_confirmation() => {
-                        this.confirm_large_export(export, shown, window, cx)
+                    Ok((shown, size)) if size.needs_confirmation() => {
+                        this.confirm_large_export(export, shown, size, window, cx)
                     }
-                    Ok(shown) => this.write_export(export, shown, window, cx),
+                    Ok((shown, _)) => this.write_export(export, shown, window, cx),
                 }
             });
             if let Err(error) = update {
@@ -1717,15 +1721,15 @@ impl Workspace {
         &mut self,
         export: CsvExport,
         shown: ShownCells,
+        size: ExportSize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let size = ExportSize::of(&shown);
         let detail = t!(
             "export.large_detail",
             rows = size.rows,
             columns = size.columns,
-            size = format_size(size.bytes),
+            size = human_size(size.bytes),
             cells = size.cells
         );
         let answer = self.ask(
@@ -1742,6 +1746,9 @@ impl Workspace {
                 if choice == Some(1) {
                     this.write_export(export, shown, window, cx)
                 } else {
+                    cx.background_executor()
+                        .spawn(async move { drop(shown) })
+                        .detach();
                     this.export_ended(export, Err(EngineError::Cancelled), window, cx)
                 }
             });
