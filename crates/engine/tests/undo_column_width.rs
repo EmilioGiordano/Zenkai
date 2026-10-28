@@ -1,4 +1,4 @@
-// Spec: undo restores a column exactly. Undoing a width set on a column without one leaves
+// Spec: undo restores a column or row exactly. Undoing a width set on a column without one leaves
 // no column entry behind, so the column draws and saves at the default width again.
 #![allow(
     clippy::unwrap_used,
@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 
 use rust_xlsxwriter::Workbook as Source;
 use zenkai_engine::{Engine, SaveTarget, Workbook, open_xlsx, save_xlsx};
-use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, SheetSizes};
+use zenkai_types::{
+    CellPos, ColIdx, DEFAULT_COL_WIDTH, Range, RowIdx, SheetId, SheetSizes, StyleChange,
+};
 
 const SHEET: SheetId = SheetId(0);
 
@@ -105,4 +107,78 @@ fn undoing_a_date_that_widened_its_column_restores_the_column() {
     book.undo().unwrap();
     assert_restored(&book, dir.path(), &before);
     assert!(book.input(SHEET, at).is_empty());
+}
+
+fn whole_column(index: i64) -> Range {
+    Range::new(
+        CellPos::new(RowIdx::clamped(0), column(index)),
+        CellPos::new(RowIdx::clamped(i64::MAX), column(index)),
+    )
+}
+
+#[test]
+fn undoing_a_hide_on_a_column_without_an_entry_leaves_no_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut book = Workbook::new_empty().unwrap();
+    let before = before(&book, dir.path());
+    book.set_columns_hidden(SHEET, whole_column(4), true).unwrap();
+    assert_eq!(book.sizes(SHEET).columns[0].width, 0.0);
+    book.undo().unwrap();
+    assert_restored(&book, dir.path(), &before);
+}
+
+#[test]
+fn showing_a_column_hidden_without_an_entry_draws_and_saves_the_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut book = Workbook::new_empty().unwrap();
+    let before = before(&book, dir.path());
+    book.set_columns_hidden(SHEET, whole_column(4), true).unwrap();
+    book.set_columns_hidden(SHEET, whole_column(4), false).unwrap();
+    assert_restored(&book, dir.path(), &before);
+}
+
+#[test]
+fn an_entry_without_a_custom_width_draws_at_the_grid_default() {
+    let mut book = Workbook::new_empty().unwrap();
+    book.apply_style(SHEET, whole_column(1), StyleChange::Bold(true))
+        .unwrap();
+    let sizes = book.sizes(SHEET);
+    assert!(
+        sizes
+            .columns
+            .iter()
+            .all(|span| span.width == DEFAULT_COL_WIDTH)
+    );
+}
+
+#[test]
+fn an_unhidden_styled_column_saves_and_reopens_at_the_default_width() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut book = Workbook::new_empty().unwrap();
+    book.apply_style(SHEET, whole_column(4), StyleChange::Bold(true))
+        .unwrap();
+    book.set_columns_hidden(SHEET, whole_column(4), true).unwrap();
+    book.set_columns_hidden(SHEET, whole_column(4), false).unwrap();
+    let path = dir.path().join("styled.xlsx");
+    save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
+    let reopened = open_xlsx(&path).unwrap().workbook;
+    assert!(
+        reopened
+            .sizes(SHEET)
+            .columns
+            .iter()
+            .all(|span| span.width == DEFAULT_COL_WIDTH)
+    );
+}
+
+#[test]
+fn undoing_a_row_height_leaves_no_row_entry_where_there_was_none() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut book = Workbook::new_empty().unwrap();
+    let before = before(&book, dir.path());
+    assert!(before.sizes.rows.is_empty());
+    book.set_row_height(SHEET, RowIdx::clamped(3), 40.0).unwrap();
+    assert_eq!(book.sizes(SHEET).rows.len(), 1);
+    book.undo().unwrap();
+    assert_restored(&book, dir.path(), &before);
 }
