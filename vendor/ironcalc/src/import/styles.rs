@@ -123,11 +123,8 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     }
 
     let mut fonts = Vec::new();
-    let font_nodes = style_sheet
-        .children()
-        .filter(|n| n.has_tag_name("fonts"))
-        .collect::<Vec<Node>>()[0];
-    for font in font_nodes.children() {
+    let font_nodes = style_sheet.children().find(|n| n.has_tag_name("fonts"));
+    for font in font_nodes.iter().flat_map(|n| n.children()) {
         let mut sz = 11;
         let mut name = "Inter".to_string();
         // NOTE: In Excel you can have simple underline or double underline
@@ -209,11 +206,8 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     }
 
     let mut fills = Vec::new();
-    let fill_nodes = style_sheet
-        .children()
-        .filter(|n| n.has_tag_name("fills"))
-        .collect::<Vec<Node>>()[0];
-    for fill in fill_nodes.children() {
+    let fill_nodes = style_sheet.children().find(|n| n.has_tag_name("fills"));
+    for fill in fill_nodes.iter().flat_map(|n| n.children()) {
         let pattern_fill = fill
             .children()
             .filter(|n| n.has_tag_name("patternFill"))
@@ -253,11 +247,8 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     }
 
     let mut borders = Vec::new();
-    let border_nodes = style_sheet
-        .children()
-        .filter(|n| n.has_tag_name("borders"))
-        .collect::<Vec<Node>>()[0];
-    for border in border_nodes.children() {
+    let border_nodes = style_sheet.children().find(|n| n.has_tag_name("borders"));
+    for border in border_nodes.iter().flat_map(|n| n.children()) {
         let diagonal_up = get_bool_false(border, "diagonal_up");
         let diagonal_down = get_bool_false(border, "diagonal_down");
         let left = get_border(border, "left", theme, indexed)?;
@@ -309,9 +300,8 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     let mut style_names = HashMap::new();
     let cell_style_nodes = style_sheet
         .children()
-        .filter(|n| n.has_tag_name("cellStyles"))
-        .collect::<Vec<Node>>()[0];
-    for cell_style in cell_style_nodes.children() {
+        .find(|n| n.has_tag_name("cellStyles"));
+    for cell_style in cell_style_nodes.iter().flat_map(|n| n.children()) {
         let name = get_attribute(&cell_style, "name")?.to_string();
         let xf_id = get_number(cell_style, "xfId");
         let builtin_id = get_number(cell_style, "builtinId");
@@ -330,11 +320,8 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     }
 
     let mut cell_xfs = Vec::new();
-    let cell_xfs_nodes = style_sheet
-        .children()
-        .filter(|n| n.has_tag_name("cellXfs"))
-        .collect::<Vec<Node>>()[0];
-    for xfs in cell_xfs_nodes.children() {
+    let cell_xfs_nodes = style_sheet.children().find(|n| n.has_tag_name("cellXfs"));
+    for xfs in cell_xfs_nodes.iter().flat_map(|n| n.children()) {
         // `xfId` is optional on a cellXfs <xf> (it references cellStyleXfs;
         // many Excel/LibreOffice files omit it). Default to 0 when absent.
         let xf_id = xfs
@@ -414,6 +401,25 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
             quote_prefix,
             alignment,
         });
+    }
+
+    // The schema allows these lists to be empty or missing. Excel reads them as a new
+    // workbook's defaults, and every style index needs at least the first record.
+    let defaults = Styles::default();
+    if fonts.is_empty() {
+        fonts = defaults.fonts;
+    }
+    if fills.is_empty() {
+        fills = defaults.fills;
+    }
+    if borders.is_empty() {
+        borders = defaults.borders;
+    }
+    if cell_styles.is_empty() {
+        cell_styles = defaults.cell_styles;
+    }
+    if cell_xfs.is_empty() {
+        cell_xfs = defaults.cell_xfs;
     }
 
     // cellStyleXfs is optional; without it every format and named style rests on the default

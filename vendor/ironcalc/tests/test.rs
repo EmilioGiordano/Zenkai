@@ -640,7 +640,8 @@ fn test_whitespace_between_column_elements_does_not_count_against_the_bound() {
             "{}<cols>{}</cols>{}",
             &text[..start],
             "
-  <col min=\"1\" max=\"16384\" width=\"9\"/>".repeat(16_384),
+  <col min=\"1\" max=\"16384\" width=\"9\"/>"
+                .repeat(16_384),
             &text[end + "</cols>".len()..]
         )
     });
@@ -703,4 +704,40 @@ fn test_saved_style_references_stay_inside_cell_style_formats() {
         referenced += 1;
     }
     assert!(referenced > 0);
+}
+
+fn example_with_style_list_replaced(list: &str, replacement: &str) -> Vec<u8> {
+    example_with_part_edited("xl/styles.xml", |text| {
+        let open = format!("<{list}");
+        let close = format!("</{list}>");
+        let start = text.find(&open).unwrap();
+        let end = text.find(&close).unwrap() + close.len();
+        format!("{}{}{}", &text[..start], replacement, &text[end..])
+    })
+}
+
+#[test]
+fn test_styles_with_empty_or_missing_lists_use_default_records() {
+    for list in ["fonts", "fills", "borders", "cellXfs", "cellStyles"] {
+        for replacement in [String::new(), format!("<{list} count=\"0\"/>")] {
+            let edited = example_with_style_list_replaced(list, &replacement);
+            let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+            let defaults = ironcalc_base::types::Styles::default();
+            let styles = &workbook.styles;
+            match list {
+                "fonts" => assert_eq!(styles.fonts, defaults.fonts),
+                "fills" => assert_eq!(styles.fills, defaults.fills),
+                "borders" => assert_eq!(styles.borders, defaults.borders),
+                "cellXfs" => assert_eq!(styles.cell_xfs, defaults.cell_xfs),
+                _ => assert_eq!(styles.cell_styles, defaults.cell_styles),
+            }
+            let mut model = Model::from_workbook(workbook, "en").unwrap();
+            model.evaluate();
+            let saved =
+                ironcalc::export::save_xlsx_to_writer(&model, std::io::Cursor::new(Vec::new()))
+                    .unwrap()
+                    .into_inner();
+            load_from_xlsx_bytes(&saved, "home", "en", "UTC").unwrap();
+        }
+    }
 }

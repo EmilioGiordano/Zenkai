@@ -67,6 +67,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   panicking on the missing element, so a save leaves no xfId dangling (`src/import/styles.rs`). Tests:
   `test_styles_without_cell_style_formats` and
   `test_saved_style_references_stay_inside_cell_style_formats` in `tests/test.rs`.
+- The xlsx import reads a styles part whose `fonts`, `fills`, `borders`, `cellXfs` or
+  `cellStyles` list is missing or empty with the default records of a new workbook
+  (`Styles::default()`), instead of panicking on the first element
+  (`src/import/styles.rs`). Stands on its own. Test:
+  `test_styles_with_empty_or_missing_lists_use_default_records` in `tests/test.rs`.
 - The xlsx import returns an error for a `<cols>` with more `<col>` elements than the sheet
   has columns, instead of keeping one entry per element: a hostile file could repeat the
   element millions of times (`src/import/worksheets.rs`). Stands on its own (uses the public
