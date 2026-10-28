@@ -1753,8 +1753,11 @@ impl Engine for Workbook {
     }
 
     fn defined_names(&self) -> Vec<DefinedName> {
+        // The raw list: the display form re-parses every formula against all names.
         self.model
-            .get_defined_name_list()
+            .get_model()
+            .workbook
+            .get_defined_names_with_scope()
             .into_iter()
             .map(|(name, scope, refers_to)| DefinedName {
                 name,
@@ -2023,6 +2026,25 @@ mod tests {
     fn any_other_import_error_stays_an_invalid_file() {
         let error = read_error(XlsxError::Workbook("bad sheet".to_string()));
         assert!(matches!(error, EngineError::InvalidFile(_)));
+    }
+
+    #[test]
+    fn thousands_of_defined_names_are_listed_quickly() {
+        let mut book = Workbook::new_empty().unwrap();
+        let sheet = book.sheets()[0].name.clone();
+        for index in 0..3000 {
+            book.model
+                .new_defined_name(
+                    &format!("Name{index}"),
+                    None,
+                    &format!("{sheet}!$A${}", index + 1),
+                )
+                .unwrap();
+        }
+        let started = std::time::Instant::now();
+        let names = book.defined_names();
+        assert_eq!(names.len(), 3000);
+        assert!(started.elapsed() < Duration::from_millis(200));
     }
 
     #[test]
