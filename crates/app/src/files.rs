@@ -1,12 +1,13 @@
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use zenkai_agent::preferences::XlsxReaderChoice;
 use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_engine::{
-    Engine, EngineError, ShownCells, Unsupported, Workbook, XlsxReader, open_xlsx_with,
+    Engine, EngineError, ShownCells, Unsupported, Workbook, XlsxReader, open_xlsx_cancellable,
     run_with_engine_stack, write_atomic_streaming,
 };
 use zenkai_formats::{CsvError, CsvWriter, Delimiter, ParsedCsv, parse_csv, read_values};
@@ -186,9 +187,13 @@ pub enum LoadFailure {
     Unreadable { reason: String, fallback: String },
 }
 
-pub fn load_workbook(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFailure> {
+pub fn load_workbook(
+    path: &Path,
+    reader: XlsxReader,
+    cancel: &Arc<AtomicBool>,
+) -> Result<FileLoad, LoadFailure> {
     let started = Instant::now();
-    let loaded = tracing::info_span!("open_workbook").in_scope(|| load_any(path, reader));
+    let loaded = tracing::info_span!("open_workbook").in_scope(|| load_any(path, reader, cancel));
     let elapsed_ms = started.elapsed().as_millis();
     match &loaded {
         Ok(load) => tracing::info!(
@@ -197,6 +202,9 @@ pub fn load_workbook(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFa
             read_only = load.read_only,
             "workbook opened"
         ),
+        Err(LoadFailure::Engine(EngineError::Cancelled)) => {
+            tracing::info!(?path, elapsed_ms, "workbook open cancelled")
+        }
         Err(LoadFailure::Missing) => {
             tracing::warn!(?path, elapsed_ms, "workbook to open is missing")
         }
@@ -210,8 +218,12 @@ pub fn load_workbook(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFa
     loaded
 }
 
-fn load_any(path: &Path, reader: XlsxReader) -> Result<FileLoad, LoadFailure> {
-    match open_xlsx_with(path, reader) {
+fn load_any(
+    path: &Path,
+    reader: XlsxReader,
+    cancel: &Arc<AtomicBool>,
+) -> Result<FileLoad, LoadFailure> {
+    match open_xlsx_cancellable(path, reader, cancel) {
         Ok(opened) => Ok(FileLoad {
             workbook: opened.workbook,
             unsupported: opened.unsupported,
