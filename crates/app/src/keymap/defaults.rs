@@ -284,7 +284,6 @@ pub fn defaults() -> Vec<Binding> {
         bind("enter", SessionsAccept, Some("ChatSessions > Input")),
         bind("escape", SessionsEscape, Some("ChatSessions > Input")),
         bind("alt-l", ConfirmAgentLaunch, Some("AgentLaunchGate")),
-        bind("enter", DeclineAgentLaunch, Some("AgentLaunchGate")),
         bind("escape", DeclineAgentLaunch, Some("AgentLaunchGate")),
         bind("ctrl-k", RecordShortcutKeys, Some("SettingsWindow")),
         bind("ctrl-shift-r", ResetAllShortcuts, Some("SettingsWindow")),
