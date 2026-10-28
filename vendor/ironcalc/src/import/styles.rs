@@ -124,7 +124,11 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
 
     let mut fonts = Vec::new();
     let font_nodes = style_sheet.children().find(|n| n.has_tag_name("fonts"));
-    for font in font_nodes.iter().flat_map(|n| n.children()) {
+    for font in font_nodes
+        .iter()
+        .flat_map(|n| n.children())
+        .filter(Node::is_element)
+    {
         let mut sz = 11;
         let mut name = "Inter".to_string();
         // NOTE: In Excel you can have simple underline or double underline
@@ -187,9 +191,7 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
                     }
                 }
                 "charset" => {}
-                _ => {
-                    println!("Unexpected feature {feature:?}");
-                }
+                _ => {}
             }
         }
         fonts.push(Font {
@@ -207,7 +209,11 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
 
     let mut fills = Vec::new();
     let fill_nodes = style_sheet.children().find(|n| n.has_tag_name("fills"));
-    for fill in fill_nodes.iter().flat_map(|n| n.children()) {
+    for fill in fill_nodes
+        .iter()
+        .flat_map(|n| n.children())
+        .filter(Node::is_element)
+    {
         let pattern_fill = fill
             .children()
             .filter(|n| n.has_tag_name("patternFill"))
@@ -230,10 +236,7 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
                 "bgColor" => {
                     bg_color = get_color_indexed(feature, theme, indexed)?;
                 }
-                _ => {
-                    println!("Unexpected pattern");
-                    dbg!(feature);
-                }
+                _ => {}
             }
         }
         // Prefer fgColor (solid fill convention); fall back to bgColor
@@ -248,7 +251,11 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
 
     let mut borders = Vec::new();
     let border_nodes = style_sheet.children().find(|n| n.has_tag_name("borders"));
-    for border in border_nodes.iter().flat_map(|n| n.children()) {
+    for border in border_nodes
+        .iter()
+        .flat_map(|n| n.children())
+        .filter(Node::is_element)
+    {
         let diagonal_up = get_bool_false(border, "diagonal_up");
         let diagonal_down = get_bool_false(border, "diagonal_down");
         let left = get_border(border, "left", theme, indexed)?;
@@ -271,7 +278,11 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     let cell_style_xfs_nodes = style_sheet
         .children()
         .find(|n| n.has_tag_name("cellStyleXfs"));
-    for xfs in cell_style_xfs_nodes.iter().flat_map(|n| n.children()) {
+    for xfs in cell_style_xfs_nodes
+        .iter()
+        .flat_map(|n| n.children())
+        .filter(Node::is_element)
+    {
         let num_fmt_id = get_number(xfs, "numFmtId");
         let font_id = get_number(xfs, "fontId");
         let fill_id = get_number(xfs, "fillId");
@@ -301,7 +312,11 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
     let cell_style_nodes = style_sheet
         .children()
         .find(|n| n.has_tag_name("cellStyles"));
-    for cell_style in cell_style_nodes.iter().flat_map(|n| n.children()) {
+    for cell_style in cell_style_nodes
+        .iter()
+        .flat_map(|n| n.children())
+        .filter(Node::is_element)
+    {
         let name = get_attribute(&cell_style, "name")?.to_string();
         let xf_id = get_number(cell_style, "xfId");
         let builtin_id = get_number(cell_style, "builtinId");
@@ -321,7 +336,11 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
 
     let mut cell_xfs = Vec::new();
     let cell_xfs_nodes = style_sheet.children().find(|n| n.has_tag_name("cellXfs"));
-    for xfs in cell_xfs_nodes.iter().flat_map(|n| n.children()) {
+    for xfs in cell_xfs_nodes
+        .iter()
+        .flat_map(|n| n.children())
+        .filter(Node::is_element)
+    {
         // `xfId` is optional on a cellXfs <xf> (it references cellStyleXfs;
         // many Excel/LibreOffice files omit it). Default to 0 when absent.
         let xf_id = xfs
@@ -403,11 +422,15 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
         });
     }
 
-    // The schema allows these lists to be empty or missing. Excel reads them as a new
-    // workbook's defaults, and every style index needs at least the first record.
+    // The schema allows these lists to be empty or missing. Excel reads a missing one as a
+    // new workbook's defaults, and every style index needs at least the first record.
     let defaults = Styles::default();
     if fonts.is_empty() {
-        fonts = defaults.fonts;
+        fonts.push(Font {
+            sz: 11,
+            name: "Calibri".to_string(),
+            ..Font::default()
+        });
     }
     if fills.is_empty() {
         fills = defaults.fills;
@@ -416,7 +439,10 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
         borders = defaults.borders;
     }
     if cell_styles.is_empty() {
-        cell_styles = defaults.cell_styles;
+        cell_styles.push(CellStyles {
+            name: "Normal".to_string(),
+            ..CellStyles::default()
+        });
     }
     if cell_xfs.is_empty() {
         cell_xfs = defaults.cell_xfs;
@@ -434,6 +460,23 @@ pub(super) fn load_styles<R: Read + std::io::Seek>(
             .unwrap_or(0)
             .clamp(0, MAX_PADDED_CELL_STYLE_XFS - 1);
         cell_style_xfs.resize_with(referenced as usize + 1, CellStyleXfs::default);
+    }
+
+    // A format pointing past a list reads as the first record, so no lookup can run off the end.
+    let known = |id: i32, len: usize| if (0..len as i32).contains(&id) { id } else { 0 };
+    for xf in &mut cell_xfs {
+        xf.font_id = known(xf.font_id, fonts.len());
+        xf.fill_id = known(xf.fill_id, fills.len());
+        xf.border_id = known(xf.border_id, borders.len());
+        xf.xf_id = known(xf.xf_id, cell_style_xfs.len());
+    }
+    for xf in &mut cell_style_xfs {
+        xf.font_id = known(xf.font_id, fonts.len());
+        xf.fill_id = known(xf.fill_id, fills.len());
+        xf.border_id = known(xf.border_id, borders.len());
+    }
+    for style in &mut cell_styles {
+        style.xf_id = known(style.xf_id, cell_style_xfs.len());
     }
 
     let dxfs = load_dxfs(style_sheet, theme, indexed)?;

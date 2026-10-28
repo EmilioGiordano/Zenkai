@@ -725,11 +725,11 @@ fn test_styles_with_empty_or_missing_lists_use_default_records() {
             let defaults = ironcalc_base::types::Styles::default();
             let styles = &workbook.styles;
             match list {
-                "fonts" => assert_eq!(styles.fonts, defaults.fonts),
+                "fonts" => assert_eq!(styles.fonts.len(), 1),
                 "fills" => assert_eq!(styles.fills, defaults.fills),
                 "borders" => assert_eq!(styles.borders, defaults.borders),
                 "cellXfs" => assert_eq!(styles.cell_xfs, defaults.cell_xfs),
-                _ => assert_eq!(styles.cell_styles, defaults.cell_styles),
+                _ => assert_eq!(styles.cell_styles.len(), 1),
             }
             let mut model = Model::from_workbook(workbook, "en").unwrap();
             model.evaluate();
@@ -740,4 +740,103 @@ fn test_styles_with_empty_or_missing_lists_use_default_records() {
             load_from_xlsx_bytes(&saved, "home", "en", "UTC").unwrap();
         }
     }
+}
+
+fn touch_every_style(model: &mut Model) {
+    for sheet in 0..model.workbook.worksheets.len() as u32 {
+        for row in 1..=40 {
+            for column in 1..=20 {
+                model.get_style_for_cell(sheet, row, column).unwrap();
+            }
+        }
+        model.set_user_input(sheet, 1, 1, "x".to_string()).unwrap();
+    }
+}
+
+#[test]
+fn test_style_references_past_the_lists_fall_back_to_the_first_record() {
+    for list in ["fonts", "fills", "borders"] {
+        let edited = example_with_style_list_replaced(list, "");
+        let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+        let mut model = Model::from_workbook(workbook, "en").unwrap();
+        touch_every_style(&mut model);
+    }
+    let edited = example_with_part_edited("xl/styles.xml", |text| {
+        let start = text.find("<fonts").unwrap();
+        let end = text.find("</fonts>").unwrap() + "</fonts>".len();
+        let one_font =
+            r#"<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>"#;
+        let text = format!("{}{}{}", &text[..start], one_font, &text[end..]);
+        let at = text.find("<cellXfs").unwrap();
+        let (head, tail) = text.split_at(at);
+        format!(
+            "{head}{}",
+            tail.replacen("fontId=\"0\"", "fontId=\"50\"", 1)
+        )
+    });
+    let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    let mut model = Model::from_workbook(workbook, "en").unwrap();
+    touch_every_style(&mut model);
+}
+
+#[test]
+fn test_cell_row_and_column_styles_past_cell_xfs_are_read_as_default() {
+    let edited = example_with_part_edited("xl/worksheets/sheet1.xml", |text| {
+        text.replacen(
+            "</sheetData>",
+            r#"<row r="500" s="77" customFormat="1"><c r="A500" s="99"><v>1</v></c></row></sheetData>"#,
+            1,
+        )
+        .replacen("<col ", "<col style=\"88\" ", 1)
+    });
+    let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    let mut model = Model::from_workbook(workbook, "en").unwrap();
+    assert_eq!(model.get_cell_style_index(0, 500, 1).unwrap(), 0);
+    touch_every_style(&mut model);
+    model.set_user_input(0, 500, 1, "y".to_string()).unwrap();
+    let saved = ironcalc::export::save_xlsx_to_writer(&model, std::io::Cursor::new(Vec::new()))
+        .unwrap()
+        .into_inner();
+    load_from_xlsx_bytes(&saved, "home", "en", "UTC").unwrap();
+}
+
+#[test]
+fn test_indented_styles_part_keeps_record_indices() {
+    let edited = example_with_part_edited("xl/styles.xml", |_| {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="0">
+  </fonts>
+  <fills count="1">
+    <fill>
+      <patternFill patternType="none"/>
+    </fill>
+  </fills>
+  <borders count="1">
+    <border/>
+  </borders>
+  <cellXfs count="2">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellXfs>
+</styleSheet>"#
+            .to_string()
+    });
+    let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    assert_eq!(workbook.styles.fonts.len(), 1);
+    assert_eq!(workbook.styles.fills.len(), 1);
+    assert_eq!(workbook.styles.borders.len(), 1);
+    assert_eq!(workbook.styles.cell_xfs.len(), 2);
+    assert_eq!(workbook.styles.cell_styles.len(), 1);
+}
+
+#[test]
+fn test_default_records_for_missing_lists_use_excels_names() {
+    let edited = example_with_style_list_replaced("cellStyles", "");
+    let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    assert_eq!(workbook.styles.cell_styles[0].name, "Normal");
+    let edited = example_with_style_list_replaced("fonts", "");
+    let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    assert_eq!(workbook.styles.fonts[0].name, "Calibri");
+    assert_eq!(workbook.styles.fonts[0].sz, 11);
 }
