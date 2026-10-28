@@ -92,21 +92,8 @@ impl<W: Write> CsvWriter<W> {
         self.end_row()
     }
 
-    pub fn finish(self) -> Result<W, CsvError> {
-        let CsvWriter {
-            writer, out: kept, ..
-        } = self;
-        drop(
-            writer
-                .into_inner()
-                .map_err(|error| CsvError::Write(error.into_error()))?,
-        );
-        match Rc::try_unwrap(kept.0) {
-            Ok(cell) => Ok(cell.into_inner()),
-            Err(_) => Err(CsvError::Write(io::Error::other(
-                "the output is still shared after the csv writer was dropped",
-            ))),
-        }
+    pub fn finish(mut self) -> Result<(), CsvError> {
+        Ok(self.writer.flush()?)
     }
 }
 
@@ -122,21 +109,24 @@ fn neutralize(text: &str) -> Cow<'_, str> {
 }
 
 pub fn write_csv(rows: &[Vec<String>], delimiter: Delimiter) -> Result<Vec<u8>, CsvError> {
-    let mut writer = CsvWriter::new(Vec::new(), delimiter)?;
+    let mut bytes = Vec::new();
+    let mut writer = CsvWriter::new(&mut bytes, delimiter)?;
     for row in rows {
         writer.write_row(row.iter().map(String::as_str))?;
     }
-    writer.finish()
+    writer.finish()?;
+    Ok(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn written(delimiter: Delimiter, build: impl FnOnce(&mut CsvWriter<Vec<u8>>)) -> String {
-        let mut writer = CsvWriter::new(Vec::new(), delimiter).unwrap();
+    fn written(delimiter: Delimiter, build: impl FnOnce(&mut CsvWriter<&mut Vec<u8>>)) -> String {
+        let mut bytes = Vec::new();
+        let mut writer = CsvWriter::new(&mut bytes, delimiter).unwrap();
         build(&mut writer);
-        let bytes = writer.finish().unwrap();
+        writer.finish().unwrap();
         assert!(bytes.starts_with(UTF8_BOM));
         String::from_utf8(bytes[UTF8_BOM.len()..].to_vec()).unwrap()
     }
@@ -238,7 +228,8 @@ mod tests {
     }
 
     fn streamed_with_gaps(rows: &[Vec<String>], delimiter: Delimiter) -> Vec<u8> {
-        let mut writer = CsvWriter::new(Vec::new(), delimiter).unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = CsvWriter::new(&mut bytes, delimiter).unwrap();
         for row in rows {
             let mut gap = 0;
             for cell in row {
@@ -253,7 +244,8 @@ mod tests {
             writer.write_empty_fields(gap).unwrap();
             writer.end_row().unwrap();
         }
-        writer.finish().unwrap()
+        writer.finish().unwrap();
+        bytes
     }
 
     proptest::proptest! {
