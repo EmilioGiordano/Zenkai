@@ -364,8 +364,7 @@ impl ChatPanel {
         self.mode_synced = true;
     }
 
-    // The label follows the agent's own mode changes, such as leaving plan mode once the user
-    // approved its plan.
+    // Only for this session: the persistent setting and the MCP bridge keep what the user chose.
     pub(super) fn follow_agent_mode(&mut self, cx: &mut Context<Self>) {
         if !self.mode_synced {
             return;
@@ -374,8 +373,9 @@ impl ChatPanel {
             .state
             .select(ConfigKind::Mode)
             .and_then(|modes| Access::from_session_mode(&modes.current));
-        if let Some(access) = reported.filter(|access| *access != self.access) {
-            self.set_access(access, cx);
+        if let Some(access) = reported.and_then(|reported| self.access.lowered_by(reported)) {
+            self.access = access;
+            cx.notify();
         }
     }
 
