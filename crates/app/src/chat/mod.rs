@@ -446,6 +446,7 @@ impl ChatPanel {
         let context = self
             .prompt_context(cx)
             .map(|line| mention_picker::with_notes(line, &mentioned.notes));
+        self.restart_session = None;
         self.start_turn(text, context, window, cx);
     }
 
@@ -457,7 +458,6 @@ impl ChatPanel {
         cx: &mut Context<Self>,
     ) {
         self.failed_prompt = None;
-        self.restart_session = None;
         self.turn_started = Some(Instant::now());
         self.turn_began = Some(SystemTime::now());
         self.problem = None;

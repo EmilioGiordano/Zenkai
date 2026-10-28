@@ -24,6 +24,9 @@ impl ChatPanel {
         let Some(text) = self.failed_prompt.clone() else {
             return;
         };
+        if self.restart_session.is_some() {
+            return;
+        }
         if !self.thread.submit(text.clone()) {
             return;
         }

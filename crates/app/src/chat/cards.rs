@@ -141,7 +141,7 @@ impl ChatPanel {
     }
 
     pub(super) fn render_recovery(&self) -> Option<impl IntoElement> {
-        let retry = !self.busy() && self.failed_prompt.is_some();
+        let retry = !self.busy() && self.failed_prompt.is_some() && self.restart_session.is_none();
         let restart = self.can_restart_agent();
         if !retry && !restart {
             return None;
