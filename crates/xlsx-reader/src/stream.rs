@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::io::{Read, Seek};
+use std::num::NonZeroU64;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -668,13 +669,15 @@ fn read_part_with<R: Read>(
 // the whole-part cap and the DOM charge apply to the bytes really inflated. The
 // shared strings take the DOM factor too: no measurement backs a lower one.
 // With cell counting the cells and rows stream past a counter on the same pass,
-// so the caller can charge them without reading the part again.
+// so the caller can charge them without reading the part again. The DOM charge is
+// multiplied by `dom_loads`, the times the importer parses the part.
 pub(crate) fn read_part_if_checked<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     index: usize,
     meter: &CompressedMeter,
     budgets: &Budgets,
     count_cells: bool,
+    dom_loads: NonZeroU64,
 ) -> Result<(String, Vec<u8>, Usage), ReadError> {
     let (name, usage) = {
         let entry = archive
@@ -706,7 +709,9 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
             }
         }
         counter.finish();
-        budgets.cells.check_dom_part(&name, inflated)?;
+        budgets
+            .cells
+            .check_dom_part(&name, inflated.saturating_mul(dom_loads.get()))?;
         let usage = counter.usage();
         if !filter.hit() {
             return Ok((name, Vec::new(), usage));
@@ -957,11 +962,13 @@ mod tests {
         let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
         let budgets = budgets();
         let (name, clean, _) =
-            read_part_if_checked(&mut archive, 0, &meter, &budgets, false).unwrap();
+            read_part_if_checked(&mut archive, 0, &meter, &budgets, false, NonZeroU64::MIN)
+                .unwrap();
         assert_eq!(name, "xl/styles.xml");
         assert!(clean.is_empty(), "a clean part needs no bytes");
         let (name, checked, _) =
-            read_part_if_checked(&mut archive, 1, &meter, &budgets, false).unwrap();
+            read_part_if_checked(&mut archive, 1, &meter, &budgets, false, NonZeroU64::MIN)
+                .unwrap();
         assert_eq!(name, "xl/workbook.xml");
         assert!(!checked.is_empty(), "a checked part is inflated");
     }
@@ -983,8 +990,15 @@ mod tests {
     ) -> Result<usize, ReadError> {
         let meter = CompressedMeter::new();
         let mut archive = zip::ZipArchive::new(meter.wrap(std::io::Cursor::new(bytes))).unwrap();
-        read_part_if_checked(&mut archive, 0, &meter, budgets, count_cells)
-            .map(|(_, part, _)| part.len())
+        read_part_if_checked(
+            &mut archive,
+            0,
+            &meter,
+            budgets,
+            count_cells,
+            NonZeroU64::MIN,
+        )
+        .map(|(_, part, _)| part.len())
     }
 
     #[test]

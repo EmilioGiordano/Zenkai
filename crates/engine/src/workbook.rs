@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use ironcalc::base::expressions::types::{Area, CellReferenceIndex};
 use ironcalc::base::types::{
-    Cell, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
+    Cell, CellType, Color, FormulaValue, HorizontalAlignment, SpillValue, Style, VerticalAlignment,
 };
 use ironcalc::base::{BorderArea, ClipboardData, Model, Recalculation, UserModel};
 use ironcalc::import::load_from_xlsx_bytes;
@@ -17,6 +17,7 @@ use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
 use crate::saved::{FileOnDisk, KnownFile, SavedSlot};
 use crate::sheet_settings::{Carried, SheetSettings};
+use crate::shown_cells::UNREADABLE_CELL;
 use zenkai_types::{
     BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, HAlign, Range, Rgb,
     RowIdx, SheetId, SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign, ValueKind,
@@ -862,23 +863,22 @@ impl Engine for Workbook {
     fn cell(&self, sheet: SheetId, pos: CellPos) -> CellView {
         let (row, col) = (row_i32(pos.row), col_i32(pos.col));
         let model = self.model.get_model();
-        let text = match self.model.get_formatted_cell_value(sheet.0, row, col) {
-            Ok(text) => text,
-            Err(error) => {
-                tracing::warn!(%error, %pos, "could not read cell");
-                return CellView {
-                    text: "#ERROR".to_string(),
-                    kind: ValueKind::Error,
-                    ..CellView::default()
-                };
-            }
+        let Some(text) = self.formatted_text(sheet, pos) else {
+            return CellView {
+                text: UNREADABLE_CELL.to_string(),
+                kind: ValueKind::Error,
+                ..CellView::default()
+            };
         };
+        let stored_type = model
+            .workbook
+            .worksheet(sheet.0)
+            .map(|worksheet| worksheet.cell(row, col).map(Cell::get_type));
+        let is_error = matches!(stored_type, Ok(Some(CellType::ErrorValue)));
         let (kind, number) = match model.get_cell_value_by_index(sheet.0, row, col) {
             Ok(ironcalc::base::cell::CellValue::Number(n)) => (ValueKind::Number, Some(n)),
             Ok(ironcalc::base::cell::CellValue::Boolean(_)) => (ValueKind::Bool, None),
-            Ok(ironcalc::base::cell::CellValue::String(s)) if s.starts_with('#') => {
-                (ValueKind::Error, None)
-            }
+            Ok(ironcalc::base::cell::CellValue::String(_)) if is_error => (ValueKind::Error, None),
             Ok(ironcalc::base::cell::CellValue::String(_)) => (ValueKind::Text, None),
             _ => (ValueKind::Empty, None),
         };
@@ -1645,8 +1645,20 @@ impl Engine for Workbook {
         let rows = i32::try_from(rows).map_err(|e| rejected(e.to_string()))?;
         self.model
             .edit_keeping_cells(|model| {
-                model.set_frozen_rows_count(sheet.0, rows)?;
-                model.set_frozen_columns_count(sheet.0, i32::from(cols))
+                // Paused before the group so closing it does not evaluate: freezing panes
+                // changes no value, and an evaluation would re-roll volatile formulas.
+                let was_paused = model.is_evaluation_paused();
+                model.pause_evaluation();
+                let set = model.begin_edit_group().and_then(|()| {
+                    let frozen = model
+                        .set_frozen_rows_count(sheet.0, rows)
+                        .and_then(|()| model.set_frozen_columns_count(sheet.0, i32::from(cols)));
+                    frozen.and(model.end_edit_group())
+                });
+                if !was_paused {
+                    model.resume_evaluation();
+                }
+                set
             })
             .map_err(rejected)
     }

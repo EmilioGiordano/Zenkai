@@ -926,6 +926,19 @@ mod tests {
     }
 
     #[test]
+    fn a_save_pressed_during_a_csv_export_runs_after_it() {
+        let mut document = document();
+        let generation = document.generation();
+        assert!(document.begin_file_job(FileJob::Saving).is_some());
+        document.request_save();
+        document.end_file_job(generation);
+        assert_eq!(
+            document.settle_save(generation, JobEnd::Autosaved),
+            AfterJob::SaveAgain
+        );
+    }
+
+    #[test]
     fn a_stale_save_does_not_release_the_new_documents_job() {
         let old = document();
         let stale = old.generation();

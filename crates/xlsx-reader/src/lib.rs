@@ -41,7 +41,9 @@ pub use styles_part::{STYLES_PART, StyleAppendix, StyleCounts, StylesShape};
 pub use verify::{PartDigest, Written, check_written, check_xml};
 
 use crate::formulas::Names;
-use crate::package::{importer_worksheet_paths, read_package, stub_archive};
+use crate::package::{
+    importer_comment_loads, importer_worksheet_paths, read_package, stub_archive,
+};
 use crate::parallel::{Job, Open, ReadPlan, SheetStreams, SheetTask};
 use crate::sheet_stream::{StreamedSheet, Tuning, stream_config, stream_worksheet};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, read_part_if_checked};
@@ -361,7 +363,8 @@ fn stream_entries<R: Read + Seek>(
             inspect(&entry_name, &[])?;
             continue;
         }
-        let (_, part, _) = read_part_if_checked(archive, index, meter, budgets, false)?;
+        let (_, part, _) =
+            read_part_if_checked(archive, index, meter, budgets, false, NonZeroU64::MIN)?;
         inspect(&entry_name, &part)?;
     }
     Ok(sheets)
@@ -387,7 +390,14 @@ pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> 
             inspect(&entry_name, &[])?;
             continue;
         }
-        let (_, part, _) = read_part_if_checked(&mut archive, index, &meter, &budgets, false)?;
+        let (_, part, _) = read_part_if_checked(
+            &mut archive,
+            index,
+            &meter,
+            &budgets,
+            false,
+            NonZeroU64::MIN,
+        )?;
         inspect(&entry_name, &part)?;
     }
     Ok(())
@@ -413,9 +423,14 @@ fn scan_archive<R: Read + Seek>(
     // The importer loads the worksheets the package relationships name, so those parts
     // are the ones counted, once for every sheet naming them. Where the package has no
     // readable index the importer fails on the file, so every part is counted only as a
-    // guard. Every part still streams through the caps below, and IronCalc still decides
-    // the file.
+    // guard. A comments part is counted for every relationship that names it, as the
+    // importer keeps a copy per sheet. Every part still streams through the caps below,
+    // and IronCalc still decides the file.
     let package_sheets = importer_worksheet_paths(archive, meter, budgets)?;
+    let comment_loads = match &package_sheets {
+        Some(sheets) => importer_comment_loads(archive, meter, budgets, sheets)?,
+        None => std::collections::HashMap::new(),
+    };
     for index in 0..archive.len() {
         let entry_name = {
             let entry = archive
@@ -432,7 +447,7 @@ fn scan_archive<R: Read + Seek>(
             None => Some(NonZeroU64::MIN),
         };
         let count_cells = loads.is_some();
-        if skipped_part(&entry_name) && !count_cells {
+        if skipped_part(&entry_name) && !count_cells && !comment_loads.contains_key(&entry_name) {
             let entry = archive
                 .by_index(index)
                 .map_err(|e| ReadError::Unreadable(e.to_string()))?;
@@ -442,7 +457,17 @@ fn scan_archive<R: Read + Seek>(
             inspect(&entry_name, &[])?;
             continue;
         }
-        let (_, part, usage) = read_part_if_checked(archive, index, meter, budgets, count_cells)?;
+        let (_, part, usage) = read_part_if_checked(
+            archive,
+            index,
+            meter,
+            budgets,
+            count_cells,
+            comment_loads
+                .get(&entry_name)
+                .copied()
+                .unwrap_or(NonZeroU64::MIN),
+        )?;
         if let Some(loads) = loads {
             budgets.check_importer_usage(usage.repeated(loads))?;
         }
@@ -1011,6 +1036,77 @@ mod tests {
         assert!(!load(1));
         assert!(load(3));
         assert!(load(40));
+    }
+
+    // One 4,000 byte comments part costs 64,000 bytes of DOM; the budget holds 70,000.
+    fn commented_sheets_refused(sheets: usize, shared: bool, max_cells: u64) -> bool {
+        let names: Vec<(String, String)> = (1..=sheets)
+            .map(|n| (format!("S{n}"), format!("rId{n}")))
+            .collect();
+        let listed: Vec<(&str, &str)> = names
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        let sheet_targets: Vec<String> = (1..=sheets)
+            .map(|n| format!("worksheets/sheet{n}.xml"))
+            .collect();
+        let rels: Vec<(&str, &str)> = names
+            .iter()
+            .zip(&sheet_targets)
+            .map(|((_, id), target)| (id.as_str(), target.as_str()))
+            .collect();
+        let workbook = workbook_of(&listed);
+        let workbook_rels = rels_of(&rels);
+        let comments = format!(
+            "<comments xmlns=\"{MAIN_NS}\"><commentList/>{}</comments>",
+            " ".repeat(4_000)
+        );
+        let sheet = bare_cells(1);
+        let sheet_rels: Vec<(String, String)> = (1..=sheets)
+            .map(|n| {
+                let target = if shared { 1 } else { n };
+                (
+                    format!("xl/worksheets/_rels/sheet{n}.xml.rels"),
+                    format!(
+                        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"{REL_NS}/comments\" Target=\"../comments{target}.xml\"/></Relationships>"
+                    ),
+                )
+            })
+            .collect();
+        let sheet_names: Vec<String> = (1..=sheets)
+            .map(|n| format!("xl/worksheets/sheet{n}.xml"))
+            .collect();
+        let comment_names: Vec<String> = (1..=if shared { 1 } else { sheets })
+            .map(|n| format!("xl/comments{n}.xml"))
+            .collect();
+        let mut entries: Vec<(&str, &[u8])> = vec![
+            ("xl/workbook.xml", workbook.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", workbook_rels.as_bytes()),
+        ];
+        for name in &sheet_names {
+            entries.push((name.as_str(), sheet.as_bytes()));
+        }
+        for (name, body) in &sheet_rels {
+            entries.push((name.as_str(), body.as_bytes()));
+        }
+        for name in &comment_names {
+            entries.push((name.as_str(), comments.as_bytes()));
+        }
+        walk_refused(&entries, max_cells)
+    }
+
+    #[test]
+    fn many_sheets_naming_one_comments_part_are_charged_for_each_load() {
+        assert!(!commented_sheets_refused(1, true, 1_000));
+        assert!(commented_sheets_refused(3, true, 1_000));
+        assert!(commented_sheets_refused(40, true, 1_000));
+    }
+
+    #[test]
+    fn a_comments_part_per_sheet_is_charged_once() {
+        assert!(!commented_sheets_refused(1, false, 1_000));
+        assert!(!commented_sheets_refused(3, false, 1_000));
+        assert!(!commented_sheets_refused(40, false, 10_000));
     }
 
     #[test]

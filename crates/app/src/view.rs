@@ -317,8 +317,25 @@ fn target_action(
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum DelimitedAction {
+    Export,
+    ConfirmReplacing,
+}
+
+// The native dialog already warns about an existing file, and a delimited name is never
+// rewritten by Zenkai; only the open source file is confirmed again.
+fn delimited_action(probe: &files::TargetProbe) -> DelimitedAction {
+    if probe.same_as_source {
+        DelimitedAction::ConfirmReplacing
+    } else {
+        DelimitedAction::Export
+    }
+}
+
 enum Replacing {
     Existing,
+    ExistingExport,
     Original(Vec<Unsupported>),
 }
 
@@ -1633,25 +1650,39 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(document) = self.documents.get(id) else {
+        let Some(document) = self.documents.get_mut(id) else {
             self.save_ended(id, false, window, cx);
             return;
         };
-        let Some(workbook) = document.workbook() else {
+        let (sheet, sheets) = (document.sheet, document.sheets.len());
+        let Some(shared) = document.begin_file_job(FileJob::Saving) else {
+            let reason = file_job_refusal(document.file_job());
+            self.notify(Severity::Warning, reason, cx);
             self.save_ended(id, false, window, cx);
-            self.notify(Severity::Warning, t!("notice.still_calculating"), cx);
             return;
         };
-        let rows = files::sheet_rows(&workbook, document.sheet);
-        let sheets = document.sheets.len();
+        let generation = document.generation();
+        self.busy = Some(t!("busy.saving").into());
+        self.start_long_job(LongJob::Saving, cx);
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
             let written = cx
                 .background_executor()
-                .spawn(async move { files::write_csv_file(&target, &rows) })
+                .spawn(async move { files::export_sheet_csv(&shared, sheet, &target) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.csv_export_ended(id, &path, sheets, written, window, cx)
+                this.clear_busy(t!("busy.saving"), cx);
+                this.end_long_job(LongJob::Saving, cx);
+                let mut follow_up = AfterJob::Nothing;
+                if let Some(document) = this.documents.get_mut(id) {
+                    document.end_file_job(generation);
+                    // A save pressed meanwhile still owes the workbook file: a CSV is not it.
+                    follow_up = document.settle_save(generation, JobEnd::Autosaved);
+                }
+                this.csv_export_ended(id, &path, sheets, written, window, cx);
+                if follow_up == AfterJob::SaveAgain {
+                    this.save_again(id, window, cx);
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during export");
@@ -1796,11 +1827,7 @@ impl Workspace {
                         if started.elapsed() < SAVE_AGAIN_LIMIT {
                             return true;
                         }
-                        let reason = match document.file_job() {
-                            FileJob::Idle => t!("notice.still_calculating"),
-                            FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
-                            FileJob::Hibernating => t!("notice.still_hibernating"),
-                        };
+                        let reason = file_job_refusal(document.file_job());
                         document.clear_pending_save();
                         this.notify(Severity::Warning, reason, cx);
                         return false;
@@ -1969,11 +1996,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if files::is_delimited_text(&chosen) {
-            self.save_as_flows.finish(id);
-            self.export_csv(id, chosen, window, cx);
-            return;
-        }
         let source = match self.documents.get(id) {
             Some(document) => document.path.clone(),
             None => {
@@ -1983,7 +2005,12 @@ impl Workspace {
             }
         };
         self.save_as_flows.start_checking(id);
-        let path = files::xlsx_target(&chosen);
+        let delimited = files::is_delimited_text(&chosen);
+        let path = if delimited {
+            chosen.clone()
+        } else {
+            files::xlsx_target(&chosen)
+        };
         let renamed = path != chosen;
         cx.spawn_in(window, async move |this, cx| {
             let target = path.clone();
@@ -1998,13 +2025,47 @@ impl Workspace {
                 probe,
             };
             let update = this.update_in(cx, |this, window, cx| {
-                this.decide_target(id, renamed, checked, window, cx)
+                if delimited {
+                    this.decide_export(id, checked, window, cx)
+                } else {
+                    this.decide_target(id, renamed, checked, window, cx)
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed while checking the save target");
             }
         })
         .detach();
+    }
+
+    fn decide_export(
+        &mut self,
+        id: WorkbookId,
+        checked: save_flow::CheckedTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let save_flow::CheckedTarget {
+            path,
+            source,
+            probe,
+        } = checked;
+        self.save_as_flows.finish(id);
+        let Some(document) = self.documents.get(id) else {
+            self.save_ended(id, false, window, cx);
+            return;
+        };
+        if source != document.path {
+            self.notify(Severity::Warning, t!("save.target_stale"), cx);
+            self.save_ended(id, false, window, cx);
+            return;
+        }
+        match delimited_action(&probe) {
+            DelimitedAction::Export => self.export_csv(id, path, window, cx),
+            DelimitedAction::ConfirmReplacing => {
+                self.confirm_replace(id, path, Replacing::ExistingExport, window, cx);
+            }
+        }
     }
 
     fn decide_target(
@@ -2068,8 +2129,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let exports = matches!(replacing, Replacing::ExistingExport);
         let (title, detail, overwrite) = match replacing {
-            Replacing::Existing => (
+            Replacing::Existing | Replacing::ExistingExport => (
                 t!("save.replace_existing_title"),
                 t!("save.replace_existing_detail", path = path.display()),
                 None,
@@ -2094,7 +2156,9 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| {
-                if choice == Some(1) {
+                if choice == Some(1) && exports {
+                    this.export_csv(id, path, window, cx)
+                } else if choice == Some(1) {
                     this.save_to(id, path, overwrite, ChangedFile::Ask, window, cx)
                 } else {
                     this.save_ended(id, false, window, cx)
@@ -2159,11 +2223,7 @@ impl Workspace {
             return;
         };
         let Some(shared) = document.begin_file_job(FileJob::Saving) else {
-            let reason = match document.file_job() {
-                FileJob::Idle => t!("notice.still_calculating"),
-                FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
-                FileJob::Hibernating => t!("notice.still_hibernating"),
-            };
+            let reason = file_job_refusal(document.file_job());
             self.notify(Severity::Warning, reason, cx);
             self.save_ended(id, false, window, cx);
             return;
@@ -3607,6 +3667,14 @@ impl Workspace {
     }
 }
 
+fn file_job_refusal(job: FileJob) -> &'static str {
+    match job {
+        FileJob::Idle => t!("notice.still_calculating"),
+        FileJob::Saving | FileJob::Autosaving => t!("notice.still_saving"),
+        FileJob::Hibernating => t!("notice.still_hibernating"),
+    }
+}
+
 fn changed_file_answers() -> [PromptButton; 3] {
     [
         PromptButton::cancel(t!("button.cancel")),
@@ -4493,9 +4561,9 @@ fn grow_wrapped_rows(wb: &mut Workbook, sheet: SheetId, range: Range) -> Result<
 #[cfg(test)]
 mod tests {
     use super::{
-        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, StructureEdit, TargetAction,
-        changed_file_answers, enter_text, grow_wrapped_rows, selection_edit, target_action,
-        widen_for_numbers,
+        CHANGED_FILE_REPLACE, CHANGED_FILE_SAVE_AS, DelimitedAction, StructureEdit, TargetAction,
+        changed_file_answers, delimited_action, enter_text, grow_wrapped_rows, selection_edit,
+        target_action, widen_for_numbers,
     };
     use crate::files::TargetProbe;
     use zenkai_engine::{Engine, Workbook};
@@ -4539,6 +4607,26 @@ mod tests {
         assert_eq!(
             target_action(&free, true, false, false),
             TargetAction::SaveNew
+        );
+    }
+
+    #[test]
+    fn delimited_export_only_asks_again_for_the_open_source_file() {
+        let probe = |same_as_source, exists| TargetProbe {
+            same_as_source,
+            exists,
+        };
+        assert_eq!(
+            delimited_action(&probe(false, true)),
+            DelimitedAction::Export
+        );
+        assert_eq!(
+            delimited_action(&probe(true, false)),
+            DelimitedAction::ConfirmReplacing
+        );
+        assert_eq!(
+            delimited_action(&probe(false, false)),
+            DelimitedAction::Export
         );
     }
 

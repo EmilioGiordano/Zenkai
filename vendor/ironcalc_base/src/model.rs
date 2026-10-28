@@ -1527,19 +1527,23 @@ impl<'a> Model<'a> {
                 match result {
                     CalcResult::Array(a) => {
                         // The cell ended up holding an array. Coerce it to a scalar so
-                        // that dependents observe the same value `set_cells_with_result`
-                        // wrote into the cell:
-                        //   * Array formula anchor (CSE/Dynamic): return a[0][0] (the
-                        //     anchor's "first cell" value, matching the existing model).
+                        // that dependents evaluated via `ReferenceKind -> evaluate_cell`
+                        // in the same recalculation pass observe the value
+                        // `set_cells_with_result` wrote into the cell:
+                        //   * Array formula anchor (CSE/Dynamic): read the stored value,
+                        //     which is `#SPILL!` or `#CALC!` instead of the first array
+                        //     value when the array could not be written.
                         //   * Plain scalar formula: 1x1 -> unwrap to the single value;
-                        //     larger -> `#VALUE!`. This must mirror the coercion in
-                        //     `set_cells_with_result` so that dependents evaluated via
-                        //     `ReferenceKind -> evaluate_cell` in the same recalculation
-                        //     pass do not observe a different value than what is stored.
-                        let is_array_formula = matches!(original_cell, Cell::ArrayFormula { .. });
+                        //     larger -> `#VALUE!`, mirroring `set_cells_with_result`.
+                        if matches!(original_cell, Cell::ArrayFormula { .. }) {
+                            return match self.fetch_cell(cell_reference) {
+                                Some(cell) => self.get_cell_value(cell, cell_reference),
+                                None => CalcResult::EmptyCell,
+                            };
+                        }
                         let array_height = a.len();
                         let array_width = if array_height > 0 { a[0].len() } else { 0 };
-                        if !is_array_formula && (array_width != 1 || array_height != 1) {
+                        if array_width != 1 || array_height != 1 {
                             // Currently unreachable from normal user formulas: static
                             // analysis wraps array-returning subexpressions in scalar
                             // contexts in implicit intersection (`@`), which collapses
@@ -1558,12 +1562,6 @@ impl<'a> Model<'a> {
                                 Error::VALUE,
                                 cell_reference,
                                 "Array result in scalar context".to_string(),
-                            )
-                        } else if array_height == 0 || array_width == 0 {
-                            CalcResult::new_error(
-                                Error::CALC,
-                                cell_reference,
-                                "Formula produced a zero-size array".to_string(),
                             )
                         } else {
                             match a[0][0] {

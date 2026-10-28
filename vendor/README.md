@@ -80,6 +80,9 @@ Zenkai-only, not for upstream:
 - The path-only `ironcalc` dev-dependency with the `mock_time` feature, which the published
   crate strips from `Cargo.toml`. Without it the generated tests compare templates holding
   `NOW()` and `TODAY()` against today's clock and fail as the date moves.
+- `zip` without default features, only `deflate` and `time`: an xlsx never uses zstd,
+  bzip2 or AES entries, and the zstd crates zip 0.6 pulls in carry RUSTSEC-2026-0403 and
+  RUSTSEC-2026-0410.
 
 ## ironcalc_base 0.8.3
 
@@ -310,6 +313,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   edit group, so a caller that pauses it for a batch of edits can leave it as it found it.
   Stands on its own (`src/user_model/common.rs`). Test: `evaluation_is_paused_by_a_pause_or_a_group`
   in `src/test/user_model/test_fill_formula.rs`.
+- A formula that makes a dynamic array anchor evaluate, when an earlier anchor reads it
+  through that formula, gets the `#SPILL!` or `#CALC!` the anchor stores when its array
+  cannot be written, instead of the array's first value (`src/model.rs`, `evaluate_cell`).
+  Stands on its own. Tests: `src/test/dynamic_evaluation/test_blocked_spill_reads.rs`.
 - Undoing a column width gives the column back the width and custom flag of the entry that
   covered it, or removes the column's entry when none did, instead of writing the width
   `get_column_width` reported: the default for a column without a custom width, which

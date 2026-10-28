@@ -120,6 +120,8 @@ version = "1.0"
 
 [dependencies.zip]
 version = "0.6"
+default-features = false
+features = ["deflate", "time"]
 
 # Path-only self dependency, stripped when publishing: turns on the mocked clock for
 # this crate's own tests while leaving normal builds untouched.
