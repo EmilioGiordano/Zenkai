@@ -219,6 +219,18 @@ fn every_importer_quirk_reads_the_same() {
 }
 
 #[test]
+fn a_style_past_cell_xfs_reads_the_same_with_both_readers() {
+    let data =
+        r#"<row r="1" s="40"><c r="A1" s="99"><v>1</v></c><c r="B1" s="1"><v>2</v></c></row>"#;
+    let bytes = workbook(&[&sheet(data)], None);
+    assert_agree("style past cellXfs", &bytes, true);
+    assert!(matches!(
+        compare_readers(&bytes),
+        ReaderComparison::FastDeclined(_)
+    ));
+}
+
+#[test]
 fn the_fast_reader_handles_the_ordinary_quirks_itself() {
     let declined = [
         "shared child before anchor",

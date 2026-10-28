@@ -43,6 +43,10 @@ pub(crate) fn fill(
         {
             return Err(unsupported("cells outside sheetData"));
         }
+        let known_styles = workbook.styles.cell_xfs.len();
+        if !usize::try_from(cells.highest_style).is_ok_and(|style| style < known_styles) {
+            return Err(unsupported("a style past cellXfs"));
+        }
         let mut local = Vec::with_capacity(cells.strings.len());
         for text in &cells.strings {
             let found: &str = text;

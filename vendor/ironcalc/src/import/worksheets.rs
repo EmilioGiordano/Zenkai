@@ -129,7 +129,15 @@ fn load_dimension(ws: Node) -> String {
     }
 }
 
-fn load_columns(ws: Node) -> Result<Vec<Col>, XlsxError> {
+// A style index past cell_xfs reads as the default style instead of running off the list.
+fn known_style(attribute: &str, style_count: usize) -> i32 {
+    match attribute.parse::<i32>() {
+        Ok(style) if (0..style_count as i32).contains(&style) => style,
+        _ => 0,
+    }
+}
+
+fn load_columns(ws: Node, style_count: usize) -> Result<Vec<Col>, XlsxError> {
     // cols
     // <cols>
     //     <col min="5" max="5" width="38.26953125" customWidth="1"/>
@@ -158,9 +166,7 @@ fn load_columns(ws: Node) -> Result<Vec<Col>, XlsxError> {
             let width = width.parse::<f64>()?;
             let custom_width = get_bool_false(col, "customWidth");
             let hidden = get_bool_false(col, "hidden");
-            let style = col
-                .attribute("style")
-                .map(|s| s.parse::<i32>().unwrap_or(0));
+            let style = col.attribute("style").map(|s| known_style(s, style_count));
             // A range is cut to the sheet and dropped when no column of it is left, so a
             // damaged file cannot give a range with min > max or outside the sheet.
             let (min, max) = (min.max(1), max.min(LAST_COLUMN));
@@ -780,6 +786,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
     defined_names: Vec<DefinedNameS>,
     theme: &Theme,
     dxfs: &mut Vec<Dxf>,
+    style_count: usize,
 ) -> Result<(Worksheet, bool), XlsxError> {
     let sheet_name = &settings.name;
     let sheet_id = settings.id;
@@ -799,7 +806,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
 
     let sheet_view = get_sheet_view(ws);
 
-    let cols = load_columns(ws)?;
+    let cols = load_columns(ws, style_count)?;
     let color = load_sheet_color(ws, theme)?;
 
     // sheetData
@@ -854,7 +861,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
         // for example because a cell has many lines or a larger font
 
         let row_style = match row.attribute("s") {
-            Some(s) => s.parse::<i32>().unwrap_or(0),
+            Some(s) => known_style(s, style_count),
             None => 0,
         };
         let custom_format = get_bool_false(row, "customFormat");
@@ -946,7 +953,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
 
             // style index, the default style is 0
             let cell_style = match cell.attribute("s") {
-                Some(s) => s.parse::<i32>().unwrap_or(0),
+                Some(s) => known_style(s, style_count),
                 None => 0,
             };
 
@@ -1235,6 +1242,7 @@ pub(super) fn load_sheets<R: Read + std::io::Seek>(
     shared_strings: &mut Vec<String>,
     theme: &Theme,
     dxfs: &mut Vec<Dxf>,
+    style_count: usize,
 ) -> Result<(Vec<Worksheet>, u32), XlsxError> {
     // load comments and tables
     let mut comments = HashMap::new();
@@ -1293,6 +1301,7 @@ pub(super) fn load_sheets<R: Read + std::io::Seek>(
                 defined_names.clone(),
                 theme,
                 dxfs,
+                style_count,
             )?;
             if is_selected {
                 selected_sheet = sheet_index;

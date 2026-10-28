@@ -67,6 +67,17 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   panicking on the missing element, so a save leaves no xfId dangling (`src/import/styles.rs`). Tests:
   `test_styles_without_cell_style_formats` and
   `test_saved_style_references_stay_inside_cell_style_formats` in `tests/test.rs`.
+- The xlsx import reads a styles part whose `fonts`, `fills`, `borders`, `cellXfs` or
+  `cellStyles` list is missing or empty with the records of a new workbook (Calibri 11, the
+  two default fills, one border, one format, the "Normal" style), instead of panicking on the
+  first element. Font, fill, border and xfId references past their list, and cell, row and
+  column style indices past `cellXfs`, read as the first record. Only element nodes count as
+  records, so indented XML shifts nothing (`src/import/styles.rs`, `src/import/worksheets.rs`).
+  Stands on its own. Tests: `test_styles_with_empty_or_missing_lists_use_default_records`,
+  `test_style_references_past_the_lists_fall_back_to_the_first_record`,
+  `test_cell_row_and_column_styles_past_cell_xfs_are_read_as_default`,
+  `test_indented_styles_part_keeps_record_indices` and
+  `test_default_records_for_missing_lists_use_excels_names` in `tests/test.rs`.
 - The xlsx import returns an error for a `<cols>` with more `<col>` elements than the sheet
   has columns, instead of keeping one entry per element: a hostile file could repeat the
   element millions of times (`src/import/worksheets.rs`). Stands on its own (uses the public

@@ -53,6 +53,8 @@ pub(crate) struct SheetCells {
     string_index: HashMap<Arc<str>, usize>,
     first_row: i32,
     last_row: i32,
+    // The highest style index a row or cell names; one past cellXfs is left to IronCalc.
+    pub(crate) highest_style: i32,
     cell_count: u64,
     string_bytes: u64,
     job_bytes: u64,
@@ -118,6 +120,14 @@ pub(crate) struct FormulaJob {
 
 pub(crate) fn unreadable(error: impl ToString) -> ReadError {
     ReadError::Unreadable(error.to_string())
+}
+
+// IronCalc reads a style index that is not a non-negative number as the default style.
+fn style_index(attribute: Option<&str>) -> i32 {
+    attribute
+        .and_then(|s| s.parse::<i32>().ok())
+        .filter(|style| *style >= 0)
+        .unwrap_or(0)
 }
 
 fn unsupported(what: &str) -> ReadError {
@@ -241,7 +251,8 @@ impl<'a> Scanner<'a, '_> {
             None => (false, DEFAULT_ROW_HEIGHT),
         };
         let custom_height = parse_bool_false(custom_height.as_deref());
-        let style = s.map_or(0, |s| s.parse::<i32>().unwrap_or(0));
+        let style = style_index(s.as_deref());
+        self.cells.highest_style = self.cells.highest_style.max(style);
         let custom_format = parse_bool_false(custom_format.as_deref());
         let hidden = parse_bool_false(hidden.as_deref());
         if let Some(r) = row_index
@@ -327,7 +338,8 @@ impl<'a> Scanner<'a, '_> {
             None if value.is_none() => "empty",
             None => "n",
         };
-        let style = s.map_or(0, |s| s.parse::<i32>().unwrap_or(0));
+        let style = style_index(s.as_deref());
+        self.cells.highest_style = self.cells.highest_style.max(style);
 
         let mut formula_event = None;
         let mut array = CellArray::None;

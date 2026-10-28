@@ -428,13 +428,48 @@ fn whole_sheet_array_formula_is_rejected_quickly() {
     assert!(started.elapsed() < Duration::from_secs(5));
 }
 
-// IronCalc 0.8.3 panics on this hand-built workbook (no theme or docProps parts);
-// the panic must surface as an error instead of closing the app.
 #[test]
-fn engine_panic_on_incomplete_workbook_becomes_an_error() {
+fn styles_with_empty_or_missing_lists_open_save_and_reopen() {
     let cell = r#"<c r="A1"><v>7</v></c><c r="B1"><f>A1*6</f></c>"#;
-    let error = open_bytes(workbook_with_sheet(&sheet(cell))).unwrap_err();
-    assert!(error.contains("damaged"), "{error}");
+    for list in ["fonts", "fills", "borders", "cellXfs", "cellStyles"] {
+        for replacement in [String::new(), format!("<{list} count=\"0\"/>")] {
+            let bytes = workbook_with_sheet(&sheet(cell));
+            let styles = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">{}</styleSheet>"#,
+                ["fonts", "fills", "borders", "cellXfs", "cellStyles"]
+                    .iter()
+                    .map(|name| if *name == list {
+                        replacement.clone()
+                    } else {
+                        style_list(name).to_string()
+                    })
+                    .collect::<String>()
+            );
+            let bytes = with_replaced_part(bytes, "xl/styles.xml", styles.as_bytes());
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("styles.xlsx");
+            std::fs::write(&path, bytes).unwrap();
+            let mut book = open_xlsx(&path).unwrap().workbook;
+            book.set_input(SheetId(0), CellPos::parse_a1("C1").unwrap(), "1")
+                .unwrap();
+            save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
+            open_xlsx(&path).unwrap();
+        }
+    }
+}
+
+fn style_list(name: &str) -> &'static str {
+    match name {
+        "fonts" => r#"<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>"#,
+        "fills" => r#"<fills count="1"><fill><patternFill patternType="none"/></fill></fills>"#,
+        "borders" => r#"<borders count="1"><border/></borders>"#,
+        "cellXfs" => {
+            r#"<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>"#
+        }
+        _ => {
+            r#"<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>"#
+        }
+    }
 }
 
 #[test]
