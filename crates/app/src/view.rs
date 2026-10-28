@@ -430,7 +430,7 @@ impl Workspace {
             generate: None,
             colors,
             focus: cx.focus_handle(),
-            name_box_focus: cx.focus_handle(),
+            name_box_focus: cx.focus_handle().tab_stop(true),
             session_lock: None,
             recovery_dir: None,
             rename: None,
@@ -2575,6 +2575,11 @@ impl Workspace {
 
     fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
+        let sidebar_label = if self.sidebar.visible {
+            t!("sidebar.hide_tooltip")
+        } else {
+            t!("sidebar.show_tooltip")
+        };
         TitleBar::new().h(rem_px(34.0)).child(
             h_flex()
                 .size_full()
@@ -2596,15 +2601,8 @@ impl Workspace {
                                     } else {
                                         gpui_kit::assets::IconName::PanelLeftOpen
                                     })
-                                    .tooltip(keymap::labeled(
-                                        cx,
-                                        if self.sidebar.visible {
-                                            t!("sidebar.hide_tooltip")
-                                        } else {
-                                            t!("sidebar.show_tooltip")
-                                        },
-                                        &ToggleSidebar,
-                                    ))
+                                    .accessibility_label(sidebar_label)
+                                    .tooltip(keymap::labeled(cx, sidebar_label, &ToggleSidebar))
                                     .on_click(|event, window, cx| {
                                         if sidebar::is_primary_click(event) {
                                             window.dispatch_action(ToggleSidebar.boxed_clone(), cx)
@@ -2665,7 +2663,6 @@ impl Workspace {
                 None => div()
                     .id("name-box")
                     .track_focus(&self.name_box_focus)
-                    .tab_stop(true)
                     .role(Role::Button)
                     .aria_label(t!("grid.name_box_label", name = name))
                     .w(rem_px(96.0))
@@ -2800,7 +2797,7 @@ impl Workspace {
                     .id("add-sheet")
                     .role(Role::Button)
                     .aria_label(t!("sheet.add"))
-                    .tab_stop(true)
+                    .tab_index(0)
                     .px_3()
                     .text_color(theme.muted_foreground)
                     .cursor_pointer()
