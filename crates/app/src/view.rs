@@ -1734,7 +1734,7 @@ impl Workspace {
         );
         let answer = self.ask(
             PromptLevel::Warning,
-            &t!("export.large_title"),
+            t!("export.large_title"),
             Some(&detail),
             &[t!("button.cancel"), t!("button.export")],
             window,
