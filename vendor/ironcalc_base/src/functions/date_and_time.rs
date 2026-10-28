@@ -634,7 +634,9 @@ impl<'a> Model<'a> {
             return out_of_range();
         };
         match ymd_to_excel_serial(year, month, excel_days_in_month(year, month)) {
-            Some(serial) if serial >= 0 => CalcResult::Number(serial as f64),
+            Some(serial) if (0..=MAXIMUM_DATE_SERIAL_NUMBER as i64).contains(&serial) => {
+                CalcResult::Number(serial as f64)
+            }
             _ => out_of_range(),
         }
     }
