@@ -42,7 +42,7 @@ use gpui_kit::*;
 use zenkai_agent::chat::history::{History, RecordId};
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
 use zenkai_agent::chat::state::{AgentState, Select};
-use zenkai_agent::chat::thread::{Entry, MessageId, Thread, ToolCallId, TurnEnd, TurnState};
+use zenkai_agent::chat::thread::{Entry, MessageId, Thread, ToolCallId, TurnState};
 use zenkai_agent::settings::AgentId;
 use zenkai_agent::tools::ToolEndpoint;
 use zenkai_types::WorkbookId;
@@ -138,6 +138,8 @@ pub struct ChatPanel {
     failed_prompt: Option<String>,
     // The agent session of a conversation whose process was ended, to reload on Restart agent.
     restart_session: Option<String>,
+    // Counts Stop presses, so a grace timer only acts on the stop that started it.
+    stops: u64,
     turn_started: Option<Instant>,
     // Wall-clock start of the turn, to find the files the agent wrote during it.
     turn_began: Option<SystemTime>,
@@ -321,6 +323,7 @@ impl ChatPanel {
             problem: None,
             failed_prompt: None,
             restart_session: None,
+            stops: 0,
             turn_started: None,
             turn_began: None,
             state: AgentState::default(),
@@ -489,11 +492,7 @@ impl ChatPanel {
                 self.watch_stop(cx);
             }
             _ => {
-                self.epoch += 1;
-                self.queued = None;
-                self.gate = None;
-                self.end_session(cx);
-                self.finish_turn(TurnEnd::Cancelled, cx);
+                self.end_stopped_turn(cx);
             }
         }
         cx.notify();

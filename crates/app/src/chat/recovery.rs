@@ -8,8 +8,8 @@ use super::{ChatPanel, Link, Start, closed};
 
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
-fn stop_overdue(turn: TurnState, stopped_epoch: u64, epoch: u64) -> bool {
-    turn == TurnState::Cancelling && stopped_epoch == epoch
+fn stop_overdue(turn: TurnState, timed_stop: u64, latest_stop: u64) -> bool {
+    turn == TurnState::Cancelling && timed_stop == latest_stop
 }
 
 pub(super) fn last_prompt(entries: &[Entry]) -> Option<String> {
@@ -36,11 +36,12 @@ impl ChatPanel {
         self.start_turn(text, context, window, cx);
     }
 
-    pub(super) fn watch_stop(&self, cx: &mut Context<Self>) {
-        let epoch = self.epoch;
+    pub(super) fn watch_stop(&mut self, cx: &mut Context<Self>) {
+        self.stops += 1;
+        let stop = self.stops;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(STOP_GRACE).await;
-            closed(this.update(cx, |this, cx| this.end_overdue_stop(epoch, cx)));
+            closed(this.update(cx, |this, cx| this.end_overdue_stop(stop, cx)));
         })
         .detach();
     }
@@ -66,17 +67,23 @@ impl ChatPanel {
         cx.notify();
     }
 
-    fn end_overdue_stop(&mut self, stopped_epoch: u64, cx: &mut Context<Self>) {
-        if !stop_overdue(self.thread.turn(), stopped_epoch, self.epoch) {
+    pub(super) fn end_stopped_turn(&mut self, cx: &mut Context<Self>) {
+        self.epoch += 1;
+        self.queued = None;
+        self.gate = None;
+        self.end_session(cx);
+        self.finish_turn(TurnEnd::Cancelled, cx);
+    }
+
+    fn end_overdue_stop(&mut self, stop: u64, cx: &mut Context<Self>) {
+        if !stop_overdue(self.thread.turn(), stop, self.stops) {
             return;
         }
         if let Some(since) = self.turn_began.take() {
             self.list_files_written(since, cx);
         }
-        self.epoch += 1;
         self.restart_session = self.reloadable_session();
-        self.end_session(cx);
-        self.finish_turn(TurnEnd::Cancelled, cx);
+        self.end_stopped_turn(cx);
         self.thread
             .notice(NoticeKind::Info, t!("chat.stop_timeout"));
         cx.notify();
@@ -100,8 +107,9 @@ mod tests {
     }
 
     #[test]
-    fn a_stop_from_an_earlier_conversation_is_not_overdue() {
-        assert!(!stop_overdue(TurnState::Cancelling, 3, 4));
+    fn the_timer_of_an_earlier_stop_does_not_end_a_later_one() {
+        assert!(!stop_overdue(TurnState::Cancelling, 1, 2));
+        assert!(stop_overdue(TurnState::Cancelling, 2, 2));
     }
 
     #[test]
