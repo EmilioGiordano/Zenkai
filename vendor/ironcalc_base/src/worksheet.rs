@@ -99,7 +99,7 @@ impl Worksheet {
 
     pub fn set_column_style(&mut self, column: i32, style_index: i32) -> Result<(), String> {
         let width = self
-            .get_column_width(column)
+            .get_actual_column_width(column)
             .unwrap_or(constants::DEFAULT_COLUMN_WIDTH);
         let hidden = self.is_column_hidden(column)?;
         self.set_column_width_and_style(column, width, hidden, Some(style_index))
