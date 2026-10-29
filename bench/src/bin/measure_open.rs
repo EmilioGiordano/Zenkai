@@ -140,8 +140,12 @@ fn main() -> Result<()> {
     PEAK.reset_peak_usage();
 
     if app_only {
+        trace_spans();
         return run_app_open(&path);
     }
+    println!(
+        "note: stage c reads with IronCalc's importer, the app's fallback; --app opens as the app does"
+    );
 
     let name = path
         .file_stem()
@@ -239,6 +243,20 @@ fn main() -> Result<()> {
     drop(bytes);
     run_engine_edits(&path, &found)?;
     Ok(())
+}
+
+// Each span of the open is printed with its time when it closes, on stderr, so the read
+// and the first evaluation of the app's path show apart.
+fn trace_spans() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new("zenkai_engine=info,zenkai_xlsx_reader=info")
+    });
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 // The app's own open path alone (streaming reader, model build, first evaluation),
