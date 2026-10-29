@@ -4539,11 +4539,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &MoveToNextSpace, _, cx| {
                 this.shift_document(Neighbour::Next, cx)
             }))
-            .on_action(cx.listener(|this, _: &ApplyHeldSettings, window, cx| {
-                this.decide_held_settings(HeldDecision::Apply, window, cx)
+            .on_action(cx.listener(|this, _: &ApplyHeldSettings, _, cx| {
+                this.decide_held_settings(HeldDecision::Apply, cx)
             }))
-            .on_action(cx.listener(|this, _: &KeepCurrentSettings, window, cx| {
-                this.decide_held_settings(HeldDecision::Keep, window, cx)
+            .on_action(cx.listener(|this, _: &KeepCurrentSettings, _, cx| {
+                this.decide_held_settings(HeldDecision::Keep, cx)
             }))
             .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.toggle_agent_editing(cx)))
             .on_action(
