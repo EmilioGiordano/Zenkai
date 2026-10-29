@@ -405,9 +405,13 @@ impl Workspace {
             let update = this.update_in(cx, |this, window, cx| {
                 let delivered = this.open_loads.finish(load);
                 cx.notify();
-                let Some(result) = result.filter(|_| delivered) else {
+                let Some(result) = result else {
                     return;
                 };
+                if !delivered {
+                    cx.background_executor().spawn(async move { drop(result) }).detach();
+                    return;
+                }
                 match result {
                     Ok(file) => {
                         this.remember_recent(&path, cx);
