@@ -1,19 +1,23 @@
-use super::write_unsigned;
+use super::write_offset;
 
 // The first byte of a fill key; a lexer key starts with 0 or 1, so the two never meet.
 const FILL: u8 = 2;
-// Marks a relative-row cell reference in the key, and a range written bottom up.
-const CELL: u8 = 1;
-const SWAPPED: u8 = 2;
+// Tags of the key, which a formula never holds: a cell reference with which of its row
+// (bit 0) and column (bit 1) are absolute, a column of a column range with whether it is
+// absolute, and the ends of a range that IronCalc swaps.
+const CELL: u8 = 0x10;
+const COLUMN: u8 = 0x14;
+const SWAPPED_ROWS: u8 = 0x16;
+const SWAPPED_COLUMNS: u8 = 0x17;
 
 const LAST_COLUMN: i32 = 16_384;
 const LAST_ROW: i32 = 1_048_576;
 
-// A key for a formula filled down a column that costs a byte scan instead of IronCalc's
-// lexer: the column, then the text with the row of every relative cell reference written
-// as its offset from the cell. False for any text whose reading by the lexer this scan
-// does not mirror exactly, such as rows alone (`3:5`), structured references or
-// characters past ASCII outside quotes; those take the lexer key.
+// A key for a filled formula that costs a byte scan instead of IronCalc's lexer: the text
+// with every reference written as a tag and its row and column, each relative one as its
+// offset from the cell, as the lexer key writes them. False for any text whose reading
+// by the lexer this scan does not mirror exactly, such as rows alone (`3:5`), structured
+// references or characters past ASCII outside quotes; those take the lexer key.
 pub(super) fn write_fill_key(
     key: &mut Vec<u8>,
     text: &str,
@@ -23,9 +27,8 @@ pub(super) fn write_fill_key(
 ) -> bool {
     key.clear();
     key.push(FILL + u8::from(array));
-    write_unsigned(key, u64::from(column.unsigned_abs()));
     let bytes = text.as_bytes();
-    if bytes.contains(&CELL) || bytes.contains(&SWAPPED) {
+    if bytes.iter().any(|b| (CELL..=SWAPPED_COLUMNS).contains(b)) {
         return false;
     }
     let mut previous = Word::Other;
@@ -55,7 +58,8 @@ pub(super) fn write_fill_key(
                 at += 1;
             }
             let word = &text[start..at];
-            let kind = if !matches!(bytes.get(at), Some(b'(' | b'!')) {
+            let next = bytes.get(at).copied();
+            let kind = if !matches!(next, Some(b'(' | b'!')) {
                 word_kind(word)
             } else if word.contains('$') {
                 // The lexer reads `A$1(` as a reference before the parenthesis.
@@ -65,30 +69,55 @@ pub(super) fn write_fill_key(
             };
             match kind {
                 Word::Invalid => return false,
-                // The offset goes before the letters: a varint ends itself, and the
-                // letters end at the next byte, which is never part of a word.
                 Word::Cell {
-                    letters,
                     row: cell_row,
-                    relative_row: true,
+                    column: cell_column,
+                    absolute_row,
+                    absolute_column,
                 } => {
-                    key.push(CELL);
-                    let offset = i64::from(cell_row) - i64::from(row);
-                    write_unsigned(key, ((offset << 1) ^ (offset >> 63)) as u64);
-                    key.extend_from_slice(letters.as_bytes());
+                    key.push(CELL | u8::from(absolute_row) | u8::from(absolute_column) << 1);
+                    write_offset(key, cell_row, absolute_row, row);
+                    write_offset(key, cell_column, absolute_column, column);
                 }
-                _ => key.extend_from_slice(word.as_bytes()),
+                // Outside a range, letters alone are a name such as `AB`, not a column.
+                Word::Column {
+                    column: range_column,
+                    absolute,
+                } if after_colon || next == Some(b':') => {
+                    key.push(COLUMN | u8::from(absolute));
+                    write_offset(key, range_column, absolute, column);
+                }
+                Word::Column { absolute: true, .. } => return false,
+                Word::Column { .. } | Word::Other => key.extend_from_slice(word.as_bytes()),
             }
             if after_colon {
                 match (previous, kind) {
-                    // IronCalc puts the lower row first, so which end that is depends on
-                    // the cell when only one row is relative.
-                    (Word::Cell { row: first, .. }, Word::Cell { row: last, .. }) => {
-                        if first > last {
-                            key.push(SWAPPED);
+                    // IronCalc puts the lower row and column first, so which end that is
+                    // depends on the cell when only one of them is relative.
+                    (
+                        Word::Cell {
+                            row: top,
+                            column: left,
+                            ..
+                        },
+                        Word::Cell {
+                            row: bottom,
+                            column: right,
+                            ..
+                        },
+                    ) => {
+                        if top > bottom {
+                            key.push(SWAPPED_ROWS);
+                        }
+                        if left > right {
+                            key.push(SWAPPED_COLUMNS);
                         }
                     }
-                    (Word::Column, Word::Column) => {}
+                    (Word::Column { column: left, .. }, Word::Column { column: right, .. }) => {
+                        if left > right {
+                            key.push(SWAPPED_COLUMNS);
+                        }
+                    }
                     _ => return false,
                 }
             }
@@ -130,21 +159,24 @@ fn is_number(word: &str) -> bool {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Word<'w> {
-    // A cell reference: its column as written and its row.
+enum Word {
     Cell {
-        letters: &'w str,
         row: i32,
-        relative_row: bool,
+        column: i32,
+        absolute_row: bool,
+        absolute_column: bool,
     },
-    // A column alone, as in `A:C`.
-    Column,
+    // Letters alone, a column if a colon joins it to another, as in `A:C`.
+    Column {
+        column: i32,
+        absolute: bool,
+    },
     // Looks like a reference IronCalc may read otherwise, such as a column past XFD.
     Invalid,
     Other,
 }
 
-fn word_kind(word: &str) -> Word<'_> {
+fn word_kind(word: &str) -> Word {
     let bytes = word.as_bytes();
     if bytes[0].is_ascii_digit() || bytes[0] == b'.' {
         return if is_number(word) {
@@ -153,15 +185,15 @@ fn word_kind(word: &str) -> Word<'_> {
             Word::Invalid
         };
     }
-    let column_absolute = bytes.first() == Some(&b'$');
-    let letters_start = usize::from(column_absolute);
+    let absolute_column = bytes[0] == b'$';
+    let letters_start = usize::from(absolute_column);
     let letters_end = letters_start
         + bytes[letters_start..]
             .iter()
             .take_while(|b| b.is_ascii_alphabetic())
             .count();
-    let row_absolute = bytes.get(letters_end) == Some(&b'$');
-    let digits_start = letters_end + usize::from(row_absolute);
+    let absolute_row = bytes.get(letters_end) == Some(&b'$');
+    let digits_start = letters_end + usize::from(absolute_row);
     let digits_end = digits_start
         + bytes[digits_start..]
             .iter()
@@ -173,10 +205,13 @@ fn word_kind(word: &str) -> Word<'_> {
         return if dollar { Word::Invalid } else { Word::Other };
     }
     if digits_start == digits_end {
-        return if row_absolute {
+        return if absolute_row {
             Word::Invalid
         } else if letters.len() <= 3 && column_number(letters) <= LAST_COLUMN {
-            Word::Column
+            Word::Column {
+                column: column_number(letters),
+                absolute: absolute_column,
+            }
         } else if dollar {
             Word::Invalid
         } else {
@@ -187,13 +222,15 @@ fn word_kind(word: &str) -> Word<'_> {
         return if dollar { Word::Invalid } else { Word::Other };
     }
     let row = word[digits_start..].parse::<i32>().unwrap_or(0);
-    if column_number(letters) > LAST_COLUMN || !(1..=LAST_ROW).contains(&row) {
+    let column = column_number(letters);
+    if column > LAST_COLUMN || !(1..=LAST_ROW).contains(&row) {
         return Word::Invalid;
     }
     Word::Cell {
-        letters: &word[..letters_end],
         row,
-        relative_row: !row_absolute,
+        column,
+        absolute_row,
+        absolute_column,
     }
 }
 
@@ -207,17 +244,25 @@ fn column_number(letters: &str) -> i32 {
 mod tests {
     use super::write_fill_key;
 
-    fn key(text: &str, row: i32) -> Option<Vec<u8>> {
+    fn key_at(text: &str, row: i32, column: i32) -> Option<Vec<u8>> {
         let mut key = Vec::new();
-        write_fill_key(&mut key, text, row, 3, false).then_some(key)
+        write_fill_key(&mut key, text, row, column, false).then_some(key)
+    }
+
+    fn key(text: &str, row: i32) -> Option<Vec<u8>> {
+        key_at(text, row, 3)
     }
 
     #[test]
-    fn fill_keys_shift_only_the_rows_of_relative_cells() {
+    fn fill_keys_shift_the_relative_rows_and_columns_of_references() {
         let second = key("IF(N2=\"A1\",E2*2,$B$1+LOG10(4)+A$7+SUM(A2:B3))", 2);
         let third = key("IF(N3=\"A1\",E3*2,$B$1+LOG10(4)+A$7+SUM(A3:B4))", 3);
         assert!(second.is_some());
         assert_eq!(second, third);
+        assert_eq!(
+            second,
+            key_at("IF(O2=\"A1\",F2*2,$B$1+LOG10(4)+B$7+SUM(B2:C3))", 2, 4)
+        );
         for other in [
             "IF(N3=\"A1\",E3*3,$B$1+LOG10(4)+A$7+SUM(A3:B4))",
             "IF(N3=\"A2\",E3*2,$B$1+LOG10(4)+A$7+SUM(A3:B4))",
@@ -228,6 +273,12 @@ mod tests {
         }
         assert_ne!(key("SUM($A$5:A4)", 4), key("SUM($A$5:A6)", 6));
         assert_eq!(key("SUM($A$5:A6)", 6), key("SUM($A$5:A7)", 7));
+        assert_ne!(key_at("SUM($E1:D1)", 1, 3), key_at("SUM($E1:F1)", 1, 5));
+        assert_eq!(key_at("SUM($E1:F1)", 1, 5), key_at("SUM($E1:G1)", 1, 6));
+        assert_eq!(key_at("SUM(A:B)", 1, 3), key_at("SUM(B:C)", 1, 4));
+        assert_ne!(key_at("SUM(A:A)", 1, 3), key_at("SUM(B:B)", 1, 3));
+        assert_ne!(key_at("SUM($C:B)", 1, 3), key_at("SUM($C:D)", 1, 5));
+        assert_ne!(key_at("AB+1", 1, 3), key_at("AC+1", 1, 4));
         let mut array = Vec::new();
         assert!(write_fill_key(&mut array, "A2", 2, 3, true));
         assert_ne!(Some(array), key("A2", 2));
@@ -244,7 +295,8 @@ mod tests {
             "\"open",
             "SUM(A1:'Other'!B2)",
             "SUM($5:$7)",
-            "A\u{1}1",
+            "A\u{10}1",
+            "$A+1",
             "Q1\\x",
             "A1?",
             "1A1",

@@ -20,6 +20,7 @@ enum Atom {
     Range(i32, i32, i32, i32),
     FixedStartRange(i32, i32),
     OtherSheet(i32, i32),
+    Columns(i32, bool, i32),
     Literal(&'static str),
     Function(&'static str, Vec<Atom>),
 }
@@ -72,7 +73,9 @@ fn atom() -> impl Strategy<Value = Atom> {
         )
             .prop_map(|(a, b, c, d)| Atom::Range(a, b, c, d)),
         (1..20i32, offset.clone()).prop_map(|(r, c)| Atom::FixedStartRange(r, c)),
-        (offset.clone(), offset).prop_map(|(r, c)| Atom::OtherSheet(r, c)),
+        (offset.clone(), offset.clone()).prop_map(|(r, c)| Atom::OtherSheet(r, c)),
+        (offset.clone(), any::<bool>(), offset)
+            .prop_map(|(a, fixed, b)| Atom::Columns(a, fixed, b)),
         prop::sample::select(LITERALS.to_vec()).prop_map(Atom::Literal),
     ];
     leaf.prop_recursive(3, 12, 3, |inner| {
@@ -108,6 +111,11 @@ fn render(atom: &Atom, row: i32, column: i32) -> Option<String> {
         }
         Atom::FixedStartRange(r, c) => format!("$A${r}:{}", cell(row, column + c)?),
         Atom::OtherSheet(r, c) => format!("'Other Sheet'!{}", cell(row + r, column + c)?),
+        Atom::Columns(a, fixed, b) => {
+            let left = number_to_column(column + a)?;
+            let dollar = if *fixed { "$" } else { "" };
+            format!("{dollar}{left}:{}", number_to_column(column + b)?)
+        }
         Atom::Literal(text) => (*text).to_string(),
         Atom::Function(name, args) => {
             let args: Option<Vec<String>> = args.iter().map(|a| render(a, row, column)).collect();
@@ -272,6 +280,55 @@ fn the_same_text_with_a_reference_cut_short_keeps_each_cells_reading() {
     }
 }
 
+// The formula across row 2, with `@` standing for the column's letters and `<` for the
+// letters of the column before it.
+fn row_of(
+    text: &str,
+    columns: std::ops::RangeInclusive<i32>,
+) -> BTreeMap<(i32, i32), (String, bool)> {
+    columns
+        .map(|column| {
+            let text = text
+                .replace('@', &number_to_column(column).unwrap())
+                .replace('<', &number_to_column(column - 1).unwrap());
+            ((2, column), (text, false))
+        })
+        .collect()
+}
+
+#[test]
+fn a_formula_filled_across_a_row_keeps_one_job() {
+    let book = Book::new();
+    let cells = row_of("<2*2+SUM($B$1:@1)+@:@", 3..=40);
+    for rows_per_piece in [1, 3] {
+        let sheet = scanned(&pieces(&cells, rows_per_piece), book.names());
+        assert_eq!(sheet.jobs.len(), 1);
+        let texts = converted_texts(&sheet, &book);
+        assert!(texts.iter().all(|text| text == &texts[0]), "{texts:?}");
+    }
+}
+
+#[test]
+fn a_formula_filled_over_a_block_keeps_one_job() {
+    let book = Book::new();
+    let cells: BTreeMap<(i32, i32), (String, bool)> = (2..=20)
+        .flat_map(|row| {
+            (3..=15).map(move |column| {
+                let before = number_to_column(column - 1).unwrap();
+                let here = number_to_column(column).unwrap();
+                let text = format!("{before}{row}+{here}$1*$A{row}+SUM($B$2:{here}{row})");
+                ((row, column), (text, false))
+            })
+        })
+        .collect();
+    for rows_per_piece in [19, 4, 1] {
+        let sheet = scanned(&pieces(&cells, rows_per_piece), book.names());
+        assert_eq!(sheet.jobs.len(), 1, "{rows_per_piece} rows per piece");
+        let texts = converted_texts(&sheet, &book);
+        assert!(texts.iter().all(|text| text == &texts[0]), "{texts:?}");
+    }
+}
+
 #[test]
 fn a_shape_that_does_not_parse_keeps_each_cells_text() {
     let book = Book::new();
@@ -378,7 +435,7 @@ proptest! {
             (atom(), prop::sample::select(vec!["+", "*", ":", ",", ""])),
             1..4,
         ),
-        places in prop::collection::vec((4..14i32, 3..6i32, -2..3i32, -2..3i32), 2..16),
+        places in prop::collection::vec((4..14i32, 3..9i32, -2..3i32, -3..4i32), 2..16),
     ) {
         let book = Book::new();
         let mut cells = BTreeMap::new();
