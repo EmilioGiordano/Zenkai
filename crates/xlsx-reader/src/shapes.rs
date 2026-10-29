@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use ironcalc::base::expressions::lexer::{Lexer, LexerMode};
 use ironcalc::base::expressions::parser::{DefinedNameS, Parser, new_parser_english};
@@ -43,12 +44,7 @@ impl<'n> ShapeReader<'n> {
     pub(crate) fn new(names: SheetNames<'n>) -> ShapeReader<'n> {
         ShapeReader {
             names,
-            lexer: Lexer::new(
-                "",
-                LexerMode::A1,
-                get_default_locale(),
-                get_default_language(),
-            ),
+            lexer: empty_lexer(),
             parser: None,
             key: Vec::new(),
         }
@@ -56,15 +52,24 @@ impl<'n> ShapeReader<'n> {
 
     // The shape of the formula, None when it has none: structured references read the
     // cell's row, and text IronCalc's lexer rejects is left to the parser cell by cell.
+    // A lexer that panics leaves the cell to the conversion, which falls back on its own.
     pub(crate) fn key(&mut self, text: &str, row: i32, column: i32, array: bool) -> Option<&[u8]> {
-        match write_key(&mut self.lexer, &mut self.key, text, row, column, array) {
-            true => Some(&self.key),
-            false => None,
+        let (lexer, key) = (&mut self.lexer, &mut self.key);
+        match catch_unwind(AssertUnwindSafe(|| {
+            write_key(lexer, key, text, row, column, array)
+        })) {
+            Ok(true) => Some(&self.key),
+            Ok(false) => None,
+            Err(_) => {
+                self.lexer = empty_lexer();
+                None
+            }
         }
     }
 
     // The parse the conversion will run, with the sheet and defined names it will have;
-    // tables only tell a table name from another name, never a parse error.
+    // tables only tell a table name from another name, never a parse error. A parser that
+    // panics leaves each cell to the conversion, which falls back on its own.
     pub(crate) fn sharing_of(&mut self, job: &FormulaJob) -> Sharing {
         let names = self.names;
         let parser = self.parser.get_or_insert_with(|| {
@@ -74,11 +79,26 @@ impl<'n> ShapeReader<'n> {
                 HashMap::new(),
             )
         });
-        match keeps_cell_text(&parse_node(parser, names.sheet, job)) {
-            true => Sharing::PerCell,
-            false => Sharing::Shared,
+        match catch_unwind(AssertUnwindSafe(|| {
+            keeps_cell_text(&parse_node(parser, names.sheet, job))
+        })) {
+            Ok(false) => Sharing::Shared,
+            Ok(true) => Sharing::PerCell,
+            Err(_) => {
+                self.parser = None;
+                Sharing::PerCell
+            }
         }
     }
+}
+
+fn empty_lexer() -> Lexer<'static> {
+    Lexer::new(
+        "",
+        LexerMode::A1,
+        get_default_locale(),
+        get_default_language(),
+    )
 }
 
 // A reference's tag carries whether it names a sheet and which parts are absolute, so a
