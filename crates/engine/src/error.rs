@@ -32,6 +32,8 @@ pub enum EngineError {
     BadDump(String),
     #[error("{0}")]
     Rejected(String),
+    #[error("the operation was cancelled; nothing was written")]
+    Cancelled,
 }
 
 impl EngineError {

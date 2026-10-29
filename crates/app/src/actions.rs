@@ -26,6 +26,7 @@ actions!(
         Open,
         Save,
         SaveAs,
+        CancelExport,
         Quit,
         CloseWindow,
         Undo,
