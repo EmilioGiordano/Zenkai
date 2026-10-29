@@ -608,7 +608,7 @@ mod tests {
         let reopened = crate::file::open_xlsx(&path).unwrap().workbook;
         let b1 = CellPos::parse_a1("B1").unwrap();
         assert_eq!(reopened.cell(SheetId(0), b1).text, "6");
-        assert!(leftovers.collided());
+        assert!(leftovers.skipped_all());
         leftovers.assert_untouched();
     }
 

@@ -147,7 +147,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"new");
-        assert!(leftovers.collided());
+        assert!(leftovers.skipped_all());
         leftovers.assert_untouched();
     }
 }

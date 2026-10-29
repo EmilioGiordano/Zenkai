@@ -231,13 +231,24 @@ const TEMP_ATTEMPTS: u32 = 32;
 #[cfg(test)]
 const PLANTED_LEFTOVERS: u64 = 16;
 
+#[cfg(not(test))]
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+// Each test thread counts on its own, so a test can plant leftovers over the exact
+// names its save will try without touching another test's temp files.
+#[cfg(test)]
+thread_local! {
+    static TEMP_COUNTER: AtomicU64 = const { AtomicU64::new(0) };
+}
 
 // A killed save leaves its temp file behind. Every attempt takes a fresh name and
 // `create_new` still refuses a file we did not create, so a leftover is skipped, never
 // reused or deleted.
 pub(crate) fn create_temp(path: &Path) -> Result<(fs::File, PathBuf), EngineError> {
-    create_temp_counting(path, &TEMP_COUNTER)
+    #[cfg(not(test))]
+    return create_temp_counting(path, &TEMP_COUNTER);
+    #[cfg(test)]
+    TEMP_COUNTER.with(|counter| create_temp_counting(path, counter))
 }
 
 fn create_temp_counting(
@@ -267,7 +278,7 @@ fn create_temp_counting(
 }
 
 // Plants leftovers over the names the next attempts would take, so a test that saves
-// right after it collides; `collided` says whether the counter moved past them.
+// right after it collides; `skipped_all` says the save settled on the first free name.
 #[cfg(test)]
 pub(crate) struct Leftovers {
     paths: Vec<PathBuf>,
@@ -277,7 +288,7 @@ pub(crate) struct Leftovers {
 #[cfg(test)]
 impl Leftovers {
     pub(crate) fn plant(dir: &Path, file_name: &str) -> Self {
-        let first = TEMP_COUNTER.load(Ordering::Relaxed);
+        let first = TEMP_COUNTER.with(|counter| counter.load(Ordering::Relaxed));
         let paths = (first..first + PLANTED_LEFTOVERS)
             .map(|count| {
                 sibling_temp(
@@ -292,8 +303,9 @@ impl Leftovers {
         Self { paths, first }
     }
 
-    pub(crate) fn collided(&self) -> bool {
-        TEMP_COUNTER.load(Ordering::Relaxed) > self.first
+    pub(crate) fn skipped_all(&self) -> bool {
+        TEMP_COUNTER.with(|counter| counter.load(Ordering::Relaxed))
+            == self.first + PLANTED_LEFTOVERS + 1
     }
 
     pub(crate) fn assert_untouched(&self) {
@@ -398,7 +410,7 @@ mod tests {
         let leftovers = Leftovers::plant(dir.path(), "book.xlsx");
         write_atomic(&path, b"new", |_| Ok(())).unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"new");
-        assert!(leftovers.collided());
+        assert!(leftovers.skipped_all());
         leftovers.assert_untouched();
     }
 
