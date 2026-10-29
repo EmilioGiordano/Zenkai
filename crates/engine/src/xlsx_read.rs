@@ -136,6 +136,7 @@ pub(crate) fn read_xlsx_file(
                 Err(ReadError::Cancelled) => Err(EngineError::Cancelled),
                 Err(ReadError::Unsafe(reason)) => Err(EngineError::refused(reason)),
                 Err(error) => {
+                    check_not_cancelled(cancel)?;
                     let bytes = std::fs::read(path).map_err(read_error)?;
                     let (book, unsupported) = fallback_to_ironcalc(&bytes, name, &error)?;
                     let settings = read_settings(&bytes)?;

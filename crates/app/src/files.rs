@@ -231,6 +231,9 @@ fn load_any(
             origin: file_origin(path),
             reader_fallback: opened.fallback,
         }),
+        Err(EngineError::InvalidFile(_)) if cancel.load(Ordering::Relaxed) => {
+            Err(LoadFailure::Engine(EngineError::Cancelled))
+        }
         Err(EngineError::InvalidFile(reason)) => match open_values(path) {
             Ok(workbook) => Ok(FileLoad {
                 workbook,
@@ -363,6 +366,19 @@ mod tests {
             Contents::Number(n) => Some(n),
             _ => None,
         }
+    }
+
+    #[test]
+    fn a_cancelled_open_of_an_unreadable_file_does_not_fall_back_to_a_second_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.xlsx");
+        std::fs::write(&path, b"not a zip").unwrap();
+        let cancel = Arc::new(AtomicBool::new(true));
+        let loaded = load_any(&path, XlsxReader::Fast, &cancel);
+        assert!(matches!(
+            loaded,
+            Err(LoadFailure::Engine(EngineError::Cancelled))
+        ));
     }
 
     #[test]
