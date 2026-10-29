@@ -212,9 +212,49 @@ pub(crate) fn parse_node(parser: &mut Parser<'_>, sheet_name: &str, job: &Formul
 }
 
 // A parse error keeps the raw formula text in the tree, so its R1C1 text is that cell's
-// own and never holds for another cell.
+// own and never holds for another cell. The walk keeps its own stack: a long operator
+// chain nests thousands of levels deep.
 pub(crate) fn keeps_cell_text(node: &Node) -> bool {
-    format!("{node:?}").contains("ParseErrorKind")
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match node {
+            Node::ParseErrorKind { .. } => return true,
+            Node::OpRangeKind { left, right }
+            | Node::OpConcatenateKind { left, right }
+            | Node::OpSumKind { left, right, .. }
+            | Node::OpProductKind { left, right, .. }
+            | Node::OpPowerKind { left, right }
+            | Node::CompareKind { left, right, .. } => {
+                pending.push(left);
+                pending.push(right);
+            }
+            Node::FunctionKind { args, .. } | Node::NamedFunctionKind { args, .. } => {
+                pending.extend(args);
+            }
+            Node::LambdaCallKind { lambda, args } => {
+                pending.push(lambda);
+                pending.extend(args);
+            }
+            Node::LambdaDefKind { body: child, .. }
+            | Node::ImplicitIntersection { child, .. }
+            | Node::SpillRangeOperator { child }
+            | Node::UnaryKind { right: child, .. } => pending.push(child),
+            Node::BooleanKind(_)
+            | Node::NumberKind(_)
+            | Node::StringKind(_)
+            | Node::ReferenceKind { .. }
+            | Node::RangeKind { .. }
+            | Node::WrongReferenceKind { .. }
+            | Node::WrongRangeKind { .. }
+            | Node::ArrayKind(_)
+            | Node::DefinedNameKind(_)
+            | Node::TableNameKind(_)
+            | Node::NamedVariableKind { .. }
+            | Node::ErrorKind(_)
+            | Node::EmptyArgKind => {}
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -240,5 +280,25 @@ mod tests {
             &converter.distinct[0],
             converter.index_of.keys().next().unwrap()
         ));
+    }
+
+    fn parsed(text: &str) -> Node {
+        let mut parser = new_parser_english(vec!["Sheet1".to_string()], Vec::new(), HashMap::new());
+        let job = FormulaJob {
+            text: text.to_string(),
+            row: 1,
+            column: 1,
+            array: false,
+            sharing: Sharing::PerCell,
+        };
+        parse_node(&mut parser, "Sheet1", &job)
+    }
+
+    #[test]
+    fn only_a_parse_error_keeps_the_cell_text() {
+        assert!(keeps_cell_text(&parsed("A1*(2")));
+        assert!(keeps_cell_text(&parsed("1+SUM(B1,(2")));
+        assert!(!keeps_cell_text(&parsed("SUM(B1:B3)*2")));
+        assert!(!keeps_cell_text(&parsed("\"ParseErrorKind\"&B1")));
     }
 }
