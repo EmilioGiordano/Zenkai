@@ -3153,6 +3153,10 @@ impl<'a> Model<'a> {
         // anchor of an array or spill sits before the cells it covers in this order. Listing
         // every cell would cost 12 bytes each and double while it grew.
         let formula_cells = self.get_formula_cells();
+        // Every formula cell ends up in `cells`; sized once, the map never holds its old
+        // and new tables together while it grows.
+        self.cells
+            .reserve(formula_cells.len().saturating_sub(self.cells.len()));
         for cell in formula_cells {
             self.evaluate_cell(CellReferenceIndex {
                 sheet: cell.index,
