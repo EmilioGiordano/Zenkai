@@ -323,9 +323,9 @@ impl<'a> Model<'a> {
         }
         let misses = self.criteria_ranges.misses;
         let mut total = ExactSum::default();
-        if let Err(error) =
-            self.scan_ifs(&sums, &values, &criteria, &fn_criteria, |value| total.add(value))
-        {
+        if let Err(error) = self.scan_ifs(&sums, &values, &criteria, &fn_criteria, |value| {
+            total.add(value)
+        }) {
             return error;
         }
         let value = total.value();
@@ -420,9 +420,12 @@ impl<'a> Model<'a> {
         row_offset: i32,
         column_offset: i32,
     ) -> bool {
-        values.iter().zip(fn_criteria).all(|(values, fn_criterion)| {
-            fn_criterion(&self.area_value(values, row_offset, column_offset))
-        })
+        values
+            .iter()
+            .zip(fn_criteria)
+            .all(|(values, fn_criterion)| {
+                fn_criterion(&self.area_value(values, row_offset, column_offset))
+            })
     }
 
     fn apply_sum<F>(

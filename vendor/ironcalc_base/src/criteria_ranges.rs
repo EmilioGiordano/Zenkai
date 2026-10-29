@@ -431,10 +431,10 @@ mod tests {
 
     use super::{CriteriaRanges, INDEX_CELL_BYTES, INDEX_KEY_BYTES, KEPT_BYTES, SLOT_BYTES};
     use crate::calc_result::CalcResult;
-    use crate::functions::util::MatchKey;
     use crate::criteria_totals::{TotalKey, USER_BYTES};
     use crate::exact_sum::ExactSum;
     use crate::expressions::types::CellReferenceIndex;
+    use crate::functions::util::MatchKey;
     use crate::test::util::new_empty_model;
 
     fn reading(bytes: usize) -> CriteriaRanges {
@@ -497,7 +497,9 @@ mod tests {
                     .criterion_cells(&values, &criterion)
                     .map(|(index, key)| {
                         let cells = index.cells(&key);
-                        assert!(cells.iter().all(|&(row, column)| row % 2 == 0 && column == 0));
+                        assert!(cells
+                            .iter()
+                            .all(|&(row, column)| row % 2 == 0 && column == 0));
                         cells.len()
                     })
             })
@@ -509,7 +511,10 @@ mod tests {
 
     #[test]
     fn an_area_is_indexed_the_second_time_once_read_whole() {
-        assert_eq!(indexed_cells(INDEX_BYTES, true), [None, Some(512), Some(512)]);
+        assert_eq!(
+            indexed_cells(INDEX_BYTES, true),
+            [None, Some(512), Some(512)]
+        );
         assert_eq!(indexed_cells(INDEX_BYTES, false), [None, None, None]);
     }
 

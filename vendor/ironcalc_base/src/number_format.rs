@@ -264,14 +264,25 @@ mod tests {
 
     #[test]
     fn rounding_shortcut_keeps_exact_values() {
-        for value in [0.0, -0.0, 0.3, 1e15, 999_999_999_999_999.0, 0.1 + 0.2, 5e-324] {
+        for value in [
+            0.0,
+            -0.0,
+            0.3,
+            1e15,
+            999_999_999_999_999.0,
+            0.1 + 0.2,
+            5e-324,
+        ] {
             assert_eq!(
                 to_excel_precision(value, 15).to_bits(),
                 round_through_text(value, 15).to_bits()
             );
         }
         assert_eq!(to_excel_precision(0.1 + 0.2, 15), 0.3);
-        assert_eq!(to_excel_precision(1_234_567_890_123_456.0, 15), 1_234_567_890_123_460.0);
+        assert_eq!(
+            to_excel_precision(1_234_567_890_123_456.0, 15),
+            1_234_567_890_123_460.0
+        );
     }
 
     // The default table is indexed by `numFmtId`: `get_num_fmt(id, &[])` must return the

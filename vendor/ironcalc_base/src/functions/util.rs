@@ -626,9 +626,31 @@ mod tests {
 
     fn texts() -> Vec<CalcResult> {
         [
-            "apple", "APPLE", "Apple ", "b*n", "Straße", "STRASSE", "İstanbul", "ΟΔΟΣ", "3", "3.0",
-            " 3", "2", "2.5", "1e1", "10", "-7", "TRUE", "true", "#N/A", "1/1/2020", "", "NaN",
-            "inf", "1.9999999999999998", "2.0000000000000004",
+            "apple",
+            "APPLE",
+            "Apple ",
+            "b*n",
+            "Straße",
+            "STRASSE",
+            "İstanbul",
+            "ΟΔΟΣ",
+            "3",
+            "3.0",
+            " 3",
+            "2",
+            "2.5",
+            "1e1",
+            "10",
+            "-7",
+            "TRUE",
+            "true",
+            "#N/A",
+            "1/1/2020",
+            "",
+            "NaN",
+            "inf",
+            "1.9999999999999998",
+            "2.0000000000000004",
         ]
         .into_iter()
         .map(|text| CalcResult::String(text.to_string()))
