@@ -24,7 +24,19 @@ enum Atom {
     Function(&'static str, Vec<Atom>),
 }
 
-const LITERALS: [&str; 14] = [
+const LITERALS: [&str; 26] = [
+    "1E5",
+    "R1C1",
+    "A1B",
+    "XFE1",
+    "\"x\"\"A1\"",
+    "1:1",
+    "$A:$B",
+    "A1#",
+    "#REF!",
+    "A\u{f1}o2",
+    "Rate2",
+    "$5",
     "1",
     "2.5",
     "\"A1\"",
@@ -323,6 +335,38 @@ proptest! {
         // IronCalc's lexer overflows on very long column names in debug builds.
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let sheet = scanned(&pieces(&cells, rows_per_piece), book.names());
+            let expected: Vec<String> = cells
+                .iter()
+                .map(|((row, column), (text, array))| {
+                    fresh_text(&book, text, *row, *column, *array)
+                })
+                .collect();
+            (converted_texts(&sheet, &book), expected)
+        }));
+        let Ok((texts, expected)) = outcome else { return Ok(()) };
+        prop_assert_eq!(texts, expected);
+    }
+
+    // One formula written as if it sat a little off its cell, so neighbouring cells hold
+    // the same text at another column, or texts that differ only in a relative row or
+    // column: none may take another's shape.
+    #[test]
+    fn shifted_formulas_convert_like_fresh_parses(
+        atoms in prop::collection::vec(
+            (atom(), prop::sample::select(vec!["+", "*", ":", ",", ""])),
+            1..4,
+        ),
+        places in prop::collection::vec((4..14i32, 3..6i32, -2..3i32, -2..3i32), 2..16),
+    ) {
+        let book = Book::new();
+        let mut cells = BTreeMap::new();
+        for (row, column, row_shift, column_shift) in places {
+            if let Some(text) = formula(&atoms, row + row_shift, column + column_shift) {
+                cells.insert((row, column), (text, false));
+            }
+        }
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let sheet = scanned(&pieces(&cells, 3), book.names());
             let expected: Vec<String> = cells
                 .iter()
                 .map(|((row, column), (text, array))| {

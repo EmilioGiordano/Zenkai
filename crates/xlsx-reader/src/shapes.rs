@@ -54,6 +54,11 @@ impl<'n> ShapeReader<'n> {
     // cell's row, and text IronCalc's lexer rejects is left to the parser cell by cell.
     // A lexer that panics leaves the cell to the conversion, which falls back on its own.
     pub(crate) fn key(&mut self, text: &str, row: i32, column: i32, array: bool) -> Option<&[u8]> {
+        // Most filled formulas take the byte scan; lexing every formula cell cost about
+        // as much as reading the rest of the sheet.
+        if fill::write_fill_key(&mut self.key, text, row, column, array) {
+            return Some(&self.key);
+        }
         let (lexer, key) = (&mut self.lexer, &mut self.key);
         match catch_unwind(AssertUnwindSafe(|| {
             write_key(lexer, key, text, row, column, array)
@@ -339,6 +344,8 @@ pub(crate) fn sheet1() -> SheetNames<'static> {
         defined_names: &[],
     }
 }
+
+mod fill;
 
 #[cfg(test)]
 mod tests;
