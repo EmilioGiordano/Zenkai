@@ -10,6 +10,9 @@ use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::Cell;
 use ironcalc::base::{Model, UserModel};
 use peak_alloc::PeakAlloc;
+use tracing_subscriber::layer::{Context as LayerContext, Layer, SubscriberExt};
+use tracing_subscriber::registry::{LookupSpan, Registry};
+use tracing_subscriber::util::SubscriberInitExt;
 use zenkai_engine::{Engine, Workbook, XlsxReader, open_xlsx_with, read_xlsx_bytes};
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
 
@@ -18,6 +21,33 @@ static PEAK: PeakAlloc = PeakAlloc;
 
 const LOCALE: &str = "en";
 const TIMEZONE: &str = "UTC";
+
+// Prints the allocator's use and its peak so far when each open span closes, so the
+// phase that holds the peak can be read off.
+struct PhaseMemory {
+    origin: Instant,
+}
+
+impl<S> Layer<S> for PhaseMemory
+where
+    S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
+{
+    fn on_close(&self, id: tracing::span::Id, context: LayerContext<'_, S>) {
+        let Some(metadata) = context.metadata(&id) else {
+            return;
+        };
+        if !metadata.name().starts_with("open_") {
+            return;
+        }
+        eprintln!(
+            "phase name={} at_ms={} alloc_mb={:.0} alloc_peak_mb={:.0}",
+            metadata.name(),
+            self.origin.elapsed().as_millis(),
+            PEAK.current_usage() as f64 / 1024.0 / 1024.0,
+            PEAK.peak_usage_as_mb(),
+        );
+    }
+}
 
 fn ms(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
@@ -251,12 +281,15 @@ fn trace_spans() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         tracing_subscriber::EnvFilter::new("zenkai_engine=info,zenkai_xlsx_reader=info")
     });
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let spans = tracing_subscriber::fmt::layer()
         .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_ansi(false)
         .with_writer(std::io::stderr)
-        .init();
+        .with_filter(filter);
+    let phases = std::env::var_os("ZENKAI_OPEN_PHASES").map(|_| PhaseMemory {
+        origin: Instant::now(),
+    });
+    Registry::default().with(spans).with(phases).init();
 }
 
 // The app's own open path alone (streaming reader, model build, first evaluation),

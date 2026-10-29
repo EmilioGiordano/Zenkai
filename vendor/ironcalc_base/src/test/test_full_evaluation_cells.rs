@@ -63,3 +63,20 @@ fn a_sheet_without_formulas_is_skipped_until_it_gets_one() {
     assert_eq!(model._get_text_at(1, 2, 1), "10");
     assert_eq!(model._get_text_at(1, 4, 1), "2");
 }
+
+#[test]
+fn the_formula_cells_are_listed_in_one_allocation() {
+    let mut model = new_empty_model();
+    model.new_sheet();
+    model.new_sheet();
+    for row in 1..=5 {
+        model._set(&format!("A{row}"), &format!("={row}*2"));
+    }
+    model._set("B1", "7");
+    model.set_user_input(2, 3, 3, "=A1+1".to_string()).unwrap();
+    model.set_user_input(1, 1, 1, "text".to_string()).unwrap();
+    let cells = model.get_formula_cells();
+    assert_eq!(cells.len(), 6);
+    assert_eq!(cells.capacity(), cells.len());
+    assert_eq!((cells[5].index, cells[5].row, cells[5].column), (2, 3, 3));
+}

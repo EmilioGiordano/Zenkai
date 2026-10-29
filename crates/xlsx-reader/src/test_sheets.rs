@@ -277,7 +277,7 @@ mod tests {
         let xml = sheet_xml(&shape);
         assert_eq!(xml, sheet_xml(&shape));
         let rows = &xml[SHEET_HEAD.len()..xml.len() - SHEET_TAIL.len()];
-        let cells = scan_rows(rows, &[Vec::new()], "Sheet1").unwrap();
+        let cells = scan_rows(rows, &[Vec::new()], crate::shapes::sheet1()).unwrap();
         assert!(cells.data.row_count() >= 400);
         assert!(!cells.strings.is_empty());
         assert!(!cells.events.is_empty());

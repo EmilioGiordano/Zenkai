@@ -2,6 +2,8 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread::{Builder, Scope, ScopedJoinHandle};
 
 use crate::ReadError;
+use crate::formulas::WORKER_STACK_BYTES;
+use crate::shapes::SheetNames;
 use crate::sheet_data::{SheetCells, scan_rows_into, unreadable};
 use crate::sheet_stream::rowtags_from_unit;
 use crate::stream::Budgets;
@@ -19,14 +21,14 @@ pub(crate) fn scan_unit(
     cut: &[u8],
     unit: &[u8],
     prefixes: &[Vec<u8>],
-    sheet_name: &str,
+    names: SheetNames<'_>,
 ) -> UnitScan {
     let mut rowtags = Vec::new();
     let rowtags_bytes = rowtags_from_unit(&mut rowtags, cut, unit);
     let mut cells = SheetCells::default();
     let outcome = std::str::from_utf8(unit)
         .map_err(unreadable)
-        .and_then(|text| scan_rows_into(&mut cells, text, prefixes, sheet_name));
+        .and_then(|text| scan_rows_into(&mut cells, text, prefixes, names));
     UnitScan {
         cells,
         rowtags,
@@ -38,7 +40,7 @@ pub(crate) fn scan_unit(
 pub(crate) struct PoolEnv<'e> {
     pub(crate) cut: &'e [u8],
     pub(crate) prefixes: &'e [Vec<u8>],
-    pub(crate) sheet_name: &'e str,
+    pub(crate) names: SheetNames<'e>,
     pub(crate) budgets: &'e Budgets,
 }
 
@@ -83,6 +85,7 @@ impl<'scope> UnitPool<'scope> {
             let parent = parent.clone();
             let spawned = Builder::new()
                 .name(format!("xlsx-rows-{number}"))
+                .stack_size(WORKER_STACK_BYTES)
                 .spawn_scoped(scope, move || {
                     parent.in_scope(|| work(env, &unit_receiver, &scan_sender));
                 });
@@ -172,7 +175,7 @@ fn work(env: &PoolEnv<'_>, units: &Receiver<Vec<u8>>, scans: &SyncSender<UnitSca
         if env.budgets.cancelled() {
             return;
         }
-        let scan = scan_unit(env.cut, &unit, env.prefixes, env.sheet_name);
+        let scan = scan_unit(env.cut, &unit, env.prefixes, env.names);
         if scans.send(scan).is_err() {
             return;
         }
@@ -191,7 +194,7 @@ mod tests {
         let env = PoolEnv {
             cut: &cut,
             prefixes: &prefixes,
-            sheet_name: "Sheet1",
+            names: crate::shapes::sheet1(),
             budgets: &budgets,
         };
         for workers in 1..=4 {

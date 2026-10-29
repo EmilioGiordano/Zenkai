@@ -115,7 +115,7 @@ fn sheet(data: &str) -> String {
     )
 }
 
-const QUIRKS: [(&str, &str); 23] = [
+const QUIRKS: [(&str, &str); 24] = [
     (
         "formulas without cached values",
         r#"<row r="1"><c r="A1"><f>1+1</f></c><c r="B1"><f>A1*2</f><v/></c><c r="C1"><f>B1+1</f><v></v></c><c r="D1" t="n"><f>C1</f><v/></c><c r="E1" t="str"><f>""</f><v></v></c></row>"#,
@@ -151,6 +151,10 @@ const QUIRKS: [(&str, &str); 23] = [
     (
         "parse errors",
         r#"<row r="1"><c r="A1"><f>SUM(</f></c><c r="B1"><f>1+</f></c><c r="C1"><f></f></c><c r="D1"><f>Nope!A1</f></c></row><row r="2"><c r="A2"><f>SUM(</f></c><c r="B2"><f>1+</f></c></row>"#,
+    ),
+    (
+        "filled formulas that do not parse",
+        r#"<row r="1"><c r="A1"><f>B1*(2</f></c><c r="B1"><f>C1+Nope!A1</f></c></row><row r="2"><c r="A2"><f>B2*(2</f></c><c r="B2"><f>C2+Nope!A2</f></c></row><row r="3"><c r="A3"><f>B3*(2</f></c><c r="B3"><f>C3+Nope!A3</f></c></row>"#,
     ),
     (
         "shared formulas",
@@ -318,8 +322,8 @@ fn the_longest_allowed_formula_opens_with_the_fast_reader() {
     );
 }
 
-// Past a few megabytes a sheet is read in pieces; strings, shared formulas and row order
-// must come out as if it were read in one go.
+// Past a few megabytes a sheet is read in pieces; strings, shared formulas, formulas that
+// repeat one shape and row order must come out as if it were read in one go.
 fn large_sheet_data(rows: usize, with_array: bool) -> String {
     let mut data = String::new();
     for row in 1..=rows {
@@ -334,7 +338,7 @@ fn large_sheet_data(rows: usize, with_array: bool) -> String {
             r#"<f t="shared" si="0"/>"#.to_string()
         };
         data.push_str(&format!(
-            r#"<row{r}><c r="A{row}"><v>{row}</v></c><c r="B{row}" t="inlineStr"><is><t>name {}</t></is></c><c r="C{row}" t="str"><v>v{}</v></c><c r="D{row}">{shared}<v>0</v></c><c r="E{row}"><f>A{row}+D{row}*$A$1+{}</f></c></row>"#,
+            r#"<row{r}><c r="A{row}"><v>{row}</v></c><c r="B{row}" t="inlineStr"><is><t>name {}</t></is></c><c r="C{row}" t="str"><v>v{}</v></c><c r="D{row}">{shared}<v>0</v></c><c r="E{row}"><f>A{row}+D{row}*$A$1+{}</f></c><c r="F{row}"><f>E{row}*(2</f></c></row>"#,
             row % 37,
             row % 11,
             row % 7,

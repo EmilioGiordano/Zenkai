@@ -16,6 +16,7 @@ mod xml;
 
 use crate::ReadError;
 use crate::limits::{self, BYTES_PER_UNIQUE_STRING};
+use crate::shapes::{ShapeReader, Sharing, SheetNames};
 use crate::text::parse_bool_false;
 use values::{ValueCell, formula_cell};
 
@@ -39,7 +40,8 @@ const DEFAULT_ROW_HEIGHT: f64 = 14.5;
 // index and every formula cell, listed in `formula_cells` in the order of `events`, holds
 // an index into `events`; both are resolved once all sheets are read, because IronCalc
 // numbers strings and formulas in document order. Formula texts are owned so row pieces
-// can be dropped as the worksheet streams in.
+// can be dropped as the worksheet streams in, one per shape: `shapes` gives the job of
+// each shape met so far.
 #[derive(Default)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub(crate) struct SheetCells {
@@ -50,6 +52,7 @@ pub(crate) struct SheetCells {
     pub(crate) formula_cells: Vec<Slot>,
     pub(crate) events: Vec<FormulaEvent>,
     pub(crate) jobs: Vec<FormulaJob>,
+    pub(crate) shapes: HashMap<Box<[u8]>, usize>,
     string_index: HashMap<Arc<str>, usize>,
     first_row: i32,
     last_row: i32,
@@ -65,6 +68,7 @@ pub(crate) struct SheetCells {
 pub(crate) struct Totals {
     pub(crate) cells: u64,
     pub(crate) formulas: u64,
+    pub(crate) shapes: u64,
     pub(crate) rows: u64,
     pub(crate) bytes: u64,
 }
@@ -90,6 +94,7 @@ impl SheetCells {
         Totals {
             cells: self.cell_count,
             formulas: self.events.len() as u64,
+            shapes: self.jobs.len() as u64,
             rows: self.data.row_count() as u64,
             bytes: self.string_bytes.saturating_add(self.job_bytes),
         }
@@ -116,6 +121,7 @@ pub(crate) struct FormulaJob {
     pub(crate) row: i32,
     pub(crate) column: i32,
     pub(crate) array: bool,
+    pub(crate) sharing: Sharing,
 }
 
 pub(crate) fn unreadable(error: impl ToString) -> ReadError {
@@ -141,7 +147,7 @@ pub(crate) fn scan_rows_into(
     cells: &mut SheetCells,
     rows: &str,
     prefixes: &[Vec<u8>],
-    sheet_name: &str,
+    names: SheetNames<'_>,
 ) -> Result<bool, ReadError> {
     let mut reader = Reader::from_str(rows);
     let config = reader.config_mut();
@@ -150,7 +156,8 @@ pub(crate) fn scan_rows_into(
     let mut scanner = Scanner {
         reader,
         prefixes,
-        sheet_name,
+        sheet_name: names.sheet,
+        shapes: ShapeReader::new(names),
         array_cells: HashMap::new(),
         array_cells_claimed: 0,
         spill_end: 0,
@@ -165,10 +172,10 @@ pub(crate) fn scan_rows_into(
 pub(crate) fn scan_rows(
     rows: &str,
     prefixes: &[Vec<u8>],
-    sheet_name: &str,
+    names: SheetNames<'_>,
 ) -> Result<SheetCells, ReadError> {
     let mut cells = SheetCells::default();
-    scan_rows_into(&mut cells, rows, prefixes, sheet_name)?;
+    scan_rows_into(&mut cells, rows, prefixes, names)?;
     Ok(cells)
 }
 
@@ -176,6 +183,7 @@ struct Scanner<'a, 's> {
     reader: Reader<&'a [u8]>,
     prefixes: &'s [Vec<u8>],
     sheet_name: &'s str,
+    shapes: ShapeReader<'s>,
     array_cells: HashMap<(i32, i32), (i32, i32)>,
     array_cells_claimed: u64,
     // The last row an array formula of this piece reaches.
@@ -466,14 +474,45 @@ impl<'a> Scanner<'a, '_> {
         // the same refusal instead of a fallback.
         limits::check_formula_text(&text).map_err(ReadError::Unsafe)?;
         let (row, column) = formula_context(cell_ref)?;
+        let Some(key) = self.shapes.key(&text, row, column, array) else {
+            return Ok(self.push_job(text, row, column, array, Sharing::PerCell));
+        };
+        let Some(&found) = self.cells.shapes.get(key) else {
+            let key: Box<[u8]> = key.into();
+            self.cells.job_bytes += key.len() as u64;
+            let job = self.push_job(text, row, column, array, Sharing::Single);
+            self.cells.shapes.insert(key, job);
+            return Ok(job);
+        };
+        let representative = &mut self.cells.jobs[found];
+        if representative.sharing == Sharing::Single {
+            representative.sharing = self.shapes.sharing_of(representative);
+        }
+        match representative.sharing {
+            Sharing::Shared => Ok(found),
+            Sharing::Single | Sharing::PerCell => {
+                Ok(self.push_job(text, row, column, array, Sharing::PerCell))
+            }
+        }
+    }
+
+    fn push_job(
+        &mut self,
+        text: Cow<'_, str>,
+        row: i32,
+        column: i32,
+        array: bool,
+        sharing: Sharing,
+    ) -> usize {
         self.cells.job_bytes += text.len() as u64;
         self.cells.jobs.push(FormulaJob {
             text: text.into_owned(),
             row,
             column,
             array,
+            sharing,
         });
-        Ok(self.cells.jobs.len() - 1)
+        self.cells.jobs.len() - 1
     }
 
     fn intern(&mut self, text: String) -> i32 {
@@ -540,7 +579,7 @@ mod tests {
     use super::*;
 
     fn scan(rows: &str) -> Result<SheetCells, ReadError> {
-        scan_rows(rows, &[Vec::new()], "Sheet1")
+        scan_rows(rows, &[Vec::new()], crate::shapes::sheet1())
     }
 
     fn array_row(row: u32, reference: &str) -> String {
@@ -552,6 +591,26 @@ mod tests {
         let rows = r#"<row r="1"><c r="A1" t="inlineStr"><is><t>ab</t></is></c><c r="B1" t="inlineStr"><is><t>ab</t></is></c><c r="C1" t="inlineStr"><is><t>cde</t></is></c></row>"#;
         let cells = scan(rows).unwrap();
         assert_eq!(cells.totals().bytes, 2 + 3 + 2 * BYTES_PER_UNIQUE_STRING);
+    }
+
+    #[test]
+    fn a_filled_formula_is_one_shape_and_distinct_ones_are_one_each() {
+        let rows = |formula: &dyn Fn(u32) -> String| -> String {
+            (1..=50)
+                .map(|n| {
+                    format!(
+                        r#"<row r="{n}"><c r="B{n}"><f>{}</f></c></row>"#,
+                        formula(n)
+                    )
+                })
+                .collect()
+        };
+        let filled = scan(&rows(&|n| format!("A{n}*2"))).unwrap().totals();
+        let distinct = scan(&rows(&|n| format!("A{n}*{n}"))).unwrap().totals();
+        assert_eq!((filled.formulas, filled.shapes), (50, 1));
+        assert_eq!((distinct.formulas, distinct.shapes), (50, 50));
+        // Each distinct shape keeps its own text and key.
+        assert!(distinct.bytes > 25 * filled.bytes);
     }
 
     #[test]

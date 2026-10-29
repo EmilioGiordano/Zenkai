@@ -4,13 +4,19 @@ use crate::types::{Cell, Workbook};
 
 // Streaming-route costs, fitted on 2026-10-14 to `measure_open --app` (release, allocator
 // peak; committed memory is 3-6% above it) over generated matrix shapes and real files:
-// about 29.5 B per cell, 199 B per row, 90-97 B per formula with repeated text and
-// 390-470 B with distinct text, about 540 B per distinct string at the peak (125 B at
-// rest; the rest is transient assembly) plus its 16 B of text. Each constant is the fit
-// with a margin so every measured shape is charged at least 1.2x its committed peak.
+// about 29.5 B per cell, 199 B per row, about 540 B per distinct string at the peak (125 B
+// at rest; the rest is transient assembly) plus its 16 B of text. Formulas were refitted on
+// 2026-10-29, once the reader keeps one job per formula shape, to the same release
+// measurement of 20k to 1M rows of repeated lookups, 200k rows of repeated or distinct
+// arithmetic and 200k and 1M rows of a formula returning 200 characters. Each constant is
+// the lowest that charges every measured shape at least 1.2x its committed peak.
 pub const BYTES_PER_CELL: u64 = 70;
-// Extra per formula cell over a value cell, sized for distinct formula text.
-pub const BYTES_PER_FORMULA: u64 = 650;
+// Extra per formula cell over a value cell, its evaluated result included: the formula
+// returning 200 characters sets it, the lookups alone would need 110-140 B.
+pub const BYTES_PER_FORMULA: u64 = 240;
+// Extra per distinct formula shape over its text: its key while reading and its parsed
+// tree in the model, fitted on 628,902 distinct shapes in 859,659 formula cells.
+pub const BYTES_PER_SHAPE: u64 = 450;
 // Extra per distinct string over its text.
 pub const BYTES_PER_UNIQUE_STRING: u64 = 650;
 pub const BYTES_PER_ROW: u64 = 256;
@@ -35,6 +41,7 @@ pub const BUDGET_REFUSAL_PREFIX: &str = "this file needs about ";
 pub struct OpenCost {
     pub cells: u64,
     pub formulas: u64,
+    pub shapes: u64,
     pub rows: u64,
     pub bytes: u64,
 }
@@ -49,6 +56,7 @@ pub fn open_cost(book: &Workbook) -> OpenCost {
                 cost.formulas += 1;
             }
         }
+        cost.shapes += sheet.shared_formulas.len() as u64;
         for formula in &sheet.shared_formulas {
             cost.bytes += formula.len() as u64;
         }
@@ -63,6 +71,7 @@ pub fn needed_bytes(cost: OpenCost) -> u64 {
     cost.cells
         .saturating_mul(BYTES_PER_CELL)
         .saturating_add(cost.formulas.saturating_mul(BYTES_PER_FORMULA))
+        .saturating_add(cost.shapes.saturating_mul(BYTES_PER_SHAPE))
         .saturating_add(cost.bytes)
         .saturating_add(cost.rows.saturating_mul(BYTES_PER_ROW))
 }
@@ -172,16 +181,56 @@ mod tests {
     }
 
     #[test]
+    fn a_formula_filled_down_is_one_shape() {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        for row in 1..=500 {
+            model
+                .set_user_input(0, row, 2, format!("=A{row}*2"))
+                .unwrap();
+            model
+                .set_user_input(0, row, 3, format!("=A{row}+{row}"))
+                .unwrap();
+        }
+        let cost = open_cost(&model.workbook);
+        assert_eq!(cost.formulas, 1000);
+        assert_eq!(cost.shapes, 501);
+        let one_shape = OpenCost { shapes: 1, ..cost };
+        assert_eq!(
+            needed_bytes(cost) - needed_bytes(one_shape),
+            500 * BYTES_PER_SHAPE
+        );
+    }
+
+    // The lookup sheet of GitHub issue #212 at a million rows, refused before shapes were
+    // kept once: it measured 3,782 MiB committed at the peak, which this charge covers
+    // 1.2 times within the allowance of a 16 GB machine.
+    #[test]
+    fn a_million_rows_of_repeated_lookups_fit_sixty_percent_of_sixteen_gigabytes() {
+        let cost = OpenCost {
+            cells: 29_312_838,
+            formulas: 21_000_143,
+            shapes: 163,
+            rows: 1_002_334,
+            bytes: 213_068 * (60 + BYTES_PER_UNIQUE_STRING),
+        };
+        let allowance = 17_043_439_616 * RAM_SHARE_PERCENT / 100;
+        assert!(needed_bytes(cost) <= allowance, "{}", needed_bytes(cost));
+        assert!(needed_bytes(cost) * 10 >= 3_782 * 1024 * 1024 * 12);
+    }
+
+    #[test]
     fn formula_cells_cost_more_than_value_cells() {
         let values = needed_bytes(OpenCost {
             cells: 1000,
             formulas: 0,
+            shapes: 0,
             rows: 10,
             bytes: 0,
         });
         let formulas = needed_bytes(OpenCost {
             cells: 1000,
             formulas: 1000,
+            shapes: 0,
             rows: 10,
             bytes: 0,
         });
@@ -192,22 +241,68 @@ mod tests {
     #[test]
     fn every_measured_shape_is_charged_at_least_one_and_a_fifth_of_its_peak() {
         let mebibyte = 1024 * 1024;
-        // (cells, formulas, rows, text and string bytes, committed peak in MiB)
-        let shapes = [
+        // (cells, formulas, formula shapes, rows, text and string bytes, committed peak in
+        // MiB, release build); the lookup sheets read their strings at 60 B of text each.
+        let measured = [
             (
                 10_000_000,
+                0,
                 0,
                 1_000_000,
                 8_000_000 * (16 + BYTES_PER_UNIQUE_STRING),
                 4_628,
             ),
-            (3_000_000, 858_000, 200_000, 0, 602),
-            (10_485_760, 0, 1_048_576, 0, 527),
+            (3_000_000, 859_659, 628_902, 200_000, 628_902 * 20, 605),
+            (3_000_000, 859_071, 13, 200_000, 13 * 20, 206),
+            (10_485_760, 0, 0, 1_048_576, 0, 527),
+            (
+                599_997,
+                420_144,
+                163,
+                22_334,
+                9_735 * (60 + BYTES_PER_UNIQUE_STRING),
+                89,
+            ),
+            (
+                1_478_987,
+                1_050_144,
+                163,
+                52_334,
+                16_869 * (60 + BYTES_PER_UNIQUE_STRING),
+                233,
+            ),
+            (
+                5_873_740,
+                4_200_144,
+                163,
+                202_334,
+                50_057 * (60 + BYTES_PER_UNIQUE_STRING),
+                916,
+            ),
+            (
+                11_733_601,
+                8_400_144,
+                163,
+                402_334,
+                92_439 * (60 + BYTES_PER_UNIQUE_STRING),
+                1_808,
+            ),
+            (
+                29_312_838,
+                21_000_143,
+                163,
+                1_002_334,
+                213_068 * (60 + BYTES_PER_UNIQUE_STRING),
+                3_782,
+            ),
+            (400_000, 200_000, 1, 200_000, 20, 94),
+            (2_000_000, 1_000_000, 1, 1_000_000, 20, 504),
         ];
-        for (cells, formulas, rows, bytes, peak) in shapes {
+        for (cells, formulas, shapes, rows, bytes, peak) in measured {
             let charged = needed_bytes(OpenCost {
                 cells,
                 formulas,
+                shapes,
                 rows,
                 bytes,
             });
@@ -223,6 +318,7 @@ mod tests {
         let cost = OpenCost {
             cells: 1000,
             formulas: 100,
+            shapes: 0,
             rows: 10,
             bytes: 0,
         };
@@ -236,6 +332,7 @@ mod tests {
         let cost = OpenCost {
             cells: 1,
             formulas: 0,
+            shapes: 0,
             rows: 0,
             bytes: 0,
         };
@@ -258,6 +355,7 @@ mod tests {
         let cost = OpenCost {
             cells: 1000,
             formulas: 1000,
+            shapes: 0,
             rows: 0,
             bytes: 0,
         };
