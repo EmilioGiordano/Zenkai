@@ -2976,7 +2976,7 @@ impl<'a> Model<'a> {
     }
 
     /// Returns the cells holding a formula, in natural (sheet, row, column) order.
-    fn get_formula_cells(&self) -> Vec<CellIndex> {
+    pub(crate) fn get_formula_cells(&self) -> Vec<CellIndex> {
         // Counted first: a vector growing to millions of cells holds its old and new
         // buffers at once each time it doubles.
         let count = self

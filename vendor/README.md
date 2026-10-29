@@ -246,12 +246,13 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/test/test_full_evaluation_cells.rs`.
 - That list is counted before it is built, so it is allocated once instead of doubling,
   which held its old and new buffers together: about 250 MB at 21 million formulas
-  (`src/model.rs`, `get_formula_cells`). Builds on the patch above. No result changes;
-  tests: `src/test/test_full_evaluation_cells.rs`.
+  (`src/model.rs`, `get_formula_cells`, now `pub(crate)` for its test). Builds on the
+  patch above. Tests: `src/test/test_full_evaluation_cells.rs`.
 - The full evaluation sizes the map of evaluated cells for every formula cell before it
   starts, so the map is never rehashed while it holds its old and new tables
-  (`src/model.rs`, `Model::evaluate`). Stands on its own. No result changes; tests:
-  `src/test/test_full_evaluation_cells.rs`.
+  (`src/model.rs`, `Model::evaluate`). Stands on its own. No result changes, which the
+  tests in `src/test/test_full_evaluation_cells.rs` check; the saving is measured with
+  `measure_open`, as no test can see a rehash.
 - `UserModel::sheets_moved_by_undo` and `sheets_moved_by_redo` say which sheets the next
   undo or redo inserts or deletes rows or columns on, or `None` when the step also adds,
   removes or moves sheets, so a caller tracking row moves need not assume the worst on
