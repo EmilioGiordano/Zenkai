@@ -428,6 +428,15 @@ Zenkai-only, not for upstream:
   importer) and `Model::from_workbook` refuses with a needs-about message that also
   names the allowance, past sixty percent of RAM, instead of hanging the machine. Tests
   in the module.
+- `Model::evaluate_opened` (and `UserModel::evaluate_opened`) runs the first evaluation of
+  a model `from_workbook` built and refuses it with the same message when the text its
+  formulas return grows past what the estimate left: each formula's charge pays for 200
+  bytes, the rest comes from the budget's headroom at the same 1.2x margin. Growth is
+  charged where `set_cells_with_result` writes a value and refunded where a spill is
+  cleared, and past the budget `evaluate_cell` evaluates nothing more (`src/model.rs`,
+  `src/incremental.rs`, `src/open_budget.rs`). `from_workbook_within` takes the budget
+  instead of reading the machine's. Needs the open budget above. Tests in
+  `src/open_budget.rs`.
 - The `sysinfo` dependency in `Cargo.toml`, used by `open_budget` to read physical RAM.
 - `build.rs` reports the crate version instead of asking `git describe`, which here
   would describe Zenkai's repository.

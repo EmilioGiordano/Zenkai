@@ -74,6 +74,10 @@ fn reference((sheet, row, column): CellKey) -> CellReferenceIndex {
 impl Model<'_> {
     pub(crate) fn evaluate_indexed(&mut self) {
         self.evaluate();
+        // A model past the open budget is refused; indexing it would only cost more.
+        if self.result_text.is_spent() {
+            return;
+        }
         if self.circular_hits != 0 {
             // Totals kept while a cell could read as #CIRC! are not worth trusting.
             self.criteria_ranges = CriteriaRanges::new();

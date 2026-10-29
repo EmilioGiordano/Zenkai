@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
-use crate::types::{Cell, Workbook};
+use crate::types::{Cell, FormulaValue, SpillValue, Workbook};
+use crate::Model;
 
 // Streaming-route costs, fitted on 2026-10-14 to `measure_open --app` (release, allocator
 // peak; committed memory is 3-6% above it) over generated matrix shapes and real files:
@@ -14,6 +15,9 @@ pub const BYTES_PER_CELL: u64 = 70;
 // Extra per formula cell over a value cell, its evaluated result included: the formula
 // returning 200 characters sets it, the lookups alone would need 110-140 B.
 pub const BYTES_PER_FORMULA: u64 = 240;
+// The result text BYTES_PER_FORMULA already pays for: the formula it was fitted on returns
+// 200 characters. Text past it is charged while the first evaluation runs.
+pub const TEXT_BYTES_PER_FORMULA: u64 = 200;
 // Extra per distinct formula shape over its text: its key while reading and its parsed
 // tree in the model, fitted on 628,902 distinct shapes in 859,659 formula cells.
 pub const BYTES_PER_SHAPE: u64 = 450;
@@ -165,10 +169,251 @@ pub fn check_open_budget(book: &Workbook) -> Result<(), String> {
     check_with_budget(book, production_budget_bytes())
 }
 
+// The estimate and budget a workbook passed when its model was built, kept until its first
+// evaluation, which is the only one that can still refuse it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OpenAllowance {
+    cost: OpenCost,
+    budget_bytes: u64,
+}
+
+impl OpenAllowance {
+    pub(crate) fn checked(book: &Workbook, budget_bytes: u64) -> Result<OpenAllowance, String> {
+        let cost = open_cost(book);
+        check_cost(cost, budget_bytes)?;
+        Ok(OpenAllowance { cost, budget_bytes })
+    }
+
+    // Text past what each formula already pays for is charged 1.2 times, the margin of
+    // every other cost, so the headroom the estimate leaves buys 5/6 of its bytes in text.
+    fn result_text_bytes(self) -> u64 {
+        let headroom = self.budget_bytes.saturating_sub(needed_bytes(self.cost));
+        self.cost
+            .formulas
+            .saturating_mul(TEXT_BYTES_PER_FORMULA)
+            .saturating_add(headroom.saturating_mul(5) / 6)
+    }
+
+    // The evaluation stops at the first result past the budget, so all that is known of
+    // the need is that it is above the allowance.
+    fn refusal(self) -> String {
+        refusal(
+            self.cost,
+            self.budget_bytes.saturating_add(1),
+            self.budget_bytes,
+        )
+    }
+}
+
+// What result text the first evaluation of an opened workbook may still add, which the
+// estimate cannot know before evaluating. Charged by growth over what each cell held, so
+// the cached values a file carries are not charged again. Unbounded in every other
+// evaluation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ResultText {
+    #[default]
+    Unbounded,
+    Left(u64),
+    Spent,
+}
+
+impl ResultText {
+    pub(crate) fn replace(&mut self, old: Option<&Cell>, new: &Cell) {
+        let ResultText::Left(left) = self else {
+            return;
+        };
+        let old = old.map_or(0, text_len);
+        let new = text_len(new);
+        if new <= old {
+            *left = left.saturating_add(old - new);
+        } else if new - old <= *left {
+            *left -= new - old;
+        } else {
+            *self = ResultText::Spent;
+        }
+    }
+
+    pub(crate) fn is_spent(self) -> bool {
+        self == ResultText::Spent
+    }
+}
+
+fn text_len(cell: &Cell) -> u64 {
+    let len = match cell {
+        Cell::CellFormula {
+            v: FormulaValue::Text(text),
+            ..
+        } => text.len(),
+        Cell::ArrayFormula(array) => match &array.v {
+            FormulaValue::Text(text) => text.len(),
+            _ => 0,
+        },
+        Cell::SpillCell(spill) => match &spill.v {
+            SpillValue::Text(text) => text.len(),
+            _ => 0,
+        },
+        _ => 0,
+    };
+    len as u64
+}
+
+impl Model<'_> {
+    /// Evaluates a model built by [Model::from_workbook] for the first time, and refuses it
+    /// with the open budget's message when the text of its results does not fit the
+    /// budget it was built within. A refused model is left half evaluated: drop it. A
+    /// later call, or one on a model built otherwise, evaluates without the check.
+    pub fn evaluate_opened(&mut self) -> Result<(), String> {
+        let Some(allowance) = self.open_allowance.take() else {
+            self.evaluate_indexed();
+            return Ok(());
+        };
+        self.result_text = ResultText::Left(allowance.result_text_bytes());
+        self.evaluate_indexed();
+        let spent = self.result_text.is_spent();
+        self.result_text = ResultText::Unbounded;
+        if spent {
+            return Err(allowance.refusal());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Model;
+    use crate::cell::CellValue;
+
+    const ROWS: i32 = 100;
+    const TEXT_LEN: u64 = 1000;
+
+    // A column of formulas returning TEXT_LEN characters each, without the values a file
+    // would cache when `cached` is false, as openpyxl writes them.
+    fn long_text_book(cached: bool) -> Workbook {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        for row in 1..=ROWS {
+            model
+                .set_user_input(0, row, 1, format!("=REPT(\"x\",{TEXT_LEN})&{row}"))
+                .unwrap();
+        }
+        model.evaluate();
+        let mut book = model.workbook;
+        if !cached {
+            for row in 1..=ROWS {
+                let cell = book.worksheets[0].sheet_data.get_mut(row, 1).unwrap();
+                let Cell::CellFormula { v, .. } = cell else {
+                    panic!("{cell:?}");
+                };
+                *v = FormulaValue::Unevaluated;
+            }
+        }
+        book
+    }
+
+    // The least budget the text of `book`'s results fits in, with every other cost.
+    fn fitting_budget(book: &Workbook, text_bytes: u64) -> u64 {
+        let cost = open_cost(book);
+        let past_allowance = text_bytes - cost.formulas * TEXT_BYTES_PER_FORMULA;
+        needed_bytes(cost) + (past_allowance * 6).div_ceil(5)
+    }
+
+    fn results_text_bytes() -> u64 {
+        (1..=ROWS as u64)
+            .map(|row| TEXT_LEN + row.to_string().len() as u64)
+            .sum()
+    }
+
+    fn values(model: &Model) -> Vec<CellValue> {
+        (1..=ROWS)
+            .map(|row| model.get_cell_value_by_index(0, row, 1).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn result_text_past_the_budget_refuses_the_open() {
+        let book = long_text_book(false);
+        let budget = fitting_budget(&book, results_text_bytes()) - 1;
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        let error = model.evaluate_opened().unwrap_err();
+        assert!(error.starts_with(BUDGET_REFUSAL_PREFIX), "{error}");
+        assert!(error.contains("100 formulas"), "{error}");
+    }
+
+    #[test]
+    fn result_text_just_within_the_budget_opens_with_every_value() {
+        let book = long_text_book(false);
+        let mut expected = Model::from_workbook_within(book.clone(), "en", u64::MAX).unwrap();
+        expected.evaluate();
+        let budget = fitting_budget(&book, results_text_bytes());
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        model.evaluate_opened().unwrap();
+        assert_eq!(values(&model), values(&expected));
+        assert_eq!(
+            model.get_cell_value_by_index(0, 7, 1).unwrap(),
+            CellValue::String(format!("{}7", "x".repeat(TEXT_LEN as usize)))
+        );
+    }
+
+    #[test]
+    fn cached_result_text_is_not_charged_again() {
+        let book = long_text_book(true);
+        let budget = needed_bytes(open_cost(&book));
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        model.evaluate_opened().unwrap();
+        assert_eq!(model.result_text, ResultText::Unbounded);
+    }
+
+    #[test]
+    fn evaluations_after_the_first_are_not_charged() {
+        let book = long_text_book(false);
+        let budget = fitting_budget(&book, results_text_bytes());
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        model.evaluate_opened().unwrap();
+        // More text than the whole first evaluation was allowed.
+        for row in 1..=4 {
+            model
+                .set_user_input(0, row, 2, "=REPT(\"y\",30000)".to_string())
+                .unwrap();
+        }
+        model.evaluate_opened().unwrap();
+        assert_eq!(
+            model.get_cell_value_by_index(0, 4, 2).unwrap(),
+            CellValue::String("y".repeat(30000))
+        );
+    }
+
+    #[test]
+    fn cached_spilled_text_is_not_charged_again() {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        model
+            .set_user_input(0, 1, 1, "=REPT(\"z\",1000)&SEQUENCE(50)".to_string())
+            .unwrap();
+        model.evaluate();
+        assert_eq!(
+            model.get_cell_value_by_index(0, 50, 1).unwrap(),
+            CellValue::String(format!("{}50", "z".repeat(1000)))
+        );
+        let book = model.workbook;
+        let budget = needed_bytes(open_cost(&book));
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        model.evaluate_opened().unwrap();
+    }
+
+    #[test]
+    fn spilled_text_past_the_budget_refuses_the_open() {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        model
+            .set_user_input(0, 1, 1, "=REPT(\"z\",1000)&SEQUENCE(50)".to_string())
+            .unwrap();
+        model.evaluate();
+        let mut book = model.workbook;
+        for row in 2..=50 {
+            book.worksheets[0].sheet_data.remove(row, 1);
+        }
+        let budget = needed_bytes(open_cost(&book));
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        let error = model.evaluate_opened().unwrap_err();
+        assert!(error.starts_with(BUDGET_REFUSAL_PREFIX), "{error}");
+    }
 
     #[test]
     fn counts_cells_and_formulas() {

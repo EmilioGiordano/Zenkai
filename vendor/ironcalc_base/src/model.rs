@@ -41,6 +41,7 @@ use crate::cf_runs::CfRun;
 use crate::criteria_ranges::CriteriaRanges;
 use crate::incremental::{circular_cells_fit, Dependencies, Recalculation};
 use crate::lookup_indexes::LookupIndexes;
+use crate::open_budget::{OpenAllowance, ResultText};
 use crate::{cf_types::CfCellResult, tz::Tz};
 
 #[cfg(any(test, feature = "mock_time"))]
@@ -246,6 +247,10 @@ pub struct Model<'a> {
     pub(crate) full_evaluations: u64,
     /// The clock NOW and TODAY read, taken once at the start of each evaluation as Excel does
     pub(crate) evaluation_milliseconds: i64,
+    /// What the workbook was opened within, until its first evaluation.
+    pub(crate) open_allowance: Option<OpenAllowance>,
+    /// Result text the evaluation running may still add.
+    pub(crate) result_text: ResultText,
 }
 
 // FIXME: Maybe this should be the same as CellReference
@@ -1030,6 +1035,8 @@ impl<'a> Model<'a> {
                                     array_node_to_spill_value(value),
                                 )
                             };
+                            self.result_text
+                                .replace(worksheet.sheet_data.get(r, c), &cell);
                             worksheet.update_cell(r, c, cell)?;
                         }
                     }
@@ -1068,10 +1075,12 @@ impl<'a> Model<'a> {
                                     self.workbook.worksheets[sheet as usize].get_style(r, c);
                                 Cell::new_spill_cell(existing_style, (row, column), sv)
                             };
-                            *self.workbook.worksheets[sheet as usize]
+                            let old_cell = self.workbook.worksheets[sheet as usize]
                                 .sheet_data
                                 .get_mut(r, c)
-                                .ok_or("expected a cell")? = new_cell;
+                                .ok_or("expected a cell")?;
+                            self.result_text.replace(Some(&*old_cell), &new_cell);
+                            *old_cell = new_cell;
                         }
                     }
                     // All cells (anchor + spills) have been written above.
@@ -1115,14 +1124,17 @@ impl<'a> Model<'a> {
                             "Array result in scalar context".to_string(),
                         )
                     };
-                    *self.workbook.worksheets[sheet as usize]
-                        .sheet_data
-                        .get_mut(row, column)
-                        .ok_or("expected a cell")? = Cell::CellFormula {
+                    let new_cell = Cell::CellFormula {
                         f: formula,
                         s,
                         v: coerced,
                     };
+                    let old_cell = self.workbook.worksheets[sheet as usize]
+                        .sheet_data
+                        .get_mut(row, column)
+                        .ok_or("expected a cell")?;
+                    self.result_text.replace(Some(&*old_cell), &new_cell);
+                    *old_cell = new_cell;
                     return Ok(());
                 }
             }
@@ -1200,15 +1212,16 @@ impl<'a> Model<'a> {
                         continue;
                     }
                     let existing_style = ws.get_style(r, c);
-                    ws.update_cell(
-                        r,
-                        c,
-                        Cell::new_spill_cell(existing_style, (row, column), spill_value.clone()),
-                    )?;
+                    let spill_cell =
+                        Cell::new_spill_cell(existing_style, (row, column), spill_value.clone());
+                    self.result_text
+                        .replace(ws.sheet_data.get(r, c), &spill_cell);
+                    ws.update_cell(r, c, spill_cell)?;
                 }
             }
         }
 
+        self.result_text.replace(Some(cell), &new_cell);
         self.workbook.worksheets[sheet as usize].update_cell(row, column, new_cell)?;
         Ok(())
     }
@@ -1412,6 +1425,15 @@ impl<'a> Model<'a> {
 
         match cell.get_formula() {
             Some(f) => {
+                // Past the open budget the model is refused and dropped: nothing more is
+                // evaluated, so nothing more is allocated.
+                if self.result_text.is_spent() {
+                    return CalcResult::new_error(
+                        Error::ERROR,
+                        cell_reference,
+                        "Over the open budget".to_string(),
+                    );
+                }
                 let key = (
                     cell_reference.sheet,
                     cell_reference.row,
@@ -1469,6 +1491,8 @@ impl<'a> Model<'a> {
                                 })
                                 .unwrap_or(false);
                             if is_own_spill {
+                                self.result_text
+                                    .replace(ws.sheet_data.get(r, c), &Cell::default());
                                 let _ = ws.cell_clear_contents(r, c);
                             }
                         }
@@ -1650,9 +1674,20 @@ impl<'a> Model<'a> {
     /// # }
     /// ```
     pub fn from_workbook(workbook: Workbook, language_id: &str) -> Result<Model<'_>, String> {
+        let budget_bytes = crate::open_budget::production_budget_bytes();
+        Model::from_workbook_within(workbook, language_id, budget_bytes)
+    }
+
+    /// [Model::from_workbook] within a memory budget of `budget_bytes` instead of the
+    /// machine's.
+    pub fn from_workbook_within(
+        workbook: Workbook,
+        language_id: &str,
+        budget_bytes: u64,
+    ) -> Result<Model<'_>, String> {
         // Parsing every formula past this point can hang the machine on a file
         // bigger than its budget; the estimate above refuses first.
-        crate::open_budget::check_open_budget(&workbook)?;
+        let open_allowance = OpenAllowance::checked(&workbook, budget_bytes)?;
         let parsed_formulas = Vec::new();
         let worksheets = &workbook.worksheets;
 
@@ -1718,6 +1753,8 @@ impl<'a> Model<'a> {
             criteria_deltas: 0,
             full_evaluations: 0,
             evaluation_milliseconds: get_milliseconds_since_epoch(),
+            open_allowance: Some(open_allowance),
+            result_text: ResultText::Unbounded,
         };
 
         model.parse_formulas();
@@ -3170,6 +3207,9 @@ impl<'a> Model<'a> {
         self.cells
             .reserve(formula_cells.len().saturating_sub(self.cells.len()));
         for cell in formula_cells {
+            if self.result_text.is_spent() {
+                break;
+            }
             self.evaluate_cell(CellReferenceIndex {
                 sheet: cell.index,
                 row: cell.row,
@@ -3178,6 +3218,9 @@ impl<'a> Model<'a> {
         }
         self.criteria_ranges.finish();
         self.lookup_indexes.finish();
+        if self.result_text.is_spent() {
+            return;
+        }
         self.evaluate_conditional_formatting();
     }
 
