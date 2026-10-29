@@ -424,8 +424,10 @@ impl Driver<'_> {
         let usage = Usage {
             cells: after.cells.saturating_sub(before.cells),
             // One event per formula cell: plain and array formulas convert, shared
-            // anchors convert once, shared children point at their anchor.
+            // anchors convert once, shared children point at their anchor. One job per
+            // shape the sheet keeps, each converted once.
             formulas: after.formulas.saturating_sub(before.formulas),
+            shapes: after.shapes.saturating_sub(before.shapes),
             bytes: after
                 .bytes
                 .saturating_sub(before.bytes)
@@ -651,6 +653,7 @@ pub(crate) fn stream_config<R: Read>(
                 budgets.check_usage(Usage {
                     cells: 0,
                     formulas: 0,
+                    shapes: 0,
                     bytes: added,
                     rows: 0,
                 })?;
@@ -1867,6 +1870,28 @@ mod tests {
             .expect("a growing sheet must stop");
         let message = error.to_string();
         assert!(message.contains("needs about"), "{message}");
+    }
+
+    #[test]
+    fn distinct_formula_shapes_are_charged_where_a_filled_formula_is_not() {
+        let sheet = |formula: &dyn Fn(u32) -> String| {
+            let rows: String = (1..=300)
+                .map(|n| {
+                    format!(
+                        r#"<row r="{n}"><c r="B{n}"><f>{}</f></c></row>"#,
+                        formula(n)
+                    )
+                })
+                .collect();
+            format!(r#"{HEAD}{rows}{TAIL}"#)
+        };
+        // The filled column costs about 165 kB, the distinct one about 380 kB.
+        let budgets = || Budgets::with_cells(CellBudget::max_cells_for_test(4_000));
+        assert!(stream_with(&sheet(&|n| format!("A{n}*2")), &budgets()).is_ok());
+        let error = stream_with(&sheet(&|n| format!("A{n}*{n}")), &budgets())
+            .err()
+            .expect("distinct shapes must trip the budget");
+        assert!(error.to_string().contains("needs about"), "{error}");
     }
 
     #[test]

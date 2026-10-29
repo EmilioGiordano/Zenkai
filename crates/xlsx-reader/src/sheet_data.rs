@@ -68,6 +68,7 @@ pub(crate) struct SheetCells {
 pub(crate) struct Totals {
     pub(crate) cells: u64,
     pub(crate) formulas: u64,
+    pub(crate) shapes: u64,
     pub(crate) rows: u64,
     pub(crate) bytes: u64,
 }
@@ -93,6 +94,7 @@ impl SheetCells {
         Totals {
             cells: self.cell_count,
             formulas: self.events.len() as u64,
+            shapes: self.jobs.len() as u64,
             rows: self.data.row_count() as u64,
             bytes: self.string_bytes.saturating_add(self.job_bytes),
         }
@@ -589,6 +591,26 @@ mod tests {
         let rows = r#"<row r="1"><c r="A1" t="inlineStr"><is><t>ab</t></is></c><c r="B1" t="inlineStr"><is><t>ab</t></is></c><c r="C1" t="inlineStr"><is><t>cde</t></is></c></row>"#;
         let cells = scan(rows).unwrap();
         assert_eq!(cells.totals().bytes, 2 + 3 + 2 * BYTES_PER_UNIQUE_STRING);
+    }
+
+    #[test]
+    fn a_filled_formula_is_one_shape_and_distinct_ones_are_one_each() {
+        let rows = |formula: &dyn Fn(u32) -> String| -> String {
+            (1..=50)
+                .map(|n| {
+                    format!(
+                        r#"<row r="{n}"><c r="B{n}"><f>{}</f></c></row>"#,
+                        formula(n)
+                    )
+                })
+                .collect()
+        };
+        let filled = scan(&rows(&|n| format!("A{n}*2"))).unwrap().totals();
+        let distinct = scan(&rows(&|n| format!("A{n}*{n}"))).unwrap().totals();
+        assert_eq!((filled.formulas, filled.shapes), (50, 1));
+        assert_eq!((distinct.formulas, distinct.shapes), (50, 50));
+        // Each distinct shape keeps its own text and key.
+        assert!(distinct.bytes > 25 * filled.bytes);
     }
 
     #[test]
