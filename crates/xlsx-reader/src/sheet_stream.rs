@@ -5,6 +5,7 @@ use quick_xml::events::{BytesStart, Event};
 
 use crate::ReadError;
 use crate::limits::Usage;
+use crate::shapes::{ShapeReader, SheetNames};
 use crate::sheet_data::{SheetCells, Totals, scan_rows_into};
 use crate::stream::{Budgets, CharacterCheck, CompressedMeter, Guard};
 use crate::unit_pool::{PoolEnv, UnitPool, UnitScan};
@@ -63,7 +64,7 @@ pub(crate) fn stream_worksheet<R: Read>(
     entry: R,
     meter: &CompressedMeter,
     part: &str,
-    sheet_name: &str,
+    names: SheetNames<'_>,
     budgets: &Budgets,
     tuning: Tuning,
 ) -> Result<StreamedSheet, ReadError> {
@@ -81,7 +82,8 @@ pub(crate) fn stream_worksheet<R: Read>(
     pump.head.drain(..content);
     pump.pos = 0;
     let driver = Driver {
-        sheet_name,
+        names,
+        shapes: ShapeReader::new(names),
         prefixes: &prefixes,
         budgets,
         merged: SheetCells::default(),
@@ -107,7 +109,7 @@ pub(crate) fn stream_worksheet<R: Read>(
     let env = PoolEnv {
         cut: &cut,
         prefixes: &prefixes,
-        sheet_name,
+        names,
         budgets,
     };
     let (tail, driver, rowtags) = std::thread::scope(|scope| {
@@ -379,7 +381,7 @@ fn parse_unit(
     let rowtags_bytes = rowtags_from_unit(rowtags, cut, unit);
     let text = std::str::from_utf8(unit).map_err(unreadable)?;
     let before = driver.merged.totals();
-    let spills = scan_rows_into(&mut driver.merged, text, driver.prefixes, driver.sheet_name)?;
+    let spills = scan_rows_into(&mut driver.merged, text, driver.prefixes, driver.names)?;
     driver.charge_unit(before, spills, rowtags_bytes)
 }
 
@@ -401,7 +403,7 @@ fn absorb_unit(
         Err(error) => return Err(error),
     };
     let before = driver.merged.totals();
-    driver.merged.absorb(scan.cells)?;
+    driver.merged.absorb(scan.cells, &mut driver.shapes)?;
     rowtags.extend_from_slice(&scan.rowtags);
     driver.charge_unit(before, spills, scan.rowtags_bytes)
 }
@@ -422,8 +424,10 @@ impl Driver<'_> {
         let usage = Usage {
             cells: after.cells.saturating_sub(before.cells),
             // One event per formula cell: plain and array formulas convert, shared
-            // anchors convert once, shared children point at their anchor.
+            // anchors convert once, shared children point at their anchor. One job per
+            // shape the sheet keeps, each converted once.
             formulas: after.formulas.saturating_sub(before.formulas),
+            shapes: after.shapes.saturating_sub(before.shapes),
             bytes: after
                 .bytes
                 .saturating_sub(before.bytes)
@@ -649,6 +653,7 @@ pub(crate) fn stream_config<R: Read>(
                 budgets.check_usage(Usage {
                     cells: 0,
                     formulas: 0,
+                    shapes: 0,
                     bytes: added,
                     rows: 0,
                 })?;
@@ -684,7 +689,8 @@ fn stream_rest<R: Read>(
 }
 
 struct Driver<'d> {
-    sheet_name: &'d str,
+    names: SheetNames<'d>,
+    shapes: ShapeReader<'d>,
     prefixes: &'d [Vec<u8>],
     budgets: &'d Budgets,
     merged: SheetCells,
@@ -1331,7 +1337,7 @@ mod tests {
             let xml = format!(
                 r#"<row r="{row}"><c r="A{row}" t="inlineStr"><is><t>same</t></is></c></row>"#
             );
-            scan_rows_into(&mut cells, &xml, &[Vec::new()], "Sheet1").unwrap();
+            scan_rows_into(&mut cells, &xml, &[Vec::new()], crate::shapes::sheet1()).unwrap();
         }
         assert_eq!(cells.strings.len(), 1);
         assert_eq!(cells.data.row_count(), 2);
@@ -1342,8 +1348,20 @@ mod tests {
     fn rows_out_of_order_across_pieces_are_left_to_ironcalc() {
         let mut cells = SheetCells::default();
         let piece = |row: u32| format!(r#"<row r="{row}"><c r="A{row}"><v>1</v></c></row>"#);
-        scan_rows_into(&mut cells, &piece(5), &[Vec::new()], "Sheet1").unwrap();
-        let error = scan_rows_into(&mut cells, &piece(5), &[Vec::new()], "Sheet1").unwrap_err();
+        scan_rows_into(
+            &mut cells,
+            &piece(5),
+            &[Vec::new()],
+            crate::shapes::sheet1(),
+        )
+        .unwrap();
+        let error = scan_rows_into(
+            &mut cells,
+            &piece(5),
+            &[Vec::new()],
+            crate::shapes::sheet1(),
+        )
+        .unwrap_err();
         assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
     }
 
@@ -1353,7 +1371,7 @@ mod tests {
             meter.wrap(xml.as_bytes()),
             &meter,
             "xl/worksheets/sheet1.xml",
-            "Sheet1",
+            crate::shapes::sheet1(),
             budgets,
             Tuning::production(0),
         )
@@ -1365,7 +1383,7 @@ mod tests {
             meter.wrap(xml.as_bytes()),
             &meter,
             "xl/worksheets/sheet1.xml",
-            "Sheet1",
+            crate::shapes::sheet1(),
             &budgets(),
             tuning,
         )
@@ -1455,7 +1473,7 @@ mod tests {
                     meter.wrap(xml.as_bytes()),
                     &meter,
                     "xl/worksheets/sheet1.xml",
-                    "Sheet1",
+                    crate::shapes::sheet1(),
                     &tight,
                     tuning,
                 )
@@ -1852,6 +1870,28 @@ mod tests {
             .expect("a growing sheet must stop");
         let message = error.to_string();
         assert!(message.contains("needs about"), "{message}");
+    }
+
+    #[test]
+    fn distinct_formula_shapes_are_charged_where_a_filled_formula_is_not() {
+        let sheet = |formula: &dyn Fn(u32) -> String| {
+            let rows: String = (1..=300)
+                .map(|n| {
+                    format!(
+                        r#"<row r="{n}"><c r="B{n}"><f>{}</f></c></row>"#,
+                        formula(n)
+                    )
+                })
+                .collect();
+            format!(r#"{HEAD}{rows}{TAIL}"#)
+        };
+        // The filled column costs about 165 kB, the distinct one about 380 kB.
+        let budgets = || Budgets::with_cells(CellBudget::max_cells_for_test(4_000));
+        assert!(stream_with(&sheet(&|n| format!("A{n}*2")), &budgets()).is_ok());
+        let error = stream_with(&sheet(&|n| format!("A{n}*{n}")), &budgets())
+            .err()
+            .expect("distinct shapes must trip the budget");
+        assert!(error.to_string().contains("needs about"), "{error}");
     }
 
     #[test]

@@ -185,6 +185,7 @@ impl CellCounter {
         Usage {
             cells: self.cells,
             formulas: self.formulas,
+            shapes: 0,
             bytes: 0,
             rows: self.rows,
         }
@@ -337,6 +338,7 @@ pub(crate) struct Budgets {
     cells: CellBudget,
     used_cells: AtomicU64,
     used_formulas: AtomicU64,
+    used_shapes: AtomicU64,
     used_bytes: AtomicU64,
     used_rows: AtomicU64,
     // The worksheet bytes the archive declares and the bytes read from them so far,
@@ -370,6 +372,7 @@ impl Budgets {
             cells,
             used_cells: AtomicU64::new(0),
             used_formulas: AtomicU64::new(0),
+            used_shapes: AtomicU64::new(0),
             used_bytes: AtomicU64::new(0),
             used_rows: AtomicU64::new(0),
             sheet_declared: AtomicU64::new(0),
@@ -417,6 +420,10 @@ impl Budgets {
             .used_formulas
             .fetch_add(additional.formulas, Ordering::Relaxed)
             .saturating_add(additional.formulas);
+        let shapes = self
+            .used_shapes
+            .fetch_add(additional.shapes, Ordering::Relaxed)
+            .saturating_add(additional.shapes);
         let bytes = self
             .used_bytes
             .fetch_add(additional.bytes, Ordering::Relaxed)
@@ -431,6 +438,7 @@ impl Budgets {
             Usage {
                 cells,
                 formulas,
+                shapes,
                 bytes,
                 rows,
             },
@@ -559,6 +567,7 @@ impl<R: Read> Guard<'_, R> {
         self.budgets.check_usage(Usage {
             cells: 0,
             formulas: 0,
+            shapes: 0,
             bytes,
             rows: 0,
         })
@@ -819,6 +828,7 @@ mod tests {
         let usage = Usage {
             cells: 300,
             formulas: 0,
+            shapes: 0,
             bytes: 0,
             rows: 0,
         };
@@ -835,6 +845,7 @@ mod tests {
         let usage = Usage {
             cells: 1_001,
             formulas: 0,
+            shapes: 0,
             bytes: 0,
             rows: 0,
         };

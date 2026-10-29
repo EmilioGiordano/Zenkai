@@ -6,6 +6,7 @@ use ironcalc::base::expressions::parser::DefinedNameS;
 
 use crate::ReadError;
 use crate::limits::describe_bytes;
+use crate::shapes::SheetNames;
 use crate::skipped_part;
 use crate::stream::{Budgets, CompressedMeter, read_part, read_part_to_peek};
 
@@ -28,6 +29,16 @@ pub(crate) struct Package {
     pub(crate) defined_names: Vec<DefinedNameS>,
     pub(crate) worksheets: Vec<WorksheetPart>,
     pub(crate) shared_strings: Option<String>,
+}
+
+impl Package {
+    pub(crate) fn names_of(&self, position: usize) -> SheetNames<'_> {
+        SheetNames {
+            sheet: &self.worksheets[position].name,
+            sheets: &self.sheet_names,
+            defined_names: &self.defined_names,
+        }
+    }
 }
 
 pub(crate) fn part_path(target: &str) -> String {

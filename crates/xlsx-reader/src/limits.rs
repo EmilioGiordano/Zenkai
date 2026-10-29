@@ -141,6 +141,7 @@ impl CellBudget {
 pub struct Usage {
     pub cells: u64,
     pub formulas: u64,
+    pub shapes: u64,
     pub bytes: u64,
     pub rows: u64,
 }
@@ -159,6 +160,7 @@ impl Usage {
         Usage {
             cells: self.cells.saturating_mul(times),
             formulas: self.formulas.saturating_mul(times),
+            shapes: self.shapes.saturating_mul(times),
             bytes: self.bytes.saturating_mul(times),
             rows: self.rows.saturating_mul(times),
         }
@@ -172,6 +174,7 @@ impl Usage {
         Usage {
             cells: scale(self.cells),
             formulas: scale(self.formulas),
+            shapes: scale(self.shapes),
             bytes: scale(self.bytes),
             rows: scale(self.rows),
         }
@@ -181,6 +184,7 @@ impl Usage {
         ironcalc::base::open_budget::OpenCost {
             cells: self.cells,
             formulas: self.formulas,
+            shapes: self.shapes,
             rows: self.rows,
             bytes: self.bytes,
         }
@@ -291,6 +295,7 @@ mod tests {
                 .check(Usage {
                     cells: 10_000,
                     formulas: 0,
+                    shapes: 0,
                     bytes: 0,
                     rows: 0
                 })
@@ -300,6 +305,7 @@ mod tests {
             .check(Usage {
                 cells: 10_001,
                 formulas: 0,
+                shapes: 0,
                 bytes: 0,
                 rows: 0,
             })
@@ -321,6 +327,7 @@ mod tests {
                 .check(Usage {
                     cells: 1000,
                     formulas: 0,
+                    shapes: 0,
                     bytes: 0,
                     rows: 0,
                 })
@@ -331,6 +338,7 @@ mod tests {
                 .check(Usage {
                     cells: 1000,
                     formulas: 1000,
+                    shapes: 0,
                     bytes: 0,
                     rows: 0,
                 })
@@ -347,6 +355,7 @@ mod tests {
                 .check(Usage {
                     cells: 99,
                     formulas: 0,
+                    shapes: 0,
                     bytes: supported - 99 * BYTES_PER_CELL,
                     rows: 0,
                 })
@@ -357,6 +366,7 @@ mod tests {
                 .check(Usage {
                     cells: 99,
                     formulas: 0,
+                    shapes: 0,
                     bytes: supported - 99 * BYTES_PER_CELL + 1,
                     rows: 0,
                 })
@@ -367,6 +377,7 @@ mod tests {
                 .check(Usage {
                     cells: 0,
                     formulas: 0,
+                    shapes: 0,
                     bytes: 0,
                     rows: supported / ROW_BYTES,
                 })
@@ -377,6 +388,7 @@ mod tests {
                 .check(Usage {
                     cells: 0,
                     formulas: 0,
+                    shapes: 0,
                     bytes: 0,
                     rows: supported / ROW_BYTES + 1,
                 })
@@ -394,6 +406,7 @@ mod tests {
         let usage = Usage {
             cells: 19_451_599,
             formulas: 269_081,
+            shapes: 0,
             bytes: 200 * 1024 * 1024,
             rows: 500_000,
         };
@@ -406,6 +419,7 @@ mod tests {
         let usage = Usage {
             cells: 21_000_000,
             formulas: 269_081,
+            shapes: 0,
             bytes: 0,
             rows: 0,
         };
@@ -421,6 +435,7 @@ mod tests {
         let usage = |cells| Usage {
             cells,
             formulas: 0,
+            shapes: 0,
             bytes: 0,
             rows: 0,
         };
@@ -447,6 +462,7 @@ mod tests {
         let usage = Usage {
             cells: 1_001,
             formulas: 0,
+            shapes: 0,
             bytes: 0,
             rows: 0,
         };
@@ -464,6 +480,7 @@ mod tests {
         let usage = Usage {
             cells: u64::MAX / 2,
             formulas: 1,
+            shapes: 0,
             bytes: 1,
             rows: 1,
         };
@@ -480,6 +497,7 @@ mod tests {
         let usage = Usage {
             cells: 1_001,
             formulas: 0,
+            shapes: 0,
             bytes: 0,
             rows: 0,
         };

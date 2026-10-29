@@ -2976,8 +2976,18 @@ impl<'a> Model<'a> {
     }
 
     /// Returns the cells holding a formula, in natural (sheet, row, column) order.
-    fn get_formula_cells(&self) -> Vec<CellIndex> {
-        let mut cells = Vec::new();
+    pub(crate) fn get_formula_cells(&self) -> Vec<CellIndex> {
+        // Counted first: a vector growing to millions of cells holds its old and new
+        // buffers at once each time it doubles.
+        let count = self
+            .workbook
+            .worksheets
+            .iter()
+            .filter(|sheet| !sheet.shared_formulas.is_empty())
+            .flat_map(|sheet| sheet.sheet_data.iter())
+            .filter(|(_, _, cell)| cell.get_formula().is_some())
+            .count();
+        let mut cells = Vec::with_capacity(count);
         for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
             // A formula cell holds an index into the sheet's formulas, so a sheet without
             // any cannot have one.
@@ -3149,6 +3159,10 @@ impl<'a> Model<'a> {
         // anchor of an array or spill sits before the cells it covers in this order. Listing
         // every cell would cost 12 bytes each and double while it grew.
         let formula_cells = self.get_formula_cells();
+        // Every formula cell ends up in `cells`; sized once, the map never holds its old
+        // and new tables together while it grows.
+        self.cells
+            .reserve(formula_cells.len().saturating_sub(self.cells.len()));
         for cell in formula_cells {
             self.evaluate_cell(CellReferenceIndex {
                 sheet: cell.index,

@@ -10016,6 +10016,7 @@ dependencies = [
  "rand_chacha 0.9.0",
  "rust_xlsxwriter",
  "tempfile",
+ "tracing",
  "tracing-subscriber",
  "zenkai-datagen",
  "zenkai-engine",
