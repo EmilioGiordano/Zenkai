@@ -62,9 +62,14 @@ pub fn is_text(path: &Path) -> bool {
         .is_some_and(|extension| extension == TEXT_EXTENSION)
 }
 
+// Every hibernation writes a fresh path, so removing the dump a wake spent can never delete the
+// dump of a later hibernation of the same workbook. The serial sits after the workbook id,
+// which keeps the session name readable by `lock_of`.
 pub fn dump_file(directory: &Path, id: WorkbookId) -> PathBuf {
+    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let serial = SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     directory.join(format!(
-        "{PREFIX}{}-{}.{DUMP_EXTENSION}",
+        "{PREFIX}{}-{}.{serial}.{DUMP_EXTENSION}",
         session_name(),
         id.0
     ))
@@ -293,6 +298,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _lock = lock_session(dir.path()).unwrap();
         let own = dump_file(dir.path(), WorkbookId(1));
+        assert_ne!(own, dump_file(dir.path(), WorkbookId(1)));
+        assert_eq!(lock_of(&own), lock_file(dir.path()));
         let dead = dir.path().join("autosave-1-1-0.zkh");
         let live = dir.path().join("autosave-2-2-0.zkh");
         for dump in [&own, &dead, &live] {
