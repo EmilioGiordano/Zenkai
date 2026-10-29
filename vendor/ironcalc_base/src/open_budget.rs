@@ -202,8 +202,9 @@ mod tests {
         );
     }
 
-    // The lookup sheet of GitHub issue #212 at a million rows: about 4.9 GiB committed at
-    // the peak, projected from 50k and 200k rows, and refused before shapes were kept once.
+    // The lookup sheet of GitHub issue #212 at a million rows, refused before shapes were
+    // kept once: it measured 3.7 GiB committed at the peak, under the 4.9 GiB projected
+    // from 50k and 200k rows that this charge still covers 1.2 times.
     #[test]
     fn a_million_rows_of_repeated_lookups_fit_sixty_percent_of_sixteen_gigabytes() {
         let gibibyte = 1024 * 1024 * 1024;
@@ -279,6 +280,14 @@ mod tests {
                 202_334,
                 50_057 * (60 + BYTES_PER_UNIQUE_STRING),
                 1_021,
+            ),
+            (
+                29_312_838,
+                21_000_143,
+                163,
+                1_002_334,
+                213_068 * (60 + BYTES_PER_UNIQUE_STRING),
+                3_771,
             ),
         ];
         for (cells, formulas, shapes, rows, bytes, peak) in measured {
