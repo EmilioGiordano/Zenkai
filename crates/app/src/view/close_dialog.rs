@@ -127,7 +127,7 @@ impl Workspace {
                 dialog.choices.ids_to_save(),
                 ClosePlan {
                     discard: dialog.choices.ids_to_discard(),
-                    start_empty: !dialog.choices.reopen,
+                    start_empty: dialog.choices.starts_empty(),
                     goal: dialog.choices.goal,
                 },
             ),
@@ -151,7 +151,7 @@ impl Workspace {
             Purpose::App => self.run_close(
                 ClosePlan {
                     discard: dialog.choices.all_ids(),
-                    start_empty: !dialog.choices.reopen,
+                    start_empty: dialog.choices.starts_empty(),
                     goal: dialog.choices.goal,
                 },
                 window,
@@ -160,12 +160,9 @@ impl Workspace {
         }
     }
 
-    // Quitting wins over hiding: a Quit asked while a hide prompt is open makes the prompt a quit.
     pub(super) fn retarget_close_dialog(&mut self, goal: CloseGoal) {
-        if let Some(dialog) = self.close_dialog.as_mut()
-            && !goal.keeps_running()
-        {
-            dialog.choices.goal = goal;
+        if let Some(dialog) = self.close_dialog.as_mut() {
+            dialog.choices.goal = dialog.choices.goal.outranking(goal);
         }
     }
 

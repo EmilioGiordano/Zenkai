@@ -178,6 +178,7 @@ impl Workspace {
                 .compact()
                 .icon(IconName::PanelRight)
                 .selected(self.chat.open)
+                .accessibility_label(label)
                 .tooltip(keymap::labeled(cx, label, &ToggleAgentChat))
                 .on_click(cx.listener(|this, event, window, cx| {
                     if !sidebar::is_primary_click(event) {

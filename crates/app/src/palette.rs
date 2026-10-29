@@ -78,6 +78,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.previous_workbook"), PreviousDocument),
                 item(t!("palette.save"), Save),
                 item(t!("palette.save_as"), SaveAs),
+                item(t!("palette.cancel_export"), CancelExport),
                 item(t!("palette.close_window"), CloseWindow),
                 item(t!("palette.quit"), Quit),
             ],
@@ -302,6 +303,10 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.let_agents_edit"), LetAgentsEdit),
                 item(t!("palette.record_shortcut_keys"), RecordShortcutKeys),
                 item(t!("palette.reset_all_shortcuts"), ResetAllShortcuts),
+                item(
+                    t!("palette.restart_to_apply_language"),
+                    RestartToApplyLanguage,
+                ),
             ],
         ),
     ]

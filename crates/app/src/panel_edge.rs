@@ -31,7 +31,6 @@ pub fn panel_edge(
         .id(state.id)
         .key_context("PanelEdge")
         .track_focus(focus)
-        .tab_stop(true)
         .role(Role::Splitter)
         .aria_label(state.label)
         .aria_orientation(Orientation::Vertical)

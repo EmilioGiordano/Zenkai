@@ -13,6 +13,7 @@ use super::choices::{self, Choices};
 use super::controls::{self, RowParts, card, explanation, group_title, mode_cards, segmented};
 use super::rows::{RowId, Section, Values, visible_rows};
 use super::{OpenDropdown, SettingsWindow, agents, info, keyboard, update};
+use crate::actions::RestartToApplyLanguage;
 use crate::interface_scale::rem_px;
 use crate::space_appearance::SpaceAppearance;
 use crate::space_controls::style_cards;
@@ -266,6 +267,14 @@ impl SettingsWindow {
                     },
                 ));
                 parts.overlay = self.dropdown_overlay(row, settings, spaces, cx);
+                if row == RowId::Language && crate::restart::language_change_pending(cx) {
+                    parts.below = Some(info::button(
+                        ("row-restart", id),
+                        t!("settings.restart_now"),
+                        t!("palette.restart_to_apply_language"),
+                        |window, cx| window.dispatch_action(Box::new(RestartToApplyLanguage), cx),
+                    ));
+                }
             }
             RowId::Autosave => {
                 let seconds = settings.general.autosave_seconds;

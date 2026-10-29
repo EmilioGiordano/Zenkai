@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui_kit::base::{h_flex, v_flex};
@@ -12,7 +12,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use zenkai_agent::settings::SettingsError;
-use zenkai_engine::{Copied, Engine, EngineError, Unsupported, Workbook, save_xlsx};
+use zenkai_engine::{Copied, Engine, EngineError, ShownCells, Unsupported, Workbook, save_xlsx};
 use zenkai_formats::{Delimiter, parse_csv};
 use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
@@ -57,6 +57,7 @@ use crate::chart_panel::{self, ChartPanel};
 use crate::chat_layout::{ChatLayout, ChatLayoutState};
 use crate::clipboard;
 use crate::close_prompt::{CloseGoal, Departure};
+use crate::csv_export_size::ExportSize;
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
@@ -80,6 +81,7 @@ use crate::recovery;
 use crate::refresh::{CellsRefresh, MissedRefreshes};
 use crate::region;
 use crate::session::{SaveOrder, Session};
+use crate::sidebar_item::human_size;
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Neighbour;
 use crate::stale_view::StaleRequest;
@@ -169,6 +171,13 @@ const AUTOFIT_CHAR_WIDTH: f32 = 7.5;
 const MAX_REPLACE_CELLS: usize = 100_000;
 const FONT_SIZES: [u16; 16] = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72];
 
+struct CsvExport {
+    id: WorkbookId,
+    path: PathBuf,
+    sheets: usize,
+    generation: u64,
+}
+
 pub struct Workspace {
     documents: Documents,
     grid: Entity<Grid>,
@@ -187,6 +196,7 @@ pub struct Workspace {
     busy: Option<SharedString>,
     save_as_flows: save_flow::SaveAsFlows,
     job_pill: JobPill,
+    export_cancels: std::collections::HashMap<WorkbookId, Arc<AtomicBool>>,
     open_loads: OpenLoads,
     last_recalc: Option<Duration>,
     diagnostics: bool,
@@ -209,6 +219,7 @@ pub struct Workspace {
     generate: Option<generate::GenerateSession>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
+    name_box_focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
     recovery_dir: Option<PathBuf>,
     rename: Option<(Entity<InputState>, Subscription)>,
@@ -232,8 +243,8 @@ pub struct Workspace {
     pdf_client: crate::pdf::PdfClient,
     text_watch: text_watch::TextWatch,
     lifecycle: Lifecycle,
-    #[cfg(windows)]
-    quit_after_hide: bool,
+    // A stronger goal asked while a close was already running; it decides how that close ends.
+    pending_goal: Option<CloseGoal>,
     // Saves ahead of closing a tab or the app; `None` when no close waits on a save.
     departure: Option<Departure>,
     close_dialog: Option<close_dialog::CloseDialog>,
@@ -342,9 +353,13 @@ enum Replacing {
     Original(Vec<Unsupported>),
 }
 
+fn activates_button(event: &KeyDownEvent) -> bool {
+    matches!(event.keystroke.key.as_str(), "enter" | "space")
+}
+
 impl Workspace {
     pub fn new(initial: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
-        let grid = cx.new(Grid::new);
+        let grid = cx.new(|cx| Grid::new(t!("grid.sheet_label").into(), cx));
         let subscription = cx.subscribe_in(&grid, window, Self::on_grid_event);
         let colors = toolbar::ColorPickers {
             font: cx.new(|cx| ColorPickerState::new(window, cx)),
@@ -406,6 +421,7 @@ impl Workspace {
             busy: None,
             save_as_flows: save_flow::SaveAsFlows::default(),
             job_pill: JobPill::default(),
+            export_cancels: std::collections::HashMap::new(),
             open_loads: OpenLoads::default(),
             last_recalc: None,
             diagnostics: false,
@@ -425,6 +441,7 @@ impl Workspace {
             generate: None,
             colors,
             focus: cx.focus_handle(),
+            name_box_focus: cx.focus_handle().tab_stop(true),
             session_lock: None,
             recovery_dir: None,
             rename: None,
@@ -445,8 +462,7 @@ impl Workspace {
             pdf_client: crate::pdf::PdfClient::next_to_exe(),
             text_watch: text_watch::TextWatch::default(),
             lifecycle: Lifecycle::Running,
-            #[cfg(windows)]
-            quit_after_hide: false,
+            pending_goal: None,
             departure: None,
             close_dialog: None,
             prompts: PromptGate::default(),
@@ -1675,23 +1691,29 @@ impl Workspace {
         self.busy = Some(t!("busy.saving").into());
         self.start_long_job(LongJob::Saving, cx);
         cx.spawn_in(window, async move |this, cx| {
-            let target = path.clone();
-            let written = cx
+            let gathered = cx
                 .background_executor()
-                .spawn(async move { files::export_sheet_csv(&shared, sheet, &target) })
+                .spawn(async move {
+                    let shown = files::gather_export(&shared, sheet)?;
+                    let size = ExportSize::of(&shown);
+                    Ok::<_, EngineError>((shown, size))
+                })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.clear_busy(t!("busy.saving"), cx);
                 this.end_long_job(LongJob::Saving, cx);
-                let mut follow_up = AfterJob::Nothing;
-                if let Some(document) = this.documents.get_mut(id) {
-                    document.end_file_job(generation);
-                    // A save pressed meanwhile still owes the workbook file: a CSV is not it.
-                    follow_up = document.settle_save(generation, JobEnd::Autosaved);
-                }
-                this.csv_export_ended(id, &path, sheets, written, window, cx);
-                if follow_up == AfterJob::SaveAgain {
-                    this.save_again(id, window, cx);
+                let export = CsvExport {
+                    id,
+                    path,
+                    sheets,
+                    generation,
+                };
+                match gathered {
+                    Err(error) => this.export_ended(export, Err(error), window, cx),
+                    Ok((shown, size)) if size.needs_confirmation() => {
+                        this.confirm_large_export(export, shown, size, window, cx)
+                    }
+                    Ok((shown, _)) => this.write_export(export, shown, window, cx),
                 }
             });
             if let Err(error) = update {
@@ -1699,6 +1721,109 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    fn confirm_large_export(
+        &mut self,
+        export: CsvExport,
+        shown: ShownCells,
+        size: ExportSize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let detail = t!(
+            "export.large_detail",
+            rows = size.rows,
+            columns = size.columns,
+            size = human_size(size.bytes),
+            cells = size.cells
+        );
+        let answer = self.ask(
+            PromptLevel::Warning,
+            t!("export.large_title"),
+            Some(&detail),
+            &[t!("button.cancel"), t!("button.export")],
+            window,
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let choice = answer.await;
+            let update = this.update_in(cx, |this, window, cx| {
+                if choice == Some(1) {
+                    this.write_export(export, shown, window, cx)
+                } else {
+                    cx.background_executor()
+                        .spawn(async move { drop(shown) })
+                        .detach();
+                    this.export_ended(export, Err(EngineError::Cancelled), window, cx)
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during export prompt");
+            }
+        })
+        .detach();
+    }
+
+    fn write_export(
+        &mut self,
+        export: CsvExport,
+        shown: ShownCells,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.export_cancels.insert(export.id, Arc::clone(&cancel));
+        self.busy = Some(t!("busy.saving").into());
+        self.start_long_job(LongJob::Saving, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let target = export.path.clone();
+            let written = cx
+                .background_executor()
+                .spawn(async move { files::write_csv_file(&target, &shown, &cancel) })
+                .await;
+            let update = this.update_in(cx, |this, window, cx| {
+                this.export_cancels.remove(&export.id);
+                this.clear_busy(t!("busy.saving"), cx);
+                this.end_long_job(LongJob::Saving, cx);
+                this.export_ended(export, written, window, cx);
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during export");
+            }
+        })
+        .detach();
+    }
+
+    fn export_ended(
+        &mut self,
+        export: CsvExport,
+        written: Result<(), EngineError>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let CsvExport {
+            id,
+            path,
+            sheets,
+            generation,
+        } = export;
+        let mut follow_up = AfterJob::Nothing;
+        if let Some(document) = self.documents.get_mut(id) {
+            document.end_file_job(generation);
+            // A save pressed meanwhile still owes the workbook file: a CSV is not it.
+            follow_up = document.settle_save(generation, JobEnd::Autosaved);
+        }
+        self.csv_export_ended(id, &path, sheets, written, window, cx);
+        if follow_up == AfterJob::SaveAgain {
+            self.save_again(id, window, cx);
+        }
+    }
+
+    fn cancel_export(&mut self, _: &CancelExport, _: &mut Window, _: &mut Context<Self>) {
+        for cancel in self.export_cancels.values() {
+            cancel.store(true, Ordering::Relaxed);
+        }
     }
 
     // The list is read and written off the UI thread; a failure only loses the list.
@@ -2569,6 +2694,11 @@ impl Workspace {
 
     fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
+        let sidebar_label = if self.sidebar.visible {
+            t!("sidebar.hide_tooltip")
+        } else {
+            t!("sidebar.show_tooltip")
+        };
         TitleBar::new().h(rem_px(34.0)).child(
             h_flex()
                 .size_full()
@@ -2590,15 +2720,8 @@ impl Workspace {
                                     } else {
                                         gpui_kit::assets::IconName::PanelLeftOpen
                                     })
-                                    .tooltip(keymap::labeled(
-                                        cx,
-                                        if self.sidebar.visible {
-                                            t!("sidebar.hide_tooltip")
-                                        } else {
-                                            t!("sidebar.show_tooltip")
-                                        },
-                                        &ToggleSidebar,
-                                    ))
+                                    .accessibility_label(sidebar_label)
+                                    .tooltip(keymap::labeled(cx, sidebar_label, &ToggleSidebar))
                                     .on_click(|event, window, cx| {
                                         if sidebar::is_primary_click(event) {
                                             window.dispatch_action(ToggleSidebar.boxed_clone(), cx)
@@ -2658,6 +2781,7 @@ impl Workspace {
                     .into_any_element(),
                 None => div()
                     .id("name-box")
+                    .track_focus(&self.name_box_focus)
                     .role(Role::Button)
                     .aria_label(t!("grid.name_box_label", name = name))
                     .w(rem_px(96.0))
@@ -2671,6 +2795,11 @@ impl Workspace {
                     .text_sm()
                     .cursor_text()
                     .on_click(cx.listener(|this, _, window, cx| this.open_go_to(window, cx)))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if activates_button(event) {
+                            this.open_go_to(window, cx);
+                        }
+                    }))
                     .child(name)
                     .into_any_element(),
             })
@@ -2785,10 +2914,18 @@ impl Workspace {
             .child(
                 div()
                     .id("add-sheet")
+                    .role(Role::Button)
+                    .aria_label(t!("sheet.add"))
+                    .tab_index(0)
                     .px_3()
                     .text_color(theme.muted_foreground)
                     .cursor_pointer()
                     .child("+")
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if activates_button(event) {
+                            this.add_sheet(window, cx);
+                        }
+                    }))
                     .on_click(cx.listener(|this, _, window, cx| this.add_sheet(window, cx))),
             )
     }
@@ -3904,6 +4041,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))
+            .on_action(cx.listener(Self::cancel_export))
             .on_action(cx.listener(Self::new_workbook))
             .on_action(cx.listener(|this, _: &CycleMarkdownView, window, cx| {
                 this.cycle_markdown_view(window, cx)

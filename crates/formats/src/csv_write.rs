@@ -1,5 +1,7 @@
 use std::borrow::Cow;
-use std::io::Write;
+use std::cell::RefCell;
+use std::io::{self, Write};
+use std::rc::Rc;
 
 use crate::csv_format::{CsvError, Delimiter};
 
@@ -7,27 +9,69 @@ const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
 // Writes an export row by row, so its memory never grows with the size of the sheet.
 pub struct CsvWriter<W: Write> {
-    writer: csv::Writer<W>,
+    writer: csv::Writer<SharedOut<W>>,
+    out: SharedOut<W>,
+    delimiter: u8,
+}
+
+// The csv writer owns its output and has no way to reach it, but long runs of empty
+// fields are cheaper written as raw delimiters between its own writes.
+struct SharedOut<W>(Rc<RefCell<W>>);
+
+impl<W> Clone for SharedOut<W> {
+    fn clone(&self) -> Self {
+        SharedOut(Rc::clone(&self.0))
+    }
+}
+
+impl<W: Write> Write for SharedOut<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.borrow_mut().write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.0.borrow_mut().flush()
+    }
 }
 
 impl<W: Write> CsvWriter<W> {
     pub fn new(mut out: W, delimiter: Delimiter) -> Result<CsvWriter<W>, CsvError> {
         out.write_all(UTF8_BOM)?;
+        let out = SharedOut(Rc::new(RefCell::new(out)));
         let writer = csv::WriterBuilder::new()
             .delimiter(delimiter.byte())
             .terminator(csv::Terminator::CRLF)
             .flexible(true)
-            .from_writer(out);
-        Ok(CsvWriter { writer })
+            .from_writer(out.clone());
+        Ok(CsvWriter {
+            writer,
+            out,
+            delimiter: delimiter.byte(),
+        })
     }
 
     pub fn write_field(&mut self, text: &str) -> Result<(), CsvError> {
         Ok(self.writer.write_field(neutralize(text).as_bytes())?)
     }
 
+    // Two fields go through the csv writer so it counts the row as more than one empty
+    // field (which it would write as `""`); the rest of a long run is raw delimiters.
     pub fn write_empty_fields(&mut self, count: usize) -> Result<(), CsvError> {
-        for _ in 0..count {
+        let through_writer = count.min(2);
+        for _ in 0..through_writer {
             self.writer.write_field(b"")?;
+        }
+        let raw = count - through_writer;
+        if raw > 0 {
+            self.writer.flush()?;
+            let mut out = self.out.0.borrow_mut();
+            let chunk = [self.delimiter; 8192];
+            let mut left = raw;
+            while left > 0 {
+                let now = left.min(chunk.len());
+                out.write_all(&chunk[..now])?;
+                left -= now;
+            }
         }
         Ok(())
     }
@@ -48,10 +92,8 @@ impl<W: Write> CsvWriter<W> {
         self.end_row()
     }
 
-    pub fn finish(self) -> Result<W, CsvError> {
-        self.writer
-            .into_inner()
-            .map_err(|error| CsvError::Write(error.into_error()))
+    pub fn finish(mut self) -> Result<(), CsvError> {
+        Ok(self.writer.flush()?)
     }
 }
 
@@ -67,21 +109,24 @@ fn neutralize(text: &str) -> Cow<'_, str> {
 }
 
 pub fn write_csv(rows: &[Vec<String>], delimiter: Delimiter) -> Result<Vec<u8>, CsvError> {
-    let mut writer = CsvWriter::new(Vec::new(), delimiter)?;
+    let mut bytes = Vec::new();
+    let mut writer = CsvWriter::new(&mut bytes, delimiter)?;
     for row in rows {
         writer.write_row(row.iter().map(String::as_str))?;
     }
-    writer.finish()
+    writer.finish()?;
+    Ok(bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn written(delimiter: Delimiter, build: impl FnOnce(&mut CsvWriter<Vec<u8>>)) -> String {
-        let mut writer = CsvWriter::new(Vec::new(), delimiter).unwrap();
+    fn written(delimiter: Delimiter, build: impl FnOnce(&mut CsvWriter<&mut Vec<u8>>)) -> String {
+        let mut bytes = Vec::new();
+        let mut writer = CsvWriter::new(&mut bytes, delimiter).unwrap();
         build(&mut writer);
-        let bytes = writer.finish().unwrap();
+        writer.finish().unwrap();
         assert!(bytes.starts_with(UTF8_BOM));
         String::from_utf8(bytes[UTF8_BOM.len()..].to_vec()).unwrap()
     }
@@ -131,6 +176,39 @@ mod tests {
         assert_eq!(text, "a,,,b\r\n,,,\r\n\"\"\r\n\"\"\r\n");
     }
 
+    #[test]
+    fn a_long_run_of_empty_fields_equals_the_same_fields_one_by_one() {
+        for gap in [0usize, 1, 2, 3, 5, 8191, 8192, 8193, 20_000] {
+            for lead in [false, true] {
+                let bulk = written(Delimiter::Semicolon, |w| {
+                    if lead {
+                        w.write_field("a").unwrap();
+                    }
+                    w.write_empty_fields(gap).unwrap();
+                    w.write_field("b").unwrap();
+                    w.end_row().unwrap();
+                    w.write_empty_fields(gap).unwrap();
+                    w.end_row().unwrap();
+                });
+                let one_by_one = written(Delimiter::Semicolon, |w| {
+                    if lead {
+                        w.write_field("a").unwrap();
+                    }
+                    for _ in 0..gap {
+                        w.write_field("").unwrap();
+                    }
+                    w.write_field("b").unwrap();
+                    w.end_row().unwrap();
+                    for _ in 0..gap {
+                        w.write_field("").unwrap();
+                    }
+                    w.end_row().unwrap();
+                });
+                assert_eq!(bulk, one_by_one, "gap {gap} lead {lead}");
+            }
+        }
+    }
+
     // The writer before it streamed: the csv crate given each whole row at once.
     fn whole_rows(rows: &[Vec<String>], delimiter: Delimiter) -> Vec<u8> {
         let mut out = UTF8_BOM.to_vec();
@@ -150,7 +228,8 @@ mod tests {
     }
 
     fn streamed_with_gaps(rows: &[Vec<String>], delimiter: Delimiter) -> Vec<u8> {
-        let mut writer = CsvWriter::new(Vec::new(), delimiter).unwrap();
+        let mut bytes = Vec::new();
+        let mut writer = CsvWriter::new(&mut bytes, delimiter).unwrap();
         for row in rows {
             let mut gap = 0;
             for cell in row {
@@ -165,7 +244,8 @@ mod tests {
             writer.write_empty_fields(gap).unwrap();
             writer.end_row().unwrap();
         }
-        writer.finish().unwrap()
+        writer.finish().unwrap();
+        bytes
     }
 
     proptest::proptest! {

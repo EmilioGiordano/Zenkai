@@ -30,7 +30,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let plan = self.take_pending_quit(plan);
+        let plan = self.with_pending_goal(plan);
         if plan.goal == CloseGoal::Hide {
             self.close_discarded(&plan, window, cx);
             self.hide_to_tray(cx);
@@ -86,24 +86,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let plan = self.take_pending_quit(plan);
+        let plan = self.with_pending_goal(plan);
         if self.holds_unprotected_work(&plan) {
             self.ask_to_quit_anyway(t!("quit.autosave_off_reason"), plan, window, cx);
             return;
         }
         self.quit_or_hide(plan, window, cx);
-    }
-
-    // A Quit asked while a hide was still in flight makes the hide end by quitting.
-    fn take_pending_quit(&mut self, plan: ClosePlan) -> ClosePlan {
-        if std::mem::take(&mut self.quit_after_hide) {
-            ClosePlan {
-                goal: CloseGoal::Quit,
-                ..plan
-            }
-        } else {
-            plan
-        }
     }
 
     fn hide_to_tray(&mut self, cx: &mut Context<Self>) {
@@ -114,7 +102,7 @@ impl Workspace {
     }
 
     pub(super) fn abandon_hide(&mut self, reason: &str, cx: &mut Context<Self>) {
-        self.quit_after_hide = false;
+        self.pending_goal = None;
         self.lifecycle = Lifecycle::Running;
         self.clear_busy(t!("busy.closing"), cx);
         self.notify(Severity::Error, t!("close.not_hidden", reason = reason), cx);

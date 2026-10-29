@@ -16,6 +16,7 @@ mod chat;
 mod chat_layout;
 mod clipboard;
 mod close_prompt;
+mod csv_export_size;
 mod csv_preview;
 mod decimals;
 mod document;
@@ -55,6 +56,7 @@ mod recent;
 mod recovery;
 mod refresh;
 mod region;
+mod restart;
 mod session;
 mod settings_window;
 mod sidebar_item;
@@ -84,7 +86,8 @@ use std::path::PathBuf;
 use gpui_kit::*;
 
 fn main() {
-    let initial: Option<PathBuf> = std::env::args_os().nth(1).map(PathBuf::from);
+    restart::wait_for_previous_instance();
+    let initial: Option<PathBuf> = restart::file_argument();
     // Before the log starts: a launch that only hands over must not truncate the log of the
     // Zenkai that keeps running.
     #[cfg(windows)]
@@ -123,6 +126,7 @@ fn main() {
             cx.on_action(|_: &actions::RecordShortcutKeys, cx| {
                 settings_window::open_to_find_shortcut(cx)
             });
+            cx.on_action(|_: &actions::RestartToApplyLanguage, cx| restart::request(cx));
             cx.on_action(|_: &actions::ResetAllShortcuts, cx| {
                 if keymap::request_reset_all(cx) {
                     settings_window::open_to_keyboard(cx);
@@ -139,11 +143,15 @@ fn main() {
             match opened {
                 #[cfg(windows)]
                 Ok((window, workspace)) => {
+                    restart::register(window, &workspace, cx);
                     tray::install(window, &workspace, claim, cx);
                     cx.activate(true)
                 }
                 #[cfg(not(windows))]
-                Ok(_) => cx.activate(true),
+                Ok((window, workspace)) => {
+                    restart::register(window, &workspace, cx);
+                    cx.activate(true)
+                }
                 Err(error) => {
                     tracing::error!(%error, "could not open the main window");
                     cx.quit();

@@ -1,6 +1,6 @@
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -286,30 +286,41 @@ pub fn open_values(path: &Path) -> Result<Workbook, String> {
 
 // The read lock is held only while the shown cells are gathered; the write can take far
 // longer. Memory follows the cells, never the area up to the sheet's end.
-pub fn export_sheet_csv(
-    shared: &RwLock<Workbook>,
-    sheet: SheetId,
-    path: &Path,
-) -> Result<(), EngineError> {
-    let shown = read_shared(shared).shown_cells(sheet)?;
-    write_csv_file(path, &shown)
+pub fn gather_export(shared: &RwLock<Workbook>, sheet: SheetId) -> Result<ShownCells, EngineError> {
+    read_shared(shared).shown_cells(sheet)
 }
 
-fn write_csv_file(path: &Path, shown: &ShownCells) -> Result<(), EngineError> {
+pub fn write_csv_file(
+    path: &Path,
+    shown: &ShownCells,
+    cancel: &AtomicBool,
+) -> Result<(), EngineError> {
     let delimiter = if extension(path).as_deref() == Some("tsv") {
         Delimiter::Tab
     } else {
         Delimiter::Comma
     };
     write_atomic_streaming(path, |out| {
-        write_shown_rows(out, shown, delimiter).map_err(|error| match error {
-            CsvError::Write(source) => EngineError::Write {
+        write_shown_rows(out, shown, delimiter, cancel).map_err(|error| match error {
+            ExportStop::Cancelled => EngineError::Cancelled,
+            ExportStop::Csv(CsvError::Write(source)) => EngineError::Write {
                 path: path.to_path_buf(),
                 source,
             },
-            other => EngineError::Rejected(other.to_string()),
+            ExportStop::Csv(other) => EngineError::Rejected(other.to_string()),
         })
     })
+}
+
+enum ExportStop {
+    Cancelled,
+    Csv(CsvError),
+}
+
+impl From<CsvError> for ExportStop {
+    fn from(error: CsvError) -> Self {
+        ExportStop::Csv(error)
+    }
 }
 
 // Every row up to the sheet's end has as many fields as the sheet has columns, as when
@@ -318,11 +329,15 @@ fn write_shown_rows(
     out: &mut dyn Write,
     shown: &ShownCells,
     delimiter: Delimiter,
-) -> Result<(), CsvError> {
+    cancel: &AtomicBool,
+) -> Result<(), ExportStop> {
     let width = usize::from(shown.end.col.get()) + 1;
     let mut writer = CsvWriter::new(out, delimiter)?;
     let mut cells = shown.cells.iter().peekable();
     for row in 0..=shown.end.row.get() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(ExportStop::Cancelled);
+        }
         let mut next_col = 0;
         while let Some((pos, text)) = cells.next_if(|(pos, _)| pos.row.get() == row) {
             let col = usize::from(pos.col.get());
@@ -383,7 +398,8 @@ mod tests {
         assert_eq!(parsed.delimiter, Delimiter::Semicolon);
         let workbook = workbook_from_rows(parsed.rows).unwrap();
         let target = dir.path().join("out.csv");
-        write_csv_file(&target, &workbook.shown_cells(SheetId(0)).unwrap()).unwrap();
+        let shown = workbook.shown_cells(SheetId(0)).unwrap();
+        write_csv_file(&target, &shown, &AtomicBool::new(false)).unwrap();
         let written = std::fs::read(&target).unwrap();
         assert_eq!(&written[3..], b"name,qty\r\nAna,3\r\nLuis,4\r\n");
     }
@@ -416,7 +432,8 @@ mod tests {
     fn exported(workbook: Workbook, name: &str) -> Vec<u8> {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join(name);
-        export_sheet_csv(&RwLock::new(workbook), SheetId(0), &target).unwrap();
+        let shown = gather_export(&RwLock::new(workbook), SheetId(0)).unwrap();
+        write_csv_file(&target, &shown, &AtomicBool::new(false)).unwrap();
         std::fs::read(&target).unwrap()
     }
 
@@ -451,6 +468,31 @@ mod tests {
             let expected = whole_rectangle_export(&workbook, delimiter);
             assert_eq!(exported(workbook, name), expected, "{name}");
         }
+    }
+
+    #[test]
+    fn a_cancelled_export_removes_its_temp_and_keeps_the_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("out.csv");
+        std::fs::write(&target, "old contents").unwrap();
+        let workbook = sheet_with(&[(at(0, 0), "a"), (at(5, 3), "b")]);
+        let shown = gather_export(&RwLock::new(workbook), SheetId(0)).unwrap();
+        let result = write_csv_file(&target, &shown, &AtomicBool::new(true));
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        assert_eq!(std::fs::read(&target).unwrap(), b"old contents");
+        let names: Vec<_> = std::fs::read_dir(dir.path()).unwrap().collect();
+        assert_eq!(names.len(), 1);
+    }
+
+    #[test]
+    fn a_cancelled_export_to_a_new_name_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("new.csv");
+        let workbook = sheet_with(&[(at(0, 0), "a")]);
+        let shown = gather_export(&RwLock::new(workbook), SheetId(0)).unwrap();
+        let result = write_csv_file(&target, &shown, &AtomicBool::new(true));
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
     }
 
     #[test]
