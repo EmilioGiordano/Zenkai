@@ -419,6 +419,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   mixing hasher instead of SipHash (`src/cell_hash.rs`), seeded once per process so a
   file cannot choose coordinates that collide. Stands on its own. Test in the module.
   The criteria indexes key their values with it too, which needs the criteria index patch.
+- REPT compares the length of its result with the 32,767 character limit in 64 bits, so a
+  long text repeated many times is `#VALUE!` instead of overflowing past the limit
+  (`src/functions/text/common.rs`). Stands on its own. Test:
+  `a_long_text_repeated_past_the_limit_is_an_error_not_an_overflow` in
+  `src/test/test_fn_rept.rs`.
 
 Zenkai-only, not for upstream:
 
