@@ -452,7 +452,6 @@ fn get_cell_from_excel(
             }
             "d" => {
                 // Not implemented
-                println!("Invalid type (d) in {sheet_name}!{cell_ref}");
                 Cell::ErrorCell {
                     ei: Error::NIMPL,
                     s: cell_style,
@@ -472,7 +471,6 @@ fn get_cell_from_excel(
             "empty" => Cell::EmptyCell { s: cell_style },
             _ => {
                 // error
-                println!("Unexpected type ({cell_type}) in {sheet_name}!{cell_ref}");
                 Cell::ErrorCell {
                     ei: Error::ERROR,
                     s: cell_style,
@@ -503,6 +501,8 @@ fn get_cell_from_excel(
         };
         match cell_type {
             "b" => make_cell(FormulaValue::Boolean(cell_value == Some("1"))),
+            // An empty <v/> is no cached value either, not the number 0.
+            "n" if cell_value.is_none_or(str::is_empty) => make_cell(FormulaValue::Unevaluated),
             "n" => make_cell(FormulaValue::Number(
                 cell_value.unwrap_or("0").parse::<f64>().unwrap_or(0.0),
             )),
@@ -525,7 +525,6 @@ fn get_cell_from_excel(
             }
             "s" => {
                 // Not implemented
-                println!("Invalid type (s) in {sheet_name}!{cell_ref}");
                 make_cell(FormulaValue::error(
                     Error::NIMPL,
                     format!("{sheet_name}!{cell_ref}"),
@@ -540,7 +539,6 @@ fn get_cell_from_excel(
             }
             "d" => {
                 // Not implemented
-                println!("Invalid type (d) in {sheet_name}!{cell_ref}");
                 make_cell(FormulaValue::error(
                     Error::NIMPL,
                     format!("{sheet_name}!{cell_ref}"),
@@ -553,9 +551,11 @@ fn get_cell_from_excel(
                     rich_text_inline.unwrap_or("".to_string()),
                 ))
             }
+            // A formula written without a cached value (openpyxl and other generators)
+            // stays unevaluated until the next evaluation computes it.
+            "empty" => make_cell(FormulaValue::Unevaluated),
             _ => {
                 // error
-                println!("Unexpected type ({cell_type}) in {sheet_name}!{cell_ref}");
                 make_cell(FormulaValue::error(
                     Error::ERROR,
                     format!("{sheet_name}!{cell_ref}"),
