@@ -361,6 +361,8 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `Worksheet::restore_row_height`). The bitcode encoding of the history changes. Stands on
   its own. Tests: `src/test/test_row_height.rs`.
 
+- The number format lexer reads a locale-only section such as `[$-409]` as no token, so a format like `[$-409]d-mmm-yy` is a date format instead of an error (`src/formatter/lexer.rs`). Stands on its own. Tests: `src/formatter/test/test_special_dollar.rs`.
+
 Zenkai-only, not for upstream:
 
 - `src/open_budget.rs` estimates the peak memory of opening a workbook (per cell,

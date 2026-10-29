@@ -352,6 +352,23 @@ impl Lexer {
                             //      Like [$$-409] (=1033 for en-US) or
                             //           [$$-40C] (=1036 for fr-FR)
                             self.read_next_char();
+                            // Only a locale, like [$-409]: no symbol, so skip it.
+                            if self.peek_char() == Some('-') {
+                                loop {
+                                    while self.read_next_char().is_some_and(|c| c != ']') {}
+                                    if self.chars.get(self.position - 1) != Some(&']') {
+                                        self.set_error("Failed to parse currency");
+                                        return Token::ILLEGAL;
+                                    }
+                                    // Consecutive locale sections are skipped here, not by
+                                    // recursion, so a hostile format cannot overflow the stack.
+                                    if self.chars[self.position..].starts_with(&['[', '$', '-']) {
+                                        self.position += 2;
+                                    } else {
+                                        return self.next_token();
+                                    }
+                                }
+                            }
                             if let Some(currency) = self.read_next_char() {
                                 // ignore the locale part for now, just check if it ends with ']'
                                 if Some('-') == self.peek_char() {
