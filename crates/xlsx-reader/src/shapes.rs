@@ -10,6 +10,8 @@ use ironcalc::base::locale::get_default_locale;
 use crate::formulas::{keeps_cell_text, parse_node};
 use crate::sheet_data::FormulaJob;
 
+mod fill;
+
 // The names a formula of one sheet can refer to, known from the package before any row
 // is read.
 #[derive(Clone, Copy)]
@@ -344,8 +346,6 @@ pub(crate) fn sheet1() -> SheetNames<'static> {
         defined_names: &[],
     }
 }
-
-mod fill;
 
 #[cfg(test)]
 mod tests;
