@@ -1036,7 +1036,7 @@ impl<'a> Model<'a> {
                                 )
                             };
                             self.result_text
-                                .replace(worksheet.sheet_data.get(r, c), &cell);
+                                .replace(|| worksheet.sheet_data.get(r, c), &cell);
                             worksheet.update_cell(r, c, cell)?;
                         }
                     }
@@ -1079,7 +1079,7 @@ impl<'a> Model<'a> {
                                 .sheet_data
                                 .get_mut(r, c)
                                 .ok_or("expected a cell")?;
-                            self.result_text.replace(Some(&*old_cell), &new_cell);
+                            self.result_text.replace(|| Some(&*old_cell), &new_cell);
                             *old_cell = new_cell;
                         }
                     }
@@ -1133,7 +1133,7 @@ impl<'a> Model<'a> {
                         .sheet_data
                         .get_mut(row, column)
                         .ok_or("expected a cell")?;
-                    self.result_text.replace(Some(&*old_cell), &new_cell);
+                    self.result_text.replace(|| Some(&*old_cell), &new_cell);
                     *old_cell = new_cell;
                     return Ok(());
                 }
@@ -1215,13 +1215,13 @@ impl<'a> Model<'a> {
                     let spill_cell =
                         Cell::new_spill_cell(existing_style, (row, column), spill_value.clone());
                     self.result_text
-                        .replace(ws.sheet_data.get(r, c), &spill_cell);
+                        .replace(|| ws.sheet_data.get(r, c), &spill_cell);
                     ws.update_cell(r, c, spill_cell)?;
                 }
             }
         }
 
-        self.result_text.replace(Some(cell), &new_cell);
+        self.result_text.replace(|| Some(cell), &new_cell);
         self.workbook.worksheets[sheet as usize].update_cell(row, column, new_cell)?;
         Ok(())
     }
@@ -1492,7 +1492,7 @@ impl<'a> Model<'a> {
                                 .unwrap_or(false);
                             if is_own_spill {
                                 self.result_text
-                                    .replace(ws.sheet_data.get(r, c), &Cell::default());
+                                    .replace(|| ws.sheet_data.get(r, c), &Cell::default());
                                 let _ = ws.cell_clear_contents(r, c);
                             }
                         }

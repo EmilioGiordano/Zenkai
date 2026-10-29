@@ -218,11 +218,12 @@ pub(crate) enum ResultText {
 }
 
 impl ResultText {
-    pub(crate) fn replace(&mut self, old: Option<&Cell>, new: &Cell) {
+    // `old` is only looked up while a budget is armed, so other evaluations pay nothing.
+    pub(crate) fn replace<'c>(&mut self, old: impl FnOnce() -> Option<&'c Cell>, new: &Cell) {
         let ResultText::Left(left) = self else {
             return;
         };
-        let old = old.map_or(0, text_len);
+        let old = old().map_or(0, text_len);
         let new = text_len(new);
         if new <= old {
             *left = left.saturating_add(old - new);
