@@ -83,10 +83,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   element millions of times (`src/import/worksheets.rs`). Stands on its own (uses the public
   `LAST_COLUMN`). Test: `test_column_elements_are_bounded_by_the_columns_of_a_sheet` in
   `tests/test.rs`.
-- The xlsx import reads a formula cell with no `t` and no `<v>`, as openpyxl and other
-  generators write it, as an unevaluated formula (`FormulaValue::Unevaluated`, what a new
-  formula holds) instead of an `#ERROR!` result, and no longer prints a line per cell of an
-  unexpected or unsupported type (`src/import/worksheets.rs`). Stands on its own. Test:
+- The xlsx import reads a formula cell with no `t` and no `<v>`, or a number formula with
+  an empty `<v/>`, as openpyxl and other generators write them, as an unevaluated formula
+  (`FormulaValue::Unevaluated`, what a new formula holds) instead of an `#ERROR!` result
+  or the number 0, and no longer prints a line per cell of an unexpected or unsupported
+  type (`src/import/worksheets.rs`). Stands on its own. Test:
   `test_formula_without_cached_value_is_unevaluated` in `tests/test.rs`.
 
 Zenkai-only, not for upstream:

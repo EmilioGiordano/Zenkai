@@ -582,13 +582,15 @@ fn test_formula_without_cached_value_is_unevaluated() {
     let last_row = last_row.get();
     let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
     let cell = |column| workbook.worksheets[0].cell(last_row, column).cloned();
-    assert!(matches!(
-        cell(700),
-        Some(ironcalc_base::types::Cell::CellFormula {
-            v: ironcalc_base::types::FormulaValue::Unevaluated,
-            ..
-        })
-    ));
+    for column in [700, 701] {
+        assert!(matches!(
+            cell(column),
+            Some(ironcalc_base::types::Cell::CellFormula {
+                v: ironcalc_base::types::FormulaValue::Unevaluated,
+                ..
+            })
+        ));
+    }
     assert!(matches!(
         cell(702),
         Some(ironcalc_base::types::Cell::CellFormula {

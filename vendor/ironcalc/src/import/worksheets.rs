@@ -501,6 +501,8 @@ fn get_cell_from_excel(
         };
         match cell_type {
             "b" => make_cell(FormulaValue::Boolean(cell_value == Some("1"))),
+            // An empty <v/> is no cached value either, not the number 0.
+            "n" if cell_value.is_none_or(str::is_empty) => make_cell(FormulaValue::Unevaluated),
             "n" => make_cell(FormulaValue::Number(
                 cell_value.unwrap_or("0").parse::<f64>().unwrap_or(0.0),
             )),
