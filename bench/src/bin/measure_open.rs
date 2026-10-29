@@ -170,7 +170,7 @@ fn main() -> Result<()> {
     PEAK.reset_peak_usage();
 
     if app_only {
-        trace_spans();
+        trace_spans()?;
         return run_app_open(&path);
     }
     println!(
@@ -275,21 +275,27 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-// Each span of the open is printed with its time when it closes, on stderr, so the read
-// and the first evaluation of the app's path show apart.
-fn trace_spans() {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        tracing_subscriber::EnvFilter::new("zenkai_engine=info,zenkai_xlsx_reader=info")
+// With ZENKAI_OPEN_SPANS set, each span of the open is printed with its time when it
+// closes, so the read and the first evaluation show apart; printing costs time of its own.
+fn trace_spans() -> Result<()> {
+    let spans = std::env::var_os("ZENKAI_OPEN_SPANS").map(|_| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            tracing_subscriber::EnvFilter::new("zenkai_engine=info,zenkai_xlsx_reader=info")
+        });
+        tracing_subscriber::fmt::layer()
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .with_filter(filter)
     });
-    let spans = tracing_subscriber::fmt::layer()
-        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
-        .with_ansi(false)
-        .with_writer(std::io::stderr)
-        .with_filter(filter);
     let phases = std::env::var_os("ZENKAI_OPEN_PHASES").map(|_| PhaseMemory {
         origin: Instant::now(),
     });
-    Registry::default().with(spans).with(phases).init();
+    Registry::default()
+        .with(spans)
+        .with(phases)
+        .try_init()
+        .context("installing the open tracing layers")
 }
 
 // The app's own open path alone (streaming reader, model build, first evaluation),
