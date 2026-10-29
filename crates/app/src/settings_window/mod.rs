@@ -2,7 +2,7 @@ mod agents;
 mod ai;
 mod choices;
 mod controls;
-mod info;
+pub(crate) mod info;
 mod keyboard;
 mod nav;
 mod page;
