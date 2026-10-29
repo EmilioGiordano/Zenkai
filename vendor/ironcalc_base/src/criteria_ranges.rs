@@ -47,17 +47,31 @@ pub(crate) struct CriteriaIndex {
 
 impl CriteriaIndex {
     // None while a value of the area is not kept yet: reading it here could evaluate a cell
-    // the full read would not have reached yet.
-    fn build(slots: &[OnceLock<CalcResult>], width: i32) -> Option<(CriteriaIndex, usize)> {
+    // the full read would not have reached yet. None as well as soon as the index would
+    // cost more than `limit`, so a refused index never takes more than that.
+    fn build(
+        slots: &[OnceLock<CalcResult>],
+        width: i32,
+        limit: usize,
+    ) -> Option<(CriteriaIndex, usize)> {
         let mut cells: HashMap<MatchKey, Vec<(i32, i32)>> = HashMap::new();
+        let mut spent = 0;
         let mut row_offset = 0;
         let mut column_offset = 0;
         for slot in slots {
             for key in value_keys(slot.get()?).into_iter().flatten() {
-                cells
-                    .entry(key)
-                    .or_default()
-                    .push((row_offset, column_offset));
+                spent += INDEX_CELL_BYTES;
+                let at = cells.entry(key).or_insert_with_key(|key| {
+                    spent += INDEX_KEY_BYTES;
+                    if let MatchKey::Text(text) = key {
+                        spent += text.len();
+                    }
+                    Vec::new()
+                });
+                at.push((row_offset, column_offset));
+                if spent > limit {
+                    return None;
+                }
             }
             column_offset += 1;
             if column_offset == width {
@@ -269,8 +283,8 @@ impl CriteriaRanges {
             Some(Indexing::Asked) => {}
         }
         // A failed build is not tried again in this evaluation, as each try reads the area.
-        let Some((index, bytes)) =
-            CriteriaIndex::build(slots, area.4).filter(|&(_, bytes)| self.spend(bytes))
+        let Some((index, bytes)) = CriteriaIndex::build(slots, area.4, self.bytes_left)
+            .filter(|&(_, bytes)| self.spend(bytes))
         else {
             self.indexes.insert(area, Indexing::Refused);
             return None;
@@ -431,7 +445,11 @@ mod tests {
 
     use std::collections::HashSet;
 
-    use super::{CriteriaRanges, INDEX_CELL_BYTES, INDEX_KEY_BYTES, KEPT_BYTES, SLOT_BYTES};
+    use std::sync::OnceLock;
+
+    use super::{
+        CriteriaIndex, CriteriaRanges, INDEX_CELL_BYTES, INDEX_KEY_BYTES, KEPT_BYTES, SLOT_BYTES,
+    };
     use crate::calc_result::CalcResult;
     use crate::criteria_totals::{TotalKey, USER_BYTES};
     use crate::exact_sum::ExactSum;
@@ -537,6 +555,16 @@ mod tests {
         assert!(model.criterion_cells(&values, &criterion).is_none());
         model.area_value(&values, 7, 0);
         assert!(model.criterion_cells(&values, &criterion).is_none());
+    }
+
+    #[test]
+    fn an_index_build_stops_at_its_limit() {
+        let slots: Vec<OnceLock<CalcResult>> = (0..1024)
+            .map(|row| OnceLock::from(CalcResult::String(["a", "b"][row % 2].to_string())))
+            .collect();
+        let (_, bytes) = CriteriaIndex::build(&slots, 1, INDEX_BYTES).unwrap();
+        assert_eq!(bytes, INDEX_BYTES);
+        assert!(CriteriaIndex::build(&slots, 1, INDEX_BYTES - 1).is_none());
     }
 
     #[test]
