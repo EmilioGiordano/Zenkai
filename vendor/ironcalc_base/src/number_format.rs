@@ -103,7 +103,7 @@ pub fn get_new_num_fmt_index(num_fmts: &[NumFmt]) -> i32 {
 }
 
 pub fn to_precision(value: f64, precision: usize) -> f64 {
-    if value.is_infinite() || value.is_nan() {
+    if value.is_infinite() || value.is_nan() || holds_precision(value, precision) {
         return value;
     }
     to_precision_str(value, precision)
@@ -127,12 +127,40 @@ pub fn to_excel_precision_str(value: f64) -> String {
 }
 
 pub fn to_excel_precision(value: f64, precision: usize) -> f64 {
-    if !value.is_finite() {
+    if !value.is_finite() || holds_precision(value, precision) {
         return value;
     }
+    round_through_text(value, precision)
+}
 
+fn round_through_text(value: f64, precision: usize) -> f64 {
     let s = format!("{:.*e}", precision.saturating_sub(1), value);
     s.parse::<f64>().unwrap_or(value)
+}
+
+// Whether rounding a finite value to `precision` significant digits gives it back, without
+// formatting it. True when its shortest round-trip decimal has at most that many digits and
+// at most 15: half an ulp of a normal double is below half the gap between 15-digit
+// decimals, so that decimal is the nearest one and it parses back to the value.
+fn holds_precision(value: f64, precision: usize) -> bool {
+    if value == 0.0 {
+        return true;
+    }
+    if precision > 15 || value.abs() < f64::MIN_POSITIVE {
+        return false;
+    }
+    let mut buffer = ryu::Buffer::new();
+    let text = buffer.format_finite(value);
+    let mantissa = text.split(['e', 'E']).next().unwrap_or(text);
+    let mut first_nonzero = None;
+    let mut last_nonzero = 0;
+    for (position, digit) in mantissa.bytes().filter(u8::is_ascii_digit).enumerate() {
+        if digit != b'0' {
+            first_nonzero.get_or_insert(position);
+            last_nonzero = position;
+        }
+    }
+    first_nonzero.is_none_or(|first| last_nonzero - first < precision)
 }
 
 pub fn to_precision_str(value: f64, precision: usize) -> String {
@@ -176,6 +204,75 @@ pub fn format_number(value: f64, format_code: &str, locale: &str) -> Formatted {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn next(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    fn sample(state: &mut u64) -> f64 {
+        let pick = next(state) % 6;
+        let sign = if next(state) % 2 == 0 { 1.0 } else { -1.0 };
+        let decimal = |state: &mut u64| {
+            let digits = next(state) % 18;
+            let mantissa = (next(state) % 10u64.pow(digits as u32 + 1)) as f64;
+            mantissa / 10f64.powi((next(state) % 40) as i32 - 20)
+        };
+        match pick {
+            0 => f64::from_bits(next(state)),
+            1 => sign * decimal(state),
+            2 => sign * (decimal(state) + decimal(state)),
+            3 => sign * decimal(state) * decimal(state) / (decimal(state) + 1.0),
+            4 => {
+                let power = 10f64.powi((next(state) % 40) as i32 - 20);
+                let ulps = (next(state) % 7) as i64 - 3;
+                sign * f64::from_bits((power.to_bits() as i64 + ulps) as u64)
+            }
+            _ => sign * f64::from_bits(next(state) % (1u64 << 53)),
+        }
+    }
+
+    #[test]
+    fn rounding_shortcut_matches_rounding_through_text() {
+        let mut state = 0x9E37_79B9_7F4A_7C15;
+        let mut checked = 0;
+        while checked < 60_000 {
+            let value = sample(&mut state);
+            if !value.is_finite() {
+                continue;
+            }
+            for precision in 0..=17 {
+                assert_eq!(
+                    to_excel_precision(value, precision).to_bits(),
+                    round_through_text(value, precision).to_bits(),
+                    "to_excel_precision({value:e}, {precision})"
+                );
+                let through_text = to_precision_str(value, precision)
+                    .parse::<f64>()
+                    .unwrap_or(0.0);
+                assert_eq!(
+                    to_precision(value, precision).to_bits(),
+                    through_text.to_bits(),
+                    "to_precision({value:e}, {precision})"
+                );
+            }
+            checked += 1;
+        }
+    }
+
+    #[test]
+    fn rounding_shortcut_keeps_exact_values() {
+        for value in [0.0, -0.0, 0.3, 1e15, 999_999_999_999_999.0, 0.1 + 0.2, 5e-324] {
+            assert_eq!(
+                to_excel_precision(value, 15).to_bits(),
+                round_through_text(value, 15).to_bits()
+            );
+        }
+        assert_eq!(to_excel_precision(0.1 + 0.2, 15), 0.3);
+        assert_eq!(to_excel_precision(1_234_567_890_123_456.0, 15), 1_234_567_890_123_460.0);
+    }
 
     // The default table is indexed by `numFmtId`: `get_num_fmt(id, &[])` must return the
     // ECMA-376 §18.8.30 built-in code for that id.
