@@ -83,9 +83,7 @@ pub(crate) fn compare_values(left: &CalcResult, right: &CalcResult) -> i32 {
         (CalcResult::Number(_value1), CalcResult::String(_value2)) => -1,
         (CalcResult::Number(_value1), CalcResult::Boolean(_value2)) => -1,
         (CalcResult::String(value1), CalcResult::String(value2)) => {
-            let value1 = value1.to_uppercase();
-            let value2 = value2.to_uppercase();
-            match value1.cmp(&value2) {
+            match cmp_uppercase(value1, value2) {
                 std::cmp::Ordering::Less => -1,
                 std::cmp::Ordering::Equal => 0,
                 std::cmp::Ordering::Greater => 1,
@@ -291,6 +289,20 @@ pub(crate) fn wildcard_matcher(pattern: &str) -> Box<dyn Fn(&CalcResult) -> bool
 
 pub(crate) fn has_wildcards(text: &str) -> bool {
     text.contains(['*', '?', '~'])
+}
+
+// The same as `left.to_uppercase().cmp(&right.to_uppercase())`, without allocating: unlike
+// lowercasing, uppercasing has no rule that depends on the next character.
+fn cmp_uppercase(left: &str, right: &str) -> Ordering {
+    if left.is_ascii() && right.is_ascii() {
+        left.bytes()
+            .map(|byte| byte.to_ascii_uppercase())
+            .cmp(right.bytes().map(|byte| byte.to_ascii_uppercase()))
+    } else {
+        left.chars()
+            .flat_map(char::to_uppercase)
+            .cmp(right.chars().flat_map(char::to_uppercase))
+    }
 }
 
 // The same as `value.to_lowercase().as_str().cmp(target)`, without allocating per cell.
@@ -546,8 +558,49 @@ pub(crate) fn build_criteria<'a>(value: &'a CalcResult, locale: &'a Locale) -> C
 
 #[cfg(test)]
 mod tests {
-    use super::{cmp_lowercase, from_wildcard_to_regex, result_matches_regex, wildcard_matcher};
+    use super::{
+        cmp_lowercase, cmp_uppercase, from_wildcard_to_regex, result_matches_regex,
+        wildcard_matcher,
+    };
     use crate::calc_result::CalcResult;
+
+    #[test]
+    fn cmp_uppercase_matches_uppercasing_copies() {
+        let values = [
+            "",
+            "apple",
+            "APPLE",
+            "apples",
+            "b*n",
+            "Zebra",
+            "_under",
+            "[x]",
+            "ÉCLAIR",
+            "éclair",
+            "Straße",
+            "STRASSE",
+            "strasse",
+            "ǆemal",
+            "ǅemal",
+            "ﬁne",
+            "FINE",
+            "İstanbul",
+            "ıstanbul",
+            "ΟΔΟΣ",
+            "οδος",
+            "ΣΑΣ",
+            "日本",
+        ];
+        for left in values {
+            for right in values {
+                assert_eq!(
+                    cmp_uppercase(left, right),
+                    left.to_uppercase().cmp(&right.to_uppercase()),
+                    "{left} against {right}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn cmp_lowercase_matches_lowercasing_a_copy() {
