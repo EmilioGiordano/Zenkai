@@ -1,4 +1,5 @@
-// Formula cells written without a cached value, as openpyxl writes them, compute on open.
+// Formula cells written without a cached value, as openpyxl writes them, compute on open
+// and save their computed values.
 #![allow(clippy::unwrap_used)]
 
 use std::io::{Cursor, Read, Write};
@@ -48,6 +49,24 @@ fn assert_computed(book: &impl Engine) {
     }
 }
 
+fn sheet_xml(path: &std::path::Path) -> String {
+    let mut archive = zip::ZipArchive::new(Cursor::new(std::fs::read(path).unwrap())).unwrap();
+    let mut xml = String::new();
+    archive
+        .by_name("xl/worksheets/sheet1.xml")
+        .unwrap()
+        .read_to_string(&mut xml)
+        .unwrap();
+    xml
+}
+
+fn cached_value<'a>(xml: &'a str, cell: &str) -> &'a str {
+    let start = xml.find(&format!("<c r=\"{cell}\"")).unwrap();
+    let element = &xml[start..start + xml[start..].find("</c>").unwrap()];
+    let value = element.find("<v>").unwrap() + "<v>".len();
+    &element[value..value + element[value..].find("</v>").unwrap()]
+}
+
 fn formulas_compute_on_open(reader: XlsxReader) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("generated.xlsx");
@@ -65,7 +84,10 @@ fn formulas_compute_on_open(reader: XlsxReader) {
             .unwrap(),
     )
     .unwrap();
-    assert_computed(&open_xlsx_with(&saved_path, reader).unwrap().workbook);
+    let xml = sheet_xml(&saved_path);
+    for (cell, expected) in [("B1", "6"), ("C1", "7"), ("A2", "15")] {
+        assert_eq!(cached_value(&xml, cell), expected, "{cell}");
+    }
 }
 
 #[test]
