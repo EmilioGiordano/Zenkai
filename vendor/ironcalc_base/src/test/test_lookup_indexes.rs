@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 use crate::test::util::new_empty_model;
+use crate::types::Cell;
 use crate::{Model, UserModel};
 
 const TABLE_ROWS: i32 = 60;
@@ -163,6 +164,44 @@ fn indexed_lookups_match_cell_by_cell_search() {
             );
         }
     }
+}
+
+// A file can hold an infinite number, which equals nothing in the cell by cell search.
+#[test]
+fn infinite_numbers_match_as_in_the_cell_by_cell_search() {
+    let mut indexed = new_empty_model();
+    let mut searched = new_empty_model();
+    searched.lookup_indexes.set_enabled(false);
+    for model in [&mut indexed, &mut searched] {
+        let sheet_data = &mut model.workbook.worksheets[0].sheet_data;
+        for (row, value) in [(1, f64::INFINITY), (2, f64::NEG_INFINITY), (3, 5.0)] {
+            sheet_data.insert(row, 1, Cell::NumberCell { v: value, s: 0 });
+            sheet_data.insert(row, 4, Cell::NumberCell { v: value, s: 0 });
+        }
+        for row in 1..=3 {
+            model._set(&format!("B{row}"), &format!("=MATCH(D{row},$A$1:$A$3,0)"));
+            model._set(
+                &format!("C{row}"),
+                &format!("=XLOOKUP(D{row},$A$1:$A$3,$A$1:$A$3,\"none\")"),
+            );
+            model._set(
+                &format!("E{row}"),
+                &format!("=VLOOKUP(D{row},$A$1:$A$3,1,FALSE)"),
+            );
+        }
+        model.evaluate();
+    }
+    for row in 1..=3 {
+        for column in ["B", "C", "E"] {
+            let cell = format!("{column}{row}");
+            assert_eq!(
+                indexed._get_text(&cell),
+                searched._get_text(&cell),
+                "{cell}"
+            );
+        }
+    }
+    assert_eq!(indexed._get_text("B3"), "3");
 }
 
 #[test]

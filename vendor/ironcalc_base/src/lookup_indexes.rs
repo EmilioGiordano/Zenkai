@@ -92,8 +92,12 @@ impl Equality {
 
     // Both comparisons hold numbers within `f64::EPSILON` equal, which is not transitive near
     // zero. From these magnitudes on, distinct values are at least that far apart, so equal
-    // means equal bits; smaller numbers are searched cell by cell.
+    // means equal bits; smaller numbers are searched cell by cell. So are infinities, which
+    // equal nothing there because their difference is NaN.
     fn number_key(self, value: f64) -> Option<u64> {
+        if !value.is_finite() {
+            return None;
+        }
         match self {
             Equality::Lookup | Equality::Xlookup => {
                 let rounded = to_excel_precision(value, 15);
