@@ -1,6 +1,7 @@
 #![deny(missing_docs)]
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::vec::Vec;
 
 use crate::expressions::parser::static_analysis::run_static_analysis_on_node;
@@ -190,8 +191,9 @@ pub(crate) enum CellOrRange {
 pub struct Model<'a> {
     /// A Rust internal representation of an Excel workbook
     pub workbook: Workbook,
-    /// A list of parsed formulas
-    pub parsed_formulas: Vec<Vec<(Node, StaticResult)>>,
+    /// A list of parsed formulas, per sheet. Shared so evaluating a formula holds it
+    /// without copying it.
+    pub parsed_formulas: Vec<Arc<Vec<(Node, StaticResult)>>>,
     /// A list of parsed defined names
     pub(crate) parsed_defined_names: HashMap<(Option<u32>, String), ParsedDefinedName>,
     /// An optimization to lookup strings faster
@@ -1472,9 +1474,9 @@ impl<'a> Model<'a> {
                 }
                 // mark cell as being evaluated
                 self.cells.insert(key, CellState::Evaluating);
-                let (node, _static_result) =
-                    &self.parsed_formulas[cell_reference.sheet as usize][f as usize];
-                let result = self.evaluate_node_in_context(&node.clone(), cell_reference);
+                let formulas = Arc::clone(&self.parsed_formulas[cell_reference.sheet as usize]);
+                let (node, _static_result) = &formulas[f as usize];
+                let result = self.evaluate_node_in_context(node, cell_reference);
 
                 // At this point a range needs to be transformed into an array
                 let result = if let CalcResult::Range { left, right } = result {
@@ -2646,7 +2648,8 @@ impl<'a> Model<'a> {
         }
         if formula_index == -1 {
             shared_formulas.push(s);
-            self.parsed_formulas[sheet as usize].push((parsed_formula, static_result));
+            Arc::make_mut(&mut self.parsed_formulas[sheet as usize])
+                .push((parsed_formula, static_result));
             formula_index = (shared_formulas.len() as i32) - 1;
         }
         if is_dynamic {
@@ -2695,7 +2698,8 @@ impl<'a> Model<'a> {
         }
         if formula_index == -1 {
             shared_formulas.push(s);
-            self.parsed_formulas[sheet as usize].push((parsed_formula, static_result));
+            Arc::make_mut(&mut self.parsed_formulas[sheet as usize])
+                .push((parsed_formula, static_result));
             formula_index = (shared_formulas.len() as i32) - 1;
         }
         worksheet.set_cell_with_array_formula(row, column, formula_index, style, width, height)?;
