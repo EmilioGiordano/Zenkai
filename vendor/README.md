@@ -438,7 +438,9 @@ Zenkai-only, not for upstream:
   formulas return grows past what the estimate left: each formula's charge pays for 200
   bytes, the rest comes from the budget's headroom at the same 1.2x margin. Growth is
   charged where `set_cells_with_result` writes a value and refunded where a spill is
-  cleared, and past the budget `evaluate_cell` evaluates nothing more (`src/model.rs`,
+  cleared; a cell or row a spill adds costs what the estimate charges one read from the
+  file. Past the budget no spill writes another cell and `evaluate_cell` evaluates
+  nothing more (`src/model.rs`,
   `src/incremental.rs`, `src/open_budget.rs`). `from_workbook_within` takes the budget
   instead of reading the machine's. Needs the open budget above. Tests in
   `src/open_budget.rs`.

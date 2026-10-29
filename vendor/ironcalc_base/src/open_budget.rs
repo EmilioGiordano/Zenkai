@@ -217,25 +217,58 @@ pub(crate) enum ResultText {
     Spent,
 }
 
+// The pool counts bytes with the 1.2x margin already taken off, while these per cell and
+// per row costs include it.
+const ADDED_CELL_BYTES: u64 = BYTES_PER_CELL * 5 / 6;
+const ADDED_ROW_BYTES: u64 = BYTES_PER_ROW * 5 / 6;
+
 impl ResultText {
-    // `old` is only looked up while a budget is armed, so other evaluations pay nothing.
+    // `old` is only looked up while a budget is armed, so other evaluations pay nothing. A
+    // cell written where none was, as a spill writes, costs what the estimate charges a
+    // cell read from the file.
     pub(crate) fn replace<'c>(&mut self, old: impl FnOnce() -> Option<&'c Cell>, new: &Cell) {
-        let ResultText::Left(left) = self else {
+        if !self.is_armed() {
             return;
-        };
-        let old = old().map_or(0, text_len);
-        let new = text_len(new);
-        if new <= old {
-            *left = left.saturating_add(old - new);
-        } else if new - old <= *left {
-            *left -= new - old;
-        } else {
-            *self = ResultText::Spent;
         }
+        match old() {
+            Some(old) => {
+                let (old, new) = (text_len(old), text_len(new));
+                if new <= old {
+                    self.refund(old - new);
+                } else {
+                    self.charge(new - old);
+                }
+            }
+            None => self.charge(text_len(new) + ADDED_CELL_BYTES),
+        }
+    }
+
+    pub(crate) fn add_row(&mut self) {
+        self.charge(ADDED_ROW_BYTES);
+    }
+
+    pub(crate) fn is_armed(self) -> bool {
+        matches!(self, ResultText::Left(_))
     }
 
     pub(crate) fn is_spent(self) -> bool {
         self == ResultText::Spent
+    }
+
+    fn charge(&mut self, bytes: u64) {
+        if let ResultText::Left(left) = self {
+            if bytes <= *left {
+                *left -= bytes;
+            } else {
+                *self = ResultText::Spent;
+            }
+        }
+    }
+
+    fn refund(&mut self, bytes: u64) {
+        if let ResultText::Left(left) = self {
+            *left = left.saturating_add(bytes);
+        }
     }
 }
 
@@ -414,6 +447,59 @@ mod tests {
         let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
         let error = model.evaluate_opened().unwrap_err();
         assert!(error.starts_with(BUDGET_REFUSAL_PREFIX), "{error}");
+    }
+
+    // `columns` dynamic formulas in row 1 spilling the numbers 1 to `rows`, without the
+    // spilled cells a file would cache, and the values of every spilled cell.
+    fn number_spills(columns: i32, rows: i32) -> (Workbook, Vec<CellValue>) {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        for column in 1..=columns {
+            model
+                .set_user_input(0, 1, column, format!("=SEQUENCE({rows})"))
+                .unwrap();
+        }
+        model.evaluate();
+        let values = (1..=columns)
+            .flat_map(|column| (1..=rows).map(move |row| (row, column)))
+            .map(|(row, column)| model.get_cell_value_by_index(0, row, column).unwrap())
+            .collect();
+        let mut book = model.workbook;
+        for column in 1..=columns {
+            for row in 2..=rows {
+                book.worksheets[0].sheet_data.remove(row, column).unwrap();
+            }
+        }
+        (book, values)
+    }
+
+    #[test]
+    fn number_spills_past_the_budget_refuse_the_open() {
+        let (book, _) = number_spills(20, 1000);
+        let budget = needed_bytes(open_cost(&book));
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        let error = model.evaluate_opened().unwrap_err();
+        assert!(error.starts_with(BUDGET_REFUSAL_PREFIX), "{error}");
+    }
+
+    #[test]
+    fn a_number_spill_just_within_the_budget_opens_with_every_value() {
+        let (book, expected) = number_spills(1, 10);
+        let cost = open_cost(&book);
+        // Nine cells and nine rows added, none of them text.
+        let added = 9 * (ADDED_CELL_BYTES + ADDED_ROW_BYTES);
+        let past_allowance = added - cost.formulas * TEXT_BYTES_PER_FORMULA;
+        let budget = needed_bytes(cost) + (past_allowance * 6).div_ceil(5);
+
+        let mut refused = Model::from_workbook_within(book.clone(), "en", budget - 1).unwrap();
+        assert!(refused.evaluate_opened().is_err());
+
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        model.evaluate_opened().unwrap();
+        let values: Vec<CellValue> = (1..=10)
+            .map(|row| model.get_cell_value_by_index(0, row, 1).unwrap())
+            .collect();
+        assert_eq!(values, expected);
+        assert_eq!(values[9], CellValue::Number(10.0));
     }
 
     #[test]

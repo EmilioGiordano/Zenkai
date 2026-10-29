@@ -1035,6 +1035,9 @@ impl<'a> Model<'a> {
                                     array_node_to_spill_value(value),
                                 )
                             };
+                            if self.result_text.is_armed() && !worksheet.sheet_data.has_row(r) {
+                                self.result_text.add_row();
+                            }
                             self.result_text
                                 .replace(|| worksheet.sheet_data.get(r, c), &cell);
                             // Past the open budget the model is dropped; the rest of the
@@ -1222,6 +1225,9 @@ impl<'a> Model<'a> {
                     let existing_style = ws.get_style(r, c);
                     let spill_cell =
                         Cell::new_spill_cell(existing_style, (row, column), spill_value.clone());
+                    if self.result_text.is_armed() && !ws.sheet_data.has_row(r) {
+                        self.result_text.add_row();
+                    }
                     self.result_text
                         .replace(|| ws.sheet_data.get(r, c), &spill_cell);
                     if self.result_text.is_spent() {
