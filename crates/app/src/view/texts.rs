@@ -377,7 +377,7 @@ impl Workspace {
                         } else {
                             Provenance::File
                         };
-                        self.announce_loaded(&name, provenance, recovery_lost, false, cx);
+                        self.announce_loaded(&name, provenance, recovery_lost, false, None, cx);
                     }
                     Installed::Background | Installed::Gone => cx.notify(),
                 }

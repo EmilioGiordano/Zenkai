@@ -478,7 +478,7 @@ impl Workspace {
                             document.read_only = read_only;
                             document.origin = origin;
                         }
-                        this.announce_opened(Some(started), cx);
+                        this.announce_opened(Some(started), true, cx);
                         if reader_fallback.is_some() {
                             this.notify(Severity::Info, t!("notice.fast_reader_fallback"), cx);
                         }
@@ -507,20 +507,34 @@ impl Workspace {
         true
     }
 
-    fn announce_opened(&mut self, started: Option<Instant>, cx: &mut Context<Self>) {
+    // `requested` is a file the user asked to open now; a tab loading lazily is not news to the
+    // user, so it skips the Protected View card but still reports its time.
+    fn announce_opened(
+        &mut self,
+        started: Option<Instant>,
+        requested: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(document) = self.documents.active() else {
             return;
         };
+        let took = started.map(|started| t!("notice.took_ms", ms = started.elapsed().as_millis()));
+        let with_time = |text: String| match &took {
+            Some(took) => format!("{text} {took}"),
+            None => text,
+        };
         if document.read_only {
-            self.notify(Severity::Warning, t!("notice.opened_read_only"), cx);
+            let text = with_time(t!("notice.opened_read_only").to_string());
+            self.notify(Severity::Warning, text, cx);
         } else if !document.unsupported.is_empty() {
             let text = t!(
                 "notice.opened_unsupported",
                 list = document::labels(&document.unsupported)
             );
+            self.notify(Severity::Warning, with_time(text.to_string()), cx);
+        } else if document.origin == FileOrigin::Internet && requested {
+            let text = with_time(t!("notice.protected_view").to_string());
             self.notify(Severity::Warning, text, cx);
-        } else if document.origin == FileOrigin::Internet && started.is_some() {
-            self.notify(Severity::Warning, t!("notice.protected_view"), cx);
         } else if let Some(started) = started {
             let text = t!("notice.opened_in", ms = started.elapsed().as_millis());
             self.notify(Severity::Info, text, cx);
@@ -554,6 +568,7 @@ impl Workspace {
         }
         let (open, cancel) = self.open_loads.start_link_load(label, id);
         cx.notify();
+        let started = Instant::now();
         let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
         cx.spawn_in(window, async move |this, cx| {
             let load = cx
@@ -581,7 +596,7 @@ impl Workspace {
                         .spawn(async move { recovery::remove(&dump) })
                         .detach();
                 }
-                this.finish_load(id, load, window, cx)
+                this.finish_load(id, load, started, window, cx)
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during load");
@@ -594,6 +609,7 @@ impl Workspace {
         &mut self,
         id: WorkbookId,
         load: LinkLoad,
+        started: Instant,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -635,7 +651,14 @@ impl Workspace {
                 match outcome {
                     Installed::OnScreen => {
                         self.present_active(window, cx);
-                        self.announce_loaded(&name, provenance, recovery_lost, dump_lost, cx);
+                        self.announce_loaded(
+                            &name,
+                            provenance,
+                            recovery_lost,
+                            dump_lost,
+                            Some(started),
+                            cx,
+                        );
                     }
                     Installed::Background => {
                         if dump_lost {
@@ -710,6 +733,7 @@ impl Workspace {
         provenance: Provenance,
         recovery_lost: bool,
         dump_lost: bool,
+        started: Option<Instant>,
         cx: &mut Context<Self>,
     ) {
         if dump_lost {
@@ -724,7 +748,7 @@ impl Workspace {
                     let text = t!("notice.recovered", name = name);
                     self.notify(Severity::Warning, text, cx);
                 }
-                Provenance::File => self.announce_opened(None, cx),
+                Provenance::File => self.announce_opened(started, false, cx),
                 Provenance::Dump => {}
             }
         }
