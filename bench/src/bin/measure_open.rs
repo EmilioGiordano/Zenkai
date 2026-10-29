@@ -12,6 +12,7 @@ use ironcalc::base::{Model, UserModel};
 use peak_alloc::PeakAlloc;
 use tracing_subscriber::layer::{Context as LayerContext, Layer, SubscriberExt};
 use tracing_subscriber::registry::{LookupSpan, Registry};
+use tracing_subscriber::util::SubscriberInitExt;
 use zenkai_engine::{Engine, Workbook, XlsxReader, open_xlsx_with, read_xlsx_bytes};
 use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
 
@@ -169,8 +170,12 @@ fn main() -> Result<()> {
     PEAK.reset_peak_usage();
 
     if app_only {
+        trace_spans()?;
         return run_app_open(&path);
     }
+    println!(
+        "note: stage c reads with IronCalc's importer, the app's fallback; --app opens as the app does"
+    );
 
     let name = path
         .file_stem()
@@ -270,17 +275,34 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+// With ZENKAI_OPEN_SPANS set, each span of the open is printed with its time when it
+// closes, so the read and the first evaluation show apart; printing costs time of its own.
+fn trace_spans() -> Result<()> {
+    let spans = std::env::var_os("ZENKAI_OPEN_SPANS").map(|_| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            tracing_subscriber::EnvFilter::new("zenkai_engine=info,zenkai_xlsx_reader=info")
+        });
+        tracing_subscriber::fmt::layer()
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+            .with_ansi(false)
+            .with_writer(std::io::stderr)
+            .with_filter(filter)
+    });
+    let phases = std::env::var_os("ZENKAI_OPEN_PHASES").map(|_| PhaseMemory {
+        origin: Instant::now(),
+    });
+    Registry::default()
+        .with(spans)
+        .with(phases)
+        .try_init()
+        .context("installing the open tracing layers")
+}
+
 // The app's own open path alone (streaming reader, model build, first evaluation),
 // so the process peak is what a user's open costs.
 fn run_app_open(path: &Path) -> Result<()> {
     begin("app");
     let start = Instant::now();
-    if std::env::var_os("ZENKAI_OPEN_PHASES").is_some() {
-        let phases = Registry::default().with(PhaseMemory {
-            origin: Instant::now(),
-        });
-        tracing::subscriber::set_global_default(phases).context("installing the phase layer")?;
-    }
     if std::env::var_os("ZENKAI_OPEN_TIMELINE").is_some() {
         std::thread::spawn(|| {
             let origin = Instant::now();

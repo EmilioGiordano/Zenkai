@@ -132,7 +132,7 @@ pub(crate) fn rejected(error: impl ToString) -> EngineError {
 #[derive(Clone, Copy)]
 pub(crate) struct ModelData<'m> {
     pub(crate) book: &'m ironcalc::base::types::Workbook,
-    pub(crate) formulas: &'m [Vec<(Node, StaticResult)>],
+    pub(crate) formulas: &'m [Arc<Vec<(Node, StaticResult)>>],
 }
 
 impl<'m> ModelData<'m> {

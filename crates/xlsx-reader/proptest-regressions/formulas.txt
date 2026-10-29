@@ -5,3 +5,5 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 4152b9d948036e1d00e454ae3d62877a541133479894a59fcbacbfa28df5df8d # shrinks to atoms = [(Relative(0, 0), ":"), (Function("SEQUENCE", [Relative(0, 0)]), "+")], places = [(1, 1, false), (1, 1, false)]
+cc a7eb57c81bde8b5c7e5417413d6242db3aeb963bf5eb462728548ec70cc7830a # shrinks to atoms = [(Function("SUM", [FixedStartRange(9, 0)]), ",")], column = 1, rows = [1, 9]
+cc f9bd1ff0e821ef4ab443cdb56a4b48805d8a9724dbf59f1a8794a6cbba93e2c3 # shrinks to atoms = [(Function("SUM", [FixedStartRange(10, 0)]), ",")], places = [(1, 7, false), (10, 7, false)]

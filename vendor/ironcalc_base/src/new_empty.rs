@@ -1,6 +1,9 @@
 use chrono::DateTime;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use crate::cell_hash::CellHashMap;
 
 use crate::{
     calc_result::Range,
@@ -111,7 +114,7 @@ impl<'a> Model<'a> {
                 let static_result = run_static_analysis_on_node(&t);
                 parse_formula.push((t, static_result));
             }
-            self.parsed_formulas.push(parse_formula);
+            self.parsed_formulas.push(Arc::new(parse_formula));
         }
         self.parser.set_lexer_mode(LexerMode::A1);
         self.parser.set_locale(locale);
@@ -678,7 +681,7 @@ impl<'a> Model<'a> {
         let worksheets = &workbook.worksheets;
         let worksheet_names = worksheets.iter().map(|s| s.get_name()).collect();
         let parser = Parser::new(worksheet_names, vec![], HashMap::new(), locale, language);
-        let cells = HashMap::new();
+        let cells = CellHashMap::default();
 
         let mut model = Model {
             workbook,

@@ -152,7 +152,7 @@ mod tests {
             assert_eq!(first, joined.len());
             joined.extend(share);
         }
-        assert_eq!(&joined, formulas);
+        assert_eq!(&joined, &**formulas);
         assert!(
             over_formulas(&[], |_, share| share.len())
                 .unwrap()

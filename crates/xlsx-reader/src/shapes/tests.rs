@@ -20,11 +20,29 @@ enum Atom {
     Range(i32, i32, i32, i32),
     FixedStartRange(i32, i32),
     OtherSheet(i32, i32),
+    Columns(i32, bool, i32),
     Literal(&'static str),
     Function(&'static str, Vec<Atom>),
 }
 
-const LITERALS: [&str; 14] = [
+const LITERALS: [&str; 31] = [
+    "Q1\\x",
+    "A1?",
+    "A1\\",
+    "1A1",
+    "B$2(1)",
+    "1E5",
+    "R1C1",
+    "A1B",
+    "XFE1",
+    "\"x\"\"A1\"",
+    "1:1",
+    "$A:$B",
+    "A1#",
+    "#REF!",
+    "A\u{f1}o2",
+    "Rate2",
+    "$5",
     "1",
     "2.5",
     "\"A1\"",
@@ -55,7 +73,9 @@ fn atom() -> impl Strategy<Value = Atom> {
         )
             .prop_map(|(a, b, c, d)| Atom::Range(a, b, c, d)),
         (1..20i32, offset.clone()).prop_map(|(r, c)| Atom::FixedStartRange(r, c)),
-        (offset.clone(), offset).prop_map(|(r, c)| Atom::OtherSheet(r, c)),
+        (offset.clone(), offset.clone()).prop_map(|(r, c)| Atom::OtherSheet(r, c)),
+        (offset.clone(), any::<bool>(), offset)
+            .prop_map(|(a, fixed, b)| Atom::Columns(a, fixed, b)),
         prop::sample::select(LITERALS.to_vec()).prop_map(Atom::Literal),
     ];
     leaf.prop_recursive(3, 12, 3, |inner| {
@@ -91,6 +111,11 @@ fn render(atom: &Atom, row: i32, column: i32) -> Option<String> {
         }
         Atom::FixedStartRange(r, c) => format!("$A${r}:{}", cell(row, column + c)?),
         Atom::OtherSheet(r, c) => format!("'Other Sheet'!{}", cell(row + r, column + c)?),
+        Atom::Columns(a, fixed, b) => {
+            let left = number_to_column(column + a)?;
+            let dollar = if *fixed { "$" } else { "" };
+            format!("{dollar}{left}:{}", number_to_column(column + b)?)
+        }
         Atom::Literal(text) => (*text).to_string(),
         Atom::Function(name, args) => {
             let args: Option<Vec<String>> = args.iter().map(|a| render(a, row, column)).collect();
@@ -238,6 +263,72 @@ fn a_formula_filled_down_keeps_one_job() {
     }
 }
 
+// The parser stops at `\` and `?` and keeps the reference before them, so the same
+// text down a column reads a different cell in each row.
+#[test]
+fn the_same_text_with_a_reference_cut_short_keeps_each_cells_reading() {
+    let book = Book::new();
+    for text in [r"Q1\x", "A1?", r"A1\"] {
+        let cells: BTreeMap<(i32, i32), (String, bool)> = (1..=6)
+            .map(|row| ((row, 3), (text.to_string(), false)))
+            .collect();
+        let sheet = scanned(&pieces(&cells, 4), book.names());
+        let expected: Vec<String> = (1..=6)
+            .map(|row| fresh_text(&book, text, row, 3, false))
+            .collect();
+        assert_eq!(converted_texts(&sheet, &book), expected, "{text}");
+    }
+}
+
+// The formula across row 2, with `@` standing for the column's letters and `<` for the
+// letters of the column before it.
+fn row_of(
+    text: &str,
+    columns: std::ops::RangeInclusive<i32>,
+) -> BTreeMap<(i32, i32), (String, bool)> {
+    columns
+        .map(|column| {
+            let text = text
+                .replace('@', &number_to_column(column).unwrap())
+                .replace('<', &number_to_column(column - 1).unwrap());
+            ((2, column), (text, false))
+        })
+        .collect()
+}
+
+#[test]
+fn a_formula_filled_across_a_row_keeps_one_job() {
+    let book = Book::new();
+    let cells = row_of("<2*2+SUM($B$1:@1)+@:@", 3..=40);
+    for rows_per_piece in [1, 3] {
+        let sheet = scanned(&pieces(&cells, rows_per_piece), book.names());
+        assert_eq!(sheet.jobs.len(), 1);
+        let texts = converted_texts(&sheet, &book);
+        assert!(texts.iter().all(|text| text == &texts[0]), "{texts:?}");
+    }
+}
+
+#[test]
+fn a_formula_filled_over_a_block_keeps_one_job() {
+    let book = Book::new();
+    let cells: BTreeMap<(i32, i32), (String, bool)> = (2..=20)
+        .flat_map(|row| {
+            (3..=15).map(move |column| {
+                let before = number_to_column(column - 1).unwrap();
+                let here = number_to_column(column).unwrap();
+                let text = format!("{before}{row}+{here}$1*$A{row}+SUM($B$2:{here}{row})");
+                ((row, column), (text, false))
+            })
+        })
+        .collect();
+    for rows_per_piece in [19, 4, 1] {
+        let sheet = scanned(&pieces(&cells, rows_per_piece), book.names());
+        assert_eq!(sheet.jobs.len(), 1, "{rows_per_piece} rows per piece");
+        let texts = converted_texts(&sheet, &book);
+        assert!(texts.iter().all(|text| text == &texts[0]), "{texts:?}");
+    }
+}
+
 #[test]
 fn a_shape_that_does_not_parse_keeps_each_cells_text() {
     let book = Book::new();
@@ -323,6 +414,38 @@ proptest! {
         // IronCalc's lexer overflows on very long column names in debug builds.
         let outcome = catch_unwind(AssertUnwindSafe(|| {
             let sheet = scanned(&pieces(&cells, rows_per_piece), book.names());
+            let expected: Vec<String> = cells
+                .iter()
+                .map(|((row, column), (text, array))| {
+                    fresh_text(&book, text, *row, *column, *array)
+                })
+                .collect();
+            (converted_texts(&sheet, &book), expected)
+        }));
+        let Ok((texts, expected)) = outcome else { return Ok(()) };
+        prop_assert_eq!(texts, expected);
+    }
+
+    // One formula written as if it sat a little off its cell, so neighbouring cells hold
+    // the same text at another column, or texts that differ only in a relative row or
+    // column: none may take another's shape.
+    #[test]
+    fn shifted_formulas_convert_like_fresh_parses(
+        atoms in prop::collection::vec(
+            (atom(), prop::sample::select(vec!["+", "*", ":", ",", ""])),
+            1..4,
+        ),
+        places in prop::collection::vec((4..14i32, 3..9i32, -2..3i32, -3..4i32), 2..16),
+    ) {
+        let book = Book::new();
+        let mut cells = BTreeMap::new();
+        for (row, column, row_shift, column_shift) in places {
+            if let Some(text) = formula(&atoms, row + row_shift, column + column_shift) {
+                cells.insert((row, column), (text, false));
+            }
+        }
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let sheet = scanned(&pieces(&cells, 3), book.names());
             let expected: Vec<String> = cells
                 .iter()
                 .map(|((row, column), (text, array))| {

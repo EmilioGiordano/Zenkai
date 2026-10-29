@@ -92,6 +92,6 @@ mod tests {
         let (sheet, formulas) =
             copied_sheet(&model.workbook.worksheets[0], &model.parsed_formulas[0]).unwrap();
         assert_eq!(sheet, model.workbook.worksheets[0]);
-        assert_eq!(formulas, model.parsed_formulas[0]);
+        assert_eq!(formulas, *model.parsed_formulas[0]);
     }
 }

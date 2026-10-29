@@ -1,7 +1,10 @@
 #![deny(missing_docs)]
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::vec::Vec;
+
+use crate::cell_hash::CellHashMap;
 
 use crate::expressions::parser::static_analysis::run_static_analysis_on_node;
 use crate::{
@@ -190,8 +193,9 @@ pub(crate) enum CellOrRange {
 pub struct Model<'a> {
     /// A Rust internal representation of an Excel workbook
     pub workbook: Workbook,
-    /// A list of parsed formulas
-    pub parsed_formulas: Vec<Vec<(Node, StaticResult)>>,
+    /// A list of parsed formulas, per sheet. Shared so evaluating a formula holds it
+    /// without copying it.
+    pub parsed_formulas: Vec<Arc<Vec<(Node, StaticResult)>>>,
     /// A list of parsed defined names
     pub(crate) parsed_defined_names: HashMap<(Option<u32>, String), ParsedDefinedName>,
     /// An optimization to lookup strings faster
@@ -199,7 +203,7 @@ pub struct Model<'a> {
     /// An instance of the parser
     pub(crate) parser: Parser<'a>,
     /// The list of cells with formulas that are evaluated or being evaluated
-    pub(crate) cells: HashMap<(u32, i32, i32), CellState>,
+    pub(crate) cells: CellHashMap<(u32, i32, i32), CellState>,
     /// The locale of the model
     pub(crate) locale: &'a Locale,
     /// The language used
@@ -1382,12 +1386,11 @@ impl<'a> Model<'a> {
     // Evaluates a cell and returns the value in the cell
     // FIXME: CalcResult cannot be Array or Range, should we have a different type?
     pub(crate) fn evaluate_cell(&mut self, cell_reference: CellReferenceIndex) -> CalcResult {
-        let original_cell = match self.fetch_cell(cell_reference) {
-            Some(c) => c.clone(),
-            None => return CalcResult::EmptyCell,
+        let Some(cell) = self.fetch_cell(cell_reference) else {
+            return CalcResult::EmptyCell;
         };
 
-        if let Some(a) = original_cell.spill_anchor() {
+        if let Some(a) = cell.spill_anchor() {
             // If it is part of an array or dynamic formula we need to evaluate the anchor cell
             // strictly speaking we don't need to evaluate the anchor cell of a dynamic array formula
             // but it is most likely a good guess anyway
@@ -1407,7 +1410,7 @@ impl<'a> Model<'a> {
             return self.get_cell_value(cell, cell_reference);
         };
 
-        match original_cell.get_formula() {
+        match cell.get_formula() {
             Some(f) => {
                 let key = (
                     cell_reference.sheet,
@@ -1428,10 +1431,11 @@ impl<'a> Model<'a> {
                             );
                         }
                         CellState::Evaluated => {
-                            return self.get_cell_value(&original_cell, cell_reference);
+                            return self.get_cell_value(cell, cell_reference);
                         }
                     }
                 }
+                let original_cell = cell.clone();
                 // Clear the pre-existing spill area of a dynamic formula before re-evaluating.
                 // This must happen after the CellState check so that a recursive call from a
                 // spill cell does not wipe out spill cells that were just written.
@@ -1472,9 +1476,9 @@ impl<'a> Model<'a> {
                 }
                 // mark cell as being evaluated
                 self.cells.insert(key, CellState::Evaluating);
-                let (node, _static_result) =
-                    &self.parsed_formulas[cell_reference.sheet as usize][f as usize];
-                let result = self.evaluate_node_in_context(&node.clone(), cell_reference);
+                let formulas = Arc::clone(&self.parsed_formulas[cell_reference.sheet as usize]);
+                let (node, _static_result) = &formulas[f as usize];
+                let result = self.evaluate_node_in_context(node, cell_reference);
 
                 // At this point a range needs to be transformed into an array
                 let result = if let CalcResult::Range { left, right } = result {
@@ -1586,7 +1590,7 @@ impl<'a> Model<'a> {
                     _ => result,
                 }
             }
-            None => self.get_cell_value(&original_cell, cell_reference),
+            None => self.get_cell_value(cell, cell_reference),
         }
     }
 
@@ -1665,7 +1669,7 @@ impl<'a> Model<'a> {
         //     tables.push(tables_in_sheet);
         // }
 
-        let cells = HashMap::new();
+        let cells = CellHashMap::default();
         let locale =
             get_locale(&workbook.settings.locale).map_err(|_| "Invalid locale".to_string())?;
         let tz = Tz::parse(&workbook.settings.tz)?;
@@ -2646,7 +2650,8 @@ impl<'a> Model<'a> {
         }
         if formula_index == -1 {
             shared_formulas.push(s);
-            self.parsed_formulas[sheet as usize].push((parsed_formula, static_result));
+            Arc::make_mut(&mut self.parsed_formulas[sheet as usize])
+                .push((parsed_formula, static_result));
             formula_index = (shared_formulas.len() as i32) - 1;
         }
         if is_dynamic {
@@ -2695,7 +2700,8 @@ impl<'a> Model<'a> {
         }
         if formula_index == -1 {
             shared_formulas.push(s);
-            self.parsed_formulas[sheet as usize].push((parsed_formula, static_result));
+            Arc::make_mut(&mut self.parsed_formulas[sheet as usize])
+                .push((parsed_formula, static_result));
             formula_index = (shared_formulas.len() as i32) - 1;
         }
         worksheet.set_cell_with_array_formula(row, column, formula_index, style, width, height)?;

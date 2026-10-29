@@ -428,6 +428,8 @@ pub(crate) fn book_print(book: &Workbook) -> Result<u64, EngineError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use ironcalc::base::Model;
     use ironcalc::base::types::Row;
 
@@ -581,11 +583,11 @@ mod tests {
                 .unwrap();
         }
         let before = print(&model, 0);
-        let formulas = &mut model.parsed_formulas[0];
+        let formulas = Arc::make_mut(&mut model.parsed_formulas[0]);
         let last = formulas.len() - 1;
         formulas.swap(1, last);
         assert!(changed(&before, &print(&model, 0)));
-        model.parsed_formulas[0].swap(1, last);
+        Arc::make_mut(&mut model.parsed_formulas[0]).swap(1, last);
         assert!(!changed(&before, &print(&model, 0)));
     }
 
