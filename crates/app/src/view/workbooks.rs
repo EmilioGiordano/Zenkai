@@ -25,6 +25,24 @@ enum OpenSource {
     ReopenClosed,
 }
 
+// Whether the user asked for the file just now or its tab loaded lazily; only the first is news
+// worth a Protected View card.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Opened {
+    Requested,
+    Lazy,
+}
+
+fn with_time(text: String, started: Option<Instant>) -> String {
+    match started {
+        Some(started) => format!(
+            "{text} {}",
+            t!("notice.took_ms", ms = started.elapsed().as_millis())
+        ),
+        None => text,
+    }
+}
+
 pub(super) enum LinkLoad {
     Loaded {
         file: Box<FileLoad>,
@@ -478,7 +496,7 @@ impl Workspace {
                             document.read_only = read_only;
                             document.origin = origin;
                         }
-                        this.announce_opened(Some(started), true, cx);
+                        this.announce_opened(Some(started), Opened::Requested, cx);
                         if reader_fallback.is_some() {
                             this.notify(Severity::Info, t!("notice.fast_reader_fallback"), cx);
                         }
@@ -507,33 +525,26 @@ impl Workspace {
         true
     }
 
-    // `requested` is a file the user asked to open now; a tab loading lazily is not news to the
-    // user, so it skips the Protected View card but still reports its time.
     fn announce_opened(
         &mut self,
         started: Option<Instant>,
-        requested: bool,
+        opened: Opened,
         cx: &mut Context<Self>,
     ) {
         let Some(document) = self.documents.active() else {
             return;
         };
-        let took = started.map(|started| t!("notice.took_ms", ms = started.elapsed().as_millis()));
-        let with_time = |text: String| match &took {
-            Some(took) => format!("{text} {took}"),
-            None => text,
-        };
         if document.read_only {
-            let text = with_time(t!("notice.opened_read_only").to_string());
+            let text = with_time(t!("notice.opened_read_only").to_string(), started);
             self.notify(Severity::Warning, text, cx);
         } else if !document.unsupported.is_empty() {
             let text = t!(
                 "notice.opened_unsupported",
                 list = document::labels(&document.unsupported)
             );
-            self.notify(Severity::Warning, with_time(text.to_string()), cx);
-        } else if document.origin == FileOrigin::Internet && requested {
-            let text = with_time(t!("notice.protected_view").to_string());
+            self.notify(Severity::Warning, with_time(text.to_string(), started), cx);
+        } else if document.origin == FileOrigin::Internet && opened == Opened::Requested {
+            let text = with_time(t!("notice.protected_view").to_string(), started);
             self.notify(Severity::Warning, text, cx);
         } else if let Some(started) = started {
             let text = t!("notice.opened_in", ms = started.elapsed().as_millis());
@@ -746,11 +757,12 @@ impl Workspace {
         } else {
             match provenance {
                 Provenance::Recovery => {
-                    let text = t!("notice.recovered", name = name);
+                    let text = with_time(t!("notice.recovered", name = name).to_string(), started);
                     self.notify(Severity::Warning, text, cx);
                 }
-                Provenance::File => self.announce_opened(started, false, cx),
-                Provenance::Dump => {}
+                Provenance::File | Provenance::Dump => {
+                    self.announce_opened(started, Opened::Lazy, cx)
+                }
             }
         }
     }
