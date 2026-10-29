@@ -6,8 +6,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::{Builder, Scope, ScopedJoinHandle};
 
 use crate::ReadError;
+use crate::formulas::WORKER_STACK_BYTES;
 use crate::limits::CellBudget;
-use crate::package::WorksheetPart;
+use crate::package::Package;
 use crate::sheet_stream::{StreamedSheet, Tuning, stream_worksheet};
 use crate::stream::{Budgets, CompressedMeter, Counted};
 
@@ -94,7 +95,7 @@ pub(crate) struct SheetTask {
 
 pub(crate) struct Job<'j, R> {
     open: &'j Open<'j, R>,
-    worksheets: &'j [WorksheetPart],
+    package: &'j Package,
     budgets: &'j Budgets,
     tasks: &'j [SheetTask],
     layout: Option<Layout>,
@@ -127,6 +128,7 @@ impl<'scope> SheetStreams<'scope> {
             let parent = parent.clone();
             let spawned = Builder::new()
                 .name(format!("xlsx-sheet-{number}"))
+                .stack_size(WORKER_STACK_BYTES)
                 .spawn_scoped(scope, move || run(job, &sender, &parent));
             match spawned {
                 Ok(handle) => handles.push(handle),
@@ -183,7 +185,7 @@ impl<'scope> SheetStreams<'scope> {
 impl<'j, R> Job<'j, R> {
     pub(crate) fn new(
         open: &'j Open<'j, R>,
-        worksheets: &'j [WorksheetPart],
+        package: &'j Package,
         budgets: &'j Budgets,
         tasks: &'j [SheetTask],
         plan: &ReadPlan,
@@ -191,7 +193,7 @@ impl<'j, R> Job<'j, R> {
         let layout = plan.layout(tasks.len());
         Job {
             open,
-            worksheets,
+            package,
             budgets,
             tasks,
             layout,
@@ -238,7 +240,7 @@ fn stream_task<R: Read + Seek>(
             "a worksheet reader stopped".to_string(),
         ));
     };
-    let part = &job.worksheets[task.position];
+    let part = &job.package.worksheets[task.position];
     let entry = archive
         .by_index(task.index)
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
@@ -248,7 +250,7 @@ fn stream_task<R: Read + Seek>(
         entry,
         meter,
         &part.path,
-        &part.name,
+        job.package.names_of(task.position),
         job.budgets,
         job.tuning,
     )

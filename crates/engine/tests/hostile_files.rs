@@ -411,6 +411,32 @@ fn long_operator_chain_is_rejected_not_a_stack_overflow() {
     assert!(error.contains("characters"), "{error}");
 }
 
+// The reader parses a formula's shape while the rows stream once it repeats, on its sheet
+// and row threads too; the longest and deepest formulas the limits allow, filled down, still
+// open, in a small sheet and in one past 8 MB, which streams on its own threads.
+#[test]
+fn the_longest_and_deepest_formulas_filled_down_open() {
+    let long = |row: usize| format!("A{row}+{}1", "1+".repeat((8_192 - 12) / 2));
+    let deep = |row: usize| format!("{}A{row}{}", "(".repeat(256), ")".repeat(256));
+    let formulas: [(&dyn Fn(usize) -> String, usize); 2] = [(&long, 1_200), (&deep, 20_000)];
+    for (formula, large) in formulas {
+        for rows in [3, large] {
+            let data: String = (1..=rows)
+                .map(|row| {
+                    format!(
+                        r#"<row r="{row}"><c r="B{row}"><f>{}</f></c></row>"#,
+                        formula(row)
+                    )
+                })
+                .collect();
+            let sheet = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{data}</sheetData></worksheet>"#
+            );
+            open_fast(workbook_with_sheet(&sheet)).unwrap();
+        }
+    }
+}
+
 #[test]
 fn single_quoted_array_ref_on_new_line_is_rejected() {
     let cell = "<c r=\"A1\"><f

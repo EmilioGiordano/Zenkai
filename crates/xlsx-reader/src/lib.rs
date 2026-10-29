@@ -10,6 +10,7 @@ mod links;
 mod nesting;
 mod package;
 mod parallel;
+mod shapes;
 mod shared_strings;
 mod sheet_data;
 mod sheet_stream;
@@ -195,7 +196,7 @@ fn read_planned<R: Read + Seek>(
     }
     drop(declared_span);
     budgets.expect_sheet_bytes(declared);
-    let job = Job::new(open, &package.worksheets, &budgets, &tasks, plan);
+    let job = Job::new(open, &package, &budgets, &tasks, plan);
     let entries_span = tracing::info_span!("open_entries").entered();
     let sheets = std::thread::scope(|scope| {
         let mut streams = SheetStreams::start(scope, &job);
@@ -338,7 +339,6 @@ fn stream_entries<R: Read + Seek>(
                     let entry = archive
                         .by_index(index)
                         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
-                    let sheet_name = package.worksheets[position].name.clone();
                     let _sheet_span =
                         tracing::info_span!("open_sheet", sheet = position, bytes = entry.size())
                             .entered();
@@ -346,7 +346,7 @@ fn stream_entries<R: Read + Seek>(
                         entry,
                         meter,
                         &entry_name,
-                        &sheet_name,
+                        package.names_of(position),
                         budgets,
                         Tuning::production(0),
                     )?
