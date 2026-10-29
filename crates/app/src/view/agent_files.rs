@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use gpui_kit::*;
 use zenkai_agent::chat::thread::FileCard;
@@ -117,7 +118,7 @@ impl Workspace {
             let task_path = path.path().to_path_buf();
             let loaded = cx
                 .background_executor()
-                .spawn(async move { files::load_workbook(&task_path, reader) })
+                .spawn(async move { files::load_workbook(&task_path, reader, &Arc::default()) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.open_loads.finish(open);

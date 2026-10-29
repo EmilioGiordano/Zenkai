@@ -1,7 +1,8 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::error::EngineError;
 use crate::preflight;
@@ -57,6 +58,17 @@ pub fn open_xlsx(path: &Path) -> Result<Opened, EngineError> {
 }
 
 pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineError> {
+    open_xlsx_cancellable(path, reader, &Arc::default())
+}
+
+// Raising `cancel` stops the open with `Cancelled` at the next checkpoint: while streaming
+// the sheets, between the read phases and before the model is built and calculated. The
+// calculation inside IronCalc cannot be interrupted, so a cancel during it is honoured once it ends.
+pub fn open_xlsx_cancellable(
+    path: &Path,
+    reader: XlsxReader,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Opened, EngineError> {
     let read_error = |source| EngineError::Read {
         path: path.to_path_buf(),
         source,
@@ -80,7 +92,8 @@ pub fn open_xlsx_with(path: &Path, reader: XlsxReader) -> Result<Opened, EngineE
         read,
         settings,
         parts,
-    } = xlsx_read::read_xlsx_file(path, &name, reader)?;
+    } = xlsx_read::read_xlsx_file(path, &name, reader, cancel)?;
+    xlsx_read::check_not_cancelled(cancel)?;
     // Even a file saves cannot copy from, or one that changed while it was read, is
     // remembered by the stamp taken before the read, so a save over it asks first.
     let known = before.as_ref().ok().map(|stamp| KnownFile {

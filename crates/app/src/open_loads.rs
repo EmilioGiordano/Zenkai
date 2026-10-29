@@ -1,11 +1,20 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::text_document::DocumentKind;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct OpenId(u64);
 
+enum Stop {
+    Unavailable,
+    Flag(Arc<AtomicBool>),
+}
+
 struct OpenLoad {
     id: OpenId,
     label: String,
+    stop: Stop,
 }
 
 #[derive(Default)]
@@ -16,9 +25,18 @@ pub struct OpenLoads {
 
 impl OpenLoads {
     pub fn start(&mut self, label: String) -> OpenId {
+        self.push(label, Stop::Unavailable)
+    }
+
+    pub fn start_cancellable(&mut self, label: String) -> (OpenId, Arc<AtomicBool>) {
+        let flag = Arc::new(AtomicBool::new(false));
+        (self.push(label, Stop::Flag(flag.clone())), flag)
+    }
+
+    fn push(&mut self, label: String, stop: Stop) -> OpenId {
         let id = OpenId(self.next);
         self.next += 1;
-        self.running.push(OpenLoad { id, label });
+        self.running.push(OpenLoad { id, label, stop });
         id
     }
 
@@ -27,8 +45,31 @@ impl OpenLoads {
         (!kind.is_pdf()).then(|| self.start(label))
     }
 
-    pub fn finish(&mut self, id: OpenId) {
+    // False when the load was cancelled meanwhile, so its late result must be dropped.
+    pub fn finish(&mut self, id: OpenId) -> bool {
+        let before = self.running.len();
         self.running.retain(|load| load.id != id);
+        self.running.len() != before
+    }
+
+    pub fn newest_cancellable(&self) -> bool {
+        self.running
+            .last()
+            .is_some_and(|load| matches!(load.stop, Stop::Flag(_)))
+    }
+
+    // Only the load the indicator shows can be cancelled; the pill clears at once.
+    pub fn cancel_newest(&mut self) -> bool {
+        let Some(OpenLoad {
+            stop: Stop::Flag(flag),
+            ..
+        }) = self.running.last()
+        else {
+            return false;
+        };
+        flag.store(true, Ordering::Relaxed);
+        self.running.pop();
+        true
     }
 
     pub fn newest_label(&self) -> Option<&str> {
@@ -85,6 +126,56 @@ mod tests {
         loads.finish(done);
         assert_eq!(loads.newest_label(), Some("other"));
         loads.finish(other);
+    }
+
+    #[test]
+    fn a_cancelled_load_is_discarded_when_its_result_arrives() {
+        let mut loads = OpenLoads::default();
+        let (id, flag) = loads.start_cancellable("big".into());
+        assert!(loads.cancel_newest());
+        assert!(flag.load(Ordering::Relaxed));
+        assert_eq!(loads.newest_label(), None);
+        assert!(!loads.finish(id));
+    }
+
+    #[test]
+    fn a_load_that_was_not_cancelled_is_delivered() {
+        let mut loads = OpenLoads::default();
+        let (id, flag) = loads.start_cancellable("big".into());
+        assert!(loads.finish(id));
+        assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn cancelling_leaves_an_older_load_running_and_untouched() {
+        let mut loads = OpenLoads::default();
+        let (older, older_flag) = loads.start_cancellable("older".into());
+        let (_, newer_flag) = loads.start_cancellable("newer".into());
+        assert!(loads.cancel_newest());
+        assert!(newer_flag.load(Ordering::Relaxed));
+        assert!(!older_flag.load(Ordering::Relaxed));
+        assert_eq!(loads.newest_label(), Some("older"));
+        assert!(loads.finish(older));
+    }
+
+    #[test]
+    fn a_load_without_a_stop_cannot_be_cancelled() {
+        let mut loads = OpenLoads::default();
+        let (_, flag) = loads.start_cancellable("big".into());
+        let reading = loads.start("reading".into());
+        assert!(!loads.newest_cancellable());
+        assert!(!loads.cancel_newest());
+        assert!(!flag.load(Ordering::Relaxed));
+        assert_eq!(loads.newest_label(), Some("reading"));
+        assert!(loads.finish(reading));
+        assert!(loads.newest_cancellable());
+    }
+
+    #[test]
+    fn nothing_running_means_nothing_to_cancel() {
+        let mut loads = OpenLoads::default();
+        assert!(!loads.newest_cancellable());
+        assert!(!loads.cancel_newest());
     }
 
     #[test]

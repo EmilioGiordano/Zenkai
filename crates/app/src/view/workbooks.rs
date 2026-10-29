@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use gpui_kit::*;
@@ -16,6 +18,12 @@ use crate::failure::open_failure;
 use crate::files::{self, FileLoad, LoadFailure};
 use crate::recovery;
 use crate::text_document::DocumentKind;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpenSource {
+    Request,
+    ReopenClosed,
+}
 
 pub(super) enum LinkLoad {
     Loaded {
@@ -107,7 +115,7 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
     let Some(path) = &link.path else {
         return LinkLoad::Missing;
     };
-    match files::load_workbook(path, reader) {
+    match files::load_workbook(path, reader, &Arc::default()) {
         Ok(file) => LinkLoad::Loaded {
             file: Box::new(file),
             provenance: Provenance::File,
@@ -361,12 +369,22 @@ impl Workspace {
 
     pub(super) fn reopen_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.documents.take_reopenable() {
-            Some(path) => self.open_path(path, window, cx),
+            Some(path) => self.open_path_from(path, OpenSource::ReopenClosed, window, cx),
             None => self.notify(Severity::Info, t!("notice.no_closed_workbook"), cx),
         }
     }
 
     pub(crate) fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_path_from(path, OpenSource::Request, window, cx);
+    }
+
+    fn open_path_from(
+        &mut self,
+        path: PathBuf,
+        source: OpenSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.show_sheet_beside_chat(cx);
         if DocumentKind::of(&path).is_text() {
             self.open_text_file(path, window, cx);
@@ -384,9 +402,9 @@ impl Workspace {
             self.switch_to(open, window, cx);
             return;
         }
-        let load = self
+        let (load, cancel) = self
             .open_loads
-            .start(t!("busy.opening", name = file_label(&path)));
+            .start_cancellable(t!("busy.opening", name = file_label(&path)));
         cx.notify();
         let started = Instant::now();
         let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
@@ -394,11 +412,29 @@ impl Workspace {
             let task_path = path.clone();
             let result = cx
                 .background_executor()
-                .spawn(async move { files::load_workbook(&task_path, reader) })
+                .spawn(async move {
+                    let loaded = files::load_workbook(&task_path, reader, &cancel);
+                    // Dropped here, off the UI thread, so a cancelled workbook frees its memory.
+                    (!cancel.load(Ordering::Relaxed)).then_some(loaded)
+                })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                this.open_loads.finish(load);
+                let delivered = this.open_loads.finish(load);
                 cx.notify();
+                let result = match result {
+                    Some(result) if delivered => result,
+                    undelivered => {
+                        if source == OpenSource::ReopenClosed {
+                            this.documents.keep_reopenable(&path);
+                        }
+                        if let Some(result) = undelivered {
+                            cx.background_executor()
+                                .spawn(async move { drop(result) })
+                                .detach();
+                        }
+                        return;
+                    }
+                };
                 match result {
                     Ok(file) => {
                         this.remember_recent(&path, cx);
@@ -431,6 +467,15 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    pub(crate) fn cancel_open(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.open_loads.cancel_newest() {
+            return false;
+        }
+        self.notify(Severity::Info, t!("notice.open_cancelled"), cx);
+        cx.notify();
+        true
     }
 
     fn announce_opened(&mut self, started: Option<Instant>, cx: &mut Context<Self>) {
@@ -486,8 +531,9 @@ impl Workspace {
                 .spawn(async move { read_link(&link, reader) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                open.into_iter()
-                    .for_each(|open| this.open_loads.finish(open));
+                open.into_iter().for_each(|open| {
+                    this.open_loads.finish(open);
+                });
                 this.finish_load(id, load, window, cx)
             });
             if let Err(error) = update {

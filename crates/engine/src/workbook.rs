@@ -246,8 +246,9 @@ pub(crate) fn read_book_streaming(
     path: &std::path::Path,
     name: &str,
     inspect: &zenkai_xlsx_reader::Inspect<'_>,
+    cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<zenkai_xlsx_reader::OpenedBook, zenkai_xlsx_reader::ReadError> {
-    zenkai_xlsx_reader::read_xlsx_file(path, name, LOCALE, timezone(), inspect)
+    zenkai_xlsx_reader::read_xlsx_file_cancellable(path, name, LOCALE, timezone(), inspect, cancel)
 }
 
 // TODAY() and NOW() must follow the user clock, as in Excel.
