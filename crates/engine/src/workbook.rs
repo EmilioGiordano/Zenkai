@@ -1933,6 +1933,24 @@ impl Series {
     }
 }
 
+// Formats IronCalc cannot parse (a "[DBNum1]" prefix, "ss.000") still fill as dates when
+// a d or y is left once quoted text, escapes and brackets are dropped.
+fn has_day_or_year_letter(code: &str) -> bool {
+    let mut chars = code.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => chars.by_ref().take_while(|&q| q != '"').for_each(drop),
+            '[' => chars.by_ref().take_while(|&q| q != ']').for_each(drop),
+            '\\' | '_' | '*' => {
+                chars.next();
+            }
+            'd' | 'y' => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 fn is_date_format(code: &str) -> bool {
     use ironcalc::base::formatter::parser::{ParsePart, Parser, TextToken};
     // The lexer reads only lowercase d, m and y; Excel accepts "YYYY-MM-DD" too. Brackets
@@ -1955,8 +1973,10 @@ fn is_date_format(code: &str) -> bool {
         .collect();
     let mut parser = Parser::new(&lowered);
     parser.parse();
-    let Some(ParsePart::Date(part)) = parser.parts.first() else {
-        return false;
+    let part = match parser.parts.first() {
+        Some(ParsePart::Date(part)) => part,
+        Some(ParsePart::Error(_)) => return has_day_or_year_letter(&lowered),
+        _ => return false,
     };
     // The parser reads "mm" before any time unit as a month, so a part with a time unit
     // counts as a date only when it also has a day, a year or a month name.
@@ -2082,6 +2102,8 @@ mod tests {
             "dddd, mmmm d",
             "mm",
             "d/m/yyyy h:mm",
+            "yyyy-mm-dd hh:mm:ss.000",
+            "[DBNum1]d/m/yyyy",
         ] {
             assert!(is_date_format(code), "{code}");
         }
