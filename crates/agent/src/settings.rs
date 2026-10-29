@@ -392,6 +392,21 @@ pub fn escalations(from: &Settings, to: &Settings) -> Vec<Escalation> {
     raised
 }
 
+// Puts the safe value back on the held keys the file still asks to raise; a key someone
+// lowered or left alone since the prompt was shown is not touched.
+pub fn lower_to(file: &mut Settings, safe: &Settings, held: &[Escalation]) {
+    let still_raised = escalations(safe, file);
+    for escalation in held.iter().filter(|e| still_raised.contains(e)) {
+        match escalation {
+            Escalation::WriteWithoutAsking => file.agents.permission = safe.agents.permission,
+            Escalation::ExternalAgents => file.agents.external_agents = safe.agents.external_agents,
+            Escalation::StopConfirmingAtStart => {
+                file.agents.confirm_elevated_at_start = safe.agents.confirm_elevated_at_start
+            }
+        }
+    }
+}
+
 // What the user has confirmed and the app may take for granted at the next start: nothing
 // while the confirmation is on, and exactly the elevated values in force while it is off.
 pub fn remembered_confirmations(settings: &Settings) -> Vec<Escalation> {
