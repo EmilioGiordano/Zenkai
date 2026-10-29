@@ -173,18 +173,27 @@ impl<'a> Model<'a> {
             None => {
                 let misses = self.criteria_ranges.misses;
                 let mut count = 0.0;
-                for row_offset in 0..height {
-                    for column_offset in 0..width {
-                        let mut is_true = true;
-                        for (values, fn_criterion) in values.iter().zip(fn_criteria.iter()) {
-                            // We check if value in range n meets criterion n
-                            if !fn_criterion(&self.area_value(values, row_offset, column_offset)) {
-                                is_true = false;
-                                break;
+                match self.criterion_cells(&values[0], &criteria[0]) {
+                    Some((index, key)) => {
+                        for &(row_offset, column_offset) in index.cells(&key) {
+                            if self.criteria_hold(&values, &fn_criteria, row_offset, column_offset)
+                            {
+                                count += 1.0;
                             }
                         }
-                        if is_true {
-                            count += 1.0;
+                    }
+                    None => {
+                        for row_offset in 0..height {
+                            for column_offset in 0..width {
+                                if self.criteria_hold(
+                                    &values,
+                                    &fn_criteria,
+                                    row_offset,
+                                    column_offset,
+                                ) {
+                                    count += 1.0;
+                                }
+                            }
                         }
                     }
                 }
@@ -284,7 +293,7 @@ impl<'a> Model<'a> {
             .iter()
             .map(|criterion| build_criteria(criterion, self.locale))
             .collect();
-        self.run_ifs(&sum_range, &ranges, &fn_criteria, cell, apply)
+        self.run_ifs(&sum_range, &ranges, &criteria, &fn_criteria, cell, apply)
     }
 
     /// SUMIFS, from the kept total when there is one.
@@ -314,7 +323,9 @@ impl<'a> Model<'a> {
         }
         let misses = self.criteria_ranges.misses;
         let mut total = ExactSum::default();
-        if let Err(error) = self.scan_ifs(&sums, &values, &fn_criteria, |value| total.add(value)) {
+        if let Err(error) =
+            self.scan_ifs(&sums, &values, &criteria, &fn_criteria, |value| total.add(value))
+        {
             return error;
         }
         let value = total.value();
@@ -333,6 +344,7 @@ impl<'a> Model<'a> {
         &mut self,
         sum_range: &Range,
         ranges: &[Range],
+        criteria: &[CalcResult],
         fn_criteria: &[Criterion<'_>],
         cell: CellReferenceIndex,
         apply: F,
@@ -341,7 +353,7 @@ impl<'a> Model<'a> {
         F: FnMut(f64),
     {
         let (sums, values) = self.ifs_areas(sum_range, ranges, cell)?;
-        self.scan_ifs(&sums, &values, fn_criteria, apply)
+        self.scan_ifs(&sums, &values, criteria, fn_criteria, apply)
     }
 
     // The sum area and the criteria areas, all in the shape of the sum range.
@@ -399,10 +411,46 @@ impl<'a> Model<'a> {
         Ok((sums, values))
     }
 
+    // Whether the cells at an offset of the criteria areas meet their criteria, read in
+    // order up to the first that does not.
+    fn criteria_hold(
+        &mut self,
+        values: &[AreaValues],
+        fn_criteria: &[Criterion<'_>],
+        row_offset: i32,
+        column_offset: i32,
+    ) -> bool {
+        values.iter().zip(fn_criteria).all(|(values, fn_criterion)| {
+            fn_criterion(&self.area_value(values, row_offset, column_offset))
+        })
+    }
+
+    fn apply_sum<F>(
+        &mut self,
+        sums: &AreaValues,
+        row_offset: i32,
+        column_offset: i32,
+        apply: &mut F,
+    ) -> Result<(), CalcResult>
+    where
+        F: FnMut(f64),
+    {
+        match self.area_value(sums, row_offset, column_offset) {
+            Cow::Borrowed(CalcResult::Number(n)) => apply(*n),
+            Cow::Owned(CalcResult::Number(n)) => apply(n),
+            v if v.is_error() => return Err(v.into_owned()),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    // When an index tells the cells the first criterion can match, only those are visited:
+    // a full read fails every other cell on that criterion before reading anything else.
     fn scan_ifs<F>(
         &mut self,
         sums: &AreaValues,
         values: &[AreaValues],
+        criteria: &[CalcResult],
         fn_criteria: &[Criterion<'_>],
         mut apply: F,
     ) -> Result<(), CalcResult>
@@ -410,22 +458,24 @@ impl<'a> Model<'a> {
         F: FnMut(f64),
     {
         let (_, _, _, height, width) = sums.area;
-        for row_offset in 0..height {
-            for column_offset in 0..width {
-                let mut is_true = true;
-                for (values, fn_criterion) in values.iter().zip(fn_criteria.iter()) {
-                    // We check if value in range n meets criterion n
-                    if !fn_criterion(&self.area_value(values, row_offset, column_offset)) {
-                        is_true = false;
-                        break;
+        let indexed = match (values.first(), criteria.first()) {
+            (Some(first), Some(criterion)) => self.criterion_cells(first, criterion),
+            _ => None,
+        };
+        match indexed {
+            Some((index, key)) => {
+                for &(row_offset, column_offset) in index.cells(&key) {
+                    if self.criteria_hold(values, fn_criteria, row_offset, column_offset) {
+                        self.apply_sum(sums, row_offset, column_offset, &mut apply)?;
                     }
                 }
-                if is_true {
-                    match self.area_value(sums, row_offset, column_offset) {
-                        Cow::Borrowed(CalcResult::Number(n)) => apply(*n),
-                        Cow::Owned(CalcResult::Number(n)) => apply(n),
-                        v if v.is_error() => return Err(v.into_owned()),
-                        _ => {}
+            }
+            None => {
+                for row_offset in 0..height {
+                    for column_offset in 0..width {
+                        if self.criteria_hold(values, fn_criteria, row_offset, column_offset) {
+                            self.apply_sum(sums, row_offset, column_offset, &mut apply)?;
+                        }
                     }
                 }
             }
@@ -533,6 +583,7 @@ impl<'a> Model<'a> {
                 let node = match self.run_ifs(
                     &sum_range,
                     std::slice::from_ref(&criteria_range),
+                    std::slice::from_ref(criterion),
                     &fn_criteria,
                     cell,
                     |v| total.add(v),

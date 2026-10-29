@@ -107,6 +107,7 @@ fn exact_lookup() -> impl Strategy<Value = String> {
 }
 
 // SUMIF and COUNTIF over areas large enough to keep their totals, reading the edited grid.
+// Several read the same area with equality criteria, so later ones go through its index.
 fn criteria_total() -> impl Strategy<Value = String> {
     prop_oneof![
         2 => cell().prop_map(|a| format!("=SUMIF($A$1:$A$1100,{a},$B$1:$B$1100)")),
@@ -119,6 +120,12 @@ fn criteria_total() -> impl Strategy<Value = String> {
         2 => Just("=COUNTIFS($A$1:$A$1100,\"a*\",$B$1:$B$1100,\"\")".to_string()),
         2 => cell().prop_map(|a| format!("=IF({a}>0,SUMIF($A$1:$A$1100,\"<3\",$D$1:$D$1100),0)")),
         2 => cell().prop_map(|a| format!("=IF({a}<0,COUNTIF($C$1:$C$1100,\">=1\"),-1)")),
+        2 => cell().prop_map(|a| format!("=SUMIFS($B$1:$B$1100,$A$1:$A$1100,{a})")),
+        2 => cell().prop_map(|a| {
+            format!("=COUNTIFS($A$1:$A$1100,{a},$C$1:$C$1100,\">0\")")
+        }),
+        2 => cell().prop_map(|a| format!("=AVERAGEIFS($C$1:$C$1100,$A$1:$A$1100,{a})")),
+        2 => Just("=COUNTIFS($A$1:$A$1100,\"b\",$B$1:$B$1100,\"<3\")".to_string()),
         1 => Just("=SUMIF($A$1:$A$1100,\">0\",$B$1:$B$1200)".to_string()),
         1 => Just("=SUMIF(A:A,\"<3\",B:B)+COUNTIF(B:B,\"<>\")".to_string()),
     ]

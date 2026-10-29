@@ -556,13 +556,162 @@ pub(crate) fn build_criteria<'a>(value: &'a CalcResult, locale: &'a Locale) -> C
     }
 }
 
+/// A value a criterion that matches by equality alone looks for. `result_is_equal_to_number`
+/// holds numbers within `f64::EPSILON` equal, which is equal bits only from 2 on, so smaller
+/// numbers have no key.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum MatchKey {
+    Number(u64),
+    Text(Box<str>),
+}
+
+impl MatchKey {
+    fn number(value: f64) -> Option<MatchKey> {
+        (value.is_finite() && value.abs() >= 2.0).then(|| MatchKey::Number(value.to_bits()))
+    }
+}
+
+/// The key every value `build_criteria(criterion)` matches has among its `value_keys`, or
+/// `None` when the criterion can match values without that key. Follows the branches of
+/// `build_criteria`.
+pub(crate) fn criterion_key(criterion: &CalcResult, locale: &Locale) -> Option<MatchKey> {
+    match criterion {
+        CalcResult::Number(target) => MatchKey::number(*target),
+        CalcResult::String(s) => {
+            if s.starts_with(['<', '>']) {
+                return None;
+            }
+            let v = s.strip_prefix('=').unwrap_or(s);
+            if let Ok(f) = v.parse::<f64>() {
+                MatchKey::number(f)
+            } else if v.is_empty()
+                || v.to_lowercase().parse::<bool>().is_ok()
+                || is_english_error_string(v)
+                || v.contains(['*', '?'])
+            {
+                None
+            } else if let Some(f) = parse_date_criterion(v, locale) {
+                MatchKey::number(f)
+            } else {
+                Some(MatchKey::Text(v.to_lowercase().into()))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The keys a value is found by: its number, or its lowercase text and the number the
+/// text parses to, as `result_is_equal_to_number` reads it.
+pub(crate) fn value_keys(value: &CalcResult) -> [Option<MatchKey>; 2] {
+    match value {
+        CalcResult::Number(number) => [MatchKey::number(*number), None],
+        CalcResult::String(text) => [
+            Some(MatchKey::Text(text.to_lowercase().into())),
+            text.parse::<f64>().ok().and_then(MatchKey::number),
+        ],
+        _ => [None, None],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        cmp_lowercase, cmp_uppercase, from_wildcard_to_regex, result_matches_regex,
-        wildcard_matcher,
+        build_criteria, cmp_lowercase, cmp_uppercase, criterion_key, from_wildcard_to_regex,
+        result_matches_regex, value_keys, wildcard_matcher,
     };
     use crate::calc_result::CalcResult;
+    use crate::expressions::token::Error;
+    use crate::expressions::types::CellReferenceIndex;
+    use crate::locale::get_locale;
+
+    fn texts() -> Vec<CalcResult> {
+        [
+            "apple", "APPLE", "Apple ", "b*n", "Straße", "STRASSE", "İstanbul", "ΟΔΟΣ", "3", "3.0",
+            " 3", "2", "2.5", "1e1", "10", "-7", "TRUE", "true", "#N/A", "1/1/2020", "", "NaN",
+            "inf", "1.9999999999999998", "2.0000000000000004",
+        ]
+        .into_iter()
+        .map(|text| CalcResult::String(text.to_string()))
+        .collect()
+    }
+
+    fn numbers() -> Vec<CalcResult> {
+        [
+            0.0,
+            -0.0,
+            0.5,
+            1.0,
+            1.0 - f64::EPSILON / 2.0,
+            1.9999999999999998,
+            2.0,
+            2.0000000000000004,
+            2.5,
+            3.0,
+            10.0,
+            -7.0,
+            43831.0,
+            1e300,
+        ]
+        .into_iter()
+        .map(CalcResult::Number)
+        .collect()
+    }
+
+    fn describe(value: &CalcResult) -> String {
+        match value {
+            CalcResult::String(text) => format!("text {text:?}"),
+            CalcResult::Number(number) => format!("number {number:e}"),
+            CalcResult::Boolean(boolean) => format!("boolean {boolean}"),
+            CalcResult::EmptyCell => "empty".to_string(),
+            CalcResult::Error { error, .. } => format!("error {error}"),
+            _ => "other".to_string(),
+        }
+    }
+
+    #[test]
+    fn a_keyed_criterion_matches_only_values_with_its_key() {
+        let locale = get_locale("en").unwrap();
+        let origin = CellReferenceIndex {
+            sheet: 0,
+            row: 1,
+            column: 1,
+        };
+        let mut values = texts();
+        values.extend(numbers());
+        values.extend([
+            CalcResult::Boolean(true),
+            CalcResult::Boolean(false),
+            CalcResult::EmptyCell,
+            CalcResult::new_error(Error::NA, origin, String::new()),
+        ]);
+        let mut criteria = values.clone();
+        for prefix in ["=", "<", ">", "<>", ">=", "<="] {
+            for value in texts() {
+                if let CalcResult::String(text) = value {
+                    criteria.push(CalcResult::String(format!("{prefix}{text}")));
+                }
+            }
+        }
+        let mut keyed = 0;
+        for criterion in &criteria {
+            let Some(key) = criterion_key(criterion, locale) else {
+                continue;
+            };
+            keyed += 1;
+            let matches = build_criteria(criterion, locale);
+            for value in &values {
+                if matches(value) {
+                    assert!(
+                        value_keys(value).contains(&Some(key.clone())),
+                        "{} matches {} without its key {key:?}",
+                        describe(criterion),
+                        describe(value)
+                    );
+                }
+            }
+        }
+        assert!(keyed > 20);
+    }
 
     #[test]
     fn cmp_uppercase_matches_uppercasing_copies() {

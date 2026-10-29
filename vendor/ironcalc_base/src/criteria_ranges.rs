@@ -8,6 +8,7 @@ use crate::{
     criteria_totals::{Total, TotalKey},
     dependency_index::CellKey,
     expressions::types::CellReferenceIndex,
+    functions::util::{criterion_key, value_keys, MatchKey},
     locale::Locale,
     model::{CellState, Model},
     types::Cell,
@@ -34,6 +35,60 @@ pub(crate) type Area = (u32, i32, i32, i32, i32);
 pub(crate) type Slots = Arc<[OnceLock<CalcResult>]>;
 
 const SLOT_BYTES: usize = size_of::<OnceLock<CalcResult>>();
+// A key of an index costs its hash map slot, at worst 8/7 of its size, plus its text.
+const INDEX_KEY_BYTES: usize = (size_of::<MatchKey>() + size_of::<Vec<(i32, i32)>>() + 1) * 8 / 7;
+const INDEX_CELL_BYTES: usize = size_of::<(i32, i32)>();
+
+// Where each key is found in a kept area, in the order of a full read, so a criterion that
+// matches by equality alone reads only the cells it can match.
+pub(crate) struct CriteriaIndex {
+    cells: HashMap<MatchKey, Vec<(i32, i32)>>,
+}
+
+impl CriteriaIndex {
+    // None while a value of the area is not kept yet: reading it here could evaluate a cell
+    // the full read would not have reached yet.
+    fn build(slots: &[OnceLock<CalcResult>], width: i32) -> Option<(CriteriaIndex, usize)> {
+        let mut cells: HashMap<MatchKey, Vec<(i32, i32)>> = HashMap::new();
+        let mut row_offset = 0;
+        let mut column_offset = 0;
+        for slot in slots {
+            for key in value_keys(slot.get()?).into_iter().flatten() {
+                cells
+                    .entry(key)
+                    .or_default()
+                    .push((row_offset, column_offset));
+            }
+            column_offset += 1;
+            if column_offset == width {
+                column_offset = 0;
+                row_offset += 1;
+            }
+        }
+        let bytes = cells
+            .iter()
+            .map(|(key, at)| {
+                let text = match key {
+                    MatchKey::Text(text) => text.len(),
+                    MatchKey::Number(_) => 0,
+                };
+                INDEX_KEY_BYTES + text + at.capacity() * INDEX_CELL_BYTES
+            })
+            .sum();
+        Some((CriteriaIndex { cells }, bytes))
+    }
+
+    /// The (row, column) offsets of the cells holding `key`, in the order of a full read.
+    pub(crate) fn cells(&self, key: &MatchKey) -> &[(i32, i32)] {
+        self.cells.get(key).map_or(&[], Vec::as_slice)
+    }
+}
+
+enum Indexing {
+    Asked,
+    Built(Arc<CriteriaIndex>, usize),
+    Refused,
+}
 
 // Values of the large areas that SUMIF, COUNTIF and the rest of the family read, so calls
 // that differ only in their criterion read each cell once, and the totals of SUMIF(S) and
@@ -49,6 +104,8 @@ pub(crate) struct CriteriaRanges {
     // Outside an evaluation cells may change, so nothing is read or kept.
     reading: bool,
     kept: HashMap<Area, Slots>,
+    // Indexes of kept areas, for the current evaluation only.
+    indexes: HashMap<Area, Indexing>,
     pub(crate) totals: HashMap<TotalKey, Total>,
     bytes_left: usize,
     delta_work: usize,
@@ -70,6 +127,7 @@ impl CriteriaRanges {
         CriteriaRanges {
             reading: false,
             kept: HashMap::new(),
+            indexes: HashMap::new(),
             totals: HashMap::new(),
             bytes_left: bytes,
             delta_work: DELTA_WORK,
@@ -85,6 +143,7 @@ impl CriteriaRanges {
 
     // Only valid when nothing but the `changed` cells changed since the last evaluation.
     pub(crate) fn start_incremental(&mut self, changed: &HashSet<CellKey>, locale: &Locale) {
+        self.forget_indexes();
         self.reading = true;
         if self.kept.len().saturating_mul(changed.len()) > self.delta_work {
             self.start_full();
@@ -152,6 +211,7 @@ impl CriteriaRanges {
             return;
         }
         self.reading = false;
+        self.forget_indexes();
         let mut refund = 0;
         self.totals.retain(|_, total| {
             let keep = total.is_current();
@@ -180,8 +240,43 @@ impl CriteriaRanges {
     // hold forgotten values, so their bytes come back only when the evaluation ends.
     pub(crate) fn forget_values(&mut self) {
         self.kept.clear();
+        self.indexes.clear();
         self.totals.clear();
         self.forgotten = true;
+    }
+
+    fn forget_indexes(&mut self) {
+        for (_, indexing) in self.indexes.drain() {
+            if let Indexing::Built(_, bytes) = indexing {
+                self.bytes_left += bytes;
+            }
+        }
+    }
+
+    // An area's index is built the second time it is asked for, so an area one criterion
+    // reads once is not indexed, and only once every value of the area is kept.
+    fn index(&mut self, area: Area, slots: &Slots) -> Option<Arc<CriteriaIndex>> {
+        if !self.is_keeping() {
+            return None;
+        }
+        match self.indexes.get(&area) {
+            None => {
+                self.indexes.insert(area, Indexing::Asked);
+                return None;
+            }
+            Some(Indexing::Built(index, _)) => return Some(Arc::clone(index)),
+            Some(Indexing::Refused) => return None,
+            Some(Indexing::Asked) => {}
+        }
+        let (index, bytes) = CriteriaIndex::build(slots, area.4)?;
+        if !self.spend(bytes) {
+            self.indexes.insert(area, Indexing::Refused);
+            return None;
+        }
+        let index = Arc::new(index);
+        self.indexes
+            .insert(area, Indexing::Built(Arc::clone(&index), bytes));
+        Some(index)
     }
 
     pub(crate) fn is_keeping(&self) -> bool {
@@ -231,6 +326,19 @@ impl Model<'_> {
         let area = (sheet, row, column, height, width);
         let kept = self.kept_values(area);
         AreaValues { area, kept }
+    }
+
+    /// The cells of `values` that `criterion` can match, when an index of the area can tell
+    /// them without reading every cell.
+    pub(crate) fn criterion_cells(
+        &mut self,
+        values: &AreaValues,
+        criterion: &CalcResult,
+    ) -> Option<(Arc<CriteriaIndex>, MatchKey)> {
+        let key = criterion_key(criterion, self.locale)?;
+        let slots = values.kept.as_ref()?;
+        let index = self.criteria_ranges.index(values.area, slots)?;
+        Some((index, key))
     }
 
     pub(crate) fn area_value<'v>(
@@ -321,8 +429,9 @@ mod tests {
 
     use std::collections::HashSet;
 
-    use super::{CriteriaRanges, KEPT_BYTES, SLOT_BYTES};
+    use super::{CriteriaRanges, INDEX_CELL_BYTES, INDEX_KEY_BYTES, KEPT_BYTES, SLOT_BYTES};
     use crate::calc_result::CalcResult;
+    use crate::functions::util::MatchKey;
     use crate::criteria_totals::{TotalKey, USER_BYTES};
     use crate::exact_sum::ExactSum;
     use crate::expressions::types::CellReferenceIndex;
@@ -365,6 +474,74 @@ mod tests {
         model.criteria_ranges.finish();
         model.criteria_ranges.start_full();
         assert!(model.area_values(0, 1, 1, 1024, 1).kept.is_some());
+    }
+
+    // A1:A1024 holding "a" and "b" in turn, read whole; returns the cells "a" is found at
+    // the first three times an index is asked for, within `bytes` beyond the slots.
+    fn indexed_cells(bytes: usize, read_whole: bool) -> Vec<Option<usize>> {
+        let mut model = new_empty_model();
+        for row in 1..=1024 {
+            model._set(&format!("A{row}"), if row % 2 == 0 { "b" } else { "a" });
+        }
+        model.evaluate();
+        model.criteria_ranges = reading(1024 * SLOT_BYTES + 1024 + bytes);
+        let values = model.area_values(0, 1, 1, 1024, 1);
+        let rows = if read_whole { 1024 } else { 1023 };
+        for row_offset in 0..rows {
+            model.area_value(&values, row_offset, 0);
+        }
+        let criterion = CalcResult::String("A".to_string());
+        (0..3)
+            .map(|_| {
+                model
+                    .criterion_cells(&values, &criterion)
+                    .map(|(index, key)| {
+                        let cells = index.cells(&key);
+                        assert!(cells.iter().all(|&(row, column)| row % 2 == 0 && column == 0));
+                        cells.len()
+                    })
+            })
+            .collect()
+    }
+
+    // Two keys of one letter, 512 cells each.
+    const INDEX_BYTES: usize = 2 * (INDEX_KEY_BYTES + 1 + 512 * INDEX_CELL_BYTES);
+
+    #[test]
+    fn an_area_is_indexed_the_second_time_once_read_whole() {
+        assert_eq!(indexed_cells(INDEX_BYTES, true), [None, Some(512), Some(512)]);
+        assert_eq!(indexed_cells(INDEX_BYTES, false), [None, None, None]);
+    }
+
+    #[test]
+    fn an_index_past_the_budget_is_not_built() {
+        assert_eq!(indexed_cells(INDEX_BYTES - 1, true), [None, None, None]);
+    }
+
+    #[test]
+    fn an_index_gives_its_bytes_back_when_the_evaluation_ends() {
+        let mut model = new_empty_model();
+        for row in 1..=1024 {
+            model._set(&format!("A{row}"), &(row % 7 + 2).to_string());
+        }
+        model.evaluate();
+        model.criteria_ranges = reading(KEPT_BYTES);
+        let values = model.area_values(0, 1, 1, 1024, 1);
+        for row_offset in 0..1024 {
+            model.area_value(&values, row_offset, 0);
+        }
+        let before = model.criteria_ranges.bytes_left;
+        let criterion = CalcResult::Number(3.0);
+        assert!(model.criterion_cells(&values, &criterion).is_none());
+        let (index, key) = model.criterion_cells(&values, &criterion).unwrap();
+        assert_eq!(key, MatchKey::Number(3f64.to_bits()));
+        let threes = (1..=1024).filter(|row| row % 7 + 2 == 3).count();
+        assert_eq!(index.cells(&key).len(), threes);
+        assert!(model.criteria_ranges.bytes_left < before);
+        drop(values);
+        model.criteria_ranges.finish();
+        assert!(model.criteria_ranges.indexes.is_empty());
+        assert_eq!(model.criteria_ranges.bytes_left, KEPT_BYTES);
     }
 
     #[test]
