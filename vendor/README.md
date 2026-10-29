@@ -415,10 +415,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/test/test_criteria_index.rs` (each formula through the index against the same one
   alone), `a_keyed_criterion_matches_only_values_with_its_key` in `src/functions/util.rs`,
   the index tests in `src/criteria_ranges.rs`.
-- The evaluation's cell state map and `CellStore` rows hash coordinates with an unseeded
-  mixing hasher instead of SipHash (`src/cell_hash.rs`). A file can choose coordinates that
-  collide, but at most about 2^34 / buckets of them per bucket. Stands on its own. Test in
-  the module.
+- The evaluation's cell state map and `CellStore` rows hash coordinates with a cheap
+  mixing hasher instead of SipHash (`src/cell_hash.rs`), seeded once per process so a
+  file cannot choose coordinates that collide. Stands on its own. Test in the module.
 
 Zenkai-only, not for upstream:
 

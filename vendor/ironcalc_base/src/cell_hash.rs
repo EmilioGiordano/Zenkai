@@ -1,15 +1,22 @@
+use std::collections::hash_map::RandomState;
 use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
+use std::hash::{BuildHasher, BuildHasherDefault, Hasher};
+use std::sync::OnceLock;
 
 /// Hashes cell coordinates, which the evaluation looks up for every cell it reads, in a
 /// few nanoseconds instead of the default hasher's tens.
 ///
-/// Unlike the default hasher it is not seeded, so a file could choose coordinates that
-/// collide. The final mix spreads every input bit over the bits a table uses, and a sheet
-/// holds at most 2^34 coordinates, so at most about 2^34 / buckets of them share a bucket:
-/// a few thousand in a table of millions, which costs probes, not a hang.
-#[derive(Default, Clone, Copy)]
+/// It starts from a random seed drawn once per process, so a file cannot choose
+/// coordinates that collide ahead of time; the mixing itself stays cheap.
+#[derive(Clone, Copy)]
 pub(crate) struct CellHasher(u64);
+
+impl Default for CellHasher {
+    fn default() -> Self {
+        static SEED: OnceLock<u64> = OnceLock::new();
+        CellHasher(*SEED.get_or_init(|| RandomState::new().build_hasher().finish()))
+    }
+}
 
 pub(crate) type CellHashMap<K, V> = HashMap<K, V, BuildHasherDefault<CellHasher>>;
 
