@@ -12,6 +12,20 @@ use crate::actions::{ApplyHeldSettings, KeepCurrentSettings};
 use crate::agent_settings::{self, AgentConfig, BridgeStatus};
 use crate::keymap::KeymapState;
 
+pub fn held_text(held: &HeldChange, cx: &App) -> Div {
+    let theme = cx.theme();
+    let mut text = div()
+        .flex_1()
+        .min_w_0()
+        .child(agent_settings::held_message(held));
+    if let Some((failed, failure)) = &cx.global::<AgentConfig>().held_failure
+        && failed == held
+    {
+        text = text.child(div().text_color(theme.danger).child(format!("⚠ {failure}")));
+    }
+    text
+}
+
 pub fn held_banner(held: &HeldChange, cx: &App) -> Div {
     let theme = cx.theme();
     h_flex()
@@ -22,10 +36,7 @@ pub fn held_banner(held: &HeldChange, cx: &App) -> Div {
         .rounded_xl()
         .bg(theme.secondary)
         .child(div().text_color(theme.warning).child("⚠"))
-        .child(div().flex_1().min_w_0().child(t!(
-            "settings.held_banner",
-            summary = agent_settings::held_summary(held)
-        )))
+        .child(held_text(held, cx))
         .child(
             Button::new("held-apply")
                 .label(t!("held.apply"))

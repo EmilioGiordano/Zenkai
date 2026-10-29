@@ -167,10 +167,12 @@ impl Model<'_> {
         let changed: HashSet<CellKey> = edited.iter().chain(&dirty).copied().collect();
         self.criteria_ranges
             .start_incremental(&changed, self.locale);
+        self.lookup_indexes.start();
         for cell in &dirty {
             self.evaluate_cell(reference(*cell));
         }
         self.criteria_ranges.finish();
+        self.lookup_indexes.finish();
         // A formula that now spills writes into cells nothing was watching.
         if self.circular_hits != circular_hits
             || dirty.iter().any(|cell| self.is_array_formula(*cell))

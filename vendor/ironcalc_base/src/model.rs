@@ -37,6 +37,7 @@ use crate::{
 use crate::cf_runs::CfRun;
 use crate::criteria_ranges::CriteriaRanges;
 use crate::incremental::{circular_cells_fit, Dependencies, Recalculation};
+use crate::lookup_indexes::LookupIndexes;
 use crate::{cf_types::CfCellResult, tz::Tz};
 
 #[cfg(any(test, feature = "mock_time"))]
@@ -234,6 +235,7 @@ pub struct Model<'a> {
     pub(crate) circular_cells: HashSet<(u32, i32, i32)>,
     pub(crate) last_recalculation: Recalculation,
     pub(crate) criteria_ranges: CriteriaRanges,
+    pub(crate) lookup_indexes: LookupIndexes,
     /// How many SUMIF(S) and COUNTIF(S) totals were updated by what changed.
     pub(crate) criteria_deltas: u64,
     /// How many times every formula was evaluated, since the model was created.
@@ -929,6 +931,7 @@ impl<'a> Model<'a> {
         // An array result or an array formula writes, grows, shrinks or clears spill cells.
         if original_range.is_some() || matches!(result, CalcResult::Array(_)) {
             self.criteria_ranges.forget_values();
+            self.lookup_indexes.forget();
         }
         let s = cell.get_style();
         let formula = match cell.get_formula() {
@@ -1434,6 +1437,7 @@ impl<'a> Model<'a> {
                 // spill cell does not wipe out spill cells that were just written.
                 if let Some((width, height)) = original_cell.dynamic_range() {
                     self.criteria_ranges.forget_values();
+                    self.lookup_indexes.forget();
                     let ws = match self.workbook.worksheet_mut(cell_reference.sheet) {
                         Ok(ws) => ws,
                         Err(_) => {
@@ -1706,6 +1710,7 @@ impl<'a> Model<'a> {
             circular_cells: HashSet::new(),
             last_recalculation: Recalculation::Full,
             criteria_ranges: CriteriaRanges::new(),
+            lookup_indexes: LookupIndexes::new(),
             criteria_deltas: 0,
             full_evaluations: 0,
             evaluation_milliseconds: get_milliseconds_since_epoch(),
@@ -3118,6 +3123,7 @@ impl<'a> Model<'a> {
             self.cells.clear();
             self.support.clear();
             self.criteria_ranges.start_full();
+            self.lookup_indexes.start();
             self.clear_variable_stack();
             self.clear_lambdas();
 
@@ -3165,6 +3171,7 @@ impl<'a> Model<'a> {
             });
         }
         self.criteria_ranges.finish();
+        self.lookup_indexes.finish();
         self.evaluate_conditional_formatting();
     }
 

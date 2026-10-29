@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ironcalc::base::expressions::parser::static_analysis::add_implicit_intersection;
@@ -49,6 +49,7 @@ fn stopped() -> ReadError {
 pub(crate) fn convert(
     sheets: &[(&str, &[FormulaJob])],
     names: &Names<'_>,
+    stop: &AtomicBool,
 ) -> Result<Converted, ReadError> {
     let mut chunks = Vec::new();
     for (sheet, (_, jobs)) in sheets.iter().enumerate() {
@@ -73,7 +74,7 @@ pub(crate) fn convert(
                 .name("zenkai-xlsx-formulas".to_string())
                 .stack_size(WORKER_STACK_BYTES)
                 .spawn_scoped(scope, || {
-                    let output = work(sheets, &chunks, &next, names);
+                    let output = work(sheets, &chunks, &next, names, stop);
                     if let Ok(mut outputs) = outputs.lock() {
                         outputs.push(output);
                     }
@@ -128,6 +129,7 @@ fn work(
     chunks: &[Chunk],
     next: &AtomicUsize,
     names: &Names<'_>,
+    stop: &AtomicBool,
 ) -> Result<WorkerOutput, ReadError> {
     let mut converter = Converter::new(names);
     let mut chunk_ids = Vec::new();
@@ -136,6 +138,9 @@ fn work(
         let Some(chunk) = chunks.get(index) else {
             break;
         };
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
         let (sheet_name, jobs) = sheets[chunk.sheet];
         let ids = jobs[chunk.start..chunk.end]
             .iter()

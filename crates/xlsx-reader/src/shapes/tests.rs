@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::AtomicBool;
 
 use ironcalc::base::expressions::parser::stringify::to_rc_format;
 use ironcalc::base::expressions::parser::{DefinedNameS, new_parser_english};
@@ -135,7 +136,7 @@ impl Book {
             defined_names: &self.defined_names,
             tables: &tables,
         };
-        convert(&[("Sheet1", jobs)], &names)
+        convert(&[("Sheet1", jobs)], &names, &AtomicBool::new(false))
     }
 }
 

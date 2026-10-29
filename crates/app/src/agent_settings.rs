@@ -35,6 +35,7 @@ pub struct AgentConfig {
     pub secrets: BTreeMap<SecretName, SecretState>,
     // The last failure of something the user asked for (saving, storing a secret).
     pub failure: Option<String>,
+    pub held_failure: Option<(HeldChange, String)>,
     pub bridge: BridgeStatus,
     pub approvals: LaunchApprovals,
     watcher: Option<SettingsWatcher>,
@@ -293,19 +294,59 @@ pub enum HeldDecision {
 }
 
 // Applies only the change the user was shown: a newer file change may have replaced it since.
+// Keeping also writes the safe values over the held keys of the file so the request does not
+// come back at the next start; if that write fails the prompt stays and says why.
 pub fn decide_held(cx: &mut App, shown: Option<HeldChange>, decision: HeldDecision) {
-    cx.update_global::<AgentConfig, _>(|config, _| {
-        if config.state.held != shown {
-            return;
+    let config = cx.global::<AgentConfig>();
+    if config.state.held != shown {
+        return;
+    }
+    let Some(held) = shown else {
+        return;
+    };
+    match decision {
+        HeldDecision::Apply => cx.update_global::<AgentConfig, _>(|config, _| {
+            config.held_failure = None;
+            config.state.accept_held();
+        }),
+        HeldDecision::Keep => {
+            let Some(paths) = config.paths.clone() else {
+                return;
+            };
+            let safe = config.state.current.clone();
+            cx.spawn(async move |cx| {
+                let escalations = held.escalations.clone();
+                let written = cx
+                    .background_executor()
+                    .spawn(async move { settings_file::keep_safe(&paths, &safe, &escalations) })
+                    .await;
+                cx.update_global::<AgentConfig, _>(|config, _| match written {
+                    Ok(_) => {
+                        config.held_failure = None;
+                        if config.state.held.as_ref() == Some(&held) {
+                            config.state.decline_held();
+                        }
+                    }
+                    Err(error) => {
+                        config.held_failure = Some((held, t!("held.not_kept", error = error)));
+                    }
+                });
+            })
+            .detach();
         }
-        match decision {
-            HeldDecision::Apply => config.state.accept_held(),
-            HeldDecision::Keep => config.state.decline_held(),
-        }
-    });
+    }
 }
 
-pub fn held_summary(held: &HeldChange) -> String {
+pub fn held_message(held: &HeldChange) -> String {
+    let summary = held_summary(held);
+    if held.settings.agents.confirm_elevated_at_start {
+        t!("held.message_each_start", summary = summary)
+    } else {
+        t!("held.message_remembered", summary = summary)
+    }
+}
+
+fn held_summary(held: &HeldChange) -> String {
     let asks: Vec<&str> = held.escalations.iter().map(|e| e.label()).collect();
     t!(
         "held.summary",

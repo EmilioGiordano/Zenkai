@@ -302,8 +302,9 @@ impl Workspace {
                 .spawn(async move { read_text_link(&link) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                open.into_iter()
-                    .for_each(|open| this.open_loads.finish(open));
+                open.into_iter().for_each(|open| {
+                    this.open_loads.finish(open);
+                });
                 this.finish_text_load(id, load, window, cx)
             });
             if let Err(error) = update {

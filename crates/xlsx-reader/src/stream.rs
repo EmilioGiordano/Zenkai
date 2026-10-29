@@ -2,6 +2,7 @@ use std::cell::Cell;
 use std::io::{Read, Seek};
 use std::num::NonZeroU64;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::ReadError;
@@ -347,6 +348,8 @@ pub(crate) struct Budgets {
     entry_cap: u64,
     // Set once the open has failed, so worksheets still streaming on other threads stop.
     cancelled: AtomicBool,
+    // Raised by the caller to abandon the read; checked wherever `cancelled` is.
+    stop: Arc<AtomicBool>,
 }
 
 impl Budgets {
@@ -376,7 +379,13 @@ impl Budgets {
             sheet_read: AtomicU64::new(0),
             entry_cap,
             cancelled: AtomicBool::new(false),
+            stop: Arc::default(),
         }
+    }
+
+    pub(crate) fn with_stop(mut self, stop: Arc<AtomicBool>) -> Budgets {
+        self.stop = stop;
+        self
     }
 
     pub(crate) fn cancel(&self) {
@@ -384,7 +393,7 @@ impl Budgets {
     }
 
     pub(crate) fn cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Relaxed)
+        self.cancelled.load(Ordering::Relaxed) || self.stop.load(Ordering::Relaxed)
     }
 
     pub(crate) fn expect_sheet_bytes(&self, declared: u64) {

@@ -254,6 +254,7 @@ actions!(
         ResetAllShortcuts,
         RestartToApplyLanguage,
         DismissNotice,
+        CancelOpen,
         CopyNotice,
         FocusNotice,
         ShowMessages,

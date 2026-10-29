@@ -115,7 +115,11 @@ fn sheet(data: &str) -> String {
     )
 }
 
-const QUIRKS: [(&str, &str); 23] = [
+const QUIRKS: [(&str, &str); 24] = [
+    (
+        "formulas without cached values",
+        r#"<row r="1"><c r="A1"><f>1+1</f></c><c r="B1"><f>A1*2</f><v/></c><c r="C1"><f>B1+1</f><v></v></c><c r="D1" t="n"><f>C1</f><v/></c><c r="E1" t="str"><f>""</f><v></v></c></row>"#,
+    ),
     (
         "numbers",
         r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>-0</v></c><c r="C1"><v>1e400</v></c><c r="D1"><v> 7 </v></c></row>"#,

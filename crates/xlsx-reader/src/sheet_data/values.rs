@@ -26,6 +26,8 @@ impl Scanner<'_, '_> {
         let origin = || format!("{}!{cell_ref}", self.sheet_name);
         match cell_type {
             "b" => FormulaValue::Boolean(value == Some("1")),
+            // An empty <v/> is no cached value either, not the number 0.
+            "n" if value.is_none_or(str::is_empty) => FormulaValue::Unevaluated,
             "n" => FormulaValue::Number(value.unwrap_or("0").parse::<f64>().unwrap_or(0.0)),
             "e" => {
                 let name = error_name(value, metadata);
@@ -38,6 +40,9 @@ impl Scanner<'_, '_> {
             "s" | "d" => FormulaValue::error(Error::NIMPL, origin(), Error::NIMPL.to_string()),
             "str" => FormulaValue::Text(decode_xlsx_escapes(value.unwrap_or(""))),
             "inlineStr" => FormulaValue::Text(inline.unwrap_or_default()),
+            // A formula written without a cached value (openpyxl and other generators)
+            // stays unevaluated until the open evaluates it, as in IronCalc's reader.
+            "empty" => FormulaValue::Unevaluated,
             _ => FormulaValue::error(Error::ERROR, origin(), Error::ERROR.to_string()),
         }
     }
