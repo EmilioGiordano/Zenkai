@@ -163,6 +163,7 @@ const MIN_COLUMN_WIDTH: f32 = 8.0;
 const MIN_ROW_HEIGHT: f32 = 4.0;
 
 pub struct Grid {
+    label: SharedString,
     focus: FocusHandle,
     layout: Rc<Layout>,
     cells: Rc<HashMap<CellPos, GridCell>>,
@@ -217,8 +218,9 @@ impl Focusable for Grid {
 }
 
 impl Grid {
-    pub fn new(cx: &mut Context<Self>) -> Grid {
+    pub fn new(label: SharedString, cx: &mut Context<Self>) -> Grid {
         Grid {
+            label,
             focus: cx.focus_handle(),
             layout: Rc::new(Layout::default()),
             cells: Rc::new(HashMap::new()),
@@ -1456,7 +1458,7 @@ impl Render for Grid {
         div()
             .id("grid")
             .role(Role::Grid)
-            .aria_label("Sheet")
+            .aria_label(self.label.clone())
             .key_context("Grid")
             .track_focus(&self.focus)
             .size_full()

@@ -209,6 +209,7 @@ pub struct Workspace {
     generate: Option<generate::GenerateSession>,
     colors: toolbar::ColorPickers,
     focus: FocusHandle,
+    name_box_focus: FocusHandle,
     session_lock: Option<recovery::SessionLock>,
     recovery_dir: Option<PathBuf>,
     rename: Option<(Entity<InputState>, Subscription)>,
@@ -342,9 +343,13 @@ enum Replacing {
     Original(Vec<Unsupported>),
 }
 
+fn activates_button(event: &KeyDownEvent) -> bool {
+    matches!(event.keystroke.key.as_str(), "enter" | "space")
+}
+
 impl Workspace {
     pub fn new(initial: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Workspace {
-        let grid = cx.new(Grid::new);
+        let grid = cx.new(|cx| Grid::new(t!("grid.sheet_label").into(), cx));
         let subscription = cx.subscribe_in(&grid, window, Self::on_grid_event);
         let colors = toolbar::ColorPickers {
             font: cx.new(|cx| ColorPickerState::new(window, cx)),
@@ -425,6 +430,7 @@ impl Workspace {
             generate: None,
             colors,
             focus: cx.focus_handle(),
+            name_box_focus: cx.focus_handle().tab_stop(true),
             session_lock: None,
             recovery_dir: None,
             rename: None,
@@ -2569,6 +2575,11 @@ impl Workspace {
 
     fn render_title_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let muted = cx.theme().muted_foreground;
+        let sidebar_label = if self.sidebar.visible {
+            t!("sidebar.hide_tooltip")
+        } else {
+            t!("sidebar.show_tooltip")
+        };
         TitleBar::new().h(rem_px(34.0)).child(
             h_flex()
                 .size_full()
@@ -2590,15 +2601,8 @@ impl Workspace {
                                     } else {
                                         gpui_kit::assets::IconName::PanelLeftOpen
                                     })
-                                    .tooltip(keymap::labeled(
-                                        cx,
-                                        if self.sidebar.visible {
-                                            t!("sidebar.hide_tooltip")
-                                        } else {
-                                            t!("sidebar.show_tooltip")
-                                        },
-                                        &ToggleSidebar,
-                                    ))
+                                    .accessibility_label(sidebar_label)
+                                    .tooltip(keymap::labeled(cx, sidebar_label, &ToggleSidebar))
                                     .on_click(|event, window, cx| {
                                         if sidebar::is_primary_click(event) {
                                             window.dispatch_action(ToggleSidebar.boxed_clone(), cx)
@@ -2658,6 +2662,7 @@ impl Workspace {
                     .into_any_element(),
                 None => div()
                     .id("name-box")
+                    .track_focus(&self.name_box_focus)
                     .role(Role::Button)
                     .aria_label(t!("grid.name_box_label", name = name))
                     .w(rem_px(96.0))
@@ -2671,6 +2676,11 @@ impl Workspace {
                     .text_sm()
                     .cursor_text()
                     .on_click(cx.listener(|this, _, window, cx| this.open_go_to(window, cx)))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if activates_button(event) {
+                            this.open_go_to(window, cx);
+                        }
+                    }))
                     .child(name)
                     .into_any_element(),
             })
@@ -2785,10 +2795,18 @@ impl Workspace {
             .child(
                 div()
                     .id("add-sheet")
+                    .role(Role::Button)
+                    .aria_label(t!("sheet.add"))
+                    .tab_index(0)
                     .px_3()
                     .text_color(theme.muted_foreground)
                     .cursor_pointer()
                     .child("+")
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                        if activates_button(event) {
+                            this.add_sheet(window, cx);
+                        }
+                    }))
                     .on_click(cx.listener(|this, _, window, cx| this.add_sheet(window, cx))),
             )
     }

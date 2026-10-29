@@ -27,8 +27,8 @@ impl PanelsState {
             widths: PanelWidths::default(),
             side_split: SideSplit::default(),
             dragging: None,
-            sidebar_edge: cx.focus_handle(),
-            chat_edge: cx.focus_handle(),
+            sidebar_edge: cx.focus_handle().tab_stop(true),
+            chat_edge: cx.focus_handle().tab_stop(true),
         }
     }
 

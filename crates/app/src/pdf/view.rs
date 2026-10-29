@@ -187,7 +187,7 @@ impl PdfView {
             settled_side: None,
             laid_out_for: None,
             side_drag: None,
-            side_edge_focus: cx.focus_handle(),
+            side_edge_focus: cx.focus_handle().tab_stop(true),
             outline_focus: cx.focus_handle(),
             outline_cursor: 0,
             outline_scroll: UniformListScrollHandle::new(),
