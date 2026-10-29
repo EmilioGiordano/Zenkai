@@ -19,6 +19,12 @@ use crate::files::{self, FileLoad, LoadFailure};
 use crate::recovery;
 use crate::text_document::DocumentKind;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OpenSource {
+    Request,
+    ReopenClosed,
+}
+
 pub(super) enum LinkLoad {
     Loaded {
         file: Box<FileLoad>,
@@ -363,12 +369,22 @@ impl Workspace {
 
     pub(super) fn reopen_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.documents.take_reopenable() {
-            Some(path) => self.open_path(path, window, cx),
+            Some(path) => self.open_path_from(path, OpenSource::ReopenClosed, window, cx),
             None => self.notify(Severity::Info, t!("notice.no_closed_workbook"), cx),
         }
     }
 
     pub(crate) fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_path_from(path, OpenSource::Request, window, cx);
+    }
+
+    fn open_path_from(
+        &mut self,
+        path: PathBuf,
+        source: OpenSource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.show_sheet_beside_chat(cx);
         if DocumentKind::of(&path).is_text() {
             self.open_text_file(path, window, cx);
@@ -405,13 +421,20 @@ impl Workspace {
             let update = this.update_in(cx, |this, window, cx| {
                 let delivered = this.open_loads.finish(load);
                 cx.notify();
-                let Some(result) = result else {
-                    return;
+                let result = match result {
+                    Some(result) if delivered => result,
+                    undelivered => {
+                        if source == OpenSource::ReopenClosed {
+                            this.documents.keep_reopenable(&path);
+                        }
+                        if let Some(result) = undelivered {
+                            cx.background_executor()
+                                .spawn(async move { drop(result) })
+                                .detach();
+                        }
+                        return;
+                    }
                 };
-                if !delivered {
-                    cx.background_executor().spawn(async move { drop(result) }).detach();
-                    return;
-                }
                 match result {
                     Ok(file) => {
                         this.remember_recent(&path, cx);
