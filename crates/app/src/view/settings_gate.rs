@@ -18,8 +18,11 @@ impl Workspace {
             if state.held.is_some() && self.shown_held.is_none() {
                 self.held_return_focus = self.take_focus_for_bar(&self.held_focus, window, cx);
             }
+            if state.held.is_none() && self.shown_held.is_some() {
+                let previous = self.held_return_focus.take();
+                self.release_focus_from_bar(&self.held_focus.clone(), previous, window, cx);
+            }
             self.shown_held = state.held.clone();
-            cx.notify();
         }
         if state.problem == self.shown_settings_problem {
             return;
@@ -34,17 +37,9 @@ impl Workspace {
         self.shown_settings_problem = state.problem;
     }
 
-    pub(super) fn decide_held_settings(
-        &mut self,
-        decision: HeldDecision,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn decide_held_settings(&mut self, decision: HeldDecision, cx: &mut Context<Self>) {
         // Apply only what the bar showed: a newer file change may have replaced it since.
         agent_settings::decide_held(cx, self.shown_held.clone(), decision);
-        let previous = self.held_return_focus.take();
-        self.release_focus_from_bar(&self.held_focus.clone(), previous, window, cx);
-        cx.notify();
     }
 
     pub(super) fn render_held_settings(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
