@@ -198,6 +198,7 @@ pub struct Workspace {
     job_pill: JobPill,
     export_cancels: std::collections::HashMap<WorkbookId, Arc<AtomicBool>>,
     open_loads: OpenLoads,
+    escape_cancelled_open: bool,
     last_recalc: Option<Duration>,
     diagnostics: bool,
     clipboard_source: Option<InternalClip>,
@@ -423,6 +424,7 @@ impl Workspace {
             job_pill: JobPill::default(),
             export_cancels: std::collections::HashMap::new(),
             open_loads: OpenLoads::default(),
+            escape_cancelled_open: false,
             last_recalc: None,
             diagnostics: false,
             clipboard_source: None,
@@ -4553,9 +4555,16 @@ impl Render for Workspace {
                 }
             }))
             .on_action(cx.listener(|this, _: &zenkai_grid::Cancel, window, cx| {
-                if !this.cancel_open(cx) {
-                    this.dismiss_notice(window, cx)
+                if this.notices.card().is_none() && !this.escape_cancelled_open {
+                    this.escape_cancelled_open = this.cancel_open(cx);
+                    if this.escape_cancelled_open {
+                        return;
+                    }
                 }
+                this.dismiss_notice(window, cx)
+            }))
+            .on_key_up(cx.listener(|this, _: &KeyUpEvent, _, _| {
+                this.escape_cancelled_open = false;
             }))
             .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
             .on_action(
