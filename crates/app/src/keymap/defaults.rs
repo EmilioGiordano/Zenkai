@@ -259,7 +259,6 @@ pub fn defaults() -> Vec<Binding> {
             Some("SettingsWindow && HeldPending"),
         ),
         bind("enter", KeepCurrentSettings, Some("HeldSettings")),
-        bind("escape", KeepCurrentSettings, Some("HeldSettings")),
         bind("alt-a", ApplyHeldSettings, Some("HeldSettings")),
         bind("enter", DenyAgentChange, Some("AgentApproval")),
         bind("alt-y", AllowAgentChange, Some("AgentApproval")),
