@@ -28,6 +28,7 @@ use crate::{
 
 use crate::criteria_ranges::CriteriaRanges;
 use crate::incremental::Recalculation;
+use crate::lookup_indexes::LookupIndexes;
 use crate::tz::Tz;
 
 pub const APPLICATION: &str = "IronCalc Sheets";
@@ -703,6 +704,7 @@ impl<'a> Model<'a> {
             circular_cells: HashSet::new(),
             last_recalculation: Recalculation::Full,
             criteria_ranges: CriteriaRanges::new(),
+            lookup_indexes: LookupIndexes::new(),
             criteria_deltas: 0,
             full_evaluations: 0,
             evaluation_milliseconds: get_milliseconds_since_epoch(),

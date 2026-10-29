@@ -83,6 +83,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   element millions of times (`src/import/worksheets.rs`). Stands on its own (uses the public
   `LAST_COLUMN`). Test: `test_column_elements_are_bounded_by_the_columns_of_a_sheet` in
   `tests/test.rs`.
+- The xlsx import reads a formula cell with no `t` and no `<v>`, or a number formula with
+  an empty `<v/>`, as openpyxl and other generators write them, as an unevaluated formula
+  (`FormulaValue::Unevaluated`, what a new formula holds) instead of an `#ERROR!` result
+  or the number 0, and no longer prints a line per cell of an unexpected or unsupported
+  type (`src/import/worksheets.rs`). Stands on its own. Test:
+  `test_formula_without_cached_value_is_unevaluated` in `tests/test.rs`.
 
 Zenkai-only, not for upstream:
 
@@ -172,6 +178,20 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - COUNTIFS over a whole-sheet range like `A:XFD` counted its blank tail in i32, which
   overflowed (`src/functions/statistical/if_ifs.rs`). Tests:
   `src/test/test_criteria_semantics.rs`.
+- VLOOKUP, HLOOKUP, MATCH, XLOOKUP and XMATCH compare a text lookup value without
+  `*`, `?` or `~` with each cell directly instead of compiling a regex for it on every
+  call (`wildcard_matcher` in `src/functions/util.rs`). Stands on its own. Tests in
+  `src/functions/util.rs`.
+- VLOOKUP, HLOOKUP, MATCH (match type 0) and XLOOKUP (exact match, first or last item)
+  search a row or column of cells without formulas through an index from each value to its
+  first and last position, built the second time an evaluation searches it and dropped when
+  the evaluation ends or a spill writes cells (`src/lookup_indexes.rs`, the hooks in
+  `src/model.rs`, `src/incremental.rs` and `src/new_empty.rs`). Each index compares as its
+  function does cell by cell; text with wildcards, numbers below 1 (or 2 for MATCH), whose
+  equality is not exact there, blank lookup values and sorted searches are still searched
+  cell by cell. Needs the incremental recalculation for the `evaluate_incremental` hooks;
+  without it, only the hooks in `Model::evaluate` remain. Tests:
+  `src/test/test_lookup_indexes.rs`, `src/lookup_indexes.rs`.
 - `UserModel::range_clear_contents_of_areas` clears several areas of a sheet as one undo
   step, so a sparse selection clears only the cells it holds instead of every cell of its
   box; an array formula may span areas as long as it lies inside the given bounds
@@ -360,6 +380,8 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `get_row_height` reported (`Diff::SetRowHeight` in `src/user_model/history.rs`,
   `Worksheet::restore_row_height`). The bitcode encoding of the history changes. Stands on
   its own. Tests: `src/test/test_row_height.rs`.
+
+- The number format lexer reads a locale-only section such as `[$-409]` as no token, so a format like `[$-409]d-mmm-yy` is a date format instead of an error (`src/formatter/lexer.rs`). Stands on its own. Tests: `src/formatter/test/test_special_dollar.rs`.
 
 Zenkai-only, not for upstream:
 

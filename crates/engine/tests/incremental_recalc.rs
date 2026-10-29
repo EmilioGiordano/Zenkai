@@ -92,6 +92,17 @@ fn formula() -> impl Strategy<Value = String> {
         1 => Just("=SUMIF($A$1:$D$300,\">2\",$B$1:$E$300)".to_string()),
         1 => Just("=COUNTIF(Sheet2!$A$1:$D$300,\"<5\")".to_string()),
         2 => criteria_total(),
+        2 => exact_lookup(),
+    ]
+}
+
+// Exact lookups over fixed vectors, so later formulas search a vector earlier ones did.
+fn exact_lookup() -> impl Strategy<Value = String> {
+    prop_oneof![
+        2 => cell().prop_map(|a| format!("=VLOOKUP({a},$A$1:$C$6,3,FALSE)")),
+        2 => cell().prop_map(|a| format!("=MATCH({a},Sheet2!$B$1:$B$6,0)")),
+        2 => cell().prop_map(|a| format!("=XLOOKUP({a},$A$1:$A$6,$D$1:$D$6,\"none\",0,-1)")),
+        1 => cell().prop_map(|a| format!("=HLOOKUP({a},Sheet2!$A$1:$D$2,2,FALSE)")),
     ]
 }
 

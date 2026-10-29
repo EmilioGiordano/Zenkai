@@ -871,6 +871,69 @@ line 2"
         );
     }
 
+    fn fill_two_values_down(first: &str, second: &str, format: &str) -> Vec<(Option<f64>, String)> {
+        let mut book = Workbook::new_empty().unwrap();
+        let at = |r: i64| {
+            CellPos::new(
+                zenkai_types::RowIdx::clamped(r),
+                zenkai_types::ColIdx::clamped(0),
+            )
+        };
+        book.set_inputs(
+            SheetId(0),
+            at(0),
+            &[vec![first.to_string()], vec![second.to_string()]],
+        )
+        .unwrap();
+        let source = zenkai_types::Range::new(at(0), at(1));
+        book.set_number_format(SheetId(0), source, format).unwrap();
+        let target = zenkai_types::Range::new(at(0), at(3));
+        book.extend(SheetId(0), source, target).unwrap();
+        (0..4)
+            .map(|r| {
+                let cell = book.cell(SheetId(0), at(r));
+                (cell.number, cell.text)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn autofill_ignores_date_letters_inside_literals_and_brackets() {
+        for format in ["0\" days\"", "0;[Red]0", r"\d0"] {
+            let numbers = fill_two_values_down("1", "2", format)
+                .into_iter()
+                .map(|(number, _)| number)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                numbers,
+                [Some(1.0), Some(2.0), Some(3.0), Some(4.0)],
+                "{format}"
+            );
+        }
+    }
+
+    #[test]
+    fn autofill_steps_dates_across_the_1900_leap_day() {
+        let filled = fill_two_values_down("58", "59", "[$-409]d-mmm-yy");
+        let texts = filled
+            .iter()
+            .map(|(_, text)| text.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(texts, ["27-Feb-00", "28-Feb-00", "29-Feb-00", "1-Mar-00"]);
+        for (first, expected) in [
+            (59.0, [59.0, 60.0, 61.0, 62.0]),
+            (60.0, [60.0, 61.0, 62.0, 63.0]),
+        ] {
+            let second = (first + 1.0).to_string();
+            let filled = fill_two_values_down(&first.to_string(), &second, "[$-409]d-mmm-yy");
+            let serials = filled
+                .into_iter()
+                .map(|(number, _)| number)
+                .collect::<Vec<_>>();
+            assert_eq!(serials, expected.map(Some), "{first}");
+        }
+    }
+
     #[test]
     fn autofill_counts_up_from_serial_zero_in_the_source_format() {
         let mut book = Workbook::new_empty().unwrap();
