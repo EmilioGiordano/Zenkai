@@ -1382,12 +1382,11 @@ impl<'a> Model<'a> {
     // Evaluates a cell and returns the value in the cell
     // FIXME: CalcResult cannot be Array or Range, should we have a different type?
     pub(crate) fn evaluate_cell(&mut self, cell_reference: CellReferenceIndex) -> CalcResult {
-        let original_cell = match self.fetch_cell(cell_reference) {
-            Some(c) => c.clone(),
-            None => return CalcResult::EmptyCell,
+        let Some(cell) = self.fetch_cell(cell_reference) else {
+            return CalcResult::EmptyCell;
         };
 
-        if let Some(a) = original_cell.spill_anchor() {
+        if let Some(a) = cell.spill_anchor() {
             // If it is part of an array or dynamic formula we need to evaluate the anchor cell
             // strictly speaking we don't need to evaluate the anchor cell of a dynamic array formula
             // but it is most likely a good guess anyway
@@ -1407,7 +1406,7 @@ impl<'a> Model<'a> {
             return self.get_cell_value(cell, cell_reference);
         };
 
-        match original_cell.get_formula() {
+        match cell.get_formula() {
             Some(f) => {
                 let key = (
                     cell_reference.sheet,
@@ -1428,10 +1427,11 @@ impl<'a> Model<'a> {
                             );
                         }
                         CellState::Evaluated => {
-                            return self.get_cell_value(&original_cell, cell_reference);
+                            return self.get_cell_value(cell, cell_reference);
                         }
                     }
                 }
+                let original_cell = cell.clone();
                 // Clear the pre-existing spill area of a dynamic formula before re-evaluating.
                 // This must happen after the CellState check so that a recursive call from a
                 // spill cell does not wipe out spill cells that were just written.
@@ -1586,7 +1586,7 @@ impl<'a> Model<'a> {
                     _ => result,
                 }
             }
-            None => self.get_cell_value(&original_cell, cell_reference),
+            None => self.get_cell_value(cell, cell_reference),
         }
     }
 
