@@ -36,7 +36,10 @@ mod xlsx_read;
 
 pub use edit_profile::{EditProfile, RecalcMode};
 pub use error::EngineError;
-pub use file::{Opened, Unsupported, open_xlsx, open_xlsx_with, scan_unsupported, write_atomic};
+pub use file::{
+    Opened, Unsupported, open_xlsx, open_xlsx_cancellable, open_xlsx_with, scan_unsupported,
+    write_atomic,
+};
 pub use hibernation::{Kept, MAX_DUMP_BYTES};
 pub use preflight::run_with_engine_stack;
 pub use save::{SaveSnapshot, SaveTarget, save_xlsx, write_xlsx_unverified};

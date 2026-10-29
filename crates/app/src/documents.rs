@@ -772,6 +772,10 @@ impl Documents {
         }
     }
 
+    pub fn keep_reopenable(&mut self, path: &Path) {
+        self.remember(Some(path));
+    }
+
     pub fn take_reopenable(&mut self) -> Option<PathBuf> {
         while let Some(path) = self.closed.pop() {
             if self.find_by_path(&path).is_none() {
@@ -1053,6 +1057,16 @@ mod tests {
         let mut documents = documents();
         assert!(!documents.close(WorkbookId(99)));
         assert_eq!(documents.len(), 1);
+    }
+
+    #[test]
+    fn a_path_taken_for_reopening_can_be_kept_when_its_open_is_cancelled() {
+        let mut documents = documents();
+        let a = open_file(&mut documents, "a.xlsx");
+        documents.close(a);
+        let path = documents.take_reopenable().unwrap();
+        documents.keep_reopenable(&path);
+        assert_eq!(documents.take_reopenable(), Some(PathBuf::from("a.xlsx")));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
 
-use crate::settings::{SCHEMA_FILE, Settings, SettingsError};
+use crate::settings::{self, Escalation, SCHEMA_FILE, Settings, SettingsError};
 
 pub const SETTINGS_FILE: &str = "settings.json";
 const LEGACY_REMEMBERED_FILE: &str = "confirmed-at-start.json";
@@ -119,6 +119,16 @@ pub fn update(
     Ok(settings)
 }
 
+// The user declined a held change: the file stops asking for it, so the prompt does not
+// come back at the next start. Only the held keys change.
+pub fn keep_safe(
+    paths: &SettingsPaths,
+    safe: &Settings,
+    held: &[Escalation],
+) -> Result<Settings, SettingsFileError> {
+    update(paths, |file| settings::lower_to(file, safe, held))
+}
+
 // Written beside the target and renamed over it, so a reader (Zenkai's own watcher or
 // an agent) never sees half a file.
 fn write_atomic(path: &Path, text: &str) -> Result<(), SettingsFileError> {
@@ -198,7 +208,7 @@ fn touches_settings(event: &notify::Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::PermissionMode;
+    use crate::settings::{ExternalAgents, PermissionMode, SettingsState};
 
     fn paths(dir: &tempfile::TempDir) -> SettingsPaths {
         SettingsPaths {
@@ -333,5 +343,111 @@ mod tests {
             }
         };
         assert!(matches!(broken, Err(SettingsError::Parse { .. })));
+    }
+
+    const ELEVATED: &str = r#"{ "agents": { "permission": "automatic",
+        "external_agents": "allowed", "confirm_elevated_at_start": false } }"#;
+
+    fn held_by_the_first_load(paths: &SettingsPaths) -> SettingsState {
+        let mut state = SettingsState::default();
+        state.apply_startup(load(&paths.settings()), &[]);
+        state
+    }
+
+    #[test]
+    fn keeping_the_current_settings_rewrites_only_the_held_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        std::fs::create_dir_all(&paths.folder).unwrap();
+        std::fs::write(paths.settings(), ELEVATED).unwrap();
+        let mut state = held_by_the_first_load(&paths);
+        let held = state.held.clone().unwrap();
+        let before = load(&paths.settings()).unwrap();
+        let written = keep_safe(&paths, &state.current, &held.escalations).unwrap();
+        assert_eq!(written.agents.permission, PermissionMode::AskBeforeWrite);
+        assert_eq!(written.agents.external_agents, ExternalAgents::Blocked);
+        assert!(written.agents.confirm_elevated_at_start);
+        let mut expected = before;
+        expected.agents.permission = PermissionMode::AskBeforeWrite;
+        expected.agents.external_agents = ExternalAgents::Blocked;
+        expected.agents.confirm_elevated_at_start = true;
+        assert_eq!(load(&paths.settings()).unwrap(), expected);
+        state.decline_held();
+        let mut next_start = SettingsState::default();
+        next_start.apply_startup(load(&paths.settings()), &[]);
+        assert_eq!(next_start.held, None);
+    }
+
+    #[test]
+    fn keeping_leaves_a_key_the_file_no_longer_raises() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        std::fs::create_dir_all(&paths.folder).unwrap();
+        std::fs::write(paths.settings(), ELEVATED).unwrap();
+        let state = held_by_the_first_load(&paths);
+        let held = state.held.clone().unwrap();
+        update(&paths, |file| {
+            file.agents.permission = PermissionMode::ReadOnly
+        })
+        .unwrap();
+        let written = keep_safe(&paths, &state.current, &held.escalations).unwrap();
+        assert_eq!(written.agents.permission, PermissionMode::ReadOnly);
+        assert_eq!(written.agents.external_agents, ExternalAgents::Blocked);
+    }
+
+    #[test]
+    fn keeping_fails_loudly_and_leaves_the_file_when_it_does_not_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        std::fs::create_dir_all(&paths.folder).unwrap();
+        std::fs::write(paths.settings(), "{ broken").unwrap();
+        let all = [Escalation::WriteWithoutAsking];
+        assert!(keep_safe(&paths, &Settings::default(), &all).is_err());
+        assert_eq!(
+            std::fs::read_to_string(paths.settings()).unwrap(),
+            "{ broken"
+        );
+    }
+
+    #[test]
+    fn an_allowed_change_asks_again_at_the_next_start_while_confirmation_is_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        std::fs::create_dir_all(&paths.folder).unwrap();
+        std::fs::write(
+            paths.settings(),
+            r#"{ "agents": { "permission": "automatic" } }"#,
+        )
+        .unwrap();
+        let mut state = held_by_the_first_load(&paths);
+        state.accept_held();
+        assert_eq!(state.current.agents.permission, PermissionMode::Automatic);
+        let restart = held_by_the_first_load(&paths);
+        assert!(restart.held.is_some());
+        assert_eq!(
+            restart.current.agents.permission,
+            PermissionMode::AskBeforeWrite
+        );
+    }
+
+    #[test]
+    fn an_outside_edit_after_keeping_is_held_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(&dir);
+        std::fs::create_dir_all(&paths.folder).unwrap();
+        std::fs::write(paths.settings(), ELEVATED).unwrap();
+        let mut state = held_by_the_first_load(&paths);
+        let held = state.held.clone().unwrap();
+        keep_safe(&paths, &state.current, &held.escalations).unwrap();
+        state.decline_held();
+        state.apply_file(load(&paths.settings()));
+        assert_eq!(state.held, None);
+        std::fs::write(paths.settings(), ELEVATED).unwrap();
+        state.apply_file(load(&paths.settings()));
+        assert!(state.held.is_some());
+        assert_eq!(
+            state.current.agents.permission,
+            PermissionMode::AskBeforeWrite
+        );
     }
 }

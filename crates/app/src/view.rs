@@ -198,6 +198,7 @@ pub struct Workspace {
     job_pill: JobPill,
     export_cancels: std::collections::HashMap<WorkbookId, Arc<AtomicBool>>,
     open_loads: OpenLoads,
+    escape_cancelled_open: bool,
     last_recalc: Option<Duration>,
     diagnostics: bool,
     clipboard_source: Option<InternalClip>,
@@ -423,6 +424,7 @@ impl Workspace {
             job_pill: JobPill::default(),
             export_cancels: std::collections::HashMap::new(),
             open_loads: OpenLoads::default(),
+            escape_cancelled_open: false,
             last_recalc: None,
             diagnostics: false,
             clipboard_source: None,
@@ -3690,7 +3692,22 @@ impl Workspace {
                         .text_color(theme.popover_foreground)
                         .shadow_md()
                         .child(indicator)
-                        .child(busy),
+                        .child(busy)
+                        .when(self.open_loads.newest_cancellable(), |pill| {
+                            pill.child(
+                                Button::new("cancel-open")
+                                    .small()
+                                    .label(t!("button.cancel"))
+                                    .tooltip(keymap::labeled(
+                                        cx,
+                                        t!("palette.cancel_open"),
+                                        &CancelOpen,
+                                    ))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.cancel_open(cx);
+                                    })),
+                            )
+                        }),
                 ),
         )
     }
@@ -4008,6 +4025,9 @@ impl Render for Workspace {
                 }
                 if self.chart.is_some() {
                     context.add("ChartOpen");
+                }
+                if self.open_loads.newest_cancellable() {
+                    context.add("Opening");
                 }
                 context
             })
@@ -4519,18 +4539,32 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &MoveToNextSpace, _, cx| {
                 this.shift_document(Neighbour::Next, cx)
             }))
-            .on_action(cx.listener(|this, _: &ApplyHeldSettings, window, cx| {
-                this.decide_held_settings(HeldDecision::Apply, window, cx)
+            .on_action(cx.listener(|this, _: &ApplyHeldSettings, _, cx| {
+                this.decide_held_settings(HeldDecision::Apply, cx)
             }))
-            .on_action(cx.listener(|this, _: &KeepCurrentSettings, window, cx| {
-                this.decide_held_settings(HeldDecision::Keep, window, cx)
+            .on_action(cx.listener(|this, _: &KeepCurrentSettings, _, cx| {
+                this.decide_held_settings(HeldDecision::Keep, cx)
             }))
             .on_action(cx.listener(|this, _: &LetAgentsEdit, _, cx| this.toggle_agent_editing(cx)))
             .on_action(
                 cx.listener(|this, _: &DismissNotice, window, cx| this.dismiss_notice(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &CancelOpen, _, cx| {
+                if !this.cancel_open(cx) {
+                    cx.propagate();
+                }
+            }))
             .on_action(cx.listener(|this, _: &zenkai_grid::Cancel, window, cx| {
+                if this.notices.card().is_none() && !this.escape_cancelled_open {
+                    this.escape_cancelled_open = this.cancel_open(cx);
+                    if this.escape_cancelled_open {
+                        return;
+                    }
+                }
                 this.dismiss_notice(window, cx)
+            }))
+            .on_key_up(cx.listener(|this, _: &KeyUpEvent, _, _| {
+                this.escape_cancelled_open = false;
             }))
             .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
             .on_action(
