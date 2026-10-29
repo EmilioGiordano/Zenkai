@@ -178,6 +178,20 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - COUNTIFS over a whole-sheet range like `A:XFD` counted its blank tail in i32, which
   overflowed (`src/functions/statistical/if_ifs.rs`). Tests:
   `src/test/test_criteria_semantics.rs`.
+- VLOOKUP, HLOOKUP, MATCH, XLOOKUP and XMATCH compare a text lookup value without
+  `*`, `?` or `~` with each cell directly instead of compiling a regex for it on every
+  call (`wildcard_matcher` in `src/functions/util.rs`). Stands on its own. Tests in
+  `src/functions/util.rs`.
+- VLOOKUP, HLOOKUP, MATCH (match type 0) and XLOOKUP (exact match, first or last item)
+  search a row or column of cells without formulas through an index from each value to its
+  first and last position, built the second time an evaluation searches it and dropped when
+  the evaluation ends or a spill writes cells (`src/lookup_indexes.rs`, the hooks in
+  `src/model.rs`, `src/incremental.rs` and `src/new_empty.rs`). Each index compares as its
+  function does cell by cell; text with wildcards, numbers below 1 (or 2 for MATCH), whose
+  equality is not exact there, blank lookup values and sorted searches are still searched
+  cell by cell. Needs the incremental recalculation for the `evaluate_incremental` hooks;
+  without it, only the hooks in `Model::evaluate` remain. Tests:
+  `src/test/test_lookup_indexes.rs`, `src/lookup_indexes.rs`.
 - `UserModel::range_clear_contents_of_areas` clears several areas of a sheet as one undo
   step, so a sparse selection clears only the cells it holds instead of every cell of its
   box; an array formula may span areas as long as it lies inside the given bounds
