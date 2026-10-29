@@ -3691,6 +3691,9 @@ impl Workspace {
                         .bg(theme.popover)
                         .text_color(theme.popover_foreground)
                         .shadow_md()
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(indicator)
                         .child(busy)
                         .when(self.open_loads.newest_cancellable(), |pill| {
