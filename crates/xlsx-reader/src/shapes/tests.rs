@@ -24,7 +24,12 @@ enum Atom {
     Function(&'static str, Vec<Atom>),
 }
 
-const LITERALS: [&str; 26] = [
+const LITERALS: [&str; 31] = [
+    "Q1\\x",
+    "A1?",
+    "A1\\",
+    "1A1",
+    "B$2(1)",
     "1E5",
     "R1C1",
     "A1B",
@@ -247,6 +252,23 @@ fn a_formula_filled_down_keeps_one_job() {
         assert_eq!(sheet.jobs.len(), 1, "{rows_per_piece} rows per piece");
         let texts = converted_texts(&sheet, &book);
         assert!(texts.iter().all(|text| text == &texts[0]), "{texts:?}");
+    }
+}
+
+// The parser stops at `\` and `?` and keeps the reference before them, so the same
+// text down a column reads a different cell in each row.
+#[test]
+fn the_same_text_with_a_reference_cut_short_keeps_each_cells_reading() {
+    let book = Book::new();
+    for text in [r"Q1\x", "A1?", r"A1\"] {
+        let cells: BTreeMap<(i32, i32), (String, bool)> = (1..=6)
+            .map(|row| ((row, 3), (text.to_string(), false)))
+            .collect();
+        let sheet = scanned(&pieces(&cells, 4), book.names());
+        let expected: Vec<String> = (1..=6)
+            .map(|row| fresh_text(&book, text, row, 3, false))
+            .collect();
+        assert_eq!(converted_texts(&sheet, &book), expected, "{text}");
     }
 }
 

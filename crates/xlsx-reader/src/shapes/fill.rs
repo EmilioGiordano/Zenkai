@@ -55,10 +55,13 @@ pub(super) fn write_fill_key(
                 at += 1;
             }
             let word = &text[start..at];
-            let kind = if matches!(bytes.get(at), Some(b'(' | b'!')) {
-                Word::Other
-            } else {
+            let kind = if !matches!(bytes.get(at), Some(b'(' | b'!')) {
                 word_kind(word)
+            } else if word.contains('$') {
+                // The lexer reads `A$1(` as a reference before the parenthesis.
+                Word::Invalid
+            } else {
+                Word::Other
             };
             match kind {
                 Word::Invalid => return false,
@@ -93,7 +96,9 @@ pub(super) fn write_fill_key(
             previous = kind;
             continue;
         }
-        if !byte.is_ascii() || byte == b'[' || byte == b']' {
+        // The lexer ends a reference at `\` or `?` and the parser drops what follows, so
+        // `Q1\x` reads as the cell Q1.
+        if !byte.is_ascii() || matches!(byte, b'[' | b']' | b'\\' | b'?') {
             return false;
         }
         if byte == b':' {
@@ -112,8 +117,16 @@ pub(super) fn write_fill_key(
     !after_colon
 }
 
+// The bytes of IronCalc's identifiers, and the `$` of absolute references.
 fn is_word_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$' | b'\\' | b'?')
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'$')
+}
+
+// The lexer reads a number from the start of `1A1` and then the reference A1.
+fn is_number(word: &str) -> bool {
+    let (mantissa, exponent) = word.split_once(['e', 'E']).unwrap_or((word, ""));
+    mantissa.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && exponent.bytes().all(|b| b.is_ascii_digit())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -133,6 +146,13 @@ enum Word<'w> {
 
 fn word_kind(word: &str) -> Word<'_> {
     let bytes = word.as_bytes();
+    if bytes[0].is_ascii_digit() || bytes[0] == b'.' {
+        return if is_number(word) {
+            Word::Other
+        } else {
+            Word::Invalid
+        };
+    }
     let column_absolute = bytes.first() == Some(&b'$');
     let letters_start = usize::from(column_absolute);
     let letters_end = letters_start
@@ -225,6 +245,10 @@ mod tests {
             "SUM(A1:'Other'!B2)",
             "SUM($5:$7)",
             "A\u{1}1",
+            "Q1\\x",
+            "A1?",
+            "1A1",
+            "B$2(1)",
         ] {
             assert_eq!(key(refused, 2), None, "{refused}");
         }
