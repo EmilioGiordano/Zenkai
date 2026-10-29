@@ -5,6 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::{
     calc_result::CalcResult,
+    cell_hash::CellHashMap,
     criteria_totals::{Total, TotalKey},
     dependency_index::CellKey,
     expressions::types::CellReferenceIndex,
@@ -42,7 +43,8 @@ const INDEX_CELL_BYTES: usize = size_of::<(i32, i32)>();
 // Where each key is found in a kept area, in the order of a full read, so a criterion that
 // matches by equality alone reads only the cells it can match.
 pub(crate) struct CriteriaIndex {
-    cells: HashMap<MatchKey, Vec<(i32, i32)>>,
+    // With SipHash, building an index after an edit cost more than the reads it saved.
+    cells: CellHashMap<MatchKey, Vec<(i32, i32)>>,
 }
 
 impl CriteriaIndex {
@@ -54,7 +56,7 @@ impl CriteriaIndex {
         width: i32,
         limit: usize,
     ) -> Option<(CriteriaIndex, usize)> {
-        let mut cells: HashMap<MatchKey, Vec<(i32, i32)>> = HashMap::new();
+        let mut cells: CellHashMap<MatchKey, Vec<(i32, i32)>> = CellHashMap::default();
         let mut spent = 0;
         let mut row_offset = 0;
         let mut column_offset = 0;

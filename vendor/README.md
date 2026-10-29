@@ -418,6 +418,7 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - The evaluation's cell state map and `CellStore` rows hash coordinates with a cheap
   mixing hasher instead of SipHash (`src/cell_hash.rs`), seeded once per process so a
   file cannot choose coordinates that collide. Stands on its own. Test in the module.
+  The criteria indexes key their values with it too, which needs the criteria index patch.
 
 Zenkai-only, not for upstream:
 
