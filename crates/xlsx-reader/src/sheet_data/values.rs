@@ -38,6 +38,9 @@ impl Scanner<'_, '_> {
             "s" | "d" => FormulaValue::error(Error::NIMPL, origin(), Error::NIMPL.to_string()),
             "str" => FormulaValue::Text(decode_xlsx_escapes(value.unwrap_or(""))),
             "inlineStr" => FormulaValue::Text(inline.unwrap_or_default()),
+            // A formula written without a cached value (openpyxl and other generators)
+            // stays unevaluated until the open evaluates it, as in IronCalc's reader.
+            "empty" => FormulaValue::Unevaluated,
             _ => FormulaValue::error(Error::ERROR, origin(), Error::ERROR.to_string()),
         }
     }
