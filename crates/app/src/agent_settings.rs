@@ -35,7 +35,7 @@ pub struct AgentConfig {
     pub secrets: BTreeMap<SecretName, SecretState>,
     // The last failure of something the user asked for (saving, storing a secret).
     pub failure: Option<String>,
-    pub held_failure: Option<String>,
+    pub held_failure: Option<(HeldChange, String)>,
     pub bridge: BridgeStatus,
     pub approvals: LaunchApprovals,
     watcher: Option<SettingsWatcher>,
@@ -304,8 +304,15 @@ pub fn decide_held(cx: &mut App, shown: Option<HeldChange>, decision: HeldDecisi
     let Some(held) = shown else {
         return;
     };
-    match (decision, config.paths.clone()) {
-        (HeldDecision::Keep, Some(paths)) => {
+    match decision {
+        HeldDecision::Apply => cx.update_global::<AgentConfig, _>(|config, _| {
+            config.held_failure = None;
+            config.state.accept_held();
+        }),
+        HeldDecision::Keep => {
+            let Some(paths) = config.paths.clone() else {
+                return;
+            };
             let safe = config.state.current.clone();
             cx.spawn(async move |cx| {
                 let escalations = held.escalations.clone();
@@ -321,20 +328,12 @@ pub fn decide_held(cx: &mut App, shown: Option<HeldChange>, decision: HeldDecisi
                         }
                     }
                     Err(error) => {
-                        config.held_failure = Some(t!("held.not_kept", error = error));
+                        config.held_failure = Some((held, t!("held.not_kept", error = error)));
                     }
                 });
             })
             .detach();
         }
-        (HeldDecision::Keep, None) => cx.update_global::<AgentConfig, _>(|config, _| {
-            config.held_failure = None;
-            config.state.decline_held();
-        }),
-        (HeldDecision::Apply, _) => cx.update_global::<AgentConfig, _>(|config, _| {
-            config.held_failure = None;
-            config.state.accept_held();
-        }),
     }
 }
 

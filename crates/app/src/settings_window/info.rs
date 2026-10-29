@@ -18,7 +18,9 @@ pub fn held_text(held: &HeldChange, cx: &App) -> Div {
         .flex_1()
         .min_w_0()
         .child(agent_settings::held_message(held));
-    if let Some(failure) = &cx.global::<AgentConfig>().held_failure {
+    if let Some((failed, failure)) = &cx.global::<AgentConfig>().held_failure
+        && failed == held
+    {
         text = text.child(div().text_color(theme.danger).child(format!("⚠ {failure}")));
     }
     text
