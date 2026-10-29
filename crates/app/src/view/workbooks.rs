@@ -73,6 +73,25 @@ impl LinkLoad {
     }
 }
 
+enum Arrival {
+    Discard(Option<LinkLoad>),
+    Deliver {
+        load: LinkLoad,
+        spent_dump: Option<PathBuf>,
+    },
+}
+
+// A cancelled load must never spend its dump: the link goes back to waiting and wakes from it.
+fn arrival(load: Option<LinkLoad>, delivered: bool) -> Arrival {
+    match load {
+        Some(load) if delivered => Arrival::Deliver {
+            spent_dump: load.spent_dump(),
+            load,
+        },
+        undelivered => Arrival::Discard(undelivered),
+    }
+}
+
 // Runs on the background executor. The recovery copy, when there is one, holds the unsaved
 // work and is read instead of the file. None when `cancel` was raised: nothing on disk has
 // been touched, so the link is exactly as it was.
@@ -593,21 +612,22 @@ impl Workspace {
             let update = this.update_in(cx, |this, window, cx| {
                 let delivered = this.open_loads.finish(open);
                 cx.notify();
-                let Some(load) = load else {
-                    return;
-                };
-                if !delivered {
-                    cx.background_executor()
-                        .spawn(async move { drop(load) })
-                        .detach();
-                    return;
+                match arrival(load, delivered) {
+                    Arrival::Discard(Some(load)) => {
+                        cx.background_executor()
+                            .spawn(async move { drop(load) })
+                            .detach();
+                    }
+                    Arrival::Discard(None) => {}
+                    Arrival::Deliver { load, spent_dump } => {
+                        if let Some(dump) = spent_dump {
+                            cx.background_executor()
+                                .spawn(async move { recovery::remove(&dump) })
+                                .detach();
+                        }
+                        this.finish_load(id, load, started, window, cx)
+                    }
                 }
-                if let Some(dump) = load.spent_dump() {
-                    cx.background_executor()
-                        .spawn(async move { recovery::remove(&dump) })
-                        .detach();
-                }
-                this.finish_load(id, load, started, window, cx)
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during load");
@@ -826,7 +846,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
-    use super::{LinkLoad, changed_while_out_of_memory, read_link};
+    use super::{Arrival, LinkLoad, arrival, changed_while_out_of_memory, read_link};
     use crate::documents::Provenance;
     use crate::entry::{FileSeen, Hibernation, Link, LinkStatus, Rested};
     use crate::files::FileLoad;
@@ -960,6 +980,27 @@ mod tests {
             read(&setup.link).is_some(),
             "the link wakes on the next try"
         );
+    }
+
+    #[test]
+    fn only_a_delivered_load_spends_its_dump() {
+        let setup = hibernated();
+        let mut loads = crate::open_loads::OpenLoads::default();
+
+        let (cancelled, _) = loads.start_link_load("tab".into(), WorkbookId(7));
+        loads.cancel_newest();
+        let delivered = loads.finish(cancelled);
+        assert!(matches!(
+            arrival(read(&setup.link), delivered),
+            Arrival::Discard(Some(_))
+        ));
+
+        let (running, _) = loads.start_link_load("tab".into(), WorkbookId(7));
+        let delivered = loads.finish(running);
+        match arrival(read(&setup.link), delivered) {
+            Arrival::Deliver { spent_dump, .. } => assert_eq!(spent_dump, Some(setup.dump)),
+            Arrival::Discard(_) => panic!("a delivered load was discarded"),
+        }
     }
 
     #[test]
