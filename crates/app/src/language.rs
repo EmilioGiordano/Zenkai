@@ -9,7 +9,7 @@ pub fn startup() -> Language {
     configured().unwrap_or_else(system)
 }
 
-fn system() -> Language {
+pub fn system() -> Language {
     sys_locale::get_locale().map_or(Language::English, |tag| Language::from_locale_tag(&tag))
 }
 

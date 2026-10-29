@@ -233,8 +233,8 @@ pub struct Workspace {
     pdf_client: crate::pdf::PdfClient,
     text_watch: text_watch::TextWatch,
     lifecycle: Lifecycle,
-    #[cfg(windows)]
-    quit_after_hide: bool,
+    // A stronger goal asked while a close was already running; it decides how that close ends.
+    pending_goal: Option<CloseGoal>,
     // Saves ahead of closing a tab or the app; `None` when no close waits on a save.
     departure: Option<Departure>,
     close_dialog: Option<close_dialog::CloseDialog>,
@@ -451,8 +451,7 @@ impl Workspace {
             pdf_client: crate::pdf::PdfClient::next_to_exe(),
             text_watch: text_watch::TextWatch::default(),
             lifecycle: Lifecycle::Running,
-            #[cfg(windows)]
-            quit_after_hide: false,
+            pending_goal: None,
             departure: None,
             close_dialog: None,
             prompts: PromptGate::default(),

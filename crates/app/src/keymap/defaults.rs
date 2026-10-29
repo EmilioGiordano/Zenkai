@@ -340,6 +340,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("escape", DeclineAgentLaunch, Some("AgentLaunchGate")),
         bind("ctrl-k", RecordShortcutKeys, Some("SettingsWindow")),
         bind("ctrl-shift-r", ResetAllShortcuts, Some("SettingsWindow")),
+        bind("ctrl-alt-r", RestartToApplyLanguage, Some("SettingsWindow")),
     ]
     .into_iter()
     .flatten()

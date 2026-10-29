@@ -121,7 +121,7 @@ impl Workspace {
                         .map_or(Loaded::Absent, |directory| session::load(&directory));
                     (
                         session,
-                        restore_enabled(),
+                        restore_enabled() || crate::restart::was_restarted(),
                         recovery::leftovers(&task_directory),
                     )
                 })
@@ -419,14 +419,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        #[cfg(windows)]
-        if !goal.keeps_running() && self.lifecycle == Lifecycle::Closing {
-            self.quit_after_hide = true;
+        if self.lifecycle == Lifecycle::Closing {
+            self.pending_goal = Some(self.pending_goal.map_or(goal, |held| held.outranking(goal)));
         }
-        if !goal.keeps_running()
-            && let Some(departure) = self.departure.as_mut()
-        {
-            departure.plan.goal = goal;
+        if let Some(departure) = self.departure.as_mut() {
+            departure.plan.goal = departure.plan.goal.outranking(goal);
         }
         if self.close_dialog.is_some() {
             self.retarget_close_dialog(goal);
@@ -437,6 +434,8 @@ impl Workspace {
             || self.departure.is_some()
             || self.prompts.blocks_input()
         {
+            tracing::debug!(?goal, "a close is already in progress or a prompt is open");
+            window.activate_window();
             return;
         }
         if !goal.keeps_running() {
@@ -788,8 +787,22 @@ impl Workspace {
         .detach();
     }
 
+    pub(super) fn with_pending_goal(&mut self, plan: ClosePlan) -> ClosePlan {
+        ClosePlan {
+            goal: self.settled_goal(plan.goal),
+            ..plan
+        }
+    }
+
+    fn settled_goal(&mut self, goal: CloseGoal) -> CloseGoal {
+        self.pending_goal
+            .take()
+            .map_or(goal, |pending| goal.outranking(pending))
+    }
+
     // The spaces and links are kept even when unsaved work could not be.
     pub(super) fn write_session_and_quit(&mut self, plan: ClosePlan, cx: &mut Context<Self>) {
+        let plan = self.with_pending_goal(plan);
         let session = self.snapshot_session_leaving(&plan, cx);
         let order = session::SaveOrder::next();
         let session_directory = recovery::session_directory();
@@ -814,7 +827,7 @@ impl Workspace {
                     _ => None,
                 }),
         );
-        cx.spawn(async move |_, cx| {
+        cx.spawn(async move |this, cx| {
             let written = cx
                 .background_executor()
                 .spawn(async move {
@@ -834,6 +847,13 @@ impl Workspace {
                 .await;
             if let Err(error) = written {
                 tracing::warn!(%error, "could not save the session");
+            }
+            // A Quit asked while the session was being written cancels the restart.
+            let goal = this
+                .update(cx, |this, _| this.settled_goal(plan.goal))
+                .unwrap_or(plan.goal);
+            if goal == CloseGoal::Restart {
+                crate::restart::relaunch();
             }
             cx.update(|cx| cx.quit());
         })
@@ -868,10 +888,7 @@ impl Workspace {
                 if proceed {
                     this.quit_or_hide(plan, window, cx);
                 } else {
-                    #[cfg(windows)]
-                    {
-                        this.quit_after_hide = false;
-                    }
+                    this.pending_goal = None;
                     this.lifecycle = Lifecycle::Running;
                     this.clear_busy(t!("busy.closing"), cx);
                 }
