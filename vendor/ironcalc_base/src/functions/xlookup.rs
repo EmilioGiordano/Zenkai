@@ -1,5 +1,6 @@
 use crate::constants::{LAST_COLUMN, LAST_ROW};
 use crate::expressions::types::CellReferenceIndex;
+use crate::lookup_indexes::{Equality, SearchFrom, Vector};
 use crate::{
     calc_result::CalcResult, expressions::parser::Node, expressions::token::Error, model::Model,
 };
@@ -9,7 +10,7 @@ use super::{
         binary_search_descending_or_greater, binary_search_descending_or_smaller,
         binary_search_or_greater, binary_search_or_smaller,
     },
-    util::{compare_values, from_wildcard_to_regex, result_matches_regex},
+    util::{compare_values, wildcard_matcher},
 };
 
 #[derive(PartialEq)]
@@ -94,11 +95,7 @@ fn linear_search(
         MatchMode::WildcardMatch => {
             let result_matches: Box<dyn Fn(&CalcResult) -> bool> =
                 if let CalcResult::String(s) = &lookup_value {
-                    if let Ok(reg) = from_wildcard_to_regex(&s.to_lowercase(), true) {
-                        Box::new(move |x| result_matches_regex(x, &reg))
-                    } else {
-                        Box::new(move |_| false)
-                    }
+                    wildcard_matcher(s)
                 } else {
                     Box::new(move |x| compare_values(x, lookup_value) == 0)
                 };
@@ -286,8 +283,35 @@ impl<'a> Model<'a> {
                         };
                         match search_mode {
                             SearchMode::StartAtFirstItem | SearchMode::StartAtLastItem => {
-                                let array = &self.prepare_array(&left, &right, is_row_vector);
-                                match linear_search(&lookup_value, array, search_mode, match_mode) {
+                                let indexed = if match_mode == MatchMode::ExactMatch {
+                                    let from = if search_mode == SearchMode::StartAtFirstItem {
+                                        SearchFrom::First
+                                    } else {
+                                        SearchFrom::Last
+                                    };
+                                    let vector = if is_row_vector {
+                                        Vector::down(left, row2 - row1 + 1)
+                                    } else {
+                                        Vector::across(left, column2 - column1 + 1)
+                                    };
+                                    self.indexed_position(
+                                        vector,
+                                        Equality::Xlookup,
+                                        &lookup_value,
+                                        from,
+                                    )
+                                } else {
+                                    None
+                                };
+                                let found = match indexed {
+                                    Some(found) => found,
+                                    None => {
+                                        let array =
+                                            &self.prepare_array(&left, &right, is_row_vector);
+                                        linear_search(&lookup_value, array, search_mode, match_mode)
+                                    }
+                                };
+                                match found {
                                     Some(index) => {
                                         let row_index =
                                             if is_row_vector { index as i32 } else { 0 };

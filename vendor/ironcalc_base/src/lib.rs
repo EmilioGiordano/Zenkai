@@ -61,6 +61,7 @@ mod exact_sum;
 mod functions;
 mod implicit_intersection;
 mod incremental;
+mod lookup_indexes;
 mod model;
 pub mod open_budget;
 mod styles;
