@@ -411,9 +411,6 @@ fn long_operator_chain_is_rejected_not_a_stack_overflow() {
     assert!(error.contains("characters"), "{error}");
 }
 
-// The reader parses a formula's shape while the rows stream once it repeats, on its sheet
-// and row threads too; the longest and deepest formulas the limits allow, filled down, still
-// open, in a small sheet and in one past 8 MB, which streams on its own threads.
 // The text formulas return is charged to the open budget while the file is first
 // evaluated; a file of long results without cached values still opens whole within it.
 #[test]
@@ -434,6 +431,9 @@ fn long_text_results_without_cached_values_open_whole() {
     assert_eq!(last.text, format!("{}1000", "x".repeat(30_000)));
 }
 
+// The reader parses a formula's shape while the rows stream once it repeats, on its sheet
+// and row threads too; the longest and deepest formulas the limits allow, filled down, still
+// open, in a small sheet and in one past 8 MB, which streams on its own threads.
 #[test]
 fn the_longest_and_deepest_formulas_filled_down_open() {
     let long = |row: usize| format!("A{row}+{}1", "1+".repeat((8_192 - 12) / 2));
