@@ -625,6 +625,7 @@ impl Workspace {
                 recovery_lost,
                 dump_lost,
                 file_changed,
+                spent_dump: _,
             } => {
                 if self.documents.shows_when_loaded(id) {
                     self.park_active(window, cx);
