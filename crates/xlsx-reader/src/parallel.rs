@@ -29,7 +29,9 @@ pub(crate) struct ReadPlan {
 // Parsing runs at 72 MB/s and inflating at 860 MB/s in the generated-sheet measurement, so
 // about twelve parsers saturate one inflater; six give half that rate and bound what a
 // sheet holds uncharged: the workers plus IN_FLIGHT_EXTRA pieces of PIECE_BYTES each,
-// parsed or being parsed, 7 * 4.25 MB of text before the cells they become. Serial holds one.
+// parsed or being parsed, 7 * 4.25 MB of text, plus what a parsed piece holds until it
+// is merged: its cells, formula texts and shape keys, a key at most about twice its
+// formula's text. Serial holds one.
 const MAX_WORKERS_PER_SHEET: usize = 6;
 
 // Threads that stream sheets, and for each of them the threads that scan its rows. A sheet

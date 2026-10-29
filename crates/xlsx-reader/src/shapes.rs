@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::fmt::Write;
 
 use ironcalc::base::expressions::lexer::{Lexer, LexerMode};
 use ironcalc::base::expressions::parser::{DefinedNameS, Parser, new_parser_english};
-use ironcalc::base::expressions::token::TokenType;
+use ironcalc::base::expressions::token::{OpCompare, OpProduct, OpSum, TokenType};
 use ironcalc::base::language::get_default_language;
 use ironcalc::base::locale::get_default_locale;
 
@@ -37,7 +36,7 @@ pub(crate) struct ShapeReader<'n> {
     names: SheetNames<'n>,
     lexer: Lexer<'static>,
     parser: Option<Parser<'static>>,
-    key: String,
+    key: Vec<u8>,
 }
 
 impl<'n> ShapeReader<'n> {
@@ -51,16 +50,16 @@ impl<'n> ShapeReader<'n> {
                 get_default_language(),
             ),
             parser: None,
-            key: String::new(),
+            key: Vec::new(),
         }
     }
 
     // The shape of the formula, None when it has none: structured references read the
     // cell's row, and text IronCalc's lexer rejects is left to the parser cell by cell.
-    pub(crate) fn key(&mut self, text: &str, row: i32, column: i32, array: bool) -> Option<&str> {
+    pub(crate) fn key(&mut self, text: &str, row: i32, column: i32, array: bool) -> Option<&[u8]> {
         match write_key(&mut self.lexer, &mut self.key, text, row, column, array) {
-            Ok(true) => Some(&self.key),
-            Ok(false) | Err(_) => None,
+            true => Some(&self.key),
+            false => None,
         }
     }
 
@@ -82,25 +81,50 @@ impl<'n> ShapeReader<'n> {
     }
 }
 
+// A reference's tag carries whether it names a sheet and which parts are absolute, so a
+// plain reference takes three bytes; the other tags are ASCII and never collide.
+const REFERENCE: u8 = 0x80;
+const RANGE: u8 = 0xc0;
+
 // The formula's tokens from IronCalc's own lexer, with every relative reference written
 // as its offset from the cell: two formulas with the same key parse to the same R1C1
-// text. False when the formula has no key.
+// text. A tag byte per token and lengths before texts keep the key about the size of the
+// formula, since the keys of a piece waiting to be merged are held uncharged. False when
+// the formula has no key.
 fn write_key(
     lexer: &mut Lexer<'_>,
-    key: &mut String,
+    key: &mut Vec<u8>,
     text: &str,
     row: i32,
     column: i32,
     array: bool,
-) -> Result<bool, std::fmt::Error> {
+) -> bool {
     key.clear();
-    write!(key, "{array}|")?;
+    key.push(u8::from(array));
     lexer.set_formula(text);
     for _ in 0..=text.len() + 1 {
-        let token = lexer.next_token();
-        match token {
-            TokenType::EOF => return Ok(true),
-            TokenType::Illegal(_) | TokenType::StructuredReference { .. } => return Ok(false),
+        let tag = match lexer.next_token() {
+            TokenType::EOF => return true,
+            TokenType::Illegal(_) | TokenType::StructuredReference { .. } => return false,
+            TokenType::Ident(name) => {
+                key.push(b'i');
+                write_text(key, &name);
+                continue;
+            }
+            TokenType::String(value) => {
+                key.push(b's');
+                write_text(key, &value);
+                continue;
+            }
+            TokenType::Number(value) => {
+                write_number(key, value);
+                continue;
+            }
+            TokenType::Error(error) => {
+                key.push(b'e');
+                write_text(key, &error.to_string());
+                continue;
+            }
             TokenType::Reference {
                 sheet,
                 row: reference_row,
@@ -108,20 +132,16 @@ fn write_key(
                 absolute_column,
                 absolute_row,
             } => {
-                let reference_row = if absolute_row {
-                    reference_row
-                } else {
-                    reference_row - row
-                };
-                let reference_column = if absolute_column {
-                    reference_column
-                } else {
-                    reference_column - column
-                };
-                write!(
-                    key,
-                    "ref({sheet:?},{absolute_row},{reference_row},{absolute_column},{reference_column})\u{1}"
-                )?;
+                key.push(
+                    REFERENCE
+                        | u8::from(sheet.is_some())
+                        | u8::from(absolute_row) << 1
+                        | u8::from(absolute_column) << 2,
+                );
+                write_sheet(key, sheet.as_deref());
+                write_offset(key, reference_row, absolute_row, row);
+                write_offset(key, reference_column, absolute_column, column);
+                continue;
             }
             TokenType::Range { sheet, left, right } => {
                 let (mut row1, mut row2) = (left.row, right.row);
@@ -138,24 +158,92 @@ fn write_key(
                     (column1, column2) = (column2, column1);
                     (absolute_column1, absolute_column2) = (absolute_column2, absolute_column1);
                 }
-                let offset = |value: i32, absolute: bool, origin: i32| {
-                    if absolute { value } else { value - origin }
-                };
-                write!(
-                    key,
-                    "range({sheet:?},{absolute_row1},{},{absolute_column1},{},{absolute_row2},{},{absolute_column2},{})\u{1}",
-                    offset(row1, absolute_row1, row),
-                    offset(column1, absolute_column1, column),
-                    offset(row2, absolute_row2, row),
-                    offset(column2, absolute_column2, column),
-                )?;
+                key.push(
+                    RANGE
+                        | u8::from(sheet.is_some())
+                        | u8::from(absolute_row1) << 1
+                        | u8::from(absolute_column1) << 2
+                        | u8::from(absolute_row2) << 3
+                        | u8::from(absolute_column2) << 4,
+                );
+                write_sheet(key, sheet.as_deref());
+                write_offset(key, row1, absolute_row1, row);
+                write_offset(key, column1, absolute_column1, column);
+                write_offset(key, row2, absolute_row2, row);
+                write_offset(key, column2, absolute_column2, column);
+                continue;
             }
-            other => {
-                write!(key, "{other:?}\u{1}")?;
-            }
-        }
+            TokenType::Boolean(true) => b'T',
+            TokenType::Boolean(false) => b'F',
+            TokenType::Compare(OpCompare::LessThan) => b'<',
+            TokenType::Compare(OpCompare::GreaterThan) => b'>',
+            TokenType::Compare(OpCompare::Equal) => b'=',
+            TokenType::Compare(OpCompare::LessOrEqualThan) => b'l',
+            TokenType::Compare(OpCompare::GreaterOrEqualThan) => b'm',
+            TokenType::Compare(OpCompare::NonEqual) => b'!',
+            TokenType::Addition(OpSum::Add) => b'+',
+            TokenType::Addition(OpSum::Minus) => b'-',
+            TokenType::Product(OpProduct::Times) => b'*',
+            TokenType::Product(OpProduct::Divide) => b'/',
+            TokenType::Power => b'^',
+            TokenType::LeftParenthesis => b'(',
+            TokenType::RightParenthesis => b')',
+            TokenType::Colon => b':',
+            TokenType::Semicolon => b';',
+            TokenType::LeftBracket => b'[',
+            TokenType::RightBracket => b']',
+            TokenType::LeftBrace => b'{',
+            TokenType::RightBrace => b'}',
+            TokenType::Comma => b',',
+            TokenType::Bang => b'b',
+            TokenType::Percent => b'%',
+            TokenType::And => b'&',
+            TokenType::At => b'@',
+            TokenType::Spill => b'#',
+            TokenType::Backslash => b'\\',
+        };
+        key.push(tag);
     }
-    Ok(false)
+    false
+}
+
+// Whole numbers, the usual ones in a formula, take a byte or two instead of eight.
+fn write_number(key: &mut Vec<u8>, value: f64) {
+    if value.is_sign_positive() && value.fract() == 0.0 && value < 9_007_199_254_740_992.0 {
+        key.push(b'n');
+        write_unsigned(key, value as u64);
+    } else {
+        key.push(b'f');
+        key.extend_from_slice(&value.to_bits().to_le_bytes());
+    }
+}
+
+fn write_text(key: &mut Vec<u8>, text: &str) {
+    write_unsigned(key, text.len() as u64);
+    key.extend_from_slice(text.as_bytes());
+}
+
+fn write_sheet(key: &mut Vec<u8>, sheet: Option<&str>) {
+    if let Some(sheet) = sheet {
+        write_text(key, sheet);
+    }
+}
+
+fn write_offset(key: &mut Vec<u8>, value: i32, absolute: bool, origin: i32) {
+    let value = if absolute {
+        i64::from(value)
+    } else {
+        i64::from(value) - i64::from(origin)
+    };
+    write_unsigned(key, ((value << 1) ^ (value >> 63)) as u64);
+}
+
+fn write_unsigned(key: &mut Vec<u8>, mut value: u64) {
+    while value >= 0x80 {
+        key.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    key.push(value as u8);
 }
 
 // Where the jobs of a piece went once taken into the sheet's, and the bytes of the job
@@ -171,9 +259,9 @@ pub(crate) struct Taken {
 // answers for both.
 pub(crate) fn merge_jobs(
     jobs: &mut Vec<FormulaJob>,
-    shapes: &mut HashMap<Box<str>, usize>,
+    shapes: &mut HashMap<Box<[u8]>, usize>,
     mut piece_jobs: Vec<FormulaJob>,
-    piece_shapes: HashMap<Box<str>, usize>,
+    piece_shapes: HashMap<Box<[u8]>, usize>,
     reader: &mut ShapeReader<'_>,
 ) -> Taken {
     let mut moved: Vec<Option<usize>> = vec![None; piece_jobs.len()];

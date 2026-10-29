@@ -52,7 +52,7 @@ pub(crate) struct SheetCells {
     pub(crate) formula_cells: Vec<Slot>,
     pub(crate) events: Vec<FormulaEvent>,
     pub(crate) jobs: Vec<FormulaJob>,
-    pub(crate) shapes: HashMap<Box<str>, usize>,
+    pub(crate) shapes: HashMap<Box<[u8]>, usize>,
     string_index: HashMap<Arc<str>, usize>,
     first_row: i32,
     last_row: i32,
@@ -478,7 +478,7 @@ impl<'a> Scanner<'a, '_> {
             return Ok(self.push_job(text, row, column, array, Sharing::PerCell));
         };
         let Some(&found) = self.cells.shapes.get(key) else {
-            let key: Box<str> = key.into();
+            let key: Box<[u8]> = key.into();
             self.cells.job_bytes += key.len() as u64;
             let job = self.push_job(text, row, column, array, Sharing::Single);
             self.cells.shapes.insert(key, job);

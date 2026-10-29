@@ -266,6 +266,33 @@ fn a_shared_job_that_converts_to_a_parse_error_is_left_to_ironcalc() {
     assert!(matches!(error, ReadError::Unsupported(_)), "{error}");
 }
 
+#[test]
+fn a_shape_key_is_at_most_twice_its_formula() {
+    let book = Book::new();
+    let mut shapes = ShapeReader::new(book.names());
+    for text in [
+        "VLOOKUP(A2,Sheet1!$A$1:$B$100,2,FALSE)",
+        "IF(B2>=1000,\"high\",\"low\")",
+        "A2*2+SUM($B$1:B2)",
+        "A2+B2+C2+D2",
+        "A1+A1+A1+A1+A1+A1",
+    ] {
+        let key = shapes.key(text, 2, 7, false).unwrap();
+        assert!(key.len() <= 2 * text.len(), "{text}: {} bytes", key.len());
+    }
+}
+
+#[test]
+fn numbers_with_the_same_whole_part_have_different_shapes() {
+    let book = Book::new();
+    let mut shapes = ShapeReader::new(book.names());
+    let whole = shapes.key("A1+2", 1, 2, false).unwrap().to_vec();
+    let fraction = shapes.key("A1+2.5", 1, 2, false).unwrap().to_vec();
+    let below = shapes.key("A2+2", 2, 2, false).unwrap().to_vec();
+    assert_ne!(whole, fraction);
+    assert_eq!(whole, below);
+}
+
 proptest! {
     #![proptest_config(ProptestConfig { cases: 400, ..ProptestConfig::default() })]
 
