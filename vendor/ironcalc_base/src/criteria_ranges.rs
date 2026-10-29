@@ -268,11 +268,13 @@ impl CriteriaRanges {
             Some(Indexing::Refused) => return None,
             Some(Indexing::Asked) => {}
         }
-        let (index, bytes) = CriteriaIndex::build(slots, area.4)?;
-        if !self.spend(bytes) {
+        // A failed build is not tried again in this evaluation, as each try reads the area.
+        let Some((index, bytes)) =
+            CriteriaIndex::build(slots, area.4).filter(|&(_, bytes)| self.spend(bytes))
+        else {
             self.indexes.insert(area, Indexing::Refused);
             return None;
-        }
+        };
         let index = Arc::new(index);
         self.indexes
             .insert(area, Indexing::Built(Arc::clone(&index), bytes));
@@ -516,6 +518,25 @@ mod tests {
             [None, Some(512), Some(512)]
         );
         assert_eq!(indexed_cells(INDEX_BYTES, false), [None, None, None]);
+    }
+
+    #[test]
+    fn an_index_that_failed_is_not_built_again_in_the_evaluation() {
+        let mut model = new_empty_model();
+        for row in 1..=8 {
+            model._set(&format!("A{row}"), "a");
+        }
+        model.evaluate();
+        model.criteria_ranges = reading(KEPT_BYTES);
+        let values = model.area_values(0, 1, 1, 8, 1);
+        for row_offset in 0..7 {
+            model.area_value(&values, row_offset, 0);
+        }
+        let criterion = CalcResult::String("a".to_string());
+        assert!(model.criterion_cells(&values, &criterion).is_none());
+        assert!(model.criterion_cells(&values, &criterion).is_none());
+        model.area_value(&values, 7, 0);
+        assert!(model.criterion_cells(&values, &criterion).is_none());
     }
 
     #[test]
