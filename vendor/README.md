@@ -382,6 +382,34 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   its own. Tests: `src/test/test_row_height.rs`.
 
 - The number format lexer reads a locale-only section such as `[$-409]` as no token, so a format like `[$-409]d-mmm-yy` is a date format instead of an error (`src/formatter/lexer.rs`). Stands on its own. Tests: `src/formatter/test/test_special_dollar.rs`.
+- `to_excel_precision` and `to_precision` return a number whose shortest decimal already has
+  at most the requested digits (up to 15) without formatting and parsing it, which every
+  numeric comparison, ROUND and the lookup indexes paid twice (`src/number_format.rs`).
+  Same results bit for bit. Stands on its own. Tests: `rounding_shortcut_*` in the module.
+- Comparing two texts uppercases them character by character instead of allocating two
+  uppercase copies (`cmp_uppercase` in `src/functions/util.rs`). Stands on its own. Test in
+  the module.
+- `evaluate_cell` reads a value cell, or a formula cell already evaluated, in place instead
+  of cloning it first (`src/model.rs`). Stands on its own.
+- `Model::parsed_formulas` holds each sheet's formulas behind an `Arc`, so evaluating a
+  formula holds its tree instead of copying it for every cell (`src/model.rs`,
+  `src/new_empty.rs`). Callers that take the formulas as a slice are unchanged; Zenkai's
+  engine adapts four lines. Stands on its own.
+- SUMIF, SUMIFS, COUNTIF, COUNTIFS, AVERAGEIF(S), MINIFS and MAXIFS visit only the cells
+  their first criterion can match when it matches by equality alone (text without
+  wildcards, a number from 2 on, a date) and its area was read whole: from the second such
+  criterion on an area in one evaluation, an index from each value to its cells, in the
+  order of a full read, answers it. The index is dropped when the evaluation ends or a
+  spill writes cells, and its bytes come from the kept values' budget (`src/criteria_ranges.rs`,
+  `criterion_key` and `value_keys` in `src/functions/util.rs`,
+  `src/functions/statistical/if_ifs.rs`). Needs the per-evaluation criteria ranges. Tests:
+  `src/test/test_criteria_index.rs` (each formula through the index against the same one
+  alone), `a_keyed_criterion_matches_only_values_with_its_key` in `src/functions/util.rs`,
+  the index tests in `src/criteria_ranges.rs`.
+- The evaluation's cell state map and `CellStore` rows hash coordinates with an unseeded
+  mixing hasher instead of SipHash (`src/cell_hash.rs`). A file can choose coordinates that
+  collide, but at most about 2^34 / buckets of them per bucket. Stands on its own. Test in
+  the module.
 
 Zenkai-only, not for upstream:
 
