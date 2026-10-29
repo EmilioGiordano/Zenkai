@@ -267,7 +267,7 @@ fn a_shared_job_that_converts_to_a_parse_error_is_left_to_ironcalc() {
 }
 
 #[test]
-fn a_shape_key_is_at_most_twice_its_formula() {
+fn a_shape_key_is_at_most_about_twice_its_formula() {
     let book = Book::new();
     let mut shapes = ShapeReader::new(book.names());
     for text in [
@@ -276,9 +276,15 @@ fn a_shape_key_is_at_most_twice_its_formula() {
         "A2*2+SUM($B$1:B2)",
         "A2+B2+C2+D2",
         "A1+A1+A1+A1+A1+A1",
+        "A1*0.5",
+        "0.125",
     ] {
         let key = shapes.key(text, 2, 7, false).unwrap();
-        assert!(key.len() <= 2 * text.len(), "{text}: {} bytes", key.len());
+        assert!(
+            key.len() <= 2 * text.len() + 1,
+            "{text}: {} bytes",
+            key.len()
+        );
     }
 }
 

@@ -227,14 +227,15 @@ fn write_key(
     false
 }
 
-// Whole numbers, the usual ones in a formula, take a byte or two instead of eight.
+// Whole numbers, the usual ones in a formula, take a byte or two; the others their
+// shortest exact text, a few bytes past what the formula wrote.
 fn write_number(key: &mut Vec<u8>, value: f64) {
     if value.is_sign_positive() && value.fract() == 0.0 && value < 9_007_199_254_740_992.0 {
         key.push(b'n');
         write_unsigned(key, value as u64);
     } else {
         key.push(b'f');
-        key.extend_from_slice(&value.to_bits().to_le_bytes());
+        write_text(key, &format!("{value:e}"));
     }
 }
 
