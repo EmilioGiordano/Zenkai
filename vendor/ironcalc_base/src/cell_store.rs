@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-
 use bitcode::{Decode, Encode};
 
+use crate::cell_hash::CellHashMap;
 use crate::types::Cell;
 
 /// Cells of one row: `columns` is strictly increasing and `cells[i]` sits at `columns[i]`.
@@ -49,7 +48,7 @@ impl Row {
 // The encoding differs from the nested maps of earlier builds; nothing persists those bytes yet.
 #[derive(Encode, Decode, Debug, PartialEq, Clone, Default)]
 pub struct CellStore {
-    rows: HashMap<i32, Row>,
+    rows: CellHashMap<i32, Row>,
 }
 
 impl CellStore {
@@ -183,6 +182,8 @@ impl CellStore {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     fn cell(s: i32) -> Cell {

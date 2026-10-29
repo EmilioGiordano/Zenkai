@@ -50,6 +50,7 @@ pub use crate::constants::ROW_HEIGHT_FACTOR;
 mod actions;
 mod arithmetic;
 mod cast;
+mod cell_hash;
 mod cf_runs;
 mod conditional_formatting;
 mod constants;

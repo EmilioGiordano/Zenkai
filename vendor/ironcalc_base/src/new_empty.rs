@@ -3,6 +3,8 @@ use chrono::DateTime;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use crate::cell_hash::CellHashMap;
+
 use crate::{
     calc_result::Range,
     constants::{DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH},
@@ -679,7 +681,7 @@ impl<'a> Model<'a> {
         let worksheets = &workbook.worksheets;
         let worksheet_names = worksheets.iter().map(|s| s.get_name()).collect();
         let parser = Parser::new(worksheet_names, vec![], HashMap::new(), locale, language);
-        let cells = HashMap::new();
+        let cells = CellHashMap::default();
 
         let mut model = Model {
             workbook,

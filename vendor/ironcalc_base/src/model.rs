@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::vec::Vec;
 
+use crate::cell_hash::CellHashMap;
+
 use crate::expressions::parser::static_analysis::run_static_analysis_on_node;
 use crate::{
     calc_result::{CalcResult, Range},
@@ -201,7 +203,7 @@ pub struct Model<'a> {
     /// An instance of the parser
     pub(crate) parser: Parser<'a>,
     /// The list of cells with formulas that are evaluated or being evaluated
-    pub(crate) cells: HashMap<(u32, i32, i32), CellState>,
+    pub(crate) cells: CellHashMap<(u32, i32, i32), CellState>,
     /// The locale of the model
     pub(crate) locale: &'a Locale,
     /// The language used
@@ -1667,7 +1669,7 @@ impl<'a> Model<'a> {
         //     tables.push(tables_in_sheet);
         // }
 
-        let cells = HashMap::new();
+        let cells = CellHashMap::default();
         let locale =
             get_locale(&workbook.settings.locale).map_err(|_| "Invalid locale".to_string())?;
         let tz = Tz::parse(&workbook.settings.tz)?;
