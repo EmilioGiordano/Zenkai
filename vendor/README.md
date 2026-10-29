@@ -224,6 +224,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   workbook of millions of values no longer builds a 12-byte index of each one first
   (`src/model.rs`, `get_formula_cells`). Stands on its own. Tests:
   `src/test/test_full_evaluation_cells.rs`.
+- That list is counted before it is built, so it is allocated once instead of doubling,
+  which held its old and new buffers together: about 250 MB at 21 million formulas
+  (`src/model.rs`, `get_formula_cells`). Builds on the patch above. No result changes;
+  tests: `src/test/test_full_evaluation_cells.rs`.
 - `UserModel::sheets_moved_by_undo` and `sheets_moved_by_redo` say which sheets the next
   undo or redo inserts or deletes rows or columns on, or `None` when the step also adds,
   removes or moves sheets, so a caller tracking row moves need not assume the worst on

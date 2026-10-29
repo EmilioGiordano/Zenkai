@@ -2972,7 +2972,17 @@ impl<'a> Model<'a> {
 
     /// Returns the cells holding a formula, in natural (sheet, row, column) order.
     fn get_formula_cells(&self) -> Vec<CellIndex> {
-        let mut cells = Vec::new();
+        // Counted first: a vector growing to millions of cells holds its old and new
+        // buffers at once each time it doubles.
+        let count = self
+            .workbook
+            .worksheets
+            .iter()
+            .filter(|sheet| !sheet.shared_formulas.is_empty())
+            .flat_map(|sheet| sheet.sheet_data.iter())
+            .filter(|(_, _, cell)| cell.get_formula().is_some())
+            .count();
+        let mut cells = Vec::with_capacity(count);
         for (index, sheet) in self.workbook.worksheets.iter().enumerate() {
             // A formula cell holds an index into the sheet's formulas, so a sheet without
             // any cannot have one.
