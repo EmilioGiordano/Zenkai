@@ -175,7 +175,9 @@ impl Model {
     // What the app does for a workbook that rests: the dump, with a recovery copy only when
     // there is unsaved work.
     fn rest(&mut self, id: WorkbookId) {
-        if let Some(document) = self.documents.get_mut(id) {
+        if let Some(document) = self.documents.get_mut(id)
+            && document.needs_recovery()
+        {
             document.recovery_written(document.edit_count());
         }
         let Some(claim) = self.documents.begin_hibernation(id) else {
@@ -301,17 +303,22 @@ impl Model {
                     return;
                 };
                 let text = value.to_string();
+                let edited = text.clone();
+                document.queue_in_test(Box::new(move |workbook| {
+                    workbook
+                        .set_input(SheetId(0), CellPos::default(), &edited)
+                        .map(|_| ())
+                }));
+                let (shared, edits) = document.take_batch().unwrap();
+                assert!(document::run_batch_serving(&shared, edits, None).is_empty());
+                let generation = document.generation();
+                assert!(document.finish_batch(generation));
                 document.dirty = true;
-                let mut workbook = document.workbook_mut().unwrap();
-                workbook
-                    .set_input(SheetId(0), CellPos::default(), &text)
-                    .unwrap();
                 self.twins
                     .entry(id)
                     .or_insert_with(blank)
                     .set_input(SheetId(0), CellPos::default(), &text)
                     .unwrap();
-                drop(workbook);
                 self.unsaved.insert(id);
             }
             Op::Undo(index) => {
