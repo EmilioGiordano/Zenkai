@@ -7,7 +7,7 @@ use zenkai_types::WorkbookId;
 use super::lifecycle::Lifecycle;
 use super::{Severity, Workspace};
 use crate::agent_settings;
-use crate::document::{self, Document};
+use crate::document;
 use crate::documents::{Dumped, Hibernating};
 use crate::memory::{self, Candidate, Resting, Sleeper};
 use crate::pending_save::{AfterJob, JobEnd};
@@ -117,7 +117,7 @@ impl Workspace {
             return;
         }
         let minutes = agent_settings::settings(cx).general.rest_after_minutes;
-        let sleepers = self.idle_sleepers();
+        let sleepers = self.idle_sleepers(cx);
         let chosen = memory::next_idle(
             minutes.map(|minutes| Duration::from_secs(u64::from(minutes) * 60)),
             self.hidden_since,
@@ -130,9 +130,16 @@ impl Workspace {
         }
     }
 
-    // Workbooks being waited for or awaiting approval never rest, nor any that is busy.
-    fn idle_sleepers(&self) -> Vec<Sleeper> {
-        let active = self.documents.active_id();
+    // Workbooks being waited for or awaiting approval never rest, nor any that is busy. The one
+    // on screen is offered only when it can leave the screen without disturbing the user: a
+    // cell or formula being typed, or a dialog, keeps it where it is.
+    fn idle_sleepers(&self, cx: &App) -> Vec<Sleeper> {
+        let shown = self.documents.shown_id();
+        let can_leave_screen = self.documents.wanted().is_none()
+            && !self.typing_in_a_field(cx)
+            && !self.prompts.blocks_input()
+            && self.format_dialog.is_none()
+            && self.chart.is_none();
         let wanted = self.documents.wanted();
         let awaiting_approval = self.awaiting_approval();
         self.documents
@@ -141,11 +148,12 @@ impl Workspace {
                 Some(document.id) != wanted
                     && Some(document.id) != awaiting_approval
                     && document.can_dump()
+                    && (Some(document.id) != shown || can_leave_screen)
             })
             .map(|document| Sleeper {
                 id: document.id,
                 last_used: document.last_used,
-                on_screen: Some(document.id) == active,
+                on_screen: Some(document.id) == shown,
             })
             .collect()
     }
@@ -158,11 +166,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if self.documents.active_id() == Some(id) {
-            // Committing a cell being typed is what leaving the workbook does anywhere else.
             self.park_active(window, cx);
-            if !self.documents.get(id).is_some_and(Document::can_dump) {
-                return;
-            }
             if self.documents.step_aside_active().is_none() {
                 return;
             }
@@ -261,14 +265,14 @@ impl Workspace {
                         };
                         this.hibernation_written(id, dumped, reason, cx);
                     }
-                    Err(error) => {
-                        this.documents.abandon_hibernation(id, generation, true);
-                        let name = this.documents.get(id).map(|document| document.name());
-                        if let Some(name) = name {
                     Err(_) if unloads_when_refused(reason, holds_unsaved_work) => {
                         this.documents.abandon_hibernation(id, generation, false);
                         this.unload_workbook(id, cx);
                     }
+                    Err(error) => {
+                        this.documents.abandon_hibernation(id, generation, true);
+                        let name = this.documents.get(id).map(|document| document.name());
+                        if let Some(name) = name {
                             let text = t!("notice.hibernation_failed", name = name, error = error);
                             this.notify(Severity::Warning, text, cx);
                         }
