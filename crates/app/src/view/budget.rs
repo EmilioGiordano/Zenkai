@@ -265,7 +265,8 @@ impl Workspace {
                         };
                         this.hibernation_written(id, dumped, reason, cx);
                     }
-                    Err(_) if unloads_when_refused(reason, holds_unsaved_work) => {
+                    Err(error) if unloads_when_refused(reason, holds_unsaved_work) => {
+                        tracing::warn!(%error, "idle dump refused, unloading the saved workbook");
                         this.documents.abandon_hibernation(id, generation, false);
                         this.unload_workbook(id, cx);
                     }
