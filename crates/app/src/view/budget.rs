@@ -21,6 +21,12 @@ enum RestReason {
     Idle { minutes: u32 },
 }
 
+// A saved workbook that idles past the dump limits still leaves memory, as it did before
+// dumps: its file is all it needs, only the undo history is lost.
+fn unloads_when_refused(reason: RestReason, holds_unsaved_work: bool) -> bool {
+    matches!(reason, RestReason::Idle { .. }) && !holds_unsaved_work
+}
+
 impl Workspace {
     pub(super) fn start_memory_sampler(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.memory_sampler = Some(cx.spawn_in(window, async move |this, cx| {
@@ -259,6 +265,10 @@ impl Workspace {
                         this.documents.abandon_hibernation(id, generation, true);
                         let name = this.documents.get(id).map(|document| document.name());
                         if let Some(name) = name {
+                    Err(_) if unloads_when_refused(reason, holds_unsaved_work) => {
+                        this.documents.abandon_hibernation(id, generation, false);
+                        this.unload_workbook(id, cx);
+                    }
                             let text = t!("notice.hibernation_failed", name = name, error = error);
                             this.notify(Severity::Warning, text, cx);
                         }
@@ -323,5 +333,38 @@ impl Workspace {
         cx.background_executor()
             .spawn(async move { recovery::remove(&dump) })
             .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RestReason, unloads_when_refused};
+    use std::path::PathBuf;
+
+    use zenkai_engine::Workbook;
+
+    use crate::documents::Documents;
+
+    const IDLE: RestReason = RestReason::Idle { minutes: 15 };
+
+    #[test]
+    fn only_a_saved_workbook_resting_idle_falls_back_to_unloading() {
+        assert!(unloads_when_refused(IDLE, false));
+        assert!(!unloads_when_refused(IDLE, true));
+        assert!(!unloads_when_refused(RestReason::MemoryPressure, false));
+    }
+
+    #[test]
+    fn a_saved_workbook_whose_dump_was_refused_can_be_unloaded() {
+        let book = || Workbook::new_empty().unwrap();
+        let mut documents = Documents::new(book());
+        documents.active_mut().unwrap().dirty = true;
+        let id = documents.open(book(), Some(PathBuf::from("a.xlsx")), Vec::new());
+        documents.open(book(), Some(PathBuf::from("b.xlsx")), Vec::new());
+        let claim = documents.begin_hibernation(id).unwrap();
+        assert!(!documents.unload(id), "the dump is still being written");
+        documents.abandon_hibernation(id, claim.generation, false);
+        assert!(documents.unload(id));
+        assert!(documents.get(id).is_none());
     }
 }
