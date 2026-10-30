@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 
 use zenkai_engine::{
-    Engine, SaveTarget, Unsupported, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
+    open_xlsx, open_xlsx_with, save_xlsx, Engine, SaveTarget, Unsupported, XlsxReader,
 };
 use zenkai_types::{CellPos, SheetId};
 
@@ -427,7 +427,9 @@ fn long_text_results_without_cached_values_open_whole() {
     let path = dir.path().join("long-text.xlsx");
     std::fs::write(&path, workbook_with_sheet(&sheet)).unwrap();
     let book = open_xlsx(&path).unwrap();
-    let last = book.cell(SheetId(0), CellPos::parse_a1("A1000").unwrap());
+    let last = book
+        .workbook
+        .cell(SheetId(0), CellPos::parse_a1("A1000").unwrap());
     assert_eq!(last.text, format!("{}1000", "x".repeat(30_000)));
 }
 
