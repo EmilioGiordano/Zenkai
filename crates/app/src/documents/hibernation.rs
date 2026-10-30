@@ -290,6 +290,15 @@ fn a_saved_workbook_with_a_save_waiting_is_not_offered() {
 }
 
 #[test]
+fn an_agent_touching_a_background_workbook_restarts_its_idle_clock() {
+    let (mut documents, id, _dir) = with_saved_work();
+    let before = documents.get(id).unwrap().last_used;
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    documents.touch(id);
+    assert!(documents.get(id).unwrap().last_used > before);
+}
+
+#[test]
 fn the_workbook_on_screen_steps_aside_to_rest_and_comes_back_when_asked() {
     let (mut documents, id, dir) = with_saved_work();
     assert!(documents.activate(id));

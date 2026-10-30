@@ -643,6 +643,13 @@ impl Documents {
         }
     }
 
+    // An agent reading or writing a workbook is using it, so it does not rest between calls.
+    pub fn touch(&mut self, id: WorkbookId) {
+        if let Some(document) = self.get_mut(id) {
+            document.last_used = Instant::now();
+        }
+    }
+
     pub fn take_retired(&mut self) -> Vec<SharedWorkbook> {
         std::mem::take(&mut self.retired)
     }

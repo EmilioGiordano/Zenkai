@@ -300,6 +300,28 @@ mod tests {
     }
 
     #[test]
+    fn a_workbook_touched_by_an_agent_does_not_rest_before_the_delay_runs_from_the_touch() {
+        let base = Instant::now() + minutes(1_000);
+        let touched_at = base - minutes(1);
+        let sleepers = [sleeper(1, touched_at, false)];
+        let almost = touched_at + REST_AFTER - Duration::from_secs(1);
+        assert_eq!(
+            next_idle(Some(REST_AFTER), None, almost, None, &sleepers),
+            None
+        );
+        assert_eq!(
+            next_idle(
+                Some(REST_AFTER),
+                None,
+                touched_at + REST_AFTER,
+                None,
+                &sleepers
+            ),
+            Some(WorkbookId(1))
+        );
+    }
+
+    #[test]
     fn nobody_to_rest_is_nothing() {
         assert_eq!(
             next_idle(Some(REST_AFTER), None, Instant::now(), None, &[]),
