@@ -168,7 +168,7 @@ impl Workspace {
                         let dumped = Dumped {
                             generation,
                             edits,
-                            recovery: recovery_copy,
+                            recovery: holds_unsaved_work.then_some(recovery_copy),
                             dump: dump.clone(),
                             kept,
                         };
@@ -223,6 +223,7 @@ impl Workspace {
             self.previews.forget(generation);
             self.drop_retired(cx);
             self.probe_links(cx);
+            holds_unsaved_work,
             self.persist_session(cx);
             self.notify(Severity::Info, t!("notice.hibernated", name = name), cx);
             return;

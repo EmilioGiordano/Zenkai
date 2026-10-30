@@ -207,6 +207,9 @@ impl Model {
             }
             Op::Hibernate(index) => {
                 let Some(id) = self.pick(*index) else { return };
+                if !self.documents.get(id).is_some_and(|d| d.needs_recovery()) {
+                    return;
+                }
                 if let Some(document) = self.documents.get_mut(id) {
                     // The autosave of the app, which hibernation waits for.
                     document.recovery_written(document.edit_count());
@@ -224,7 +227,7 @@ impl Model {
                     Dumped {
                         generation: claim.generation,
                         edits: claim.edits,
-                        recovery,
+                        recovery: Some(recovery),
                         dump,
                         kept,
                     },

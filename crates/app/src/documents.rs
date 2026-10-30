@@ -84,12 +84,13 @@ pub struct Hibernating {
     pub edits: u64,
     pub workbook: SharedWorkbook,
 }
+    pub holds_unsaved_work: bool,
 
 // What the job wrote, for `finish_hibernation`.
 pub struct Dumped {
     pub generation: u64,
     pub edits: u64,
-    pub recovery: PathBuf,
+    pub recovery: Option<PathBuf>,
     pub dump: PathBuf,
     pub kept: Kept,
 }
@@ -651,16 +652,18 @@ impl Documents {
         let Some(SlotMut::Other(Slot::Loaded(document))) = self.slot_mut(id) else {
             return None;
         };
-        if !document.can_hibernate() {
+        if !document.can_dump() {
             return None;
         }
         let workbook = document.begin_file_job(FileJob::Hibernating)?;
         Some(Hibernating {
             generation: document.generation(),
             edits: document.edit_count(),
+        let holds_unsaved_work = document.needs_recovery();
             workbook,
         })
     }
+            holds_unsaved_work,
 
     // The workbook stays in memory, and is not offered again until it is edited.
     pub fn abandon_hibernation(&mut self, id: WorkbookId, generation: u64, failed: bool) {
@@ -694,7 +697,7 @@ impl Documents {
         if on_screen_or_wanted
             || document.generation() != generation
             || document.edit_count() != edits
-            || !document.can_hibernate()
+            || !document.can_dump()
         {
             return false;
         }

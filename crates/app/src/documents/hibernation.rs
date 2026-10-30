@@ -39,7 +39,7 @@ fn dump_of(
     let dumped = Dumped {
         generation: claim.generation,
         edits: claim.edits,
-        recovery: dir.path().join("autosave.xlsx"),
+        recovery: Some(dir.path().join("autosave.xlsx")),
         dump: dump.clone(),
         kept,
     };
@@ -159,7 +159,7 @@ fn a_workbook_that_came_on_screen_while_the_dump_was_written_stays() {
 }
 
 #[test]
-fn only_off_screen_unsaved_work_with_a_current_recovery_copy_is_offered() {
+fn only_off_screen_idle_workbooks_with_a_current_recovery_copy_are_offered() {
     let (mut documents, id, _dir) = with_unsaved_work();
     let active = documents.active_id().unwrap();
     assert!(documents.begin_hibernation(active).is_none());
@@ -183,7 +183,13 @@ fn only_off_screen_unsaved_work_with_a_current_recovery_copy_is_offered() {
 
     let clean = open_file(&mut documents, "c.xlsx");
     open_file(&mut documents, "d.xlsx");
-    assert!(documents.begin_hibernation(clean).is_none());
+    assert!(
+        !documents
+            .begin_hibernation(clean)
+            .unwrap()
+            .holds_unsaved_work,
+        "a saved workbook is offered too, without a recovery copy"
+    );
 }
 
 #[test]
@@ -213,5 +219,72 @@ fn a_failed_dump_is_not_tried_again_until_the_work_changes() {
 fn a_workbook_being_waited_for_is_never_hibernated() {
     let (mut documents, id, _dir) = with_unsaved_work();
     documents.want(id, super::Intent::Switch);
+    assert!(documents.begin_hibernation(id).is_none());
+}
+
+fn with_saved_work() -> (Documents, WorkbookId, tempfile::TempDir) {
+    let mut documents = busy();
+    let mut book = blank();
+    book.set_input(SheetId(0), CellPos::default(), "42")
+        .unwrap();
+    let id = documents.open(book, Some(PathBuf::from("a.xlsx")), Vec::new());
+    open_file(&mut documents, "b.xlsx");
+    (documents, id, tempfile::tempdir().unwrap())
+}
+
+fn dump_saved(
+    documents: &mut Documents,
+    id: WorkbookId,
+    dir: &tempfile::TempDir,
+) -> Option<Dumped> {
+    let claim = documents.begin_hibernation(id)?;
+    assert!(!claim.holds_unsaved_work);
+    let dump = dir.path().join("a.zkh");
+    let kept = document::write_hibernation(&claim.workbook, &dump).unwrap();
+    Some(Dumped {
+        generation: claim.generation,
+        edits: claim.edits,
+        recovery: None,
+        dump,
+        kept,
+    })
+}
+
+#[test]
+fn a_saved_workbook_rests_as_a_link_without_a_recovery_copy_and_keeps_its_history() {
+    let (mut documents, id, dir) = with_saved_work();
+    let dumped = dump_saved(&mut documents, id, &dir).unwrap();
+    assert!(documents.finish_hibernation(id, dumped));
+    let Some(Entry::Link(link)) = documents.entry(id) else {
+        panic!("expected a link");
+    };
+    assert!(!link.dirty);
+    assert_eq!(link.recovery, None);
+    assert_eq!(link.path, Some(PathBuf::from("a.xlsx")));
+    let hibernation = link.rested.as_ref().unwrap().hibernation.as_ref().unwrap();
+
+    let woken = Workbook::wake(&hibernation.dump, &hibernation.kept).unwrap();
+    documents.start_loading(id);
+    documents.install(Loaded {
+        id,
+        workbook: woken,
+        unsupported: Vec::new(),
+        read_only: false,
+        origin: FileOrigin::Local,
+        provenance: Provenance::Dump,
+    });
+    let document = documents.get_mut(id).unwrap();
+    assert!(!document.dirty);
+    let mut workbook = document.workbook_mut().unwrap();
+    assert_eq!(cell(&workbook), "42");
+    workbook.undo().unwrap();
+    assert_eq!(cell(&workbook), "");
+}
+
+#[test]
+fn a_saved_workbook_with_a_save_waiting_is_not_offered() {
+    let (mut documents, id, _dir) = with_saved_work();
+    documents.get_mut(id).unwrap().request_save();
+    assert!(documents.get(id).unwrap().has_pending_save());
     assert!(documents.begin_hibernation(id).is_none());
 }
