@@ -78,7 +78,7 @@ pub fn next_under_pressure(
 // A workbook that can rest because the user is not using it.
 pub struct Sleeper {
     pub id: WorkbookId,
-    // When it left the screen. Unused for the workbook on screen.
+    // When it left the screen, or was last used by an agent.
     pub last_used: Instant,
     pub on_screen: bool,
 }
@@ -100,8 +100,9 @@ pub fn next_idle(
     sleepers
         .iter()
         .filter_map(|sleeper| {
+            // Agent calls refresh `last_used` on the workbook on screen too.
             let since = if sleeper.on_screen {
-                hidden_since?
+                hidden_since?.max(sleeper.last_used)
             } else {
                 sleeper.last_used
             };
@@ -250,6 +251,28 @@ mod tests {
         );
         assert_eq!(
             next_idle(Some(REST_AFTER), Some(hidden), due, None, &sleepers),
+            Some(WorkbookId(1))
+        );
+    }
+
+    #[test]
+    fn an_agent_using_the_workbook_on_screen_while_hidden_keeps_it_awake() {
+        let base = Instant::now() + minutes(1_000);
+        let hidden = base - minutes(20);
+        let used = base - minutes(5);
+        let sleepers = [sleeper(1, used, true)];
+        assert_eq!(
+            next_idle(Some(REST_AFTER), Some(hidden), base, None, &sleepers),
+            None
+        );
+        assert_eq!(
+            next_idle(
+                Some(REST_AFTER),
+                Some(hidden),
+                used + REST_AFTER,
+                None,
+                &sleepers
+            ),
             Some(WorkbookId(1))
         );
     }
