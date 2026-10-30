@@ -153,7 +153,7 @@ impl Loaded {
         if from_copy && let Some(rested) = &link.rested {
             document.guard_file(rested.file);
         }
-        if self.provenance == Provenance::Dump {
+        if self.provenance == Provenance::Dump && link.recovery.is_some() {
             // The recovery copy was written from this very work, and the new document has
             // made no edit yet.
             document.set_autosaved_at(Some(document.edit_count()));
