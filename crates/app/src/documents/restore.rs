@@ -80,7 +80,10 @@ impl Documents {
         recovery_file: impl Fn(WorkbookId) -> Option<PathBuf>,
         discarded: &[WorkbookId],
     ) -> Session {
-        let active = self.wanted().or_else(|| self.shown_id());
+        let active = self
+            .wanted()
+            .or_else(|| self.shown_id())
+            .or_else(|| self.stepped_aside());
         let spaces = self
             .spaces
             .iter()

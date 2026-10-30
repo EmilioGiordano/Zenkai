@@ -76,15 +76,18 @@ pub struct Documents {
     // Workbooks that left memory: the last reference to each is dropped by the caller on a
     // background thread, since freeing a large model takes long enough to stall a frame.
     retired: Vec<SharedWorkbook>,
+    // The workbook that was on screen when it was put to rest with the window hidden; it comes
+    // back to the screen when the window is shown.
+    stepped_aside: Option<WorkbookId>,
 }
 
 // A workbook claimed by `begin_hibernation`, for the job that writes it.
 pub struct Hibernating {
     pub generation: u64,
+    pub holds_unsaved_work: bool,
     pub edits: u64,
     pub workbook: SharedWorkbook,
 }
-    pub holds_unsaved_work: bool,
 
 // What the job wrote, for `finish_hibernation`.
 pub struct Dumped {
@@ -200,6 +203,7 @@ impl Documents {
             closed: Vec::new(),
             spaces,
             retired: Vec::new(),
+            stepped_aside: None,
         }
     }
 
@@ -655,15 +659,15 @@ impl Documents {
         if !document.can_dump() {
             return None;
         }
+        let holds_unsaved_work = document.needs_recovery();
         let workbook = document.begin_file_job(FileJob::Hibernating)?;
         Some(Hibernating {
             generation: document.generation(),
+            holds_unsaved_work,
             edits: document.edit_count(),
-        let holds_unsaved_work = document.needs_recovery();
             workbook,
         })
     }
-            holds_unsaved_work,
 
     // The workbook stays in memory, and is not offered again until it is edited.
     pub fn abandon_hibernation(&mut self, id: WorkbookId, generation: u64, failed: bool) {
@@ -705,6 +709,32 @@ impl Documents {
         *slot = Slot::Link(document.to_hibernated_link(recovery, dump, kept));
         self.retired.push(model);
         true
+    }
+
+    // Lets the workbook on screen be put to rest like any other: it leaves the screen, keeping
+    // its tab, and `stepped_aside` remembers it. Nothing on screen is how Excel shows no workbook.
+    pub fn step_aside_active(&mut self) -> Option<WorkbookId> {
+        if self.wanted.is_some() || self.tab_shown.is_some() {
+            return None;
+        }
+        let document = self.active.take()?;
+        let id = document.id;
+        self.empty_space = document.space;
+        self.before.push(Slot::Loaded(document));
+        self.before.append(&mut self.after);
+        self.stepped_aside = Some(id);
+        Some(id)
+    }
+
+    // Only while nothing else took the screen in the meantime.
+    pub fn take_stepped_aside(&mut self) -> Option<WorkbookId> {
+        let id = self.stepped_aside.take()?;
+        (self.shown_id().is_none() && self.entry(id).is_some()).then_some(id)
+    }
+
+    pub fn stepped_aside(&self) -> Option<WorkbookId> {
+        self.stepped_aside
+            .filter(|id| self.shown_id().is_none() && self.entry(*id).is_some())
     }
 
     // The nearest loaded neighbour takes over, to the right first, so the screen never lands

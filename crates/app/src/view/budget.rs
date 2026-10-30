@@ -4,14 +4,22 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
+use super::lifecycle::Lifecycle;
 use super::{Severity, Workspace};
-use crate::document;
+use crate::agent_settings;
+use crate::document::{self, Document};
 use crate::documents::{Dumped, Hibernating};
-use crate::memory::{self, Candidate, Resting};
+use crate::memory::{self, Candidate, Resting, Sleeper};
 use crate::pending_save::{AfterJob, JobEnd};
 use crate::recovery;
 
 const SAMPLE_EVERY: Duration = Duration::from_secs(1);
+
+#[derive(Clone, Copy)]
+enum RestReason {
+    MemoryPressure,
+    Idle { minutes: u32 },
+}
 
 impl Workspace {
     pub(super) fn start_memory_sampler(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -24,7 +32,7 @@ impl Workspace {
                             cx.notify();
                         }
                         this.enforce_memory_budget(window, cx);
-                        this.rest_while_away(window, cx);
+                        this.rest_when_idle(window, cx);
                     });
                     if update.is_err() {
                         break;
@@ -84,20 +92,84 @@ impl Workspace {
         }
     }
 
-    // The window hidden in the tray for a long time with workbooks nobody touched since.
-    fn rest_while_away(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    // Workbooks off screen rest after the configured time. With the window hidden in the tray
+    // the one on screen rests too, and comes back when the window is shown.
+    fn rest_when_idle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if crate::tray::hidden_to_tray(cx) {
             self.hidden_since.get_or_insert_with(Instant::now);
         } else {
             self.hidden_since = None;
+            self.wake_stepped_aside(window, cx);
         }
-        let hidden_for = self.hidden_since.map(|since| since.elapsed());
-        let since_last = self.last_unload.map(|at| at.elapsed());
-        let candidates = self.rest_candidates();
-        if let Some((id, resting)) =
-            memory::next_when_away(hidden_for, Instant::now(), since_last, &candidates)
+        // A close writes its own copies, and a dump could outlive a workbook it discards.
+        if self.hibernating.is_some()
+            || self.recovery_dir.is_none()
+            || self.lifecycle == Lifecycle::Closing
+            || self.departure.is_some()
+            || self.close_dialog.is_some()
         {
-            self.rest(id, resting, window, cx);
+            return;
+        }
+        let minutes = agent_settings::settings(cx).general.rest_after_minutes;
+        let sleepers = self.idle_sleepers();
+        let chosen = memory::next_idle(
+            minutes.map(|minutes| Duration::from_secs(u64::from(minutes) * 60)),
+            self.hidden_since,
+            Instant::now(),
+            self.last_unload.map(|at| at.elapsed()),
+            &sleepers,
+        );
+        if let (Some(id), Some(minutes)) = (chosen, minutes) {
+            self.rest_idle(id, minutes, window, cx);
+        }
+    }
+
+    // Workbooks being waited for or awaiting approval never rest, nor any that is busy.
+    fn idle_sleepers(&self) -> Vec<Sleeper> {
+        let active = self.documents.active_id();
+        let wanted = self.documents.wanted();
+        let awaiting_approval = self.awaiting_approval();
+        self.documents
+            .iter()
+            .filter(|document| {
+                Some(document.id) != wanted
+                    && Some(document.id) != awaiting_approval
+                    && document.can_dump()
+            })
+            .map(|document| Sleeper {
+                id: document.id,
+                last_used: document.last_used,
+                on_screen: Some(document.id) == active,
+            })
+            .collect()
+    }
+
+    fn rest_idle(
+        &mut self,
+        id: WorkbookId,
+        minutes: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.documents.active_id() == Some(id) {
+            // Committing a cell being typed is what leaving the workbook does anywhere else.
+            self.park_active(window, cx);
+            if !self.documents.get(id).is_some_and(Document::can_dump) {
+                return;
+            }
+            if self.documents.step_aside_active().is_none() {
+                return;
+            }
+            self.present_active(window, cx);
+        }
+        self.begin_hibernation(id, RestReason::Idle { minutes }, window, cx);
+    }
+
+    // The window is shown again: the workbook that rested with it comes back, loading if it
+    // has already left memory.
+    pub(super) fn wake_stepped_aside(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.documents.take_stepped_aside() {
+            self.switch_to(id, window, cx);
         }
     }
 
@@ -110,7 +182,9 @@ impl Workspace {
     ) {
         match resting {
             Resting::Unload => self.unload_workbook(id, cx),
-            Resting::Hibernate => self.begin_hibernation(id, window, cx),
+            Resting::Hibernate => {
+                self.begin_hibernation(id, RestReason::MemoryPressure, window, cx)
+            }
         }
     }
 
@@ -137,12 +211,19 @@ impl Workspace {
         }
     }
 
-    fn begin_hibernation(&mut self, id: WorkbookId, window: &mut Window, cx: &mut Context<Self>) {
+    fn begin_hibernation(
+        &mut self,
+        id: WorkbookId,
+        reason: RestReason,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(directory) = self.recovery_dir.clone() else {
             return;
         };
         let Some(Hibernating {
             generation,
+            holds_unsaved_work,
             edits,
             workbook,
         }) = self.documents.begin_hibernation(id)
@@ -172,7 +253,7 @@ impl Workspace {
                             dump: dump.clone(),
                             kept,
                         };
-                        this.hibernation_written(id, dumped, cx);
+                        this.hibernation_written(id, dumped, reason, cx);
                     }
                     Err(error) => {
                         this.documents.abandon_hibernation(id, generation, true);
@@ -211,7 +292,13 @@ impl Workspace {
 
     // The dump is on disk and was checked. If the workbook changed or came back on screen in
     // the meantime the dump is stale, and the workbook stays in memory.
-    fn hibernation_written(&mut self, id: WorkbookId, dumped: Dumped, cx: &mut Context<Self>) {
+    fn hibernation_written(
+        &mut self,
+        id: WorkbookId,
+        dumped: Dumped,
+        reason: RestReason,
+        cx: &mut Context<Self>,
+    ) {
         let dump = dumped.dump.clone();
         let named = self
             .documents
@@ -223,9 +310,14 @@ impl Workspace {
             self.previews.forget(generation);
             self.drop_retired(cx);
             self.probe_links(cx);
-            holds_unsaved_work,
             self.persist_session(cx);
-            self.notify(Severity::Info, t!("notice.hibernated", name = name), cx);
+            let text = match reason {
+                RestReason::MemoryPressure => t!("notice.hibernated", name = name),
+                RestReason::Idle { minutes } => {
+                    t!("notice.rested_idle", name = name, minutes = minutes)
+                }
+            };
+            self.notify(Severity::Info, text, cx);
             return;
         }
         cx.background_executor()

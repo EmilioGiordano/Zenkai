@@ -288,3 +288,46 @@ fn a_saved_workbook_with_a_save_waiting_is_not_offered() {
     assert!(documents.get(id).unwrap().has_pending_save());
     assert!(documents.begin_hibernation(id).is_none());
 }
+
+#[test]
+fn the_workbook_on_screen_steps_aside_to_rest_and_comes_back_when_asked() {
+    let (mut documents, id, dir) = with_saved_work();
+    assert!(documents.activate(id));
+    assert_eq!(documents.step_aside_active(), Some(id));
+    assert_eq!(documents.shown_id(), None);
+    assert_eq!(documents.stepped_aside(), Some(id));
+    assert!(
+        documents
+            .snapshot(true, Default::default(), |_| None)
+            .spaces
+            .iter()
+            .flat_map(|space| &space.files)
+            .any(|file| file.active),
+        "the session still remembers the tab that was on screen"
+    );
+
+    let dumped = dump_saved(&mut documents, id, &dir).unwrap();
+    assert!(documents.finish_hibernation(id, dumped));
+    assert_eq!(documents.take_stepped_aside(), Some(id));
+    assert_eq!(documents.take_stepped_aside(), None);
+    assert!(matches!(documents.entry(id), Some(Entry::Link(_))));
+}
+
+#[test]
+fn a_workbook_that_took_the_screen_while_another_rested_is_not_pushed_off_by_the_wake() {
+    let (mut documents, id, _dir) = with_saved_work();
+    assert!(documents.activate(id));
+    documents.step_aside_active().unwrap();
+    open_file(&mut documents, "c.xlsx");
+    assert_eq!(documents.stepped_aside(), None);
+    assert_eq!(documents.take_stepped_aside(), None);
+}
+
+#[test]
+fn nothing_steps_aside_while_a_workbook_is_being_waited_for() {
+    let (mut documents, id, _dir) = with_saved_work();
+    assert!(documents.activate(id));
+    let other = open_file(&mut documents, "d.xlsx");
+    documents.want(other, super::Intent::Switch);
+    assert_eq!(documents.step_aside_active(), None);
+}

@@ -7,7 +7,6 @@ const FALLBACK_BUDGET_MB: u64 = 4096;
 const SHARE_OF_RAM_PERCENT: u64 = 60;
 const BUDGET_VARIABLE: &str = "ZENKAI_MEMORY_BUDGET_MB";
 const COOLDOWN: Duration = Duration::from_secs(15);
-const AWAY_AFTER: Duration = Duration::from_secs(30 * 60);
 
 // 60 % of the physical memory, unless the variable names a number of MB.
 pub fn budget_mb() -> u64 {
@@ -76,23 +75,41 @@ pub fn next_under_pressure(
     longest_unused(candidates.iter())
 }
 
-// A window hidden in the tray for half an hour is not being worked in. Only workbooks nobody
-// has touched since then rest, and never because of a short pause: Excel keeps everything in
-// memory, so Zenkai steps in only when the user has clearly gone away.
-pub fn next_when_away(
-    hidden_for: Option<Duration>,
+// A workbook that can rest because the user is not using it.
+pub struct Sleeper {
+    pub id: WorkbookId,
+    // When it left the screen. Unused for the workbook on screen.
+    pub last_used: Instant,
+    pub on_screen: bool,
+}
+
+// Workbooks off screen rest `rest_after` after they left it. The one on screen rests only
+// while the window is hidden in the tray, `rest_after` after it was hidden. The one that has
+// waited longest goes first, one per cooldown, so memory is freed gradually.
+pub fn next_idle(
+    rest_after: Option<Duration>,
+    hidden_since: Option<Instant>,
     now: Instant,
     since_last_rest: Option<Duration>,
-    candidates: &[Candidate],
-) -> Option<(WorkbookId, Resting)> {
-    if hidden_for? < AWAY_AFTER || since_last_rest.is_some_and(|since| since < COOLDOWN) {
+    sleepers: &[Sleeper],
+) -> Option<WorkbookId> {
+    let rest_after = rest_after?;
+    if since_last_rest.is_some_and(|since| since < COOLDOWN) {
         return None;
     }
-    longest_unused(
-        candidates
-            .iter()
-            .filter(|candidate| now.saturating_duration_since(candidate.last_used) >= AWAY_AFTER),
-    )
+    sleepers
+        .iter()
+        .filter_map(|sleeper| {
+            let since = if sleeper.on_screen {
+                hidden_since?
+            } else {
+                sleeper.last_used
+            };
+            let waited = now.saturating_duration_since(since);
+            (waited >= rest_after).then_some((sleeper.id, waited))
+        })
+        .max_by_key(|(_, waited)| *waited)
+        .map(|(id, _)| id)
 }
 
 #[cfg(test)]
@@ -171,33 +188,123 @@ mod tests {
         );
     }
 
+    const REST_AFTER: Duration = Duration::from_secs(15 * 60);
+
+    fn sleeper(id: u64, left_screen: Instant, on_screen: bool) -> Sleeper {
+        Sleeper {
+            id: WorkbookId(id),
+            last_used: left_screen,
+            on_screen,
+        }
+    }
+
+    fn minutes(count: u64) -> Duration {
+        Duration::from_secs(count * 60)
+    }
+
     #[test]
-    fn nothing_rests_while_the_window_is_shown_or_was_hidden_a_short_while() {
-        let now = Instant::now() + AWAY_AFTER * 4;
-        let candidates = [candidate(1, 0, UNLOAD, now - AWAY_AFTER * 3)];
-        assert_eq!(next_when_away(None, now, None, &candidates), None);
-        let short = Some(AWAY_AFTER - Duration::from_secs(1));
-        assert_eq!(next_when_away(short, now, None, &candidates), None);
-        let long = Some(AWAY_AFTER);
+    fn a_workbook_off_screen_rests_once_the_delay_has_passed() {
+        let base = Instant::now();
+        let sleepers = [sleeper(1, base, false)];
+        let before = base + REST_AFTER - Duration::from_secs(1);
         assert_eq!(
-            next_when_away(long, now, None, &candidates),
-            Some((WorkbookId(1), Resting::Unload))
+            next_idle(Some(REST_AFTER), None, before, None, &sleepers),
+            None
+        );
+        assert_eq!(
+            next_idle(Some(REST_AFTER), None, base + REST_AFTER, None, &sleepers),
+            Some(WorkbookId(1))
         );
     }
 
     #[test]
-    fn a_workbook_used_during_the_last_half_hour_stays_when_the_user_is_away() {
-        let now = Instant::now() + AWAY_AFTER * 4;
-        let candidates = [
-            candidate(1, 0, UNLOAD, now - AWAY_AFTER + Duration::from_secs(1)),
-            candidate(2, 0, HIBERNATE, now - AWAY_AFTER),
-        ];
-        let away = Some(AWAY_AFTER * 2);
+    fn never_means_nothing_rests() {
+        let base = Instant::now();
+        let sleepers = [sleeper(1, base, false), sleeper(2, base, true)];
+        let late = base + minutes(10_000);
+        assert_eq!(next_idle(None, Some(base), late, None, &sleepers), None);
+    }
+
+    #[test]
+    fn the_workbook_on_screen_stays_while_the_window_is_shown() {
+        let base = Instant::now();
+        let sleepers = [sleeper(1, base, true)];
+        let late = base + minutes(10_000);
         assert_eq!(
-            next_when_away(away, now, None, &candidates),
-            Some((WorkbookId(2), Resting::Hibernate))
+            next_idle(Some(REST_AFTER), None, late, None, &sleepers),
+            None
         );
-        assert_eq!(next_when_away(away, now, None, &candidates[..1]), None);
+    }
+
+    #[test]
+    fn the_workbook_on_screen_rests_after_the_window_was_hidden_long_enough() {
+        let base = Instant::now() + minutes(1_000);
+        let hidden = base - minutes(5);
+        // On screen since long before the window was hidden: only the hiding counts.
+        let sleepers = [sleeper(1, base - minutes(500), true)];
+        let early = base + minutes(9);
+        let due = base + minutes(10);
+        assert_eq!(
+            next_idle(Some(REST_AFTER), Some(hidden), early, None, &sleepers),
+            None
+        );
+        assert_eq!(
+            next_idle(Some(REST_AFTER), Some(hidden), due, None, &sleepers),
+            Some(WorkbookId(1))
+        );
+    }
+
+    #[test]
+    fn a_background_workbook_counts_from_when_it_left_the_screen_not_from_hiding() {
+        let base = Instant::now() + minutes(1_000);
+        let sleepers = [sleeper(1, base - minutes(20), false)];
+        assert_eq!(
+            next_idle(Some(REST_AFTER), Some(base), base, None, &sleepers),
+            Some(WorkbookId(1))
+        );
+        let fresh = [sleeper(2, base - minutes(2), false)];
+        assert_eq!(
+            next_idle(
+                Some(REST_AFTER),
+                Some(base - minutes(60)),
+                base,
+                None,
+                &fresh
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn the_longest_waiting_workbook_goes_first_and_one_per_cooldown() {
+        let base = Instant::now() + minutes(1_000);
+        let sleepers = [
+            sleeper(1, base - minutes(20), false),
+            sleeper(2, base - minutes(40), false),
+            sleeper(3, base - minutes(30), false),
+        ];
+        assert_eq!(
+            next_idle(Some(REST_AFTER), None, base, None, &sleepers),
+            Some(WorkbookId(2))
+        );
+        let soon = Some(Duration::from_secs(3));
+        assert_eq!(
+            next_idle(Some(REST_AFTER), None, base, soon, &sleepers),
+            None
+        );
+        let later = Some(COOLDOWN);
+        assert_eq!(
+            next_idle(Some(REST_AFTER), None, base, later, &sleepers),
+            Some(WorkbookId(2))
+        );
+    }
+
+    #[test]
+    fn nobody_to_rest_is_nothing() {
+        assert_eq!(
+            next_idle(Some(REST_AFTER), None, Instant::now(), None, &[]),
+            None
+        );
     }
 
     #[test]
