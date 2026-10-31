@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in Zenkai does not work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please do not attach files with private or customer data.
+  - type: input
+    id: version
+    attributes:
+      label: Zenkai version
+      description: Settings, About page.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and OS version
+      placeholder: Windows 11 23H2
+    validations:
+      required: true
+  - type: input
+    id: file
+    attributes:
+      label: File type and size
+      placeholder: .xlsx, 40 MB, about 1M rows
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Press ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+    validations:
+      required: true
+  - type: textarea
+    id: attachment
+    attributes:
+      label: Example file (optional)
+      description: Drag a small anonymized file here, with real names and numbers replaced. Never attach private data.
