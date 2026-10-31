@@ -234,7 +234,7 @@ fn load_any(
         Err(EngineError::InvalidFile(_)) if cancel.load(Ordering::Relaxed) => {
             Err(LoadFailure::Engine(EngineError::Cancelled))
         }
-        Err(EngineError::InvalidFile(reason)) => match open_values(path) {
+        Err(EngineError::InvalidFile(reason)) => match open_values(path, cancel) {
             Ok(workbook) => Ok(FileLoad {
                 workbook,
                 unsupported: Vec::new(),
@@ -242,6 +242,9 @@ fn load_any(
                 origin: file_origin(path),
                 reader_fallback: None,
             }),
+            Err(_) if cancel.load(Ordering::Relaxed) => {
+                Err(LoadFailure::Engine(EngineError::Cancelled))
+            }
             Err(fallback) => Err(LoadFailure::Unreadable { reason, fallback }),
         },
         Err(EngineError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
@@ -255,7 +258,7 @@ const MAX_VALUES_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 // Plan B when the engine cannot open a file (or it is .xls/.ods): only the values,
 // read by calamine, in a workbook that is never saved over the original.
-pub fn open_values(path: &Path) -> Result<Workbook, String> {
+pub fn open_values(path: &Path, cancel: &AtomicBool) -> Result<Workbook, String> {
     let size = std::fs::metadata(path)
         .map_err(|e| t!("file.read_failed", path = path.display(), error = e))?
         .len();
@@ -264,7 +267,8 @@ pub fn open_values(path: &Path) -> Result<Workbook, String> {
     }
     let path = path.to_path_buf();
     run_with_engine_stack(move || {
-        let sheets = read_values(&path).map_err(|e| EngineError::InvalidFile(e.to_string()))?;
+        let sheets =
+            read_values(&path, cancel).map_err(|e| EngineError::InvalidFile(e.to_string()))?;
         let mut workbook = Workbook::new_empty()?;
         for (index, sheet) in (0u32..).zip(&sheets) {
             if index > 0 {

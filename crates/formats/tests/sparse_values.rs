@@ -2,6 +2,7 @@
 #![allow(clippy::unwrap_used)]
 
 use std::io::Write;
+use std::sync::atomic::AtomicBool;
 
 use zenkai_formats::read_values;
 
@@ -42,7 +43,7 @@ fn far_apart_cells_do_not_allocate_the_space_between_them() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("sparse.xlsx");
     std::fs::write(&path, sparse_xlsx()).unwrap();
-    let sheets = read_values(&path).unwrap();
+    let sheets = read_values(&path, &AtomicBool::new(false)).unwrap();
     let blocks = &sheets[0].blocks;
     assert_eq!(blocks.len(), 2);
     assert_eq!(blocks[0].rows, vec![vec!["1".to_string()]]);

@@ -1,4 +1,7 @@
+use std::panic::catch_unwind;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 use calamine::{Data, DataRef, Reader, Sheets, open_workbook_auto};
 
@@ -8,6 +11,8 @@ pub const MAX_CELLS: usize = 20_000_000;
 // global cap bounds the total; scattered cells can never inflate into dense blocks.
 const MAX_GAP: u32 = 8;
 const MAX_ALLOCATED_CELLS: usize = 40_000_000;
+const MAX_READ_TIME: Duration = Duration::from_secs(300);
+const CELLS_PER_STOP_CHECK: usize = 4096;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ValuesError {
@@ -15,6 +20,12 @@ pub enum ValuesError {
     Unreadable(String),
     #[error("the workbook has more than {MAX_CELLS} cells")]
     TooLarge,
+    #[error("reading the file took longer than {} seconds", MAX_READ_TIME.as_secs())]
+    TimedOut,
+    #[error("reading the file was cancelled")]
+    Cancelled,
+    #[error("the reader stopped on this file; the file may be damaged")]
+    Panicked,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,12 +72,37 @@ fn data_ref_input(cell: &DataRef<'_>) -> String {
     }
 }
 
-struct Cells {
-    cells: Vec<(u32, u32, String)>,
-    total: usize,
+pub(crate) struct Stop<'a> {
+    cancel: &'a AtomicBool,
+    deadline: Instant,
 }
 
-impl Cells {
+impl<'a> Stop<'a> {
+    pub(crate) fn new(cancel: &'a AtomicBool) -> Self {
+        Stop {
+            cancel,
+            deadline: Instant::now() + MAX_READ_TIME,
+        }
+    }
+
+    pub(crate) fn check(&self) -> Result<(), ValuesError> {
+        if self.cancel.load(Ordering::Relaxed) {
+            return Err(ValuesError::Cancelled);
+        }
+        if Instant::now() > self.deadline {
+            return Err(ValuesError::TimedOut);
+        }
+        Ok(())
+    }
+}
+
+struct Cells<'a> {
+    cells: Vec<(u32, u32, String)>,
+    total: usize,
+    stop: Stop<'a>,
+}
+
+impl Cells<'_> {
     fn push(&mut self, row: u32, col: u32, input: String) -> Result<(), ValuesError> {
         if input.is_empty() {
             return Ok(());
@@ -74,6 +110,9 @@ impl Cells {
         self.total += 1;
         if self.total > MAX_CELLS {
             return Err(ValuesError::TooLarge);
+        }
+        if self.total % CELLS_PER_STOP_CHECK == 0 {
+            self.stop.check()?;
         }
         self.cells.push((row, col, input));
         Ok(())
@@ -87,7 +126,7 @@ fn unreadable(e: impl std::fmt::Display) -> ValuesError {
 fn sheet_cells<RS: std::io::Read + std::io::Seek>(
     workbook: &mut Sheets<RS>,
     name: &str,
-    sink: &mut Cells,
+    sink: &mut Cells<'_>,
 ) -> Result<(), ValuesError> {
     match workbook {
         Sheets::Xlsx(xlsx) => {
@@ -162,15 +201,24 @@ fn into_blocks(
     Ok(blocks)
 }
 
-pub fn read_values(path: &Path) -> Result<Vec<SheetValues>, ValuesError> {
+// A panic inside calamine becomes an error. The closure only borrows a path and an atomic,
+// both unwind safe, and everything calamine builds is dropped with the unwind.
+pub fn read_values(path: &Path, cancel: &AtomicBool) -> Result<Vec<SheetValues>, ValuesError> {
+    catch_unwind(|| read_sheets(path, cancel)).unwrap_or(Err(ValuesError::Panicked))
+}
+
+fn read_sheets(path: &Path, cancel: &AtomicBool) -> Result<Vec<SheetValues>, ValuesError> {
+    let stop = Stop::new(cancel);
     let mut workbook = open_workbook_auto(path).map_err(unreadable)?;
     let mut sheets = Vec::new();
     let mut allocated = 0usize;
     let mut sink = Cells {
         cells: Vec::new(),
         total: 0,
+        stop,
     };
     for name in workbook.sheet_names() {
+        sink.stop.check()?;
         sheet_cells(&mut workbook, &name, &mut sink)?;
         let blocks = into_blocks(
             std::mem::take(&mut sink.cells),
