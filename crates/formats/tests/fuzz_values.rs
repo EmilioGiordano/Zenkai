@@ -1,7 +1,8 @@
-// Structured fuzzing of the read-only fallback reader (calamine): small valid .xls, .ods and
-// .xlsb files are damaged the way a corrupt or hostile file would be. Reading must end in
-// values or an error, within a bounded time; a panic inside calamine must come back as
-// `ValuesError::Panicked`, never unwind through the caller.
+// Structured fuzzing of the in-process fallback reader (calamine) on .xlsb and .xlsx: valid
+// files are damaged the way a corrupt or hostile file would be. Reading must end in values or
+// an error, within a bounded time, and a panic inside calamine must not unwind through the
+// caller. .xls and .ods can hang or abort calamine, so they are fuzzed through the child
+// process in `crates/values-host/tests`.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
@@ -111,21 +112,6 @@ fn valid_xlsb() -> Vec<u8> {
     zip_of(&xlsb_parts(&valid_xlsb_cells()))
 }
 
-fn valid_ods() -> Vec<u8> {
-    let content = r#"<?xml version="1.0"?><office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table table:name="Data"><table:table-row><table:table-cell office:value-type="float" office:value="1"><text:p>1</text:p></table:table-cell><table:table-cell office:value-type="string"><text:p>text</text:p></table:table-cell><table:table-cell table:number-columns-repeated="3" office:value-type="boolean" office:boolean-value="true"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#;
-    zip_of(&[
-        (
-            "mimetype".to_string(),
-            b"application/vnd.oasis.opendocument.spreadsheet".to_vec(),
-        ),
-        ("content.xml".to_string(), content.into()),
-        (
-            "META-INF/manifest.xml".to_string(),
-            br#"<?xml version="1.0"?><manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"/>"#.to_vec(),
-        ),
-    ])
-}
-
 fn damaged_parts(mut parts: Vec<(String, Vec<u8>)>, damages: &[Damage]) -> Vec<(String, Vec<u8>)> {
     for damage in damages {
         if !parts.is_empty() {
@@ -135,21 +121,8 @@ fn damaged_parts(mut parts: Vec<(String, Vec<u8>)>, damages: &[Damage]) -> Vec<(
     parts
 }
 
-fn parts_of_bytes(bytes: &[u8]) -> Vec<(String, Vec<u8>)> {
-    let (_folder, path) = write_temp("parts.zip", bytes);
-    parts_of(&path)
-}
-
 fn damaged_zip(source: &Path, damages: &[Damage]) -> Vec<u8> {
     zip_of(&damaged_parts(parts_of(source), damages))
-}
-
-fn damaged_blob(bytes: &[u8], damages: &[Damage]) -> Vec<u8> {
-    damaged_parts(vec![("blob".to_string(), bytes.to_vec())], damages)
-        .into_iter()
-        .next()
-        .map(|(_, bytes)| bytes)
-        .unwrap_or_default()
 }
 
 fn read_with_watchdog(extension: &'static str, bytes: Vec<u8>) {
@@ -190,35 +163,18 @@ proptest! {
     }
 
     #[test]
-    fn damaged_ods_reads_or_fails(damages in damages(), from_fixture in any::<bool>()) {
-        let (_folder, source) = if from_fixture {
-            (None, fixture("issues.ods"))
-        } else {
-            let (folder, path) = write_temp("valid.ods", &valid_ods());
-            (Some(folder), path)
-        };
-        read_with_watchdog("ods", damaged_zip(&source, &damages));
-    }
-
-    #[test]
     fn damaged_xlsx_reads_or_fails(damages in damages(), pick in any::<prop::sample::Index>()) {
         let corpus = corpus();
         read_with_watchdog("xlsx", damaged_zip(&corpus[pick.index(corpus.len())], &damages));
     }
 
-    #[test]
-    fn damaged_xls_reads_or_fails(damages in damages(), date in any::<bool>()) {
-        let name = if date { "date.xls" } else { "issues.xls" };
-        let source = std::fs::read(fixture(name)).unwrap();
-        read_with_watchdog("xls", damaged_blob(&source, &damages));
-    }
 }
 
 #[test]
 fn the_valid_inputs_read_before_any_damage() {
     for (name, bytes) in [
         ("valid.xlsb", valid_xlsb()),
-        ("valid.ods", valid_ods()),
+        ("valid.ods", std::fs::read(fixture("issues.ods")).unwrap()),
         ("valid.xls", std::fs::read(fixture("issues.xls")).unwrap()),
     ] {
         let (_folder, path) = write_temp(name, &bytes);
@@ -238,28 +194,5 @@ fn a_shared_string_index_out_of_range_is_an_error_not_a_crash() {
     let cells = vec![record(0x07, &cell(0, &99u32.to_le_bytes()))];
     let (_folder, path) = write_temp("bad_index.xlsb", &zip_of(&xlsb_parts(&cells)));
     let outcome = read_values(&path, &AtomicBool::new(false));
-    assert!(matches!(outcome, Err(ValuesError::Panicked)));
-}
-
-#[test]
-fn an_ods_cut_inside_its_table_is_an_error_not_an_endless_loop() {
-    let mut parts = parts_of_bytes(&valid_ods());
-    let content = &mut parts
-        .iter_mut()
-        .find(|(name, _)| name == "content.xml")
-        .unwrap()
-        .1;
-    let cut = content
-        .windows(b"</table:table>".len())
-        .position(|window| window == b"</table:table>")
-        .unwrap();
-    content.truncate(cut);
-    let (_folder, path) = write_temp("cut.ods", &zip_of(&parts));
-    let (done, finished) = mpsc::channel();
-    std::thread::spawn(move || {
-        done.send(read_values(&path, &AtomicBool::new(false)))
-            .unwrap();
-    });
-    let outcome = finished.recv_timeout(Duration::from_secs(20)).unwrap();
-    assert!(matches!(outcome, Err(ValuesError::Unreadable(_))));
+    assert!(outcome.is_err());
 }

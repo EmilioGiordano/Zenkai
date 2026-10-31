@@ -5,14 +5,12 @@ use std::time::{Duration, Instant};
 
 use calamine::{Data, DataRef, Reader, Sheets, open_workbook_auto};
 
-use crate::ods_guard;
-
 pub const MAX_CELLS: usize = 20_000_000;
 // Rows are cut into runs wherever more than MAX_GAP empty cells separate two values,
 // so the cells allocated stay within (MAX_GAP + 1) times the populated ones, and a
 // global cap bounds the total; scattered cells can never inflate into dense blocks.
 const MAX_GAP: u32 = 8;
-const MAX_ALLOCATED_CELLS: usize = 40_000_000;
+pub const MAX_ALLOCATED_CELLS: usize = 40_000_000;
 const MAX_READ_TIME: Duration = Duration::from_secs(300);
 const CELLS_PER_STOP_CHECK: usize = 4096;
 
@@ -74,20 +72,20 @@ fn data_ref_input(cell: &DataRef<'_>) -> String {
     }
 }
 
-pub(crate) struct Stop<'a> {
+struct Stop<'a> {
     cancel: &'a AtomicBool,
     deadline: Instant,
 }
 
 impl<'a> Stop<'a> {
-    pub(crate) fn new(cancel: &'a AtomicBool) -> Self {
+    fn new(cancel: &'a AtomicBool) -> Self {
         Stop {
             cancel,
             deadline: Instant::now() + MAX_READ_TIME,
         }
     }
 
-    pub(crate) fn check(&self) -> Result<(), ValuesError> {
+    fn check(&self) -> Result<(), ValuesError> {
         if self.cancel.load(Ordering::Relaxed) {
             return Err(ValuesError::Cancelled);
         }
@@ -101,20 +99,22 @@ impl<'a> Stop<'a> {
 struct Cells<'a> {
     cells: Vec<(u32, u32, String)>,
     total: usize,
+    pushed: usize,
     stop: Stop<'a>,
 }
 
 impl Cells<'_> {
     fn push(&mut self, row: u32, col: u32, input: String) -> Result<(), ValuesError> {
+        self.pushed += 1;
+        if self.pushed.is_multiple_of(CELLS_PER_STOP_CHECK) {
+            self.stop.check()?;
+        }
         if input.is_empty() {
             return Ok(());
         }
         self.total += 1;
         if self.total > MAX_CELLS {
             return Err(ValuesError::TooLarge);
-        }
-        if self.total % CELLS_PER_STOP_CHECK == 0 {
-            self.stop.check()?;
         }
         self.cells.push((row, col, input));
         Ok(())
@@ -211,13 +211,13 @@ pub fn read_values(path: &Path, cancel: &AtomicBool) -> Result<Vec<SheetValues>,
 
 fn read_sheets(path: &Path, cancel: &AtomicBool) -> Result<Vec<SheetValues>, ValuesError> {
     let stop = Stop::new(cancel);
-    ods_guard::check_content_ends_cleanly(path, &stop)?;
     let mut workbook = open_workbook_auto(path).map_err(unreadable)?;
     let mut sheets = Vec::new();
     let mut allocated = 0usize;
     let mut sink = Cells {
         cells: Vec::new(),
         total: 0,
+        pushed: 0,
         stop,
     };
     for name in workbook.sheet_names() {
