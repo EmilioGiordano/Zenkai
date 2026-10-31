@@ -173,7 +173,7 @@ Agents write the content; `scripts/pr` (bash, `gh`, `jq`) does the GitHub mechan
   at most 72 characters, no trailing period, ` (N/M)` appended for stacked PRs.
 - **Body:** `## Why` (1 or 2 sentences), `## What` (2 to 5 bullets), `## Decisions`
   (optional: choice and reason), `## Validation` (tests, staging result, what was not
-  verified), then `Card: <url>` and, when stacked, `Stacked on #N`. At most 40 lines.
+  verified), then `Card: <url>` (optional, absent on fork PRs) and, when stacked, `Stacked on #N`. At most 40 lines.
   `scripts/pr/lint.sh` enforces it and `scripts/pr/open.sh` runs it before opening.
 - **Review:** a summary of at most 6 lines and inline comments of at most 3 lines, each
   with an optional suggestion block. Low findings without action go only in the summary.
