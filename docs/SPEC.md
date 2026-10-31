@@ -353,6 +353,13 @@ pesado corre a la vez en la máquina.
 | 4 | `feat/workbook-hibernation` | Dos niveles de reposo para libros inactivos: descargado (guardado, se recarga del archivo) e hibernado (con cambios sin guardar, se vuelca a disco en binario con su historial de deshacer y vuelve sin releer el xlsx). Los volcados se borran al guardar o cerrar. |
 | 5 | `perf/grid-scale` | El grid con el archivo grande: alto de filas, barra de scroll, saltos y selección de columnas enteras cumplen el presupuesto de frame. |
 
+## Versión y publicación
+
+- Una sola versión del proyecto, en `[workspace.package]` del `Cargo.toml` raíz; todos los crates la heredan. Un solo cambio actualiza la versión en todas partes.
+- La app muestra la versión en Acerca de (About) y, si el binario acepta argumentos, en `--version`.
+- Un tag `v*` dispara un workflow que compila los binarios en release para Windows, Linux y macOS y los adjunta a un release de GitHub. Las notas del release son la sección de esa versión en `CHANGELOG.md`.
+- El binario de Windows no está firmado.
+
 ## Proceso de trabajo para el agente
 
 El trabajo avanza por fases. Al cerrar cada una, el agente se detiene, entrega un resumen con lo hecho, lo pendiente y los riesgos, y espera aprobación antes de seguir.
