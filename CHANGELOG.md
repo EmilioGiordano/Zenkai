@@ -33,10 +33,10 @@ First release.
   sort A to Z and Z to A, insert and delete rows and columns, find and replace, zoom, Go To.
 - Excel keyboard shortcuts and a command palette (Ctrl+Shift+P).
 - Formula editing with point mode, colored references and function AutoComplete.
-- A warning before saving would drop content Zenkai does not support (charts, images,
-  pivot tables, macros, comments, Excel tables, hyperlinks, data validation, external
-  links): the save asks for a new name first, and `.xlsm` originals are never overwritten.
-  Files that merely contain such content are saved without touching the sheets that hold it.
+- Saving keeps what Zenkai cannot edit (charts, images, comments, Excel tables, pivot
+  tables, protection, filters, data validation, hyperlinks) wherever the edit allows. When a
+  save would drop any of it, Zenkai lists exactly what and asks first, offering a copy with a
+  new name; `.xlsm` originals are never overwritten.
 - Files that could harm the app (zip bombs, huge array areas, over-deep formulas) are
   rejected before the engine sees them.
 - AI chat assistant that works on the open workbook through the agent you already have
