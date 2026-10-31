@@ -70,5 +70,6 @@ First release.
 ### Interface
 
 - Live charts of a selection (column, line, pie) exported as SVG.
+- Builds for Windows x64, Linux x64 and macOS on Apple silicon (arm64); Linux and macOS are experimental.
 - Light, dark and high-contrast themes, English and Spanish interface, screen reader labels.
-- Viewing of Markdown and PDF files next to your workbooks.
+- Viewing of Markdown and PDF files next to your workbooks (PDF on Windows only for now).
