@@ -147,6 +147,8 @@ The version comes from `crates/app/Cargo.toml`; the icon (`crates/app/zenkai.ico
 placeholder. Release builds have no console window and log to
 `%LOCALAPPDATA%\Zenkai\zenkai.log` (`RUST_LOG` sets the level).
 
+The Windows build is unsigned. SmartScreen shows "Windows protected your PC": click "More info", then "Run anyway".
+
 ## Tests and checks
 
 ```powershell
