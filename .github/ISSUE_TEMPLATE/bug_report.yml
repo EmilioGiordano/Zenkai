@@ -10,7 +10,7 @@ body:
     id: version
     attributes:
       label: Zenkai version
-      description: Settings, About page.
+      description: "Settings > About > Version."
     validations:
       required: true
   - type: input

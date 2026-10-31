@@ -21,5 +21,5 @@ body:
     attributes:
       label: Roadmap
       options:
-        - label: I read docs/ROADMAP.md and this request is not one of its non-goals.
+        - label: I read [the roadmap](https://github.com/EmilioGiordano/Zenkai/blob/main/docs/ROADMAP.md) and this request is not one of its non-goals.
           required: true
