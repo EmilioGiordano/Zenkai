@@ -23,6 +23,7 @@ or a hang.
 | --- | --- |
 | xlsx open path, preflight included, and save after a damaged open | `crates/engine/tests/fuzz_xlsx_open.rs` |
 | CSV | `crates/formats/tests/fuzz_csv.rs` |
+| Read-only fallback reader (calamine): .xls, .ods, .xlsb | `crates/formats/tests/fuzz_values.rs` |
 | session.json | `crates/app/src/documents/session_fuzz.rs` |
 | settings.json | `crates/agent/tests/fuzz_settings.rs` |
 | MCP JSON-RPC messages and tool calls | `crates/agent/tests/fuzz_mcp_message.rs` |
