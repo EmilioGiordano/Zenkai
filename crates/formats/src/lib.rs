@@ -4,6 +4,7 @@ mod csv_format;
 mod csv_write;
 mod dates;
 mod numbers;
+mod ods_guard;
 mod values;
 
 pub use csv_format::{CsvError, Delimiter, Encoding, ParsedCsv, parse_csv};

@@ -10077,6 +10077,7 @@ dependencies = [
  "csv",
  "encoding_rs",
  "proptest",
+ "quick-xml 0.41.0",
  "tempfile",
  "thiserror 2.0.21",
  "zenkai-types",

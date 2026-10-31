@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 
 use calamine::{Data, DataRef, Reader, Sheets, open_workbook_auto};
 
+use crate::ods_guard;
+
 pub const MAX_CELLS: usize = 20_000_000;
 // Rows are cut into runs wherever more than MAX_GAP empty cells separate two values,
 // so the cells allocated stay within (MAX_GAP + 1) times the populated ones, and a
@@ -209,6 +211,7 @@ pub fn read_values(path: &Path, cancel: &AtomicBool) -> Result<Vec<SheetValues>,
 
 fn read_sheets(path: &Path, cancel: &AtomicBool) -> Result<Vec<SheetValues>, ValuesError> {
     let stop = Stop::new(cancel);
+    ods_guard::check_content_ends_cleanly(path, &stop)?;
     let mut workbook = open_workbook_auto(path).map_err(unreadable)?;
     let mut sheets = Vec::new();
     let mut allocated = 0usize;
