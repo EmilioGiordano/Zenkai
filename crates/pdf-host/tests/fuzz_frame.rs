@@ -16,9 +16,7 @@ use serde_json::Value;
 use zenkai_pdf_host::codec::{
     Expect, check_request, decode_reply, decode_request, encode_reply, encode_request, reply_id,
 };
-use zenkai_pdf_host::frame::{
-    Frame, MAX_HEADER_BYTES, MAX_PAYLOAD_BYTES, read_frame, write_frame,
-};
+use zenkai_pdf_host::frame::{Frame, MAX_HEADER_BYTES, MAX_PAYLOAD_BYTES, read_frame, write_frame};
 use zenkai_pdf_host::wire::{
     Bitmap, BrokenFile, CharBox, CharSpan, DocId, FindMatch, Job, LinkTarget, MAX_CHARS,
     MAX_MATCHES, MAX_PAGES, MAX_RENDER_PIXELS, OpenError, Opened, OutlineItem, PageContent,
