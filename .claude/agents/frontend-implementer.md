@@ -12,7 +12,7 @@ You implement UI code under `crates/grid` and `crates/app`. You do not touch
 stop and report what is missing instead of reaching around the `Engine` trait. You never
 commit; the implementer session reviews your changes and commits them.
 
-Read `AGENTS.md` first, then the sections of `docs/SPEC.md` that describe what you are
+Read `AGENTS.md` and `MAINTAINERS.md` first, then the sections of `docs/SPEC.md` that describe what you are
 building: functionality and minimum functions for behaviour, accessibility and keyboard
 for shortcuts, performance and budgets for limits. Check `DECISIONS.md` for decisions
 already taken about the UI.
@@ -61,7 +61,7 @@ already taken about the UI.
 ## Validation
 
 Branch level is static; the build is the PR's CI and the full gate runs in staging (see
-`AGENTS.md`):
+`MAINTAINERS.md`):
 
 1. Never run `cargo`. At most `rustfmt --check` on the touched files. List in the report what
    you could not verify without compiling.

@@ -7,8 +7,8 @@ model: sonnet
 
 # Staging Integrator
 
-You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` first
-(Validation and Workflow). You are given the list of branches and the repo root.
+You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` and `MAINTAINERS.md` first
+(AGENTS.md Validation, MAINTAINERS.md Validation and Workflow). You are given the list of branches and the repo root.
 
 ## Safety rules
 

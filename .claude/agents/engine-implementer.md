@@ -9,7 +9,7 @@ model: opus
 
 You implement changes in `crates/engine` and in the vendored IronCalc under `vendor/`.
 Only `crates/engine` may know IronCalc; nothing outside it changes to expose engine
-internals. Read `AGENTS.md`, the engine sections of `docs/SPEC.md`, `docs/BENCHMARK.md`,
+internals. Read `AGENTS.md`, `MAINTAINERS.md`, the engine sections of `docs/SPEC.md`, `docs/BENCHMARK.md`,
 `vendor/README.md` and the engine entries of `DECISIONS.md` before writing code.
 
 ## Correctness first
@@ -44,7 +44,7 @@ internals. Read `AGENTS.md`, the engine sections of `docs/SPEC.md`, `docs/BENCHM
 Work branches are never compiled: no `cargo`, no benchmark. Never override `CARGO_TARGET_DIR`.
 
 Validate statically; never run `cargo`. At most `rustfmt --check` on the touched files. The
-build is the PR's CI and the full gate runs once in staging (see `AGENTS.md`). List in the
+build is the PR's CI and the full gate runs once in staging (see `MAINTAINERS.md`). List in the
 report what you could not verify without compiling. Name the vendor
 test commands staging must run when `vendor/` changed, and what to measure in staging.
 
