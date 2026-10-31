@@ -6,6 +6,7 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
 `docs/BENCHMARK.md`).
 
 - Product spec: `docs/SPEC.md`
+- How to contribute: `CONTRIBUTING.md`
 - Rules for contributors and agents: `AGENTS.md`
 - Ideas backlog: `docs/IDEAS.md`
 - Public roadmap and non-goals: `docs/ROADMAP.md`
