@@ -149,6 +149,8 @@ placeholder. Release builds have no console window and log to
 
 The Windows build is unsigned. SmartScreen shows "Windows protected your PC": click "More info", then "Run anyway".
 
+Release builds cover Windows x64, Linux x64 and macOS on Apple silicon (arm64) only. Viewing PDF files works only on Windows for now, because the PDF library is bundled only there.
+
 ## Tests and checks
 
 ```powershell
