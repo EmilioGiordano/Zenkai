@@ -148,6 +148,10 @@ The version comes from `crates/app/Cargo.toml`; the icon (`crates/app/zenkai.ico
 placeholder. Release builds have no console window and log to
 `%LOCALAPPDATA%\Zenkai\zenkai.log` (`RUST_LOG` sets the level).
 
+The Windows build is unsigned. SmartScreen shows "Windows protected your PC": click "More info", then "Run anyway".
+
+Release builds cover Windows x64, Linux x64 and macOS on Apple silicon (arm64) only. Viewing PDF files works only on Windows for now, because the PDF library is bundled only there.
+
 ## Tests and checks
 
 ```powershell
