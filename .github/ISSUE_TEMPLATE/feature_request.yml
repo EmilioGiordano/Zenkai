@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest something Zenkai should do.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: How should Zenkai handle it? Mention how Excel does it if relevant.
+    validations:
+      required: true
+  - type: checkboxes
+    id: roadmap
+    attributes:
+      label: Roadmap
+      options:
+        - label: I read [the roadmap](https://github.com/EmilioGiordano/Zenkai/blob/main/docs/ROADMAP.md) and this request is not one of its non-goals.
+          required: true
