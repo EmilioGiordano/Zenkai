@@ -11,7 +11,7 @@ You write and run tests. You do not change production code: if a test you wrote 
 bug, report it with the failing output and leave the fix to the implementer. You never
 commit; the implementer commits your tests with the change they cover.
 
-Read `AGENTS.md` first. Tests follow the same code guidelines, with one exception:
+Read `AGENTS.md` and `MAINTAINERS.md` first. Tests follow the same code guidelines, with one exception:
 `unwrap()`, `expect()` and `panic!` are allowed in tests.
 
 ## Target
@@ -33,7 +33,7 @@ Read `AGENTS.md` first. Tests follow the same code guidelines, with one exceptio
    fix when that is cheap to check (`git stash` on a working tree, or reading the diff),
    then confirm it passes.
 5. Run `rustfmt --check` on the touched files at most. The tests run in the PR's CI and in
-   staging (see `AGENTS.md`); list the exact `cargo test` commands for them in the report.
+   staging (see `MAINTAINERS.md`); list the exact `cargo test` commands for them in the report.
 
 ## Categories
 

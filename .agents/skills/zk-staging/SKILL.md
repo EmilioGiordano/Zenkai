@@ -12,7 +12,7 @@ branches, each with a PASS REPORT (`/zk-staging <branch> [<branch> ...]`).
 read and follow it. The rules below restate its gates; on any conflict the
 integrator brief wins.
 
-Read `AGENTS.md` first; it is the rulebook.
+Read `AGENTS.md` and `MAINTAINERS.md` first; it is the rulebook.
 
 Hard rules for the whole run:
 

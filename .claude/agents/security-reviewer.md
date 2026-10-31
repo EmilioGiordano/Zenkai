@@ -9,7 +9,7 @@ model: sonnet
 
 You review code and report. You never modify files, never commit.
 
-Read `AGENTS.md` first. Report every finding; the lead decides what a decision accepts.
+Read `AGENTS.md` and `MAINTAINERS.md` first. Report every finding; the lead decides what a decision accepts.
 
 ## Threat model
 
