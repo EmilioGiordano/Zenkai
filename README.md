@@ -91,13 +91,15 @@ Requirements: Windows 10/11, the MSVC build tools (Visual Studio Build Tools wit
 `rust-toolchain.toml` and installs itself on the first build.
 
 ```powershell
-cargo build --release -p zenkai -p zenkai-mcp -p zenkai-pdf-host -j 4
+cargo build --release -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host -j 4
 .\target\release\zenkai.exe                    # empty workbook
 .\target\release\zenkai.exe path\to\book.xlsx  # open a file
 ```
 
 `-j 4` keeps the first build (GPUI is large) from saturating the machine; drop it on a
 dedicated build box. The release binary is `target\release\zenkai.exe`.
+
+Legacy files (.xls, .ods, .xlsb) and workbooks the engine cannot open are read by `zenkai-values-host.exe`, one short-lived process per file, so a failure inside the reader only fails that open. It is loaded from the folder of `zenkai.exe` only.
 
 PDFs are read by `zenkai-pdf-host.exe`, a separate process, so a crash inside pdfium cannot take Zenkai down. It and `pdfium.dll` are loaded from the folder of `zenkai.exe` only.
 Without either, everything else works and the PDF tab says the viewer is unavailable. To read
