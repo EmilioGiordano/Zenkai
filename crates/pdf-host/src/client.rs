@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, BufWriter, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -10,15 +10,12 @@ use async_channel::{Receiver, Sender};
 
 use crate::codec::{Expect, decode_reply, encode_request, reply_id};
 use crate::frame::{read_frame, write_frame};
+use crate::process::{kill_and_wait, spawn_piped};
 use crate::wire::{BrokenFile, DocId, Job, OpenError, PageContent, Reply, Request};
 
 const HOST_FILE: &str = "zenkai-pdf-host.exe";
 const MAX_IN_FLIGHT: usize = 4;
 const SLOT_POLL: Duration = Duration::from_millis(50);
-const KILL_WAIT: Duration = Duration::from_millis(50);
-const KILL_WAITS: u32 = 40;
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 // How long the host may take over one request before it is taken for stuck.
 #[derive(Clone, Copy, Debug)]
@@ -214,52 +211,13 @@ struct Launch {
 
 fn spawn_host(launch: &Launch) -> Result<(Child, ChildStdin, ChildStdout), OpenError> {
     let path: &Path = launch.host.as_deref().ok_or(OpenError::HostMissing)?;
-    let mut command = Command::new(path);
-    command
-        .args(&launch.arguments)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    for (name, value) in &launch.environment {
-        command.env(name, value);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    let mut child = command.spawn().map_err(|error| {
+    spawn_piped(path, &launch.arguments, &launch.environment).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             OpenError::HostMissing
         } else {
             OpenError::HostFailed(error.to_string())
         }
-    })?;
-    match (child.stdin.take(), child.stdout.take()) {
-        (Some(stdin), Some(stdout)) => Ok((child, stdin, stdout)),
-        _ => {
-            kill(&mut child);
-            Err(OpenError::HostFailed("the pipes did not open".to_string()))
-        }
-    }
-}
-
-// Kills the host and waits a little for it to go; a host that will not go is left to the system.
-fn kill(child: &mut Child) {
-    if let Err(error) = child.kill() {
-        tracing::debug!(%error, "the PDF host was already gone");
-    }
-    for _ in 0..KILL_WAITS {
-        match child.try_wait() {
-            Ok(Some(_)) => return,
-            Ok(None) => std::thread::sleep(KILL_WAIT),
-            Err(error) => {
-                tracing::debug!(%error, "could not wait for the PDF host");
-                return;
-            }
-        }
-    }
-    tracing::warn!("the PDF host did not exit after being killed");
+    })
 }
 
 fn tell(reply: &Sender<Reply>, message: Reply) {
@@ -299,7 +257,7 @@ fn stop(link: &Link, unsent: VecDeque<Request>) {
     link.changed.notify_all();
     let child = locked(&link.child).take();
     if let Some(mut child) = child {
-        kill(&mut child);
+        kill_and_wait(&mut child);
     }
     // Requests that were queued and never written are answered too, or their tabs would wait.
     let mut views: Vec<Sender<Reply>> = unsent.into_iter().map(|request| request.reply).collect();
