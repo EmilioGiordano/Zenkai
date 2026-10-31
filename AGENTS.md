@@ -33,8 +33,7 @@ Design principle: reinvent nothing. Shortcuts, menu names, selection, formula er
 
 ## Process
 
-- Work advances by the phases in `docs/SPEC.md`. At the end of each phase: stop, report
-  what was done, what is pending and the risks, and wait for approval.
+- Work advances by the phases in `docs/SPEC.md`.
 - A decision the spec does not cover: choose the option closest to how Excel behaves and
   record it in the PR's `## Decisions` section (the maintainer also keeps a local
   `DECISIONS.md`, see `MAINTAINERS.md`).
