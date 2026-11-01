@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::time::{Duration, Instant};
 
 use zenkai_engine::{
-    open_xlsx, open_xlsx_with, save_xlsx, Engine, SaveTarget, Unsupported, XlsxReader,
+    Engine, SaveTarget, Unsupported, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
 };
 use zenkai_types::{CellPos, SheetId};
 
