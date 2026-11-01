@@ -6,27 +6,36 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
-use zenkai_formats::{Block, MAX_ALLOCATED_CELLS, SheetValues};
+use zenkai_formats::{Block, MAX_ALLOCATED_CELLS, MAX_TEXT_BYTES, SheetValues};
 use zenkai_pdf_host::frame::{Frame, read_frame};
 use zenkai_pdf_host::process::{kill_and_wait, spawn_piped};
 
 use crate::wire::{Failure, Message, decode};
 
+pub const HOST_FILE: &str = if cfg!(windows) {
+    "zenkai-values-host.exe"
+} else {
+    "zenkai-values-host"
+};
 const READ_DEADLINE: Duration = Duration::from_secs(300);
 const POLL: Duration = Duration::from_millis(50);
 const FRAMES_IN_FLIGHT: usize = 4;
 const MAX_SHEETS: usize = 4096;
+// Json escapes can double what the host holds in memory, so the budget is twice its text cap.
+const MAX_PAYLOAD_BYTES: usize = 2 * MAX_TEXT_BYTES;
 
 #[derive(Debug, Error)]
 pub enum ReadError {
-    #[error("the file reader {0} was not found")]
-    HostMissing(String),
+    #[error("the file reader was not found next to the program")]
+    HostMissing,
     #[error("the file reader could not start: {0}")]
     StartFailed(String),
     #[error("reading the file was cancelled")]
     Cancelled,
     #[error("reading the file took too long and was stopped")]
     TimedOut,
+    #[error("the file has more cells or text than the reader allows")]
+    TooLarge,
     #[error("the file could not be read: {}", .0.detail)]
     Failed(Failure),
     #[error("the file reader stopped without a result: {0}")]
@@ -37,36 +46,19 @@ pub enum ReadError {
 // read. Nothing the child does, however it ends, can do more than make the read fail.
 #[derive(Clone, Debug)]
 pub struct ValuesClient {
-    host: PathBuf,
+    host: Option<PathBuf>,
     environment: Vec<(String, String)>,
     deadline: Duration,
+    payload_budget: usize,
 }
 
 impl ValuesClient {
-    // The host is looked for next to the running exe, or one folder up when that exe is a
-    // cargo test binary in `deps`.
-    pub fn next_to_exe() -> ValuesClient {
-        let folder = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(Path::to_path_buf))
-            .unwrap_or_default();
-        let folder = match folder.file_name() {
-            Some(name) if name == "deps" => {
-                folder.parent().map(Path::to_path_buf).unwrap_or(folder)
-            }
-            _ => folder,
-        };
-        ValuesClient::new(folder.join(format!(
-            "zenkai-values-host{}",
-            std::env::consts::EXE_SUFFIX
-        )))
-    }
-
-    pub fn new(host: PathBuf) -> ValuesClient {
+    pub fn new(host: Option<PathBuf>) -> ValuesClient {
         ValuesClient {
             host,
             environment: Vec::new(),
             deadline: READ_DEADLINE,
+            payload_budget: MAX_PAYLOAD_BYTES,
         }
     }
 
@@ -80,12 +72,18 @@ impl ValuesClient {
         self
     }
 
+    pub fn with_payload_budget(mut self, bytes: usize) -> ValuesClient {
+        self.payload_budget = bytes;
+        self
+    }
+
     pub fn read(&self, path: &Path, cancel: &AtomicBool) -> Result<Vec<SheetValues>, ReadError> {
-        let arguments = [path.to_string_lossy().into_owned()];
-        let (child, stdin, stdout) = spawn_piped(&self.host, &arguments, &self.environment)
-            .map_err(|error| {
+        let host = self.host.as_deref().ok_or(ReadError::HostMissing)?;
+        let arguments = [path.as_os_str().to_os_string()];
+        let (child, stdin, stdout) =
+            spawn_piped(host, &arguments, &self.environment).map_err(|error| {
                 if error.kind() == std::io::ErrorKind::NotFound {
-                    ReadError::HostMissing(self.host.display().to_string())
+                    ReadError::HostMissing
                 } else {
                     ReadError::StartFailed(error.to_string())
                 }
@@ -137,6 +135,10 @@ impl ValuesClient {
                 Ok(Err(error)) => return Err(broken(&error)),
                 Err(RecvTimeoutError::Timeout) => continue,
             };
+            result.payload_bytes = result.payload_bytes.saturating_add(frame.payload.len());
+            if result.payload_bytes > self.payload_budget {
+                return Err(ReadError::TooLarge);
+            }
             let (message, rows) = decode(&frame).map_err(|error| broken(&error.to_string()))?;
             if let Some(finished) = result.accept(message, rows)? {
                 return Ok(finished);
@@ -161,6 +163,7 @@ impl Drop for KillOnDrop {
 struct Collected {
     sheets: Vec<SheetValues>,
     allocated: usize,
+    payload_bytes: usize,
 }
 
 impl Collected {
@@ -185,11 +188,11 @@ impl Collected {
                 first_row,
                 first_col,
             } => {
-                self.allocated = rows
-                    .iter()
-                    .fold(self.allocated, |total, row| total.saturating_add(row.len()));
+                self.allocated = rows.iter().fold(self.allocated, |total, row| {
+                    total.saturating_add(row.len().max(1))
+                });
                 if self.allocated > MAX_ALLOCATED_CELLS {
-                    return Err(broken("more cells than the reader allows"));
+                    return Err(ReadError::TooLarge);
                 }
                 let sheet = self
                     .sheets

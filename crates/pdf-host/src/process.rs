@@ -1,5 +1,6 @@
+use std::ffi::OsString;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::Duration;
 
@@ -8,11 +9,19 @@ const KILL_WAITS: u32 = 40;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+// Helper processes are looked for next to the running exe and nowhere else, so nothing that
+// can be planted in the working directory or on the path is ever started. None when the
+// system cannot say where the exe is.
+pub fn host_next_to_exe(file: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join(file))
+}
+
 // Starts a helper process with stdin and stdout piped and no console window. Shared by every
 // helper the app talks to over frames, so they start and stop the same way.
 pub fn spawn_piped(
     path: &Path,
-    arguments: &[String],
+    arguments: &[OsString],
     environment: &[(String, String)],
 ) -> io::Result<(Child, ChildStdin, ChildStdout)> {
     let mut command = Command::new(path);

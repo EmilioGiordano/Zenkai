@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
 use std::io::{BufReader, BufWriter, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout};
@@ -10,7 +11,7 @@ use async_channel::{Receiver, Sender};
 
 use crate::codec::{Expect, decode_reply, encode_request, reply_id};
 use crate::frame::{read_frame, write_frame};
-use crate::process::{kill_and_wait, spawn_piped};
+use crate::process::{host_next_to_exe, kill_and_wait, spawn_piped};
 use crate::wire::{BrokenFile, DocId, Job, OpenError, PageContent, Reply, Request};
 
 const HOST_FILE: &str = "zenkai-pdf-host.exe";
@@ -38,7 +39,7 @@ impl Default for Deadlines {
 #[derive(Clone)]
 pub struct PdfClient {
     host: Option<PathBuf>,
-    arguments: Vec<String>,
+    arguments: Vec<OsString>,
     environment: Vec<(String, String)>,
     deadlines: Deadlines,
     running: Arc<Mutex<Option<Running>>>,
@@ -117,12 +118,8 @@ impl Link {
 }
 
 impl PdfClient {
-    // The host is looked for next to the running exe and nowhere else.
     pub fn next_to_exe() -> PdfClient {
-        let host = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(|folder| folder.join(HOST_FILE)));
-        PdfClient::new(host)
+        PdfClient::new(host_next_to_exe(HOST_FILE))
     }
 
     pub fn new(host: Option<PathBuf>) -> PdfClient {
@@ -141,7 +138,7 @@ impl PdfClient {
     }
 
     pub fn with_arguments(mut self, arguments: &[&str]) -> PdfClient {
-        self.arguments = arguments.iter().map(ToString::to_string).collect();
+        self.arguments = arguments.iter().map(OsString::from).collect();
         self
     }
 
@@ -204,7 +201,7 @@ impl PdfClient {
 
 struct Launch {
     host: Option<PathBuf>,
-    arguments: Vec<String>,
+    arguments: Vec<OsString>,
     environment: Vec<(String, String)>,
     deadlines: Deadlines,
 }

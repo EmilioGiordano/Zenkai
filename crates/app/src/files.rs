@@ -12,8 +12,9 @@ use zenkai_engine::{
 };
 use zenkai_formats::{CsvError, CsvWriter, Delimiter, ParsedCsv, parse_csv};
 use zenkai_i18n::t;
+use zenkai_pdf_host::process::host_next_to_exe;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
-use zenkai_values_host::client::{ReadError, ValuesClient};
+use zenkai_values_host::client::{HOST_FILE, ReadError, ValuesClient};
 use zenkai_values_host::wire::FailureKind;
 
 use crate::document::read_shared;
@@ -262,9 +263,10 @@ fn values_error_text(error: &ReadError) -> String {
     match error {
         ReadError::Cancelled => t!("file.values_cancelled").to_string(),
         ReadError::TimedOut => t!("file.values_timed_out").to_string(),
-        ReadError::HostMissing(_) | ReadError::StartFailed(_) => {
+        ReadError::HostMissing | ReadError::StartFailed(_) => {
             t!("file.values_host_unavailable").to_string()
         }
+        ReadError::TooLarge => t!("file.values_too_many_cells").to_string(),
         ReadError::Failed(failure) if failure.kind == FailureKind::TooLarge => {
             t!("file.values_too_many_cells").to_string()
         }
@@ -281,7 +283,7 @@ pub fn open_values(path: &Path, cancel: &AtomicBool) -> Result<Workbook, String>
     if size > MAX_VALUES_FILE_BYTES {
         return Err(t!("file.too_large", path = path.display()));
     }
-    let sheets = ValuesClient::next_to_exe()
+    let sheets = ValuesClient::new(host_next_to_exe(HOST_FILE))
         .read(path, cancel)
         .map_err(|error| values_error_text(&error))?;
     run_with_engine_stack(move || {

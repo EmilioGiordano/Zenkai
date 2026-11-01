@@ -40,6 +40,16 @@ fn main() {
             let frame = encode(&message, &[vec!["a".to_string()]]).unwrap_or_else(|_| empty());
             write_frame(&mut out, &frame).unwrap_or_default();
         }
+        "big_block" => {
+            send(&mut out, &Message::Sheet { name: "S".into() });
+            let message = Message::Block {
+                first_row: 0,
+                first_col: 0,
+            };
+            let frame = encode(&message, &[vec!["x".repeat(1000)]]).unwrap_or_else(|_| empty());
+            write_frame(&mut out, &frame).unwrap_or_default();
+            send(&mut out, &Message::Done);
+        }
         "flood" => loop {
             send(&mut out, &Message::Sheet { name: "S".into() });
         },

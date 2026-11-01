@@ -25,8 +25,10 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn client() -> ValuesClient {
-    ValuesClient::new(PathBuf::from(env!("CARGO_BIN_EXE_zenkai-values-host")))
-        .with_deadline(DEADLINE)
+    ValuesClient::new(Some(PathBuf::from(env!(
+        "CARGO_BIN_EXE_zenkai-values-host"
+    ))))
+    .with_deadline(DEADLINE)
 }
 
 fn write_temp(name: &str, bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
@@ -49,7 +51,7 @@ fn read_bytes_through_the_child(name: &str, bytes: &[u8]) -> Result<usize, ReadE
     assert!(
         !matches!(
             outcome,
-            Err(ReadError::HostMissing(_) | ReadError::StartFailed(_))
+            Err(ReadError::HostMissing | ReadError::StartFailed(_))
         ),
         "{name}: {outcome:?}"
     );
@@ -128,7 +130,7 @@ fn xls_with_a_self_looping_fat_chain() -> Vec<u8> {
 fn the_host_returns_what_the_in_process_reader_returns() {
     for name in ["issues.xls", "date.xls", "issues.ods", "unicode.xlsx"] {
         let path = fixture(name);
-        let expected = read_values(&path, &AtomicBool::new(false)).unwrap();
+        let expected = read_values(&path).unwrap();
         let received = client().read(&path, &AtomicBool::new(false)).unwrap();
         assert_eq!(received.len(), expected.len(), "{name}");
         for (got, want) in received.iter().zip(&expected) {

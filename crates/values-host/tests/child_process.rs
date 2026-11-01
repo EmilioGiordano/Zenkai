@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use zenkai_values_host::client::{ReadError, ValuesClient};
 
 fn fake(mode: &str) -> ValuesClient {
-    ValuesClient::new(PathBuf::from(env!("CARGO_BIN_EXE_fake-values-host")))
+    ValuesClient::new(Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-values-host"))))
         .with_environment("ZENKAI_FAKE_VALUES_HOST", mode)
         .with_deadline(Duration::from_secs(2))
 }
@@ -38,9 +38,24 @@ fn a_child_that_dies_or_misbehaves_is_a_broken_host_error() {
 }
 
 #[test]
+fn a_host_that_cannot_be_located_is_a_missing_host() {
+    assert!(matches!(
+        read(&ValuesClient::new(None)),
+        Err(ReadError::HostMissing)
+    ));
+}
+
+#[test]
+fn a_child_that_sends_more_bytes_than_the_budget_is_refused() {
+    let client = fake("big_block").with_payload_budget(100);
+    assert!(matches!(read(&client), Err(ReadError::TooLarge)));
+    assert_eq!(read(&fake("big_block")).unwrap(), 1);
+}
+
+#[test]
 fn a_missing_host_is_its_own_error() {
-    let client = ValuesClient::new(PathBuf::from("no-such-values-host.exe"));
-    assert!(matches!(read(&client), Err(ReadError::HostMissing(_))));
+    let client = ValuesClient::new(Some(PathBuf::from("no-such-values-host.exe")));
+    assert!(matches!(read(&client), Err(ReadError::HostMissing)));
 }
 
 #[test]
