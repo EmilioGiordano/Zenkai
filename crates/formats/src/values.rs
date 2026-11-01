@@ -1,7 +1,5 @@
 use std::panic::catch_unwind;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 use calamine::{Data, DataRef, Reader, Sheets, open_workbook_auto};
 
@@ -11,19 +9,16 @@ pub const MAX_CELLS: usize = 20_000_000;
 // global cap bounds the total; scattered cells can never inflate into dense blocks.
 const MAX_GAP: u32 = 8;
 pub const MAX_ALLOCATED_CELLS: usize = 40_000_000;
-const MAX_READ_TIME: Duration = Duration::from_secs(300);
-const CELLS_PER_STOP_CHECK: usize = 4096;
+// Excel holds 32,767 characters in a cell; this leaves room for any encoding of them.
+const MAX_CELL_BYTES: usize = 128 * 1024;
+pub const MAX_TEXT_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ValuesError {
     #[error("the file could not be read: {0}")]
     Unreadable(String),
-    #[error("the workbook has more than {MAX_CELLS} cells")]
+    #[error("the workbook has more cells or text than the reader allows")]
     TooLarge,
-    #[error("reading the file took longer than {} seconds", MAX_READ_TIME.as_secs())]
-    TimedOut,
-    #[error("reading the file was cancelled")]
-    Cancelled,
     #[error("the reader stopped on this file; the file may be damaged")]
     Panicked,
 }
@@ -72,48 +67,20 @@ fn data_ref_input(cell: &DataRef<'_>) -> String {
     }
 }
 
-struct Stop<'a> {
-    cancel: &'a AtomicBool,
-    deadline: Instant,
-}
-
-impl<'a> Stop<'a> {
-    fn new(cancel: &'a AtomicBool) -> Self {
-        Stop {
-            cancel,
-            deadline: Instant::now() + MAX_READ_TIME,
-        }
-    }
-
-    fn check(&self) -> Result<(), ValuesError> {
-        if self.cancel.load(Ordering::Relaxed) {
-            return Err(ValuesError::Cancelled);
-        }
-        if Instant::now() > self.deadline {
-            return Err(ValuesError::TimedOut);
-        }
-        Ok(())
-    }
-}
-
-struct Cells<'a> {
+struct Cells {
     cells: Vec<(u32, u32, String)>,
     total: usize,
-    pushed: usize,
-    stop: Stop<'a>,
+    bytes: usize,
 }
 
-impl Cells<'_> {
+impl Cells {
     fn push(&mut self, row: u32, col: u32, input: String) -> Result<(), ValuesError> {
-        self.pushed += 1;
-        if self.pushed.is_multiple_of(CELLS_PER_STOP_CHECK) {
-            self.stop.check()?;
-        }
         if input.is_empty() {
             return Ok(());
         }
         self.total += 1;
-        if self.total > MAX_CELLS {
+        self.bytes += input.len();
+        if self.total > MAX_CELLS || input.len() > MAX_CELL_BYTES || self.bytes > MAX_TEXT_BYTES {
             return Err(ValuesError::TooLarge);
         }
         self.cells.push((row, col, input));
@@ -128,7 +95,7 @@ fn unreadable(e: impl std::fmt::Display) -> ValuesError {
 fn sheet_cells<RS: std::io::Read + std::io::Seek>(
     workbook: &mut Sheets<RS>,
     name: &str,
-    sink: &mut Cells<'_>,
+    sink: &mut Cells,
 ) -> Result<(), ValuesError> {
     match workbook {
         Sheets::Xlsx(xlsx) => {
@@ -203,25 +170,23 @@ fn into_blocks(
     Ok(blocks)
 }
 
-// A panic inside calamine becomes an error. The closure only borrows a path and an atomic,
-// both unwind safe, and everything calamine builds is dropped with the unwind.
-pub fn read_values(path: &Path, cancel: &AtomicBool) -> Result<Vec<SheetValues>, ValuesError> {
-    catch_unwind(|| read_sheets(path, cancel)).unwrap_or(Err(ValuesError::Panicked))
+// A panic inside calamine becomes an error. The closure only borrows a path, which is unwind
+// safe, and everything calamine builds is dropped with the unwind. Cancel and the time limit
+// belong to the process that runs this, which can stop what no check in here could reach.
+pub fn read_values(path: &Path) -> Result<Vec<SheetValues>, ValuesError> {
+    catch_unwind(|| read_sheets(path)).unwrap_or(Err(ValuesError::Panicked))
 }
 
-fn read_sheets(path: &Path, cancel: &AtomicBool) -> Result<Vec<SheetValues>, ValuesError> {
-    let stop = Stop::new(cancel);
+fn read_sheets(path: &Path) -> Result<Vec<SheetValues>, ValuesError> {
     let mut workbook = open_workbook_auto(path).map_err(unreadable)?;
     let mut sheets = Vec::new();
     let mut allocated = 0usize;
     let mut sink = Cells {
         cells: Vec::new(),
         total: 0,
-        pushed: 0,
-        stop,
+        bytes: 0,
     };
     for name in workbook.sheet_names() {
-        sink.stop.check()?;
         sheet_cells(&mut workbook, &name, &mut sink)?;
         let blocks = into_blocks(
             std::mem::take(&mut sink.cells),
@@ -236,6 +201,33 @@ fn read_sheets(path: &Path, cancel: &AtomicBool) -> Result<Vec<SheetValues>, Val
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cell_over_the_byte_cap_is_refused() {
+        let mut cells = Cells {
+            cells: Vec::new(),
+            total: 0,
+            bytes: 0,
+        };
+        cells.push(0, 0, "x".repeat(MAX_CELL_BYTES)).unwrap();
+        assert!(matches!(
+            cells.push(0, 1, "x".repeat(MAX_CELL_BYTES + 1)),
+            Err(ValuesError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn text_past_the_total_byte_cap_is_refused() {
+        let mut cells = Cells {
+            cells: Vec::new(),
+            total: 0,
+            bytes: MAX_TEXT_BYTES,
+        };
+        assert!(matches!(
+            cells.push(0, 0, "x".to_string()),
+            Err(ValuesError::TooLarge)
+        ));
+    }
 
     #[test]
     fn every_text_stays_text() {

@@ -6,12 +6,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use zenkai_formats::{ValuesError, read_values};
+use zenkai_formats::read_values;
 
 #[path = "../../../test-support/xlsx_damage.rs"]
 mod xlsx_damage;
@@ -131,7 +130,7 @@ fn read_with_watchdog(extension: &'static str, bytes: Vec<u8>) {
         let folder = tempfile::tempdir().unwrap();
         let path = folder.path().join(format!("fuzzed.{extension}"));
         std::fs::write(&path, &bytes).unwrap();
-        if let Err(error) = read_values(&path, &AtomicBool::new(false)) {
+        if let Err(error) = read_values(&path) {
             assert!(!error.to_string().is_empty());
         }
         done.send(()).unwrap();
@@ -178,21 +177,15 @@ fn the_valid_inputs_read_before_any_damage() {
         ("valid.xls", std::fs::read(fixture("issues.xls")).unwrap()),
     ] {
         let (_folder, path) = write_temp(name, &bytes);
-        let sheets = read_values(&path, &AtomicBool::new(false)).unwrap();
+        let sheets = read_values(&path).unwrap();
         assert!(!sheets[0].blocks.is_empty(), "{name} read no cells");
     }
-}
-
-#[test]
-fn a_cancelled_read_stops_with_a_cancelled_error() {
-    let outcome = read_values(&fixture("issues.xls"), &AtomicBool::new(true));
-    assert!(matches!(outcome, Err(ValuesError::Cancelled)));
 }
 
 #[test]
 fn a_shared_string_index_out_of_range_is_an_error_not_a_crash() {
     let cells = vec![record(0x07, &cell(0, &99u32.to_le_bytes()))];
     let (_folder, path) = write_temp("bad_index.xlsb", &zip_of(&xlsb_parts(&cells)));
-    let outcome = read_values(&path, &AtomicBool::new(false));
+    let outcome = read_values(&path);
     assert!(outcome.is_err());
 }

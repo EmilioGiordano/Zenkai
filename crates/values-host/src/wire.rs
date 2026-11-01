@@ -10,8 +10,6 @@ pub const TARGET_ROWS_BYTES: usize = 4 * 1024 * 1024;
 pub enum FailureKind {
     Unreadable,
     TooLarge,
-    TimedOut,
-    Cancelled,
     Panicked,
 }
 
@@ -26,8 +24,6 @@ impl From<&ValuesError> for Failure {
         let kind = match error {
             ValuesError::Unreadable(_) => FailureKind::Unreadable,
             ValuesError::TooLarge => FailureKind::TooLarge,
-            ValuesError::TimedOut => FailureKind::TimedOut,
-            ValuesError::Cancelled => FailureKind::Cancelled,
             ValuesError::Panicked => FailureKind::Panicked,
         };
         Failure {

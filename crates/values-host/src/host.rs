@@ -1,6 +1,5 @@
 use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
 
 use thiserror::Error;
 use zenkai_formats::{SheetValues, read_values};
@@ -20,7 +19,7 @@ pub enum HostError {
 // client as a Failed frame; a panic inside calamine is caught by `read_values` and arrives the
 // same way. Only a failure to write the last frame is an error here.
 pub fn run(path: &Path, out: &mut impl Write) -> Result<(), HostError> {
-    let last = match read_values(path, &AtomicBool::new(false)) {
+    let last = match read_values(path) {
         Ok(sheets) => match send_sheets(&sheets, out) {
             Ok(()) => Message::Done,
             Err(error) => Message::Failed(Failure {

@@ -340,12 +340,10 @@ fn check(path: &Path) -> Row {
             }
         }
         Err(error) => {
-            let fallback =
-                zenkai_formats::read_values(path, &std::sync::atomic::AtomicBool::new(false))
-                    .map_or_else(
-                        |e| format!("no ({error}; values: {e})"),
-                        |sheets| format!("read-only values ({} sheets)", sheets.len()),
-                    );
+            let fallback = zenkai_formats::read_values(path).map_or_else(
+                |e| format!("no ({error}; values: {e})"),
+                |sheets| format!("read-only values ({} sheets)", sheets.len()),
+            );
             Row {
                 file,
                 opens: fallback,
