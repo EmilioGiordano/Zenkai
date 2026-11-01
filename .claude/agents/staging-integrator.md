@@ -45,7 +45,7 @@ You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` an
    workspace excludes, for each crate present under `vendor/` (`ironcalc_base`, and
    `ironcalc` once it exists): `cargo test --manifest-path vendor/<crate>/Cargo.toml`.
 6. Run the benchmark in `bench/` (release) when any merged branch touched `crates/engine`,
-   `crates/grid`, `crates/formats` or `bench/`, as `README.md` documents it, and compare it
+   `crates/grid`, `crates/formats` or `bench/`, as `docs/DEVELOPMENT.md` documents it, and compare it
    with the saved baseline and the SPEC budgets.
 7. Copy `target\release\zenkai.exe` to `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`,
    overwriting: from the staging target dir, or from the branch's own target dir in the

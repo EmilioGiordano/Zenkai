@@ -47,7 +47,7 @@ Hard rules for the whole run:
    `cargo deny check`, `cargo build --release`, then the vendor suites the workspace
    excludes, for each crate present under `vendor/` (`ironcalc_base`, and `ironcalc` once
    it exists): `cargo test --manifest-path vendor/<crate>/Cargo.toml`. Plus the benchmark in
-   `bench/` (release, as `README.md` documents it) when a merged branch touches
+   `bench/` (release, as `docs/DEVELOPMENT.md` documents it) when a merged branch touches
    `crates/engine`, `crates/grid`, `crates/formats` or `bench/`.
 5. Copy the release exe to `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`,
    overwriting. If the file is locked, report it and stop; never kill the

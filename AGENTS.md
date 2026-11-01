@@ -41,7 +41,7 @@ Design principle: reinvent nothing. Shortcuts, menu names, selection, formula er
 - A UI task gets a design artifact approved before implementation.
 - If an engine or GPUI limitation blocks a requirement: stop and report it with
   alternatives. Never work around it silently.
-- Keep `README.md` current with how to build, test and run the benchmark on Windows.
+- Keep `docs/DEVELOPMENT.md` current with how to build, test and run the benchmark.
 
 ## Architecture
 
