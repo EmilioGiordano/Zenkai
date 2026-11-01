@@ -151,28 +151,49 @@ Never comments that narrate the code, decorative section headers or commented-ou
   is not visible in the diff: a subtle bug, a counterintuitive decision, a measurement
   behind the change.
 
+Good subjects: `Give every save attempt its own temp file name`, `Add cancellation to the
+streaming xlsx reader`, `Index exact lookups over cells without formulas during an
+evaluation`. Bad: `Update files`, `Implement phase 2` (too big), `Fixed bug in grid.` (past
+tense, vague, trailing period).
+
 ## Branches
 - Never commit to `main`. Every task starts on a new branch.
 - One branch per feature or logical change. Group only changes that are related;
   never several unrelated features on one branch.
-- Names: `feat/<topic>`, `fix/<topic>`, `perf/<topic>`, `test/<topic>`, `chore/<topic>`.
+- Names: `feat/<topic>`, `fix/<topic>`, `perf/<topic>`, `test/<topic>`, `chore/<topic>`,
+  for example `fix/stale-save-temp`, `feat/open-cancel`, `perf/lookup-cache`.
 - Agents never push or open PRs; the human who owns the checkout does. Merging needs the
   maintainer's explicit approval.
-
-Good subjects: `Add atomic save with temp file swap`, `Fix range selection past frozen panes`,
-`Cache visible range values in grid`. Bad: `Update files`, `Implement phase 2` (too big),
-`Fixed bug in grid.` (past tense, vague, trailing period).
 
 ## Pull requests
 
 All text is English and never contains the middle dot character.
 
 - **Title:** `<type>: <imperative summary>`, type one of feat, fix, perf, chore, test, docs;
-  at most 72 characters, no trailing period, ` (N/M)` appended for stacked PRs.
+  at most 72 characters, no trailing period, ` (N/M)` appended for stacked PRs. For
+  example `fix: give every save attempt its own temp file name`, `perf: index exact
+  lookups during an evaluation`, `fix: ask before replacing an existing csv or tsv (2/2)`.
 - **Body:** `## Why` (1 or 2 sentences), `## What` (2 to 5 bullets), `## Decisions`
   (optional: choice and reason), `## Validation` (tests, CI result, what was not
   verified), and, when stacked, `Stacked on #N`. At most 40 lines.
   `scripts/pr/lint.sh` checks it.
+
+A body from the history (#222, with the maintainer's staging lines left out):
+
+```markdown
+## Why
+A save that failed or was killed could leave its temp file, and the next save reused the
+same name and collided (#89).
+
+## What
+- Give every save attempt its own temp file name.
+- Tests that hit the old collision, with temp names counted per test thread.
+
+## Validation
+- Cross-model review asked for tests that really hit the collision; fixed in 662e3372 and
+  7eb4e61c.
+- Cleaning temps left by a killed process stays in #208.
+```
 
 ## Validation
 

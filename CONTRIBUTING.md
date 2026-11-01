@@ -75,10 +75,13 @@ assistant wrote, and must be able to explain it in review.
 ## Pull requests
 
 - One branch per change. Name it `feat/<topic>`, `fix/<topic>`, `perf/<topic>`,
-  `test/<topic>` or `chore/<topic>`.
-- Commits are small, in English and imperative (`Fix range selection past frozen panes`).
+  `test/<topic>` or `chore/<topic>`, for example `fix/stale-save-temp` or
+  `feat/open-cancel`.
+- Commits are small, in English and imperative, for example `Give every save attempt its
+  own temp file name` or `Add cancellation to the streaming xlsx reader`.
 - The PR title is `<type>: <imperative summary>`, with type one of feat, fix, perf, chore,
-  test or docs, at most 72 characters and no trailing period.
+  test or docs, at most 72 characters and no trailing period, for example
+  `fix: give every save attempt its own temp file name`.
 - The body has `## Why`, `## What`, an optional `## Decisions` and `## Validation`
-  (what you ran and what you did not verify).
+  (what you ran and what you did not verify). AGENTS.md has an example body.
 - CI must be green. The maintainer reviews every PR and merges it.
