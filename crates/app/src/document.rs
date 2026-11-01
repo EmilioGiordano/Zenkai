@@ -540,13 +540,16 @@ pub enum ChangedFile {
 }
 
 // A base other than the target is only read from, and a target that no longer exists holds
-// nothing to lose, so writing the target whole is safe. The target itself as a changed or
+// nothing to lose, so writing the target whole is safe. A base that is gone, such as the
+// recovery copy a restored workbook stood on before it was moved under the session's name,
+// cannot be the target that is still there. The target itself as a changed or
 // unusable base may hold another program's work: like Excel, a save asks before replacing it.
 fn retries_whole(error: &EngineError, target: &Path, changed: ChangedFile) -> bool {
     match error {
         EngineError::ChangedOnDisk(base) | EngineError::BaseUnusable { path: base, .. } => {
             changed == ChangedFile::Replace
                 || matches!(target.try_exists(), Ok(false))
+                || matches!(base.try_exists(), Ok(false))
                 || !files::same_file(base, target, files::Unresolved::AssumeSame)
         }
         _ => false,
@@ -1130,6 +1133,84 @@ mod tests {
         );
         assert!(matches!(replaced, Ok(DocumentSave::Written { .. })));
         assert_eq!(saved_text(&target), "mine");
+    }
+
+    // A workbook restored from a recovery copy whose file was then moved under the session's
+    // own name, with the target as the user's file left alone or changed since.
+    fn restored_from_a_moved_copy(
+        dir: &Path,
+        target: &Path,
+    ) -> (RwLock<Workbook>, crate::entry::FileSeen) {
+        let copy = dir.join("autosave-old.xlsx");
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_input(SheetId(0), CellPos::default(), "first")
+            .unwrap();
+        zenkai_engine::save_xlsx(book.save_snapshot(target, SaveTarget::Document).unwrap())
+            .unwrap();
+        let seen = crate::entry::FileSeen {
+            stamp: None,
+            at: Stamp::of(target).unwrap().modified(),
+        };
+        book.set_input(SheetId(0), CellPos::default(), "mine")
+            .unwrap();
+        zenkai_engine::save_xlsx(book.save_snapshot(&copy, SaveTarget::Copy).unwrap()).unwrap();
+        let shared = RwLock::new(zenkai_engine::open_xlsx(&copy).unwrap().workbook);
+        std::fs::rename(&copy, dir.join("autosave-7.xlsx")).unwrap();
+        (shared, seen)
+    }
+
+    #[test]
+    fn a_restored_workbook_saves_in_place_when_its_file_is_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let (shared, seen) = restored_from_a_moved_copy(dir.path(), &target);
+        let saved = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            Some(seen),
+            zenkai_engine::save_xlsx,
+        );
+        assert!(
+            matches!(saved, Ok(DocumentSave::Written { .. })),
+            "{saved:?}"
+        );
+        assert_eq!(saved_text(&target), "mine");
+    }
+
+    #[test]
+    fn a_restored_workbook_asks_when_its_file_changed_in_between() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        let (shared, seen) = restored_from_a_moved_copy(dir.path(), &target);
+        std::fs::File::options()
+            .write(true)
+            .open(&target)
+            .unwrap()
+            .set_modified(seen.at + Duration::from_secs(5))
+            .unwrap();
+        let asked = save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            Some(seen),
+            zenkai_engine::save_xlsx,
+        );
+        assert_eq!(asked.unwrap(), DocumentSave::BaseChanged);
+        assert_eq!(saved_text(&target), "first");
+    }
+
+    #[test]
+    fn a_base_that_is_gone_is_replaced_without_asking() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        std::fs::write(&target, b"x").unwrap();
+        let gone = dir.path().join("autosave-old.xlsx");
+        assert!(retries_whole(&unusable(&gone), &target, ChangedFile::Ask));
+        let changed = EngineError::ChangedOnDisk(gone);
+        assert!(retries_whole(&changed, &target, ChangedFile::Ask));
     }
 
     #[test]
