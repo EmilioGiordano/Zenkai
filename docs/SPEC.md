@@ -358,7 +358,49 @@ pesado corre a la vez en la máquina.
 - Una sola versión del proyecto, en `[workspace.package]` del `Cargo.toml` raíz; todos los crates la heredan. Un solo cambio actualiza la versión en todas partes.
 - La app muestra la versión en Acerca de (About) y, si el binario acepta argumentos, en `--version`.
 - Un tag `v*` dispara un workflow que compila los binarios en release para Windows, Linux y macOS y los adjunta a un release de GitHub. Las notas del release son la sección de esa versión en `CHANGELOG.md`.
-- El binario de Windows no está firmado.
+- El binario de Windows no está firmado con Authenticode.
+
+### Actualizaciones
+
+Mockups aprobados en `docs/design/auto-update/`. La v0.1.0 ya sale con este actualizador, para que nadie tenga que actualizar a mano después.
+
+**Búsqueda**
+
+- Al abrir, como máximo una vez por día, en segundo plano, la app pide la lista de releases de GitHub. Se ignoran borradores y prereleases, y solo cuenta una versión estrictamente mayor que la instalada.
+- Activada por defecto, con un interruptor en Settings > About que explica que GitHub ve la IP y que no se envía nada más. El README también lo dice. Sin cuenta ni telemetría.
+- La búsqueda automática que falla no muestra nada, solo deja un log: trabajar sin conexión es normal. La acción "Check for Updates", en About y en la paleta, sí informa si no hay nada nuevo o si falló.
+- Por cada versión se avisa una sola vez. Con "Later" no se vuelve a avisar en esa sesión.
+
+**Descarga e integridad (Windows)**
+
+- La descarga empieza solo con "Update now", en segundo plano y cancelable, sin bloquear la UI.
+- Cada zip de release lleva una firma minisign. La clave pública va dentro de la app y la privada en un secreto de GitHub, con una copia offline del mantenedor. Perder la clave deja a las versiones instaladas sin actualización automática.
+- La firma cubre también la versión y la plataforma, para que un zip viejo y bien firmado no se pueda usar para bajar de versión. Lo que no verifica se borra y no se instala nada.
+- La respuesta de GitHub, el zip y las notas son datos no confiables: límites de tamaño y de tiempo, y al extraer solo se aceptan los nombres esperados, sin rutas.
+
+**Reemplazo y reinicio**
+
+- "Restart now" pasa por el cierre normal de la app, con su aviso de guardar. Si se cancela, sigue abierta y la actualización espera. Nunca se reinicia durante un guardado.
+- Todos los archivos del programa se reemplazan juntos. Los anteriores quedan como `.old` hasta que la versión nueva confirma que arrancó; si no lo confirma, se restauran y vuelve a abrir la anterior. Las sesiones, los ajustes y los documentos no se tocan.
+- Sin permiso de escritura en la carpeta, por ejemplo instalado para todos los usuarios, o si un archivo no se puede reemplazar, se avisa y no queda nada a medias. El caso sin permiso ofrece abrir la página de Releases.
+- Linux y macOS: solo el aviso, con un botón a la página de Releases.
+
+**What's new**
+
+- Se abre como pestaña Markdown de solo lectura, con las notas de todas las versiones entre la instalada y la última, la más nueva arriba, y "Update now" si queda algo por instalar. El origen es el texto de cada release, que sale de `CHANGELOG.md`, y se guarda al encontrar la actualización para poder leerlo sin conexión.
+- Ese Markdown no carga imágenes remotas ni archivos locales. Sus links abren solo `https` en el navegador, con un clic.
+
+**Plan de ramas**
+
+| # | Rama | Qué entrega |
+|---|---|---|
+| 1 | `chore/release-signing` | El workflow firma cada zip con minisign y adjunta las firmas. |
+| 2 | `feat/update-check` | Búsqueda, comparación de versiones, aviso, ajustes y Check for Updates. Sale al navegador; no instala nada. |
+| 3 | `feat/update-notes` | Pestaña What's new. |
+| 4 | `feat/update-download` | Descarga cancelable y verificación de la firma, con claves de prueba en los tests. |
+| 5 | `feat/update-install` | Reemplazo, reinicio y restauración. Prueba completa entre dos versiones de prueba, con firma alterada y fallo a mitad del reemplazo. |
+
+Las ramas 1, 4 y 5 cambian E/S de archivos y un límite de seguridad: llevan revisión de otro modelo.
 
 ## Proceso de trabajo para el agente
 
