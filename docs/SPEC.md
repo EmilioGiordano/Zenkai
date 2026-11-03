@@ -377,7 +377,7 @@ Mockups aprobados en `docs/design/auto-update/`. La v0.1.0 ya sale con este actu
 - Cada zip lleva una firma minisign cuyo comentario de confianza es `zenkai/<versión>/<plataforma>`. Se verifica con `minisign-verify`, incluida la firma global que cubre ese comentario.
 - La app lleva dos claves públicas: la actual y la siguiente. Las dos privadas tienen copia offline del mantenedor, y solo la actual está en un secreto de GitHub. Si la actual se filtra, se publica una versión firmada con la siguiente, que trae un par nuevo. Si se pierden las dos, las versiones instaladas se quedan sin actualización automática.
 - El secreto vive en un Environment de GitHub con aprobación manual, limitado a tags. Firma un job propio que no compila ni corre código de dependencias: solo baja los artefactos de los builds y los firma. pdfium se baja con checksum fijado.
-- Antes de mergear `feat/update-download` deben estar generadas las claves, sus copias offline y este procedimiento. Lo que trae la v0.1.0 ya no se puede cambiar sin pasar por una actualización.
+- El desarrollo no necesita las claves reales: los tests y las pruebas entre versiones usan claves de prueba, y sin una clave real compilada no se instala ninguna actualización. Antes del tag v0.1.0 deben estar generadas las claves, sus copias offline y este procedimiento. Lo que trae la v0.1.0 ya no se puede cambiar sin pasar por una actualización.
 
 **Descarga y verificación (Windows)**
 
@@ -407,11 +407,11 @@ Mockups aprobados en `docs/design/auto-update/`. La v0.1.0 ya sale con este actu
 
 | # | Rama | Qué entrega |
 |---|---|---|
-| 1 | `chore/release-signing` | Job de firma aislado con Environment, firmas con versión y plataforma, y el procedimiento de claves. |
-| 2 | `feat/update-check` | Búsqueda, comparación de versiones, aviso, ajustes y Check for Updates, con la nueva dependencia HTTP en `deny.toml`. Sale al navegador; no instala nada. |
-| 3 | `feat/update-notes` | Pestaña What's new con su modo restringido. |
-| 4 | `feat/update-download` | Descarga cancelable, verificación y extracción. Pruebas: zip viejo, de otra plataforma, byte alterado, entradas hostiles y bomba de compresión. |
-| 5 | `feat/update-install` | Reemplazo, reinicio y restauración. Prueba completa entre dos versiones de prueba, con un fallo inyectado después de cada renombre, un archivo bloqueado y una versión que no arranca. |
+| 1 | `feat/update-check` | Búsqueda, comparación de versiones, aviso, ajustes y Check for Updates, con la nueva dependencia HTTP en `deny.toml`. Sale al navegador; no instala nada. |
+| 2 | `feat/update-notes` | Pestaña What's new con su modo restringido. |
+| 3 | `feat/update-download` | Descarga cancelable, verificación y extracción. Pruebas: zip viejo, de otra plataforma, byte alterado, entradas hostiles y bomba de compresión. |
+| 4 | `feat/update-install` | Reemplazo, reinicio y restauración. Prueba completa entre dos versiones de prueba, con un fallo inyectado después de cada renombre, un archivo bloqueado y una versión que no arranca. |
+| 5 | `chore/release-signing` | Job de firma aislado con Environment, firmas con versión y plataforma, claves reales y su procedimiento. Última antes del tag v0.1.0. |
 
 Las cinco ramas llevan revisión de otro modelo: tocan la primera conexión de red propia de la app, E/S de archivos o un límite de seguridad.
 
