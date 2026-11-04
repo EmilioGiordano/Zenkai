@@ -22,15 +22,27 @@ pub fn run(path: &Path, out: &mut impl Write) -> Result<(), HostError> {
     let last = match read_values(path) {
         Ok(sheets) => match send_sheets(&sheets, out) {
             Ok(()) => Message::Done,
-            Err(error) => Message::Failed(Failure {
-                kind: FailureKind::Unreadable,
-                detail: error.to_string(),
-            }),
+            Err(error) => Message::Failed(send_failure(&error)),
         },
         Err(error) => Message::Failed(Failure::from(&error)),
     };
     write_frame(out, &encode(&last, &[])?)?;
     Ok(())
+}
+
+// A row or a sheet name too big for a frame is a workbook the reader cannot carry, which the
+// user is told as too large; nothing of the frame was written, so the stream stays valid.
+fn send_failure(error: &HostError) -> Failure {
+    let kind = match error {
+        HostError::Frame(FrameError::PayloadTooLarge(_) | FrameError::HeaderTooLarge(_)) => {
+            FailureKind::TooLarge
+        }
+        _ => FailureKind::Unreadable,
+    };
+    Failure {
+        kind,
+        detail: error.to_string(),
+    }
 }
 
 fn send_sheets(sheets: &[SheetValues], out: &mut impl Write) -> Result<(), HostError> {
@@ -61,4 +73,31 @@ fn send_sheets(sheets: &[SheetValues], out: &mut impl Write) -> Result<(), HostE
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_over_its_limit_is_reported_as_too_large() {
+        for error in [
+            FrameError::PayloadTooLarge(1),
+            FrameError::HeaderTooLarge(1),
+        ] {
+            assert_eq!(send_failure(&error.into()).kind, FailureKind::TooLarge);
+        }
+        let other = FrameError::BadMagic;
+        assert_eq!(send_failure(&other.into()).kind, FailureKind::Unreadable);
+    }
+
+    #[test]
+    fn a_sheet_name_over_the_header_limit_ends_in_a_too_large_failure() {
+        let sheets = vec![SheetValues {
+            name: "n".repeat(zenkai_pdf_host::frame::MAX_HEADER_BYTES + 1),
+            blocks: Vec::new(),
+        }];
+        let error = send_sheets(&sheets, &mut Vec::new()).unwrap_err();
+        assert_eq!(send_failure(&error).kind, FailureKind::TooLarge);
+    }
 }
