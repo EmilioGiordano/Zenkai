@@ -122,6 +122,9 @@ fn main() {
             updates::init(cx);
             settings_window::register_agent_actions(cx);
             cx.on_action(|_: &actions::OpenSettings, cx| settings_window::open(cx));
+            cx.on_action(|_: &actions::CheckForUpdates, cx| {
+                updates::check(cx, updates::Source::Palette)
+            });
             cx.on_action(|_: &actions::InterfaceLarger, cx| interface_scale::larger(cx));
             cx.on_action(|_: &actions::InterfaceSmaller, cx| interface_scale::smaller(cx));
             cx.on_action(|_: &actions::InterfaceReset, cx| interface_scale::reset(cx));
