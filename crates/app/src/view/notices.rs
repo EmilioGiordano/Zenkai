@@ -26,9 +26,16 @@ pub(super) enum Lifetime {
     UntilOpen,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum NoticeKind {
+    Plain,
+    UpdateAvailable,
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Notice {
     id: u64,
+    pub kind: NoticeKind,
     pub severity: Severity,
     pub text: SharedString,
     detail: Option<SharedString>,
@@ -76,9 +83,34 @@ impl Notices {
         lifetime: Lifetime,
         time: SharedString,
     ) -> u64 {
+        self.push(NoticeKind::Plain, severity, text, detail, lifetime, time)
+    }
+
+    // An informational notice that still gets a card, because it carries buttons.
+    pub fn post_update_available(&mut self, text: SharedString, time: SharedString) -> u64 {
+        self.push(
+            NoticeKind::UpdateAvailable,
+            Severity::Info,
+            text,
+            None,
+            Lifetime::UntilReplaced,
+            time,
+        )
+    }
+
+    fn push(
+        &mut self,
+        kind: NoticeKind,
+        severity: Severity,
+        text: SharedString,
+        detail: Option<SharedString>,
+        lifetime: Lifetime,
+        time: SharedString,
+    ) -> u64 {
         let id = self.next_id;
         let notice = Notice {
             id,
+            kind,
             severity,
             text,
             detail,
@@ -90,7 +122,7 @@ impl Notices {
             self.history.pop_front();
         }
         self.history.push_back(notice.clone());
-        if severity != Severity::Info {
+        if severity != Severity::Info || kind == NoticeKind::UpdateAvailable {
             self.card = Some(notice.clone());
         }
         self.status = Some(notice);
@@ -168,7 +200,7 @@ impl Notices {
 
 #[cfg(test)]
 mod tests {
-    use super::{Expiry, HISTORY_LIMIT, Lifetime, Notices, Severity};
+    use super::{Expiry, HISTORY_LIMIT, Lifetime, NoticeKind, Notices, Severity};
 
     fn post(notices: &mut Notices, severity: Severity, text: &str, lifetime: Lifetime) -> u64 {
         notices.post(
@@ -318,6 +350,33 @@ a.xlsx: Access denied (os error 5)",
         assert_eq!(
             notices.status().map(|n| n.text.to_string()).as_deref(),
             Some("Saved")
+        );
+    }
+
+    #[test]
+    fn an_update_notice_gets_a_card_that_never_times_out() {
+        let mut notices = Notices::default();
+        let id = notices.post_update_available("Zenkai 0.1.1".into(), "12:00:00".into());
+        let card = notices.card().unwrap();
+        assert_eq!(card.kind, NoticeKind::UpdateAvailable);
+        assert_eq!(card.severity, Severity::Info);
+        assert_eq!(notices.expire_warning(id, false), Expiry::Gone);
+        assert!(notices.card().is_some());
+    }
+
+    #[test]
+    fn an_info_notice_after_an_update_notice_keeps_the_card() {
+        let mut notices = Notices::default();
+        notices.post_update_available("Zenkai 0.1.1".into(), "12:00:00".into());
+        post(
+            &mut notices,
+            Severity::Info,
+            "Saved",
+            Lifetime::UntilReplaced,
+        );
+        assert_eq!(
+            notices.card().map(|n| n.kind),
+            Some(NoticeKind::UpdateAvailable)
         );
     }
 

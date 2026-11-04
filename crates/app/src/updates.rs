@@ -35,7 +35,7 @@ pub enum Report {
     Failed,
 }
 
-struct Updates {
+pub struct Updates {
     record: Record,
     status: Status,
     silenced_this_session: bool,

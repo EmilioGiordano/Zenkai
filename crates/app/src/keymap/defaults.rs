@@ -268,6 +268,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("escape", DismissNotice, CONTEXT),
         bind("escape", CancelOpen, Some("Workspace && Opening")),
         bind("ctrl-c", CopyNotice, Some("NoticeCard")),
+        bind("alt-u", UpdateNow, Some("NoticeCard")),
         bind("ctrl-shift-j", ShowMessages, CONTEXT),
         bind("escape", CloseMessages, Some("MessagesPanel")),
         bind("down", NextMessage, Some("MessagesPanel")),
