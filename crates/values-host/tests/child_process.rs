@@ -28,13 +28,29 @@ fn a_child_that_finishes_gives_its_result() {
 
 #[test]
 fn a_child_that_dies_or_misbehaves_is_a_broken_host_error() {
-    for mode in ["abort", "exit", "garbage", "block_without_sheet", "flood"] {
+    for mode in [
+        "abort",
+        "exit",
+        "garbage",
+        "block_without_sheet",
+        "empty_block",
+        "flood",
+    ] {
         let outcome = read(&fake(mode));
         assert!(
             matches!(outcome, Err(ReadError::HostBroken(_))),
             "{mode}: {outcome:?}"
         );
     }
+}
+
+#[test]
+fn a_host_that_aborts_fails_only_its_own_read() {
+    assert!(matches!(
+        read(&fake("abort")),
+        Err(ReadError::HostBroken(_))
+    ));
+    assert_eq!(read(&fake("done")).unwrap(), 0);
 }
 
 #[test]
