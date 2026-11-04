@@ -105,8 +105,12 @@ pub fn silence_for_session(cx: &mut App) {
     cx.update_global::<Updates, _>(|updates, _| updates.silenced_this_session = true);
 }
 
+// Called from an observer of `Updates`: updating the global when there is nothing to take would
+// notify that observer again, forever, and freeze the app at startup.
 pub fn take_report(cx: &mut App) -> Option<Report> {
-    cx.update_global::<Updates, _>(|updates, _| updates.report.take())
+    let report = cx.global::<Updates>().report?;
+    cx.update_global::<Updates, _>(|updates, _| updates.report = None);
+    Some(report)
 }
 
 pub fn check(cx: &mut App, source: Source) {
