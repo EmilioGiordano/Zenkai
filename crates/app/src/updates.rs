@@ -19,7 +19,7 @@ pub const RELEASES_PAGE: &str = "https://github.com/EmilioGiordano/Zenkai/releas
 impl Global for Updates {}
 
 pub fn init(cx: &mut App) {
-    cx.set_global(Updates::new());
+    cx.set_global(Updates::default());
     cx.observe_global::<AgentConfig>(start_if_ready).detach();
     cx.spawn(async move |cx| {
         let record = cx

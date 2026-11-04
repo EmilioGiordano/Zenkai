@@ -49,8 +49,8 @@ pub struct Updates {
     source: Source,
 }
 
-impl Updates {
-    pub fn new() -> Updates {
+impl Default for Updates {
+    fn default() -> Updates {
         Updates {
             record: Record::default(),
             report: None,
@@ -61,7 +61,9 @@ impl Updates {
             source: Source::Startup,
         }
     }
+}
 
+impl Updates {
     pub fn startup_pending(&self) -> bool {
         self.record_loaded && !self.startup_decided
     }
@@ -175,7 +177,7 @@ mod tests {
     }
 
     fn loaded(record: Record) -> Updates {
-        let mut updates = Updates::new();
+        let mut updates = Updates::default();
         updates.load_record(record, installed());
         updates
     }
@@ -200,7 +202,7 @@ mod tests {
 
     #[test]
     fn the_startup_check_waits_for_the_settings_and_the_record() {
-        let mut updates = Updates::new();
+        let mut updates = Updates::default();
         assert_eq!(updates.startup_check(ON, Some(100)), StartupCheck::Wait);
         updates.load_record(Record::default(), installed());
         assert_eq!(
