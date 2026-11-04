@@ -1,9 +1,13 @@
 use std::fmt;
 
 use serde::Deserialize;
+use serde::de::{
+    DeserializeSeed, Deserializer, Error as _, IgnoredAny, MapAccess, SeqAccess, Visitor,
+};
 
 const MAX_TAG_BYTES: usize = 24;
 const MAX_COMPONENT_DIGITS: usize = 9;
+const MAX_RELEASES: usize = 100;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Version {
@@ -50,28 +54,233 @@ fn component(text: &str) -> Option<u32> {
     if plain { text.parse().ok() } else { None }
 }
 
-#[derive(Deserialize)]
-struct RawRelease {
-    tag_name: Option<String>,
-    draft: Option<bool>,
-    prerelease: Option<bool>,
-}
-
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 #[error("the response is not a list of releases")]
 pub struct NotAReleaseList;
 
-// A malformed element is skipped instead of failing the list, so one odd release can never
-// hide a newer one.
+// The list is read as a stream that keeps only the best stable version, never as a tree, and
+// only its first MAX_RELEASES elements. An element that is not a release is skipped, so one
+// odd release cannot hide a newer one.
 pub fn newest_stable(body: &[u8]) -> Result<Option<Version>, NotAReleaseList> {
-    let elements: Vec<serde_json::Value> =
-        serde_json::from_slice(body).map_err(|_| NotAReleaseList)?;
-    Ok(elements
-        .into_iter()
-        .filter_map(|element| serde_json::from_value::<RawRelease>(element).ok())
-        .filter(|release| release.draft != Some(true) && release.prerelease != Some(true))
-        .filter_map(|release| Version::parse_tag(&release.tag_name?))
-        .max())
+    let mut scan = Scan::default();
+    let mut deserializer = serde_json::Deserializer::from_slice(body);
+    let read = ReleaseList(&mut scan)
+        .deserialize(&mut deserializer)
+        .and_then(|()| deserializer.end());
+    match read {
+        Ok(()) => Ok(scan.newest),
+        Err(_) if scan.capped => Ok(scan.newest),
+        Err(_) => Err(NotAReleaseList),
+    }
+}
+
+#[derive(Default)]
+struct Scan {
+    newest: Option<Version>,
+    seen: usize,
+    capped: bool,
+}
+
+struct ReleaseList<'a>(&'a mut Scan);
+
+impl<'de> DeserializeSeed<'de> for ReleaseList<'_> {
+    type Value = ();
+
+    fn deserialize<D: Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for ReleaseList<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a list of releases")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        while let Some(Element(stable)) = seq.next_element::<Element>()? {
+            if self.0.seen == MAX_RELEASES {
+                self.0.capped = true;
+                return Err(A::Error::custom("more releases than are read"));
+            }
+            self.0.seen += 1;
+            self.0.newest = self.0.newest.max(stable);
+        }
+        Ok(())
+    }
+}
+
+// The version of a release that is neither a draft nor a prerelease, if its tag is valid.
+struct Element(Option<Version>);
+
+impl<'de> Deserialize<'de> for Element {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Element, D::Error> {
+        deserializer.deserialize_any(ElementVisitor)
+    }
+}
+
+struct ElementVisitor;
+
+macro_rules! not_a_release {
+    ($($method:ident($argument:ty)),+) => {
+        $(
+            fn $method<E>(self, _: $argument) -> Result<Element, E> {
+                Ok(Element(None))
+            }
+        )+
+    };
+}
+
+impl<'de> Visitor<'de> for ElementVisitor {
+    type Value = Element;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a release")
+    }
+
+    not_a_release!(
+        visit_bool(bool),
+        visit_i64(i64),
+        visit_u64(u64),
+        visit_f64(f64),
+        visit_str(&str)
+    );
+
+    fn visit_unit<E>(self) -> Result<Element, E> {
+        Ok(Element(None))
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Element, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(Element(None))
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Element, A::Error> {
+        let mut tag = None;
+        let mut draft = false;
+        let mut prerelease = false;
+        // A flag that is present but not a boolean is not trusted: the release is skipped.
+        let mut flags_are_booleans = true;
+        while let Some(field) = map.next_key::<Field>()? {
+            match field {
+                Field::TagName => {
+                    if let Scalar::Text(version) = map.next_value()? {
+                        tag = version;
+                    }
+                }
+                Field::Draft | Field::Prerelease => {
+                    let flag = match map.next_value()? {
+                        Scalar::Flag(flag) => flag,
+                        _ => {
+                            flags_are_booleans = false;
+                            false
+                        }
+                    };
+                    if field == Field::Draft {
+                        draft = flag;
+                    } else {
+                        prerelease = flag;
+                    }
+                }
+                Field::Other => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        let stable = flags_are_booleans && !draft && !prerelease;
+        Ok(Element(tag.filter(|_| stable)))
+    }
+}
+
+#[derive(PartialEq, Eq)]
+enum Field {
+    TagName,
+    Draft,
+    Prerelease,
+    Other,
+}
+
+impl<'de> Deserialize<'de> for Field {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Field, D::Error> {
+        deserializer.deserialize_identifier(FieldVisitor)
+    }
+}
+
+struct FieldVisitor;
+
+impl Visitor<'_> for FieldVisitor {
+    type Value = Field;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a field name")
+    }
+
+    fn visit_str<E>(self, name: &str) -> Result<Field, E> {
+        Ok(match name {
+            "tag_name" => Field::TagName,
+            "draft" => Field::Draft,
+            "prerelease" => Field::Prerelease,
+            _ => Field::Other,
+        })
+    }
+}
+
+// The value of a field: a tag text is parsed on the spot, so a long string is never kept.
+enum Scalar {
+    Text(Option<Version>),
+    Flag(bool),
+    Other,
+}
+
+impl<'de> Deserialize<'de> for Scalar {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Scalar, D::Error> {
+        deserializer.deserialize_any(ScalarVisitor)
+    }
+}
+
+struct ScalarVisitor;
+
+impl<'de> Visitor<'de> for ScalarVisitor {
+    type Value = Scalar;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("a value")
+    }
+
+    fn visit_str<E>(self, text: &str) -> Result<Scalar, E> {
+        Ok(Scalar::Text(Version::parse_tag(text)))
+    }
+
+    fn visit_bool<E>(self, flag: bool) -> Result<Scalar, E> {
+        Ok(Scalar::Flag(flag))
+    }
+
+    fn visit_i64<E>(self, _: i64) -> Result<Scalar, E> {
+        Ok(Scalar::Other)
+    }
+
+    fn visit_u64<E>(self, _: u64) -> Result<Scalar, E> {
+        Ok(Scalar::Other)
+    }
+
+    fn visit_f64<E>(self, _: f64) -> Result<Scalar, E> {
+        Ok(Scalar::Other)
+    }
+
+    fn visit_unit<E>(self) -> Result<Scalar, E> {
+        Ok(Scalar::Other)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Scalar, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(Scalar::Other)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Scalar, A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(Scalar::Other)
+    }
 }
 
 pub fn newer_than(newest: Option<Version>, installed: Version) -> Option<Version> {
@@ -192,6 +401,48 @@ mod tests {
         assert_eq!(newest_stable(body), Ok(Some(version(0, 1, 1))));
     }
 
+    #[test]
+    fn a_flag_that_is_not_a_boolean_skips_the_release() {
+        let body = br#"[
+            {"tag_name":"v9.0.0","draft":"no"},
+            {"tag_name":"v8.0.0","prerelease":null},
+            {"tag_name":"v0.2.0","draft":false}
+        ]"#;
+        assert_eq!(newest_stable(body), Ok(Some(version(0, 2, 0))));
+    }
+
+    #[test]
+    fn nested_values_in_unknown_fields_are_skipped() {
+        let body = br#"[{"assets":[{"a":[1,2,{"b":null}]}],"body":"x","tag_name":"v0.3.0","author":{"id":1}}]"#;
+        assert_eq!(newest_stable(body), Ok(Some(version(0, 3, 0))));
+    }
+
+    #[test]
+    fn only_the_first_hundred_releases_are_read() {
+        let mut elements: Vec<String> = (0..super::MAX_RELEASES)
+            .map(|_| r#"{"tag_name":"v0.1.1"}"#.to_string())
+            .collect();
+        elements.push(r#"{"tag_name":"v9.9.9"}"#.to_string());
+        let body = format!("[{}]", elements.join(","));
+        assert_eq!(newest_stable(body.as_bytes()), Ok(Some(version(0, 1, 1))));
+    }
+
+    #[test]
+    fn a_huge_tag_text_is_ignored() {
+        let body = format!(r#"[{{"tag_name":"v{}"}}]"#, "1".repeat(100_000));
+        assert_eq!(newest_stable(body.as_bytes()), Ok(None));
+    }
+
+    #[test]
+    fn text_after_the_list_is_an_error() {
+        assert_eq!(newest_stable(b"[] x"), Err(NotAReleaseList));
+    }
+
+    #[test]
+    fn hostile_nesting_is_an_error_not_a_crash() {
+        let body = format!("[{}]", "[".repeat(10_000));
+        assert_eq!(newest_stable(body.as_bytes()), Err(NotAReleaseList));
+    }
     #[test]
     fn an_empty_list_has_no_newest() {
         assert_eq!(newest_stable(b"[]"), Ok(None));
