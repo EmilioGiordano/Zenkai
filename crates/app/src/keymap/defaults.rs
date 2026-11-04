@@ -220,6 +220,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("escape", ClosePalette, Some("Palette")),
         bind("escape", CancelThemePicker, Some("ThemePicker")),
         bind("ctrl-alt-t", SelectTheme, CONTEXT),
+        bind("ctrl-alt-u", CheckForUpdates, CONTEXT),
         bind("escape", CloseSearch, Some("SearchOverlay")),
         bind("ctrl-,", OpenSettings, CONTEXT),
         bind("ctrl-,", OpenSettings, Some("SettingsWindow")),
