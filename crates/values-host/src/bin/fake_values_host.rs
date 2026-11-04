@@ -50,6 +50,15 @@ fn main() {
             write_frame(&mut out, &frame).unwrap_or_default();
             send(&mut out, &Message::Done);
         }
+        "empty_block" => {
+            send(&mut out, &Message::Sheet { name: "S".into() });
+            let message = Message::Block {
+                first_row: 0,
+                first_col: 0,
+            };
+            write_frame(&mut out, &encode(&message, &[]).unwrap_or_else(|_| empty()))
+                .unwrap_or_default();
+        }
         "flood" => loop {
             send(&mut out, &Message::Sheet { name: "S".into() });
         },

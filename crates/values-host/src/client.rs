@@ -21,8 +21,9 @@ const READ_DEADLINE: Duration = Duration::from_secs(300);
 const POLL: Duration = Duration::from_millis(50);
 const FRAMES_IN_FLIGHT: usize = 4;
 const MAX_SHEETS: usize = 4096;
-// Json escapes can double what the host holds in memory, so the budget is twice its text cap.
-const MAX_PAYLOAD_BYTES: usize = 2 * MAX_TEXT_BYTES;
+// The most an honest host sends over the wire: a character can take six bytes as a \u00XX
+// escape, and every cell takes about three more for its quotes and comma, empty or not.
+const MAX_PAYLOAD_BYTES: usize = 6 * MAX_TEXT_BYTES + 3 * MAX_ALLOCATED_CELLS;
 
 #[derive(Debug, Error)]
 pub enum ReadError {
@@ -91,7 +92,7 @@ impl ValuesClient {
         let child = KillOnDrop(child);
         drop(stdin);
         let (frames, inbox) = mpsc::sync_channel(FRAMES_IN_FLIGHT);
-        let reader = std::thread::Builder::new()
+        std::thread::Builder::new()
             .name("values-host-reader".to_string())
             .spawn(move || {
                 let mut stdout = BufReader::new(stdout);
@@ -106,10 +107,8 @@ impl ValuesClient {
             .map_err(|error| ReadError::StartFailed(error.to_string()))?;
         let outcome = self.collect(&inbox, cancel);
         drop(child);
+        // The reader ends by itself once the killed child closes the pipe or the inbox is gone.
         drop(inbox);
-        if reader.join().is_err() {
-            tracing::warn!("the values host reader thread panicked");
-        }
         outcome
     }
 
@@ -135,7 +134,9 @@ impl ValuesClient {
                 Ok(Err(error)) => return Err(broken(&error)),
                 Err(RecvTimeoutError::Timeout) => continue,
             };
-            result.payload_bytes = result.payload_bytes.saturating_add(frame.payload.len());
+            result.payload_bytes = result
+                .payload_bytes
+                .saturating_add(frame.head.len() + frame.payload.len());
             if result.payload_bytes > self.payload_budget {
                 return Err(ReadError::TooLarge);
             }
@@ -188,6 +189,9 @@ impl Collected {
                 first_row,
                 first_col,
             } => {
+                if rows.is_empty() {
+                    return Err(broken("a block without rows"));
+                }
                 self.allocated = rows.iter().fold(self.allocated, |total, row| {
                     total.saturating_add(row.len().max(1))
                 });
