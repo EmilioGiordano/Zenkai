@@ -81,6 +81,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.cancel_export"), CancelExport),
                 item(t!("palette.close_window"), CloseWindow),
                 item(t!("palette.quit"), Quit),
+                item(t!("palette.check_for_updates"), CheckForUpdates),
             ],
         ),
         group(
@@ -233,7 +234,6 @@ pub fn table() -> Vec<Group> {
             t!("palette.group.agents"),
             [
                 item(t!("palette.settings"), OpenSettings),
-                item(t!("palette.check_for_updates"), CheckForUpdates),
                 item(t!("palette.show_agent_change"), ShowAgentChange),
                 item(t!("palette.next_agent_change"), NextAgentChange),
                 item(t!("palette.previous_agent_change"), PreviousAgentChange),
