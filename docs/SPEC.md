@@ -370,7 +370,7 @@ Mockups aprobados en `docs/design/auto-update/`. La v0.1.0 ya sale con este actu
 - Activada por defecto, con un interruptor en Settings > About que explica que GitHub ve la IP y que no se envía nada más: un User-Agent genérico y ningún dato de documentos ni rutas. El README también lo dice. Sin cuenta ni telemetría.
 - La búsqueda automática que falla no muestra nada, solo deja un log, y espera al día siguiente: trabajar sin conexión es normal, y GitHub limita las consultas por IP. Una fecha de última búsqueda en el futuro se trata como vencida. La acción "Check for Updates", en About y en la paleta, sí informa si no hay nada nuevo o si falló.
 - Por cada versión se avisa una sola vez. Con "Later" no se vuelve a avisar en esa sesión.
-- La URL de GitHub y las claves son constantes de compilación. Ningún ajuste, variable de entorno ni argumento las cambia, y las claves de prueba existen solo en `#[cfg(test)]`. Las pruebas con procesos reales usan el binario del lanzador, que no tiene claves, con apps de prueba.
+- La URL de GitHub y las claves son constantes de compilación. Ningún ajuste, variable de entorno ni argumento las cambia, y las claves de prueba existen solo en `#[cfg(test)]` y en un feature `test-keys`, usado por la prueba completa entre versiones. CI comprueba que los binarios de release no se compilan con ese feature.
 
 **Firma de las releases**
 
@@ -382,9 +382,9 @@ Mockups aprobados en `docs/design/auto-update/`. La v0.1.0 ya sale con este actu
 **Descarga y verificación (Windows)**
 
 - La descarga empieza solo con "Update now", en segundo plano y cancelable, sin bloquear la UI. Solo sigue URLs `https` de `github.com` y de los hosts de descarga de GitHub, con 5 redirecciones como máximo. El zip tiene un límite de 256 MiB y el asset se elige por su nombre exacto, derivado de la versión y la plataforma.
-- La versión y la plataforma se toman del comentario verificado, nunca del JSON ni del nombre del archivo. Deben coincidir con la versión elegida y con la plataforma propia, y esa versión debe ser mayor que la instalada. Así un zip viejo o de otra plataforma, aunque esté bien firmado, no se instala. Lo que no verifica se borra, y se prueba con la versión anterior a esa en la lista, para que una release mala no trabe las actualizaciones.
+- La versión y la plataforma se toman del comentario verificado, nunca del JSON ni del nombre del archivo. Deben coincidir con la versión elegida y con la plataforma propia, y esa versión debe ser mayor que la instalada. Así un zip viejo o de otra plataforma, aunque esté bien firmado, no se instala. Lo que no verifica se borra, y se prueba con la versión anterior a esa en la lista, para que una release mala no trabe las actualizaciones, con 3 intentos como máximo por búsqueda. La firma tiene un límite de 4 KiB.
 - El zip se verifica antes de abrirlo como zip, y una actualización pendiente se vuelve a verificar justo antes del reemplazo: "ya verificado" nunca se guarda como confianza.
-- Se extrae a `<instalación>\.update\new-<versión>\`, nunca con `extract()` del crate. Solo se aceptan los archivos de `app\` que muestra la estructura de abajo, bajo la carpeta de primer nivel del zip; los de la raíz se ignoran. Se rechaza el zip entero ante rutas, enlaces, nombres repetidos sin distinguir mayúsculas, flujos alternativos NTFS, nombres de dispositivo, puntos o espacios finales. Los límites de tamaño, cantidad y compresión se cuentan sobre los bytes escritos.
+- Se extrae a `<instalación>\.update\new-<versión>\`, nunca con `extract()` del crate. Solo se aceptan los archivos de `app\` que muestra la estructura de abajo, bajo la carpeta de primer nivel del zip; los de la raíz se ignoran. Se rechaza el zip entero ante rutas, enlaces, nombres repetidos sin distinguir mayúsculas, flujos alternativos NTFS, nombres de dispositivo, puntos o espacios finales. Los límites de tamaño, cantidad y compresión se cuentan sobre los bytes escritos. Cada archivo extraído se sincroniza a disco (`sync_all`) antes de abrir el lanzador.
 - Esta firma es la única comprobación: un archivo que baja la app no lleva Mark of the Web, así que SmartScreen no lo mira. Si más adelante se suma Authenticode, no la reemplaza.
 
 **Estructura de la instalación (Windows)**
@@ -405,7 +405,7 @@ El instalador y el zip portable usan la misma estructura:
   .update\          carpeta permanente; descarga, extracción y marcas
 ```
 
-- Los accesos directos, las asociaciones de archivos y la ruta de `zenkai-mcp` que registran los agentes apuntan a la raíz, que nunca cambia. La app y sus accesos comparten un `AppUserModelID` explícito, para que la barra de tareas los trate como un solo programa.
+- Los accesos directos, las asociaciones de archivos y la ruta de `zenkai-mcp` que registran los agentes apuntan a la raíz, que nunca cambia. La app y sus accesos comparten un `AppUserModelID` explícito, para que la barra de tareas los trate como un solo programa. Se fija con el wrapper seguro de `winsafe`, sin `unsafe` propio; si esa versión no se puede usar, se detiene y se reporta.
 - El lanzador es un programa mínimo, sin red, sin claves y sin GPUI. Los archivos de la raíz solo cambian con un instalador o un zip nuevos, así que el lanzador se revisa con el mismo rigor que la verificación de firmas.
 - La app reconoce esta estructura porque su carpeta se llama `app` y a su lado existe el lanzador. Si no se cumple, por ejemplo en un checkout de desarrollo, el actualizador está apagado y "Check for Updates" abre Releases.
 
@@ -418,14 +418,14 @@ El instalador y el zip portable usan la misma estructura:
 
 Aplicar una actualización:
 
-1. Espera a que termine la app anterior, hasta 60 s. Si no termina, sale sin tocar nada.
+1. Espera a que termine la app anterior, hasta 60 s. Si no termina, abre la app actual y avisa, sin tocar nada. Después resuelve el estado en disco según la tabla, para que un `app.old` viejo no bloquee esta actualización.
 2. Exige que `new-<versión>` sea una carpeta real y que tenga un `zenkai.exe` regular, sin puntos de reanálisis. La lista exacta de archivos la controla el extractor, que sí se puede actualizar.
-3. Renombra `app` a `app.old`, con reintentos durante 10 s. Si falla, algo sigue corriendo desde `app`: abre la versión anterior y avisa.
+3. Borra cualquier `confirmed` anterior y renombra `app` a `app.old`, con reintentos durante 10 s. Si falla, algo sigue corriendo desde `app`: abre la versión anterior y avisa.
 4. Renombra `new-<versión>` a `app`, con reintentos durante 30 s. Si falla, devuelve `app.old` a `app` y avisa.
-5. Abre la versión nueva y espera la marca `confirmed` hasta 120 s, o a que el proceso termine.
-6. Con la marca, borra `app.old` y el contenido de `.update\`, salvo el bloqueo. Sin la marca, si el proceso sigue vivo termina ese proceso, que es su propio hijo, y restaura.
+5. Abre la versión nueva y espera la marca `confirmed` con esa misma versión, hasta 120 s, o a que el proceso termine.
+6. Con la marca, borra `app.old` y el contenido de `.update\`, salvo el bloqueo, y la marca al final. Sin la marca, si el proceso sigue vivo termina ese proceso, que es su propio hijo, y restaura.
 
-La app, al mostrar la primera ventana, crea `confirmed` si existe `app.old` y aún no hay marca. No depende de ningún argumento.
+La app, al mostrar la primera ventana, crea `confirmed` con su propia versión y lo sincroniza a disco, si existe `app.old` y no hay una marca de esa versión. No depende de ningún argumento. Una marca de otra versión no cuenta.
 
 Cada inicio del lanzador resuelve lo que encuentre en disco:
 
@@ -440,7 +440,7 @@ Cada inicio del lanzador resuelve lo que encuentre en disco:
 
 - La app está corriendo si abrir `app\zenkai.exe` para escritura falla con violación de uso compartido. Cualquier otro error cuenta como desconocido, y con un estado desconocido nunca se restaura. Si mover `app` falla tras 10 s de reintentos, tampoco se restaura: se abre `app` normalmente y se decide en el próximo inicio.
 - Sin un corte, ningún proceso puede ver una mezcla de archivos viejos y nuevos, porque el reemplazo es de la carpeta entera. Entre los dos renombres, un inicio directo de `app\zenkai.exe` no encuentra el archivo; el lanzador queda esperando el bloqueo. Los agentes usan el relay de la raíz y no lo notan.
-- Una versión restaurada queda anotada y no se vuelve a ofrecer sola; "Check for Updates" sí puede intentarla. Confirmar el arranque no detecta errores posteriores, y eso se acepta.
+- Una versión restaurada queda anotada en la carpeta de datos de la app, fuera de `.update\`, y no se vuelve a ofrecer sola; "Check for Updates" sí puede intentarla. Confirmar el arranque no detecta errores posteriores, y eso se acepta.
 - Las sesiones, los ajustes y los documentos no se tocan. Una versión que cambie el formato de la sesión o de los ajustes guarda antes una copia, para que la anterior siga funcionando si se restaura.
 - Instalación por usuario: la app actualiza `DisplayVersion` en la lista de programas de Windows. El desinstalador elimina `app`, `app.old` y `.update`, y reinstalar encima limpia los restos.
 - Linux y macOS: solo el aviso, con un botón a la página de Releases. El código de descarga y reemplazo no se compila en esas plataformas.
