@@ -10121,6 +10121,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel",
  "pdfium-render",
+ "proptest",
  "serde",
  "serde_json",
  "tempfile",

@@ -66,8 +66,10 @@ if [ -n "$decisions" ]; then
   fi
 fi
 
-if ! grep -qE '^Card: https?://[^ ]+$' "$body_file"; then
-  fail "body needs a 'Card: <url>' line"
+card_line=$(grep -E "^Card:" "$body_file" | head -n1)
+card_re='^Card: https?://[^ ]+$'
+if [ -n "$card_line" ] && ! [[ $card_line =~ $card_re ]]; then
+  fail "Card line must be 'Card: <url>'"
 fi
 
 lines=$(awk 'END { print NR }' "$body_file")

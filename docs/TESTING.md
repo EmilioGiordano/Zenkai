@@ -27,9 +27,11 @@ or a hang.
 | Read-only fallback reader through its child process: .xls, .ods, hostile seeds | `crates/values-host/tests/real_host.rs` |
 | Frames from the values host | `crates/values-host/tests/fuzz_wire.rs` |
 | session.json | `crates/app/src/documents/session_fuzz.rs` |
+| Tray handoff message from a second launch | `crates/app/src/tray/handoff_fuzz.rs` |
 | settings.json | `crates/agent/tests/fuzz_settings.rs` |
 | MCP JSON-RPC messages and tool calls | `crates/agent/tests/fuzz_mcp_message.rs` |
 | Data generation spec JSON | `crates/datagen/tests/fuzz_spec.rs` |
+| PDF host frames, requests and replies | `crates/pdf-host/tests/fuzz_frame.rs` |
 
 The number of cases is the `cases` value in each file. Raise it for a long local run.
 

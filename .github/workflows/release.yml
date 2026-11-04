@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  verify:
+    name: Verify the tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the tag is on main and matches the app version
+        run: |
+          rustup toolchain install
+          version="${GITHUB_REF_NAME#v}"
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::The tagged commit is not on main."
+            exit 1
+          fi
+          crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "zenkai") | .version')
+          if [ "$crate" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the app version $crate."
+            exit 1
+          fi
+
+      - name: Extract the changelog section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [ ! -f CHANGELOG.md ]; then
+            echo "::error::CHANGELOG.md does not exist; add it before tagging."
+            exit 1
+          fi
+          awk -v header="## [$version]" '
+            index($0, header) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no section '## [$version]' with content."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: notes
+          path: notes.md
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: verify
+    timeout-minutes: 90
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            target: windows-x64
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-latest
+            target: macos-arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      REF_NAME: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install the toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install
+          rustc --version
+
+      - name: Install GPUI system packages (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libxcb1-dev \
+            libwayland-dev \
+            libfontconfig1-dev \
+            libfreetype-dev \
+            libvulkan1
+
+      - name: Install the Metal toolchain if Xcode lacks it (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if ! xcrun -sdk macosx metal --version >/dev/null 2>&1; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+
+      - name: Build
+        run: cargo build --locked --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host
+
+      - name: Fetch pdfium (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./packaging/windows/fetch-pdfium.ps1 -Destination target/dist
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "zenkai-$env:REF_NAME-${{ matrix.target }}"
+          New-Item -ItemType Directory $name | Out-Null
+          Copy-Item target/dist/zenkai.exe, target/dist/zenkai-mcp.exe, target/dist/zenkai-pdf-host.exe, target/dist/pdfium.dll, target/dist/pdfium-LICENSE.txt, LICENSE, README.md $name
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+
+      - name: Package (Linux and macOS)
+        if: runner.os != 'Windows'
+        run: |
+          name="zenkai-$REF_NAME-${{ matrix.target }}"
+          mkdir "$name"
+          cp target/dist/zenkai target/dist/zenkai-mcp target/dist/zenkai-pdf-host LICENSE README.md "$name"
+          tar -czf "$name.tar.gz" "$name"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zenkai-${{ matrix.target }}
+          path: |
+            zenkai-*.zip
+            zenkai-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: [verify, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: zenkai-*
+          merge-multiple: true
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: notes
+
+      - name: Write checksums
+        run: sha256sum zenkai-*.zip zenkai-*.tar.gz > SHA256SUMS
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          prerelease=()
+          case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" zenkai-*.zip zenkai-*.tar.gz SHA256SUMS \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md "${prerelease[@]}"

@@ -86,7 +86,11 @@ impl Workspace {
 
     // The window hidden in the tray for a long time with workbooks nobody touched since.
     fn rest_while_away(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if crate::tray::hidden_to_tray(cx) {
+        #[cfg(windows)]
+        let hidden = crate::tray::hidden_to_tray(cx);
+        #[cfg(not(windows))]
+        let hidden = false;
+        if hidden {
             self.hidden_since.get_or_insert_with(Instant::now);
         } else {
             self.hidden_since = None;
