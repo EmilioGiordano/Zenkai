@@ -42,6 +42,7 @@ mod text_actions;
 mod text_save;
 mod text_watch;
 mod texts;
+mod updates;
 
 use crate::prompt_gate::{PROMPT_OPEN_CONTEXT, PromptGate};
 use agent_calls::{AgentLink, Decision};
@@ -389,6 +390,7 @@ impl Workspace {
                 agent_settings::reload(cx);
             }
         });
+        let update_reports = cx.observe_global::<crate::updates::Updates>(Self::show_update_report);
         let settings = cx.observe_global_in::<AgentConfig>(window, Self::on_settings_changed);
         let space_look = cx.observe_global::<SpaceAppearance>(|this, cx| {
             this.persist_session(cx);
@@ -486,6 +488,7 @@ impl Workspace {
                 activation,
                 settings,
                 space_look,
+                update_reports,
                 quit,
                 font_color,
                 fill_color,
@@ -4567,6 +4570,7 @@ impl Render for Workspace {
                 this.escape_cancelled_open = false;
             }))
             .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
+            .on_action(cx.listener(|this, _: &UpdateNow, window, cx| this.update_now(window, cx)))
             .on_action(
                 cx.listener(|this, _: &ShowMessages, window, cx| this.toggle_messages(window, cx)),
             )

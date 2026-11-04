@@ -17,7 +17,7 @@ use crate::actions::RestartToApplyLanguage;
 use crate::interface_scale::rem_px;
 use crate::space_appearance::SpaceAppearance;
 use crate::space_controls::style_cards;
-use crate::{agent_settings, space_settings, theme_list};
+use crate::{agent_settings, space_settings, theme_list, updates};
 
 impl SettingsWindow {
     pub(super) fn content(
@@ -461,6 +461,27 @@ impl SettingsWindow {
             }
             RowId::Version => {
                 parts.control = Some(info::value(env!("CARGO_PKG_VERSION"), cx));
+            }
+            RowId::CheckOnOpen => {
+                parts.control = Some(controls::switch(
+                    ("row", id),
+                    info.title,
+                    settings.general.check_for_updates,
+                    |on, _, cx| {
+                        agent_settings::change(cx, move |settings| {
+                            settings.general.check_for_updates = on
+                        })
+                    },
+                ));
+            }
+            RowId::UpdateStatus => {
+                parts.control = Some(info::button(
+                    ("row", id),
+                    t!("settings.update.check_button"),
+                    t!("palette.check_for_updates"),
+                    |_, cx| updates::check(cx, updates::Source::Settings),
+                ));
+                parts.below = Some(info::update_status(cx));
             }
             RowId::License => {
                 parts.control = Some(info::value(env!("CARGO_PKG_LICENSE"), cx));

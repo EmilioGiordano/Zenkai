@@ -257,6 +257,8 @@ actions!(
         CancelOpen,
         CopyNotice,
         FocusNotice,
+        UpdateNow,
+        CheckForUpdates,
         ShowMessages,
         CloseMessages,
         NextMessage,

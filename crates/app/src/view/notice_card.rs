@@ -7,7 +7,7 @@ use zenkai_i18n::t;
 
 use super::Workspace;
 use super::notices::{Expiry, Notice, Severity, WARNING_LIFETIME};
-use crate::actions::{CopyNotice, DismissNotice, ShowMessages};
+use crate::actions::{CopyNotice, DismissNotice, ShowMessages, UpdateNow};
 use crate::interface_scale::rem_px;
 use crate::keymap;
 
@@ -102,6 +102,7 @@ impl Workspace {
                     let expiry = this.notices.expire_warning(id, held);
                     if expiry == Expiry::Closed {
                         this.notice_hovered = false;
+                        this.announce_shown_update(cx);
                         cx.notify();
                     }
                     expiry
@@ -121,6 +122,7 @@ impl Workspace {
         }
         let focused = self.notice_focus.contains_focused(window, cx);
         self.notices.dismiss_card();
+        self.announce_shown_update(cx);
         self.notice_hovered = false;
         if focused {
             window.focus(&self.grid.focus_handle(cx), cx);
@@ -157,7 +159,12 @@ impl Workspace {
             .set(self.notice_focus.contains_focused(window, cx));
         let theme = cx.theme();
         let (icon, color) = severity_icon(notice.severity, theme);
-        let title = severity_title(notice.severity);
+        let update_available = notice.is_update_available();
+        let title = if update_available {
+            SharedString::from(t!("update.title"))
+        } else {
+            severity_title(notice.severity)
+        };
         Some(
             div()
                 .absolute()
@@ -252,6 +259,41 @@ impl Workspace {
                                             window.dispatch_action(Box::new(ShowMessages), cx)
                                         }),
                                 ),
+                            )
+                        })
+                        .when(update_available, |card| {
+                            card.child(
+                                h_flex()
+                                    .justify_end()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("update-later")
+                                            .ghost()
+                                            .small()
+                                            .label(t!("update.later"))
+                                            .tooltip(keymap::labeled(
+                                                cx,
+                                                t!("update.later"),
+                                                &DismissNotice,
+                                            ))
+                                            .on_click(|_, window, cx| {
+                                                window.dispatch_action(Box::new(DismissNotice), cx)
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("update-now")
+                                            .primary()
+                                            .small()
+                                            .label(t!("update.now"))
+                                            .tooltip(keymap::labeled(
+                                                cx,
+                                                t!("update.now"),
+                                                &UpdateNow,
+                                            ))
+                                            .on_click(|_, window, cx| {
+                                                window.dispatch_action(Box::new(UpdateNow), cx)
+                                            }),
+                                    ),
                             )
                         }),
                 ),

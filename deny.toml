@@ -33,6 +33,7 @@ allow = [
     "CC0-1.0",
     "Unicode-3.0",
     "MPL-2.0",
+    "CDLA-Permissive-2.0", # webpki-roots, the certificate list of the update check client
 ]
 
 [bans]
