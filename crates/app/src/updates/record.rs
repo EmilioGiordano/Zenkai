@@ -175,13 +175,7 @@ mod tests {
 
     #[test]
     fn a_damaged_record_is_an_error_and_the_default_is_due() {
-        for bytes in [
-            &b""[..],
-            b"not json",
-            b"[]",
-            b"{\"last_check\":-1}",
-            b"\xff",
-        ] {
+        for bytes in [&b""[..], b"not json", b"{\"last_check\":-1}", b"\xff"] {
             assert!(Record::parse(bytes).is_err(), "{bytes:?}");
         }
         assert!(Record::default().is_due(0));

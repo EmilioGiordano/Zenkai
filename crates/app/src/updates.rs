@@ -50,7 +50,7 @@ fn start_if_ready(cx: &mut App) {
             check_for_updates: config.settings().general.check_for_updates,
         }
     } else {
-        return;
+        SettingsReading::Loading
     };
     let verdict =
         cx.update_global::<Updates, _>(|updates, _| updates.startup_check(reading, now()));
