@@ -13,6 +13,7 @@ ignore = [
     { id = "RUSTSEC-2026-0367", reason = "extract() is never called; zip 9 not supported by ironcalc, calamine, rust_xlsxwriter" },
     { id = "RUSTSEC-2026-0368", reason = "extract() is never called; zip 9 not supported by ironcalc, calamine, rust_xlsxwriter" },
     { id = "RUSTSEC-2026-0369", reason = "extract() is never called; zip 9 not supported by ironcalc, calamine, rust_xlsxwriter" },
+    { id = "RUSTSEC-2026-0429", reason = "extract() is never called; zip 9 not supported by ironcalc, calamine, rust_xlsxwriter" },
 ]
 
 [licenses]
