@@ -110,8 +110,8 @@ fn file() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::version::Version;
     use super::{CHECK_INTERVAL_SECS, Record};
-    use crate::updates::version::Version;
 
     fn version(text: &str) -> Version {
         Version::parse_bare(text).unwrap()
