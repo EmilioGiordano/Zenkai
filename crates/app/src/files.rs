@@ -261,7 +261,6 @@ const MAX_VALUES_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
 fn values_error_text(error: &ReadError) -> String {
     match error {
-        ReadError::Cancelled => t!("file.values_cancelled").to_string(),
         ReadError::TimedOut => t!("file.values_timed_out").to_string(),
         ReadError::HostMissing | ReadError::StartFailed(_) => {
             t!("file.values_host_unavailable").to_string()
@@ -270,7 +269,9 @@ fn values_error_text(error: &ReadError) -> String {
         ReadError::Failed(failure) if failure.kind == FailureKind::TooLarge => {
             t!("file.values_too_many_cells").to_string()
         }
-        ReadError::Failed(_) | ReadError::HostBroken(_) => t!("file.values_unreadable").to_string(),
+        ReadError::Cancelled | ReadError::Failed(_) | ReadError::HostBroken(_) => {
+            t!("file.values_unreadable").to_string()
+        }
     }
 }
 
@@ -285,7 +286,10 @@ pub fn open_values(path: &Path, cancel: &AtomicBool) -> Result<Workbook, String>
     }
     let sheets = ValuesClient::new(host_next_to_exe(HOST_FILE))
         .read(path, cancel)
-        .map_err(|error| values_error_text(&error))?;
+        .map_err(|error| {
+            tracing::warn!(%error, "values host read failed");
+            values_error_text(&error)
+        })?;
     run_with_engine_stack(move || {
         let mut workbook = Workbook::new_empty()?;
         for (index, sheet) in (0u32..).zip(&sheets) {
