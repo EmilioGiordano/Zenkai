@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>What's new tab</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7fb894}a:hover{color:#a6d3b5}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 880px; height: 560px; overflow: hidden; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; background: #18191b; color: #e4e4e6; ">
+  <div style="height: 40px; display: flex; align-items: flex-end; gap: 2px; padding: 0 12px; background: #1f2023">
+    <div style="height: 32px; display: flex; align-items: center; padding: 0 14px; color: #8f9198">Sales 2026.xlsx</div>
+    <div style="height: 32px; display: flex; align-items: center; padding: 0 14px; color: #8f9198">Budget.xlsx</div>
+    <div style="height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 14px; border-radius: 8px 8px 0 0; background: #18191b"><span>What's new</span><button aria-label="Close tab" style="width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; border-radius: 5px"><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8f9198" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0"><path d="M6 6l12 12"></path><path d="M18 6 6 18"></path></svg></button></div>
+  </div>
+  <div style="height: 46px; box-sizing: border-box; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; gap: 16px; background: #222326">
+    <span>Zenkai 0.1.3 is available. You have 0.1.0.</span>
+    <span style="display: flex; align-items: center; gap: 14px"><a href="https://github.com/EmilioGiordano/Zenkai/releases">View on GitHub</a><button style="height: 30px; padding: 0 14px; border-radius: 7px; white-space: nowrap; background: #4caf7a; color: #0f1a13; font-weight: 600">Update now</button></span>
+  </div>
+  <div style="box-sizing: border-box; max-width: 640px; margin: 0 auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 16px">
+      <h1 style="margin: 0; font-size: 20px; font-weight: 600">What's new</h1>
+      <section style="display: flex; flex-direction: column; gap: 6px">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600">0.1.3 <span style="font-weight: 400; color: #8f9198">2026-12-04</span></h2>
+        <h3 style="margin: 0; font-size: 13px; font-weight: 600; color: #a3a5ab">Added</h3>
+        <ul style="margin: 0; padding-left: 18px; color: #a3a5ab; line-height: 1.55"><li>Select several adjacent whole columns or rows and act on all of them.</li></ul>
+      </section>
+      <section style="display: flex; flex-direction: column; gap: 6px">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600">0.1.2 <span style="font-weight: 400; color: #8f9198">2026-11-27</span></h2>
+        <h3 style="margin: 0; font-size: 13px; font-weight: 600; color: #a3a5ab">Fixed</h3>
+        <ul style="margin: 0; padding-left: 18px; color: #a3a5ab; line-height: 1.55"><li>Copying a whole column or row shows the copy border.</li><li>Esc cancels a copy, as in Excel.</li></ul>
+      </section>
+      <section style="display: flex; flex-direction: column; gap: 6px">
+        <h2 style="margin: 0; font-size: 15px; font-weight: 600">0.1.1 <span style="font-weight: 400; color: #8f9198">2026-11-20</span></h2>
+        <h3 style="margin: 0; font-size: 13px; font-weight: 600; color: #a3a5ab">Fixed</h3>
+        <ul style="margin: 0; padding-left: 18px; color: #a3a5ab; line-height: 1.55"><li>Saving a workbook restored after a crash no longer asks for Save As.</li></ul>
+      </section>
+  </div>
+  <div style="position: absolute; left: 0; right: 0; bottom: 0; height: 26px; box-sizing: border-box; padding: 0 12px; display: flex; align-items: center; font-size: 12px; color: #a3a5ab; background: #1f2023">Read only</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":880,"height":560}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>
