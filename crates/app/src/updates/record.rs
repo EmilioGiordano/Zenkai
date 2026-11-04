@@ -9,9 +9,13 @@ use super::version::Version;
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const MAX_FILE_BYTES: u64 = 4096;
 
+// What survives between sessions. `last_check` is the last attempt and decides when the next
+// automatic check is due; `last_success` and `newest` are what the last answer said.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Record {
     pub last_check: Option<u64>,
+    pub last_success: Option<u64>,
+    pub newest: Option<Version>,
     pub announced: Option<Version>,
 }
 
@@ -19,6 +23,10 @@ pub struct Record {
 struct Stored {
     #[serde(default)]
     last_check: Option<u64>,
+    #[serde(default)]
+    last_success: Option<u64>,
+    #[serde(default)]
+    newest: Option<String>,
     #[serde(default)]
     announced: Option<String>,
 }
@@ -32,27 +40,33 @@ impl Record {
         }
     }
 
-    pub fn should_announce(&self, found: Version, silenced_this_session: bool) -> bool {
-        !silenced_this_session && self.announced.is_none_or(|announced| found > announced)
+    // Different, not greater: a bogus high tag announced once must not mute the real versions
+    // that come after it.
+    pub fn should_announce(&self, found: Version) -> bool {
+        self.announced != Some(found)
     }
 
-    pub fn parse(bytes: &[u8]) -> Record {
-        let Ok(stored) = serde_json::from_slice::<Stored>(bytes) else {
-            return Record::default();
-        };
-        Record {
+    pub fn parse(bytes: &[u8]) -> Result<Record, serde_json::Error> {
+        let stored: Stored = serde_json::from_slice(bytes)?;
+        let version = |text: Option<String>| text.as_deref().and_then(Version::parse_bare);
+        Ok(Record {
             last_check: stored.last_check,
-            announced: stored.announced.as_deref().and_then(Version::parse_bare),
-        }
+            last_success: stored.last_success,
+            newest: version(stored.newest),
+            announced: version(stored.announced),
+        })
     }
 
     fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(&Stored {
             last_check: self.last_check,
+            last_success: self.last_success,
+            newest: self.newest.map(|version| version.to_string()),
             announced: self.announced.map(|version| version.to_string()),
         })
     }
 
+    // A missing or damaged record is the default, which is due: the next check rebuilds it.
     pub fn load() -> Record {
         let Some(file) = file() else {
             return Record::default();
@@ -61,7 +75,10 @@ impl Record {
         let read = std::fs::File::open(&file)
             .and_then(|file| file.take(MAX_FILE_BYTES).read_to_end(&mut bytes));
         match read {
-            Ok(_) => Record::parse(&bytes),
+            Ok(_) => Record::parse(&bytes).unwrap_or_else(|error| {
+                tracing::warn!(%error, "the update check record is damaged; starting a new one");
+                Record::default()
+            }),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Record::default(),
             Err(error) => {
                 tracing::warn!(%error, "could not read the update check record");
@@ -88,7 +105,7 @@ impl Record {
 }
 
 fn file() -> Option<PathBuf> {
-    Some(crate::recovery::directory()?.parent()?.join("updates.json"))
+    Some(crate::recovery::session_directory()?.join("updates.json"))
 }
 
 #[cfg(test)]
@@ -109,8 +126,7 @@ mod tests {
 
     #[test]
     fn a_new_install_is_due() {
-        let record = Record::default();
-        assert!(record.is_due(1_000));
+        assert!(Record::default().is_due(1_000));
     }
 
     #[test]
@@ -130,38 +146,35 @@ mod tests {
     #[test]
     fn each_version_is_announced_once() {
         let mut record = Record::default();
-        assert!(record.should_announce(version("0.1.1"), false));
+        assert!(record.should_announce(version("0.1.1")));
         record.announced = Some(version("0.1.1"));
-        assert!(!record.should_announce(version("0.1.1"), false));
-        assert!(record.should_announce(version("0.1.2"), false));
+        assert!(!record.should_announce(version("0.1.1")));
+        assert!(record.should_announce(version("0.1.2")));
     }
 
     #[test]
-    fn an_older_found_version_is_not_announced_again() {
+    fn a_bogus_high_tag_does_not_mute_the_real_versions_after_it() {
         let record = Record {
-            announced: Some(version("0.2.0")),
+            announced: Some(version("9.9.9")),
             ..Record::default()
         };
-        assert!(!record.should_announce(version("0.1.5"), false));
-    }
-
-    #[test]
-    fn later_silences_the_session() {
-        assert!(!Record::default().should_announce(version("0.1.1"), true));
+        assert!(record.should_announce(version("0.1.1")));
     }
 
     #[test]
     fn the_record_survives_a_round_trip() {
         let record = Record {
-            last_check: Some(1_700_000_000),
+            last_check: Some(1_700_000_100),
+            last_success: Some(1_700_000_000),
+            newest: Some(version("1.2.4")),
             announced: Some(version("1.2.3")),
         };
         let json = record.to_json().unwrap();
-        assert_eq!(Record::parse(json.as_bytes()), record);
+        assert_eq!(Record::parse(json.as_bytes()).unwrap(), record);
     }
 
     #[test]
-    fn a_corrupt_record_is_the_default_and_due() {
+    fn a_damaged_record_is_an_error_and_the_default_is_due() {
         for bytes in [
             &b""[..],
             b"not json",
@@ -169,15 +182,21 @@ mod tests {
             b"{\"last_check\":-1}",
             b"\xff",
         ] {
-            let record = Record::parse(bytes);
-            assert_eq!(record, Record::default());
-            assert!(record.is_due(0));
+            assert!(Record::parse(bytes).is_err(), "{bytes:?}");
         }
+        assert!(Record::default().is_due(0));
     }
 
     #[test]
-    fn an_announced_value_that_is_not_a_version_is_dropped() {
-        let record = Record::parse(br#"{"announced":"latest"}"#);
+    fn a_version_field_that_is_not_a_version_is_dropped() {
+        let record = Record::parse(br#"{"announced":"latest","newest":"v1.0.0"}"#).unwrap();
         assert_eq!(record.announced, None);
+        assert_eq!(record.newest, None);
+    }
+
+    #[test]
+    fn an_old_record_with_a_switch_still_loads() {
+        let record = Record::parse(br#"{"check_on_open":false,"last_check":5}"#).unwrap();
+        assert_eq!(record.last_check, Some(5));
     }
 }
