@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use gpui_kit::SharedString;
 
+use crate::updates::Version;
+
 const HISTORY_LIMIT: usize = 20;
 pub(super) const WARNING_LIFETIME: Duration = Duration::from_secs(8);
 
@@ -29,7 +31,7 @@ pub(super) enum Lifetime {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum NoticeKind {
     Plain,
-    UpdateAvailable,
+    UpdateAvailable(Version),
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +54,10 @@ impl Notice {
         self.detail.as_ref()
     }
 
+    pub fn is_update_available(&self) -> bool {
+        matches!(self.kind, NoticeKind::UpdateAvailable(_))
+    }
+
     pub fn copy_text(&self) -> String {
         match &self.detail {
             Some(detail) => format!(
@@ -64,12 +70,16 @@ impl Notice {
     }
 }
 
-// Info goes to the status bar only. A warning or an error also gets a card that stays
-// until it is dismissed or replaced, so an unread problem survives a later "Saved".
+// Info goes to the status bar only. A warning, an error or an update notice also gets a card
+// that stays until it is dismissed or replaced, so an unread problem survives a later
+// "Saved". The card is a single slot: an update card never takes it from a problem, and one
+// a problem displaced comes back when that problem closes.
 #[derive(Default)]
 pub(super) struct Notices {
     status: Option<Notice>,
     card: Option<Notice>,
+    held_update: Option<Notice>,
+    shown_update: Option<Version>,
     history: VecDeque<Notice>,
     next_id: u64,
 }
@@ -83,22 +93,68 @@ impl Notices {
         lifetime: Lifetime,
         time: SharedString,
     ) -> u64 {
-        self.push(NoticeKind::Plain, severity, text, detail, lifetime, time)
+        let notice = self.record(NoticeKind::Plain, severity, text, detail, lifetime, time);
+        let id = notice.id;
+        if severity != Severity::Info {
+            if let Some(displaced) = self.card.take()
+                && displaced.is_update_available()
+            {
+                self.held_update = Some(displaced);
+            }
+            self.card = Some(notice.clone());
+        }
+        self.status = Some(notice);
+        id
     }
 
-    // An informational notice that still gets a card, because it carries buttons.
-    pub fn post_update_available(&mut self, text: SharedString, time: SharedString) -> u64 {
-        self.push(
-            NoticeKind::UpdateAvailable,
+    pub fn post_update_available(
+        &mut self,
+        version: Version,
+        text: SharedString,
+        time: SharedString,
+    ) {
+        let notice = self.record(
+            NoticeKind::UpdateAvailable(version),
             Severity::Info,
             text,
             None,
             Lifetime::UntilReplaced,
             time,
-        )
+        );
+        if self
+            .card
+            .as_ref()
+            .is_some_and(|card| !card.is_update_available())
+        {
+            self.held_update = Some(notice);
+        } else {
+            self.show_update(notice);
+        }
     }
 
-    fn push(
+    // The version of an update card that came on screen since the last call, so that it
+    // counts as announced only once it was shown.
+    pub fn take_shown_update(&mut self) -> Option<Version> {
+        self.shown_update.take()
+    }
+
+    fn show_update(&mut self, notice: Notice) {
+        if let NoticeKind::UpdateAvailable(version) = notice.kind {
+            self.shown_update = Some(version);
+        }
+        self.card = Some(notice.clone());
+        self.status = Some(notice);
+    }
+
+    fn restore_held_update(&mut self) {
+        if self.card.is_none()
+            && let Some(held) = self.held_update.take()
+        {
+            self.show_update(held);
+        }
+    }
+
+    fn record(
         &mut self,
         kind: NoticeKind,
         severity: Severity,
@@ -106,10 +162,9 @@ impl Notices {
         detail: Option<SharedString>,
         lifetime: Lifetime,
         time: SharedString,
-    ) -> u64 {
-        let id = self.next_id;
+    ) -> Notice {
         let notice = Notice {
-            id,
+            id: self.next_id,
             kind,
             severity,
             text,
@@ -122,11 +177,7 @@ impl Notices {
             self.history.pop_front();
         }
         self.history.push_back(notice.clone());
-        if severity != Severity::Info || kind == NoticeKind::UpdateAvailable {
-            self.card = Some(notice.clone());
-        }
-        self.status = Some(notice);
-        id
+        notice
     }
 
     pub fn status(&self) -> Option<&Notice> {
@@ -165,6 +216,7 @@ impl Notices {
         {
             self.status = None;
         }
+        self.restore_held_update();
     }
 
     // Only a warning times out, and never while the user is reading it.
@@ -195,12 +247,14 @@ impl Notices {
         };
         until_open(&mut self.status);
         until_open(&mut self.card);
+        self.restore_held_update();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Expiry, HISTORY_LIMIT, Lifetime, NoticeKind, Notices, Severity};
+    use super::{Expiry, HISTORY_LIMIT, Lifetime, Notices, Severity};
+    use crate::updates::Version;
 
     fn post(notices: &mut Notices, severity: Severity, text: &str, lifetime: Lifetime) -> u64 {
         notices.post(
@@ -353,31 +407,134 @@ a.xlsx: Access denied (os error 5)",
         );
     }
 
+    fn version(text: &str) -> Version {
+        Version::parse_bare(text).unwrap()
+    }
+
+    fn post_update(notices: &mut Notices, text: &str) {
+        notices.post_update_available(version("0.1.1"), text.to_string().into(), "12:00:00".into());
+    }
+
+    fn card_text(notices: &Notices) -> Option<String> {
+        notices.card().map(|card| card.text.to_string())
+    }
+
     #[test]
     fn an_update_notice_gets_a_card_that_never_times_out() {
         let mut notices = Notices::default();
-        let id = notices.post_update_available("Zenkai 0.1.1".into(), "12:00:00".into());
+        post_update(&mut notices, "Zenkai 0.1.1");
         let card = notices.card().unwrap();
-        assert_eq!(card.kind, NoticeKind::UpdateAvailable);
+        assert!(card.is_update_available());
         assert_eq!(card.severity, Severity::Info);
+        let id = card.id();
         assert_eq!(notices.expire_warning(id, false), Expiry::Gone);
         assert!(notices.card().is_some());
+        assert_eq!(notices.take_shown_update(), Some(version("0.1.1")));
+        assert_eq!(notices.take_shown_update(), None);
     }
 
     #[test]
     fn an_info_notice_after_an_update_notice_keeps_the_card() {
         let mut notices = Notices::default();
-        notices.post_update_available("Zenkai 0.1.1".into(), "12:00:00".into());
+        post_update(&mut notices, "Zenkai 0.1.1");
         post(
             &mut notices,
             Severity::Info,
             "Saved",
             Lifetime::UntilReplaced,
         );
-        assert_eq!(
-            notices.card().map(|n| n.kind),
-            Some(NoticeKind::UpdateAvailable)
+        assert!(
+            notices
+                .card()
+                .is_some_and(|card| card.is_update_available())
         );
+    }
+
+    #[test]
+    fn an_update_notice_waits_behind_a_problem_card_and_is_not_shown_yet() {
+        let mut notices = Notices::default();
+        let error = post(
+            &mut notices,
+            Severity::Error,
+            "Disk full",
+            Lifetime::UntilReplaced,
+        );
+        post_update(&mut notices, "Zenkai 0.1.1");
+        assert_eq!(card_text(&notices).as_deref(), Some("Disk full"));
+        assert_eq!(notices.take_shown_update(), None);
+        assert_eq!(notices.card().map(|card| card.id()), Some(error));
+    }
+
+    #[test]
+    fn a_held_update_notice_comes_when_the_problem_is_dismissed() {
+        let mut notices = Notices::default();
+        post(
+            &mut notices,
+            Severity::Error,
+            "Disk full",
+            Lifetime::UntilReplaced,
+        );
+        post_update(&mut notices, "Zenkai 0.1.1");
+        notices.dismiss_card();
+        assert_eq!(card_text(&notices).as_deref(), Some("Zenkai 0.1.1"));
+        assert_eq!(notices.take_shown_update(), Some(version("0.1.1")));
+    }
+
+    #[test]
+    fn a_warning_over_an_update_notice_gives_it_back_when_it_times_out() {
+        let mut notices = Notices::default();
+        post_update(&mut notices, "Zenkai 0.1.1");
+        notices.take_shown_update();
+        let warning = post(
+            &mut notices,
+            Severity::Warning,
+            "Careful",
+            Lifetime::UntilReplaced,
+        );
+        assert_eq!(card_text(&notices).as_deref(), Some("Careful"));
+        assert_eq!(notices.expire_warning(warning, false), Expiry::Closed);
+        assert_eq!(card_text(&notices).as_deref(), Some("Zenkai 0.1.1"));
+        assert_eq!(notices.take_shown_update(), Some(version("0.1.1")));
+    }
+
+    #[test]
+    fn a_second_problem_keeps_the_displaced_update_notice() {
+        let mut notices = Notices::default();
+        post_update(&mut notices, "Zenkai 0.1.1");
+        for text in ["one", "two"] {
+            post(
+                &mut notices,
+                Severity::Warning,
+                text,
+                Lifetime::UntilReplaced,
+            );
+        }
+        notices.dismiss_card();
+        assert_eq!(card_text(&notices).as_deref(), Some("Zenkai 0.1.1"));
+    }
+
+    #[test]
+    fn a_newer_update_notice_replaces_the_one_on_screen() {
+        let mut notices = Notices::default();
+        post_update(&mut notices, "Zenkai 0.1.1");
+        notices.post_update_available(version("0.1.2"), "Zenkai 0.1.2".into(), "12:00:00".into());
+        assert_eq!(card_text(&notices).as_deref(), Some("Zenkai 0.1.2"));
+        notices.dismiss_card();
+        assert!(notices.card().is_none());
+    }
+
+    #[test]
+    fn a_held_update_notice_comes_when_an_until_open_problem_clears() {
+        let mut notices = Notices::default();
+        post(
+            &mut notices,
+            Severity::Warning,
+            "Unsupported",
+            Lifetime::UntilOpen,
+        );
+        post_update(&mut notices, "Zenkai 0.1.1");
+        notices.clear_on_open();
+        assert_eq!(card_text(&notices).as_deref(), Some("Zenkai 0.1.1"));
     }
 
     #[test]

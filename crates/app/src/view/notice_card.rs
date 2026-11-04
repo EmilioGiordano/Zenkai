@@ -6,10 +6,10 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::Workspace;
-use super::notices::{Expiry, Notice, NoticeKind, Severity, WARNING_LIFETIME};
+use super::notices::{Expiry, Notice, Severity, WARNING_LIFETIME};
 use crate::actions::{CopyNotice, DismissNotice, ShowMessages, UpdateNow};
 use crate::interface_scale::rem_px;
-use crate::{keymap, updates};
+use crate::keymap;
 
 const CARD_WIDTH: f32 = 420.0;
 pub(super) const STATUS_BAR_HEIGHT: f32 = 26.0;
@@ -102,6 +102,7 @@ impl Workspace {
                     let expiry = this.notices.expire_warning(id, held);
                     if expiry == Expiry::Closed {
                         this.notice_hovered = false;
+                        this.announce_shown_update(cx);
                         cx.notify();
                     }
                     expiry
@@ -120,14 +121,8 @@ impl Workspace {
             return;
         }
         let focused = self.notice_focus.contains_focused(window, cx);
-        if self
-            .notices
-            .card()
-            .is_some_and(|card| card.kind == NoticeKind::UpdateAvailable)
-        {
-            updates::silence_for_session(cx);
-        }
         self.notices.dismiss_card();
+        self.announce_shown_update(cx);
         self.notice_hovered = false;
         if focused {
             window.focus(&self.grid.focus_handle(cx), cx);
@@ -164,7 +159,7 @@ impl Workspace {
             .set(self.notice_focus.contains_focused(window, cx));
         let theme = cx.theme();
         let (icon, color) = severity_icon(notice.severity, theme);
-        let update_available = notice.kind == NoticeKind::UpdateAvailable;
+        let update_available = notice.is_update_available();
         let title = if update_available {
             SharedString::from(t!("update.title"))
         } else {
