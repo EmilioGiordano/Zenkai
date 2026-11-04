@@ -24,12 +24,13 @@ pub enum FetchError {
     NotAReleaseList(#[from] NotAReleaseList),
 }
 
-// Blocks on the network: call it from a background task only.
+// A redirect is a failed check. Blocks on the network: call it from a background task only.
 pub fn newest_release() -> Result<Option<Version>, FetchError> {
     let config = ureq::Agent::config_builder()
         .timeout_connect(Some(CONNECT_TIMEOUT))
         .timeout_global(Some(TOTAL_TIMEOUT))
         .https_only(true)
+        .max_redirects(0)
         .user_agent(USER_AGENT)
         .build();
     let response = ureq::Agent::new_with_config(config)
