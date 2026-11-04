@@ -57,7 +57,8 @@ struct RawRelease {
     prerelease: Option<bool>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the response is not a list of releases")]
 pub struct NotAReleaseList;
 
 // A malformed element is skipped instead of failing the list, so one odd release can never

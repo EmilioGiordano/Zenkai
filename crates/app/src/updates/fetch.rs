@@ -20,7 +20,7 @@ pub enum FetchError {
     Read(#[from] std::io::Error),
     #[error("the response is larger than {} bytes", MAX_RESPONSE_BYTES)]
     TooLarge,
-    #[error("the response is not a list of releases")]
+    #[error(transparent)]
     NotAReleaseList(#[from] NotAReleaseList),
 }
 
