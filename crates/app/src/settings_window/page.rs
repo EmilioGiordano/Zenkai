@@ -466,8 +466,12 @@ impl SettingsWindow {
                 parts.control = Some(controls::switch(
                     ("row", id),
                     info.title,
-                    updates::check_on_open(cx),
-                    |on, _, cx| updates::set_check_on_open(cx, on),
+                    settings.general.check_for_updates,
+                    |on, _, cx| {
+                        agent_settings::change(cx, move |settings| {
+                            settings.general.check_for_updates = on
+                        })
+                    },
                 ));
             }
             RowId::UpdateStatus => {

@@ -385,6 +385,9 @@ impl RowId {
                 settings.agents.external_agents != default.agents.external_agents
             }
             RowId::FastXlsxReader => settings.advanced.xlsx_reader != default.advanced.xlsx_reader,
+            RowId::CheckOnOpen => {
+                settings.general.check_for_updates != default.general.check_for_updates
+            }
             RowId::Agents
             | RowId::ConnectionCommand
             | RowId::WhatLeaves
@@ -392,7 +395,6 @@ impl RowId {
             | RowId::SettingsFile
             | RowId::LogsFolder
             | RowId::Version
-            | RowId::CheckOnOpen
             | RowId::UpdateStatus
             | RowId::License => false,
         }
@@ -428,6 +430,9 @@ impl RowId {
                 settings.agents.external_agents = default.agents.external_agents
             }
             RowId::FastXlsxReader => settings.advanced.xlsx_reader = default.advanced.xlsx_reader,
+            RowId::CheckOnOpen => {
+                settings.general.check_for_updates = default.general.check_for_updates
+            }
             _ => {}
         }
     }

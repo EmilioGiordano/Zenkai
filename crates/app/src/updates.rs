@@ -6,6 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui_kit::*;
 
+use crate::agent_settings::AgentConfig;
 use fetch::FetchError;
 use record::Record;
 pub use version::Version;
@@ -37,6 +38,8 @@ pub enum Report {
 
 pub struct Updates {
     record: Record,
+    record_loaded: bool,
+    startup_decided: bool,
     status: Status,
     silenced_this_session: bool,
     running: bool,
@@ -48,26 +51,45 @@ impl Global for Updates {}
 pub fn init(cx: &mut App) {
     cx.set_global(Updates {
         record: Record::default(),
+        record_loaded: false,
+        startup_decided: false,
         status: Status::Unchecked,
         silenced_this_session: false,
         running: false,
         report: None,
     });
+    cx.observe_global::<AgentConfig>(start_if_ready).detach();
     cx.spawn(async move |cx| {
         let record = cx
             .background_executor()
             .spawn(async { Record::load() })
             .await;
         cx.update(|cx| {
-            let due = now().is_some_and(|now| record.is_due(now));
-            let run = record.check_on_open && due;
-            cx.update_global::<Updates, _>(|updates, _| updates.record = record);
-            if run {
-                check(cx, Source::Startup);
-            }
+            cx.update_global::<Updates, _>(|updates, _| {
+                updates.record = record;
+                updates.record_loaded = true;
+            });
+            start_if_ready(cx);
         });
     })
     .detach();
+}
+
+// The settings file loads on its own schedule: deciding earlier would check even when the
+// user turned the check off.
+fn start_if_ready(cx: &mut App) {
+    let config = cx.global::<AgentConfig>();
+    let settings_ready = config.paths.is_some() || config.failure.is_some();
+    let check_for_updates = config.settings().general.check_for_updates;
+    let due = now().is_some_and(|now| cx.global::<Updates>().record.is_due(now));
+    let ready = settings_ready && cx.global::<Updates>().record_loaded;
+    if !ready || cx.global::<Updates>().startup_decided {
+        return;
+    }
+    cx.update_global::<Updates, _>(|updates, _| updates.startup_decided = true);
+    if check_for_updates && due {
+        check(cx, Source::Startup);
+    }
 }
 
 fn now() -> Option<u64> {
@@ -77,18 +99,6 @@ fn now() -> Option<u64> {
 
 pub fn status(cx: &App) -> Status {
     cx.global::<Updates>().status
-}
-
-pub fn check_on_open(cx: &App) -> bool {
-    cx.global::<Updates>().record.check_on_open
-}
-
-pub fn set_check_on_open(cx: &mut App, on: bool) {
-    let record = cx.update_global::<Updates, _>(|updates, _| {
-        updates.record.check_on_open = on;
-        updates.record.clone()
-    });
-    save_in_background(record, cx);
 }
 
 pub fn silence_for_session(cx: &mut App) {
@@ -197,6 +207,8 @@ mod tests {
     fn updates() -> Updates {
         Updates {
             record: Record::default(),
+            record_loaded: true,
+            startup_decided: false,
             status: Status::Unchecked,
             silenced_this_session: false,
             running: false,

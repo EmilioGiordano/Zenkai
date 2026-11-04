@@ -9,35 +9,18 @@ use super::version::Version;
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const MAX_FILE_BYTES: u64 = 4096;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Record {
-    pub check_on_open: bool,
     pub last_check: Option<u64>,
     pub announced: Option<Version>,
 }
 
-impl Default for Record {
-    fn default() -> Record {
-        Record {
-            check_on_open: true,
-            last_check: None,
-            announced: None,
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize)]
 struct Stored {
-    #[serde(default = "enabled")]
-    check_on_open: bool,
     #[serde(default)]
     last_check: Option<u64>,
     #[serde(default)]
     announced: Option<String>,
-}
-
-fn enabled() -> bool {
-    true
 }
 
 impl Record {
@@ -58,7 +41,6 @@ impl Record {
             return Record::default();
         };
         Record {
-            check_on_open: stored.check_on_open,
             last_check: stored.last_check,
             announced: stored.announced.as_deref().and_then(Version::parse_bare),
         }
@@ -66,7 +48,6 @@ impl Record {
 
     fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(&Stored {
-            check_on_open: self.check_on_open,
             last_check: self.last_check,
             announced: self.announced.map(|version| version.to_string()),
         })
@@ -127,9 +108,8 @@ mod tests {
     }
 
     #[test]
-    fn a_new_install_checks_on_and_is_due() {
+    fn a_new_install_is_due() {
         let record = Record::default();
-        assert!(record.check_on_open);
         assert!(record.is_due(1_000));
     }
 
@@ -173,17 +153,11 @@ mod tests {
     #[test]
     fn the_record_survives_a_round_trip() {
         let record = Record {
-            check_on_open: false,
             last_check: Some(1_700_000_000),
             announced: Some(version("1.2.3")),
         };
         let json = record.to_json().unwrap();
         assert_eq!(Record::parse(json.as_bytes()), record);
-    }
-
-    #[test]
-    fn a_missing_switch_means_on() {
-        assert!(Record::parse(br#"{"last_check":5}"#).check_on_open);
     }
 
     #[test]
