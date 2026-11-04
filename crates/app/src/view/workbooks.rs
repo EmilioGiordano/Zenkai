@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use gpui_kit::*;
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Stamp, Unsupported, Workbook, XlsxReader, open_xlsx};
+use zenkai_engine::{Stamp, Unsupported, Workbook, XlsxReader, open_xlsx_cancellable};
 use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
@@ -25,6 +25,24 @@ enum OpenSource {
     ReopenClosed,
 }
 
+// Whether the user asked for the file just now or its tab loaded lazily; only the first is news
+// worth a Protected View card.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Opened {
+    Requested,
+    Lazy,
+}
+
+fn with_time(text: String, started: Option<Instant>) -> String {
+    match started {
+        Some(started) => format!(
+            "{text} {}",
+            t!("notice.took_ms", ms = started.elapsed().as_millis())
+        ),
+        None => text,
+    }
+}
+
 pub(super) enum LinkLoad {
     Loaded {
         file: Box<FileLoad>,
@@ -38,14 +56,47 @@ pub(super) enum LinkLoad {
         // The file is not as the workbook last had it: it changed while the workbook was out
         // of memory, and what loaded is the file as it is now.
         file_changed: bool,
+        // The dump this workbook woke from. It goes only once the result is delivered, so a
+        // cancelled wake leaves it for the next try.
+        spent_dump: Option<PathBuf>,
     },
     Missing,
     Failed(String),
 }
 
+impl LinkLoad {
+    fn spent_dump(&self) -> Option<PathBuf> {
+        match self {
+            LinkLoad::Loaded { spent_dump, .. } => spent_dump.clone(),
+            LinkLoad::Missing | LinkLoad::Failed(_) => None,
+        }
+    }
+}
+
+enum Arrival {
+    Discard(Option<LinkLoad>),
+    Deliver {
+        load: LinkLoad,
+        spent_dump: Option<PathBuf>,
+    },
+}
+
+// A cancelled load must never spend its dump: the link goes back to waiting and wakes from it.
+fn arrival(load: Option<LinkLoad>, delivered: bool) -> Arrival {
+    match load {
+        Some(load) if delivered => Arrival::Deliver {
+            spent_dump: load.spent_dump(),
+            load,
+        },
+        undelivered => Arrival::Discard(undelivered),
+    }
+}
+
 // Runs on the background executor. The recovery copy, when there is one, holds the unsaved
-// work and is read instead of the file.
-fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
+// work and is read instead of the file. None when `cancel` was raised: nothing on disk has
+// been touched, so the link is exactly as it was.
+fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Option<LinkLoad> {
+    let cancelled = || cancel.load(Ordering::Relaxed);
     let hibernation = link
         .rested
         .as_ref()
@@ -54,8 +105,10 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
     if let Some(hibernation) = hibernation {
         match Workbook::wake(&hibernation.dump, &hibernation.kept) {
             Ok(workbook) => {
-                recovery::remove(&hibernation.dump);
-                return LinkLoad::Loaded {
+                if cancelled() {
+                    return None;
+                }
+                return Some(LinkLoad::Loaded {
                     file: Box::new(FileLoad {
                         workbook,
                         unsupported: Vec::new(),
@@ -68,7 +121,8 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
                     recovery_lost: false,
                     dump_lost: false,
                     file_changed: file_changed_since_rest(link),
-                };
+                    spent_dump: Some(hibernation.dump.clone()),
+                });
             }
             Err(error) => {
                 tracing::warn!(%error, "could not wake a hibernated workbook");
@@ -78,12 +132,12 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
     }
     let mut recovery_lost = link.recovery_lost;
     if let Some(copy) = link.recovery.as_ref().filter(|copy| copy.exists()) {
-        match open_xlsx(copy) {
+        match open_xlsx_cancellable(copy, XlsxReader::Fast, cancel) {
             Ok(opened) => {
-                if let Some(hibernation) = hibernation {
-                    recovery::remove(&hibernation.dump);
+                if cancelled() {
+                    return None;
                 }
-                return LinkLoad::Loaded {
+                return Some(LinkLoad::Loaded {
                     file: Box::new(FileLoad {
                         workbook: opened.workbook,
                         unsupported: Vec::new(),
@@ -97,8 +151,10 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
                     recovery_lost: false,
                     dump_lost,
                     file_changed: file_changed_since_rest(link),
-                };
+                    spent_dump: hibernation.map(|hibernation| hibernation.dump.clone()),
+                });
             }
+            Err(_) if cancelled() => return None,
             Err(error) => {
                 tracing::warn!(%error, "could not read the recovery copy");
                 recovery_lost = true;
@@ -110,12 +166,16 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
     if dump_lost {
         // The file holds none of the unsaved work, so loading it would show the user an older
         // workbook as if nothing was lost. The link and its dump stay for another try.
-        return LinkLoad::Failed(t!("open.hibernation_lost").to_string());
+        return Some(LinkLoad::Failed(t!("open.hibernation_lost").to_string()));
     }
     let Some(path) = &link.path else {
-        return LinkLoad::Missing;
+        return Some(LinkLoad::Missing);
     };
-    match files::load_workbook(path, reader, &Arc::default()) {
+    let loaded = files::load_workbook(path, reader, cancel);
+    if cancelled() {
+        return None;
+    }
+    Some(match loaded {
         Ok(file) => LinkLoad::Loaded {
             file: Box::new(file),
             provenance: Provenance::File,
@@ -123,10 +183,11 @@ fn read_link(link: &Link, reader: XlsxReader) -> LinkLoad {
             recovery_lost,
             dump_lost: false,
             file_changed: changed_while_out_of_memory(link, path),
+            spent_dump: None,
         },
         Err(LoadFailure::Missing) => LinkLoad::Missing,
         Err(failure) => LinkLoad::Failed(open_failure(path, &failure).text),
-    }
+    })
 }
 
 // Checked after the read, so a change between the check and the read is never missed.
@@ -454,7 +515,7 @@ impl Workspace {
                             document.read_only = read_only;
                             document.origin = origin;
                         }
-                        this.announce_opened(Some(started), cx);
+                        this.announce_opened(Some(started), Opened::Requested, cx);
                         if reader_fallback.is_some() {
                             this.notify(Severity::Info, t!("notice.fast_reader_fallback"), cx);
                         }
@@ -469,29 +530,41 @@ impl Workspace {
         .detach();
     }
 
-    pub(crate) fn cancel_open(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn cancel_open(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let link = self.open_loads.newest_link();
         if !self.open_loads.cancel_newest() {
             return false;
+        }
+        if let Some(id) = link {
+            self.documents.set_link_status(id, LinkStatus::NotLoaded);
+            self.departure_load_finished(id, window, cx);
         }
         self.notify(Severity::Info, t!("notice.open_cancelled"), cx);
         cx.notify();
         true
     }
 
-    fn announce_opened(&mut self, started: Option<Instant>, cx: &mut Context<Self>) {
+    fn announce_opened(
+        &mut self,
+        started: Option<Instant>,
+        opened: Opened,
+        cx: &mut Context<Self>,
+    ) {
         let Some(document) = self.documents.active() else {
             return;
         };
         if document.read_only {
-            self.notify(Severity::Warning, t!("notice.opened_read_only"), cx);
+            let text = with_time(t!("notice.opened_read_only").to_string(), started);
+            self.notify(Severity::Warning, text, cx);
         } else if !document.unsupported.is_empty() {
             let text = t!(
                 "notice.opened_unsupported",
                 list = document::labels(&document.unsupported)
             );
+            self.notify(Severity::Warning, with_time(text.to_string(), started), cx);
+        } else if document.origin == FileOrigin::Internet && opened == Opened::Requested {
+            let text = with_time(t!("notice.protected_view").to_string(), started);
             self.notify(Severity::Warning, text, cx);
-        } else if document.origin == FileOrigin::Internet && started.is_some() {
-            self.notify(Severity::Warning, t!("notice.protected_view"), cx);
         } else if let Some(started) = started {
             let text = t!("notice.opened_in", ms = started.elapsed().as_millis());
             self.notify(Severity::Info, text, cx);
@@ -512,29 +585,49 @@ impl Workspace {
             .entry(id)
             .map(Entry::name)
             .unwrap_or_default();
-        let open = self
-            .open_loads
-            .start_for(link.kind, t!("busy.opening", name = name));
+        let label = t!("busy.opening", name = name);
+        if link.kind.is_text() || link.kind.is_pdf() {
+            let open = self.open_loads.start_for(link.kind, label);
+            cx.notify();
+            if link.kind.is_text() {
+                self.begin_text_load(link, open, window, cx);
+            } else {
+                self.begin_pdf_load(link.id, window, cx);
+            }
+            return;
+        }
+        let (open, cancel) = self.open_loads.start_link_load(label, id);
         cx.notify();
-        if link.kind.is_text() {
-            self.begin_text_load(link, open, window, cx);
-            return;
-        }
-        if link.kind.is_pdf() {
-            self.begin_pdf_load(link.id, window, cx);
-            return;
-        }
+        let started = Instant::now();
         let reader = files::xlsx_reader(agent_settings::settings(cx).advanced.xlsx_reader);
         cx.spawn_in(window, async move |this, cx| {
             let load = cx
                 .background_executor()
-                .spawn(async move { read_link(&link, reader) })
+                .spawn(async move {
+                    let load = read_link(&link, reader, &cancel);
+                    // Dropped here, off the UI thread, so a cancelled workbook frees its memory.
+                    (!cancel.load(Ordering::Relaxed)).then_some(load).flatten()
+                })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
-                open.into_iter().for_each(|open| {
-                    this.open_loads.finish(open);
-                });
-                this.finish_load(id, load, window, cx)
+                let delivered = this.open_loads.finish(open);
+                cx.notify();
+                match arrival(load, delivered) {
+                    Arrival::Discard(Some(load)) => {
+                        cx.background_executor()
+                            .spawn(async move { drop(load) })
+                            .detach();
+                    }
+                    Arrival::Discard(None) => {}
+                    Arrival::Deliver { load, spent_dump } => {
+                        if let Some(dump) = spent_dump {
+                            cx.background_executor()
+                                .spawn(async move { recovery::remove(&dump) })
+                                .detach();
+                        }
+                        this.finish_load(id, load, started, window, cx)
+                    }
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during load");
@@ -547,6 +640,7 @@ impl Workspace {
         &mut self,
         id: WorkbookId,
         load: LinkLoad,
+        started: Instant,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -562,6 +656,7 @@ impl Workspace {
                 recovery_lost,
                 dump_lost,
                 file_changed,
+                spent_dump: _,
             } => {
                 if self.documents.shows_when_loaded(id) {
                     self.park_active(window, cx);
@@ -588,7 +683,14 @@ impl Workspace {
                 match outcome {
                     Installed::OnScreen => {
                         self.present_active(window, cx);
-                        self.announce_loaded(&name, provenance, recovery_lost, dump_lost, cx);
+                        self.announce_loaded(
+                            &name,
+                            provenance,
+                            recovery_lost,
+                            dump_lost,
+                            Some(started),
+                            cx,
+                        );
                     }
                     Installed::Background => {
                         if dump_lost {
@@ -663,6 +765,7 @@ impl Workspace {
         provenance: Provenance,
         recovery_lost: bool,
         dump_lost: bool,
+        started: Option<Instant>,
         cx: &mut Context<Self>,
     ) {
         if dump_lost {
@@ -674,11 +777,12 @@ impl Workspace {
         } else {
             match provenance {
                 Provenance::Recovery => {
-                    let text = t!("notice.recovered", name = name);
+                    let text = with_time(t!("notice.recovered", name = name).to_string(), started);
                     self.notify(Severity::Warning, text, cx);
                 }
-                Provenance::File => self.announce_opened(None, cx),
-                Provenance::Dump => {}
+                Provenance::File | Provenance::Dump => {
+                    self.announce_opened(started, Opened::Lazy, cx)
+                }
             }
         }
     }
@@ -739,7 +843,10 @@ mod tests {
     use zenkai_grid::ViewState;
     use zenkai_types::{CellPos, SheetId, WorkbookId};
 
-    use super::{LinkLoad, changed_while_out_of_memory, read_link};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use super::{Arrival, LinkLoad, arrival, changed_while_out_of_memory, read_link};
     use crate::documents::Provenance;
     use crate::entry::{FileSeen, Hibernation, Link, LinkStatus, Rested};
     use crate::files::FileLoad;
@@ -815,8 +922,12 @@ mod tests {
         std::fs::write(dump, bytes).unwrap();
     }
 
-    fn loaded(load: LinkLoad) -> (Box<FileLoad>, Provenance, bool) {
-        match load {
+    fn read(link: &Link) -> Option<LinkLoad> {
+        read_link(link, XlsxReader::Fast, &Arc::default())
+    }
+
+    fn loaded(load: Option<LinkLoad>) -> (Box<FileLoad>, Provenance, bool) {
+        match load.expect("the load was cancelled") {
             LinkLoad::Loaded {
                 file,
                 provenance,
@@ -829,16 +940,76 @@ mod tests {
     }
 
     #[test]
-    fn a_hibernated_workbook_wakes_from_its_dump_with_its_history_and_the_dump_goes() {
+    fn a_hibernated_workbook_wakes_from_its_dump_with_its_history_and_names_the_dump_as_spent() {
         let setup = hibernated();
-        let (file, provenance, dump_lost) = loaded(read_link(&setup.link, XlsxReader::Fast));
+        let load = read(&setup.link);
+        assert_eq!(
+            load.as_ref().and_then(LinkLoad::spent_dump),
+            Some(setup.dump.clone())
+        );
+        let (file, provenance, dump_lost) = loaded(load);
         assert_eq!(provenance, Provenance::Dump);
         assert!(!dump_lost);
         let mut workbook = file.workbook;
         assert_eq!(text(&workbook), "42");
         workbook.undo().unwrap();
         assert_eq!(text(&workbook), "");
-        assert!(!setup.dump.exists());
+        assert!(
+            setup.dump.exists(),
+            "the dump goes only once the result is delivered"
+        );
+        assert!(setup.copy.exists());
+    }
+
+    #[test]
+    fn a_cancelled_wake_loads_nothing_and_leaves_the_dump_and_the_copy_alone() {
+        let setup = hibernated();
+        let cancel = Arc::new(AtomicBool::new(true));
+        assert!(read_link(&setup.link, XlsxReader::Fast, &cancel).is_none());
+        assert!(setup.dump.exists());
+        assert!(setup.copy.exists());
+        assert!(setup.link.dirty);
+        assert!(
+            setup
+                .link
+                .rested
+                .as_ref()
+                .is_some_and(|rested| rested.hibernation.is_some())
+        );
+        assert!(
+            read(&setup.link).is_some(),
+            "the link wakes on the next try"
+        );
+    }
+
+    #[test]
+    fn only_a_delivered_load_spends_its_dump() {
+        let setup = hibernated();
+        let mut loads = crate::open_loads::OpenLoads::default();
+
+        let (cancelled, _) = loads.start_link_load("tab".into(), WorkbookId(7));
+        loads.cancel_newest();
+        let delivered = loads.finish(cancelled);
+        assert!(matches!(
+            arrival(read(&setup.link), delivered),
+            Arrival::Discard(Some(_))
+        ));
+
+        let (running, _) = loads.start_link_load("tab".into(), WorkbookId(7));
+        let delivered = loads.finish(running);
+        match arrival(read(&setup.link), delivered) {
+            Arrival::Deliver { spent_dump, .. } => assert_eq!(spent_dump, Some(setup.dump)),
+            Arrival::Discard(_) => panic!("a delivered load was discarded"),
+        }
+    }
+
+    #[test]
+    fn a_cancelled_wake_from_the_recovery_copy_keeps_the_dump_too() {
+        let setup = hibernated();
+        damage(&setup.dump);
+        let cancel = Arc::new(AtomicBool::new(true));
+        assert!(read_link(&setup.link, XlsxReader::Fast, &cancel).is_none());
+        assert!(setup.dump.exists());
         assert!(setup.copy.exists());
     }
 
@@ -857,7 +1028,7 @@ mod tests {
             },
             hibernation,
         }));
-        let LinkLoad::Loaded { file_changed, .. } = read_link(&setup.link, XlsxReader::Fast) else {
+        let Some(LinkLoad::Loaded { file_changed, .. }) = read(&setup.link) else {
             panic!("the link did not load");
         };
         assert!(!file_changed);
@@ -873,11 +1044,11 @@ mod tests {
             },
             hibernation,
         }));
-        let LinkLoad::Loaded {
+        let Some(LinkLoad::Loaded {
             file_changed,
             provenance,
             ..
-        } = read_link(&setup.link, XlsxReader::Fast)
+        }) = read(&setup.link)
         else {
             panic!("the link did not load");
         };
@@ -892,11 +1063,15 @@ mod tests {
         }] {
             let setup = hibernated();
             break_dump(&setup.dump);
-            let (file, provenance, dump_lost) = loaded(read_link(&setup.link, XlsxReader::Fast));
+            let load = read(&setup.link);
+            assert_eq!(
+                load.as_ref().and_then(LinkLoad::spent_dump),
+                Some(setup.dump.clone())
+            );
+            let (file, provenance, dump_lost) = loaded(load);
             assert_eq!(provenance, Provenance::Recovery);
             assert!(dump_lost);
             assert_eq!(text(&file.workbook), "42");
-            assert!(!setup.dump.exists());
         }
     }
 
@@ -912,10 +1087,7 @@ mod tests {
             .unwrap();
         recovery::write(older.save_snapshot(&file, SaveTarget::Copy).unwrap()).unwrap();
         setup.link.path = Some(file);
-        assert!(matches!(
-            read_link(&setup.link, XlsxReader::Fast),
-            LinkLoad::Failed(_)
-        ));
+        assert!(matches!(read(&setup.link), Some(LinkLoad::Failed(_))));
         assert!(
             setup.dump.exists(),
             "the damaged dump is kept for another look"
