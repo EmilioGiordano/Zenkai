@@ -8,6 +8,7 @@ built in Rust with GPUI and designed to behave like Excel. The calculation engin
 - Product spec: `docs/SPEC.md`
 - Rules for contributors and agents: `AGENTS.md`
 - Ideas backlog: `docs/IDEAS.md`
+- Public roadmap and non-goals: `docs/ROADMAP.md`
 
 ## What works
 
@@ -155,7 +156,7 @@ cargo test -j 4
 cargo deny check            # cargo install cargo-deny --locked
 ```
 
-These run in staging and in CI, not on work branches (see `AGENTS.md`, Validation).
+These run in staging and in CI, not on work branches (see `MAINTAINERS.md`, Validation).
 
 The calculation engine is IronCalc's `ironcalc_base` 0.8.3, vendored in
 `vendor/ironcalc_base` with Zenkai's changes (incremental recalculation) and built in

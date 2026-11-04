@@ -24,9 +24,11 @@ or a hang.
 | xlsx open path, preflight included, and save after a damaged open | `crates/engine/tests/fuzz_xlsx_open.rs` |
 | CSV | `crates/formats/tests/fuzz_csv.rs` |
 | session.json | `crates/app/src/documents/session_fuzz.rs` |
+| Tray handoff message from a second launch | `crates/app/src/tray/handoff_fuzz.rs` |
 | settings.json | `crates/agent/tests/fuzz_settings.rs` |
 | MCP JSON-RPC messages and tool calls | `crates/agent/tests/fuzz_mcp_message.rs` |
 | Data generation spec JSON | `crates/datagen/tests/fuzz_spec.rs` |
+| PDF host frames, requests and replies | `crates/pdf-host/tests/fuzz_frame.rs` |
 
 The number of cases is the `cases` value in each file. Raise it for a long local run.
 

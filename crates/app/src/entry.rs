@@ -71,8 +71,8 @@ impl FileSeen {
     }
 }
 
-// What a workbook with unsaved work left in memory when it went to disk: where its dump is,
-// and the few things the engine needs to save it as it would have.
+// What a workbook left in memory when it went to disk with its undo history: where its dump
+// is, and the few things the engine needs to save it as it would have.
 #[derive(Clone, Debug)]
 pub struct Hibernation {
     pub dump: PathBuf,
@@ -290,12 +290,13 @@ impl Document {
         })
     }
 
-    // The link a workbook with unsaved work becomes when it goes to disk. Its recovery copy
-    // holds the same work, and is what loads if the dump cannot be read.
-    pub fn to_hibernated_link(&self, recovery: PathBuf, dump: PathBuf, kept: Kept) -> Link {
+    // The link a workbook becomes when it goes to disk with its undo history. With unsaved work
+    // its recovery copy holds the same work, and is what loads if the dump cannot be read;
+    // a saved workbook has none and falls back to its file.
+    pub fn to_hibernated_link(&self, recovery: Option<PathBuf>, dump: PathBuf, kept: Kept) -> Link {
         Link {
             dirty: self.needs_recovery(),
-            recovery: Some(recovery),
+            recovery,
             rested: Some(Box::new(Rested {
                 file: self.file_seen(),
                 hibernation: Some(Hibernation {
@@ -325,6 +326,19 @@ impl Document {
             && !self.has_pending_save()
             && self.file_job() == FileJob::Idle
             && !self.hibernation_was_refused()
+    }
+
+    // A saved workbook doing nothing right now. It needs no recovery copy: if the dump cannot be
+    // read back, its file is loaded instead and only the undo history is lost.
+    pub fn can_hibernate_saved(&self) -> bool {
+        self.can_unload()
+            && self.review.is_empty()
+            && !self.has_pending_save()
+            && !self.hibernation_was_refused()
+    }
+
+    pub fn can_dump(&self) -> bool {
+        self.can_hibernate() || self.can_hibernate_saved()
     }
 
     // A clean workbook with a file to come back from, doing nothing right now.

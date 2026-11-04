@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 
 use proptest::prelude::*;
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::Workbook;
-use zenkai_types::WorkbookId;
+use zenkai_engine::{Engine, Workbook};
+use zenkai_types::{CellPos, SheetId, WorkbookId};
 
 use super::test_support::{blank, documents};
-use super::{Documents, Dumped, Loaded, Provenance, TextLoad};
+use super::{Documents, Dumped, Intent, Loaded, Provenance, TextLoad};
 use crate::document;
 use crate::entry::Entry;
 use crate::session::{self, Loaded as LoadedSession};
@@ -27,6 +27,11 @@ enum Op {
     Close(usize),
     Unload(usize),
     Hibernate(usize),
+    Type(usize, u8),
+    Undo(usize),
+    IdleRest(usize),
+    IdleRestShown,
+    ShowAgain,
     Load(usize),
     Quit,
 }
@@ -41,6 +46,11 @@ fn op() -> impl Strategy<Value = Op> {
         2 => any::<usize>().prop_map(Op::Close),
         2 => any::<usize>().prop_map(Op::Unload),
         2 => any::<usize>().prop_map(Op::Hibernate),
+        4 => (any::<usize>(), any::<u8>()).prop_map(|(index, value)| Op::Type(index, value)),
+        2 => any::<usize>().prop_map(Op::Undo),
+        3 => any::<usize>().prop_map(Op::IdleRest),
+        1 => Just(Op::IdleRestShown),
+        1 => Just(Op::ShowAgain),
         2 => any::<usize>().prop_map(Op::Load),
         3 => Just(Op::Quit),
     ]
@@ -56,6 +66,13 @@ struct Model {
     copies: BTreeMap<WorkbookId, String>,
     next_copy: u32,
     next_save: u32,
+    // Each workbook edited here has a twin that receives the same edits and is never put to
+    // rest: what wakes from a dump must read and undo exactly as its twin.
+    twins: BTreeMap<WorkbookId, Workbook>,
+}
+
+fn a1(workbook: &Workbook) -> String {
+    workbook.cell(SheetId(0), CellPos::default()).text
 }
 
 impl Model {
@@ -68,6 +85,7 @@ impl Model {
             copies: BTreeMap::new(),
             next_copy: 0,
             next_save: 0,
+            twins: BTreeMap::new(),
         }
     }
 
@@ -119,6 +137,73 @@ impl Model {
             origin: FileOrigin::Local,
             provenance,
         });
+        if provenance == Provenance::Dump {
+            let woken = self.documents.get(id).unwrap();
+            let workbook = woken.workbook().unwrap();
+            let twin = self.twins.entry(id).or_insert_with(blank);
+            assert_eq!(
+                a1(&workbook),
+                a1(twin),
+                "a woken workbook reads differently"
+            );
+        } else {
+            self.twins.insert(id, blank());
+        }
+    }
+
+    // Undo until the history runs out, on the woken workbook and on its twin.
+    fn undo_alike(&mut self, id: WorkbookId) {
+        self.load(id);
+        let Some(document) = self.documents.get(id) else {
+            return;
+        };
+        let Some(twin) = self.twins.get_mut(&id) else {
+            return;
+        };
+        let mut workbook = document.workbook_mut().unwrap();
+        for _ in 0..6 {
+            let (undone, twin_undone) = (workbook.undo().is_ok(), twin.undo().is_ok());
+            assert_eq!(undone, twin_undone, "the undo history differs after a wake");
+            assert_eq!(
+                a1(&workbook),
+                a1(twin),
+                "an undo after a wake reads differently"
+            );
+        }
+    }
+
+    // What the app does for a workbook that rests: the dump, with a recovery copy only when
+    // there is unsaved work.
+    fn rest(&mut self, id: WorkbookId) {
+        if let Some(document) = self.documents.get_mut(id)
+            && document.needs_recovery()
+        {
+            document.recovery_written(document.edit_count());
+        }
+        let Some(claim) = self.documents.begin_hibernation(id) else {
+            return;
+        };
+        std::fs::create_dir_all(&self.recovery_dir).unwrap();
+        let dump = self.recovery_dir.join(format!("dump-{}.zkh", id.0));
+        let kept = document::write_hibernation(&claim.workbook, &dump).unwrap();
+        let recovery = claim.holds_unsaved_work.then(|| {
+            let copy = self.copy_name(id);
+            self.recovery_dir.join(copy)
+        });
+        let left = self.documents.finish_hibernation(
+            id,
+            Dumped {
+                generation: claim.generation,
+                edits: claim.edits,
+                recovery,
+                dump,
+                kept,
+            },
+        );
+        assert!(
+            !left || self.unsaved.contains(&id) || !claim.holds_unsaved_work,
+            "unsaved work was lost track of while resting"
+        );
     }
 
     fn pending_text(&self, id: WorkbookId) -> bool {
@@ -207,32 +292,66 @@ impl Model {
             }
             Op::Hibernate(index) => {
                 let Some(id) = self.pick(*index) else { return };
-                if let Some(document) = self.documents.get_mut(id) {
-                    // The autosave of the app, which hibernation waits for.
-                    document.recovery_written(document.edit_count());
+                if self.documents.get(id).is_some_and(|d| d.needs_recovery()) {
+                    self.rest(id);
                 }
-                let Some(claim) = self.documents.begin_hibernation(id) else {
+            }
+            Op::Type(index, value) => {
+                let Some(id) = self.pick(*index) else { return };
+                self.load(id);
+                let Some(document) = self.documents.get_mut(id) else {
                     return;
                 };
-                std::fs::create_dir_all(&self.recovery_dir).unwrap();
-                let dump = self.recovery_dir.join(format!("dump-{}.zkh", id.0));
-                let kept = document::write_hibernation(&claim.workbook, &dump).unwrap();
-                let copy = self.copy_name(id);
-                let recovery = self.recovery_dir.join(copy);
-                let left = self.documents.finish_hibernation(
-                    id,
-                    Dumped {
-                        generation: claim.generation,
-                        edits: claim.edits,
-                        recovery,
-                        dump,
-                        kept,
-                    },
-                );
-                assert!(
-                    !left || self.unsaved.contains(&id),
-                    "a workbook without unsaved work was hibernated"
-                );
+                let text = value.to_string();
+                let edited = text.clone();
+                document.queue_in_test(Box::new(move |workbook| {
+                    workbook
+                        .set_input(SheetId(0), CellPos::default(), &edited)
+                        .map(|_| ())
+                }));
+                let (shared, edits) = document.take_batch().unwrap();
+                assert!(document::run_batch_serving(&shared, edits, None).is_empty());
+                let generation = document.generation();
+                assert!(document.finish_batch(generation));
+                document.dirty = true;
+                self.twins
+                    .entry(id)
+                    .or_insert_with(blank)
+                    .set_input(SheetId(0), CellPos::default(), &text)
+                    .unwrap();
+                self.unsaved.insert(id);
+            }
+            Op::Undo(index) => {
+                if let Some(id) = self.pick(*index) {
+                    self.undo_alike(id);
+                }
+            }
+            Op::IdleRest(index) => {
+                let Some(id) = self.pick(*index) else { return };
+                if self.documents.active_id() != Some(id) {
+                    self.rest(id);
+                }
+            }
+            Op::IdleRestShown => {
+                let Some(id) = self.documents.active_id() else {
+                    return;
+                };
+                if self.documents.get(id).is_some_and(|d| d.can_dump())
+                    && self.documents.step_aside_active().is_some()
+                {
+                    self.rest(id);
+                }
+            }
+            Op::ShowAgain => {
+                let Some(id) = self.documents.take_stepped_aside() else {
+                    return;
+                };
+                if matches!(self.documents.entry(id), Some(Entry::Link(_))) {
+                    self.documents.want(id, Intent::Switch);
+                    self.load(id);
+                } else {
+                    self.documents.activate(id);
+                }
             }
             Op::Load(index) => {
                 if let Some(id) = self.pick(*index) {
@@ -307,6 +426,7 @@ impl Model {
         );
 
         self.documents = fresh;
+        self.twins.clear();
         self.unsaved = carried;
         self.copies = copies;
     }

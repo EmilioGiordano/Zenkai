@@ -76,11 +76,15 @@ pub struct Documents {
     // Workbooks that left memory: the last reference to each is dropped by the caller on a
     // background thread, since freeing a large model takes long enough to stall a frame.
     retired: Vec<SharedWorkbook>,
+    // The workbook that was on screen when it was put to rest with the window hidden; it comes
+    // back to the screen when the window is shown.
+    stepped_aside: Option<WorkbookId>,
 }
 
 // A workbook claimed by `begin_hibernation`, for the job that writes it.
 pub struct Hibernating {
     pub generation: u64,
+    pub holds_unsaved_work: bool,
     pub edits: u64,
     pub workbook: SharedWorkbook,
 }
@@ -89,7 +93,7 @@ pub struct Hibernating {
 pub struct Dumped {
     pub generation: u64,
     pub edits: u64,
-    pub recovery: PathBuf,
+    pub recovery: Option<PathBuf>,
     pub dump: PathBuf,
     pub kept: Kept,
 }
@@ -149,7 +153,7 @@ impl Loaded {
         if from_copy && let Some(rested) = &link.rested {
             document.guard_file(rested.file);
         }
-        if self.provenance == Provenance::Dump {
+        if self.provenance == Provenance::Dump && link.recovery.is_some() {
             // The recovery copy was written from this very work, and the new document has
             // made no edit yet.
             document.set_autosaved_at(Some(document.edit_count()));
@@ -199,6 +203,7 @@ impl Documents {
             closed: Vec::new(),
             spaces,
             retired: Vec::new(),
+            stepped_aside: None,
         }
     }
 
@@ -638,6 +643,13 @@ impl Documents {
         }
     }
 
+    // An agent reading or writing a workbook is using it, so it does not rest between calls.
+    pub fn touch(&mut self, id: WorkbookId) {
+        if let Some(document) = self.get_mut(id) {
+            document.last_used = Instant::now();
+        }
+    }
+
     pub fn take_retired(&mut self) -> Vec<SharedWorkbook> {
         std::mem::take(&mut self.retired)
     }
@@ -651,12 +663,14 @@ impl Documents {
         let Some(SlotMut::Other(Slot::Loaded(document))) = self.slot_mut(id) else {
             return None;
         };
-        if !document.can_hibernate() {
+        if !document.can_dump() {
             return None;
         }
+        let holds_unsaved_work = document.needs_recovery();
         let workbook = document.begin_file_job(FileJob::Hibernating)?;
         Some(Hibernating {
             generation: document.generation(),
+            holds_unsaved_work,
             edits: document.edit_count(),
             workbook,
         })
@@ -694,7 +708,7 @@ impl Documents {
         if on_screen_or_wanted
             || document.generation() != generation
             || document.edit_count() != edits
-            || !document.can_hibernate()
+            || !document.can_dump()
         {
             return false;
         }
@@ -702,6 +716,32 @@ impl Documents {
         *slot = Slot::Link(document.to_hibernated_link(recovery, dump, kept));
         self.retired.push(model);
         true
+    }
+
+    // Lets the workbook on screen be put to rest like any other: it leaves the screen, keeping
+    // its tab, and `stepped_aside` remembers it. Nothing on screen is how Excel shows no workbook.
+    pub fn step_aside_active(&mut self) -> Option<WorkbookId> {
+        if self.wanted.is_some() || self.tab_shown.is_some() {
+            return None;
+        }
+        let document = self.active.take()?;
+        let id = document.id;
+        self.empty_space = document.space;
+        self.before.push(Slot::Loaded(document));
+        self.before.append(&mut self.after);
+        self.stepped_aside = Some(id);
+        Some(id)
+    }
+
+    // Only while nothing else took the screen in the meantime.
+    pub fn take_stepped_aside(&mut self) -> Option<WorkbookId> {
+        let id = self.stepped_aside.take()?;
+        (self.shown_id().is_none() && self.entry(id).is_some()).then_some(id)
+    }
+
+    pub fn stepped_aside(&self) -> Option<WorkbookId> {
+        self.stepped_aside
+            .filter(|id| self.shown_id().is_none() && self.entry(*id).is_some())
     }
 
     // The nearest loaded neighbour takes over, to the right first, so the screen never lands
