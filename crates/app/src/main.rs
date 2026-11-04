@@ -79,6 +79,7 @@ mod theme_palettes;
 mod toolbar;
 #[cfg(windows)]
 mod tray;
+mod updates;
 mod view;
 
 use std::path::PathBuf;
@@ -118,6 +119,7 @@ fn main() {
             theme::init(cx);
             interface_scale::init(cx);
             agent_settings::init(cx);
+            updates::init(cx);
             settings_window::register_agent_actions(cx);
             cx.on_action(|_: &actions::OpenSettings, cx| settings_window::open(cx));
             cx.on_action(|_: &actions::InterfaceLarger, cx| interface_scale::larger(cx));
