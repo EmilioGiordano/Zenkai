@@ -411,6 +411,28 @@ fn long_operator_chain_is_rejected_not_a_stack_overflow() {
     assert!(error.contains("characters"), "{error}");
 }
 
+// The text formulas return is charged to the open budget while the file is first
+// evaluated; a file of long results without cached values still opens whole within it.
+#[test]
+fn long_text_results_without_cached_values_open_whole() {
+    let data: String = (1..=1_000)
+        .map(|row| {
+            format!(r#"<row r="{row}"><c r="A{row}"><f>REPT("x",30000)&amp;{row}</f></c></row>"#)
+        })
+        .collect();
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{data}</sheetData></worksheet>"#
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-text.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet)).unwrap();
+    let book = open_xlsx(&path).unwrap();
+    let last = book
+        .workbook
+        .cell(SheetId(0), CellPos::parse_a1("A1000").unwrap());
+    assert_eq!(last.text, format!("{}1000", "x".repeat(30_000)));
+}
+
 // The reader parses a formula's shape while the rows stream once it repeats, on its sheet
 // and row threads too; the longest and deepest formulas the limits allow, filled down, still
 // open, in a small sheet and in one past 8 MB, which streams on its own threads.

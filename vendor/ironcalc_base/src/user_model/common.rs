@@ -640,6 +640,12 @@ impl<'a> UserModel<'a> {
         }
     }
 
+    /// Evaluates the whole workbook, refusing it as [Model::evaluate_opened] does.
+    pub fn evaluate_opened(&mut self) -> Result<(), String> {
+        self.pending_recalculation = PendingRecalculation::nothing();
+        self.model.evaluate_opened()
+    }
+
     /// Returns the list of pending diffs and removes them from the queue
     ///
     /// This is used together with [apply_external_diffs](UserModel::apply_external_diffs) to keep two remote models
