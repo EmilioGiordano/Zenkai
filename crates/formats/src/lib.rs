@@ -10,4 +10,6 @@ pub use csv_format::{CsvError, Delimiter, Encoding, ParsedCsv, parse_csv};
 pub use csv_write::{CsvWriter, write_csv};
 pub use dates::{DateOrder, detect_date_order, normalize_day_first};
 pub use numbers::{detect_decimal_comma, normalize_decimal_comma};
-pub use values::{Block, SheetValues, ValuesError, read_values};
+pub use values::{
+    Block, MAX_ALLOCATED_CELLS, MAX_CELLS, MAX_TEXT_BYTES, SheetValues, ValuesError, read_values,
+};

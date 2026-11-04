@@ -31,6 +31,7 @@ zenkai-formats = { path = "../formats" }
 zenkai-grid = { path = "../grid" }
 zenkai-i18n = { path = "../i18n" }
 zenkai-pdf-host = { path = "../pdf-host", default-features = false }
+zenkai-values-host = { path = "../values-host" }
 zenkai-types = { path = "../types" }
 
 [target.'cfg(windows)'.dependencies]

@@ -1,3 +1,4 @@
+use std::panic::catch_unwind;
 use std::path::Path;
 
 use calamine::{Data, DataRef, Reader, Sheets, open_workbook_auto};
@@ -7,14 +8,19 @@ pub const MAX_CELLS: usize = 20_000_000;
 // so the cells allocated stay within (MAX_GAP + 1) times the populated ones, and a
 // global cap bounds the total; scattered cells can never inflate into dense blocks.
 const MAX_GAP: u32 = 8;
-const MAX_ALLOCATED_CELLS: usize = 40_000_000;
+pub const MAX_ALLOCATED_CELLS: usize = 40_000_000;
+// Excel holds 32,767 characters in a cell; this leaves room for any encoding of them.
+const MAX_CELL_BYTES: usize = 128 * 1024;
+pub const MAX_TEXT_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ValuesError {
     #[error("the file could not be read: {0}")]
     Unreadable(String),
-    #[error("the workbook has more than {MAX_CELLS} cells")]
+    #[error("the workbook has more cells or text than the reader allows")]
     TooLarge,
+    #[error("the reader stopped on this file; the file may be damaged")]
+    Panicked,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +70,7 @@ fn data_ref_input(cell: &DataRef<'_>) -> String {
 struct Cells {
     cells: Vec<(u32, u32, String)>,
     total: usize,
+    bytes: usize,
 }
 
 impl Cells {
@@ -72,7 +79,8 @@ impl Cells {
             return Ok(());
         }
         self.total += 1;
-        if self.total > MAX_CELLS {
+        self.bytes += input.len();
+        if self.total > MAX_CELLS || input.len() > MAX_CELL_BYTES || self.bytes > MAX_TEXT_BYTES {
             return Err(ValuesError::TooLarge);
         }
         self.cells.push((row, col, input));
@@ -162,13 +170,21 @@ fn into_blocks(
     Ok(blocks)
 }
 
+// A panic inside calamine becomes an error. The closure only borrows a path, which is unwind
+// safe, and everything calamine builds is dropped with the unwind. Cancel and the time limit
+// belong to the process that runs this, which can stop what no check in here could reach.
 pub fn read_values(path: &Path) -> Result<Vec<SheetValues>, ValuesError> {
+    catch_unwind(|| read_sheets(path)).unwrap_or(Err(ValuesError::Panicked))
+}
+
+fn read_sheets(path: &Path) -> Result<Vec<SheetValues>, ValuesError> {
     let mut workbook = open_workbook_auto(path).map_err(unreadable)?;
     let mut sheets = Vec::new();
     let mut allocated = 0usize;
     let mut sink = Cells {
         cells: Vec::new(),
         total: 0,
+        bytes: 0,
     };
     for name in workbook.sheet_names() {
         sheet_cells(&mut workbook, &name, &mut sink)?;
@@ -185,6 +201,33 @@ pub fn read_values(path: &Path) -> Result<Vec<SheetValues>, ValuesError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cell_over_the_byte_cap_is_refused() {
+        let mut cells = Cells {
+            cells: Vec::new(),
+            total: 0,
+            bytes: 0,
+        };
+        cells.push(0, 0, "x".repeat(MAX_CELL_BYTES)).unwrap();
+        assert!(matches!(
+            cells.push(0, 1, "x".repeat(MAX_CELL_BYTES + 1)),
+            Err(ValuesError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn text_past_the_total_byte_cap_is_refused() {
+        let mut cells = Cells {
+            cells: Vec::new(),
+            total: 0,
+            bytes: MAX_TEXT_BYTES,
+        };
+        assert!(matches!(
+            cells.push(0, 0, "x".to_string()),
+            Err(ValuesError::TooLarge)
+        ));
+    }
 
     #[test]
     fn every_text_stays_text() {

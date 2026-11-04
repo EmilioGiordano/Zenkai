@@ -9969,6 +9969,7 @@ dependencies = [
  "zenkai-i18n",
  "zenkai-pdf-host",
  "zenkai-types",
+ "zenkai-values-host",
 ]
 
 [[package]]
@@ -10136,6 +10137,22 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "zenkai-values-host"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "zenkai-formats",
+ "zenkai-pdf-host",
+ "zenkai-values-host",
+ "zip 0.6.6",
 ]
 
 [[package]]
