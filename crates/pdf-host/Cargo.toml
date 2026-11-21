@@ -17,7 +17,8 @@ required-features = ["host"]
 
 [features]
 default = ["host"]
-host = ["dep:pdfium-render", "dep:tracing-subscriber"]
+host = ["dep:pdfium-render", "logging"]
+logging = ["dep:tracing-subscriber"]
 
 [dependencies]
 async-channel = "2"

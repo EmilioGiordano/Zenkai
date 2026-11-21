@@ -53,6 +53,9 @@ Design principle: reinvent nothing. Shortcuts, menu names, selection, formula er
 - `pdf-host` holds the PDF wire format and client the `app` uses, plus the
   `zenkai-pdf-host` binary, the only code that loads pdfium. PDFs are read in that
   process so a pdfium crash never takes the app down.
+- `values-host` holds the read-only fallback's wire format and client the `app` uses, plus
+  the `zenkai-values-host` binary, the only process that runs calamine, so a panic or hang on
+  a hostile file never takes the app down.
 - `launcher` is the `zenkai.exe` at the root of the Windows install: it opens the app in
   `app\`, applies updates and restores the previous version when a new one does not start.
   Windows only, it depends on no Zenkai crate, and no update ever replaces it.

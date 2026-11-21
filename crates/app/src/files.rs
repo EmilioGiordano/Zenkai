@@ -10,9 +10,12 @@ use zenkai_engine::{
     Engine, EngineError, ShownCells, Unsupported, Workbook, XlsxReader, open_xlsx_cancellable,
     run_with_engine_stack, write_atomic_streaming,
 };
-use zenkai_formats::{CsvError, CsvWriter, Delimiter, ParsedCsv, parse_csv, read_values};
+use zenkai_formats::{CsvError, CsvWriter, Delimiter, ParsedCsv, parse_csv};
 use zenkai_i18n::t;
+use zenkai_pdf_host::process::host_next_to_exe;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
+use zenkai_values_host::client::{HOST_FILE, ReadError, ValuesClient};
+use zenkai_values_host::wire::FailureKind;
 
 use crate::document::read_shared;
 use crate::text_document::DocumentKind;
@@ -234,7 +237,7 @@ fn load_any(
         Err(EngineError::InvalidFile(_)) if cancel.load(Ordering::Relaxed) => {
             Err(LoadFailure::Engine(EngineError::Cancelled))
         }
-        Err(EngineError::InvalidFile(reason)) => match open_values(path) {
+        Err(EngineError::InvalidFile(reason)) => match open_values(path, cancel) {
             Ok(workbook) => Ok(FileLoad {
                 workbook,
                 unsupported: Vec::new(),
@@ -242,6 +245,9 @@ fn load_any(
                 origin: file_origin(path),
                 reader_fallback: None,
             }),
+            Err(_) if cancel.load(Ordering::Relaxed) => {
+                Err(LoadFailure::Engine(EngineError::Cancelled))
+            }
             Err(fallback) => Err(LoadFailure::Unreadable { reason, fallback }),
         },
         Err(EngineError::Read { source, .. }) if source.kind() == std::io::ErrorKind::NotFound => {
@@ -253,18 +259,38 @@ fn load_any(
 
 const MAX_VALUES_FILE_BYTES: u64 = 512 * 1024 * 1024;
 
+fn values_error_text(error: &ReadError) -> String {
+    match error {
+        ReadError::TimedOut => t!("file.values_timed_out").to_string(),
+        ReadError::HostMissing | ReadError::StartFailed(_) => {
+            t!("file.values_host_unavailable").to_string()
+        }
+        ReadError::TooLarge => t!("file.values_too_many_cells").to_string(),
+        ReadError::Failed(failure) if failure.kind == FailureKind::TooLarge => {
+            t!("file.values_too_many_cells").to_string()
+        }
+        ReadError::Cancelled | ReadError::Failed(_) | ReadError::HostBroken(_) => {
+            t!("file.values_unreadable").to_string()
+        }
+    }
+}
+
 // Plan B when the engine cannot open a file (or it is .xls/.ods): only the values,
-// read by calamine, in a workbook that is never saved over the original.
-pub fn open_values(path: &Path) -> Result<Workbook, String> {
+// read by calamine in a child process, in a workbook that is never saved over the original.
+pub fn open_values(path: &Path, cancel: &AtomicBool) -> Result<Workbook, String> {
     let size = std::fs::metadata(path)
         .map_err(|e| t!("file.read_failed", path = path.display(), error = e))?
         .len();
     if size > MAX_VALUES_FILE_BYTES {
         return Err(t!("file.too_large", path = path.display()));
     }
-    let path = path.to_path_buf();
+    let sheets = ValuesClient::new(host_next_to_exe(HOST_FILE))
+        .read(path, cancel)
+        .map_err(|error| {
+            tracing::warn!(%error, "values host read failed");
+            values_error_text(&error)
+        })?;
     run_with_engine_stack(move || {
-        let sheets = read_values(&path).map_err(|e| EngineError::InvalidFile(e.to_string()))?;
         let mut workbook = Workbook::new_empty()?;
         for (index, sheet) in (0u32..).zip(&sheets) {
             if index > 0 {

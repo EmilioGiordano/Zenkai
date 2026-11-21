@@ -4,8 +4,8 @@ use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, ReadBuf};
 
-// rmcp buffers a whole line before parsing it, with no upper bound; a client sending an
-// endless line would grow that buffer until Zenkai runs out of memory.
+// rmcp only drops lines past 16 MiB and keeps reading; this tighter cap ends the connection
+// at 1 MiB, so one client cannot make Zenkai buffer more than that per message.
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 
 pub struct LineLimited<R> {

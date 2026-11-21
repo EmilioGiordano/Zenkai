@@ -11,7 +11,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed' }
     $version = ($metadata.packages | Where-Object { $_.name -eq 'zenkai' }).version
 
-    cargo build --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-launcher -j 6
+    cargo build --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host -p zenkai-launcher -j 6
     if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
     $exeDir = Join-Path $root 'target\dist'
     & (Join-Path $PSScriptRoot 'fetch-pdfium.ps1') -Destination $exeDir

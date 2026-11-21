@@ -8,11 +8,17 @@ version = 2
 yanked = "warn"
 # Unmaintained crates deep in the GPUI tree are tracked upstream; direct ones must be replaced.
 unmaintained = "workspace"
-# Only ZipArchive::extract() is affected and no code path calls it; zip 9 is unsupported upstream.
+# zip 0.6 advisories where only ZipArchive::extract() is affected; no code path calls it.
 ignore = [
-    { id = "RUSTSEC-2026-0367", reason = "extract() is never called; zip 9 not supported by ironcalc, calamine, rust_xlsxwriter" },
-    { id = "RUSTSEC-2026-0368", reason = "extract() is never called; zip 9 not supported by ironcalc, calamine, rust_xlsxwriter" },
-    { id = "RUSTSEC-2026-0369", reason = "extract() is never called; zip 9 not supported by ironcalc, calamine, rust_xlsxwriter" },
+    { id = "RUSTSEC-2026-0367", reason = "extract() is never called; vendored ironcalc and the xlsx crates still use zip 0.6" },
+    { id = "RUSTSEC-2026-0368", reason = "extract() is never called; vendored ironcalc and the xlsx crates still use zip 0.6" },
+    { id = "RUSTSEC-2026-0369", reason = "extract() is never called; vendored ironcalc and the xlsx crates still use zip 0.6" },
+    { id = "RUSTSEC-2026-0429", reason = "extract() is never called; vendored ironcalc and the xlsx crates still use zip 0.6" },
+    # Unreachable in zip 0.6 as built here: AES decryption is compiled out and nothing reads entries from a stream.
+    { id = "RUSTSEC-2026-0545", reason = "no crate enables zip's aes-crypto feature, so AES entries fail to open; no decrypt call exists" },
+    { id = "RUSTSEC-2026-0548", reason = "ZipStreamReader and read_zipfile_from_stream are never called; entries are read through ZipArchive by central directory name" },
+    # Replacing chrono in the app would not drop it: ironcalc_base, gpui, pdfium-render, rmcp and schemars pull it.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained with no safe upgrade; it stays in the tree through ironcalc_base, gpui, rmcp and schemars" },
 ]
 
 [licenses]

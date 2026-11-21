@@ -3,8 +3,8 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::*;
 use zenkai_agent::preferences::{
-    CloseWithUnsaved, ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS, MarkdownOpensIn,
-    XlsxReaderChoice,
+    CloseWithUnsaved, ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS, MIN_REST_MINUTES,
+    MarkdownOpensIn, XlsxReaderChoice,
 };
 use zenkai_agent::settings::{PermissionMode, Settings, ToolCallDisplay};
 use zenkai_i18n::t;
@@ -157,6 +157,7 @@ impl SettingsWindow {
             modified,
             first,
             control: None,
+            status_line: None,
             below: None,
             overlay: None,
             code: None,
@@ -293,6 +294,26 @@ impl SettingsWindow {
                     cx,
                 ));
             }
+            RowId::RestAfter => {
+                let minutes = settings.general.rest_after_minutes;
+                let value = minutes.map_or_else(
+                    || t!("settings.rest_after.never").to_string(),
+                    |minutes| t!("settings.rest_after.minutes", minutes = minutes).to_string(),
+                );
+                parts.control = Some(controls::stepper(
+                    "rest-after",
+                    t!("settings.rest_after_delay"),
+                    value,
+                    minutes.is_none_or(|minutes| minutes > MIN_REST_MINUTES),
+                    minutes.is_some(),
+                    |up, _, cx| {
+                        agent_settings::change(cx, move |settings| {
+                            settings.general.rest_after_minutes = settings.general.rest_stepped(up)
+                        })
+                    },
+                    cx,
+                ));
+            }
             RowId::ColorMode => {
                 parts.below = Some(
                     mode_cards(
@@ -411,7 +432,7 @@ impl SettingsWindow {
                     super::rows::external_agents_on(settings),
                     |on, _, cx| agents::set_external_agents(on, cx),
                 ));
-                parts.below = Some(info::bridge_status(cx));
+                parts.status_line = Some(info::bridge_status(cx));
             }
             RowId::ConnectionCommand => {
                 parts.code = self.claude_command.clone();
@@ -481,7 +502,7 @@ impl SettingsWindow {
                     t!("palette.check_for_updates"),
                     |_, cx| updates::check(cx, updates::Source::Settings),
                 ));
-                parts.below = Some(info::update_status(cx));
+                parts.status_line = Some(info::update_status(cx));
             }
             RowId::License => {
                 parts.control = Some(info::value(env!("CARGO_PKG_LICENSE"), cx));

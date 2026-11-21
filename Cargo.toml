@@ -13,6 +13,7 @@ members = [
     "crates/mcp-relay",
     "crates/fake-acp-agent",
     "crates/pdf-host",
+    "crates/values-host",
     "crates/launcher",
     "crates/app",
 ]
