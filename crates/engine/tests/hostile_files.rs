@@ -791,3 +791,25 @@ fn text_joins_past_the_text_limit_open_as_value_errors() {
         assert_eq!(view.text, "#VALUE!", "{cell}");
     }
 }
+
+// Opens a sheet whose formulas have no cached values, so each is evaluated on open, and
+// returns the text of the cells asked for.
+fn texts_on_open(cells: &str, wanted: &[&str]) -> Vec<String> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("evaluated.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet(cells))).unwrap();
+    let started = Instant::now();
+    let book = open_xlsx(&path).unwrap().workbook;
+    assert!(started.elapsed() < Duration::from_secs(30));
+    wanted
+        .iter()
+        .map(|cell| book.cell(SheetId(0), CellPos::parse_a1(cell).unwrap()).text)
+        .collect()
+}
+
+// BASE padded its result to the two billion characters the file asked for; Excel allows 255.
+#[test]
+fn base_past_its_minimum_length_limit_opens_as_num() {
+    let texts = texts_on_open(r#"<c r="A1"><f>BASE(1,2,2000000000)</f></c>"#, &["A1"]);
+    assert_eq!(texts, ["#NUM!"]);
+}
