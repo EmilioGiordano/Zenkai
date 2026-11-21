@@ -824,3 +824,14 @@ fn fixed_and_dollar_past_their_decimals_limit_open_as_value_errors() {
     );
     assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
 }
+
+// ARRAYTOTEXT joined every text of an array whole, at about three times the result's size;
+// past Excel's 32,767 characters it is #VALUE!.
+#[test]
+fn arraytotext_past_the_text_limit_opens_as_value_error() {
+    let texts = texts_on_open(
+        r#"<c r="A1"><f>ARRAYTOTEXT(REPT("x",30000)&amp;SEQUENCE(1000))</f></c><c r="B1"><f>ARRAYTOTEXT(REPT("x",30000)&amp;SEQUENCE(1000),1)</f></c>"#,
+        &["A1", "B1"],
+    );
+    assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
+}

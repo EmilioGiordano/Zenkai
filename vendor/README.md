@@ -440,6 +440,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   padding their result to whatever width a file asks for
   (`src/functions/text/string_format.rs`). Stands on its own. Test:
   `test_fixed_and_dollar_decimals_past_127_are_value` in `src/test/text_functions/mod.rs`.
+- ARRAYTOTEXT builds its text piece by piece through `LimitedText` and returns `#VALUE!`, as
+  Excel does, once it would pass 32,767 characters, instead of formatting every element,
+  joining each row and then the rows, about three times the result at its peak
+  (`src/functions/text/arraytotext.rs`, `LimitedText::is_too_long` in `src/text_limit.rs`).
+  Needs the text limit patch. Tests: `src/test/text_functions/fn_arraytotext.rs`.
 
 Zenkai-only, not for upstream:
 
