@@ -8,17 +8,26 @@ pub const MAX_NESTING: usize = 64;
 // What the text view parses on the UI thread; anything longer is checked in the background.
 pub const SYNC_BYTES: usize = 4 * 1024;
 
-// The parser's cost grows faster than the text, so a preview is not offered past this size.
-pub const MAX_PREVIEW_BYTES: usize = 1024 * 1024;
+// The parser's cost grows faster than the text, so a preview is not offered past this size;
+// a longer file is still edited in Source.
+pub const MAX_PREVIEW_BYTES: usize = 256 * 1024;
 
-// Budgets on the shape of the tree, for what the text view does per node, per pair of inline
-// HTML tags among siblings, and per cell of a table (it pads every row to the header).
-const MAX_NODES: usize = 300_000;
-const MAX_HTML_SIBLINGS: usize = 1_000;
+// Budgets on the shape of the whole document, for what the text view does per node, per
+// inline HTML tag (it pairs them among siblings, and each pair recurses), and per cell of a
+// table (it pads every row to the header).
+const MAX_NODES: usize = 100_000;
+const MAX_HTML_NODES: usize = 2_000;
 const MAX_TABLE_CELLS: usize = 50_000;
+
+// Closers of emphasis that have no opener: the parser looks back over them again and again.
+const MAX_LONE_CLOSERS: usize = 3_000;
 
 const TAB_WIDTH: usize = 4;
 const LIST_INDENT: usize = 2;
+const VOID_TAGS: [&str; 14] = [
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
@@ -33,10 +42,20 @@ pub fn parse_within(text: &str, limit: usize) -> Result<Node, Refusal> {
     if deeper_than(text, limit) {
         return Err(Refusal::TooDeep);
     }
-    let tree = match markdown::to_mdast(text, &parse_options()) {
-        Ok(tree) => tree,
-        Err(error) => {
+    let options = parse_options();
+    // The parser unwraps in places; a panic on a hostile text must not end a background task
+    // unseen, so it counts as a text that cannot be shown.
+    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        markdown::to_mdast(text, &options)
+    }));
+    let tree = match parsed {
+        Ok(Ok(tree)) => tree,
+        Ok(Err(error)) => {
             tracing::debug!(%error, "text that could not be parsed is not shown");
+            return Err(Refusal::TooLarge);
+        }
+        Err(_) => {
+            tracing::error!("the Markdown parser panicked on a text; it is not shown");
             return Err(Refusal::TooLarge);
         }
     };
@@ -63,8 +82,12 @@ fn parse_options() -> ParseOptions {
     options
 }
 
+// Depth counts the inline HTML tags still open around a node as levels: the text view pairs
+// the tags of a parent's children and recurses once per open tag, inside every level above.
 fn over_budget(tree: &Node, limit: usize) -> Option<Refusal> {
     let mut nodes = 0usize;
+    let mut html = 0usize;
+    let mut cells = 0usize;
     let mut pending = vec![(tree, 0usize)];
     while let Some((node, depth)) = pending.pop() {
         if depth > limit {
@@ -75,29 +98,52 @@ fn over_budget(tree: &Node, limit: usize) -> Option<Refusal> {
             return Some(Refusal::TooLarge);
         }
         if let Node::Table(table) = node {
-            let columns = table.align.len().max(
-                table
-                    .children
-                    .first()
-                    .and_then(Node::children)
-                    .map_or(0, Vec::len),
-            );
-            if columns.saturating_mul(table.children.len()) > MAX_TABLE_CELLS {
+            let header = table.children.first().and_then(Node::children);
+            let columns = table.align.len().max(header.map_or(0, Vec::len));
+            cells = cells.saturating_add(columns.saturating_mul(table.children.len()));
+            if cells > MAX_TABLE_CELLS {
                 return Some(Refusal::TooLarge);
             }
         }
         if let Some(children) = node.children() {
-            let html = children
-                .iter()
-                .filter(|child| matches!(child, Node::Html(_)))
-                .count();
-            if html > MAX_HTML_SIBLINGS {
-                return Some(Refusal::TooLarge);
+            let mut open = 0usize;
+            for child in children {
+                if let Node::Html(tag) = child {
+                    html += 1;
+                    if html > MAX_HTML_NODES {
+                        return Some(Refusal::TooLarge);
+                    }
+                    open = tag_balance(&tag.value, open);
+                }
+                pending.push((child, depth + 1 + open));
             }
-            pending.extend(children.iter().map(|child| (child, depth + 1)));
         }
     }
     None
+}
+
+// The number of tags open after this piece of HTML: an opening tag adds one, a closing tag
+// takes one off, and comments, void and self-closing tags change nothing.
+fn tag_balance(html: &str, open: usize) -> usize {
+    let Some(inner) = html.strip_prefix('<') else {
+        return open;
+    };
+    if let Some(closing) = inner.strip_prefix('/') {
+        return if closing.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            open.saturating_sub(1)
+        } else {
+            open
+        };
+    }
+    let name: String = inner
+        .chars()
+        .take_while(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let opens = inner.starts_with(|c: char| c.is_ascii_alphabetic())
+        && !html.ends_with("/>")
+        && !VOID_TAGS.contains(&name.as_str());
+    open + usize::from(opens)
 }
 
 // Dropping a deep tree recurses once per level; taking the children out first does not.
@@ -153,7 +199,7 @@ fn line_exceeds(
     if starts_item || is_atx_heading(rest) {
         paragraph.clear();
     }
-    blocks + paragraph.scan(rest, limit) > limit
+    blocks + paragraph.scan(rest, limit) > limit || paragraph.lone_closers > MAX_LONE_CLOSERS
 }
 
 // A code fence as CommonMark has it: up to three spaces of indent, then three or more
@@ -221,6 +267,14 @@ fn block_depth(line: &str, limit: usize) -> (usize, bool, &str) {
                 }
                 None => break,
             },
+            b'[' => match footnote_marker_end(bytes, at) {
+                Some(end) => {
+                    depth += 1;
+                    starts_item = true;
+                    at = end - 1;
+                }
+                None => break,
+            },
             _ => break,
         }
         if depth > limit {
@@ -234,6 +288,21 @@ fn block_depth(line: &str, limit: usize) -> (usize, bool, &str) {
 // A list marker is followed by a space, a tab or the end of the line.
 fn ends_marker(bytes: &[u8], at: usize) -> bool {
     matches!(bytes.get(at), None | Some(b' ' | b'\t'))
+}
+
+// A footnote definition, `[^label]:`, holds blocks like a list item does; the index after it.
+fn footnote_marker_end(bytes: &[u8], start: usize) -> Option<usize> {
+    if bytes.get(start + 1) != Some(&b'^') {
+        return None;
+    }
+    let label = bytes[start + 2..]
+        .iter()
+        .take_while(|byte| !byte.is_ascii_whitespace() && **byte != b']')
+        .count();
+    let close = start + 2 + label;
+    let marker =
+        label > 0 && bytes.get(close) == Some(&b']') && bytes.get(close + 1) == Some(&b':');
+    marker.then_some(close + 2)
 }
 
 // Up to nine digits and a `.` or `)`; the index after the delimiter.
@@ -252,6 +321,8 @@ fn ordered_marker_end(bytes: &[u8], start: usize) -> Option<usize> {
 struct Inline {
     brackets: usize,
     emphasis: Vec<u8>,
+    // Over the whole text, not only the paragraph: the cost adds up across paragraphs.
+    lone_closers: usize,
 }
 
 impl Inline {
@@ -294,6 +365,8 @@ impl Inline {
                         self.emphasis
                             .resize(self.emphasis.len() + levels, delimiter);
                         deepest = deepest.max(self.brackets + self.emphasis.len());
+                    } else if closes {
+                        self.lone_closers += 1;
                     }
                     at += run - 1;
                 }
@@ -370,7 +443,7 @@ mod tests {
     fn every_list_marker_counts_on_one_line() {
         for marker in ["1. ", "1) ", "- ", "* ", "+ ", "-\t", "10. ", "123456789. "] {
             assert!(too_deep(&marker.repeat(MAX_NESTING + 1)), "{marker:?}");
-            assert!(!too_deep(&marker.repeat(MAX_NESTING)), "{marker:?}");
+            assert!(!too_deep(&marker.repeat(10)), "{marker:?}");
         }
         assert!(!too_deep(&"1234567890. ".repeat(MAX_NESTING + 1)));
         assert!(!too_deep(&"1.5 ".repeat(1000)));
@@ -543,20 +616,66 @@ mod tests {
     // Each case below is within the byte cap of the pane, and only its shape is hostile.
     #[test]
     fn a_flood_of_html_tags_among_siblings_is_refused_at_the_byte_cap() {
-        let pairs = MAX_PREVIEW_BYTES / 7;
+        let pairs = (MAX_PREVIEW_BYTES - 2) / 7;
         let text = format!("x{}y{}", "<b>".repeat(pairs), "</b>".repeat(pairs));
         assert!(text.len() <= MAX_PREVIEW_BYTES);
         assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
         assert_eq!(preview_refusal("x <b>y</b> z"), None);
     }
 
+    // Tags split over many parents add up: the budget is for the document, not per parent.
+    #[test]
+    fn html_tags_spread_over_nested_emphasis_are_refused_at_the_byte_cap() {
+        let level = format!("*a{}", "<b>".repeat(499));
+        let close = format!("{}a*", "</b>".repeat(499));
+        let levels = MAX_PREVIEW_BYTES / (level.len() + close.len() + 2) - 1;
+        let text = format!(
+            "{}{}",
+            format!("{level}\n").repeat(levels),
+            format!("{close}\n").repeat(levels)
+        );
+        assert!(text.len() <= MAX_PREVIEW_BYTES);
+        assert!(preview_refusal(&text).is_some());
+    }
+
+    #[test]
+    fn unclosed_tags_count_as_levels_and_closed_ones_do_not() {
+        assert_eq!(
+            preview_refusal(&format!("{}x", "<b>".repeat(MAX_NESTING + 1))),
+            Some(Refusal::TooDeep)
+        );
+        assert_eq!(
+            preview_refusal(&format!("{}x{}", "<b>".repeat(30), "</b>".repeat(30))),
+            None
+        );
+        assert_eq!(
+            preview_refusal(&"<br>a<hr/><!-- c --><img src=x>\n".repeat(20)),
+            None
+        );
+    }
+
     #[test]
     fn a_wide_header_over_many_rows_is_refused_at_the_byte_cap() {
         let header = format!("{}|\n{}|\n", "|a".repeat(4_000), "|-".repeat(4_000));
-        let text = format!("{header}{}", "|x|\n".repeat(200_000));
+        let text = format!("{header}{}", "|x|\n".repeat(40_000));
         assert!(text.len() <= MAX_PREVIEW_BYTES);
         assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
         assert_eq!(preview_refusal("|a|b|\n|-|-|\n|1|2|\n"), None);
+    }
+
+    // The cell budget is one sum over the document, not one per table.
+    #[test]
+    fn many_tables_that_are_each_within_the_cell_budget_are_refused_together() {
+        let table = format!(
+            "{}|\n{}|\n{}\n",
+            "|a".repeat(100),
+            "|-".repeat(100),
+            "|x|\n".repeat(300)
+        );
+        assert_eq!(preview_refusal(&table), None);
+        let text = table.repeat(2);
+        assert!(text.len() <= MAX_PREVIEW_BYTES);
+        assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
     }
 
     #[test]
@@ -565,6 +684,31 @@ mod tests {
         assert!(text.len() <= MAX_PREVIEW_BYTES);
         assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
         assert_eq!(preview_refusal(&"*a* ".repeat(1000)), None);
+    }
+
+    #[test]
+    fn closers_without_openers_are_turned_away_before_parsing_at_the_byte_cap() {
+        let text = "a* ".repeat(MAX_PREVIEW_BYTES / 3);
+        assert!(text.len() <= MAX_PREVIEW_BYTES);
+        assert!(deeper_than(&text, MAX_NESTING));
+        assert_eq!(preview_refusal(&text), Some(Refusal::TooDeep));
+        let underscores = "a_ ".repeat(MAX_PREVIEW_BYTES / 3);
+        assert_eq!(preview_refusal(&underscores), Some(Refusal::TooDeep));
+        assert_eq!(preview_refusal(&"snake_case_word ".repeat(10_000)), None);
+        assert_eq!(
+            preview_refusal(&"*a* and **b** and _c_ ".repeat(2_000)),
+            None
+        );
+    }
+
+    #[test]
+    fn nested_footnote_definitions_are_turned_away_before_parsing_at_the_byte_cap() {
+        let text = "[^a]: ".repeat(MAX_PREVIEW_BYTES / 6);
+        assert!(text.len() <= MAX_PREVIEW_BYTES);
+        assert_eq!(preview_refusal(&text), Some(Refusal::TooDeep));
+        assert_eq!(preview_refusal("text[^1]\n\n[^1]: the note\n"), None);
+        assert!(too_deep(&"[^a]: ".repeat(MAX_NESTING + 1)));
+        assert!(!too_deep(&"[^a]: ".repeat(10)));
     }
 
     // Math spans are one node here and the view must not parse their text again; whatever is
