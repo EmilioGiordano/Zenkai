@@ -107,7 +107,7 @@ struct WrittenNote<'a> {
 
 impl Notes {
     pub fn from_releases(mut found: Vec<Note>) -> Notes {
-        found.sort_by(|a, b| b.version.cmp(&a.version));
+        found.sort_by_key(|note| std::cmp::Reverse(note.version));
         found.dedup_by_key(|note| note.version);
         let truncated = found.len() > MAX_NOTES;
         found.truncate(MAX_NOTES);
