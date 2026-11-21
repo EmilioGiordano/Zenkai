@@ -67,7 +67,7 @@ pub struct Snapshot {
 pub struct Updates {
     pub record: Record,
     pub report: Option<Report>,
-    pub launcher_notice: Option<LauncherNotice>,
+    pub launcher_notices: Vec<LauncherNotice>,
     notes: Arc<Notes>,
     notes_from_check: bool,
     notes_unsaved: bool,
@@ -84,7 +84,7 @@ impl Default for Updates {
         Updates {
             record: Record::default(),
             report: None,
-            launcher_notice: None,
+            launcher_notices: Vec::new(),
             notes: Arc::default(),
             notes_from_check: false,
             notes_unsaved: false,
@@ -250,7 +250,7 @@ impl Updates {
     // True when the record changed and needs saving: a version the launcher had to restore from
     // is not offered again on its own.
     pub fn receive_launcher_notice(&mut self, notice: LauncherNotice) -> bool {
-        self.launcher_notice = Some(notice);
+        self.launcher_notices.push(notice);
         match notice {
             LauncherNotice::Restored(Some(version)) => {
                 self.record.restored = Some(version);
@@ -491,8 +491,8 @@ mod tests {
         let mut updates = loaded(Record::default());
         assert!(updates.receive_launcher_notice(LauncherNotice::Restored(Some(version("0.1.1")))));
         assert_eq!(
-            updates.launcher_notice,
-            Some(LauncherNotice::Restored(Some(version("0.1.1"))))
+            updates.launcher_notices,
+            [LauncherNotice::Restored(Some(version("0.1.1")))]
         );
         checking(&mut updates, Source::Startup);
         updates.finish_ok(found(Some(version("0.1.1"))), installed(), 900);
@@ -512,7 +512,7 @@ mod tests {
             let mut updates = loaded(Record::default());
             assert!(!updates.receive_launcher_notice(notice));
             assert_eq!(updates.record, Record::default());
-            assert_eq!(updates.launcher_notice, Some(notice));
+            assert_eq!(updates.launcher_notices, [notice]);
         }
     }
 

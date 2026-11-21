@@ -2,7 +2,8 @@ use crate::arguments::Version;
 use crate::folders::Folders;
 
 // Left in `.update\notice` for the app it opens, which shows it, records a restored version so it
-// is not offered again on its own, and deletes the file. The app parses exactly these words.
+// is not offered again on its own, and deletes the file. The app parses exactly these words, one
+// notice per line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Notice {
     Restored(Option<Version>),
@@ -21,10 +22,15 @@ impl Notice {
     }
 }
 
-pub fn leave(folders: &Folders, notice: &Notice) {
-    tracing::info!(notice = %notice.text(), "leaving a notice for the app");
-    if let Err(error) = std::fs::write(folders.notice(), notice.text()) {
-        tracing::error!(%error, "could not leave the notice for the app");
+pub fn leave(folders: &Folders, notices: &[Notice]) {
+    let text = notices
+        .iter()
+        .map(Notice::text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    tracing::info!(notices = %text, "leaving notices for the app");
+    if let Err(error) = std::fs::write(folders.notice(), text) {
+        tracing::error!(%error, "could not leave the notices for the app");
     }
 }
 

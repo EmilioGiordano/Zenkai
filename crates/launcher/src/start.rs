@@ -31,7 +31,7 @@ const TIMING: Timing = Timing {
 
 #[derive(Debug)]
 pub enum Finish {
-    Open(Option<Notice>),
+    Open(Vec<Notice>),
     OpenAndTell(Message),
     Running,
     Tell(Message),
@@ -65,7 +65,7 @@ pub fn run(
         Taken::Busy => return Some(Message::Busy),
         Taken::Unavailable(error) => {
             tracing::warn!(%error, "no lock, so the install is left as it is");
-            return open(folders, passed, None).err();
+            return open(folders, passed, &[]).err();
         }
     };
     let finish = match request {
@@ -78,8 +78,8 @@ pub fn run(
     };
     tracing::info!(?finish, "done");
     match finish {
-        Finish::Open(notice) => open(folders, passed, notice).err(),
-        Finish::OpenAndTell(message) => Some(open(folders, passed, None).err().unwrap_or(message)),
+        Finish::Open(notices) => open(folders, passed, &notices).err(),
+        Finish::OpenAndTell(message) => Some(open(folders, passed, &[]).err().unwrap_or(message)),
         Finish::Running => None,
         Finish::Tell(message) => Some(message),
     }
@@ -92,17 +92,17 @@ fn open_as_settled(folders: &Folders, timing: &Timing) -> Finish {
 impl From<Settled> for Finish {
     fn from(settled: Settled) -> Finish {
         match settled {
-            Settled::Clean(notice) => Finish::Open(notice),
-            Settled::AsIs => Finish::Open(None),
+            Settled::Clean(notice) => Finish::Open(notice.into_iter().collect()),
+            Settled::AsIs => Finish::Open(Vec::new()),
             Settled::NoApp(message) => Finish::Tell(message),
         }
     }
 }
 
 // The app outlives the launcher: dropping the child's handle does not end it.
-fn open(folders: &Folders, passed: &[OsString], notice: Option<Notice>) -> Result<(), Message> {
-    if let Some(notice) = notice {
-        notice::leave(folders, &notice);
+fn open(folders: &Folders, passed: &[OsString], notices: &[Notice]) -> Result<(), Message> {
+    if !notices.is_empty() {
+        notice::leave(folders, notices);
     }
     open_app(folders, passed)
         .map(drop)

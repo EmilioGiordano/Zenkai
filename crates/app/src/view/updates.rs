@@ -7,7 +7,7 @@ use crate::updates::{self, LauncherNotice, Report, Version};
 
 impl Workspace {
     pub(super) fn show_update_report(&mut self, cx: &mut Context<Self>) {
-        if let Some(notice) = updates::take_launcher_notice(cx) {
+        for notice in updates::take_launcher_notices(cx) {
             self.show_launcher_notice(notice, cx);
         }
         let Some(report) = updates::take_report(cx) else {

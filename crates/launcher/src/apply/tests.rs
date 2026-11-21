@@ -32,7 +32,7 @@ fn with_new_version(behavior: Behavior) -> Install {
 
 fn assert_restored(install: &Install, finish: &Finish) {
     assert!(
-        matches!(finish, Finish::Open(Some(Notice::Restored(Some(v)))) if *v == version("0.2.0")),
+        matches!(finish, Finish::Open(notices) if *notices == [Notice::Restored(Some(version("0.2.0")))]),
         "{finish:?}"
     );
     assert_eq!(install.version_in("app").as_deref(), Some("old"));
@@ -43,7 +43,7 @@ fn assert_restored(install: &Install, finish: &Finish) {
 
 fn assert_untouched(install: &Install, finish: &Finish) {
     assert!(
-        matches!(finish, Finish::Open(Some(Notice::NotApplied(v))) if *v == version("0.2.0")),
+        matches!(finish, Finish::Open(notices) if *notices == [Notice::NotApplied(version("0.2.0"))]),
         "{finish:?}"
     );
     assert_eq!(install.version_in("app").as_deref(), Some("old"));
@@ -160,7 +160,10 @@ fn a_missing_new_version_is_not_applied() {
     let install = Install::new();
     install.put_version("app", "old");
     let finish = run(&install, &TEST_TIMING);
-    assert!(matches!(finish, Finish::Open(Some(Notice::NotApplied(_)))));
+    assert!(
+        matches!(&finish, Finish::Open(notices) if *notices == [Notice::NotApplied(version("0.2.0"))]),
+        "{finish:?}"
+    );
     assert_eq!(install.version_in("app").as_deref(), Some("old"));
 }
 
@@ -170,7 +173,10 @@ fn a_new_version_without_a_plain_program_is_not_applied() {
     install.put_version("app", "old");
     fs::create_dir_all(install.path(".update/new-0.2.0/zenkai.exe")).unwrap();
     let finish = run(&install, &TEST_TIMING);
-    assert!(matches!(finish, Finish::Open(Some(Notice::NotApplied(_)))));
+    assert!(
+        matches!(&finish, Finish::Open(notices) if *notices == [Notice::NotApplied(version("0.2.0"))]),
+        "{finish:?}"
+    );
     assert_eq!(install.version_in("app").as_deref(), Some("old"));
     assert!(!install.exists("app.old"));
 }
@@ -190,7 +196,10 @@ fn a_new_version_that_is_a_link_elsewhere_is_not_applied() {
         .unwrap();
     assert!(linked.status.success(), "{linked:?}");
     let finish = run(&install, &TEST_TIMING);
-    assert!(matches!(finish, Finish::Open(Some(Notice::NotApplied(_)))));
+    assert!(
+        matches!(&finish, Finish::Open(notices) if *notices == [Notice::NotApplied(version("0.2.0"))]),
+        "{finish:?}"
+    );
     assert_eq!(install.version_in("app").as_deref(), Some("old"));
     assert_eq!(install.version_in("elsewhere").as_deref(), Some("planted"));
 }
@@ -233,4 +242,21 @@ fn an_unfinished_cleanup_before_does_not_take_the_new_version_with_it() {
     assert!(matches!(finish, Finish::Running), "{finish:?}");
     assert!(install.exists("app/fake-behavior.txt"));
     assert!(!install.exists("app.old"));
+}
+
+#[test]
+fn an_interruption_found_first_is_still_reported_when_the_update_fails() {
+    let install = Install::new();
+    install.put_version("app.old", "old");
+    install.put_version(".update/new-0.2.0", "not a program");
+    let finish = run(&install, &TEST_TIMING);
+    let expected = [
+        Notice::Interrupted,
+        Notice::Restored(Some(version("0.2.0"))),
+    ];
+    assert!(
+        matches!(&finish, Finish::Open(notices) if *notices == expected),
+        "{finish:?}"
+    );
+    assert_eq!(install.version_in("app").as_deref(), Some("old"));
 }

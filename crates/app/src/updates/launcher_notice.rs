@@ -4,10 +4,11 @@ use super::store::{self, ReadError};
 use super::version::Version;
 
 const FILE: &str = "notice";
-const MAX_BYTES: u64 = 64;
+const MAX_BYTES: u64 = 256;
+const MAX_NOTICES: usize = 4;
 
-// What the launcher left in `.update\notice` about the update it just handled. The words are
-// the ones the launcher writes, in crates/launcher/src/notice.rs.
+// What the launcher left in `.update\notice` about the update it just handled, one per line. The
+// words are the ones the launcher writes, in crates/launcher/src/notice.rs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LauncherNotice {
     Restored(Option<Version>),
@@ -33,25 +34,38 @@ impl LauncherNotice {
     }
 }
 
-// The file goes once read, so a notice shows once even when it cannot be understood.
-pub fn take(update_folder: &Path) -> Option<LauncherNotice> {
+// The file goes once read, so its notices show once. A line this version does not understand is
+// skipped; a file past the limit is dropped whole.
+pub fn take(update_folder: &Path) -> Vec<LauncherNotice> {
     let file = update_folder.join(FILE);
-    let bytes = match store::read_capped(&file, MAX_BYTES) {
-        Ok(bytes) => Some(bytes),
-        Err(ReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => return None,
-        Err(error) => {
-            tracing::warn!(%error, "could not read the launcher's notice");
-            None
-        }
-    };
+    let read = store::read_capped(&file, MAX_BYTES);
+    if let Err(ReadError::Io(error)) = &read
+        && error.kind() == std::io::ErrorKind::NotFound
+    {
+        return Vec::new();
+    }
     if let Err(error) = std::fs::remove_file(&file) {
         tracing::warn!(%error, "could not delete the launcher's notice; it may show again");
     }
-    let notice = LauncherNotice::parse(&bytes?);
-    if notice.is_none() {
-        tracing::warn!("the launcher left a notice this version does not understand");
-    }
-    notice
+    let bytes = match read {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(%error, "could not read the launcher's notice");
+            return Vec::new();
+        }
+    };
+    bytes
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| {
+            let notice = LauncherNotice::parse(line);
+            if notice.is_none() {
+                tracing::warn!("the launcher left a notice this version does not understand");
+            }
+            notice
+        })
+        .take(MAX_NOTICES)
+        .collect()
 }
 
 #[cfg(test)]
@@ -120,9 +134,9 @@ mod tests {
     fn a_notice_is_taken_once() {
         let folder = tempfile::tempdir().unwrap();
         std::fs::write(folder.path().join("notice"), "interrupted").unwrap();
-        assert_eq!(take(folder.path()), Some(LauncherNotice::Interrupted));
+        assert_eq!(take(folder.path()), [LauncherNotice::Interrupted]);
         assert!(!folder.path().join("notice").exists());
-        assert_eq!(take(folder.path()), None);
+        assert!(take(folder.path()).is_empty());
     }
 
     #[test]
@@ -130,10 +144,24 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let file = folder.path().join("notice");
         std::fs::write(&file, "restored ".repeat(100)).unwrap();
-        assert_eq!(take(folder.path()), None);
+        assert!(take(folder.path()).is_empty());
         assert!(!file.exists());
         std::fs::write(&file, "upgraded").unwrap();
-        assert_eq!(take(folder.path()), None);
+        assert!(take(folder.path()).is_empty());
         assert!(!file.exists());
+    }
+
+    #[test]
+    fn each_line_is_a_notice_and_an_unknown_line_is_skipped() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("notice");
+        std::fs::write(&file, "interrupted\nupgraded 9.9.9\nrestored 0.2.0").unwrap();
+        assert_eq!(
+            take(folder.path()),
+            [
+                LauncherNotice::Interrupted,
+                LauncherNotice::Restored(Some(version("0.2.0")))
+            ]
+        );
     }
 }

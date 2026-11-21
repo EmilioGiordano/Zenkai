@@ -18,12 +18,20 @@ pub fn apply(folders: &Folders, version: &Version, passed: &[OsString], timing: 
         tracing::warn!("the previous version did not close; nothing was touched");
         return Finish::OpenAndTell(Message::NotClosed);
     }
-    let not_applied = || Finish::Open(Some(Notice::NotApplied(version.clone())));
-    match settle::settle(folders, timing) {
-        Settled::Clean(_) => {}
-        Settled::AsIs => return not_applied(),
+    let earlier = match settle::settle(folders, timing) {
+        Settled::Clean(notice) => notice,
+        Settled::AsIs => return Finish::Open(vec![Notice::NotApplied(version.clone())]),
         Settled::NoApp(message) => return Finish::Tell(message),
+    };
+    // What settling found about an earlier update still matters to the app this run opens.
+    match swap(folders, version, passed, timing) {
+        Finish::Open(notices) => Finish::Open(earlier.into_iter().chain(notices).collect()),
+        finish => finish,
     }
+}
+
+fn swap(folders: &Folders, version: &Version, passed: &[OsString], timing: &Timing) -> Finish {
+    let not_applied = || Finish::Open(vec![Notice::NotApplied(version.clone())]);
     if let Err(problem) = disk::check_new_app(folders, version) {
         tracing::error!(%problem, "the new version cannot be swapped in");
         return not_applied();
