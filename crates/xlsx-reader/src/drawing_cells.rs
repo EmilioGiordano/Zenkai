@@ -2,28 +2,91 @@
 // whose text shows a cell, a picture of cells (the camera tool) or a legacy control linked
 // to cells. Excel writes an empty textlink on every shape, so only a value counts.
 
+use std::io::{self, BufReader, Read};
+
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
-// A drawing that is not well-formed UTF-8 XML may name anything. XML forbids NUL, so one
-// means another encoding, such as UTF-16, whose names this scan would not see.
-pub(crate) fn names_cells(drawing: &[u8]) -> bool {
-    if drawing.contains(&0) || std::str::from_utf8(drawing).is_err() {
-        return true;
-    }
-    let mut reader = Reader::from_reader(drawing);
+use crate::nesting::MAX_XML_DEPTH;
+
+// Scans the drawing as it streams, holding a buffered chunk and the event being read, never
+// the whole part. A drawing that is not well-formed UTF-8 XML, or nests past the depth the
+// reader allows, may name anything. An error is the source failing to deliver the bytes.
+pub(crate) fn names_cells(drawing: impl Read) -> io::Result<bool> {
+    let mut reader = Reader::from_reader(BufReader::new(Utf8Checked::new(drawing)));
     let config = reader.config_mut();
     config.check_end_names = true;
     config.check_comments = true;
+    let mut event = Vec::new();
+    let mut depth = 0usize;
     loop {
-        match reader.read_event() {
-            Ok(Event::Start(element) | Event::Empty(element)) if names_a_cell(&element) => {
-                return true;
+        event.clear();
+        match reader.read_event_into(&mut event) {
+            Ok(Event::Start(element)) => {
+                depth += 1;
+                if depth > MAX_XML_DEPTH || names_a_cell(&element) {
+                    return Ok(true);
+                }
             }
-            Ok(Event::Eof) => return false,
+            Ok(Event::Empty(element)) if names_a_cell(&element) => return Ok(true),
+            Ok(Event::End(_)) => depth = depth.saturating_sub(1),
+            Ok(Event::Eof) => return Ok(false),
             Ok(_) => {}
-            Err(_) => return true,
+            Err(quick_xml::Error::Io(error)) if !reader.get_ref().get_ref().invalid => {
+                return Err(io::Error::new(error.kind(), error.to_string()));
+            }
+            Err(_) => return Ok(true),
         }
+    }
+}
+
+// Passes the bytes through while checking they are UTF-8 with no NUL, which XML forbids, so
+// another encoding such as UTF-16 cannot hide its names from the scan.
+struct Utf8Checked<R> {
+    inner: R,
+    // The start of a character split across reads, at most three bytes.
+    pending: Vec<u8>,
+    invalid: bool,
+}
+
+impl<R> Utf8Checked<R> {
+    fn new(inner: R) -> Utf8Checked<R> {
+        Utf8Checked {
+            inner,
+            pending: Vec::new(),
+            invalid: false,
+        }
+    }
+
+    fn accepts(&mut self, chunk: &[u8]) -> bool {
+        if chunk.contains(&0) {
+            return false;
+        }
+        let mut text = std::mem::take(&mut self.pending);
+        text.extend_from_slice(chunk);
+        match std::str::from_utf8(&text) {
+            Ok(_) => true,
+            Err(error) if error.error_len().is_none() => {
+                self.pending = text[error.valid_up_to()..].to_vec();
+                true
+            }
+            Err(_) => false,
+        }
+    }
+}
+
+impl<R: Read> Read for Utf8Checked<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.inner.read(buf)?;
+        let valid = match read {
+            0 => self.pending.is_empty(),
+            read => self.accepts(&buf[..read]),
+        };
+        if !valid {
+            self.invalid = true;
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        Ok(read)
     }
 }
 
@@ -49,7 +112,14 @@ fn names_a_cell(element: &BytesStart) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{self, Read};
+
     use super::names_cells;
+    use crate::nesting::MAX_XML_DEPTH;
+
+    fn scan(drawing: &[u8]) -> bool {
+        names_cells(drawing).unwrap()
+    }
 
     const DRAWING: &str = concat!(
         r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" "#,
@@ -68,7 +138,7 @@ mod tests {
             r#"<xdr:oneCellAnchor><xdr:sp macro="" textlink=""><xdr:txBody><a:p><a:r><a:t>Sheet3!A1</a:t></a:r></a:p></xdr:txBody></xdr:sp></xdr:oneCellAnchor>"#,
             r#"<xdr:sp textlink="  "/><a:fld type="slidenum"/>"#,
         ] {
-            assert!(!names_cells(&drawing(body)), "{body}");
+            assert!(!scan(&drawing(body)), "{body}");
         }
     }
 
@@ -81,14 +151,14 @@ mod tests {
             r#"<a14:cameraTool xmlns:a14="urn:a14" cellRange="Sheet1!$A$1:$C$5" spid="s1"/>"#,
             r#"<a14:cameraTool xmlns:a14="urn:a14"/>"#,
         ] {
-            assert!(names_cells(&drawing(body)), "{body}");
+            assert!(scan(&drawing(body)), "{body}");
         }
         let vml = concat!(
             r#"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:schemas-microsoft-com:office:excel">"#,
             r#"<v:shape><x:ClientData ObjectType="Checkbox"><x:FmlaLink>$B$2</x:FmlaLink>"#,
             r#"</x:ClientData></v:shape></xml>"#
         );
-        assert!(names_cells(vml.as_bytes()));
+        assert!(scan(vml.as_bytes()));
     }
 
     #[test]
@@ -101,7 +171,7 @@ mod tests {
             r#"<x:Anchor>1, 15, 0, 2, 3, 15, 3, 16</x:Anchor><x:Row>0</x:Row><x:Column>0</x:Column>"#,
             r#"</x:ClientData></v:shape></xml>"#
         );
-        assert!(!names_cells(vml.as_bytes()));
+        assert!(!scan(vml.as_bytes()));
     }
 
     #[test]
@@ -113,7 +183,7 @@ mod tests {
             b"<xdr:wsDr><xdr:sp textlink=".to_vec(),
             drawing(r#"<xdr:sp textlink="A1/>"#),
         ] {
-            assert!(names_cells(&broken), "{}", String::from_utf8_lossy(&broken));
+            assert!(scan(&broken), "{}", String::from_utf8_lossy(&broken));
         }
     }
 
@@ -124,27 +194,64 @@ mod tests {
             .encode_utf16()
             .flat_map(u16::to_le_bytes)
             .collect();
-        assert!(names_cells(&utf16));
+        assert!(scan(&utf16));
         let mut latin1 = drawing("<!--Caf-->");
         let after = latin1.windows(3).position(|w| w == b"Caf").unwrap() + 3;
         latin1.insert(after, 0xE9);
-        assert!(names_cells(&latin1));
+        assert!(scan(&latin1));
     }
 
-    // A deep or long drawing is scanned as it streams, with no tree built for it.
+    // Hands out one byte per read, so every character and tag is split across reads.
+    struct Trickle<'a>(&'a [u8]);
+
+    impl Read for Trickle<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let Some((first, rest)) = self.0.split_first() else {
+                return Ok(0);
+            };
+            buf[0] = *first;
+            self.0 = rest;
+            Ok(1)
+        }
+    }
+
     #[test]
-    fn deep_and_wide_drawings_are_scanned_without_a_tree() {
-        let depth = 100_000;
-        let deep = format!(
-            "{DRAWING}{}{}</xdr:wsDr>",
-            "<a:g>".repeat(depth),
-            "</a:g>".repeat(depth)
-        );
-        assert!(!names_cells(deep.as_bytes()));
+    fn characters_split_across_reads_are_read_whole() {
+        let plain = drawing("<!--Café 東京 😀-->");
+        assert!(!names_cells(Trickle(&plain)).unwrap());
+        let linked = drawing(r#"<xdr:sp textlink="'Café'!A1"/>"#);
+        assert!(names_cells(Trickle(&linked)).unwrap());
+        let mut cut = drawing("");
+        cut.push("é".as_bytes()[0]);
+        assert!(names_cells(Trickle(&cut)).unwrap());
+    }
+
+    struct Failing;
+
+    impl Read for Failing {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("the entry cannot be inflated"))
+        }
+    }
+
+    #[test]
+    fn a_source_that_fails_is_an_error_not_an_answer() {
+        assert!(names_cells(Failing).is_err());
+    }
+
+    #[test]
+    fn drawings_nested_past_the_reader_depth_may_name_cells() {
+        let nested = |depth: usize| format!("{}{}", "<g>".repeat(depth), "</g>".repeat(depth));
+        assert!(!scan(nested(MAX_XML_DEPTH).as_bytes()));
+        assert!(scan(nested(MAX_XML_DEPTH + 1).as_bytes()));
+    }
+
+    #[test]
+    fn a_long_drawing_is_scanned_to_its_end() {
         let wide = drawing(&format!(
             r#"{}<xdr:sp textlink="Other!A1"/>"#,
             r#"<xdr:pic macro=""/>"#.repeat(100_000)
         ));
-        assert!(names_cells(&wide));
+        assert!(scan(&wide));
     }
 }

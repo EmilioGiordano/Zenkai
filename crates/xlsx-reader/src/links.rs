@@ -4,12 +4,12 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeSet, HashMap};
-use std::io::{Read, Seek};
+use std::io::{self, Read, Seek};
 
 use crate::ReadError;
 use crate::drawing_cells;
 use crate::layout::names_in_order;
-use crate::stream::{Budgets, CompressedMeter, read_part, read_part_to_peek};
+use crate::stream::{Budgets, CompressedMeter, Guard, read_part};
 
 // Excel allows 65,530 hyperlinks on a sheet, each a relationship of about 250 bytes. A
 // larger relationships part is not parsed, and its sheet counts as pointing at anything.
@@ -245,19 +245,38 @@ impl<'a, R: Read + Seek> Reader<'a, R> {
             return Ok(true);
         }
         let part = entry.name().to_string();
-        // The bytes are dropped once scanned, so the caps above bound them instead of the
+        // Nothing is kept once scanned, so the caps above bound the work instead of the
         // budgets that measure what the open keeps.
-        let read = read_part_to_peek(entry.take(cap as u64 + 1), self.meter, &part, self.budgets);
-        let spent = read.as_ref().map_or(cap, Vec::len);
-        self.drawing_bytes_left = self.drawing_bytes_left.saturating_sub(spent);
+        let mut inflating = Inflating {
+            guard: self
+                .budgets
+                .stream_reread(entry.take(cap as u64 + 1), self.meter, &part),
+            read: 0,
+        };
+        let scanned = drawing_cells::names_cells(&mut inflating);
+        self.drawing_bytes_left = self.drawing_bytes_left.saturating_sub(inflating.read);
         // The open walk never inflated the drawing, so one that fails here must not stop it.
-        match read {
-            Ok(bytes) => Ok(bytes.len() > cap || drawing_cells::names_cells(&bytes)),
+        match scanned {
+            Ok(names) => Ok(names || inflating.read > cap),
             Err(error) => {
                 tracing::debug!(%error, part, "a drawing that cannot be read may name cells");
                 Ok(true)
             }
         }
+    }
+}
+
+// A drawing as it inflates, through the budgets' checks, counting the bytes it gives.
+struct Inflating<'b, R> {
+    guard: Guard<'b, R>,
+    read: usize,
+}
+
+impl<R: Read> Read for Inflating<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.guard.read_chunk(buf).map_err(io::Error::other)?;
+        self.read += read;
+        Ok(read)
     }
 }
 
