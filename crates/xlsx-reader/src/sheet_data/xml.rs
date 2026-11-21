@@ -66,8 +66,12 @@ impl<'a> Scanner<'a, '_> {
     // For every element below a cell except its own <v>, <is> and <f>: a nested <f> would
     // escape the formula limits, since the preflight checks every <f> wherever it is.
     pub(super) fn check_element(&self, start: &BytesStart<'_>) -> Result<(), ReadError> {
-        let name = start.local_name();
-        if name.as_ref() == b"f" || CHECKED_ELEMENTS.contains(&name.as_ref()) {
+        let checked = match start.local_name().as_ref() {
+            b"v" | b"is" | b"t" => false,
+            b"f" => true,
+            name => CHECKED_ELEMENTS.contains(&name),
+        };
+        if checked {
             return Err(unsupported("a checked element inside sheetData"));
         }
         self.attributes(start, [])?;
