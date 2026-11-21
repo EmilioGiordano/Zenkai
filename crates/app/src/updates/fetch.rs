@@ -16,6 +16,8 @@ const TOTAL_TIMEOUT: Duration = Duration::from_secs(60);
 pub enum FetchError {
     #[error("the request failed: {0}")]
     Request(#[from] ureq::Error),
+    #[error("the server answered with status {0}")]
+    Status(u16),
     #[error("could not read the response: {0}")]
     Read(#[from] std::io::Error),
     #[error("the response is larger than {} bytes", MAX_RESPONSE_BYTES)]
@@ -37,8 +39,18 @@ pub fn newest_release() -> Result<Option<Version>, FetchError> {
         .get(RELEASES_API)
         .header("Accept", "application/vnd.github+json")
         .call()?;
+    require_ok(response.status().as_u16())?;
     let body = read_limited(response.into_body().into_reader(), MAX_RESPONSE_BYTES)?;
     Ok(newest_stable(&body)?)
+}
+
+// With redirects off, ureq hands a 3xx back as a response, not as an error.
+fn require_ok(status: u16) -> Result<(), FetchError> {
+    if status == 200 {
+        Ok(())
+    } else {
+        Err(FetchError::Status(status))
+    }
 }
 
 // A response past the limit is a failed check, never a partial read: a big release in the
@@ -54,7 +66,18 @@ fn read_limited(reader: impl Read, limit: usize) -> Result<Vec<u8>, FetchError> 
 
 #[cfg(test)]
 mod tests {
-    use super::{FetchError, read_limited};
+    use super::{FetchError, read_limited, require_ok};
+
+    #[test]
+    fn only_a_200_answer_is_read() {
+        assert!(require_ok(200).is_ok());
+        for status in [201, 204, 301, 302, 304, 307, 308, 403, 404, 500] {
+            assert!(
+                matches!(require_ok(status), Err(FetchError::Status(found)) if found == status),
+                "{status}"
+            );
+        }
+    }
 
     #[test]
     fn a_response_within_the_limit_is_read_whole() {
