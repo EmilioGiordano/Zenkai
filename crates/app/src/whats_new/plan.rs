@@ -3,6 +3,9 @@ use super::links::{NoteLink, links_of};
 use crate::markdown_restricted;
 use crate::updates::{Day, Note, Notes, Status, Version, known_update};
 
+// Past this many lines in all the notes together, the older ones are not drawn.
+const MAX_BLOCKS_IN_ALL: usize = 5_000;
+
 pub struct SectionPlan {
     pub version: Version,
     pub published: Option<Day>,
@@ -35,7 +38,17 @@ pub struct Plan {
 }
 
 pub fn plan(status: Status, notes: &Notes, installed: Version) -> Plan {
-    let sections: Vec<SectionPlan> = notes.newer_than(installed).map(section).collect();
+    let mut sections: Vec<SectionPlan> = notes.newer_than(installed).map(section).collect();
+    // The newest notes are drawn first, and the older ones give way when the list is too long.
+    let mut remaining = MAX_BLOCKS_IN_ALL;
+    for section in &mut sections {
+        let count = section.blocks.as_ref().map_or(0, Vec::len);
+        if count > remaining {
+            section.blocks = None;
+        } else {
+            remaining -= count;
+        }
+    }
     let banner = known_update(status, notes, installed);
     let line = match status {
         Status::Checking => Some(Line::Checking),
@@ -215,5 +228,34 @@ mod tests {
         assert!(!older(MAX_NOTES, installed()));
         assert!(!older(1, installed()));
         assert!(!older(MAX_NOTES + 1, version("0.1.2")));
+    }
+
+    #[test]
+    fn all_the_notes_together_have_a_budget_of_lines_and_the_older_ones_give_way() {
+        let body = "a\n\n".repeat(300);
+        let notes = Notes::from_releases(
+            (1..=20)
+                .map(|patch| note(&format!("0.1.{patch}"), Some(&body)))
+                .collect(),
+        );
+        let plan = plan(Status::Available(version("0.1.20")), &notes, installed());
+        let found = sections(&plan);
+        assert_eq!(found.len(), 20);
+        let drawn = found
+            .iter()
+            .filter(|section| section.blocks.is_some())
+            .count();
+        assert_eq!(drawn, MAX_BLOCKS_IN_ALL / 300);
+        assert!(
+            found[..drawn]
+                .iter()
+                .all(|section| section.blocks.is_some())
+        );
+        assert!(
+            found[drawn..]
+                .iter()
+                .all(|section| section.blocks.is_none())
+        );
+        assert!(found.iter().all(|section| !section.links.is_empty()));
     }
 }
