@@ -31,7 +31,7 @@ pub fn check(text: &str) -> Option<Checked> {
             _ => cleaned.push(character),
         }
     }
-    let tree = markdown_depth::parse_within(&cleaned, MAX_NESTING)?;
+    let tree = markdown_depth::parse_within(&cleaned, MAX_NESTING).ok()?;
     Some(Checked {
         text: cleaned,
         tree,

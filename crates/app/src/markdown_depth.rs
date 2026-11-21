@@ -11,6 +11,12 @@ pub const SYNC_BYTES: usize = 4 * 1024;
 // The parser's cost grows faster than the text, so a preview is not offered past this size.
 pub const MAX_PREVIEW_BYTES: usize = 1024 * 1024;
 
+// Budgets on the shape of the tree, for what the text view does per node, per pair of inline
+// HTML tags among siblings, and per cell of a table (it pads every row to the header).
+const MAX_NODES: usize = 300_000;
+const MAX_HTML_SIBLINGS: usize = 1_000;
+const MAX_TABLE_CELLS: usize = 50_000;
+
 const TAB_WIDTH: usize = 4;
 const LIST_INDENT: usize = 2;
 
@@ -20,33 +26,32 @@ pub enum Refusal {
     TooLarge,
 }
 
-// The parsed text when its tree is no deeper than `limit`, so nothing deeper reaches the
-// renderer. The tree is what the text view will build, and it is measured without recursion.
-pub fn parse_within(text: &str, limit: usize) -> Option<Node> {
+// The parsed text when its tree is within `limit` levels and the budgets, so nothing beyond
+// them reaches the renderer. The tree is what the text view will build, and it is measured
+// without recursion.
+pub fn parse_within(text: &str, limit: usize) -> Result<Node, Refusal> {
     if deeper_than(text, limit) {
-        return None;
+        return Err(Refusal::TooDeep);
     }
     let tree = match markdown::to_mdast(text, &parse_options()) {
         Ok(tree) => tree,
         Err(error) => {
             tracing::debug!(%error, "text that could not be parsed is not shown");
-            return None;
+            return Err(Refusal::TooLarge);
         }
     };
-    if depth_exceeds(&tree, limit) {
+    if let Some(refusal) = over_budget(&tree, limit) {
         dismantle(tree);
-        return None;
+        return Err(refusal);
     }
-    Some(tree)
+    Ok(tree)
 }
 
 pub fn preview_refusal(text: &str) -> Option<Refusal> {
     if text.len() > MAX_PREVIEW_BYTES {
         return Some(Refusal::TooLarge);
     }
-    parse_within(text, MAX_NESTING)
-        .is_none()
-        .then_some(Refusal::TooDeep)
+    parse_within(text, MAX_NESTING).err()
 }
 
 // The options the text view parses with first, so the checked tree is the rendered one. The
@@ -58,17 +63,41 @@ fn parse_options() -> ParseOptions {
     options
 }
 
-fn depth_exceeds(tree: &Node, limit: usize) -> bool {
+fn over_budget(tree: &Node, limit: usize) -> Option<Refusal> {
+    let mut nodes = 0usize;
     let mut pending = vec![(tree, 0usize)];
     while let Some((node, depth)) = pending.pop() {
         if depth > limit {
-            return true;
+            return Some(Refusal::TooDeep);
+        }
+        nodes += 1;
+        if nodes > MAX_NODES {
+            return Some(Refusal::TooLarge);
+        }
+        if let Node::Table(table) = node {
+            let columns = table.align.len().max(
+                table
+                    .children
+                    .first()
+                    .and_then(Node::children)
+                    .map_or(0, Vec::len),
+            );
+            if columns.saturating_mul(table.children.len()) > MAX_TABLE_CELLS {
+                return Some(Refusal::TooLarge);
+            }
         }
         if let Some(children) = node.children() {
+            let html = children
+                .iter()
+                .filter(|child| matches!(child, Node::Html(_)))
+                .count();
+            if html > MAX_HTML_SIBLINGS {
+                return Some(Refusal::TooLarge);
+            }
             pending.extend(children.iter().map(|child| (child, depth + 1)));
         }
     }
-    false
+    None
 }
 
 // Dropping a deep tree recurses once per level; taking the children out first does not.
@@ -88,24 +117,32 @@ fn dismantle(tree: Node) {
 // a hostile file from costing a parse.
 pub fn deeper_than(text: &str, limit: usize) -> bool {
     let mut paragraph = Inline::default();
-    let mut in_fence = false;
+    let mut fence = None;
     // CommonMark ends a line at a line feed, a carriage return or both; the empty piece between
     // a carriage return and its line feed is harmless.
     text.split(['\n', '\r'])
-        .any(|line| line_exceeds(line, limit, &mut paragraph, &mut in_fence))
+        .any(|line| line_exceeds(line, limit, &mut paragraph, &mut fence))
 }
 
-fn line_exceeds(line: &str, limit: usize, paragraph: &mut Inline, in_fence: &mut bool) -> bool {
-    let trimmed = line.trim_start();
-    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-        *in_fence = !*in_fence;
+fn line_exceeds(
+    line: &str,
+    limit: usize,
+    paragraph: &mut Inline,
+    fence: &mut Option<Fence>,
+) -> bool {
+    if let Some(open) = *fence {
+        if open.is_closed_by(line) {
+            *fence = None;
+            paragraph.clear();
+        }
+        return false;
+    }
+    if let Some(open) = Fence::opened_by(line) {
+        *fence = Some(open);
         paragraph.clear();
         return false;
     }
-    if *in_fence {
-        return false;
-    }
-    if trimmed.is_empty() {
+    if line.trim().is_empty() {
         paragraph.clear();
         return false;
     }
@@ -113,12 +150,54 @@ fn line_exceeds(line: &str, limit: usize, paragraph: &mut Inline, in_fence: &mut
     if blocks > limit {
         return true;
     }
-    if starts_item || rest.starts_with('#') {
+    if starts_item || is_atx_heading(rest) {
         paragraph.clear();
     }
     blocks + paragraph.scan(rest, limit) > limit
 }
 
+// A code fence as CommonMark has it: up to three spaces of indent, then three or more
+// backticks or tildes; the info string of a backtick fence holds no backtick.
+#[derive(Clone, Copy)]
+struct Fence {
+    mark: u8,
+    length: usize,
+}
+
+impl Fence {
+    fn opened_by(line: &str) -> Option<Fence> {
+        let (mark, length, after) = Fence::run(line)?;
+        let info_ok = mark == b'~' || !after.contains('`');
+        info_ok.then_some(Fence { mark, length })
+    }
+
+    fn is_closed_by(self, line: &str) -> bool {
+        Fence::run(line).is_some_and(|(mark, length, after)| {
+            mark == self.mark && length >= self.length && after.trim().is_empty()
+        })
+    }
+
+    // The mark, how many of it, and what follows, for a line that starts with a fence run.
+    fn run(line: &str) -> Option<(u8, usize, &str)> {
+        let indent = line.bytes().take_while(|byte| *byte == b' ').count();
+        if indent > 3 {
+            return None;
+        }
+        let rest = &line[indent..];
+        let mark = *rest.as_bytes().first()?;
+        if mark != b'`' && mark != b'~' {
+            return None;
+        }
+        let length = rest.bytes().take_while(|byte| *byte == mark).count();
+        (length >= 3).then(|| (mark, length, &rest[length..]))
+    }
+}
+
+// One to six `#` and then a space, a tab or the end of the line.
+fn is_atx_heading(text: &str) -> bool {
+    let hashes = text.bytes().take_while(|byte| *byte == b'#').count();
+    (1..=6).contains(&hashes) && ends_marker(text.as_bytes(), hashes)
+}
 fn block_depth(line: &str, limit: usize) -> (usize, bool, &str) {
     let bytes = line.as_bytes();
     let mut depth = 0;
@@ -273,7 +352,7 @@ mod tests {
         assert!(too_deep(&text));
         let spaced = "> ".repeat(2 * 1024 * 1024);
         assert!(too_deep(&spaced));
-        assert!(parse_within(&text, MAX_NESTING).is_none());
+        assert!(parse_within(&text, MAX_NESTING).is_err());
     }
 
     #[test]
@@ -351,7 +430,7 @@ mod tests {
         ] {
             let text = opened_per_line(open, close, 2_000);
             assert!(too_deep(&text), "{open}");
-            assert!(parse_within(&text, MAX_NESTING).is_none(), "{open}");
+            assert!(parse_within(&text, MAX_NESTING).is_err(), "{open}");
         }
     }
 
@@ -388,7 +467,7 @@ mod tests {
             })
             .collect();
         for text in [ordered, quoted, mixed] {
-            assert!(parse_within(&text, MAX_NESTING).is_none());
+            assert!(parse_within(&text, MAX_NESTING).is_err());
         }
     }
 
@@ -396,7 +475,7 @@ mod tests {
     fn a_document_within_the_limit_gives_its_tree() {
         let tree = parse_within("- a\n  - b *c*\n", MAX_NESTING).unwrap();
         assert!(tree_depth(&tree) <= MAX_NESTING);
-        assert!(parse_within("- a\n  - b *c*\n", 3).is_none());
+        assert!(parse_within("- a\n  - b *c*\n", 3).is_err());
     }
 
     // A tree the pre-pass never sees is still measured, and taking it apart does not recurse.
@@ -412,7 +491,7 @@ mod tests {
                 position: None,
             });
         }
-        assert!(depth_exceeds(&tree, MAX_NESTING));
+        assert_eq!(over_budget(&tree, MAX_NESTING), Some(Refusal::TooDeep));
         dismantle(tree);
     }
 
@@ -427,13 +506,74 @@ mod tests {
         assert_eq!(preview_refusal("plain"), None);
     }
 
+    #[test]
+    fn only_a_real_heading_ends_what_a_paragraph_carries() {
+        for heading in ["# h", "###### h", "#", "##\t", "  ## h"] {
+            let text = format!("*a\n{heading}\n").repeat(200);
+            assert!(!too_deep(&text), "{heading:?}");
+        }
+        for not_heading in ["#tag", "####### h", "#5 items", "\\# h"] {
+            let text = format!("*a\n{not_heading}\n").repeat(200);
+            assert!(too_deep(&text), "{not_heading:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_real_fence_hides_its_lines() {
+        let inside = "*a\n".repeat(200);
+        for (open, close) in [
+            ("```", "```"),
+            ("~~~", "~~~"),
+            ("   ````", "`````"),
+            ("```rust", "```"),
+        ] {
+            let text = format!("{open}\n{inside}{close}\n");
+            assert!(!too_deep(&text), "{open:?}");
+        }
+        for not_fence in ["    ```", "``` a`b", "``", "~~", "x ```"] {
+            let text = format!("{not_fence}\n{inside}");
+            assert!(too_deep(&text), "{not_fence:?}");
+        }
+        let unclosed_by_other_mark = format!("```\n{inside}~~~\n{inside}");
+        assert!(!too_deep(&unclosed_by_other_mark));
+        let closed = format!("```\n```\n{inside}");
+        assert!(too_deep(&closed));
+    }
+
+    // Each case below is within the byte cap of the pane, and only its shape is hostile.
+    #[test]
+    fn a_flood_of_html_tags_among_siblings_is_refused_at_the_byte_cap() {
+        let pairs = MAX_PREVIEW_BYTES / 7;
+        let text = format!("x{}y{}", "<b>".repeat(pairs), "</b>".repeat(pairs));
+        assert!(text.len() <= MAX_PREVIEW_BYTES);
+        assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
+        assert_eq!(preview_refusal("x <b>y</b> z"), None);
+    }
+
+    #[test]
+    fn a_wide_header_over_many_rows_is_refused_at_the_byte_cap() {
+        let header = format!("{}|\n{}|\n", "|a".repeat(4_000), "|-".repeat(4_000));
+        let text = format!("{header}{}", "|x|\n".repeat(200_000));
+        assert!(text.len() <= MAX_PREVIEW_BYTES);
+        assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
+        assert_eq!(preview_refusal("|a|b|\n|-|-|\n|1|2|\n"), None);
+    }
+
+    #[test]
+    fn more_nodes_than_the_budget_are_refused_at_the_byte_cap() {
+        let text = "*a* ".repeat(MAX_PREVIEW_BYTES / 4);
+        assert!(text.len() <= MAX_PREVIEW_BYTES);
+        assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
+        assert_eq!(preview_refusal(&"*a* ".repeat(1000)), None);
+    }
+
     // Math spans are one node here and the view must not parse their text again; whatever is
     // inside them is measured as the text it is.
     #[test]
     fn a_math_span_does_not_hide_nesting_in_the_checked_tree() {
         for (open, close) in [("*", "*"), ("~~", "~~")] {
             let text = format!("${}$", opened_per_line(open, close, 2_000));
-            assert!(parse_within(&text, MAX_NESTING).is_none(), "{open}");
+            assert!(parse_within(&text, MAX_NESTING).is_err(), "{open}");
         }
         assert!(fits("it cost $5 and $10, or $*a*$ in math"));
     }
@@ -495,7 +635,7 @@ mod tests {
 
         #[test]
         fn accepted_text_never_parses_deeper_than_the_limit(text in assembled(), limit in 2usize..40) {
-            if let Some(tree) = parse_within(&text, limit) {
+            if let Ok(tree) = parse_within(&text, limit) {
                 prop_assert!(tree_depth(&tree) <= limit);
             }
         }
@@ -506,7 +646,7 @@ mod tests {
             times in 1usize..300,
         ) {
             let text = piece.repeat(times);
-            if let Some(tree) = parse_within(&text, MAX_NESTING) {
+            if let Ok(tree) = parse_within(&text, MAX_NESTING) {
                 prop_assert!(tree_depth(&tree) <= MAX_NESTING);
             }
         }
@@ -518,7 +658,7 @@ mod tests {
             limit in 3usize..20,
         ) {
             let whole = format!("{prefix}{delta}");
-            if parse_within(&prefix, limit).is_some() && parse_within(&whole, limit).is_some() {
+            if parse_within(&prefix, limit).is_ok() && parse_within(&whole, limit).is_ok() {
                 prop_assert!(appended_depth(&prefix, &delta) <= limit);
             }
         }
@@ -549,7 +689,7 @@ mod tests {
         for (open, close) in [("*", "*"), ("_", "_"), ("~~", "~~"), ("[", "]")] {
             let text = opened_per_line(open, close, 64 * 1024 / (open.len() + 3) / 2);
             let started = Instant::now();
-            assert!(parse_within(&text, 32).is_none(), "{open}");
+            assert!(parse_within(&text, 32).is_err(), "{open}");
             assert!(
                 started.elapsed() < Duration::from_secs(2),
                 "{open:?} took {:?}",
