@@ -2,7 +2,6 @@ use crate::{
     arithmetic::{bcast_idx, BYTES_PER_ELEMENT, MAX_TEXT_ARRAY_BYTES},
     calc_result::CalcResult,
     cast::{array_node_to_string, calc_result_to_array_node},
-    constants::{LAST_COLUMN, LAST_ROW},
     expressions::{
         parser::{ArrayNode, Node},
         token::Error,
@@ -16,6 +15,7 @@ use crate::{
     },
     model::Model,
     number_format::to_precision,
+    range_cells::{RangeCells, RangeWalk},
     text_limit::{text_length, text_too_long, LimitedText, TextTooLong, MAX_TEXT_LENGTH},
 };
 
@@ -246,27 +246,22 @@ impl<'a> Model<'a> {
                             "Ranges are in different sheets".to_string(),
                         );
                     }
-                    for row in left.row..(right.row + 1) {
-                        for column in left.column..(right.column + 1) {
-                            match self.evaluate_cell(CellReferenceIndex {
-                                sheet: left.sheet,
-                                row,
-                                column,
-                            }) {
-                                CalcResult::String(value) => result.push(&value),
-                                CalcResult::Number(value) => result.push(&format!("{value}")),
-                                CalcResult::Boolean(value) => {
-                                    result.push(if value { "TRUE" } else { "FALSE" })
-                                }
-                                error @ CalcResult::Error { .. } => return error,
-                                CalcResult::EmptyCell | CalcResult::EmptyArg => {}
-                                CalcResult::Range { .. } => {}
-                                CalcResult::Array(_) | CalcResult::Lambda(_) => {
-                                    return CalcResult::Error {
-                                        error: Error::NIMPL,
-                                        origin: cell,
-                                        message: "Arrays not supported yet".to_string(),
-                                    }
+                    let mut cells = RangeCells::new(left, right);
+                    while let Some(reference) = cells.next(self, RangeWalk::Occupied) {
+                        match self.evaluate_cell(reference) {
+                            CalcResult::String(value) => result.push(&value),
+                            CalcResult::Number(value) => result.push(&format!("{value}")),
+                            CalcResult::Boolean(value) => {
+                                result.push(if value { "TRUE" } else { "FALSE" })
+                            }
+                            error @ CalcResult::Error { .. } => return error,
+                            CalcResult::EmptyCell | CalcResult::EmptyArg => {}
+                            CalcResult::Range { .. } => {}
+                            CalcResult::Array(_) | CalcResult::Lambda(_) => {
+                                return CalcResult::Error {
+                                    error: Error::NIMPL,
+                                    origin: cell,
+                                    message: "Arrays not supported yet".to_string(),
                                 }
                             }
                         }
@@ -1003,16 +998,24 @@ impl<'a> Model<'a> {
         };
         let mut joined = LimitedText::default();
         let mut is_first = true;
-        let mut join = |value: &str| {
+        let mut join = |joined: &mut LimitedText, value: &str| {
             if !is_first {
                 joined.push(&delimiter);
             }
             is_first = false;
             joined.push(value);
         };
+        // An empty cell adds only a delimiter to the text, and nothing once it is too long.
+        let walk = |joined: &LimitedText| {
+            if ignore_empty || delimiter.is_empty() || joined.is_too_long() {
+                RangeWalk::Occupied
+            } else {
+                RangeWalk::Every
+            }
+        };
         for arg in &args[2..] {
             match self.evaluate_node_in_context(arg, cell) {
-                CalcResult::Number(value) => join(&format!("{value}")),
+                CalcResult::Number(value) => join(&mut joined, &format!("{value}")),
                 CalcResult::Range { left, right } => {
                     if left.sheet != right.sheet {
                         return CalcResult::new_error(
@@ -1021,66 +1024,35 @@ impl<'a> Model<'a> {
                             "Ranges are in different sheets".to_string(),
                         );
                     }
-                    let row1 = left.row;
-                    let mut row2 = right.row;
-                    let column1 = left.column;
-                    let mut column2 = right.column;
-                    if row1 == 1 && row2 == LAST_ROW {
-                        row2 = match self.workbook.worksheet(left.sheet) {
-                            Ok(s) => s.dimension().max_row,
-                            Err(_) => {
-                                return CalcResult::new_error(
-                                    Error::ERROR,
-                                    cell,
-                                    format!("Invalid worksheet index: '{}'", left.sheet),
-                                );
+                    let mut cells = RangeCells::new(left, right);
+                    while let Some(reference) = cells.next(self, walk(&joined)) {
+                        match self.evaluate_cell(reference) {
+                            CalcResult::Number(value) => join(&mut joined, &format!("{value}")),
+                            CalcResult::String(value) => join(&mut joined, &value),
+                            CalcResult::Boolean(value) => {
+                                join(&mut joined, if value { "TRUE" } else { "FALSE" })
                             }
-                        };
-                    }
-                    if column1 == 1 && column2 == LAST_COLUMN {
-                        column2 = match self.workbook.worksheet(left.sheet) {
-                            Ok(s) => s.dimension().max_column,
-                            Err(_) => {
-                                return CalcResult::new_error(
-                                    Error::ERROR,
-                                    cell,
-                                    format!("Invalid worksheet index: '{}'", left.sheet),
-                                );
-                            }
-                        };
-                    }
-                    for row in row1..row2 + 1 {
-                        for column in column1..(column2 + 1) {
-                            match self.evaluate_cell(CellReferenceIndex {
-                                sheet: left.sheet,
-                                row,
-                                column,
-                            }) {
-                                CalcResult::Number(value) => join(&format!("{value}")),
-                                CalcResult::String(value) => join(&value),
-                                CalcResult::Boolean(value) => {
-                                    join(if value { "TRUE" } else { "FALSE" })
-                                }
-                                CalcResult::EmptyCell if ignore_empty => {}
-                                CalcResult::EmptyCell => join(""),
-                                error @ CalcResult::Error { .. } => return error,
-                                CalcResult::EmptyArg | CalcResult::Range { .. } => {}
-                                CalcResult::Array(_) | CalcResult::Lambda(_) => {
-                                    return CalcResult::Error {
-                                        error: Error::NIMPL,
-                                        origin: cell,
-                                        message: "Arrays not supported yet".to_string(),
-                                    }
+                            CalcResult::EmptyCell if ignore_empty => {}
+                            CalcResult::EmptyCell => join(&mut joined, ""),
+                            error @ CalcResult::Error { .. } => return error,
+                            CalcResult::EmptyArg | CalcResult::Range { .. } => {}
+                            CalcResult::Array(_) | CalcResult::Lambda(_) => {
+                                return CalcResult::Error {
+                                    error: Error::NIMPL,
+                                    origin: cell,
+                                    message: "Arrays not supported yet".to_string(),
                                 }
                             }
                         }
                     }
                 }
                 error @ CalcResult::Error { .. } => return error,
-                CalcResult::String(value) => join(&value),
-                CalcResult::Boolean(value) => join(if value { "TRUE" } else { "FALSE" }),
+                CalcResult::String(value) => join(&mut joined, &value),
+                CalcResult::Boolean(value) => {
+                    join(&mut joined, if value { "TRUE" } else { "FALSE" })
+                }
                 CalcResult::EmptyCell if ignore_empty => {}
-                CalcResult::EmptyCell => join(""),
+                CalcResult::EmptyCell => join(&mut joined, ""),
                 CalcResult::EmptyArg => {}
                 CalcResult::Array(_) | CalcResult::Lambda(_) => {
                     return CalcResult::Error {

@@ -846,3 +846,14 @@ fn text_broadcasts_past_the_array_size_limit_open_as_value_errors() {
     );
     assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
 }
+
+// CONCAT and TEXTJOIN over all of a sheet but its first row evaluated each of its 1.7e10
+// cells, empty or not; now they read only the cells the sheet holds.
+#[test]
+fn concat_and_textjoin_over_the_whole_sheet_open_quickly() {
+    let texts = texts_on_open(
+        r#"<c r="B1"><f>CONCAT(A2:XFD1048576)</f></c><c r="C1"><f>TEXTJOIN(",",TRUE,A2:XFD1048576)</f></c><c r="D1"><f>TEXTJOIN("",FALSE,A2:XFD1048576)</f></c><c r="E1"><f>TEXTJOIN(",",FALSE,A2:XFD1048576)</f></c>"#,
+        &["B1", "C1", "D1", "E1"],
+    );
+    assert_eq!(texts, ["", "", "", "#VALUE!"]);
+}

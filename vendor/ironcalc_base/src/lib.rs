@@ -65,6 +65,7 @@ mod incremental;
 mod lookup_indexes;
 mod model;
 pub mod open_budget;
+mod range_cells;
 mod styles;
 mod text_limit;
 mod tz;

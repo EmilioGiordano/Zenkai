@@ -452,6 +452,17 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   against a row built every pair (`broadcast_text` in `src/functions/text/common.rs`). Needs
   the text limit patch for the `&` limits. Tests: `broadcast_*` in
   `src/test/text_functions/fn_left_right_mid_arrays.rs`.
+- CONCAT, and TEXTJOIN when an empty cell adds nothing to its text, read only the cells a
+  range holds (`RangeCells` in `src/range_cells.rs`, `CellStore::next_column` and
+  `CellStore::last_row`), instead of evaluating every cell of it, 1.7e10 for a whole sheet.
+  The worksheet is read as the walk goes, so a spill written while it runs is read as before.
+  TEXTJOIN with `ignore_empty` FALSE and a delimiter reads every cell until its text passes
+  32,767 characters. TEXTJOIN no longer cuts a whole row or column at the used area, which
+  dropped the delimiters of its empty cells: like Excel it is `#VALUE!` for a whole column
+  with `ignore_empty` FALSE (`src/functions/text/common.rs`). Needs the text limit patch.
+  Tests: `src/test/test_range_walk.rs` (each function over a range against the same cells
+  listed one by one, on random sheets with spills), `next_column_and_last_row` in
+  `src/cell_store.rs`.
 
 Zenkai-only, not for upstream:
 
