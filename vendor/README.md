@@ -463,6 +463,12 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   Tests: `src/test/test_range_walk.rs` (each function over a range against the same cells
   listed one by one, on random sheets with spills), `next_column_and_last_row` in
   `src/cell_store.rs`.
+- REGEXREPLACE returns `#VALUE!`, as Excel does, for a result past 32,767 characters. It
+  reads the replacement once into text and group references, as `Captures::expand` reads it,
+  and adds each match's pieces to a `LimitedText`, so a replacement repeating `$0` over a long
+  match no longer builds hundreds of megabytes (`src/functions/text/regex_functions.rs`).
+  Needs the text limit patch. Tests: the module (against `Regex::replace_all` on random
+  replacements) and `test_regexreplace_*` in `src/test/text_functions/fn_regex.rs`.
 
 Zenkai-only, not for upstream:
 

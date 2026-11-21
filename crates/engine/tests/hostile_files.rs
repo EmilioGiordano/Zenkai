@@ -857,3 +857,14 @@ fn concat_and_textjoin_over_the_whole_sheet_open_quickly() {
     );
     assert_eq!(texts, ["", "", "", "#VALUE!"]);
 }
+
+// A REGEXREPLACE replacement repeating `$0` sixteen thousand times over a 32,767 character
+// match built half a gigabyte; past Excel's 32,767 characters it is #VALUE!.
+#[test]
+fn regexreplace_past_the_text_limit_opens_as_value_error() {
+    let texts = texts_on_open(
+        r#"<c r="A1"><f>REGEXREPLACE(REPT("x",32767),"x+",REPT("$0",16383))</f></c>"#,
+        &["A1"],
+    );
+    assert_eq!(texts, ["#VALUE!"]);
+}
