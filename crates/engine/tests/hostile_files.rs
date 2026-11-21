@@ -411,6 +411,28 @@ fn long_operator_chain_is_rejected_not_a_stack_overflow() {
     assert!(error.contains("characters"), "{error}");
 }
 
+// The text formulas return is charged to the open budget while the file is first
+// evaluated; a file of long results without cached values still opens whole within it.
+#[test]
+fn long_text_results_without_cached_values_open_whole() {
+    let data: String = (1..=1_000)
+        .map(|row| {
+            format!(r#"<row r="{row}"><c r="A{row}"><f>REPT("x",30000)&amp;{row}</f></c></row>"#)
+        })
+        .collect();
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{data}</sheetData></worksheet>"#
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-text.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet)).unwrap();
+    let book = open_xlsx(&path).unwrap();
+    let last = book
+        .workbook
+        .cell(SheetId(0), CellPos::parse_a1("A1000").unwrap());
+    assert_eq!(last.text, format!("{}1000", "x".repeat(30_000)));
+}
+
 // The reader parses a formula's shape while the rows stream once it repeats, on its sheet
 // and row threads too; the longest and deepest formulas the limits allow, filled down, still
 // open, in a small sheet and in one past 8 MB, which streams on its own threads.
@@ -769,5 +791,25 @@ fn styles_without_cell_style_formats_open_edit_and_save() {
         save_xlsx(book.save_snapshot(&path, SaveTarget::Document).unwrap()).unwrap();
         let reopened = open_xlsx(&path).unwrap().workbook;
         assert!(reopened.cell(SheetId(0), a1).style.bold, "{reader:?}");
+    }
+}
+
+// Joined thousands of times, or with every number of a large SEQUENCE, a long text grew to
+// tens of gigabytes on the first evaluation; past Excel's 32,767 characters each is #VALUE!.
+#[test]
+fn text_joins_past_the_text_limit_open_as_value_errors() {
+    let chain = format!("{}A1", "A1&amp;".repeat(2_500));
+    let cells = format!(
+        r#"<c r="A1"><f>REPT("x",30000)</f></c><c r="B1"><f>{chain}</f></c><c r="C1" cm="1"><f t="array" ref="C1">REPT("x",32000)&amp;SEQUENCE(1000000)</f></c>"#
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-joins.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet(&cells))).unwrap();
+    let started = Instant::now();
+    let book = open_xlsx(&path).unwrap().workbook;
+    assert!(started.elapsed() < Duration::from_secs(30));
+    for cell in ["B1", "C1"] {
+        let view = book.cell(SheetId(0), CellPos::parse_a1(cell).unwrap());
+        assert_eq!(view.text, "#VALUE!", "{cell}");
     }
 }

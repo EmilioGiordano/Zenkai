@@ -41,7 +41,7 @@ Design principle: reinvent nothing. Shortcuts, menu names, selection, formula er
 - A UI task gets a design artifact approved before implementation.
 - If an engine or GPUI limitation blocks a requirement: stop and report it with
   alternatives. Never work around it silently.
-- Keep `README.md` current with how to build, test and run the benchmark on Windows.
+- Keep `docs/DEVELOPMENT.md` current with how to build, test and run the benchmark.
 
 ## Architecture
 
@@ -53,6 +53,9 @@ Design principle: reinvent nothing. Shortcuts, menu names, selection, formula er
 - `pdf-host` holds the PDF wire format and client the `app` uses, plus the
   `zenkai-pdf-host` binary, the only code that loads pdfium. PDFs are read in that
   process so a pdfium crash never takes the app down.
+- `values-host` holds the read-only fallback's wire format and client the `app` uses, plus
+  the `zenkai-values-host` binary, the only process that runs calamine, so a panic or hang on
+  a hostile file never takes the app down.
 - Dependencies flow one way: `app` uses `grid`, `engine` and `formats`; `grid` does not
   know the engine; only `engine` knows IronCalc or logisheets. Where `formats` sits
   relative to `engine` is decided in Phase 1 and recorded in the decisions log (`MAINTAINERS.md`).
@@ -151,28 +154,49 @@ Never comments that narrate the code, decorative section headers or commented-ou
   is not visible in the diff: a subtle bug, a counterintuitive decision, a measurement
   behind the change.
 
+Good subjects: `Give every save attempt its own temp file name`, `Add cancellation to the
+streaming xlsx reader`, `Index exact lookups over cells without formulas during an
+evaluation`. Bad: `Update files`, `Implement phase 2` (too big), `Fixed bug in grid.` (past
+tense, vague, trailing period).
+
 ## Branches
 - Never commit to `main`. Every task starts on a new branch.
 - One branch per feature or logical change. Group only changes that are related;
   never several unrelated features on one branch.
-- Names: `feat/<topic>`, `fix/<topic>`, `perf/<topic>`, `test/<topic>`, `chore/<topic>`.
+- Names: `feat/<topic>`, `fix/<topic>`, `perf/<topic>`, `test/<topic>`, `chore/<topic>`,
+  for example `fix/stale-save-temp`, `feat/open-cancel`, `perf/lookup-cache`.
 - Agents never push or open PRs; the human who owns the checkout does. Merging needs the
   maintainer's explicit approval.
-
-Good subjects: `Add atomic save with temp file swap`, `Fix range selection past frozen panes`,
-`Cache visible range values in grid`. Bad: `Update files`, `Implement phase 2` (too big),
-`Fixed bug in grid.` (past tense, vague, trailing period).
 
 ## Pull requests
 
 All text is English and never contains the middle dot character.
 
 - **Title:** `<type>: <imperative summary>`, type one of feat, fix, perf, chore, test, docs;
-  at most 72 characters, no trailing period, ` (N/M)` appended for stacked PRs.
+  at most 72 characters, no trailing period, ` (N/M)` appended for stacked PRs. For
+  example `fix: give every save attempt its own temp file name`, `perf: index exact
+  lookups during an evaluation`, `fix: ask before replacing an existing csv or tsv (2/2)`.
 - **Body:** `## Why` (1 or 2 sentences), `## What` (2 to 5 bullets), `## Decisions`
   (optional: choice and reason), `## Validation` (tests, CI result, what was not
   verified), and, when stacked, `Stacked on #N`. At most 40 lines.
   `scripts/pr/lint.sh` checks it.
+
+A body from the history (#222, with the maintainer's staging lines left out):
+
+```markdown
+## Why
+A save that failed or was killed could leave its temp file, and the next save reused the
+same name and collided (#89).
+
+## What
+- Give every save attempt its own temp file name.
+- Tests that hit the old collision, with temp names counted per test thread.
+
+## Validation
+- Cross-model review asked for tests that really hit the collision; fixed in 662e3372 and
+  7eb4e61c.
+- Cleaning temps left by a killed process stays in #208.
+```
 
 ## Validation
 

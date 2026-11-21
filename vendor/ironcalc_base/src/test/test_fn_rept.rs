@@ -27,3 +27,14 @@ fn wrong_number_of_arguments() {
     assert_eq!(model._get_text("B1"), *"#ERROR!");
     assert_eq!(model._get_text("B2"), *"#ERROR!");
 }
+
+#[test]
+fn a_length_past_i32_is_an_error_not_an_overflow() {
+    let mut model = new_empty_model();
+    // 4 characters 2^29 times is 2^31, which wraps an i32 product to a negative length.
+    model._set("B1", "=REPT(\"abcd\", 536870912)");
+
+    model.evaluate();
+
+    assert_eq!(model._get_text("B1"), *"#VALUE!");
+}

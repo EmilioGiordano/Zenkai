@@ -28,12 +28,12 @@ Hard rules for the whole run:
 ## Procedure
 
 1. One branch: run the full gate (step 4) directly in that branch's worktree
-   and copy the exe (step 5). No staging branch, no staging worktree.
+   and copy the exe (step 5), with the same `.cargo/config.toml` as step 2 so
+   the build never lands inside OneDrive. No staging branch, no staging worktree.
 2. Several branches: create the worktree from the repo root:
    `git worktree add -b staging/<date> .claude/worktrees/staging main`
    (adding `-n` when the name is taken). Add the untracked `.cargo/config.toml`
-   with `target-dir = "D:/More-Code-Projects/Zenkai-compiled/staging"` (plus
-   `rustc-wrapper = "sccache"`), and never change it afterwards. Merge the
+   with `target-dir = "C:/yien-compiled/zenkai/staging"`, and never change it afterwards. Merge the
    final tip of each branch once, in the order given, with
    `git merge --no-ff <branch>`. After each merge run
    `cargo check --workspace --all-targets` to attribute breakage to the branch
@@ -47,10 +47,11 @@ Hard rules for the whole run:
    `cargo deny check`, `cargo build --release`, then the vendor suites the workspace
    excludes, for each crate present under `vendor/` (`ironcalc_base`, and `ironcalc` once
    it exists): `cargo test --manifest-path vendor/<crate>/Cargo.toml`. Plus the benchmark in
-   `bench/` (release, as `README.md` documents it) when a merged branch touches
+   `bench/` (release, as `docs/DEVELOPMENT.md` documents it) when a merged branch touches
    `crates/engine`, `crates/grid`, `crates/formats` or `bench/`.
-5. Copy the release exe to `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`,
-   overwriting. If the file is locked, report it and stop; never kill the
+5. Copy `C:\yien-compiled\zenkai\staging\release\zenkai.exe` to
+   `C:\Users\giord\OneDrive\Desktop\Zenkai.exe`, overwriting, and next to it
+   `zenkai-pdf-host.exe`, `zenkai-values-host.exe` and `pdfium.dll` when present. If the file is locked, report it and stop; never kill the
    process.
 6. Per-PR comment: for each PR of the batch, write a staging comment of at most 10 lines
    (gate result, measurements before and after, what to test by hand) and post it with

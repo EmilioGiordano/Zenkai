@@ -31,7 +31,7 @@ location and format are set in Phase 0 and documented there.
 
 ## Measure (staging only)
 
-1. Build and run the benchmark in release, exactly as `README.md` documents it. Never a
+1. Build and run the benchmark in release, exactly as `docs/DEVELOPMENT.md` documents it. Never a
    debug build: a number from a debug build is not evidence and must not appear in the
    report.
 2. Follow the method in `docs/BENCHMARK.md`: same fixtures, same number of runs, median.

@@ -25,11 +25,13 @@ You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` an
 ## Procedure
 
 1. One branch: run the full gate (step 5) directly in that branch's worktree and copy the
-   exe (step 7) from its target dir. Create no staging branch and no staging worktree.
+   exe (step 7), with the same untracked `.cargo/config.toml` as step 2 so the build
+   lands in the staging target dir, never inside OneDrive. Create no staging branch and no
+   staging worktree.
 2. Several branches: create a worktree: `git worktree add -b staging/<YYYY-MM-DD>
    .claude/worktrees/staging main` from the repo root (adding `-n` when the name is
    taken). Add an untracked `.cargo/config.toml` with
-   `target-dir = "D:/More-Code-Projects/Zenkai-compiled/staging"`. That dir is persistent and
+   `target-dir = "C:/yien-compiled/zenkai/staging"`. That dir is persistent and
    is never cleaned. Merge the final tip of each branch once, in the order given, with
    `git merge --no-ff <branch>`. If a branch changes after a failure, start over with a new
    staging branch from `main`; never re-merge into the old one.
@@ -45,12 +47,12 @@ You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` an
    workspace excludes, for each crate present under `vendor/` (`ironcalc_base`, and
    `ironcalc` once it exists): `cargo test --manifest-path vendor/<crate>/Cargo.toml`.
 6. Run the benchmark in `bench/` (release) when any merged branch touched `crates/engine`,
-   `crates/grid`, `crates/formats` or `bench/`, as `README.md` documents it, and compare it
+   `crates/grid`, `crates/formats` or `bench/`, as `docs/DEVELOPMENT.md` documents it, and compare it
    with the saved baseline and the SPEC budgets.
-7. Copy `target\release\zenkai.exe` to `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`,
-   overwriting: from the staging target dir, or from the branch's own target dir in the
-   single-branch case. If the copy fails because the file is locked, report it and stop;
-   do not kill the process.
+7. Copy `C:\yien-compiled\zenkai\staging\release\zenkai.exe` to
+   `C:\Users\giord\OneDrive\Desktop\Zenkai.exe`, overwriting, and next to it the helpers the
+   app loads from its own folder: `zenkai-pdf-host.exe`, `zenkai-values-host.exe` and `pdfium.dll` when present. If a copy fails because the file is locked,
+   report it and stop; do not kill the process.
 
 ## Failures
 
