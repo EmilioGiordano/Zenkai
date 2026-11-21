@@ -170,14 +170,37 @@ impl MarkdownPane {
         self.show_in_preview(&text, cx);
     }
 
-    // Text nested too deeply is not handed to the parser; the pane says so instead.
+    // Text whose parsed tree nests too deeply is not handed to the text view; the pane says so
+    // instead. A long text is measured in the background and the preview waits for the answer.
     pub(super) fn show_in_preview(&mut self, text: &str, cx: &mut Context<Self>) {
         self.vet_images(text, cx);
-        self.too_deep = markdown_depth::too_deep(text);
-        let shown = if self.too_deep { "" } else { text };
+        self.preview_stale = false;
+        if text.len() <= markdown_depth::SYNC_BYTES {
+            self.depth_task = None;
+            self.apply_depth(text, markdown_depth::fits(text), cx);
+            return;
+        }
+        let text = text.to_owned();
+        self.depth_task = Some(cx.spawn(async move |this, cx| {
+            let (text, fits) = cx
+                .background_executor()
+                .spawn(async move {
+                    let fits = markdown_depth::fits(&text);
+                    (text, fits)
+                })
+                .await;
+            if let Err(error) = this.update(cx, |this, cx| this.apply_depth(&text, fits, cx)) {
+                tracing::debug!(%error, "markdown pane closed before its depth was checked");
+            }
+        }));
+    }
+
+    fn apply_depth(&mut self, text: &str, fits: bool, cx: &mut Context<Self>) {
+        self.too_deep = !fits;
+        let shown = if fits { text } else { "" };
         self.preview
             .update(cx, |preview, cx| preview.set_text(shown, cx));
-        self.preview_stale = false;
+        cx.notify();
     }
 
     pub(super) fn schedule_follow(&mut self, cx: &mut Context<Self>) {

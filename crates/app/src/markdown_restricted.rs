@@ -4,14 +4,18 @@ use url::Url;
 use crate::markdown_depth;
 use crate::markdown_links::is_invisible_or_bidi;
 
-const MAX_NESTING: usize = 16;
+const MAX_NESTING: usize = 32;
 const MAX_LINK_BYTES: usize = 2048;
 const REPOSITORY_PATH: &str = "/EmilioGiordano/Zenkai";
 
-// The text of a release note is edited on GitHub and is not signed, so it is shown in a
-// restricted mode: this cleans what the parser sees, and the pane renders HTML, images and
-// links through `vetted_link` only. None when the text nests too deep to be shown.
-pub fn clean(text: &str) -> Option<String> {
+pub struct Checked {
+    pub text: String,
+    pub tree: Node,
+}
+
+// Release text is edited on GitHub and is not signed: control and direction characters go,
+// and text whose parsed tree nests past the limit is refused (None).
+pub fn check(text: &str) -> Option<Checked> {
     let mut cleaned = String::with_capacity(text.len());
     let mut characters = text.chars().peekable();
     while let Some(character) = characters.next() {
@@ -27,12 +31,15 @@ pub fn clean(text: &str) -> Option<String> {
             _ => cleaned.push(character),
         }
     }
-    (!markdown_depth::deeper_than(&cleaned, MAX_NESTING)).then_some(cleaned)
+    let tree = markdown_depth::parse_within(&cleaned, MAX_NESTING)?;
+    Some(Checked {
+        text: cleaned,
+        tree,
+    })
 }
 
-// The address a link may open, as the URL parser reads it: https, exactly github.com, no user,
-// no port, no `..`, and inside this repository. The caller shows and opens the returned text,
-// never the one it was given, so what the user confirms is what the browser gets.
+// The address a link may open, as the URL parser reads it. The caller shows and opens the
+// returned text, never the one it was given.
 pub fn vetted_link(raw: &str) -> Option<String> {
     if raw.len() > MAX_LINK_BYTES
         || raw
@@ -59,7 +66,7 @@ pub fn vetted_link(raw: &str) -> Option<String> {
 }
 
 // What a node shows as plain text, for a link or an image the restricted mode does not draw.
-// Walks with its own stack: nesting is bounded by `clean`, but not exactly.
+// Walks with its own stack: the tree is bounded by `check`.
 pub fn plain_text(children: &[Node]) -> String {
     let mut text = String::new();
     let mut pending: Vec<&Node> = children.iter().rev().collect();
@@ -104,6 +111,10 @@ mod tests {
     use super::*;
 
     const REPOSITORY: &str = "https://github.com/EmilioGiordano/Zenkai";
+
+    fn clean(text: &str) -> Option<String> {
+        check(text).map(|checked| checked.text)
+    }
 
     #[test]
     fn links_inside_the_repository_are_allowed() {
@@ -214,6 +225,14 @@ mod tests {
     }
 
     #[test]
+    fn the_tree_is_measured_not_the_lines() {
+        let text = format!("{}{}", "*a\n".repeat(500), "a*\n".repeat(500));
+        assert!(check(&text).is_none());
+        let plain = check("# Title\n\n- one\n  - two *three*\n").unwrap();
+        assert!(markdown_depth::tree_depth(&plain.tree) <= MAX_NESTING);
+    }
+
+    #[test]
     fn markup_is_left_for_the_renderer_to_show_as_text() {
         let text = "<script>x</script>\n\n![logo](C:\\a.png)\n\n[a](file:///x)\n";
         assert_eq!(clean(text).as_deref(), Some(text));
@@ -245,6 +264,11 @@ mod tests {
         "\u{202e}",
         "é",
         "%",
+    ];
+
+    const DEEP_PIECES: &[&str] = &[
+        "> ", "- ", "1. ", "1) ", "\t", "  ", "*", "**", "_", "~~", "[", "](x)", "a ", "a", "\n",
+        "\n  ",
     ];
 
     fn assembled() -> impl Strategy<Value = String> {
@@ -287,6 +311,15 @@ mod tests {
                     .chars()
                     .all(|c| c == '\n' || c == '\t' || !is_invisible_or_bidi(c)));
                 prop_assert_eq!(clean(&cleaned).as_deref(), Some(cleaned.as_str()));
+            }
+        }
+
+        #[test]
+        fn accepted_text_never_parses_deeper_than_the_limit(
+            parts in prop::collection::vec(prop::sample::select(DEEP_PIECES.to_vec()), 0..80)
+        ) {
+            if let Some(checked) = check(&parts.concat()) {
+                prop_assert!(markdown_depth::tree_depth(&checked.tree) <= MAX_NESTING);
             }
         }
     }

@@ -62,16 +62,16 @@ pub fn plan(status: Status, notes: &Notes, installed: Version) -> Plan {
 // A note that is empty, too deeply nested or past the size limit has no text, and its
 // heading says so; its release page is still there.
 fn section(note: &Note) -> SectionPlan {
-    let text = note
+    let checked = note
         .body
         .as_deref()
-        .and_then(markdown_restricted::clean)
-        .filter(|text| !text.trim().is_empty());
+        .and_then(markdown_restricted::check)
+        .filter(|checked| !checked.text.trim().is_empty());
     SectionPlan {
         version: note.version,
         published: note.published,
-        links: links_of(note.version, text.as_deref()),
-        text,
+        links: links_of(note.version, checked.as_ref().map(|checked| &checked.tree)),
+        text: checked.map(|checked| checked.text),
     }
 }
 

@@ -1,11 +1,10 @@
-use markdown::ParseOptions;
 use markdown::mdast::Node;
 
 use crate::markdown_links::shown_target;
 use crate::markdown_restricted::{plain_text, vetted_link};
 use crate::updates::Version;
 
-const MAX_LINKS: usize = 12;
+pub const MAX_LINKS: usize = 12;
 const MAX_TEXT_CHARS: usize = 60;
 const REPOSITORY: &str = "https://github.com/EmilioGiordano/Zenkai";
 
@@ -30,28 +29,15 @@ pub fn release_page(version: Version) -> String {
     format!("{REPOSITORY}/releases/tag/v{version}")
 }
 
-// The release page of the version first, then the vetted links of its text in the order they
-// appear, without repeats. A version always has its release page, whatever its text says.
-pub fn links_of(version: Version, text: Option<&str>) -> Vec<NoteLink> {
+// The release page of the version first, then the vetted links of its parsed text in the
+// order they appear, without repeats. A version always has its release page.
+pub fn links_of(version: Version, tree: Option<&Node>) -> Vec<NoteLink> {
     let mut links = vec![NoteLink {
         target: Target::Release(version),
         text: String::new(),
         url: release_page(version),
     }];
-    let Some(text) = text else {
-        return links;
-    };
-    let mut options = ParseOptions::gfm();
-    options.constructs.math_text = true;
-    options.constructs.math_flow = true;
-    let tree = match markdown::to_mdast(text, &options) {
-        Ok(tree) => tree,
-        Err(error) => {
-            tracing::debug!(%error, "release notes could not be read for their links");
-            return links;
-        }
-    };
-    let mut pending = vec![&tree];
+    let mut pending: Vec<&Node> = tree.into_iter().collect();
     while let Some(node) = pending.pop() {
         if links.len() == MAX_LINKS {
             break;
@@ -119,9 +105,15 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::markdown_restricted;
 
     fn version(text: &str) -> Version {
         Version::parse_bare(text).unwrap()
+    }
+
+    fn links_in(version: Version, text: Option<&str>) -> Vec<NoteLink> {
+        let checked = text.and_then(markdown_restricted::check);
+        links_of(version, checked.as_ref().map(|checked| &checked.tree))
     }
 
     fn urls(links: &[NoteLink]) -> Vec<&str> {
@@ -141,7 +133,7 @@ mod tests {
     #[test]
     fn a_version_without_text_or_links_has_only_its_release_page() {
         for text in [None, Some(""), Some("- fixed a bug\n- and another\n")] {
-            let links = links_of(version("0.1.3"), text);
+            let links = links_in(version("0.1.3"), text);
             assert_eq!(links.len(), 1);
             assert_eq!(links[0].target, Target::Release(version("0.1.3")));
         }
@@ -153,7 +145,7 @@ mod tests {
                     [the fix](https://github.com/EmilioGiordano/Zenkai/pull/13), also \
                     [again](https://github.com/EmilioGiordano/Zenkai/issues/12) and \
                     [this release](https://github.com/EmilioGiordano/Zenkai/releases/tag/v0.1.3).";
-        let links = links_of(version("0.1.3"), Some(text));
+        let links = links_in(version("0.1.3"), Some(text));
         assert_eq!(
             urls(&links),
             [
@@ -173,14 +165,14 @@ mod tests {
                     [b](http://github.com/EmilioGiordano/Zenkai/issues/1) \
                     [c](file:///C:/x) [d](#top) [e](https://github.com/Other/Zenkai) \
                     [f](https://github.com/EmilioGiordano/Zenkai/../Other)";
-        assert_eq!(links_of(version("0.1.3"), Some(text)).len(), 1);
+        assert_eq!(links_in(version("0.1.3"), Some(text)).len(), 1);
     }
 
     #[test]
     fn other_links_are_named_by_their_text_or_else_their_address() {
         let text = "[the wiki](https://github.com/EmilioGiordano/Zenkai/wiki) \
                     [](https://github.com/EmilioGiordano/Zenkai/discussions)";
-        let links = links_of(version("0.1.3"), Some(text));
+        let links = links_in(version("0.1.3"), Some(text));
         assert_eq!(links[1].target, Target::Other);
         assert_eq!(links[1].text, "the wiki");
         assert_eq!(
@@ -195,7 +187,7 @@ mod tests {
             "[{}](https://github.com/EmilioGiordano/Zenkai/wiki)",
             "word ".repeat(40)
         );
-        let links = links_of(version("0.1.3"), Some(&text));
+        let links = links_in(version("0.1.3"), Some(&text));
         assert_eq!(links[1].text.chars().count(), MAX_TEXT_CHARS + 1);
         assert!(links[1].text.ends_with('\u{2026}'));
     }
@@ -206,7 +198,7 @@ mod tests {
                     <https://github.com/EmilioGiordano/Zenkai/pull/6>\n\n\
                     `[x](https://github.com/EmilioGiordano/Zenkai/issues/7)`\n\n\
                     ```\nhttps://github.com/EmilioGiordano/Zenkai/issues/8\n```\n";
-        let links = links_of(version("0.1.3"), Some(text));
+        let links = links_in(version("0.1.3"), Some(text));
         assert_eq!(
             urls(&links)[1..],
             [
@@ -219,7 +211,7 @@ mod tests {
     #[test]
     fn a_reference_link_is_not_a_link() {
         let text = "[a][ref]\n\n[ref]: https://github.com/EmilioGiordano/Zenkai/issues/9\n";
-        assert_eq!(links_of(version("0.1.3"), Some(text)).len(), 1);
+        assert_eq!(links_in(version("0.1.3"), Some(text)).len(), 1);
     }
 
     #[test]
@@ -229,7 +221,7 @@ mod tests {
                 format!("[{number}](https://github.com/EmilioGiordano/Zenkai/issues/{number}) ")
             })
             .collect();
-        assert_eq!(links_of(version("0.1.3"), Some(&text)).len(), MAX_LINKS);
+        assert_eq!(links_in(version("0.1.3"), Some(&text)).len(), MAX_LINKS);
     }
 
     #[test]
@@ -278,7 +270,7 @@ mod tests {
             parts in prop::collection::vec(prop::sample::select(PIECES.to_vec()), 0..30)
         ) {
             let text = parts.concat();
-            let links = links_of(version("0.1.3"), Some(&text));
+            let links = links_in(version("0.1.3"), Some(&text));
             prop_assert!(!links.is_empty() && links.len() <= MAX_LINKS);
             prop_assert_eq!(&links[0].url, &release_page(version("0.1.3")));
             for link in &links {
@@ -292,7 +284,7 @@ mod tests {
         fn any_characters_are_read_without_a_panic(
             text in prop::collection::vec(any::<char>(), 0..200).prop_map(String::from_iter)
         ) {
-            let links = links_of(version("0.1.3"), Some(&text));
+            let links = links_in(version("0.1.3"), Some(&text));
             prop_assert!(links.len() <= MAX_LINKS);
         }
     }
