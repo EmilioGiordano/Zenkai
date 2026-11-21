@@ -1,5 +1,5 @@
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,16 @@ use super::version::Version;
 
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const MAX_FILE_BYTES: u64 = 4096;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SaveError {
+    #[error("the session directory is unknown")]
+    NoDirectory,
+    #[error("could not write the record: {0}")]
+    Write(#[from] std::io::Error),
+    #[error("could not encode the record: {0}")]
+    Encode(#[from] serde_json::Error),
+}
 
 // What survives between sessions. `last_check` is the last attempt and decides when the next
 // automatic check is due; `last_success` and `newest` are what the last answer said.
@@ -87,20 +97,24 @@ impl Record {
         }
     }
 
-    pub fn save(&self) -> std::io::Result<()> {
-        let Some(file) = file() else {
-            return Ok(());
-        };
+    pub fn save(&self) -> Result<(), SaveError> {
+        let file = file().ok_or(SaveError::NoDirectory)?;
+        self.write_to(&file)
+    }
+
+    fn write_to(&self, file: &Path) -> Result<(), SaveError> {
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let text = self.to_json().map_err(std::io::Error::other)?;
+        let text = self.to_json()?;
         static SAVING: Mutex<()> = Mutex::new(());
         let _saving = SAVING
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let temp = file.with_extension("tmp");
-        std::fs::write(&temp, text).and_then(|()| std::fs::rename(&temp, &file))
+        std::fs::write(&temp, text)?;
+        std::fs::rename(&temp, file)?;
+        Ok(())
     }
 }
 
@@ -111,7 +125,7 @@ fn file() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::super::version::Version;
-    use super::{CHECK_INTERVAL_SECS, Record};
+    use super::{CHECK_INTERVAL_SECS, Record, SaveError};
 
     fn version(text: &str) -> Version {
         Version::parse_bare(text).unwrap()
@@ -186,6 +200,31 @@ mod tests {
         let record = Record::parse(br#"{"announced":"latest","newest":"v1.0.0"}"#).unwrap();
         assert_eq!(record.announced, None);
         assert_eq!(record.newest, None);
+    }
+
+    #[test]
+    fn a_saved_record_is_read_back_from_a_new_folder() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("session").join("updates.json");
+        let record = Record {
+            last_check: Some(7),
+            announced: Some(version("1.2.3")),
+            ..Record::default()
+        };
+        record.write_to(&file).unwrap();
+        assert_eq!(
+            Record::parse(&std::fs::read(&file).unwrap()).unwrap(),
+            record
+        );
+    }
+
+    #[test]
+    fn a_record_that_cannot_be_written_is_an_error() {
+        let folder = tempfile::tempdir().unwrap();
+        let blocker = folder.path().join("blocker");
+        std::fs::write(&blocker, b"").unwrap();
+        let result = Record::default().write_to(&blocker.join("updates.json"));
+        assert!(matches!(result, Err(SaveError::Write(_))));
     }
 
     #[test]
