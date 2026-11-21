@@ -17,6 +17,8 @@ ignore = [
     # Unreachable in zip 0.6 as built here: AES decryption is compiled out and nothing reads entries from a stream.
     { id = "RUSTSEC-2026-0545", reason = "no crate enables zip's aes-crypto feature, so AES entries fail to open; no decrypt call exists" },
     { id = "RUSTSEC-2026-0548", reason = "ZipStreamReader and read_zipfile_from_stream are never called; entries are read through ZipArchive by central directory name" },
+    # Replacing chrono in the app would not drop it: ironcalc_base, gpui, pdfium-render, rmcp and schemars pull it.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained with no safe upgrade; it stays in the tree through ironcalc_base, gpui, rmcp and schemars" },
 ]
 
 [licenses]
