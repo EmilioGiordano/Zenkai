@@ -107,6 +107,19 @@ fn unsupported_label(unsupported: Unsupported) -> &'static str {
         Unsupported::SheetProtection => t!("unsupported.sheet_protection"),
         Unsupported::Outline => t!("unsupported.outline"),
         Unsupported::PageBreaks => t!("unsupported.page_breaks"),
+        Unsupported::Sparklines => t!("unsupported.sparklines"),
+        Unsupported::ExtendedConditionalFormats => t!("unsupported.extended_conditional_formats"),
+        Unsupported::Slicers => t!("unsupported.slicers"),
+        Unsupported::CustomViews => t!("unsupported.custom_views"),
+        Unsupported::Phonetic => t!("unsupported.phonetic"),
+        Unsupported::Scenarios => t!("unsupported.scenarios"),
+        Unsupported::CellWatches => t!("unsupported.cell_watches"),
+        Unsupported::Connections => t!("unsupported.connections"),
+        Unsupported::QueryTables => t!("unsupported.query_tables"),
+        Unsupported::CustomXml => t!("unsupported.custom_xml"),
+        Unsupported::DataModel => t!("unsupported.data_model"),
+        Unsupported::WorkbookProtection => t!("unsupported.workbook_protection"),
+        Unsupported::PrinterSettings => t!("unsupported.printer_settings"),
     }
 }
 

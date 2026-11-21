@@ -175,7 +175,7 @@ impl Session {
     }
 }
 
-const ALL_UNSUPPORTED: [Unsupported; 13] = [
+const ALL_UNSUPPORTED: [Unsupported; 26] = [
     Unsupported::Charts,
     Unsupported::Images,
     Unsupported::PivotTables,
@@ -189,6 +189,19 @@ const ALL_UNSUPPORTED: [Unsupported; 13] = [
     Unsupported::SheetProtection,
     Unsupported::Outline,
     Unsupported::PageBreaks,
+    Unsupported::Sparklines,
+    Unsupported::ExtendedConditionalFormats,
+    Unsupported::Slicers,
+    Unsupported::CustomViews,
+    Unsupported::Phonetic,
+    Unsupported::Scenarios,
+    Unsupported::CellWatches,
+    Unsupported::Connections,
+    Unsupported::QueryTables,
+    Unsupported::CustomXml,
+    Unsupported::DataModel,
+    Unsupported::WorkbookProtection,
+    Unsupported::PrinterSettings,
 ];
 
 fn unsupported_code(unsupported: Unsupported) -> &'static str {
@@ -206,6 +219,19 @@ fn unsupported_code(unsupported: Unsupported) -> &'static str {
         Unsupported::SheetProtection => "sheet-protection",
         Unsupported::Outline => "outline",
         Unsupported::PageBreaks => "page-breaks",
+        Unsupported::Sparklines => "sparklines",
+        Unsupported::ExtendedConditionalFormats => "extended-conditional-formats",
+        Unsupported::Slicers => "slicers",
+        Unsupported::CustomViews => "custom-views",
+        Unsupported::Phonetic => "phonetic",
+        Unsupported::Scenarios => "scenarios",
+        Unsupported::CellWatches => "cell-watches",
+        Unsupported::Connections => "connections",
+        Unsupported::QueryTables => "query-tables",
+        Unsupported::CustomXml => "custom-xml",
+        Unsupported::DataModel => "data-model",
+        Unsupported::WorkbookProtection => "workbook-protection",
+        Unsupported::PrinterSettings => "printer-settings",
     }
 }
 

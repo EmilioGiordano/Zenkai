@@ -104,6 +104,7 @@ fn kind_of(kind: &str) -> Kind {
         "comments" | "threadedComment" => Kind::Link(SheetLink::Comments),
         "table" => Kind::Link(SheetLink::Table),
         "hyperlink" => Kind::Link(SheetLink::Hyperlink),
+        // Its loss is reported through the page setup element pointing at it.
         "printerSettings" => Kind::Harmless,
         _ => Kind::Unlisted,
     }
