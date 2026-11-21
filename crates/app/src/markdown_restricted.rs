@@ -231,6 +231,15 @@ mod tests {
     }
 
     #[test]
+    fn a_math_span_around_nested_emphasis_is_refused_too() {
+        for (open, close) in [("*", "*"), ("~~", "~~")] {
+            let inner = format!("{open}a\n").repeat(500) + &format!("a{close}\n").repeat(500);
+            let text = format!("${inner}$");
+            assert!(check(&text).is_none(), "{open}");
+        }
+    }
+
+    #[test]
     fn the_tree_is_measured_not_the_lines() {
         let text = format!("{}{}", "*a\n".repeat(500), "a*\n".repeat(500));
         assert!(check(&text).is_none());
@@ -273,8 +282,8 @@ mod tests {
     ];
 
     const DEEP_PIECES: &[&str] = &[
-        "> ", "- ", "1. ", "1) ", "\t", "  ", "*", "**", "_", "~~", "[", "](x)", "a ", "a", "\n",
-        "\n  ",
+        "> ", "- ", "1. ", "1) ", "\t", "  ", "*", "**", "_", "~", "~~", "$", "$$", "[", "](x)",
+        "a ", "a", "\n", "\n  ",
     ];
 
     fn assembled() -> impl Strategy<Value = String> {
