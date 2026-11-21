@@ -37,7 +37,9 @@ const DRAWN: &[Unsupported] = &[
     Unsupported::Comments,
 ];
 
-const BY_PART: [(&str, &str, &[Unsupported]); 8] = [
+const SLICERS: &[Unsupported] = &[Unsupported::Slicers];
+
+const BY_PART: [(&str, &str, &[Unsupported]); 17] = [
     ("xl/charts/", "charts", &[Unsupported::Charts]),
     ("xl/drawings/", "drawings", DRAWN),
     ("xl/media/", "images", &[Unsupported::Images]),
@@ -54,10 +56,34 @@ const BY_PART: [(&str, &str, &[Unsupported]); 8] = [
         "external links",
         &[Unsupported::ExternalLinks],
     ),
+    ("xl/slicers/", "slicers", SLICERS),
+    ("xl/slicercaches/", "slicers", SLICERS),
+    ("xl/timelines/", "timelines", SLICERS),
+    ("xl/timelinecaches/", "timelines", SLICERS),
+    (
+        "xl/connections",
+        "data connections",
+        &[Unsupported::Connections],
+    ),
+    (
+        "xl/querytables/",
+        "query tables",
+        &[Unsupported::QueryTables],
+    ),
+    ("customxml/", "custom XML data", &[Unsupported::CustomXml]),
+    ("xl/model/", "data model", &[Unsupported::DataModel]),
+    (
+        "xl/printersettings/",
+        "printer settings",
+        &[Unsupported::PrinterSettings],
+    ),
 ];
 
-// Top-level elements of the workbook and worksheet parts, by local name.
-const BY_ELEMENT: [(&str, &str, &[Unsupported]); 23] = [
+const CUSTOM_VIEWS: &[Unsupported] = &[Unsupported::CustomViews];
+
+// Top-level elements of the workbook and worksheet parts, by local name. Their extension
+// lists are compared by what each extension holds, below.
+const BY_ELEMENT: [(&str, &str, &[Unsupported]); 28] = [
     ("sheetPr", "sheet properties", &[]),
     ("sheetFormatPr", "default sizes", &[]),
     ("cols", "column widths", &[]),
@@ -86,9 +112,40 @@ const BY_ELEMENT: [(&str, &str, &[Unsupported]); 23] = [
     ("legacyDrawing", "drawings", DRAWN),
     ("legacyDrawingHF", "header images", DRAWN),
     ("tableParts", "tables", &[Unsupported::Tables]),
-    ("extLst", "extensions", &[]),
     ("calcPr", "calculation settings", &[]),
     ("bookViews", "window settings", &[]),
+    ("customSheetViews", "custom views", CUSTOM_VIEWS),
+    ("customWorkbookViews", "custom views", CUSTOM_VIEWS),
+    ("phoneticPr", "phonetic guides", &[Unsupported::Phonetic]),
+    ("scenarios", "scenarios", &[Unsupported::Scenarios]),
+    ("cellWatches", "watched cells", &[Unsupported::CellWatches]),
+    (
+        "workbookProtection",
+        "workbook protection",
+        &[Unsupported::WorkbookProtection],
+    ),
+];
+
+const EXTENSION_LIST: &str = "extLst";
+
+// What an extension of a workbook or worksheet extension list holds, by local name.
+const BY_EXTENSION: [(&str, &str, &[Unsupported]); 8] = [
+    ("sparklineGroups", "sparklines", &[Unsupported::Sparklines]),
+    (
+        "conditionalFormattings",
+        "newer conditional formats",
+        &[Unsupported::ExtendedConditionalFormats],
+    ),
+    (
+        "dataValidations",
+        "data validation",
+        &[Unsupported::DataValidation],
+    ),
+    ("slicerList", "slicers", SLICERS),
+    ("slicerCaches", "slicers", SLICERS),
+    ("timelineRefs", "timelines", SLICERS),
+    ("timelineCacheRefs", "timelines", SLICERS),
+    ("dataModel", "data model", &[Unsupported::DataModel]),
 ];
 
 // Attributes whose loss matters even when their element is written.
@@ -131,9 +188,18 @@ pub fn parts(bytes: &[u8]) -> Result<Vec<(String, String)>, String> {
         .collect()
 }
 
-// Local names of the root's children, read from the tags so a large sheet costs one scan.
-fn top_level_elements(xml: &str) -> BTreeSet<String> {
-    let mut names = BTreeSet::new();
+#[derive(Default)]
+struct Elements {
+    // The local names of the root's children.
+    top: BTreeSet<String>,
+    // The local names of what each extension of the root's extension list holds.
+    extensions: BTreeSet<String>,
+}
+
+// Read from the tags so a large sheet costs one scan.
+fn elements_of(xml: &str) -> Elements {
+    let mut elements = Elements::default();
+    let mut in_extensions = false;
     let mut depth = 0usize;
     let mut rest = xml;
     while let Some(at) = rest.find('<') {
@@ -154,13 +220,18 @@ fn top_level_elements(xml: &str) -> BTreeSet<String> {
             .unwrap_or_default();
         let local = name.rsplit(':').next().unwrap_or_default();
         if depth == 1 {
-            names.insert(local.to_string());
+            in_extensions = local == EXTENSION_LIST;
+            elements.top.insert(local.to_string());
+        }
+        // extLst, then ext, then what the extension holds.
+        if depth == 3 && in_extensions {
+            elements.extensions.insert(local.to_string());
         }
         if !tag.ends_with('/') {
             depth += 1;
         }
     }
-    names
+    elements
 }
 
 fn is_layout_part(name: &str) -> bool {
@@ -168,7 +239,8 @@ fn is_layout_part(name: &str) -> bool {
 }
 
 // What is present in the original and absent after Zenkai saves it: by part name, by
-// top-level element of the workbook and worksheet parts, and by key attribute.
+// top-level element of the workbook and worksheet parts and what their extensions hold,
+// and by key attribute.
 pub fn dropped(original: &[u8], saved: &[u8]) -> Result<Vec<Loss>, String> {
     let (before, after) = (parts(original)?, parts(saved)?);
     let has_name =
@@ -176,8 +248,12 @@ pub fn dropped(original: &[u8], saved: &[u8]) -> Result<Vec<Loss>, String> {
     let elements = |set: &[(String, String)]| {
         set.iter()
             .filter(|(name, _)| is_layout_part(name))
-            .flat_map(|(_, xml)| top_level_elements(xml))
-            .collect::<BTreeSet<_>>()
+            .map(|(_, xml)| elements_of(xml))
+            .fold(Elements::default(), |mut all, part| {
+                all.top.extend(part.top);
+                all.extensions.extend(part.extensions);
+                all
+            })
     };
     let has_attribute = |set: &[(String, String)], marker: &str| {
         set.iter()
@@ -189,7 +265,12 @@ pub fn dropped(original: &[u8], saved: &[u8]) -> Result<Vec<Loss>, String> {
         .map(|(_, label, warned_by)| Loss::new(label, warned_by))
         .collect();
     let (kept, had) = (elements(&after), elements(&before));
-    for name in had.difference(&kept) {
+    // A lost extension list is reported by what its extensions held.
+    for name in had
+        .top
+        .difference(&kept.top)
+        .filter(|name| *name != EXTENSION_LIST)
+    {
         let known = BY_ELEMENT.iter().find(|(element, ..)| element == name);
         let not_content = NOT_CONTENT.iter().find(|(element, _)| element == name);
         lost.push(match (known, not_content) {
@@ -200,6 +281,14 @@ pub fn dropped(original: &[u8], saved: &[u8]) -> Result<Vec<Loss>, String> {
             },
             (None, None) => Loss::new(&format!("<{name}>"), &[]),
         });
+    }
+    for name in had.extensions.difference(&kept.extensions) {
+        lost.push(
+            match BY_EXTENSION.iter().find(|(element, ..)| element == name) {
+                Some((_, label, warned_by)) => Loss::new(label, warned_by),
+                None => Loss::new(&format!("extension <{name}>"), &[]),
+            },
+        );
     }
     lost.extend(
         BY_ATTRIBUTE
@@ -214,12 +303,24 @@ pub fn dropped(original: &[u8], saved: &[u8]) -> Result<Vec<Loss>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::top_level_elements;
+    use super::elements_of;
 
     #[test]
     fn top_level_elements_skip_nested_ones() {
         let xml = r#"<?xml version="1.0"?><x:worksheet xmlns:x="m"><x:sheetPr><x:tabColor rgb="FF000000"/></x:sheetPr><x:sheetData><x:row r="1"/></x:sheetData><x:pageMargins left="1"/></x:worksheet>"#;
-        let names: Vec<String> = top_level_elements(xml).into_iter().collect();
+        let names: Vec<String> = elements_of(xml).top.into_iter().collect();
         assert_eq!(names, ["pageMargins", "sheetData", "sheetPr"]);
+    }
+
+    #[test]
+    fn extensions_are_read_only_from_the_roots_own_list() {
+        let xml = concat!(
+            r#"<worksheet><conditionalFormatting><cfRule><extLst><ext><x14:id>1</x14:id>"#,
+            r#"</ext></extLst></cfRule></conditionalFormatting><extLst><ext uri="a">"#,
+            r#"<x14:sparklineGroups><x14:sparklineGroup/></x14:sparklineGroups></ext>"#,
+            r#"<ext uri="b"><x14:conditionalFormattings/></ext></extLst></worksheet>"#
+        );
+        let names: Vec<String> = elements_of(xml).extensions.into_iter().collect();
+        assert_eq!(names, ["conditionalFormattings", "sparklineGroups"]);
     }
 }
