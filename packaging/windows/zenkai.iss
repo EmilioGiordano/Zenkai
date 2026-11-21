@@ -1,27 +1,32 @@
-; Built by build.ps1, which passes the version and the folders on the command line:
-;   iscc /DAppVersion=0.1.0 /DExeDir=..\..\target\dist /DOutputDir=..\..\dist zenkai.iss
+; Built by package.ps1 from the folder it lays out, the same one it zips:
+;   iscc /DAppVersion=0.1.0 /DLayoutDir=..\..\dist\zenkai-0.1.0-windows-x64 /DOutputDir=..\..\dist zenkai.iss
 
 #ifndef AppVersion
   #error Pass the version with /DAppVersion=x.y.z
 #endif
-#ifndef ExeDir
-  #define ExeDir "..\..\target\dist"
+#ifndef LayoutDir
+  #error Pass the laid out install folder with /DLayoutDir=path
 #endif
 #ifndef OutputDir
   #define OutputDir "..\..\dist"
 #endif
+#ifndef OutputBaseName
+  #define OutputBaseName "zenkai-" + AppVersion + "-windows-x64-setup"
+#endif
 
 [Setup]
-; Never change AppId: Windows uses it to match upgrades and the uninstaller.
+; Never change AppId: Windows uses it to match upgrades and the uninstaller, and the app finds
+; its uninstall entry by it to keep DisplayVersion current after an update.
 AppId={{20C0FE1B-59E0-4985-8377-20D8CBD20083}
 AppName=Zenkai
 AppVersion={#AppVersion}
 AppVerName=Zenkai {#AppVersion}
 AppPublisher=Zenkai
-DefaultDirName={autopf}\Zenkai
+; Per user only, in a folder the user owns: the updater swaps app\ without ever asking for
+; elevation, which a Program Files install would need.
+DefaultDirName={localappdata}\Programs\Zenkai
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
@@ -30,7 +35,7 @@ SetupIconFile=..\..\crates\app\zenkai.ico
 UninstallDisplayIcon={app}\zenkai.exe
 UninstallDisplayName=Zenkai
 OutputDir={#OutputDir}
-OutputBaseFilename=zenkai-{#AppVersion}-windows-x64-setup
+OutputBaseFilename={#OutputBaseName}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -39,18 +44,19 @@ WizardStyle=modern
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx, .csv, Markdown and PDF files"; GroupDescription: "File types:"; Flags: unchecked
 
-[Files]
-Source: "{#ExeDir}\zenkai.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#ExeDir}\zenkai-mcp.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#ExeDir}\zenkai-pdf-host.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#ExeDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#ExeDir}\pdfium-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+; A reinstall starts from a clean slate: what an update left behind goes before the files land.
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\app"
+Type: filesandordirs; Name: "{app}\app.old"
+Type: filesandordirs; Name: "{app}\.update"
 
+[Files]
+Source: "{#LayoutDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+; Everything points at the launcher at the root, which an update never moves.
 [Icons]
-Name: "{autoprograms}\Zenkai"; Filename: "{app}\zenkai.exe"
-Name: "{autodesktop}\Zenkai"; Filename: "{app}\zenkai.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Zenkai"; Filename: "{app}\zenkai.exe"; AppUserModelID: "EmilioGiordano.Zenkai"
+Name: "{autodesktop}\Zenkai"; Filename: "{app}\zenkai.exe"; AppUserModelID: "EmilioGiordano.Zenkai"; Tasks: desktopicon
 
 ; Only adds Zenkai to the "Open with" list. The default value of .xlsx, .csv, .md and .markdown is never
 ; written, so the program that opens them by default does not change.
@@ -75,3 +81,10 @@ Root: HKA; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; V
 
 [Run]
 Filename: "{app}\zenkai.exe"; Description: "{cm:LaunchProgram,Zenkai}"; Flags: nowait postinstall skipifsilent
+
+; An update replaces app\ with files the installer never wrote, and leaves app.old\ and .update\
+; (its marker and lock included). %LOCALAPPDATA%\Zenkai, with the recovery files, is kept.
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\app"
+Type: filesandordirs; Name: "{app}\app.old"
+Type: filesandordirs; Name: "{app}\.update"
