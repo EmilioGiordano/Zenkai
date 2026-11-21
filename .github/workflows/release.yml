@@ -65,10 +65,13 @@ jobs:
         include:
           - os: windows-latest
             target: windows-x64
+            launcher: -p zenkai-launcher
           - os: ubuntu-latest
             target: linux-x64
+            launcher: ""
           - os: macos-latest
             target: macos-arm64
+            launcher: ""
     runs-on: ${{ matrix.os }}
     env:
       REF_NAME: ${{ github.ref_name }}
@@ -102,21 +105,28 @@ jobs:
           fi
 
       - name: Build
-        run: cargo build --locked --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host
+        run: cargo build --locked --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host ${{ matrix.launcher }}
 
       - name: Fetch pdfium (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./packaging/windows/fetch-pdfium.ps1 -Destination target/dist
 
-      - name: Package (Windows)
+      - name: Package the zip and the installer (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $name = "zenkai-$env:REF_NAME-${{ matrix.target }}"
-          New-Item -ItemType Directory $name | Out-Null
-          Copy-Item target/dist/zenkai.exe, target/dist/zenkai-mcp.exe, target/dist/zenkai-pdf-host.exe, target/dist/pdfium.dll, target/dist/pdfium-LICENSE.txt, LICENSE, README.md $name
-          Compress-Archive -Path $name -DestinationPath "$name.zip"
+          $iscc = ./packaging/windows/fetch-inno-setup.ps1 -Destination (Join-Path $env:RUNNER_TEMP 'inno-setup')
+          ./packaging/windows/package.ps1 -ExeDir target/dist -Version $env:REF_NAME.Substring(1) -Name $name -OutputDir . -Iscc $iscc
+          $setup = "$name-setup.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText((Join-Path $PWD "$setup.sha256"), "$hash  $setup`n")
+
+      - name: Test the installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./packaging/windows/test-install.ps1 -Setup "zenkai-$env:REF_NAME-${{ matrix.target }}-setup.exe"
 
       - name: Package (Linux and macOS)
         if: runner.os != 'Windows'
@@ -131,6 +141,8 @@ jobs:
           name: zenkai-${{ matrix.target }}
           path: |
             zenkai-*.zip
+            zenkai-*-setup.exe
+            zenkai-*-setup.exe.sha256
             zenkai-*.tar.gz
           if-no-files-found: error
 
@@ -153,7 +165,7 @@ jobs:
           name: notes
 
       - name: Write checksums
-        run: sha256sum zenkai-*.zip zenkai-*.tar.gz > SHA256SUMS
+        run: sha256sum zenkai-*.zip zenkai-*-setup.exe zenkai-*.tar.gz > SHA256SUMS
 
       - name: Create the release
         env:
@@ -161,6 +173,6 @@ jobs:
         run: |
           prerelease=()
           case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" zenkai-*.zip zenkai-*.tar.gz SHA256SUMS \
+          gh release create "$GITHUB_REF_NAME" zenkai-*.zip zenkai-*-setup.exe zenkai-*-setup.exe.sha256 zenkai-*.tar.gz SHA256SUMS \
             --title "$GITHUB_REF_NAME" \
             --notes-file notes.md "${prerelease[@]}"
