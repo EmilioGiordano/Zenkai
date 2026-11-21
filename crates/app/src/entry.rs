@@ -63,6 +63,15 @@ pub struct FileSeen {
 }
 
 impl FileSeen {
+    // Nothing is known of the file: any modification counts as a change, and the session
+    // records no time for it rather than a made-up one.
+    pub fn unknown() -> FileSeen {
+        FileSeen {
+            stamp: None,
+            at: SystemTime::UNIX_EPOCH,
+        }
+    }
+
     pub fn changed(&self, now: Stamp) -> bool {
         match self.stamp {
             Some(seen) => seen != now,
@@ -284,9 +293,13 @@ impl Document {
     // A restored workbook stands on a recovery copy, whose own stamp says nothing about the
     // file, so the guard it was restored with is what carries on.
     fn file_seen(&self) -> FileSeen {
-        self.file_guard().unwrap_or_else(|| FileSeen {
-            stamp: self.workbook().and_then(|workbook| workbook.file_stamp()),
-            at: SystemTime::now(),
+        self.file_guard().unwrap_or_else(|| {
+            self.workbook()
+                .and_then(|workbook| workbook.file_stamp())
+                .map_or_else(FileSeen::unknown, |stamp| FileSeen {
+                    stamp: Some(stamp),
+                    at: stamp.modified(),
+                })
         })
     }
 
