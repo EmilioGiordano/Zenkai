@@ -12,6 +12,7 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 use roxmltree::Node;
+use zenkai_xlsx_reader::{SheetLink, SheetLinks};
 
 use crate::file::Unsupported;
 use crate::preflight::element_kind;
@@ -158,18 +159,55 @@ fn digest(xml: &str) -> u64 {
     hasher.finish()
 }
 
+// What the parts the relationships point at may name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Pointed {
+    // Cells on any sheet, as far as is known: chart series, table formulas, pivot sources,
+    // or parts never read.
+    AnySheet,
+    // Only cells of this sheet, by anchor or position: drawings and pictures whose shapes
+    // name no cell, notes and links out of the workbook.
+    OwnSheet,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 enum Linked {
     // The relationships part goes with the rewritten sheet, and these elements point
     // into it.
-    Kept(Vec<Element>),
+    Kept {
+        elements: Vec<Element>,
+        pointed: Pointed,
+    },
     // The part and every element pointing into it are left out; the parts it pointed at
     // stay in the file, unreferenced.
     #[default]
     Dropped,
-    // The file's relationships hold nothing for this sheet, so there is nothing for a move
-    // on another sheet to drop and the sheet is left as it is.
-    Nothing,
+}
+
+impl Linked {
+    // Whether rows or columns inserted or deleted on another sheet leave it right.
+    fn survives_move_elsewhere(&self) -> bool {
+        match self {
+            Linked::Kept {
+                elements,
+                pointed: Pointed::OwnSheet,
+            } => elements.iter().all(|e| e.reach != Reach::Workbook),
+            Linked::Kept {
+                pointed: Pointed::AnySheet,
+                ..
+            } => false,
+            Linked::Dropped => true,
+        }
+    }
+}
+
+fn names_own_sheet_only(link: SheetLink) -> bool {
+    match link {
+        SheetLink::Drawing | SheetLink::Image | SheetLink::Comments | SheetLink::Hyperlink => true,
+        SheetLink::Chart | SheetLink::PivotTable | SheetLink::Table | SheetLink::CellReference => {
+            false
+        }
+    }
 }
 
 // What is left of the element bytes a workbook may hold, spent sheet by sheet as they are
@@ -255,7 +293,10 @@ impl Elements {
         }
         budget.left -= bytes;
         Elements {
-            linked: linked.map_or(Linked::Dropped, Linked::Kept),
+            linked: linked.map_or(Linked::Dropped, |elements| Linked::Kept {
+                elements,
+                pointed: Pointed::AnySheet,
+            }),
             standalone,
         }
     }
@@ -272,8 +313,8 @@ impl Elements {
 
     fn all(&self) -> impl Iterator<Item = &Element> {
         let linked = match &self.linked {
-            Linked::Kept(linked) => linked.as_slice(),
-            Linked::Dropped | Linked::Nothing => &[],
+            Linked::Kept { elements, .. } => elements.as_slice(),
+            Linked::Dropped => &[],
         };
         linked.iter().chain(&self.standalone)
     }
@@ -293,7 +334,7 @@ impl Elements {
 
     pub fn relationships(&self) -> Relationships {
         match self.linked {
-            Linked::Kept(_) | Linked::Nothing => Relationships::Kept,
+            Linked::Kept { .. } => Relationships::Kept,
             Linked::Dropped => Relationships::Dropped,
         }
     }
@@ -310,10 +351,20 @@ impl Elements {
         }
     }
 
-    // The file's relationships hold nothing for this sheet, as the package was read.
-    pub fn nothing_linked(&mut self) {
-        if self.linked == Linked::Kept(Vec::new()) {
-            self.linked = Linked::Nothing;
+    // The file's relationships for this sheet point at `links`, as the package was read.
+    pub fn links_read(&mut self, links: &SheetLinks) {
+        let (Linked::Kept { elements, pointed }, SheetLinks::Known(links)) =
+            (&mut self.linked, links)
+        else {
+            return;
+        };
+        // An element pointing into relationships that hold nothing points into a part
+        // other than the one read.
+        if links.is_empty() && !elements.is_empty() {
+            return;
+        }
+        if links.iter().all(|link| names_own_sheet_only(*link)) {
+            *pointed = Pointed::OwnSheet;
         }
     }
 
@@ -332,14 +383,14 @@ impl Elements {
         before
     }
 
-    // Rows or columns were inserted or deleted on another sheet. The parts the
-    // relationships point at (chart series, table formulas, pivot tables) may name cells
-    // there and are never read, so they all go, even those that name none.
+    // Rows or columns were inserted or deleted on another sheet. Unless the parts the
+    // relationships point at are known to name only this sheet's cells, they may name
+    // cells there (chart series, table formulas, pivot tables), so they all go.
     pub fn moved_elsewhere(&mut self) -> Option<Elements> {
-        let changed = matches!(self.linked, Linked::Kept(_))
-            || self.standalone.iter().any(|e| e.reach == Reach::Workbook);
+        let linked_stays = self.linked.survives_move_elsewhere();
+        let changed = !linked_stays || self.standalone.iter().any(|e| e.reach == Reach::Workbook);
         let before = changed.then(|| self.clone());
-        if self.linked != Linked::Nothing {
+        if !linked_stays {
             self.linked = Linked::Dropped;
         }
         self.standalone.retain(|e| e.reach != Reach::Workbook);
@@ -557,6 +608,8 @@ mod tests {
     use std::collections::BTreeSet;
     use std::hash::{DefaultHasher, Hash, Hasher};
     use std::sync::Arc;
+
+    use zenkai_xlsx_reader::{SheetLink, SheetLinks};
 
     use super::{
         Axis, ElementBudget, Elements, MAX_ELEMENT_BYTES, MAX_WORKBOOK_ELEMENT_BYTES, Place,
@@ -811,10 +864,14 @@ mod tests {
         assert_eq!(unpointed.kinds().len(), 1);
     }
 
+    fn known(links: &[SheetLink]) -> SheetLinks {
+        SheetLinks::Known(links.iter().copied().collect())
+    }
+
     #[test]
     fn a_sheet_the_file_links_nothing_to_is_left_alone_by_a_move_elsewhere() {
         let mut sheet = elements(r#"<sheetProtection sheet="1"/>"#);
-        sheet.nothing_linked();
+        sheet.links_read(&known(&[]));
         let before = sheet.clone();
         sheet.moved_elsewhere();
         assert_eq!(sheet, before);
@@ -823,9 +880,74 @@ mod tests {
         assert_eq!(sheet.relationships(), Relationships::Dropped);
         // An element pointing into the relationships part means the sheet does link.
         let mut linked = elements(r#"<drawing r:id="rId1"/>"#);
-        linked.nothing_linked();
+        linked.links_read(&known(&[]));
         linked.moved_elsewhere();
         assert_eq!(linked.relationships(), Relationships::Dropped);
+    }
+
+    const NOTES_IMAGE_AND_LINK: &str = concat!(
+        r#"<hyperlinks><hyperlink ref="A7" r:id="rId1"/></hyperlinks>"#,
+        r#"<drawing r:id="rId2"/><legacyDrawing r:id="rId3"/>"#
+    );
+    const OWN_SHEET: [SheetLink; 4] = [
+        SheetLink::Drawing,
+        SheetLink::Image,
+        SheetLink::Comments,
+        SheetLink::Hyperlink,
+    ];
+
+    #[test]
+    fn a_move_elsewhere_keeps_notes_images_and_links_out_of_the_workbook() {
+        let mut sheet = elements(NOTES_IMAGE_AND_LINK);
+        sheet.links_read(&known(&OWN_SHEET));
+        let before = sheet.clone();
+        assert_eq!(sheet.moved_elsewhere(), None);
+        assert_eq!(sheet, before);
+        assert_eq!(sheet.relationships(), Relationships::Kept);
+        assert_eq!(sheet.kinds(), BTreeSet::from([Unsupported::Hyperlinks]));
+        // Their anchors and cells are on this sheet, which a move here shifts.
+        assert_eq!(sheet.moved(Axis::Rows, 1_000_000), Some(before));
+        assert_eq!(sheet.relationships(), Relationships::Dropped);
+    }
+
+    #[test]
+    fn a_move_elsewhere_drops_what_may_name_cells_on_other_sheets() {
+        for named in [
+            SheetLink::Chart,
+            SheetLink::Table,
+            SheetLink::PivotTable,
+            SheetLink::CellReference,
+        ] {
+            let mut sheet = elements(NOTES_IMAGE_AND_LINK);
+            sheet.links_read(&known(&[SheetLink::Drawing, SheetLink::Image, named]));
+            let before = sheet.clone();
+            assert_eq!(sheet.moved_elsewhere(), Some(before), "{named:?}");
+            assert_eq!(sheet.relationships(), Relationships::Dropped, "{named:?}");
+        }
+        let mut unknown = elements(NOTES_IMAGE_AND_LINK);
+        unknown.links_read(&SheetLinks::Unknown);
+        unknown.moved_elsewhere();
+        assert_eq!(unknown.relationships(), Relationships::Dropped);
+        // Never told what the relationships point at, as the IronCalc reader leaves it.
+        let mut unread = elements(NOTES_IMAGE_AND_LINK);
+        unread.moved_elsewhere();
+        assert_eq!(unread.relationships(), Relationships::Dropped);
+    }
+
+    #[test]
+    fn a_linked_element_naming_another_sheet_drops_every_linked_one() {
+        let mut sheet = elements(concat!(
+            r#"<hyperlinks><hyperlink ref="A7" r:id="rId1"/>"#,
+            r#"<hyperlink ref="A8" location="Other!A5"/></hyperlinks><drawing r:id="rId2"/>"#,
+            r#"<sheetProtection sheet="1"/>"#
+        ));
+        sheet.links_read(&known(&OWN_SHEET));
+        sheet.moved_elsewhere();
+        assert_eq!(sheet.relationships(), Relationships::Dropped);
+        assert_eq!(
+            sheet.kinds(),
+            BTreeSet::from([Unsupported::SheetProtection])
+        );
     }
 
     #[test]

@@ -29,6 +29,7 @@ fn source(dir: &Path) -> PathBuf {
         }
     }
     sheet.write_url(8, 0, "https://example.com").unwrap();
+    sheet.write_url(9, 4, "internal:Sheet2!A1").unwrap();
     let rule = DataValidation::new().allow_whole_number(DataValidationRule::Between(1, 9));
     sheet.add_data_validation(7, 1, 8, 1, &rule).unwrap();
     let other = book.add_worksheet();
@@ -120,8 +121,8 @@ fn redo_drops_the_elements_again_and_undo_restores_them_again() {
     assert!(saved_elements(&redone, &dir.path().join("redone.xlsx")).is_empty());
 }
 
-// The second sheet's hyperlink is dropped by a move on the first, which cannot tell what
-// the relationships part points at.
+// The first sheet's hyperlinks, one of which names a cell on the second, are dropped by a
+// move there, and the second sheet's own hyperlink by the same move.
 #[test]
 fn a_move_on_one_sheet_that_drops_the_elements_of_another_is_undone_and_redone() {
     let dir = tempfile::tempdir().unwrap();
@@ -279,13 +280,15 @@ fn spread_source(dir: &Path) -> PathBuf {
         sheet.write_number(row, 0, f64::from(row)).unwrap();
     }
     sheet.write_url(2, 1, "https://example.com").unwrap();
+    sheet.write_url(1, 1, "internal:Sheet2!A1").unwrap();
     book.add_worksheet().write_number(0, 0, 1.0).unwrap();
     book.save(&path).unwrap();
     path
 }
 
-// A move on the second sheet takes the first sheet's hyperlink without moving its rows,
-// so after a redo and undo a cell edit there is saved row by row.
+// A move on the second sheet takes the first sheet's hyperlinks, one of which names a cell
+// there, without moving its rows, so after a redo and undo a cell edit there is saved row
+// by row.
 #[test]
 fn a_restore_onto_a_sheet_saved_row_by_row_still_warns() {
     let dir = tempfile::tempdir().unwrap();
