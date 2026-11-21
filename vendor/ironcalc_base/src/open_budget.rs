@@ -15,9 +15,8 @@ pub const BYTES_PER_CELL: u64 = 70;
 // Extra per formula cell over a value cell, its evaluated result included: the formula
 // returning 200 characters sets it, the lookups alone would need 110-140 B.
 pub const BYTES_PER_FORMULA: u64 = 240;
-// The result text BYTES_PER_FORMULA already pays for: the formula it was fitted on returns
-// 200 characters. Text past it is charged 1.2 times, the margin of every other cost: what
-// the file caches by the estimate, what the first evaluation adds while it runs.
+// The result text BYTES_PER_FORMULA pays for, as it was fitted on 200-character results;
+// text past it, cached or evaluated, is charged at the 1.2x margin of every other cost.
 pub const TEXT_BYTES_PER_FORMULA: u64 = 200;
 // Extra per distinct formula shape over its text: its key while reading and its parsed
 // tree in the model, fitted on 628,902 distinct shapes in 859,659 formula cells.
@@ -196,11 +195,8 @@ impl OpenAllowance {
         Ok(OpenAllowance { cost, budget_bytes })
     }
 
-    // Text past what each formula already pays for is charged 1.2 times, the margin of
-    // every other cost, so the headroom the estimate leaves buys 5/6 of its bytes in text.
-    // The text the cells hold has used its share of what the formulas pay for, so what
-    // is left plus what they hold never exceeds what was charged, and a refund only
-    // returns charged bytes.
+    // Headroom buys text at the 1.2x margin; the text cells already hold used its share of
+    // the formulas' allowance, so what is left plus what is held never exceeds the charge.
     fn result_text_bytes(self) -> u64 {
         let headroom = self.budget_bytes.saturating_sub(needed_bytes(self.cost));
         self.cost
