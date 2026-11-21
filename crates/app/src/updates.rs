@@ -1,7 +1,9 @@
 mod fetch;
+mod notes;
 mod record;
-mod store;
+mod releases;
 mod state;
+mod store;
 mod version;
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,9 +12,11 @@ use gpui_kit::*;
 
 use crate::agent_settings::AgentConfig;
 use fetch::FetchError;
+use notes::Notes;
 use record::Record;
+use releases::Releases;
 pub use state::{Report, Source, Status, Updates};
-use state::{SettingsReading, StartupCheck};
+use state::{SettingsReading, Snapshot, StartupCheck};
 pub use version::Version;
 
 pub const RELEASES_PAGE: &str = "https://github.com/EmilioGiordano/Zenkai/releases";
@@ -23,16 +27,19 @@ pub fn init(cx: &mut App) {
     cx.set_global(Updates::default());
     cx.observe_global::<AgentConfig>(start_if_ready).detach();
     cx.spawn(async move |cx| {
-        let record = cx
+        let (record, notes) = cx
             .background_executor()
-            .spawn(async { Record::load() })
+            .spawn(async { (Record::load(), Notes::load()) })
             .await;
         cx.update(|cx| {
             let Some(installed) = Version::installed() else {
                 tracing::error!("the installed version is not a plain X.Y.Z");
                 return;
             };
-            cx.update_global::<Updates, _>(|updates, _| updates.load_record(record, installed));
+            cx.update_global::<Updates, _>(|updates, _| {
+                updates.load_record(record, installed);
+                updates.load_notes(notes);
+            });
             start_if_ready(cx);
         });
     })
@@ -79,11 +86,11 @@ pub fn take_report(cx: &mut App) -> Option<Report> {
 
 // Called once the notice is on screen: a version counts as announced only when it was seen.
 pub fn mark_announced(cx: &mut App, version: Version) {
-    let (record, order) = cx.update_global::<Updates, _>(|updates, _| {
+    let snapshot = cx.update_global::<Updates, _>(|updates, _| {
         updates.mark_announced(version);
         updates.snapshot_for_save()
     });
-    save_in_background(record, order, cx);
+    save_in_background(snapshot, cx);
 }
 
 pub fn check(cx: &mut App, source: Source) {
@@ -98,22 +105,17 @@ pub fn check(cx: &mut App, source: Source) {
     cx.spawn(async move |cx| {
         let result = cx
             .background_executor()
-            .spawn(async { fetch::newest_release() })
+            .spawn(async move { fetch::latest_releases(installed) })
             .await;
         cx.update(|cx| finish(cx, installed, started_at, result));
     })
     .detach();
 }
 
-fn finish(
-    cx: &mut App,
-    installed: Version,
-    checked_at: u64,
-    result: Result<Option<Version>, FetchError>,
-) {
-    let (record, order) = cx.update_global::<Updates, _>(|updates, _| {
+fn finish(cx: &mut App, installed: Version, checked_at: u64, result: Result<Releases, FetchError>) {
+    let snapshot = cx.update_global::<Updates, _>(|updates, _| {
         match result {
-            Ok(newest) => updates.finish_ok(newest, installed, checked_at),
+            Ok(releases) => updates.finish_ok(releases, installed, checked_at),
             Err(error) => {
                 tracing::warn!(%error, "the update check failed");
                 updates.finish_failed(checked_at);
@@ -121,14 +123,19 @@ fn finish(
         }
         updates.snapshot_for_save()
     });
-    save_in_background(record, order, cx);
+    save_in_background(snapshot, cx);
 }
 
-fn save_in_background(record: Record, order: u64, cx: &mut App) {
+fn save_in_background(snapshot: Snapshot, cx: &mut App) {
     cx.background_executor()
         .spawn(async move {
-            if let Err(error) = record.save(order) {
+            if let Err(error) = snapshot.record.save(snapshot.order) {
                 tracing::warn!(%error, "could not save the update check record");
+            }
+            if let Some(notes) = snapshot.notes
+                && let Err(error) = notes.save(snapshot.order)
+            {
+                tracing::warn!(%error, "could not save the release notes cache");
             }
         })
         .detach();

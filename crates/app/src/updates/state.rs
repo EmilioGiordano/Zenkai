@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
+use super::notes::Notes;
 use super::record::Record;
+use super::releases::Releases;
 use super::version::{Version, newer_than};
 
 // Ordered by how much the user asked to hear: a stronger request joins a running check.
@@ -39,9 +43,20 @@ pub enum StartupCheck {
     Run,
 }
 
+// What one save writes. `notes` is there only when a check replaced them, so announcing a
+// version does not rewrite a file of up to a megabyte or more.
+pub struct Snapshot {
+    pub record: Record,
+    pub notes: Option<Arc<Notes>>,
+    pub order: u64,
+}
+
 pub struct Updates {
     pub record: Record,
     pub report: Option<Report>,
+    notes: Arc<Notes>,
+    notes_from_check: bool,
+    notes_unsaved: bool,
     saves_started: u64,
     record_loaded: bool,
     startup_decided: bool,
@@ -55,6 +70,9 @@ impl Default for Updates {
         Updates {
             record: Record::default(),
             report: None,
+            notes: Arc::default(),
+            notes_from_check: false,
+            notes_unsaved: false,
             saves_started: 0,
             record_loaded: false,
             startup_decided: false,
@@ -80,6 +98,18 @@ impl Updates {
         self.record_loaded = true;
         if self.status == Status::Unchecked {
             self.status = self.status_from_record(installed);
+        }
+    }
+
+    pub fn notes(&self) -> Arc<Notes> {
+        self.notes.clone()
+    }
+
+    // The cache is read in the background and can land after a check that already found newer
+    // notes: those stay.
+    pub fn load_notes(&mut self, cached: Notes) {
+        if !self.notes_from_check {
+            self.notes = Arc::new(cached);
         }
     }
 
@@ -126,11 +156,14 @@ impl Updates {
         true
     }
 
-    pub fn finish_ok(&mut self, newest: Option<Version>, installed: Version, now: u64) {
+    pub fn finish_ok(&mut self, releases: Releases, installed: Version, now: u64) {
         self.record.last_check = Some(now);
         self.record.last_success = Some(now);
-        self.record.newest = newest;
-        match newer_than(newest, installed) {
+        self.record.newest = releases.newest;
+        self.notes = Arc::new(releases.notes);
+        self.notes_from_check = true;
+        self.notes_unsaved = true;
+        match newer_than(releases.newest, installed) {
             Some(found) => {
                 self.status = Status::Available(found);
                 if self.source != Source::Startup || self.record.should_announce(found) {
@@ -177,9 +210,14 @@ impl Updates {
     }
 
     // Saves run on background threads in any order: the number lets the writer drop a stale snapshot.
-    pub fn snapshot_for_save(&mut self) -> (Record, u64) {
+    pub fn snapshot_for_save(&mut self) -> Snapshot {
         self.saves_started += 1;
-        (self.record.clone(), self.saves_started)
+        let notes = std::mem::take(&mut self.notes_unsaved).then(|| self.notes.clone());
+        Snapshot {
+            record: self.record.clone(),
+            notes,
+            order: self.saves_started,
+        }
     }
 
     pub fn mark_announced(&mut self, version: Version) {
@@ -189,7 +227,11 @@ impl Updates {
 
 #[cfg(test)]
 mod tests {
-    use super::{Record, Report, SettingsReading, Source, StartupCheck, Status, Updates, Version};
+    use super::super::notes::Note;
+    use super::{
+        Notes, Record, Releases, Report, SettingsReading, Source, StartupCheck, Status, Updates,
+        Version,
+    };
 
     fn version(text: &str) -> Version {
         Version::parse_bare(text).unwrap()
@@ -197,6 +239,13 @@ mod tests {
 
     fn installed() -> Version {
         version("0.1.0")
+    }
+
+    fn found(newest: Option<Version>) -> Releases {
+        Releases {
+            newest,
+            notes: Notes::default(),
+        }
     }
 
     fn loaded(record: Record) -> Updates {
@@ -353,7 +402,7 @@ mod tests {
         let mut updates = loaded(Record::default());
         checking(&mut updates, Source::Startup);
         assert!(!updates.begin_check(Source::Palette));
-        updates.finish_ok(Some(installed()), installed(), 900);
+        updates.finish_ok(found(Some(installed())), installed(), 900);
         assert_eq!(updates.report, Some(Report::UpToDate));
     }
 
@@ -370,7 +419,7 @@ mod tests {
     fn a_found_version_is_reported_but_not_yet_announced() {
         let mut updates = loaded(Record::default());
         checking(&mut updates, Source::Startup);
-        updates.finish_ok(Some(version("0.1.1")), installed(), 900);
+        updates.finish_ok(found(Some(version("0.1.1"))), installed(), 900);
         assert_eq!(updates.report, Some(Report::Available(version("0.1.1"))));
         assert_eq!(updates.record.announced, None);
         assert_eq!(updates.status(), Status::Available(version("0.1.1")));
@@ -383,7 +432,7 @@ mod tests {
             ..Record::default()
         });
         checking(&mut updates, Source::Startup);
-        updates.finish_ok(Some(version("0.1.1")), installed(), 900);
+        updates.finish_ok(found(Some(version("0.1.1"))), installed(), 900);
         assert_eq!(updates.report, None);
         assert_eq!(updates.status(), Status::Available(version("0.1.1")));
     }
@@ -395,7 +444,7 @@ mod tests {
             ..Record::default()
         });
         checking(&mut updates, Source::Palette);
-        updates.finish_ok(Some(version("0.1.1")), installed(), 900);
+        updates.finish_ok(found(Some(version("0.1.1"))), installed(), 900);
         assert_eq!(updates.report, Some(Report::Available(version("0.1.1"))));
     }
 
@@ -406,7 +455,7 @@ mod tests {
             ..Record::default()
         });
         checking(&mut updates, Source::Startup);
-        updates.finish_ok(Some(version("0.1.1")), installed(), 900);
+        updates.finish_ok(found(Some(version("0.1.1"))), installed(), 900);
         assert_eq!(updates.report, Some(Report::Available(version("0.1.1"))));
     }
 
@@ -414,7 +463,7 @@ mod tests {
     fn up_to_date_is_reported_only_to_the_palette() {
         let mut updates = loaded(Record::default());
         checking(&mut updates, Source::Settings);
-        updates.finish_ok(Some(installed()), installed(), 900);
+        updates.finish_ok(found(Some(installed())), installed(), 900);
         assert_eq!(updates.report, None);
         assert_eq!(updates.status(), Status::UpToDate { at: 900 });
     }
@@ -422,18 +471,75 @@ mod tests {
     #[test]
     fn each_snapshot_for_saving_is_numbered_after_the_last() {
         let mut updates = loaded(Record::default());
-        let (_, first) = updates.snapshot_for_save();
+        let first = updates.snapshot_for_save();
         updates.mark_announced(version("0.1.1"));
-        let (record, second) = updates.snapshot_for_save();
-        assert!(second > first);
-        assert_eq!(record.announced, Some(version("0.1.1")));
+        let second = updates.snapshot_for_save();
+        assert!(second.order > first.order);
+        assert_eq!(second.record.announced, Some(version("0.1.1")));
+    }
+
+    fn note(text: &str) -> Note {
+        Note {
+            version: version(text),
+            published: None,
+            body: Some("text".to_owned()),
+        }
+    }
+
+    fn found_with_notes(newest: &str, notes: Vec<Note>) -> Releases {
+        Releases {
+            newest: Some(version(newest)),
+            notes: Notes::from_releases(notes),
+        }
+    }
+
+    #[test]
+    fn the_notes_of_a_check_are_saved_once() {
+        let mut updates = loaded(Record::default());
+        checking(&mut updates, Source::Startup);
+        updates.finish_ok(
+            found_with_notes("0.1.1", vec![note("0.1.1")]),
+            installed(),
+            900,
+        );
+        assert_eq!(updates.notes().newer_than(installed()).count(), 1);
+        let after_check = updates.snapshot_for_save();
+        assert!(after_check.notes.is_some());
+        updates.mark_announced(version("0.1.1"));
+        assert!(updates.snapshot_for_save().notes.is_none());
+    }
+
+    #[test]
+    fn a_cache_read_late_does_not_replace_the_notes_of_a_check() {
+        let mut updates = loaded(Record::default());
+        checking(&mut updates, Source::Palette);
+        updates.finish_ok(
+            found_with_notes("0.1.2", vec![note("0.1.2")]),
+            installed(),
+            900,
+        );
+        updates.load_notes(Notes::from_releases(vec![note("0.1.1")]));
+        let listed: Vec<String> = updates
+            .notes()
+            .newer_than(installed())
+            .map(|note| note.version.to_string())
+            .collect();
+        assert_eq!(listed, ["0.1.2"]);
+    }
+
+    #[test]
+    fn the_cache_is_what_shows_before_any_check() {
+        let mut updates = loaded(Record::default());
+        updates.load_notes(Notes::from_releases(vec![note("0.1.1")]));
+        assert_eq!(updates.notes().newer_than(installed()).count(), 1);
+        assert!(updates.snapshot_for_save().notes.is_none());
     }
 
     #[test]
     fn an_answer_is_kept_for_the_next_session() {
         let mut updates = loaded(Record::default());
         checking(&mut updates, Source::Startup);
-        updates.finish_ok(Some(version("0.1.1")), installed(), 900);
+        updates.finish_ok(found(Some(version("0.1.1"))), installed(), 900);
         updates.mark_announced(version("0.1.1"));
         let restarted = loaded(updates.record.clone());
         assert_eq!(restarted.status(), Status::Available(version("0.1.1")));
