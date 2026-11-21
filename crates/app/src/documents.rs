@@ -718,10 +718,14 @@ impl Documents {
         true
     }
 
+    pub fn can_step_aside(&self) -> bool {
+        self.active.is_some() && self.wanted.is_none() && self.tab_shown.is_none()
+    }
+
     // Lets the workbook on screen be put to rest like any other: it leaves the screen, keeping
     // its tab, and `stepped_aside` remembers it. Nothing on screen is how Excel shows no workbook.
     pub fn step_aside_active(&mut self) -> Option<WorkbookId> {
-        if self.wanted.is_some() || self.tab_shown.is_some() {
+        if !self.can_step_aside() {
             return None;
         }
         let document = self.active.take()?;

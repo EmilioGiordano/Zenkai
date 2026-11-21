@@ -143,12 +143,13 @@ impl Workspace {
         }
     }
 
-    // Workbooks being waited for or awaiting approval never rest, nor any that is busy. The one
-    // on screen is offered only when it can leave the screen without disturbing the user: a
+    // Workbooks being waited for or awaiting approval never rest, nor any that is busy. The
+    // active one is offered only when it can leave the screen without disturbing the user: a
     // cell or formula being typed, or a dialog, keeps it where it is.
     fn idle_sleepers(&self, cx: &App) -> Vec<Sleeper> {
         let shown = self.documents.shown_id();
-        let can_leave_screen = self.documents.wanted().is_none()
+        let active = self.documents.active_id();
+        let can_leave_screen = self.documents.can_step_aside()
             && !self.typing_in_a_field(cx)
             && !self.prompts.blocks_input()
             && self.format_dialog.is_none()
@@ -162,7 +163,7 @@ impl Workspace {
                 Some(document.id) != wanted
                     && Some(document.id) != awaiting_approval
                     && rests_idle(has_recovery_dir, document.can_dump(), document.can_unload())
-                    && (Some(document.id) != shown || can_leave_screen)
+                    && (Some(document.id) != active || can_leave_screen)
             })
             .map(|document| Sleeper {
                 id: document.id,
@@ -181,9 +182,8 @@ impl Workspace {
     ) {
         if self.documents.active_id() == Some(id) {
             self.park_active(window, cx);
-            if self.documents.step_aside_active().is_none() {
-                return;
-            }
+            // `idle_sleepers` offers the active workbook only when it can step aside.
+            self.documents.step_aside_active();
             self.present_active(window, cx);
         }
         if self.recovery_dir.is_some() {

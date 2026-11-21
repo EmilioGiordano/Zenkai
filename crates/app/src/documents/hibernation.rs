@@ -302,6 +302,7 @@ fn an_agent_touching_a_background_workbook_restarts_its_idle_clock() {
 fn the_workbook_on_screen_steps_aside_to_rest_and_comes_back_when_asked() {
     let (mut documents, id, dir) = with_saved_work();
     assert!(documents.activate(id));
+    assert!(documents.can_step_aside());
     assert_eq!(documents.step_aside_active(), Some(id));
     assert_eq!(documents.shown_id(), None);
     assert_eq!(documents.stepped_aside(), Some(id));
@@ -338,5 +339,6 @@ fn nothing_steps_aside_while_a_workbook_is_being_waited_for() {
     assert!(documents.activate(id));
     let other = open_file(&mut documents, "d.xlsx");
     documents.want(other, super::Intent::Switch);
+    assert!(!documents.can_step_aside());
     assert_eq!(documents.step_aside_active(), None);
 }
