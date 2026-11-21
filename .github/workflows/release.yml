@@ -102,7 +102,7 @@ jobs:
           fi
 
       - name: Build
-        run: cargo build --locked --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host
+        run: cargo build --locked --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host
 
       - name: Fetch pdfium (Windows)
         if: runner.os == 'Windows'
@@ -115,7 +115,7 @@ jobs:
         run: |
           $name = "zenkai-$env:REF_NAME-${{ matrix.target }}"
           New-Item -ItemType Directory $name | Out-Null
-          Copy-Item target/dist/zenkai.exe, target/dist/zenkai-mcp.exe, target/dist/zenkai-pdf-host.exe, target/dist/pdfium.dll, target/dist/pdfium-LICENSE.txt, LICENSE, README.md $name
+          Copy-Item target/dist/zenkai.exe, target/dist/zenkai-mcp.exe, target/dist/zenkai-pdf-host.exe, target/dist/zenkai-values-host.exe, target/dist/pdfium.dll, target/dist/pdfium-LICENSE.txt, LICENSE, README.md $name
           Compress-Archive -Path $name -DestinationPath "$name.zip"
 
       - name: Package (Linux and macOS)
@@ -123,7 +123,7 @@ jobs:
         run: |
           name="zenkai-$REF_NAME-${{ matrix.target }}"
           mkdir "$name"
-          cp target/dist/zenkai target/dist/zenkai-mcp target/dist/zenkai-pdf-host LICENSE README.md "$name"
+          cp target/dist/zenkai target/dist/zenkai-mcp target/dist/zenkai-pdf-host target/dist/zenkai-values-host LICENSE README.md "$name"
           tar -czf "$name.tar.gz" "$name"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

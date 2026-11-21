@@ -50,7 +50,15 @@ fn link_meta(link: &Link) -> String {
         LinkStatus::Loading => parts.push(t!("sidebar.loading").to_string()),
         LinkStatus::Missing => parts.push(t!("sidebar.not_found").to_string()),
         LinkStatus::NotLoaded => {
-            parts.push(t!("sidebar.not_loaded").to_string());
+            let resting = link
+                .rested
+                .as_ref()
+                .is_some_and(|rested| rested.hibernation.is_some());
+            parts.push(if resting {
+                t!("sidebar.resting").to_string()
+            } else {
+                t!("sidebar.not_loaded").to_string()
+            });
             parts.extend(link.size.map(human_size));
         }
     }

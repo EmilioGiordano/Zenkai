@@ -66,6 +66,7 @@ mod lookup_indexes;
 mod model;
 pub mod open_budget;
 mod styles;
+mod text_limit;
 mod tz;
 mod units;
 mod user_model;

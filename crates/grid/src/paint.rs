@@ -707,12 +707,22 @@ fn paint_selection(
         if let Some(marquee) = frame.marquee
             && let Some(area) = range_rect(marquee, columns, rows, origin, z)
         {
+            // The copied range is usually also the selection, whose solid accent border
+            // would hide accent dashes, so the ants alternate foreground over background.
             window.paint_quad(quad(
                 area,
                 px(0.0),
                 transparent_black(),
                 px(2.0),
-                c.accent,
+                c.background,
+                BorderStyle::Solid,
+            ));
+            window.paint_quad(quad(
+                area,
+                px(0.0),
+                transparent_black(),
+                px(2.0),
+                c.foreground,
                 BorderStyle::Dashed,
             ));
         }
@@ -962,5 +972,34 @@ mod tests {
         };
         assert!(range_rect(corner(2, 1_000_000), &columns, &rows, origin, 1.0).is_none());
         assert!(range_rect(corner(1, 1_000_001), &columns, &rows, origin, 1.0).is_some());
+    }
+
+    #[test]
+    fn a_whole_column_or_row_has_a_rectangle_over_the_visible_part_only() {
+        let columns = Columns {
+            xs: vec![
+                (ColIdx::default(), 40.0, 64.0),
+                (ColIdx::clamped(1), 104.0, 64.0),
+            ],
+        };
+        let rows = Rows {
+            ys: vec![(row(5), 24.0, 20.0), (row(6), 44.0, 20.0)],
+        };
+        let origin = point(px(0.0), px(0.0));
+        let whole_column = Range::new(
+            CellPos::new(RowIdx::default(), ColIdx::clamped(1)),
+            CellPos::new(RowIdx::LAST, ColIdx::clamped(1)),
+        );
+        let area = range_rect(whole_column, &columns, &rows, origin, 1.0).unwrap();
+        assert_eq!(f32::from(area.origin.x), 104.0);
+        assert_eq!(f32::from(area.size.width), 64.0);
+        assert!(f32::from(area.origin.y + area.size.height) <= 64.0 + 2.0);
+        let whole_row = Range::new(
+            CellPos::new(row(6), ColIdx::default()),
+            CellPos::new(row(6), ColIdx::LAST),
+        );
+        let area = range_rect(whole_row, &columns, &rows, origin, 1.0).unwrap();
+        assert_eq!(f32::from(area.origin.y), 44.0);
+        assert!(f32::from(area.origin.x + area.size.width) <= 168.0 + 2.0);
     }
 }

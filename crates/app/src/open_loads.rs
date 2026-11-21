@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use zenkai_types::WorkbookId;
+
 use crate::text_document::DocumentKind;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -15,6 +17,7 @@ struct OpenLoad {
     id: OpenId,
     label: String,
     stop: Stop,
+    link: Option<WorkbookId>,
 }
 
 #[derive(Default)]
@@ -25,19 +28,39 @@ pub struct OpenLoads {
 
 impl OpenLoads {
     pub fn start(&mut self, label: String) -> OpenId {
-        self.push(label, Stop::Unavailable)
+        self.push(label, Stop::Unavailable, None)
     }
 
     pub fn start_cancellable(&mut self, label: String) -> (OpenId, Arc<AtomicBool>) {
         let flag = Arc::new(AtomicBool::new(false));
-        (self.push(label, Stop::Flag(flag.clone())), flag)
+        (self.push(label, Stop::Flag(flag.clone()), None), flag)
     }
 
-    fn push(&mut self, label: String, stop: Stop) -> OpenId {
+    pub fn start_link_load(
+        &mut self,
+        label: String,
+        link: WorkbookId,
+    ) -> (OpenId, Arc<AtomicBool>) {
+        let flag = Arc::new(AtomicBool::new(false));
+        let id = self.push(label, Stop::Flag(flag.clone()), Some(link));
+        (id, flag)
+    }
+
+    fn push(&mut self, label: String, stop: Stop, link: Option<WorkbookId>) -> OpenId {
         let id = OpenId(self.next);
         self.next += 1;
-        self.running.push(OpenLoad { id, label, stop });
+        self.running.push(OpenLoad {
+            id,
+            label,
+            stop,
+            link,
+        });
         id
+    }
+
+    // The sidebar link the newest load is waking, which goes back to waiting if it is cancelled.
+    pub fn newest_link(&self) -> Option<WorkbookId> {
+        self.running.last().and_then(|load| load.link)
     }
 
     // A PDF opens in its own view, which shows its progress, so it has no pill to clear.
@@ -169,6 +192,29 @@ mod tests {
         assert_eq!(loads.newest_label(), Some("reading"));
         assert!(loads.finish(reading));
         assert!(loads.newest_cancellable());
+    }
+
+    #[test]
+    fn a_cancelled_link_load_names_the_link_to_put_back() {
+        let mut loads = OpenLoads::default();
+        let (id, flag) = loads.start_link_load("tab".into(), WorkbookId(4));
+        assert!(loads.newest_cancellable());
+        assert_eq!(loads.newest_link(), Some(WorkbookId(4)));
+        assert!(loads.cancel_newest());
+        assert!(flag.load(Ordering::Relaxed));
+        assert_eq!(loads.newest_link(), None);
+        assert!(!loads.finish(id), "the late result is dropped");
+    }
+
+    #[test]
+    fn a_new_load_of_the_same_link_is_not_taken_for_the_cancelled_one() {
+        let mut loads = OpenLoads::default();
+        let (first, _) = loads.start_link_load("tab".into(), WorkbookId(4));
+        loads.cancel_newest();
+        let (second, flag) = loads.start_link_load("tab".into(), WorkbookId(4));
+        assert!(!loads.finish(first));
+        assert!(!flag.load(Ordering::Relaxed));
+        assert!(loads.finish(second));
     }
 
     #[test]
