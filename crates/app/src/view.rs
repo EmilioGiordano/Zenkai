@@ -3691,6 +3691,9 @@ impl Workspace {
                         .bg(theme.popover)
                         .text_color(theme.popover_foreground)
                         .shadow_md()
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(indicator)
                         .child(busy)
                         .when(self.open_loads.newest_cancellable(), |pill| {
@@ -3703,8 +3706,8 @@ impl Workspace {
                                         t!("palette.cancel_open"),
                                         &CancelOpen,
                                     ))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.cancel_open(cx);
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.cancel_open(window, cx);
                                     })),
                             )
                         }),
@@ -4549,14 +4552,14 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &DismissNotice, window, cx| this.dismiss_notice(window, cx)),
             )
-            .on_action(cx.listener(|this, _: &CancelOpen, _, cx| {
-                if !this.cancel_open(cx) {
+            .on_action(cx.listener(|this, _: &CancelOpen, window, cx| {
+                if !this.cancel_open(window, cx) {
                     cx.propagate();
                 }
             }))
             .on_action(cx.listener(|this, _: &zenkai_grid::Cancel, window, cx| {
                 if this.notices.card().is_none() && !this.escape_cancelled_open {
-                    this.escape_cancelled_open = this.cancel_open(cx);
+                    this.escape_cancelled_open = this.cancel_open(window, cx);
                     if this.escape_cancelled_open {
                         return;
                     }
