@@ -734,11 +734,13 @@ impl<'a> Model<'a> {
             Ok(f) => f.floor() as i32,
             Err(s) => return s,
         };
-        let text_len = text.len() as i32;
+        // In i64: an i32 product overflows for a long text, and would let its result past
+        // the limit.
+        let text_len = text.len() as i64;
 
         // We normally don't follow Excel's sometimes archaic size's restrictions
         // But this might be a security issue
-        if text_len * number_times > 32767 {
+        if text_len * number_times as i64 > 32767 {
             return CalcResult::Error {
                 error: Error::VALUE,
                 origin: cell,

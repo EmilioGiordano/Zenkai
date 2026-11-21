@@ -32,6 +32,7 @@ use crate::{
 use crate::criteria_ranges::CriteriaRanges;
 use crate::incremental::Recalculation;
 use crate::lookup_indexes::LookupIndexes;
+use crate::open_budget::ResultText;
 use crate::tz::Tz;
 
 pub const APPLICATION: &str = "IronCalc Sheets";
@@ -711,6 +712,8 @@ impl<'a> Model<'a> {
             criteria_deltas: 0,
             full_evaluations: 0,
             evaluation_milliseconds: get_milliseconds_since_epoch(),
+            open_allowance: None,
+            result_text: ResultText::Unbounded,
         };
         model.parse_formulas();
         model.evaluate_conditional_formatting();

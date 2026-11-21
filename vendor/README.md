@@ -419,6 +419,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   mixing hasher instead of SipHash (`src/cell_hash.rs`), seeded once per process so a
   file cannot choose coordinates that collide. Stands on its own. Test in the module.
   The criteria indexes key their values with it too, which needs the criteria index patch.
+- REPT compares the length of its result with the 32,767 character limit in 64 bits, so a
+  long text repeated many times is `#VALUE!` instead of overflowing past the limit
+  (`src/functions/text/common.rs`). Stands on its own. Test:
+  `a_long_text_repeated_past_the_limit_is_an_error_not_an_overflow` in
+  `src/test/test_fn_rept.rs`.
 
 Zenkai-only, not for upstream:
 
@@ -428,6 +433,17 @@ Zenkai-only, not for upstream:
   importer) and `Model::from_workbook` refuses with a needs-about message that also
   names the allowance, past sixty percent of RAM, instead of hanging the machine. Tests
   in the module.
+- `Model::evaluate_opened` (and `UserModel::evaluate_opened`) runs the first evaluation of
+  a model `from_workbook` built and refuses it with the same message when the text its
+  formulas return grows past what the estimate left: each formula's charge pays for 200
+  bytes, the rest comes from the budget's headroom at the same 1.2x margin. Growth is
+  charged where `set_cells_with_result` writes a value and refunded where a spill is
+  cleared; a cell or row a spill adds costs what the estimate charges one read from the
+  file. Past the budget no spill writes another cell and `evaluate_cell` evaluates
+  nothing more (`src/model.rs`,
+  `src/incremental.rs`, `src/open_budget.rs`). `from_workbook_within` takes the budget
+  instead of reading the machine's. Needs the open budget above. Tests in
+  `src/open_budget.rs`.
 - The `sysinfo` dependency in `Cargo.toml`, used by `open_budget` to read physical RAM.
 - `build.rs` reports the crate version instead of asking `git describe`, which here
   would describe Zenkai's repository.
