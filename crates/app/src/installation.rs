@@ -1,3 +1,6 @@
+#[cfg(windows)]
+mod uninstall_entry;
+
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -12,6 +15,8 @@ const UPDATE: &str = ".update";
 const CONFIRMED: &str = "confirmed";
 const MAX_MARKER_BYTES: u64 = 32;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+#[cfg(windows)]
+const APP_USER_MODEL_ID: &str = "EmilioGiordano.Zenkai";
 
 // The Windows install keeps the app in `<root>\app\` and the launcher at `<root>\zenkai.exe`.
 // Anywhere else, such as a development checkout, there is no root and the updater stays off.
@@ -33,6 +38,18 @@ fn root_of(exe: &Path) -> Option<PathBuf> {
     (in_app_folder && root.join(LAUNCHER).is_file()).then(|| root.to_path_buf())
 }
 
+// The taskbar groups the app with the shortcuts, which point at the launcher, only when both
+// carry the same explicit identity. Must run before the first window.
+#[cfg(windows)]
+pub fn identify_process() {
+    if root().is_none() {
+        return;
+    }
+    if let Err(error) = winsafe::SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID) {
+        tracing::warn!(%error, "could not set the taskbar identity");
+    }
+}
+
 pub fn after_first_window(cx: &mut App) {
     let Some(root) = root() else {
         return;
@@ -44,6 +61,8 @@ pub fn after_first_window(cx: &mut App) {
                 Ok(Confirmation::NotUpdating | Confirmation::AlreadyWritten) => {}
                 Err(error) => tracing::error!(%error, "could not confirm that this version starts"),
             }
+            #[cfg(windows)]
+            uninstall_entry::record_version(root);
         })
         .detach();
 }

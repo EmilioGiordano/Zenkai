@@ -114,6 +114,8 @@ fn main() {
         );
     }
     zenkai_i18n::init(language::startup());
+    #[cfg(windows)]
+    installation::identify_process();
 
     gpui_kit::application()
         .with_assets(assets::ZenkaiAssets)
