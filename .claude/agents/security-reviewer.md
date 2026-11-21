@@ -13,7 +13,8 @@ Read `AGENTS.md` and `MAINTAINERS.md` first. Report every finding; the lead deci
 
 ## Threat model
 
-Zenkai is a local desktop app with no network and no server. The attacker is a file: an
+Zenkai is a local desktop app with no server. Its only network path is the update check
+(`crates/app/src/updates`): one HTTPS request to the fixed GitHub releases URL. The attacker is a file: an
 `.xlsx`, `.xlsm`, `.xls`, `.ods` or `.csv` the user opens, pastes or imports, crafted to
 crash the app, exhaust memory or CPU, run something, read something or corrupt other files
 of the user. Reachability for every finding is written as: "a file built like this, when
@@ -100,8 +101,9 @@ A finding without `file:line`, a crafted-input scenario and evidence is not repo
 
 - Code quality, style, naming or architecture. That belongs to `quality-reviewer`.
 - Risks that require a compromised machine or a modified binary.
-- Network security: the app has no network code. If a change adds network code, that
-  itself is a `High` finding for scope.
+- Network security beyond the update check: GitHub's own servers and TLS internals are out of
+  scope. The check's request limits, URL constant, response parsing and redirects are in scope.
+  Any other network code is a `High` finding for scope.
 - Theoretical issues inside the engine library that the change does not touch. Put them
   under Notes for an issue.
 

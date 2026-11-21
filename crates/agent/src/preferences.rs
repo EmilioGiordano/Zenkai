@@ -16,7 +16,7 @@ const DEFAULT_REST_MINUTES: u32 = 15;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GeneralSettings {
-    #[serde(default = "restore_by_default")]
+    #[serde(default = "on_by_default")]
     #[schemars(
         description = "Reopen the spaces and workbooks of the last session, including unsaved work, when Zenkai starts."
     )]
@@ -48,6 +48,11 @@ pub struct GeneralSettings {
         description = "How a Markdown file opens: \"preview\" shows it rendered, \"split\" shows the source beside the preview."
     )]
     pub markdown_opens_in: MarkdownOpensIn,
+    #[serde(default = "on_by_default")]
+    #[schemars(
+        description = "Ask GitHub for a newer Zenkai release when Zenkai starts, at most once a day. GitHub sees the IP address, or the proxy's if one is set; nothing else is sent."
+    )]
+    pub check_for_updates: bool,
     #[serde(default)]
     pub status_summary: StatusSummary,
 }
@@ -101,7 +106,7 @@ fn keep_when_closing_window() -> CloseWithUnsaved {
     CloseWithUnsaved::Keep
 }
 
-fn restore_by_default() -> bool {
+fn on_by_default() -> bool {
     true
 }
 
@@ -137,12 +142,13 @@ fn clamped_autosave<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result
 impl Default for GeneralSettings {
     fn default() -> GeneralSettings {
         GeneralSettings {
-            restore_session: restore_by_default(),
+            restore_session: on_by_default(),
             close_with_unsaved: CloseWithUnsaved::default(),
             close_window_with_unsaved: keep_when_closing_window(),
             autosave_seconds: DEFAULT_AUTOSAVE_SECONDS,
             rest_after_minutes: default_rest(),
             markdown_opens_in: MarkdownOpensIn::default(),
+            check_for_updates: on_by_default(),
             status_summary: StatusSummary::default(),
         }
     }

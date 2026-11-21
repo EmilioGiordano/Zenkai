@@ -78,6 +78,8 @@ pub enum RowId {
     FastXlsxReader,
     LogsFolder,
     Version,
+    CheckOnOpen,
+    UpdateStatus,
     License,
 }
 
@@ -90,7 +92,7 @@ pub struct RowInfo {
 }
 
 impl RowId {
-    pub const ALL: [RowId; 27] = [
+    pub const ALL: [RowId; 29] = [
         RowId::RestoreSession,
         RowId::CloseWithUnsaved,
         RowId::CloseWindowWithUnsaved,
@@ -117,6 +119,8 @@ impl RowId {
         RowId::FastXlsxReader,
         RowId::LogsFolder,
         RowId::Version,
+        RowId::CheckOnOpen,
+        RowId::UpdateStatus,
         RowId::License,
     ];
 
@@ -329,6 +333,20 @@ impl RowId {
                 "",
                 &["release", "build"],
             ),
+            RowId::CheckOnOpen => row(
+                Section::About,
+                t!("settings.group.zenkai"),
+                t!("settings.row.check_on_open"),
+                t!("settings.row.check_on_open.description"),
+                &["update", "release", "github", "network", "privacy"],
+            ),
+            RowId::UpdateStatus => row(
+                Section::About,
+                t!("settings.group.zenkai"),
+                t!("settings.row.updates"),
+                "",
+                &["update", "check", "release", "latest"],
+            ),
             RowId::License => row(
                 Section::About,
                 t!("settings.group.zenkai"),
@@ -387,6 +405,9 @@ impl RowId {
                 settings.agents.external_agents != default.agents.external_agents
             }
             RowId::FastXlsxReader => settings.advanced.xlsx_reader != default.advanced.xlsx_reader,
+            RowId::CheckOnOpen => {
+                settings.general.check_for_updates != default.general.check_for_updates
+            }
             RowId::Agents
             | RowId::ConnectionCommand
             | RowId::WhatLeaves
@@ -394,6 +415,7 @@ impl RowId {
             | RowId::SettingsFile
             | RowId::LogsFolder
             | RowId::Version
+            | RowId::UpdateStatus
             | RowId::License => false,
         }
     }
@@ -431,6 +453,9 @@ impl RowId {
                 settings.agents.external_agents = default.agents.external_agents
             }
             RowId::FastXlsxReader => settings.advanced.xlsx_reader = default.advanced.xlsx_reader,
+            RowId::CheckOnOpen => {
+                settings.general.check_for_updates = default.general.check_for_updates
+            }
             _ => {}
         }
     }
