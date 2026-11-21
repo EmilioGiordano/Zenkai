@@ -11,13 +11,20 @@ use gpui_kit::component::text::{
 use gpui_kit::*;
 
 use super::MarkdownPane;
-use crate::markdown_depth;
+use crate::markdown_depth::{self, Refusal};
 use crate::markdown_images::{image_path, image_urls, vet_image};
 use crate::markdown_restricted::{plain_text, vetted_link};
 use crate::text_document::ViewMode;
 
 const PREVIEW_DELAY: Duration = Duration::from_millis(150);
 const FOLLOW_DELAY: Duration = Duration::from_millis(120);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Extensions {
+    NotDrawn,
+    Drawing,
+    Attached,
+}
 
 // The verdict on each image the document names, found off the UI thread: the preview shows an
 // image only once its path has been checked, and nothing is read from disk while drawing.
@@ -67,11 +74,46 @@ impl MarkdownPlugin for HtmlAsText {
     }
 }
 
+// A math span is shown as the text it was written as. A span nobody claims is parsed again as
+// prose by the text view, which would build a tree the depth check never measured.
+struct MathAsText;
+
+impl MarkdownPlugin for MathAsText {
+    fn name(&self) -> &str {
+        "zenkai-math"
+    }
+
+    fn parse(
+        &self,
+        node: &markdown_ast::Node,
+        context: &MarkdownParseContext<'_>,
+    ) -> Option<MarkdownNode> {
+        let markdown_ast::Node::InlineMath(math) = node else {
+            return None;
+        };
+        let written = context
+            .node_source(node)
+            .map_or_else(|| math.value.clone(), str::to_owned);
+        Some(MarkdownNode::new(self.name().to_owned(), ()).text(written))
+    }
+
+    fn render_inline(
+        &self,
+        node: &MarkdownNode,
+        _: &InlineRenderContext,
+        _: &mut Window,
+        _: &mut App,
+    ) -> Option<InlineElement> {
+        Some(InlineElement::new(node.as_text().to_string()))
+    }
+}
+
 pub(super) fn extensions() -> MarkdownExtensions {
     MarkdownExtensions::default()
-        .parser_revision(1)
+        .parser_revision(2)
         .plugin(HtmlAsText { block: false })
         .plugin(HtmlAsText { block: true })
+        .plugin(MathAsText)
 }
 
 // The text of a release note is not signed, so beyond what the pane already does with HTML,
@@ -112,9 +154,10 @@ impl MarkdownPlugin for Restricted {
 
 pub(crate) fn restricted_extensions() -> MarkdownExtensions {
     MarkdownExtensions::default()
-        .parser_revision(2)
+        .parser_revision(3)
         .plugin(HtmlAsText { block: false })
         .plugin(HtmlAsText { block: true })
+        .plugin(MathAsText)
         .plugin(Restricted)
 }
 
@@ -175,32 +218,59 @@ impl MarkdownPane {
     pub(super) fn show_in_preview(&mut self, text: &str, cx: &mut Context<Self>) {
         self.vet_images(text, cx);
         self.preview_stale = false;
-        if text.len() <= markdown_depth::SYNC_BYTES {
+        if text.len() > markdown_depth::MAX_PREVIEW_BYTES
+            || text.len() <= markdown_depth::SYNC_BYTES
+        {
             self.depth_task = None;
-            self.apply_depth(text, markdown_depth::fits(text), cx);
+            self.apply_depth(text, markdown_depth::preview_refusal(text), cx);
             return;
         }
         let text = text.to_owned();
         self.depth_task = Some(cx.spawn(async move |this, cx| {
-            let (text, fits) = cx
+            let (text, refusal) = cx
                 .background_executor()
                 .spawn(async move {
-                    let fits = markdown_depth::fits(&text);
-                    (text, fits)
+                    let refusal = markdown_depth::preview_refusal(&text);
+                    (text, refusal)
                 })
                 .await;
-            if let Err(error) = this.update(cx, |this, cx| this.apply_depth(&text, fits, cx)) {
+            if let Err(error) = this.update(cx, |this, cx| this.apply_depth(&text, refusal, cx)) {
                 tracing::debug!(%error, "markdown pane closed before its depth was checked");
             }
         }));
     }
 
-    fn apply_depth(&mut self, text: &str, fits: bool, cx: &mut Context<Self>) {
-        self.too_deep = !fits;
-        let shown = if fits { text } else { "" };
-        self.preview
-            .update(cx, |preview, cx| preview.set_text(shown, cx));
+    fn apply_depth(&mut self, text: &str, refusal: Option<Refusal>, cx: &mut Context<Self>) {
+        self.refusal = refusal;
+        let shown = if refusal.is_none() { text } else { "" };
+        if self.extensions == Extensions::Attached {
+            self.preview
+                .update(cx, |preview, cx| preview.set_text(shown, cx));
+        } else {
+            self.held_text = Some(shown.to_owned());
+        }
         cx.notify();
+    }
+
+    // The text view parses with the extensions it has when it is given text, and takes them from
+    // the element that draws it. So text waits until a frame has drawn the preview, and the
+    // checked tree is the one that is rendered, with HTML and math claimed.
+    pub(super) fn await_extensions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.extensions = Extensions::Drawing;
+        let pane = cx.entity().downgrade();
+        window.on_next_frame(move |_, cx| {
+            if let Err(error) = pane.update(cx, |pane, cx| pane.attach_extensions(cx)) {
+                tracing::debug!(%error, "markdown pane closed before its preview was drawn");
+            }
+        });
+    }
+
+    fn attach_extensions(&mut self, cx: &mut Context<Self>) {
+        self.extensions = Extensions::Attached;
+        if let Some(text) = self.held_text.take() {
+            self.preview
+                .update(cx, |preview, cx| preview.set_text(&text, cx));
+        }
     }
 
     pub(super) fn schedule_follow(&mut self, cx: &mut Context<Self>) {

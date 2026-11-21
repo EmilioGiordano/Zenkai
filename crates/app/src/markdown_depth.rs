@@ -8,8 +8,17 @@ pub const MAX_NESTING: usize = 64;
 // What the text view parses on the UI thread; anything longer is checked in the background.
 pub const SYNC_BYTES: usize = 4 * 1024;
 
+// The parser's cost grows faster than the text, so a preview is not offered past this size.
+pub const MAX_PREVIEW_BYTES: usize = 1024 * 1024;
+
 const TAB_WIDTH: usize = 4;
 const LIST_INDENT: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    TooDeep,
+    TooLarge,
+}
 
 // The parsed text when its tree is no deeper than `limit`, so nothing deeper reaches the
 // renderer. The tree is what the text view will build, and it is measured without recursion.
@@ -31,11 +40,17 @@ pub fn parse_within(text: &str, limit: usize) -> Option<Node> {
     Some(tree)
 }
 
-pub fn fits(text: &str) -> bool {
-    parse_within(text, MAX_NESTING).is_some()
+pub fn preview_refusal(text: &str) -> Option<Refusal> {
+    if text.len() > MAX_PREVIEW_BYTES {
+        return Some(Refusal::TooLarge);
+    }
+    parse_within(text, MAX_NESTING)
+        .is_none()
+        .then_some(Refusal::TooDeep)
 }
 
-// The options the text view parses with, so both build the same tree.
+// The options the text view parses with first, so the checked tree is the rendered one. The
+// view's plugins claim math spans, which keeps it from parsing their text again as prose.
 fn parse_options() -> ParseOptions {
     let mut options = ParseOptions::gfm();
     options.constructs.math_text = true;
@@ -66,35 +81,63 @@ fn dismantle(tree: Node) {
     }
 }
 
-// A cheap pass, linear in the text, that turns away the obvious cases before they are parsed:
-// per line, the block prefix (quotes and list markers) plus open brackets and emphasis.
-// The parsed tree decides; this only keeps a hostile file from costing a parse.
+// A cheap pass, linear in the text, that turns away the obvious cases before they are parsed,
+// because the parser costs more than the text is long when the nesting is deep: per line, the
+// block prefix (quotes and list markers) plus the inline openers still open in the paragraph
+// (brackets and emphasis, carried across its lines). The parsed tree decides; this only keeps
+// a hostile file from costing a parse.
 pub fn deeper_than(text: &str, limit: usize) -> bool {
+    let mut paragraph = Inline::default();
+    let mut in_fence = false;
     // CommonMark ends a line at a line feed, a carriage return or both; the empty piece between
     // a carriage return and its line feed is harmless.
     text.split(['\n', '\r'])
-        .any(|line| line_depth(line, limit) > limit)
+        .any(|line| line_exceeds(line, limit, &mut paragraph, &mut in_fence))
 }
 
-fn line_depth(line: &str, limit: usize) -> usize {
-    let (blocks, rest) = block_depth(line, limit);
-    blocks + inline_depth(rest, limit)
+fn line_exceeds(line: &str, limit: usize, paragraph: &mut Inline, in_fence: &mut bool) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        *in_fence = !*in_fence;
+        paragraph.clear();
+        return false;
+    }
+    if *in_fence {
+        return false;
+    }
+    if trimmed.is_empty() {
+        paragraph.clear();
+        return false;
+    }
+    let (blocks, starts_item, rest) = block_depth(line, limit);
+    if blocks > limit {
+        return true;
+    }
+    if starts_item || rest.starts_with('#') {
+        paragraph.clear();
+    }
+    blocks + paragraph.scan(rest, limit) > limit
 }
 
-fn block_depth(line: &str, limit: usize) -> (usize, &str) {
+fn block_depth(line: &str, limit: usize) -> (usize, bool, &str) {
     let bytes = line.as_bytes();
     let mut depth = 0;
     let mut indent = 0;
+    let mut starts_item = false;
     let mut at = 0;
     while at < bytes.len() {
         match bytes[at] {
             b' ' => indent += 1,
             b'\t' => indent += TAB_WIDTH,
             b'>' => depth += 1,
-            b'-' | b'*' | b'+' if ends_marker(bytes, at + 1) => depth += 1,
+            b'-' | b'*' | b'+' if ends_marker(bytes, at + 1) => {
+                depth += 1;
+                starts_item = true;
+            }
             b'0'..=b'9' => match ordered_marker_end(bytes, at) {
                 Some(end) => {
                     depth += 1;
+                    starts_item = true;
                     at = end - 1;
                 }
                 None => break,
@@ -102,11 +145,11 @@ fn block_depth(line: &str, limit: usize) -> (usize, &str) {
             _ => break,
         }
         if depth > limit {
-            return (depth, "");
+            return (depth, starts_item, "");
         }
         at += 1;
     }
-    (depth + indent / LIST_INDENT, &line[at..])
+    (depth + indent / LIST_INDENT, starts_item, &line[at..])
 }
 
 // A list marker is followed by a space, a tab or the end of the line.
@@ -125,45 +168,65 @@ fn ordered_marker_end(bytes: &[u8], start: usize) -> Option<usize> {
     (marker && ends_marker(bytes, delimiter + 1)).then_some(delimiter + 1)
 }
 
-fn inline_depth(text: &str, limit: usize) -> usize {
-    let bytes = text.as_bytes();
-    let mut brackets = 0usize;
-    let mut deepest = 0usize;
-    let mut emphasis: Vec<u8> = Vec::new();
-    let mut at = 0;
-    while at < bytes.len() {
-        match bytes[at] {
-            b'\\' => at += 1,
-            b'[' => {
-                brackets += 1;
-                deepest = deepest.max(brackets + emphasis.len());
-            }
-            b']' => brackets = brackets.saturating_sub(1),
-            delimiter @ (b'*' | b'_') => {
-                let run = bytes[at..]
-                    .iter()
-                    .take_while(|byte| **byte == delimiter)
-                    .count();
-                let opens = bytes
-                    .get(at + run)
-                    .is_some_and(|next| !next.is_ascii_whitespace());
-                let closes = at > 0 && !bytes[at - 1].is_ascii_whitespace();
-                if closes && emphasis.last() == Some(&delimiter) {
-                    emphasis.pop();
-                } else if opens {
-                    emphasis.push(delimiter);
-                    deepest = deepest.max(brackets + emphasis.len());
-                }
-                at += run - 1;
-            }
-            _ => {}
-        }
-        if deepest > limit {
-            return deepest;
-        }
-        at += 1;
+// The brackets and emphasis opened so far in a paragraph and not yet closed.
+#[derive(Default)]
+struct Inline {
+    brackets: usize,
+    emphasis: Vec<u8>,
+}
+
+impl Inline {
+    fn clear(&mut self) {
+        self.brackets = 0;
+        self.emphasis.clear();
     }
-    deepest
+
+    // How deep the open inline constructs get on this line, counting those carried in. A run of
+    // n delimiters can open up to ceil(n / 2) levels, so it is counted as that many.
+    fn scan(&mut self, text: &str, limit: usize) -> usize {
+        let bytes = text.as_bytes();
+        let mut deepest = self.brackets + self.emphasis.len();
+        let mut at = 0;
+        while at < bytes.len() {
+            match bytes[at] {
+                b'\\' => at += 1,
+                b'[' => {
+                    self.brackets += 1;
+                    deepest = deepest.max(self.brackets + self.emphasis.len());
+                }
+                b']' => self.brackets = self.brackets.saturating_sub(1),
+                delimiter @ (b'*' | b'_' | b'~') => {
+                    let run = bytes[at..]
+                        .iter()
+                        .take_while(|byte| **byte == delimiter)
+                        .count();
+                    let opens = bytes
+                        .get(at + run)
+                        .is_some_and(|next| !next.is_ascii_whitespace());
+                    let closes = at > 0 && !bytes[at - 1].is_ascii_whitespace();
+                    let levels = run.div_ceil(2).min(limit + 1);
+                    if closes && self.emphasis.last() == Some(&delimiter) {
+                        for _ in 0..levels {
+                            if self.emphasis.last() == Some(&delimiter) {
+                                self.emphasis.pop();
+                            }
+                        }
+                    } else if opens {
+                        self.emphasis
+                            .resize(self.emphasis.len() + levels, delimiter);
+                        deepest = deepest.max(self.brackets + self.emphasis.len());
+                    }
+                    at += run - 1;
+                }
+                _ => {}
+            }
+            if deepest > limit {
+                return deepest;
+            }
+            at += 1;
+        }
+        deepest
+    }
 }
 
 // The depth of the deepest node, measured apart from the code under test.
@@ -184,12 +247,17 @@ pub(crate) fn tree_depth(tree: &Node) -> usize {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use markdown::mdast::BlockQuote;
     use proptest::prelude::*;
 
     use super::*;
 
     fn too_deep(text: &str) -> bool {
         deeper_than(text, MAX_NESTING)
+    }
+
+    fn fits(text: &str) -> bool {
+        preview_refusal(text).is_none()
     }
 
     #[test]
@@ -262,24 +330,46 @@ mod tests {
         assert!(!too_deep(&"**bold** and *it* and [x](y)\n".repeat(100_000)));
     }
 
-    // The case the line count cannot see: one level per line, each line shallow.
+    fn opened_per_line(open: &str, close: &str, times: usize) -> String {
+        format!(
+            "{}{}",
+            format!("{open}a\n").repeat(times),
+            format!("a{close}\n").repeat(times)
+        )
+    }
+
+    // The case a per-line count cannot see: one level per line, each line shallow.
     #[test]
-    fn emphasis_opened_on_each_line_and_closed_later_is_refused() {
+    fn emphasis_opened_on_each_line_and_closed_later_is_turned_away_before_parsing() {
         for (open, close) in [
             ("*", "*"),
             ("_", "_"),
             ("**", "**"),
             ("__", "__"),
             ("~~", "~~"),
+            ("[", "]"),
         ] {
-            let text = format!(
-                "{}\n{}\n",
-                format!("{open}a\n").repeat(2_000),
-                format!("a{close}\n").repeat(2_000)
-            );
-            assert!(!too_deep(&text), "{open}");
+            let text = opened_per_line(open, close, 2_000);
+            assert!(too_deep(&text), "{open}");
             assert!(parse_within(&text, MAX_NESTING).is_none(), "{open}");
         }
+    }
+
+    #[test]
+    fn what_a_blank_line_a_heading_a_list_item_or_a_fence_ends_does_not_carry_over() {
+        let apart = |separator: &str| format!("*a{separator}").repeat(200);
+        assert!(!too_deep(&apart("\n\n")));
+        assert!(!too_deep(&apart("\n# h\n")));
+        assert!(!too_deep(&"- *a\n".repeat(200)));
+        assert!(!too_deep(&format!("```\n{}```\n", "*a\n".repeat(200))));
+        assert!(!too_deep(&format!("~~~\n{}~~~\n", "[a\n".repeat(200))));
+        assert!(too_deep(&"> *a\n".repeat(200)));
+    }
+
+    #[test]
+    fn balanced_emphasis_across_lines_is_not_counted_as_nesting() {
+        assert!(!too_deep(&"*a\na*\n".repeat(500)));
+        assert!(!too_deep(&"**a\nb** and [c\nd](e)\n".repeat(500)));
     }
 
     #[test]
@@ -309,10 +399,90 @@ mod tests {
         assert!(parse_within("- a\n  - b *c*\n", 3).is_none());
     }
 
+    // A tree the pre-pass never sees is still measured, and taking it apart does not recurse.
+    #[test]
+    fn a_tree_a_hundred_thousand_levels_deep_is_measured_and_dropped_without_recursion() {
+        let mut tree = Node::Text(markdown::mdast::Text {
+            value: String::new(),
+            position: None,
+        });
+        for _ in 0..100_000 {
+            tree = Node::BlockQuote(BlockQuote {
+                children: vec![tree],
+                position: None,
+            });
+        }
+        assert!(depth_exceeds(&tree, MAX_NESTING));
+        dismantle(tree);
+    }
+
+    #[test]
+    fn a_text_past_the_preview_size_is_refused_without_a_parse() {
+        let big = "a\n".repeat(MAX_PREVIEW_BYTES / 2 + 1);
+        assert_eq!(preview_refusal(&big), Some(Refusal::TooLarge));
+        assert_eq!(
+            preview_refusal(&">".repeat(MAX_NESTING + 1)),
+            Some(Refusal::TooDeep)
+        );
+        assert_eq!(preview_refusal("plain"), None);
+    }
+
+    // Math spans are one node here and the view must not parse their text again; whatever is
+    // inside them is measured as the text it is.
+    #[test]
+    fn a_math_span_does_not_hide_nesting_in_the_checked_tree() {
+        for (open, close) in [("*", "*"), ("~~", "~~")] {
+            let text = format!("${}$", opened_per_line(open, close, 2_000));
+            assert!(parse_within(&text, MAX_NESTING).is_none(), "{open}");
+        }
+        assert!(fits("it cost $5 and $10, or $*a*$ in math"));
+    }
+
+    // What the view builds when text is appended: the blocks before the last stay as they were
+    // parsed, and the last block is parsed again together with the new text.
+    fn appended_depth(prefix: &str, delta: &str) -> usize {
+        let options = parse_options();
+        let Ok(Node::Root(first)) = markdown::to_mdast(prefix, &options) else {
+            return 0;
+        };
+        let (kept, restart) = match first.children.last().and_then(|block| block.position()) {
+            Some(position) => (
+                &first.children[..first.children.len() - 1],
+                position.start.offset,
+            ),
+            None => (&first.children[..], prefix.len()),
+        };
+        let mut deepest = kept
+            .iter()
+            .map(|block| tree_depth(block) + 1)
+            .max()
+            .unwrap_or(0);
+        let again = format!("{}{delta}", &prefix[restart..]);
+        if let Ok(tree) = markdown::to_mdast(&again, &options) {
+            deepest = deepest.max(tree_depth(&tree));
+        }
+        deepest
+    }
+
+    #[test]
+    fn appending_to_accepted_text_stays_within_what_the_whole_text_was_measured_at() {
+        let cases = [
+            ("- a\n  - b", "\n    - c"),
+            ("> a\n> *b", "*\n> > c"),
+            ("para *a", " b* c\n\n- d"),
+            ("1. a\n", "   1. b\n      1. c"),
+        ];
+        for (prefix, delta) in cases {
+            let whole = format!("{prefix}{delta}");
+            let measured = tree_depth(&parse_within(&whole, MAX_NESTING).unwrap());
+            assert!(appended_depth(prefix, delta) <= measured);
+        }
+    }
+
     const PIECES: &[&str] = &[
         "> ", ">", "- ", "* ", "+ ", "1. ", "1) ", "10. ", "\t", "  ", "    ", "-\t", "*", "**",
-        "***", "_", "__", "~", "~~", "[", "](x)", "](", "a ", "a", "\n", "\n  ", "\n\n", "`", "<",
-        "![",
+        "***", "_", "__", "~", "~~", "$", "$$", "[", "](x)", "](", "a ", "a", "\n", "\n  ", "\n\n",
+        "`", "<", "![",
     ];
 
     fn assembled() -> impl Strategy<Value = String> {
@@ -340,10 +510,23 @@ mod tests {
                 prop_assert!(tree_depth(&tree) <= MAX_NESTING);
             }
         }
+
+        #[test]
+        fn appending_never_builds_a_tree_deeper_than_the_whole_text_check_accepted(
+            prefix in assembled(),
+            delta in assembled(),
+            limit in 3usize..20,
+        ) {
+            let whole = format!("{prefix}{delta}");
+            if parse_within(&prefix, limit).is_some() && parse_within(&whole, limit).is_some() {
+                prop_assert!(appended_depth(&prefix, &delta) <= limit);
+            }
+        }
     }
 
     // The parse runs for every note in the list, so no 64 KiB text may take long to refuse or
-    // to accept. The bound is loose: it catches a growth that is worse than linear.
+    // to accept. The bound is loose for the parser alone and tight for what the pre-pass
+    // turns away.
     #[test]
     fn adversarial_notes_of_the_size_limit_are_parsed_in_reasonable_time() {
         let size = 64 * 1024;
@@ -356,6 +539,20 @@ mod tests {
             assert!(
                 started.elapsed() < Duration::from_secs(20),
                 "{piece:?} took {:?}",
+                started.elapsed()
+            );
+        }
+    }
+
+    #[test]
+    fn deep_inline_nesting_across_lines_is_refused_fast_at_the_size_limit() {
+        for (open, close) in [("*", "*"), ("_", "_"), ("~~", "~~"), ("[", "]")] {
+            let text = opened_per_line(open, close, 64 * 1024 / (open.len() + 3) / 2);
+            let started = Instant::now();
+            assert!(parse_within(&text, 32).is_none(), "{open}");
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "{open:?} took {:?}",
                 started.elapsed()
             );
         }

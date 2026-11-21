@@ -48,7 +48,9 @@ pub struct MarkdownPane {
     state: PaneState,
     focus: FocusHandle,
     preview_stale: bool,
-    too_deep: bool,
+    refusal: Option<Refusal>,
+    extensions: Extensions,
+    held_text: Option<String>,
     images: Images,
     preview_task: Option<Task<()>>,
     depth_task: Option<Task<()>>,
@@ -61,7 +63,8 @@ pub struct MarkdownPane {
 mod preview;
 pub(crate) mod zoom_style;
 
-use preview::{Images, extensions, verdicts};
+use crate::markdown_depth::Refusal;
+use preview::{Extensions, Images, extensions, verdicts};
 
 pub(crate) use preview::{blocked_image, restricted_extensions};
 
@@ -113,7 +116,9 @@ impl MarkdownPane {
             state,
             focus: cx.focus_handle(),
             preview_stale: false,
-            too_deep: false,
+            refusal: None,
+            extensions: Extensions::NotDrawn,
+            held_text: None,
             images: Images::default(),
             preview_task: None,
             depth_task: None,
@@ -371,7 +376,7 @@ impl MarkdownPane {
         let folder = self.state.folder.clone();
         let images = self.images.clone();
         let centered = self.mode == ViewMode::Preview;
-        let too_deep = self.too_deep;
+        let refusal = self.refusal;
         div()
             .id("markdown-preview")
             .flex_1()
@@ -389,7 +394,7 @@ impl MarkdownPane {
                     .px_6()
                     .py_4()
                     .when(centered, |page| page.max_w(rem_px(READING_WIDTH)).mx_auto())
-                    .when(!too_deep, |page| {
+                    .when(refusal.is_none(), |page| {
                         page.child(
                         TextView::new(&self.preview)
                             .when_some(zoomed, |view, style| view.style(style))
@@ -417,7 +422,12 @@ impl MarkdownPane {
                             }),
                     )
                     })
-                    .when(too_deep, |page| page.child(t!("markdown.too_deep"))),
+                    .when_some(refusal, |page, refusal| {
+                        page.child(match refusal {
+                            Refusal::TooDeep => t!("markdown.too_deep"),
+                            Refusal::TooLarge => t!("markdown.too_large"),
+                        })
+                    }),
             )
     }
 }
@@ -435,6 +445,9 @@ impl Render for MarkdownPane {
         };
         let shows_source = self.mode != ViewMode::Preview;
         let shows_preview = self.mode != ViewMode::Source;
+        if shows_preview && self.refusal.is_none() && self.extensions == Extensions::NotDrawn {
+            self.await_extensions(window, cx);
+        }
         v_flex()
             .id("markdown-pane")
             .key_context(CONTEXT)
