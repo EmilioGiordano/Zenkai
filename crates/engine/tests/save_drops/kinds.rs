@@ -7,8 +7,8 @@ use rust_xlsxwriter::{ConditionalFormatDataBar, Sparkline};
 use zenkai_engine::{Unsupported, open_xlsx};
 
 use super::{
-    Edit, HELD_PART, assert_sound, held_sheet, kept_by_each_path, part, saved_after, scan, source,
-    with_held_sheet_replaced, with_part_replaced, with_parts,
+    Edit, HELD_PART, assert_sound, held_sheet, inserted_row, kept_by_each_path, part, saved_after,
+    scan, source, with_held_sheet_replaced, with_part_replaced, with_parts,
 };
 
 const WORKBOOK_PART: &str = "xl/workbook.xml";
@@ -234,7 +234,7 @@ const QUERY_TABLE_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalon
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/queryTable" Target="../queryTables/queryTable1.xml"/></Relationships>"#;
 
 // The sheet's relationships point at a kind no reader lists, so it is taken to own every
-// part outside the sheets; its relationships go along with it, so an edit loses none.
+// part a sheet can point at; its relationships go along with it, so an edit loses none.
 #[test]
 fn a_query_table_is_dropped_only_by_a_full_save() {
     let dir = tempfile::tempdir().unwrap();
@@ -256,6 +256,28 @@ fn a_query_table_is_dropped_only_by_a_full_save() {
         [Unsupported::Connections, Unsupported::QueryTables]
     );
     kept_by_each_path(&path, None);
+}
+
+// The connections part is copied whole, whatever happens to the sheet's relationships.
+#[test]
+fn a_sheet_written_without_its_unknown_links_drops_only_what_a_sheet_can_point_at() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = source(dir.path(), |_| {});
+    with_parts(
+        &path,
+        &[
+            ("xl/connections.xml", CONNECTIONS_TYPE, CONNECTIONS),
+            (
+                "xl/queryTables/queryTable1.xml",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml",
+                QUERY_TABLE,
+            ),
+            ("xl/worksheets/_rels/sheet1.xml.rels", "", QUERY_TABLE_RELS),
+        ],
+    );
+    let saved = inserted_row(&path, 1, "inserted.xlsx");
+    assert_eq!(saved.dropped, [Unsupported::QueryTables]);
+    assert_eq!(saved.kept, scan(&saved.bytes));
 }
 
 #[test]

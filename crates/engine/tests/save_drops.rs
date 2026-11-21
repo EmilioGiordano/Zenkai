@@ -502,7 +502,7 @@ fn a_pivot_table_is_kept_when_its_sheet_is_edited() {
 }
 
 // A drawing whose relationships cannot be read may hold anything, so the sheet pointing at
-// it is taken to own every part no worksheet is known to own; its relationships part goes
+// it is taken to own every part a sheet can point at; its relationships part goes
 // along unchanged, so an edit on it loses none of them.
 #[test]
 fn a_sheet_with_unreadable_links_keeps_everything_outside_the_sheets() {

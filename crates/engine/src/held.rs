@@ -44,6 +44,20 @@ impl Owned {
     }
 }
 
+// What a sheet's relationships can point at, whether the reader lists the relationship or
+// not. Everything else lives in parts a patch save copies whole.
+const LINKABLE: [Unsupported; 9] = [
+    Unsupported::Images,
+    Unsupported::Charts,
+    Unsupported::PivotTables,
+    Unsupported::Comments,
+    Unsupported::Tables,
+    Unsupported::Hyperlinks,
+    Unsupported::Slicers,
+    Unsupported::QueryTables,
+    Unsupported::PrinterSettings,
+];
+
 fn kind_of(link: SheetLink) -> Unsupported {
     match link {
         SheetLink::Drawing | SheetLink::Image => Unsupported::Images,
@@ -87,8 +101,12 @@ impl Held {
                     .unwrap_or_default(),
                 linked: match links {
                     SheetLinks::Known(links) => links.iter().map(|l| kind_of(*l)).collect(),
-                    // Whatever the other parts hold may hang off this sheet.
-                    SheetLinks::Unknown => book.clone(),
+                    // Whatever the other parts hold that a sheet can point at may hang off it.
+                    SheetLinks::Unknown => book
+                        .iter()
+                        .copied()
+                        .filter(|kind| LINKABLE.contains(kind))
+                        .collect(),
                 },
             })
             .collect();
@@ -239,17 +257,27 @@ mod tests {
     }
 
     #[test]
-    fn a_sheet_with_unknown_links_may_own_anything_outside_the_sheets() {
-        let mut held = Held::of(&found(), &layout(vec![SheetLinks::Unknown]));
+    fn a_sheet_with_unknown_links_may_own_any_part_a_sheet_can_point_at() {
+        let mut found = found();
+        found.extend(
+            [
+                ("xl/workbook.xml", Unsupported::WorkbookProtection),
+                ("xl/connections.xml", Unsupported::Connections),
+                ("xl/slicers/slicer1.xml", Unsupported::Slicers),
+            ]
+            .map(|(name, kind)| (name.to_string(), kind)),
+        );
+        let mut held = Held::of(&found, &layout(vec![SheetLinks::Unknown]));
         assert_eq!(
             held.rewrite(0, BTreeSet::new(), Relationships::Dropped)
                 .unwrap(),
             set(&[
                 Unsupported::PivotTables,
-                Unsupported::Macros,
-                Unsupported::AutoFilter
+                Unsupported::AutoFilter,
+                Unsupported::Slicers
             ])
         );
+        assert!(held.all().contains(&Unsupported::WorkbookProtection));
     }
 
     #[test]
