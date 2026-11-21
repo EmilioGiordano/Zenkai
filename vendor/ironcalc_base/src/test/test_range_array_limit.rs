@@ -23,3 +23,21 @@ fn ranges_turned_into_arrays_stop_at_the_byte_budget() {
         assert_eq!(model._get_text(cell), "#VALUE!", "{cell}");
     }
 }
+
+// Cells holding one shared string each get a copy of it in the array, so the texts count
+// toward the budget as they are copied: 8,000 copies of 30,000 bytes fit, 9,000 do not.
+#[test]
+fn copies_of_a_shared_string_count_toward_the_byte_budget() {
+    let text = "x".repeat(30_000);
+    let mut model = new_empty_model();
+    for row in 1..=9_000 {
+        model._set(&format!("A{row}"), &text);
+    }
+    model._set("B1", "=COUNTA(LEFT(A1:A8000,1))");
+    model._set("B2", "=COUNTA(LEFT(A1:A9000,1))");
+    model.evaluate();
+    let stored = model.workbook.shared_strings.iter().filter(|s| **s == text);
+    assert_eq!(stored.count(), 1);
+    assert_eq!(model._get_text("B1"), "8000");
+    assert_eq!(model._get_text("B2"), "#VALUE!");
+}

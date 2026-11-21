@@ -478,7 +478,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `get_number_or_array` included, which built their own copy; functions that read a range
   cell by cell, such as SUM, are unchanged (`src/model.rs`, `src/cast.rs` and the callers in
   `src/functions`). A limit Excel does not have. Needs the text limit patch for the
-  constants. Tests: `src/test/test_range_array_limit.rs`.
+  constants. Tests: `src/test/test_range_array_limit.rs`. The texts of the range count
+  toward the same budget as they are copied, since every cell holding one shared string got
+  its own copy: a million cells of one 32,767 character string took 32 GB. A range holding
+  more than about 200 MiB of text is now `#VALUE!` where Excel gives a result.
 
 Zenkai-only, not for upstream:
 

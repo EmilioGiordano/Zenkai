@@ -1345,7 +1345,8 @@ impl<'a> Model<'a> {
 
     /// Evaluates all cells in a given range and returns the results in a 2D vector.
     /// A range whose nodes would pass `MAX_TEXT_ARRAY_BYTES` is the `#VALUE!` of `cell`
-    /// before any is built: five whole columns fit, six or the whole sheet do not.
+    /// before any is built: five whole columns fit, six or the whole sheet do not. The texts
+    /// count too as they are copied, since cells sharing one long string each get a copy.
     pub(crate) fn evaluate_range(
         &mut self,
         left: CellReferenceIndex,
@@ -1355,12 +1356,16 @@ impl<'a> Model<'a> {
         let rows = (i64::from(right.row) - i64::from(left.row) + 1).max(0);
         let columns = (i64::from(right.column) - i64::from(left.column) + 1).max(0);
         let elements = usize::try_from(rows * columns).unwrap_or(usize::MAX);
-        if elements.saturating_mul(BYTES_PER_ELEMENT) > MAX_TEXT_ARRAY_BYTES {
-            return Err(CalcResult::new_error(
+        let too_large = || {
+            CalcResult::new_error(
                 Error::VALUE,
                 cell,
                 format!("Range larger than {MAX_TEXT_ARRAY_BYTES} bytes as an array"),
-            ));
+            )
+        };
+        let mut bytes = elements.saturating_mul(BYTES_PER_ELEMENT);
+        if bytes > MAX_TEXT_ARRAY_BYTES {
+            return Err(too_large());
         }
         let mut result = Vec::new();
         for r in left.row..=right.row {
@@ -1374,7 +1379,13 @@ impl<'a> Model<'a> {
                 let value = match self.evaluate_cell(cell_reference) {
                     CalcResult::Number(n) => ArrayNode::Number(n),
                     CalcResult::Boolean(b) => ArrayNode::Boolean(b),
-                    CalcResult::String(s) => ArrayNode::String(s),
+                    CalcResult::String(s) => {
+                        bytes += s.len();
+                        if bytes > MAX_TEXT_ARRAY_BYTES {
+                            return Err(too_large());
+                        }
+                        ArrayNode::String(s)
+                    }
                     CalcResult::Error { error, .. } => ArrayNode::Error(error),
                     CalcResult::EmptyCell | CalcResult::EmptyArg => ArrayNode::Empty,
                     CalcResult::Range { .. } | CalcResult::Array(_) | CalcResult::Lambda(_) => {
