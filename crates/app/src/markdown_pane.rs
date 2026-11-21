@@ -61,12 +61,10 @@ pub struct MarkdownPane {
 }
 
 mod preview;
-pub(crate) mod zoom_style;
+mod zoom_style;
 
 use crate::markdown_depth::Refusal;
-use preview::{Extensions, Images, extensions, verdicts};
-
-pub(crate) use preview::{blocked_image, restricted_extensions};
+use preview::{Extensions, Images, blocked_image, extensions, verdicts};
 
 impl EventEmitter<PaneEvent> for MarkdownPane {}
 

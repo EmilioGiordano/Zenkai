@@ -1,3 +1,4 @@
+use super::blocks::{Block, blocks_of};
 use super::links::{NoteLink, links_of};
 use crate::markdown_restricted;
 use crate::updates::{Day, Note, Notes, Status, Version, known_update};
@@ -5,7 +6,7 @@ use crate::updates::{Day, Note, Notes, Status, Version, known_update};
 pub struct SectionPlan {
     pub version: Version,
     pub published: Option<Day>,
-    pub text: Option<String>,
+    pub blocks: Option<Vec<Block>>,
     pub links: Vec<NoteLink>,
 }
 
@@ -56,19 +57,20 @@ pub fn plan(status: Status, notes: &Notes, installed: Version) -> Plan {
     Plan { banner, line, body }
 }
 
-// A note that is empty, too deeply nested or past the size limit has no text, and its
-// heading says so; its release page is still there.
+// A note that is empty, too deeply nested or past a budget has no blocks, and its heading says
+// so; its release page is still there.
 fn section(note: &Note) -> SectionPlan {
     let checked = note
         .body
         .as_deref()
         .and_then(markdown_restricted::check)
         .filter(|checked| !checked.text.trim().is_empty());
+    let tree = checked.as_ref().map(|checked| &checked.tree);
     SectionPlan {
         version: note.version,
         published: note.published,
-        links: links_of(note.version, checked.as_ref().map(|checked| &checked.tree)),
-        text: checked.map(|checked| checked.text),
+        links: links_of(note.version, tree),
+        blocks: tree.and_then(blocks_of).filter(|blocks| !blocks.is_empty()),
     }
 }
 
@@ -93,6 +95,11 @@ mod tests {
         version("0.1.0")
     }
 
+    fn first_text(section: &SectionPlan) -> Option<&str> {
+        let blocks = section.blocks.as_ref()?;
+        blocks.first().map(|block| block.text.as_str())
+    }
+
     fn sections(plan: &Plan) -> &[SectionPlan] {
         match &plan.body {
             Body::Sections { sections, .. } => sections,
@@ -115,7 +122,7 @@ mod tests {
             .map(|section| section.version.to_string())
             .collect();
         assert_eq!(listed, ["0.1.2", "0.1.1"]);
-        assert_eq!(sections(&plan)[0].text.as_deref(), Some("two"));
+        assert_eq!(first_text(&sections(&plan)[0]), Some("two"));
     }
 
     #[test]
@@ -129,7 +136,7 @@ mod tests {
         let plan = plan(Status::Available(version("0.1.3")), &notes, installed());
         assert_eq!(sections(&plan).len(), 3);
         for section in sections(&plan) {
-            assert_eq!(section.text, None);
+            assert!(section.blocks.is_none());
             assert_eq!(section.links.len(), 1);
         }
     }
@@ -138,7 +145,7 @@ mod tests {
     fn the_text_of_a_note_is_cleaned_before_it_is_shown() {
         let notes = Notes::from_releases(vec![note("0.1.1", Some("a\u{202e}b\r\nc"))]);
         let plan = plan(Status::Available(version("0.1.1")), &notes, installed());
-        assert_eq!(sections(&plan)[0].text.as_deref(), Some("ab\nc"));
+        assert_eq!(first_text(&sections(&plan)[0]), Some("ab\nc"));
     }
 
     #[test]

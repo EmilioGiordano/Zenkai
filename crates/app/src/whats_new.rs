@@ -1,10 +1,11 @@
+mod blocks;
+mod draw;
 mod links;
 mod plan;
 mod render;
 
 use std::sync::Arc;
 
-use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 
 use crate::text_zoom::TextZoom;
@@ -19,19 +20,15 @@ pub enum NotesEvent {
     OpenLink(String),
 }
 
-struct Drawn {
-    state: Entity<TextViewState>,
-    text: SharedString,
-    loaded: bool,
-}
-
+// `texts[section][block]` is the text of that block, kept as a shared string so drawing it
+// again costs no copy.
 struct Shown {
     plan: Plan,
-    bodies: Vec<Option<Drawn>>,
+    texts: Vec<Vec<SharedString>>,
 }
 
 // The What's new tab: the notes the update check fetched, read-only. Each version is a heading
-// the tab draws and a body the Markdown text view draws in its restricted mode.
+// and a flat list of lines the tab draws itself from the parsed note; no text view is used.
 pub struct NotesView {
     shown: Option<Shown>,
     seen: Option<(Arc<Notes>, Status)>,
@@ -108,48 +105,20 @@ impl NotesView {
     }
 
     fn show(&mut self, plan: Plan, cx: &mut Context<Self>) {
-        let bodies = match &plan.body {
+        let texts: Vec<Vec<SharedString>> = match &plan.body {
             Body::Sections { sections, .. } => sections
                 .iter()
                 .map(|section| {
-                    section.text.as_ref().map(|text| Drawn {
-                        state: cx.new(|cx| TextViewState::markdown("", cx)),
-                        text: SharedString::from(text.clone()),
-                        loaded: false,
-                    })
+                    let blocks = section.blocks.iter().flatten();
+                    blocks
+                        .map(|block| SharedString::from(block.text.clone()))
+                        .collect()
                 })
                 .collect(),
             Body::UpToDate | Body::NoNotes | Body::Nothing => Vec::new(),
         };
-        self.shown = Some(Shown { plan, bodies });
+        self.shown = Some(Shown { plan, texts });
         cx.notify();
-    }
-
-    // A text view parses with the extensions it has when it is given text, and it takes them
-    // from the element that draws it. So each body starts empty and gets its text only after a
-    // frame has drawn it, and no note is ever parsed without the restricted extensions.
-    fn load_drawn_bodies(&mut self, window: &mut Window) {
-        let Some(shown) = &mut self.shown else {
-            return;
-        };
-        let pending: Vec<(Entity<TextViewState>, SharedString)> = shown
-            .bodies
-            .iter_mut()
-            .flatten()
-            .filter(|body| !body.loaded)
-            .map(|body| {
-                body.loaded = true;
-                (body.state.clone(), body.text.clone())
-            })
-            .collect();
-        if pending.is_empty() {
-            return;
-        }
-        window.on_next_frame(move |_, cx| {
-            for (state, text) in pending {
-                state.update(cx, |state, cx| state.set_text(&text, cx));
-            }
-        });
     }
 
     // The arrow, page and home keys scroll the notes wherever the focus is inside the tab.

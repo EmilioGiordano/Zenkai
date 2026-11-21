@@ -1,18 +1,16 @@
-use gpui_kit::base::{TextView, h_flex, v_flex};
+use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Sizable};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_i18n::t;
 
+use super::draw::{Look, draw_block};
 use super::links::{MAX_LINKS, NoteLink, Target};
 use super::plan::{Body, Line, SectionPlan};
-use super::{CONTEXT, Drawn, NotesEvent, NotesView};
+use super::{CONTEXT, NotesEvent, NotesView};
 use crate::actions::{CheckForUpdates, UpdateNow};
 use crate::interface_scale::rem_px;
 use crate::keymap;
-use crate::markdown_pane::zoom_style::zoomed;
-use crate::markdown_pane::{blocked_image, restricted_extensions};
 use crate::updates::{RELEASES_PAGE, Version};
 
 const COLUMN_WIDTH: f32 = 640.0;
@@ -106,27 +104,21 @@ impl NotesView {
         &self,
         index: usize,
         section: &SectionPlan,
-        body: Option<&Drawn>,
+        texts: &[SharedString],
+        look: &Look,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let factor = self.zoom.factor();
         let muted = cx.theme().muted_foreground;
-        let style = (!self.zoom.is_default()).then(|| zoomed(cx.theme(), factor));
-        let weak = cx.entity().downgrade();
-        let text = match body {
-            Some(body) => TextView::new(&body.state)
-                .when_some(style, |view, style| view.style(style))
-                .markdown_extensions(restricted_extensions())
-                .selectable(true)
-                .image_source(|_| blocked_image())
-                .on_link_click(move |url, _, _, cx| {
-                    let target = url.to_string();
-                    if let Err(error) =
-                        weak.update(cx, |_, cx| cx.emit(NotesEvent::OpenLink(target)))
-                    {
-                        tracing::debug!(%error, "the What's new tab closed on a link click");
-                    }
-                })
+        let text = match &section.blocks {
+            Some(blocks) => v_flex()
+                .gap_1p5()
+                .children(
+                    blocks
+                        .iter()
+                        .zip(texts)
+                        .map(|(block, text)| draw_block(block, text, look)),
+                )
                 .into_any_element(),
             None => div()
                 .text_color(muted)
@@ -211,7 +203,6 @@ fn label_of(link: &NoteLink) -> String {
 
 impl Render for NotesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.load_drawn_bodies(window);
         let (background, ring) = {
             let theme = cx.theme();
             (theme.background, theme.ring)
@@ -222,6 +213,7 @@ impl Render for NotesView {
             background
         };
         let factor = self.zoom.factor();
+        let look = Look::new(window, cx, factor);
         let mut banner = None;
         let mut column = v_flex()
             .w_full()
@@ -250,8 +242,9 @@ impl Render for NotesView {
                     older_exist,
                 } => {
                     for (index, section) in sections.iter().enumerate() {
-                        let body = shown.bodies.get(index).and_then(Option::as_ref);
-                        column = column.child(self.render_section(index, section, body, cx));
+                        let texts = shown.texts.get(index).map_or(&[][..], Vec::as_slice);
+                        column =
+                            column.child(self.render_section(index, section, texts, &look, cx));
                     }
                     if *older_exist {
                         column = column.child(self.render_older(cx));

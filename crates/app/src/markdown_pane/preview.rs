@@ -13,7 +13,6 @@ use gpui_kit::*;
 use super::MarkdownPane;
 use crate::markdown_depth::{self, Refusal};
 use crate::markdown_images::{image_path, image_urls, vet_image};
-use crate::markdown_restricted::{plain_text, vetted_link};
 use crate::text_document::ViewMode;
 
 const PREVIEW_DELAY: Duration = Duration::from_millis(150);
@@ -116,52 +115,7 @@ pub(super) fn extensions() -> MarkdownExtensions {
         .plugin(MathAsText)
 }
 
-// The text of a release note is not signed, so beyond what the pane already does with HTML,
-// images are drawn as their alt text and only links `vetted_link` accepts are links.
-struct Restricted;
-
-impl MarkdownPlugin for Restricted {
-    fn name(&self) -> &str {
-        "zenkai-restricted"
-    }
-
-    fn parse(
-        &self,
-        node: &markdown_ast::Node,
-        _: &MarkdownParseContext<'_>,
-    ) -> Option<MarkdownNode> {
-        let text = match node {
-            markdown_ast::Node::Link(link) if vetted_link(&link.url).is_some() => return None,
-            markdown_ast::Node::Link(link) => plain_text(&link.children),
-            markdown_ast::Node::LinkReference(link) => plain_text(&link.children),
-            markdown_ast::Node::Image(image) => image.alt.clone(),
-            markdown_ast::Node::ImageReference(image) => image.alt.clone(),
-            _ => return None,
-        };
-        Some(MarkdownNode::new(self.name().to_owned(), ()).text(text))
-    }
-
-    fn render_inline(
-        &self,
-        node: &MarkdownNode,
-        _: &InlineRenderContext,
-        _: &mut Window,
-        _: &mut App,
-    ) -> Option<InlineElement> {
-        Some(InlineElement::new(node.as_text().to_string()))
-    }
-}
-
-pub(crate) fn restricted_extensions() -> MarkdownExtensions {
-    MarkdownExtensions::default()
-        .parser_revision(3)
-        .plugin(HtmlAsText { block: false })
-        .plugin(HtmlAsText { block: true })
-        .plugin(MathAsText)
-        .plugin(Restricted)
-}
-
-pub(crate) fn blocked_image() -> ImageSource {
+pub(super) fn blocked_image() -> ImageSource {
     ImageSource::Custom(Arc::new(|_, _| None))
 }
 
