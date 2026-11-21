@@ -8,7 +8,7 @@ version = 2
 yanked = "warn"
 # Unmaintained crates deep in the GPUI tree are tracked upstream; direct ones must be replaced.
 unmaintained = "workspace"
-# Only ZipArchive::extract() is affected and no code path calls it; vendored ironcalc and the xlsx crates still use zip 0.6.
+# zip 0.6 advisories where only ZipArchive::extract() is affected; no code path calls it.
 ignore = [
     { id = "RUSTSEC-2026-0367", reason = "extract() is never called; vendored ironcalc and the xlsx crates still use zip 0.6" },
     { id = "RUSTSEC-2026-0368", reason = "extract() is never called; vendored ironcalc and the xlsx crates still use zip 0.6" },
