@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use zenkai_xlsx_reader::start_tag_names;
 
 use crate::error::EngineError;
+use crate::extended_rules;
 use crate::file::Unsupported;
 
 pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
@@ -24,9 +25,6 @@ const PARSED_ELEMENTS: [&str; 6] = [
     "definedName",
     "conditionalFormattings",
 ];
-
-// IronCalc reads these rule types from a sheet's extension list; it drops any other.
-const EXTENDED_RULES_READ: [&str; 3] = ["dataBar", "iconSet", "expression"];
 
 // Every XML part is checked, wherever it lives: the engine follows relationship
 // targets to any path and also parses formulas outside worksheets (defined names,
@@ -55,6 +53,7 @@ pub fn check_part(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
             return Ok(found);
         }
     };
+    let data_bar_ids = extended_rules::data_bar_ids(&document);
     for node in document.descendants().filter(roxmltree::Node::is_element) {
         let name = node.tag_name().name();
         if matches!(
@@ -63,7 +62,9 @@ pub fn check_part(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
         ) {
             check_formula(&node)?;
         }
-        if let Some(kind) = element_kind(name).or_else(|| placed_kind(node))
+        let dropped_rule = name == "cfRule" && extended_rules::is_dropped(node, &data_bar_ids);
+        let placed = dropped_rule.then_some(Unsupported::ExtendedConditionalFormats);
+        if let Some(kind) = element_kind(name).or(placed)
             && !found.contains(&kind)
         {
             found.push(kind);
@@ -88,33 +89,6 @@ pub(crate) fn element_kind(name: &str) -> Option<Unsupported> {
         "rPh" => Some(Unsupported::Phonetic),
         _ => None,
     }
-}
-
-// What an element holds only where it sits, or with the attributes it has.
-fn placed_kind(node: roxmltree::Node<'_, '_>) -> Option<Unsupported> {
-    let parent = node.parent_element()?;
-    match node.tag_name().name() {
-        "cfRule" if is_dropped_extended_rule(node, parent) => {
-            Some(Unsupported::ExtendedConditionalFormats)
-        }
-        _ => None,
-    }
-}
-
-// A rule of the sheet's extension list (conditionalFormattings, conditionalFormatting,
-// cfRule) of a type IronCalc does not read, such as one comparing with another sheet.
-fn is_dropped_extended_rule(
-    rule: roxmltree::Node<'_, '_>,
-    parent: roxmltree::Node<'_, '_>,
-) -> bool {
-    let in_extension = parent.tag_name().name() == "conditionalFormatting"
-        && parent
-            .parent_element()
-            .is_some_and(|list| list.tag_name().name() == "conditionalFormattings");
-    in_extension
-        && !rule
-            .attribute("type")
-            .is_some_and(|kind| EXTENDED_RULES_READ.contains(&kind))
 }
 
 fn check_formula(node: &roxmltree::Node<'_, '_>) -> Result<(), EngineError> {
@@ -331,20 +305,15 @@ mod tests {
         r#"</x14:conditionalFormatting></x14:conditionalFormattings></ext></extLst></worksheet>"#
     );
 
-    // IronCalc reads data bars, icon sets and expression rules from the extension list and
-    // writes them back; any other rule there is dropped.
+    // IronCalc reads an expression from the extension list and writes it back; the rest of
+    // what it reads there is in `extended_rules`.
     #[test]
     fn reports_extended_rules_ironcalc_does_not_read() {
         assert_eq!(
             kinds(&EXTENDED_RULE.replace("TYPE", "cellIs")),
             [Unsupported::ExtendedConditionalFormats]
         );
-        for read in ["dataBar", "iconSet", "expression"] {
-            assert!(
-                kinds(&EXTENDED_RULE.replace("TYPE", read)).is_empty(),
-                "{read}"
-            );
-        }
+        assert!(kinds(&EXTENDED_RULE.replace("TYPE", "expression")).is_empty());
         let plain = sheet("").replace(
             "</worksheet>",
             concat!(

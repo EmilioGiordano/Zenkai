@@ -5,6 +5,7 @@ mod carried_moves;
 mod content_cells_property;
 mod edit_profile;
 mod error;
+mod extended_rules;
 mod file;
 mod fingerprint;
 mod held;
