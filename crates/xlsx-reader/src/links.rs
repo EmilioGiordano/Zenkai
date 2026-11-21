@@ -250,9 +250,9 @@ impl<'a, R: Read + Seek> Reader<'a, R> {
         let read = read_part_to_peek(entry.take(cap as u64 + 1), self.meter, &part, self.budgets);
         let spent = read.as_ref().map_or(cap, Vec::len);
         self.drawing_bytes_left = self.drawing_bytes_left.saturating_sub(spent);
+        // The open walk never inflated the drawing, so one that fails here must not stop it.
         match read {
             Ok(bytes) => Ok(bytes.len() > cap || drawing_cells::names_cells(&bytes)),
-            Err(ReadError::Cancelled) => Err(ReadError::Cancelled),
             Err(error) => {
                 tracing::debug!(%error, part, "a drawing that cannot be read may name cells");
                 Ok(true)
