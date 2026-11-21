@@ -8,7 +8,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use proptest::prelude::*;
-use zenkai_formats::read_values;
+use zenkai_formats::{SheetValues, read_values};
 use zenkai_values_host::client::{ReadError, ValuesClient};
 
 #[path = "../../../test-support/xlsx_damage.rs"]
@@ -126,24 +126,36 @@ fn xls_with_a_self_looping_fat_chain() -> Vec<u8> {
     bytes
 }
 
+// Every non-empty cell as (sheet, row, column, value), so a block the host split across frames
+// compares equal to the reader's single block.
+fn cells(sheets: &[SheetValues]) -> Vec<(&str, u32, u32, &str)> {
+    let mut cells = Vec::new();
+    for sheet in sheets {
+        for block in &sheet.blocks {
+            for (row, values) in (block.first_row..).zip(&block.rows) {
+                for (col, value) in (block.first_col..).zip(values) {
+                    if !value.is_empty() {
+                        cells.push((sheet.name.as_str(), row, col, value.as_str()));
+                    }
+                }
+            }
+        }
+    }
+    cells
+}
+
 #[test]
 fn the_host_returns_what_the_in_process_reader_returns() {
     for name in ["issues.xls", "date.xls", "issues.ods", "unicode.xlsx"] {
         let path = fixture(name);
         let expected = read_values(&path).unwrap();
         let received = client().read(&path, &AtomicBool::new(false)).unwrap();
-        assert_eq!(received.len(), expected.len(), "{name}");
-        for (got, want) in received.iter().zip(&expected) {
-            assert_eq!(got.name, want.name, "{name}");
-            let cells = |blocks: &[zenkai_formats::Block]| {
-                blocks
-                    .iter()
-                    .flat_map(|block| block.rows.iter().flatten())
-                    .filter(|cell| !cell.is_empty())
-                    .count()
-            };
-            assert_eq!(cells(&got.blocks), cells(&want.blocks), "{name}");
-        }
+        let names = |sheets: &[SheetValues]| -> Vec<String> {
+            sheets.iter().map(|sheet| sheet.name.clone()).collect()
+        };
+        assert_eq!(names(&received), names(&expected), "{name}");
+        assert!(!cells(&expected).is_empty(), "{name}");
+        assert_eq!(cells(&received), cells(&expected), "{name}");
     }
 }
 
