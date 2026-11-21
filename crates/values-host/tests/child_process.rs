@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -106,6 +106,28 @@ fn a_cancel_stops_a_hanging_child() {
         client.read(Path::new("ignored.xls"), &cancel)
     });
     assert!(matches!(outcome, Err(ReadError::Cancelled)));
+}
+
+#[test]
+fn a_hanging_host_exits_once_its_stdin_closes() {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fake-values-host"))
+        .env("ZENKAI_FAKE_VALUES_HOST", "hang")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    drop(child.stdin.take());
+    let started = Instant::now();
+    let mut exited = child.try_wait().unwrap().is_some();
+    while !exited && started.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(50));
+        exited = child.try_wait().unwrap().is_some();
+    }
+    if !exited {
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+    assert!(exited, "the host outlived its closed stdin");
 }
 
 fn is_running(pid: &str) -> bool {

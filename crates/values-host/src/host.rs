@@ -15,6 +15,20 @@ pub enum HostError {
     Frame(#[from] FrameError),
 }
 
+// The client holds stdin open for the whole read and never writes to it, so its closing, on
+// purpose or because the app died, ends a host stuck in calamine instead of leaving it running.
+pub fn exit_when_stdin_closes() -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("values-host-watchdog".to_string())
+        .spawn(|| {
+            if let Err(error) = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink()) {
+                tracing::debug!(%error, "stdin failed; the app can no longer be heard");
+            }
+            std::process::exit(1);
+        })?;
+    Ok(())
+}
+
 // Reads the workbook and writes it to `out` as frames. A read that fails is reported to the
 // client as a Failed frame; a panic inside calamine is caught by `read_values` and arrives the
 // same way. Only a failure to write the last frame is an error here.

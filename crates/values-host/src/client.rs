@@ -90,7 +90,6 @@ impl ValuesClient {
                 }
             })?;
         let child = KillOnDrop(child);
-        drop(stdin);
         let (frames, inbox) = mpsc::sync_channel(FRAMES_IN_FLIGHT);
         std::thread::Builder::new()
             .name("values-host-reader".to_string())
@@ -106,6 +105,9 @@ impl ValuesClient {
             })
             .map_err(|error| ReadError::StartFailed(error.to_string()))?;
         let outcome = self.collect(&inbox, cancel);
+        // The host exits once its stdin closes, so it stays open for the whole read; if the app
+        // dies first, the system closes it and a host stuck in calamine goes with it.
+        drop(stdin);
         drop(child);
         // The reader ends by itself once the killed child closes the pipe or the inbox is gone.
         drop(inbox);

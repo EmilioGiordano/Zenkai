@@ -9,6 +9,9 @@ fn main() -> ExitCode {
     let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) else {
         return ExitCode::FAILURE;
     };
+    if zenkai_values_host::host::exit_when_stdin_closes().is_err() {
+        return ExitCode::FAILURE;
+    }
     let mut out = BufWriter::new(std::io::stdout().lock());
     match zenkai_values_host::host::run(&path, &mut out) {
         Ok(()) => ExitCode::SUCCESS,

@@ -15,6 +15,9 @@ fn main() {
     {
         std::process::exit(2);
     }
+    if zenkai_values_host::host::exit_when_stdin_closes().is_err() {
+        std::process::exit(2);
+    }
     let mut out = std::io::stdout().lock();
     match mode.as_str() {
         "abort" => std::process::abort(),
