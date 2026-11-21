@@ -30,7 +30,7 @@ As in the mockup, inside the normal workbook area (sidebar and status bar unchan
    per version, newest first, up to 20. Each section is:
    - a heading the tab draws itself: the version at 15 px semibold and the date beside it,
      lighter and in the muted colour;
-   - the release text, drawn by the Markdown text view in restricted mode (below);
+   - the release text, drawn by the tab itself from the parsed note (below);
    - a row of link buttons (below).
 3. The status bar says "What's new" and "Read-only". There is no Source or Split toggle, no
    caret position and no encoding: the tab shows the preview only and takes no typing, Find or
@@ -48,32 +48,33 @@ first, so a version with no other links shows only that button. Each button is a
 a focus ring and Enter activates it, and goes through the same confirmation as a click. Labels
 come from the target: "Release 0.1.3 on GitHub", "Issue #301", "Pull request #13", and for
 any other link the link text (cut at 60 characters), or its address when it has no text.
-Links inside the Markdown stay clickable with the mouse as well.
+There are no clickable links inside the text: a link is drawn as its text, and these buttons
+are the only way to open one.
 
-## Restricted mode
+## How a note is drawn
 
-The notes use the Markdown pane's own text view, extensions and HTML plugin, with a restricted
-mode added to them (`restricted_extensions` in `markdown_pane`); there is no second renderer.
-The tab does not use the whole pane, which carries an editor, because each version is its own
-body under a heading the tab draws.
+The tab does not use the Markdown text view, or any gpui Markdown parsing, for the notes. This
+deviates from the SPEC's "pestaña Markdown de solo lectura", for security and at the user's
+decision: the text of a release is not signed, and the text view's inline HTML pairing, table
+padding and re-parsing cost more than any depth check can bound.
 
-- Text goes through `markdown_restricted::check` before it reaches the renderer: control and
-  bidirectional characters removed, line endings normalised, then parsed with the `markdown`
-  crate and refused if the tree is deeper than 32 levels (64 in the Markdown pane, which uses
-  the same check). The tree is measured without recursion, in the background for long text.
-  A refused note is treated like an empty one. Each body gets its text only after its view has
-  the restricted extensions, so no note is ever parsed without them.
-- Raw HTML is shown as text by the pane's existing plugin. Images are replaced by their alt
-  text and no image is ever loaded (a plugin, plus an image source that is always blocked).
-- Every link is judged by `markdown_restricted::vetted_link` (https, exactly `github.com`, no
-  user, no port, no `..`, path `/EmilioGiordano/Zenkai` or below). A link that passes is
-  rendered as a link; any other link, including reference links and bare URLs, is rendered as
-  its plain text. The click handler checks again, so a link never opens on the strength of how
-  it was drawn.
+- Text goes through `markdown_restricted::check`: control and bidirectional characters
+  removed, line endings normalised, then parsed once with the `markdown` crate and refused if
+  the tree is deeper than 32 levels or past the node, HTML-sibling or table budgets (the same
+  check the Markdown pane uses, with 64 levels). The tree is measured without recursion, in
+  the background.
+- `whats_new/blocks.rs` turns that tree into a flat list of lines with an iterative walk and a
+  hard budget on nodes visited, lines and text bytes; a note past it is shown as "not shown
+  here". Headings keep three sizes (deeper ones use the third), paragraphs, bullet and ordered
+  list items (marker beside the text, indent capped at four levels), block quotes (a rule and
+  muted text), code blocks and inline code (monospace), and bold and italic runs.
+- Everything else is its plain text: links, images (the alt text), raw HTML, math, tables (one
+  line per row, cells joined by " | "), footnotes and thematic breaks (nothing).
+- `whats_new/draw.rs` draws each line as plain GPUI text with per-run fonts and colours.
 
 ## Opening a link
 
-A click on a link, or Enter on a link button, asks first with the existing web-link prompt
+A click or Enter on a link button asks first with the existing web-link prompt
 (warning style, the same focus and keyboard handling as the prompt for links in other
 documents):
 
@@ -126,6 +127,6 @@ keys work inside the tab.
 - Versions are kept only above the installed one when fetched, and cut again when read, since
   the installed version changes after an update.
 - A link with an explicit port, including `:443`, is refused as written, even though the URL
-  parser would drop a default port. The nesting limit is on the parsed tree: 32 in restricted mode, 64 in the Markdown pane.
+  parser would drop a default port. The nesting limit is on the parsed tree: 32 for notes, 64 in the Markdown pane.
 - New direct dependencies: `url` for the link check and `markdown` (the parser GPUI already
-  uses, pinned to the same version) to find a version's links; neither changes the build.
+  uses, pinned to the same version) to parse the notes; neither changes the build.
