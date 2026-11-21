@@ -79,13 +79,23 @@ mod theme_palettes;
 mod toolbar;
 #[cfg(windows)]
 mod tray;
+mod version;
 mod view;
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use gpui_kit::*;
 
-fn main() {
+fn main() -> ExitCode {
+    if version::requested(std::env::args_os().skip(1)) {
+        return version::print();
+    }
+    run();
+    ExitCode::SUCCESS
+}
+
+fn run() {
     restart::wait_for_previous_instance();
     let initial: Option<PathBuf> = restart::file_argument();
     // Before the log starts: a launch that only hands over must not truncate the log of the
