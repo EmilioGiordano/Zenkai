@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{
     calc_result::CalcResult,
     cast::{array_node_to_string, NumberOrArray, StringOrArray, ValueOrArray},
@@ -8,6 +10,7 @@ use crate::{
     },
     functions::util::compare_values,
     model::Model,
+    text_limit::{text_length, text_too_long, MAX_TEXT_LENGTH},
 };
 
 /// Maps an output index `i` back to the source array index, applying Excel's
@@ -34,6 +37,84 @@ fn to_f64(value: &ArrayNode) -> Result<f64, Error> {
         },
         ArrayNode::Error(err) => Err(err.clone()),
         ArrayNode::Empty => Ok(0.0),
+    }
+}
+
+/// The text of one element of an operand of `&`, with its length as Excel counts it.
+struct TextPiece<'a> {
+    text: Cow<'a, str>,
+    length: usize,
+}
+
+impl<'a> TextPiece<'a> {
+    fn new(text: Cow<'a, str>) -> Self {
+        let length = text_length(&text);
+        TextPiece { text, length }
+    }
+
+    fn from_node(node: &'a ArrayNode) -> Result<Self, Error> {
+        match node {
+            ArrayNode::String(s) => Ok(TextPiece::new(Cow::Borrowed(s))),
+            other => array_node_to_string(other).map(|s| TextPiece::new(Cow::Owned(s))),
+        }
+    }
+}
+
+/// An operand of `&`: a single text, or the text of each element of an array.
+enum ConcatOperand<'a> {
+    Text(TextPiece<'a>),
+    Array(Vec<Vec<Result<TextPiece<'a>, Error>>>),
+}
+
+impl<'a> ConcatOperand<'a> {
+    fn new(operand: &'a StringOrArray) -> Self {
+        match operand {
+            StringOrArray::String(s) => ConcatOperand::Text(TextPiece::new(Cow::Borrowed(s))),
+            StringOrArray::Array(a) => ConcatOperand::Array(
+                a.iter()
+                    .map(|row| row.iter().map(TextPiece::from_node).collect())
+                    .collect(),
+            ),
+        }
+    }
+
+    /// The (rows, columns) shape. A text has none of its own: it repeats over the shape of
+    /// the other operand.
+    fn dims(&self) -> (usize, usize) {
+        match self {
+            ConcatOperand::Text(_) => (0, 0),
+            ConcatOperand::Array(a) => (a.len(), a.first().map(|r| r.len()).unwrap_or(0)),
+        }
+    }
+
+    /// The element at (`row`, `column`) with Excel's size-1 broadcasting, or `None` past
+    /// the shape of an array.
+    fn piece(&self, row: usize, column: usize) -> Option<Result<&TextPiece<'a>, Error>> {
+        match self {
+            ConcatOperand::Text(piece) => Some(Ok(piece)),
+            ConcatOperand::Array(a) => {
+                let columns = a.first().map(|r| r.len()).unwrap_or(0);
+                bcast_idx(a.len(), row)
+                    .and_then(|i| a.get(i))
+                    .and_then(|r| bcast_idx(columns, column).and_then(|j| r.get(j)))
+                    .map(|piece| piece.as_ref().map_err(|e| e.clone()))
+            }
+        }
+    }
+}
+
+/// The two texts one element of `&` joins, or the error it gives, as in Excel: `#VALUE!`
+/// for a missing element, the left error before the right one, and `#VALUE!` when the two
+/// texts together are longer than a text can be.
+fn joined<'p, 'a>(
+    left: Option<Result<&'p TextPiece<'a>, Error>>,
+    right: Option<Result<&'p TextPiece<'a>, Error>>,
+) -> Result<(&'p TextPiece<'a>, &'p TextPiece<'a>), Error> {
+    match (left, right) {
+        (Some(Ok(l)), Some(Ok(r))) if l.length + r.length > MAX_TEXT_LENGTH => Err(Error::VALUE),
+        (Some(Ok(l)), Some(Ok(r))) => Ok((l, r)),
+        (Some(Err(e)), Some(_)) | (Some(Ok(_)), Some(Err(e))) => Err(e),
+        _ => Err(Error::VALUE),
     }
 }
 
@@ -188,63 +269,32 @@ impl<'a> Model<'a> {
             Ok(v) => v,
             Err(e) => return e,
         };
+        let (l, r) = (ConcatOperand::new(&l), ConcatOperand::new(&r));
 
-        // Concatenates two array elements, propagating errors as error nodes.
-        let concat_nodes = |a: &ArrayNode, b: &ArrayNode| -> ArrayNode {
-            match (array_node_to_string(a), array_node_to_string(b)) {
-                (Ok(sa), Ok(sb)) => ArrayNode::String(format!("{sa}{sb}")),
-                (Err(e), _) | (_, Err(e)) => ArrayNode::Error(e),
-            }
-        };
-
-        match (l, r) {
-            (StringOrArray::String(s1), StringOrArray::String(s2)) => {
-                CalcResult::String(format!("{s1}{s2}"))
-            }
-            (StringOrArray::String(s1), StringOrArray::Array(a2)) => CalcResult::Array(
-                a2.iter()
-                    .map(|row| {
-                        row.iter()
-                            .map(|n| concat_nodes(&ArrayNode::String(s1.clone()), n))
-                            .collect()
-                    })
-                    .collect(),
-            ),
-            (StringOrArray::Array(a1), StringOrArray::String(s2)) => CalcResult::Array(
-                a1.iter()
-                    .map(|row| {
-                        row.iter()
-                            .map(|n| concat_nodes(n, &ArrayNode::String(s2.clone())))
-                            .collect()
-                    })
-                    .collect(),
-            ),
-            (StringOrArray::Array(a1), StringOrArray::Array(a2)) => {
-                let n1 = a1.len();
-                let m1 = a1.first().map(|r| r.len()).unwrap_or(0);
-                let n2 = a2.len();
-                let m2 = a2.first().map(|r| r.len()).unwrap_or(0);
-                let rows = n1.max(n2);
-                let cols = m1.max(m2);
-                let mut array = Vec::with_capacity(rows);
-                for ri in 0..rows {
-                    let row1 = bcast_idx(n1, ri).and_then(|i| a1.get(i));
-                    let row2 = bcast_idx(n2, ri).and_then(|i| a2.get(i));
-                    let mut data_row = Vec::with_capacity(cols);
-                    for ci in 0..cols {
-                        let v1 = row1.and_then(|r| bcast_idx(m1, ci).and_then(|j| r.get(j)));
-                        let v2 = row2.and_then(|r| bcast_idx(m2, ci).and_then(|j| r.get(j)));
-                        let node = match (v1, v2) {
-                            (Some(v1), Some(v2)) => concat_nodes(v1, v2),
-                            _ => ArrayNode::Error(Error::VALUE),
-                        };
-                        data_row.push(node);
-                    }
-                    array.push(data_row);
-                }
-                CalcResult::Array(array)
-            }
+        if let (ConcatOperand::Text(s1), ConcatOperand::Text(s2)) = (&l, &r) {
+            return match joined(Some(Ok(s1)), Some(Ok(s2))) {
+                Ok((s1, s2)) => CalcResult::String(format!("{}{}", s1.text, s2.text)),
+                Err(_) => text_too_long(cell),
+            };
         }
+
+        let (n1, m1) = l.dims();
+        let (n2, m2) = r.dims();
+        let rows = n1.max(n2);
+        let cols = m1.max(m2);
+
+        CalcResult::Array(
+            (0..rows)
+                .map(|ri| {
+                    (0..cols)
+                        .map(|ci| match joined(l.piece(ri, ci), r.piece(ri, ci)) {
+                            Ok((s1, s2)) => ArrayNode::String(format!("{}{}", s1.text, s2.text)),
+                            Err(e) => ArrayNode::Error(e),
+                        })
+                        .collect()
+                })
+                .collect(),
+        )
     }
 
     /// Applies a comparison operator element-wise.

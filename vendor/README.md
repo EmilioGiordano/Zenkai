@@ -398,6 +398,13 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - Comparing two texts uppercases them character by character instead of allocating two
   uppercase copies (`cmp_uppercase` in `src/functions/util.rs`). Stands on its own. Test in
   the module.
+- `&`, CONCAT, CONCATENATE, TEXTJOIN and SUBSTITUTE return `#VALUE!`, as Excel does, when
+  their result would be longer than 32,767 characters counted in UTF-16 code units, and
+  measure it before building it; they built it whole, so a formula joining a long text with
+  itself took tens of gigabytes. CONCAT appends to one buffer instead of copying the text so
+  far for each piece, and TEXTJOIN no longer copies every piece before joining them
+  (`src/text_limit.rs`, `src/arithmetic.rs`, `src/functions/text/common.rs`). Stands on its
+  own. Tests: `src/test/test_text_limit.rs`, `src/text_limit.rs`.
 - `evaluate_cell` reads a value cell, or a formula cell already evaluated, in place instead
   of cloning it first (`src/model.rs`). Stands on its own.
 - `Model::parsed_formulas` holds each sheet's formulas behind an `Arc`, so evaluating a
