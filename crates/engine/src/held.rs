@@ -66,6 +66,7 @@ fn kind_of(link: SheetLink) -> Unsupported {
         SheetLink::Comments => Unsupported::Comments,
         SheetLink::Table => Unsupported::Tables,
         SheetLink::Hyperlink => Unsupported::Hyperlinks,
+        SheetLink::PrinterSettings => Unsupported::PrinterSettings,
     }
 }
 
@@ -150,7 +151,14 @@ impl Held {
         let after = Owned {
             elements: written,
             linked: match relationships {
-                Relationships::Kept => owned.linked.clone(),
+                // The page setup is written without the id of its printer settings part
+                // (`sheet_settings`), so that link goes even while the part stays.
+                Relationships::Kept => owned
+                    .linked
+                    .iter()
+                    .copied()
+                    .filter(|kind| *kind != Unsupported::PrinterSettings)
+                    .collect(),
                 Relationships::Dropped => BTreeSet::new(),
             },
         };
@@ -293,6 +301,27 @@ mod tests {
             set(&[Unsupported::Slicers])
         );
         assert_eq!(held.all(), set(&[Unsupported::Slicers]));
+    }
+
+    #[test]
+    fn a_rewritten_sheet_loses_its_printer_settings_even_with_its_relationships() {
+        let found = [(
+            "xl/printerSettings/printerSettings1.bin".to_string(),
+            Unsupported::PrinterSettings,
+        )];
+        let printer = SheetLinks::Known(set_of_links(&[SheetLink::PrinterSettings]));
+        let mut held = Held::of(&found, &layout(vec![printer]));
+        assert_eq!(
+            held.rewrite(0, BTreeSet::new(), Relationships::Kept)
+                .unwrap(),
+            set(&[Unsupported::PrinterSettings])
+        );
+        assert!(
+            held.rewrite(0, BTreeSet::new(), Relationships::Kept)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(held.all(), set(&[Unsupported::PrinterSettings]));
     }
 
     #[test]

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ironcalc::base::types::Workbook as Book;
-use zenkai_xlsx_reader::{ReadError, SheetLinks, list_sheets, workbook_differences};
+use zenkai_xlsx_reader::{ReadError, SheetLink, SheetLinks, list_sheets, workbook_differences};
 
 pub use zenkai_xlsx_reader::ListedSheet;
 
@@ -257,7 +257,9 @@ fn read_streaming(
                 return SheetSettings::default();
             }
             let mut settings = sheet_settings::read(config, &mut budget);
-            if matches!(links, SheetLinks::Known(known) if known.is_empty()) {
+            // A printer settings link is never written back, and no move elsewhere affects it.
+            let only_printer = |link: &SheetLink| *link == SheetLink::PrinterSettings;
+            if matches!(links, SheetLinks::Known(known) if known.iter().all(only_printer)) {
                 settings.elements.nothing_linked();
             }
             settings

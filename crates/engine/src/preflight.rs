@@ -14,15 +14,14 @@ fn reject(reason: String) -> EngineError {
     EngineError::Unsafe(reason)
 }
 
-// The part is parsed only for these: formulas are checked against the limits, and where a
-// page setup or an extension rule sits decides what it holds.
-const PARSED_ELEMENTS: [&str; 7] = [
+// The part is parsed only for these: formulas are checked against the limits, and where an
+// extension rule sits decides what it holds.
+const PARSED_ELEMENTS: [&str; 6] = [
     "f",
     "formula",
     "formula1",
     "formula2",
     "definedName",
-    "pageSetup",
     "conditionalFormattings",
 ];
 
@@ -95,23 +94,11 @@ pub(crate) fn element_kind(name: &str) -> Option<Unsupported> {
 fn placed_kind(node: roxmltree::Node<'_, '_>) -> Option<Unsupported> {
     let parent = node.parent_element()?;
     match node.tag_name().name() {
-        // The relationship names the printer settings part; the page setup is written
-        // back without it.
-        "pageSetup" if node.attributes().any(|a| is_relationship_id(&a)) => {
-            Some(Unsupported::PrinterSettings)
-        }
         "cfRule" if is_dropped_extended_rule(node, parent) => {
             Some(Unsupported::ExtendedConditionalFormats)
         }
         _ => None,
     }
-}
-
-fn is_relationship_id(attribute: &roxmltree::Attribute<'_, '_>) -> bool {
-    attribute.name() == "id"
-        && attribute
-            .namespace()
-            .is_some_and(|namespace| namespace.ends_with("/relationships"))
 }
 
 // A rule of the sheet's extension list (conditionalFormattings, conditionalFormatting,
@@ -290,8 +277,7 @@ mod tests {
                 Unsupported::Slicers,
                 Unsupported::CustomViews,
                 Unsupported::Scenarios,
-                Unsupported::CellWatches,
-                Unsupported::PrinterSettings
+                Unsupported::CellWatches
             ]
         );
     }
@@ -333,12 +319,6 @@ mod tests {
             [Unsupported::Phonetic]
         );
         assert!(kinds("<sst><si><t>plain</t></si></sst>").is_empty());
-    }
-
-    #[test]
-    fn a_page_setup_without_printer_settings_reports_nothing() {
-        let xml = r#"<worksheet><sheetData/><pageSetup paperSize="9" orientation="portrait"/></worksheet>"#;
-        assert!(kinds(xml).is_empty());
     }
 
     const EXTENDED_RULE: &str = concat!(

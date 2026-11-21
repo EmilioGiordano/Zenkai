@@ -23,6 +23,7 @@ pub enum SheetLink {
     Comments,
     Table,
     Hyperlink,
+    PrinterSettings,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,8 +91,6 @@ fn resolve(source: &str, target: &str) -> Option<String> {
 
 enum Kind {
     Link(SheetLink),
-    // Nothing the user loses when a save leaves it behind.
-    Harmless,
     Unlisted,
 }
 
@@ -104,8 +103,7 @@ fn kind_of(kind: &str) -> Kind {
         "comments" | "threadedComment" => Kind::Link(SheetLink::Comments),
         "table" => Kind::Link(SheetLink::Table),
         "hyperlink" => Kind::Link(SheetLink::Hyperlink),
-        // Its loss is reported through the page setup element pointing at it.
-        "printerSettings" => Kind::Harmless,
+        "printerSettings" => Kind::Link(SheetLink::PrinterSettings),
         _ => Kind::Unlisted,
     }
 }
@@ -130,7 +128,6 @@ fn parse(bytes: &[u8], source: &str) -> Option<Found> {
         let kind = node.attribute("Type")?.rsplit('/').next()?;
         let link = match kind_of(kind) {
             Kind::Link(link) => link,
-            Kind::Harmless => continue,
             Kind::Unlisted => return None,
         };
         let external = node
@@ -426,13 +423,13 @@ mod tests {
     }
 
     #[test]
-    fn a_link_not_listed_leaves_the_sheet_unknown_unless_known_harmless() {
+    fn a_link_not_listed_leaves_the_sheet_unknown() {
         let sheet_with = |body: &str| {
             let entries = [(SHEET, String::new()), (SHEET_RELS, rels(body))];
             links_of(&entries, &[SHEET])
         };
         let printer = relationship(1, "printerSettings", "../printerSettings/p1.bin");
-        assert_eq!(sheet_with(&printer), [known(&[])]);
+        assert_eq!(sheet_with(&printer), [known(&[SheetLink::PrinterSettings])]);
         for kind in [
             "oleObject",
             "ctrlProp",

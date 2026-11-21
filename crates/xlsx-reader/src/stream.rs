@@ -11,7 +11,7 @@ use crate::nesting::{NestingCheck, is_xml_part};
 
 pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
 
-const CHECKED_ELEMENTS: [&[u8]; 20] = [
+const CHECKED_ELEMENTS: [&[u8]; 19] = [
     b"f",
     b"formula",
     b"formula1",
@@ -21,7 +21,6 @@ const CHECKED_ELEMENTS: [&[u8]; 20] = [
     b"dataValidations",
     b"autoFilter",
     b"sheetProtection",
-    b"pageSetup",
     b"customSheetViews",
     b"customWorkbookViews",
     b"scenarios",
