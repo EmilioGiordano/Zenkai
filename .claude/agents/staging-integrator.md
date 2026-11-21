@@ -49,9 +49,10 @@ You turn a batch of reviewed branches into one tested build. Read `AGENTS.md` an
 6. Run the benchmark in `bench/` (release) when any merged branch touched `crates/engine`,
    `crates/grid`, `crates/formats` or `bench/`, as `docs/DEVELOPMENT.md` documents it, and compare it
    with the saved baseline and the SPEC budgets.
-7. Copy `target\release\zenkai.exe` to `C:\Users\giord\OneDrive\Desktop\Zenkai.exe`,
-   overwriting: from the staging target dir in both cases. If the copy fails because the file is locked, report it and stop;
-   do not kill the process.
+7. Copy `C:\yien-compiled\zenkai\staging\release\zenkai.exe` to
+   `C:\Users\giord\OneDrive\Desktop\Zenkai.exe`, overwriting, and next to it the helpers the
+   app loads from its own folder: `zenkai-pdf-host.exe`, `zenkai-values-host.exe` and `pdfium.dll` when present. If a copy fails because the file is locked,
+   report it and stop; do not kill the process.
 
 ## Failures
 

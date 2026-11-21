@@ -68,8 +68,8 @@ Local builds happen only in staging, once per batch: one `cargo` process at a ti
 and no heavy measurement alongside a build. The repo lives in OneDrive, so every build sets
 `target-dir` under `C:/yien-compiled/zenkai/`; a target dir inside OneDrive is never allowed.
 
-A batch with a single branch runs the full gate directly in that branch's worktree and
-copies the release exe from there; no staging branch is created.
+A batch with a single branch runs the full gate directly in that branch's worktree, with the
+staging target dir, and copies the release exe from there; no staging branch is created.
 
 A batch with several branches gets a fresh `staging/<date>` from `main` (adding `-n`
 when the name is taken); the final tip of each branch is merged once with `--no-ff`. If
