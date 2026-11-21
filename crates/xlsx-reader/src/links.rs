@@ -98,6 +98,17 @@ fn resolve(source: &str, target: &str) -> Option<String> {
     Some(segments.join("/").to_ascii_lowercase())
 }
 
+// An entry name spelled as `resolve` spells targets, so two spellings of one part collide
+// and count as a part stored twice.
+fn normalized(name: &str) -> String {
+    name.replace('\\', "/")
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+        .to_ascii_lowercase()
+}
+
 enum Kind {
     Link(SheetLink),
     // Nothing the user loses when a save leaves it behind.
@@ -192,7 +203,7 @@ impl<'a, R: Read + Seek> Reader<'a, R> {
         let mut names: HashMap<String, Option<usize>> = HashMap::new();
         for (index, name) in names_in_order(archive)?.into_iter().enumerate() {
             names
-                .entry(name.to_ascii_lowercase())
+                .entry(normalized(&name))
                 .and_modify(|stored| *stored = None)
                 .or_insert(Some(index));
         }
@@ -211,7 +222,7 @@ impl<'a, R: Read + Seek> Reader<'a, R> {
 
     // A part without a relationships part points at nothing.
     fn relationships(&mut self, source: &str) -> Result<Option<Found>, ReadError> {
-        let name = relationships_part(source).to_ascii_lowercase();
+        let name = normalized(&relationships_part(source));
         let index = match self.names.get(&name) {
             None => return Ok(Some(Vec::new())),
             Some(None) => return Ok(None),
@@ -576,12 +587,21 @@ mod tests {
     // Readers disagree on which of two entries of one name they take.
     #[test]
     fn a_drawing_stored_twice_names_cells() {
-        let mut entries = with_drawing(String::new()).to_vec();
-        entries.push(("XL/Drawings/Drawing1.xml", shape_linked_to("A1")));
-        assert_eq!(
-            links_of(&entries, &[SHEET]),
-            [known(&[SheetLink::Drawing, SheetLink::CellReference])]
-        );
+        for spelling in [
+            "XL/Drawings/Drawing1.xml",
+            "/xl/drawings/./drawing1.xml",
+            "xl//drawings/drawing1.xml",
+            "xl\\drawings\\drawing1.xml",
+            "xl/drawings/drawing1.xml",
+        ] {
+            let mut entries = with_drawing(String::new()).to_vec();
+            entries.push((spelling, shape_linked_to("A1")));
+            assert_eq!(
+                links_of(&entries, &[SHEET]),
+                [known(&[SheetLink::Drawing, SheetLink::CellReference])],
+                "{spelling}"
+            );
+        }
     }
 
     #[test]
