@@ -424,7 +424,7 @@ Aplicar una actualización:
 3. Borra cualquier `confirmed` anterior y renombra `app` a `app.old`, con reintentos durante 10 s. Si falla, algo sigue corriendo desde `app`: abre la versión anterior y avisa.
 4. Renombra `new-<versión>` a `app`, con reintentos durante 30 s. Si falla, devuelve `app.old` a `app` y avisa.
 5. Abre la versión nueva y espera la marca `confirmed` con esa misma versión, hasta 120 s, o a que el proceso termine.
-6. Con la marca, borra `app.old` y el contenido de `.update\`, salvo el bloqueo, y la marca al final. Sin la marca, si el proceso sigue vivo termina ese proceso, que es su propio hijo, y restaura.
+6. Con la marca, borra `app.old` y después la marca. El resto de `.update\` no se toca: descargas, otras carpetas `new-*` y el registro del lanzador son de quien los escribió, que puede ser una app ya preparando la siguiente actualización. Sin la marca, si el proceso sigue vivo termina ese proceso, que es su propio hijo, y restaura.
 
 La app, al mostrar la primera ventana, crea `confirmed` con su propia versión y lo sincroniza a disco, si existe `app.old` y no hay una marca de esa versión. No depende de ningún argumento. Una marca de otra versión no cuenta.
 
@@ -434,7 +434,7 @@ Cada inicio del lanzador resuelve lo que encuentre en disco:
 |---|---|---|
 | `app`, sin `app.old` | Normal | Abre la app y termina. |
 | `app.old`, sin `app` | Se cortó entre los dos renombres | Restaura `app.old` y abre la app, avisando que la actualización se interrumpió. |
-| Ambas, con `confirmed` | Se cortó antes de limpiar | Borra `app.old` y limpia `.update\`. Abre la app. |
+| Ambas, con `confirmed` | Se cortó antes de limpiar | Borra `app.old` y después la marca, sin tocar el resto de `.update\`. Abre la app. |
 | Ambas, sin `confirmed`, la app corriendo | Está arrancando | Abre la app, que pasa el pedido a la instancia en marcha, y termina. |
 | Ambas, sin `confirmed`, la app sin correr | La versión nueva no arrancó | Mueve `app` a `.update\rejected-<pid>`, restaura `app.old` y abre la anterior, con el aviso de restauración. |
 | Ninguna | Daño externo | Avisa que hay que reinstalar desde Releases. |

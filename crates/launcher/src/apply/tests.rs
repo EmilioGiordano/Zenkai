@@ -53,14 +53,14 @@ fn assert_untouched(install: &Install, finish: &Finish) {
 #[test]
 fn a_new_version_that_confirms_takes_the_place_of_the_old_one() {
     let install = with_new_version(Behavior::Confirm("0.2.0"));
-    install.put_version(".update/rejected-7", "bad");
+    install.put_version(".update/new-0.3.0", "next");
     let finish = run(&install, &TEST_TIMING);
     assert!(matches!(finish, Finish::Running), "{finish:?}");
     assert!(install.exists("app/fake-behavior.txt"));
     assert_eq!(fake_app::started_with(install.root.path()), ARGUMENTS);
     assert!(!install.exists("app.old"));
     assert!(!install.exists(".update/new-0.2.0"));
-    assert!(!install.exists(".update/rejected-7"));
+    assert!(install.exists(".update/new-0.3.0"));
     assert!(!install.exists(".update/confirmed"));
 }
 
@@ -219,4 +219,15 @@ fn a_missing_install_is_not_patched_up_by_an_update() {
         "{finish:?}"
     );
     assert!(!install.exists("app"));
+}
+
+#[test]
+fn an_unfinished_cleanup_before_does_not_take_the_new_version_with_it() {
+    let install = with_new_version(Behavior::Confirm("0.2.0"));
+    install.put_version("app.old", "older");
+    install.write(".update/confirmed", "0.1.9");
+    let finish = run(&install, &TEST_TIMING);
+    assert!(matches!(finish, Finish::Running), "{finish:?}");
+    assert!(install.exists("app/fake-behavior.txt"));
+    assert!(!install.exists("app.old"));
 }

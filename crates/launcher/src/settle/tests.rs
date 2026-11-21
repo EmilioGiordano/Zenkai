@@ -181,7 +181,7 @@ fn a_crash_after_the_swap_before_the_new_version_confirmed_restores_the_previous
 }
 
 #[test]
-fn a_crash_after_the_new_version_confirmed_keeps_it_and_cleans_up() {
+fn a_crash_after_the_new_version_confirmed_keeps_it_and_only_drops_the_old_one() {
     let install = Install::new();
     install.put_version("app.old", "old");
     install.put_version("app", "new");
@@ -193,11 +193,11 @@ fn a_crash_after_the_new_version_confirmed_keeps_it_and_cleans_up() {
     let settled = settle(&install.folders(), &TEST_TIMING);
     assert!(matches!(settled, Settled::Clean(None)));
     assert_eq!(install.version_in("app").as_deref(), Some("new"));
-    let left: Vec<_> = fs::read_dir(install.path(".update"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name())
-        .collect();
-    assert_eq!(left, ["launcher.log"]);
+    assert!(!install.exists("app.old"));
+    assert!(!install.exists(".update/confirmed"));
+    for kept in ["launcher.log", "notice", "new-0.3.0", "rejected-7"] {
+        assert!(install.exists(&format!(".update/{kept}")), "{kept}");
+    }
 }
 
 #[test]

@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::io;
 use std::path::PathBuf;
 
@@ -80,10 +79,4 @@ impl Folders {
         self.update()
             .join(format!("rejected-{}", std::process::id()))
     }
-}
-
-// The cleanup after an update keeps the lock it runs under and the journal, and removes the
-// marker only last, once `app.old` is gone.
-pub fn kept_by_cleanup(name: &OsStr) -> bool {
-    [LOCK, JOURNAL, CONFIRMED].iter().any(|kept| name == *kept)
 }

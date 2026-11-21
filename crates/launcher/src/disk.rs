@@ -1,12 +1,12 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
-use std::os::windows::fs::{FileTypeExt, MetadataExt};
+use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use crate::arguments::Version;
-use crate::folders::{Folders, kept_by_cleanup};
+use crate::folders::Folders;
 
 pub const ERROR_SHARING_VIOLATION: i32 = 32;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
@@ -150,27 +150,11 @@ pub fn remove_tree(path: &Path) -> io::Result<()> {
     }
 }
 
+// Only what the swap itself left goes; the rest of `.update` (downloads, `new-*` folders, the
+// journal) belongs to whoever wrote it, which may be a running app preparing the next update.
 // `app.old` must be gone before the marker goes: both folders without a marker would make the
 // next start take the new version for one that never started.
 pub fn finish_update(folders: &Folders) -> io::Result<()> {
     remove_tree(&folders.old())?;
-    let mut first_failure = None;
-    for entry in fs::read_dir(folders.update())? {
-        let entry = entry?;
-        if kept_by_cleanup(&entry.file_name()) {
-            continue;
-        }
-        let kind = entry.file_type()?;
-        let removed = if kind.is_dir() || kind.is_symlink_dir() {
-            fs::remove_dir_all(entry.path())
-        } else {
-            fs::remove_file(entry.path())
-        };
-        if let Err(error) = removed {
-            tracing::warn!(%error, path = %entry.path().display(), "could not clean up after the update");
-            first_failure.get_or_insert(error);
-        }
-    }
-    remove_marker(folders)?;
-    first_failure.map_or(Ok(()), Err)
+    remove_marker(folders)
 }
