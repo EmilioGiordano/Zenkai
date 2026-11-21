@@ -216,6 +216,17 @@ fn a_failed_dump_is_not_tried_again_until_the_work_changes() {
 }
 
 #[test]
+fn a_saved_workbook_that_could_not_rest_is_not_offered_again_until_it_changes() {
+    let (mut documents, id, _dir) = with_saved_work();
+    let claim = documents.begin_hibernation(id).unwrap();
+    documents.abandon_hibernation(id, claim.generation, false);
+    assert!(documents.get(id).unwrap().can_dump());
+    documents.get_mut(id).unwrap().hibernation_failed();
+    assert!(!documents.get(id).unwrap().can_dump());
+    assert!(documents.begin_hibernation(id).is_none());
+}
+
+#[test]
 fn a_workbook_being_waited_for_is_never_hibernated() {
     let (mut documents, id, _dir) = with_unsaved_work();
     documents.want(id, super::Intent::Switch);

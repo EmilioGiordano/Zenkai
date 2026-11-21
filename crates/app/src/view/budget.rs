@@ -213,25 +213,29 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match resting {
-            Resting::Unload => self.unload_workbook(id, cx),
+            Resting::Unload => {
+                self.unload_workbook(id, cx);
+            }
             Resting::Hibernate => {
                 self.begin_hibernation(id, RestReason::MemoryPressure, window, cx)
             }
         }
     }
 
-    fn unload_workbook(&mut self, id: WorkbookId, cx: &mut Context<Self>) {
+    fn unload_workbook(&mut self, id: WorkbookId, cx: &mut Context<Self>) -> bool {
         let Some(document) = self.documents.get(id) else {
-            return;
+            return false;
         };
         let (name, generation) = (document.name(), document.generation());
-        if self.documents.unload(id) {
-            self.previews.forget(generation);
-            self.drop_retired(cx);
-            self.last_unload = Some(Instant::now());
-            self.probe_links(cx);
-            self.notify(Severity::Info, t!("notice.unloaded", name = name), cx);
+        if !self.documents.unload(id) {
+            return false;
         }
+        self.previews.forget(generation);
+        self.drop_retired(cx);
+        self.last_unload = Some(Instant::now());
+        self.probe_links(cx);
+        self.notify(Severity::Info, t!("notice.unloaded", name = name), cx);
+        true
     }
 
     fn drop_retired(&mut self, cx: &mut Context<Self>) {
@@ -290,7 +294,11 @@ impl Workspace {
                     Err(error) if unloads_when_refused(reason, holds_unsaved_work) => {
                         tracing::warn!(%error, "idle dump refused, unloading the saved workbook");
                         this.documents.abandon_hibernation(id, generation, false);
-                        this.unload_workbook(id, cx);
+                        if !this.unload_workbook(id, cx)
+                            && let Some(document) = this.documents.get_mut(id)
+                        {
+                            document.hibernation_failed();
+                        }
                     }
                     Err(error) => {
                         this.documents.abandon_hibernation(id, generation, true);
