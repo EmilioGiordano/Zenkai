@@ -456,7 +456,7 @@ pub(crate) fn tree_depth(tree: &Node) -> usize {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use markdown::mdast::BlockQuote;
+    use markdown::mdast::Blockquote;
     use proptest::prelude::*;
 
     use super::*;
@@ -616,7 +616,7 @@ mod tests {
             position: None,
         });
         for _ in 0..100_000 {
-            tree = Node::BlockQuote(BlockQuote {
+            tree = Node::Blockquote(Blockquote {
                 children: vec![tree],
                 position: None,
             });
@@ -764,7 +764,7 @@ mod tests {
         assert_eq!(preview_refusal(&images), Some(Refusal::TooDeep));
         let tildes = "x~~~y ".repeat(10_000);
         assert_eq!(preview_refusal(&tildes), Some(Refusal::TooDeep));
-        let separated = "x~~~y \n2.\n".repeat(5_000);
+        let separated = "x~~~y \n2.\n".repeat(6_000);
         assert_eq!(preview_refusal(&separated), Some(Refusal::TooDeep));
         let group = format!("{}\n2.\n", "[".repeat(63));
         let brackets = format!("{}{}", group.repeat(490), "]".repeat(31_000));

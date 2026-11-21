@@ -107,7 +107,7 @@ pub fn blocks_of(tree: &Node) -> Option<Vec<Block>> {
         } = work;
         let mut text = Text::default();
         let kind = match node {
-            Node::BlockQuote(quote) => {
+            Node::Blockquote(quote) => {
                 push_children(&mut pending, &quote.children, indent, true, None);
                 continue;
             }
@@ -421,7 +421,9 @@ mod tests {
         let many_lines = "a\n\n".repeat(MAX_BLOCKS + 1);
         let tree = markdown_restricted::check(&many_lines).unwrap().tree;
         assert!(blocks_of(&tree).is_none());
-        let many_nodes = "*a* ".repeat(MAX_VISITED);
+        // Within the parse budgets (30,000 nodes, 2,000 inline objects a parent), past the walk's.
+        let paragraph = format!("{}\n\n", "`a` ".repeat(950));
+        let many_nodes = paragraph.repeat(MAX_VISITED / 1_900 + 1);
         let tree = markdown_restricted::check(&many_nodes).unwrap().tree;
         assert!(blocks_of(&tree).is_none());
         assert!(blocks_of(&markdown_restricted::check("fine\n").unwrap().tree).is_some());

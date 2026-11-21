@@ -274,7 +274,8 @@ mod tests {
             prop_assert!(!links.is_empty() && links.len() <= MAX_LINKS);
             prop_assert_eq!(&links[0].url, &release_page(version("0.1.3")));
             for link in &links {
-                prop_assert_eq!(vetted_link(&link.url).as_deref(), Some(link.url.as_str()));
+                let vetted = vetted_link(&link.url);
+                prop_assert_eq!(vetted.as_deref(), Some(link.url.as_str()));
             }
             let mut seen = std::collections::HashSet::new();
             prop_assert!(links.iter().all(|link| seen.insert(&link.url)));

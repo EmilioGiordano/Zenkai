@@ -308,7 +308,8 @@ mod tests {
                 );
                 prop_assert!(url.path_segments().unwrap().all(|segment| segment != ".."));
                 prop_assert!(!allowed.chars().any(|c| c.is_whitespace() || is_invisible_or_bidi(c)));
-                prop_assert_eq!(vetted_link(&allowed).as_deref(), Some(allowed.as_str()));
+                let vetted = vetted_link(&allowed);
+                prop_assert_eq!(vetted.as_deref(), Some(allowed.as_str()));
             }
         }
 
@@ -325,7 +326,8 @@ mod tests {
                 prop_assert!(cleaned
                     .chars()
                     .all(|c| c == '\n' || c == '\t' || !is_invisible_or_bidi(c)));
-                prop_assert_eq!(clean(&cleaned).as_deref(), Some(cleaned.as_str()));
+                let again = clean(&cleaned);
+                prop_assert_eq!(again.as_deref(), Some(cleaned.as_str()));
             }
         }
 
