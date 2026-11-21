@@ -1,6 +1,6 @@
 use super::links::{NoteLink, links_of};
 use crate::markdown_restricted;
-use crate::updates::{Day, MAX_NOTES, Note, Notes, Status, Version};
+use crate::updates::{Day, Note, Notes, Status, Version};
 
 pub struct SectionPlan {
     pub version: Version,
@@ -46,7 +46,7 @@ pub fn plan(status: Status, notes: &Notes, installed: Version) -> Plan {
     };
     let body = if !sections.is_empty() {
         Body::Sections {
-            older_exist: sections.len() == MAX_NOTES,
+            older_exist: notes.truncated_above(installed),
             sections,
         }
     } else {
@@ -78,6 +78,7 @@ fn section(note: &Note) -> SectionPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::updates::MAX_NOTES;
 
     fn version(text: &str) -> Version {
         Version::parse_bare(text).unwrap()
@@ -182,30 +183,31 @@ mod tests {
     }
 
     #[test]
-    fn a_full_list_says_older_versions_exist() {
-        let many: Vec<Note> = (1..=MAX_NOTES)
-            .map(|patch| note(&format!("0.1.{patch}"), Some("n")))
-            .collect();
-        let plan = plan(
-            Status::Available(version("0.1.20")),
-            &Notes::from_releases(many),
-            installed(),
-        );
-        assert!(matches!(
-            plan.body,
-            Body::Sections {
-                older_exist: true,
-                ..
-            }
-        ));
-        let few = Notes::from_releases(vec![note("0.1.1", Some("n"))]);
-        let plan = super::plan(Status::Available(version("0.1.1")), &few, installed());
-        assert!(matches!(
-            plan.body,
-            Body::Sections {
-                older_exist: false,
-                ..
-            }
-        ));
+    fn older_versions_are_named_only_when_some_were_left_out() {
+        let made = |count: usize| {
+            Notes::from_releases(
+                (1..=count)
+                    .map(|patch| note(&format!("0.1.{patch}"), Some("n")))
+                    .collect(),
+            )
+        };
+        let older = |count: usize, installed: Version| {
+            let plan = plan(
+                Status::Available(version("0.1.30")),
+                &made(count),
+                installed,
+            );
+            matches!(
+                plan.body,
+                Body::Sections {
+                    older_exist: true,
+                    ..
+                }
+            )
+        };
+        assert!(older(MAX_NOTES + 1, installed()));
+        assert!(!older(MAX_NOTES, installed()));
+        assert!(!older(1, installed()));
+        assert!(!older(MAX_NOTES + 1, version("0.1.2")));
     }
 }

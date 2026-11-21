@@ -61,9 +61,11 @@ pub struct Note {
 }
 
 // What the What's new tab shows: at most MAX_NOTES versions, newest first, one per version.
+// `truncated` says older versions than the last one were left out.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Notes {
     entries: Vec<Note>,
+    truncated: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -77,6 +79,8 @@ pub enum CacheError {
 #[derive(Deserialize)]
 struct Stored {
     notes: Vec<StoredNote>,
+    #[serde(default)]
+    truncated: bool,
 }
 
 #[derive(Deserialize)]
@@ -90,6 +94,7 @@ struct StoredNote {
 
 #[derive(Serialize)]
 struct Written<'a> {
+    truncated: bool,
     notes: &'a [WrittenNote<'a>],
 }
 
@@ -104,8 +109,22 @@ impl Notes {
     pub fn from_releases(mut found: Vec<Note>) -> Notes {
         found.sort_by(|a, b| b.version.cmp(&a.version));
         found.dedup_by_key(|note| note.version);
+        let truncated = found.len() > MAX_NOTES;
         found.truncate(MAX_NOTES);
-        Notes { entries: found }
+        Notes {
+            entries: found,
+            truncated,
+        }
+    }
+
+    // Whether versions above the installed one were left out of the list: none were if the
+    // installed version has since moved past the oldest one kept.
+    pub fn truncated_above(&self, installed: Version) -> bool {
+        self.truncated
+            && self
+                .entries
+                .last()
+                .is_some_and(|note| note.version > installed)
     }
 
     // The installed version moves up after an update, so the list is cut at read time, not
@@ -147,7 +166,10 @@ impl Notes {
                 body: note.body,
             });
         }
-        Ok(Notes { entries })
+        Ok(Notes {
+            entries,
+            truncated: stored.truncated,
+        })
     }
 
     // Escaping can make a file larger than the text in it, so the oldest versions are left
@@ -164,13 +186,17 @@ impl Notes {
             .collect();
         for keep in (1..=written.len()).rev() {
             let json = serde_json::to_string(&Written {
+                truncated: self.truncated || keep < written.len(),
                 notes: &written[..keep],
             })?;
             if json.len() as u64 <= MAX_FILE_BYTES {
                 return Ok(json);
             }
         }
-        serde_json::to_string(&Written { notes: &[] })
+        serde_json::to_string(&Written {
+            truncated: self.truncated || !written.is_empty(),
+            notes: &[],
+        })
     }
 
     // A missing or damaged cache is no notes: the next check fills it again.
@@ -286,6 +312,23 @@ mod tests {
     }
 
     #[test]
+    fn a_list_cut_to_twenty_says_so_and_a_list_of_twenty_does_not() {
+        let made = |count: usize| {
+            Notes::from_releases(
+                (1..=count)
+                    .map(|patch| note(&format!("0.1.{patch}"), Some("text")))
+                    .collect(),
+            )
+        };
+        assert!(made(21).truncated_above(version("0.0.0")));
+        assert!(!made(20).truncated_above(version("0.0.0")));
+        assert!(made(21).truncated_above(version("0.1.1")));
+        assert!(!made(21).truncated_above(version("0.1.2")));
+        let json = made(21).to_json().unwrap();
+        assert_eq!(Notes::parse(json.as_bytes()).unwrap(), made(21));
+    }
+
+    #[test]
     fn only_versions_above_the_installed_one_are_listed() {
         let notes = Notes::from_releases(vec![
             note("0.1.0", Some("a")),
@@ -367,6 +410,7 @@ mod tests {
         let kept = Notes::parse(json.as_bytes()).unwrap();
         let listed = versions(&kept);
         assert!(!listed.is_empty() && listed.len() < MAX_NOTES);
+        assert!(kept.truncated_above(version("0.0.0")));
         assert_eq!(listed.first().map(String::as_str), Some("0.1.20"));
     }
 
