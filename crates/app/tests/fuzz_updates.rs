@@ -11,6 +11,8 @@
 mod json_mutation;
 #[path = "../src/updates/record.rs"]
 mod record;
+#[path = "../src/updates/store.rs"]
+mod store;
 #[path = "../src/updates/version.rs"]
 mod version;
 

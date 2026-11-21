@@ -1,5 +1,6 @@
 mod fetch;
 mod record;
+mod store;
 mod state;
 mod version;
 
