@@ -36,7 +36,7 @@ pub fn exit_when_stdin_closes() -> std::io::Result<()> {
 // same way. Only a failure to write the last frame is an error here.
 pub fn run(path: &Path, out: &mut impl Write) -> Result<(), HostError> {
     let last = match read_values(path) {
-        Ok(sheets) => match send_sheets(&sheets, out) {
+        Ok(sheets) => match send_sheets(sheets, out) {
             Ok(()) => Message::Done,
             Err(error) => Message::Failed(send_failure(&error)),
         },
@@ -61,13 +61,11 @@ fn send_failure(error: &HostError) -> Failure {
     }
 }
 
-fn send_sheets(sheets: &[SheetValues], out: &mut impl Write) -> Result<(), HostError> {
-    for sheet in sheets {
-        let name = Message::Sheet {
-            name: sheet.name.clone(),
-        };
-        write_frame(out, &encode(&name, &[])?)?;
-        for block in &sheet.blocks {
+// Sheets are taken by value so each block is freed as soon as its frames are written.
+fn send_sheets(sheets: Vec<SheetValues>, out: &mut impl Write) -> Result<(), HostError> {
+    for SheetValues { name, blocks } in sheets {
+        write_frame(out, &encode(&Message::Sheet { name }, &[])?)?;
+        for block in blocks {
             let mut start = 0;
             while start < block.rows.len() {
                 let mut end = start;
@@ -119,7 +117,7 @@ mod tests {
             name: "n".repeat(zenkai_pdf_host::frame::MAX_HEADER_BYTES + 1),
             blocks: Vec::new(),
         }];
-        let error = send_sheets(&sheets, &mut Vec::new()).unwrap_err();
+        let error = send_sheets(sheets, &mut Vec::new()).unwrap_err();
         assert_eq!(send_failure(&error).kind, FailureKind::TooLarge);
     }
 
@@ -133,7 +131,7 @@ mod tests {
                 rows: vec![vec!["x".repeat(TARGET_ROWS_BYTES)], vec!["y".into()]],
             }],
         }];
-        let error = send_sheets(&sheets, &mut Vec::new()).unwrap_err();
+        let error = send_sheets(sheets, &mut Vec::new()).unwrap_err();
         assert!(matches!(error, HostError::RowOutOfRange));
         assert_eq!(send_failure(&error).kind, FailureKind::Unreadable);
     }
