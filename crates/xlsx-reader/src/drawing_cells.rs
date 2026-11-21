@@ -135,6 +135,9 @@ fn names_a_cell(element: &BytesStart) -> bool {
 }
 
 #[cfg(test)]
+mod fuzz;
+
+#[cfg(test)]
 mod tests {
     use std::io::{self, Read};
 
