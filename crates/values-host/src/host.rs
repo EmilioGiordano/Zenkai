@@ -96,8 +96,10 @@ fn send_sheets(sheets: Vec<SheetValues>, out: &mut impl Write) -> Result<(), Hos
 #[cfg(test)]
 mod tests {
     use zenkai_formats::Block;
+    use zenkai_pdf_host::frame::read_frame;
 
     use super::*;
+    use crate::wire::decode;
 
     #[test]
     fn a_frame_over_its_limit_is_reported_as_too_large() {
@@ -119,6 +121,41 @@ mod tests {
         }];
         let error = send_sheets(sheets, &mut Vec::new()).unwrap_err();
         assert_eq!(send_failure(&error).kind, FailureKind::TooLarge);
+    }
+
+    #[test]
+    fn a_block_split_across_frames_sends_each_frame_at_its_own_row() {
+        let half = TARGET_ROWS_BYTES / 2;
+        let rows: Vec<Vec<String>> = ["a", "b", "c"]
+            .iter()
+            .map(|text| vec![text.repeat(half)])
+            .collect();
+        let sheets = vec![SheetValues {
+            name: "S".into(),
+            blocks: vec![Block {
+                first_row: 7,
+                first_col: 3,
+                rows: rows.clone(),
+            }],
+        }];
+        let mut out = Vec::new();
+        send_sheets(sheets, &mut out).unwrap();
+        let mut stream = out.as_slice();
+        let mut blocks = Vec::new();
+        while let Some(frame) = read_frame(&mut stream).unwrap() {
+            if let (
+                Message::Block {
+                    first_row,
+                    first_col,
+                },
+                sent,
+            ) = decode(&frame).unwrap()
+            {
+                blocks.push((first_row, first_col, sent));
+            }
+        }
+        let expected = vec![(7, 3, rows[..2].to_vec()), (9, 3, rows[2..].to_vec())];
+        assert_eq!(blocks, expected);
     }
 
     #[test]
