@@ -109,6 +109,20 @@ fn normalized(name: &str) -> String {
         .to_ascii_lowercase()
 }
 
+// A link to a place in a workbook names cells a move may shift: `#Sheet2!A1`, and, failing
+// closed, any fragment or bracketed book outside a web or mail address, since
+// `Book.xlsx#Sheet2!A1` and `[Book.xlsx]Sheet2!A1` may name this very file.
+fn names_a_place(target: &str) -> bool {
+    let target = target.trim();
+    let web = ["http:", "https:", "mailto:"].iter().any(|scheme| {
+        target
+            .get(..scheme.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
+    });
+    let fragment = target.contains('#') || target.to_ascii_lowercase().contains("%23");
+    target.starts_with('#') || (!web && (fragment || target.starts_with('[')))
+}
+
 enum Kind {
     Link(SheetLink),
     // Nothing the user loses when a save leaves it behind.
@@ -162,8 +176,7 @@ fn parse(bytes: &[u8], source: &str) -> Option<Found> {
             false => target.and_then(|target| resolve(source, target)),
         };
         found.push((link, part));
-        let to_a_place = target.is_some_and(|target| target.trim_start().starts_with('#'));
-        if link == SheetLink::Hyperlink && to_a_place {
+        if link == SheetLink::Hyperlink && target.is_some_and(names_a_place) {
             found.push((SheetLink::CellReference, None));
         }
     }
@@ -723,14 +736,32 @@ mod tests {
             drawing_with(&external("https://example.com/#top")),
             [known(&[SheetLink::Drawing, SheetLink::Hyperlink])]
         );
-        let sheet_level = [
-            (SHEET, String::new()),
-            (SHEET_RELS, rels(&external(" #'My Sheet'!B2"))),
-        ];
-        assert_eq!(
-            links_of(&sheet_level, &[SHEET]),
-            [known(&[SheetLink::Hyperlink, SheetLink::CellReference])]
-        );
+        for place in [
+            " #'My Sheet'!B2",
+            "Book.xlsx#Sheet2!A1",
+            "[Book.xlsx]Sheet2!A1",
+            "file:///C:/Books/Book.xlsx#Sheet2!A1",
+            "Book.xlsx%23Sheet2!A1",
+        ] {
+            let sheet_level = [(SHEET, String::new()), (SHEET_RELS, rels(&external(place)))];
+            assert_eq!(
+                links_of(&sheet_level, &[SHEET]),
+                [known(&[SheetLink::Hyperlink, SheetLink::CellReference])],
+                "{place}"
+            );
+        }
+        for web in [
+            "HTTPS://example.com/#top",
+            "mailto:a@example.com",
+            "Book.xlsx",
+        ] {
+            let sheet_level = [(SHEET, String::new()), (SHEET_RELS, rels(&external(web)))];
+            assert_eq!(
+                links_of(&sheet_level, &[SHEET]),
+                [known(&[SheetLink::Hyperlink])],
+                "{web}"
+            );
+        }
     }
 
     #[test]
