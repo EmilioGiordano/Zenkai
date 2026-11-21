@@ -15,6 +15,7 @@ use crate::{
     },
     model::Model,
     number_format::to_precision,
+    text_limit::{text_length, text_too_long, LimitedText, TextTooLong, MAX_TEXT_LENGTH},
 };
 
 /// A LEFT/RIGHT/MID argument: a single scalar value or a 2-D array of values.
@@ -203,19 +204,13 @@ fn search(search_for: &str, text: &str, start: usize) -> Option<i32> {
 
 impl<'a> Model<'a> {
     pub(crate) fn fn_concat(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
-        let mut result = "".to_string();
+        let mut result = LimitedText::default();
         for arg in args {
             match self.evaluate_node_in_context(arg, cell) {
-                CalcResult::String(value) => result = format!("{result}{value}"),
-                CalcResult::Number(value) => result = format!("{result}{value}"),
+                CalcResult::String(value) => result.push(&value),
+                CalcResult::Number(value) => result.push(&format!("{value}")),
                 CalcResult::EmptyCell | CalcResult::EmptyArg => {}
-                CalcResult::Boolean(value) => {
-                    if value {
-                        result = format!("{result}TRUE");
-                    } else {
-                        result = format!("{result}FALSE");
-                    }
-                }
+                CalcResult::Boolean(value) => result.push(if value { "TRUE" } else { "FALSE" }),
                 error @ CalcResult::Error { .. } => return error,
                 CalcResult::Range { left, right } => {
                     if left.sheet != right.sheet {
@@ -232,16 +227,10 @@ impl<'a> Model<'a> {
                                 row,
                                 column,
                             }) {
-                                CalcResult::String(value) => {
-                                    result = format!("{result}{value}");
-                                }
-                                CalcResult::Number(value) => result = format!("{result}{value}"),
+                                CalcResult::String(value) => result.push(&value),
+                                CalcResult::Number(value) => result.push(&format!("{value}")),
                                 CalcResult::Boolean(value) => {
-                                    if value {
-                                        result = format!("{result}TRUE");
-                                    } else {
-                                        result = format!("{result}FALSE");
-                                    }
+                                    result.push(if value { "TRUE" } else { "FALSE" })
                                 }
                                 error @ CalcResult::Error { .. } => return error,
                                 CalcResult::EmptyCell | CalcResult::EmptyArg => {}
@@ -266,7 +255,10 @@ impl<'a> Model<'a> {
                 }
             };
         }
-        CalcResult::String(result)
+        match result.into_string() {
+            Ok(text) => CalcResult::String(text),
+            Err(TextTooLong) => text_too_long(cell),
+        }
     }
     pub(crate) fn fn_text(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         use crate::expressions::parser::ArrayNode;
@@ -985,10 +977,18 @@ impl<'a> Model<'a> {
             Ok(b) => b,
             Err(error) => return error,
         };
-        let mut values = Vec::new();
+        let mut joined = LimitedText::default();
+        let mut is_first = true;
+        let mut join = |value: &str| {
+            if !is_first {
+                joined.push(&delimiter);
+            }
+            is_first = false;
+            joined.push(value);
+        };
         for arg in &args[2..] {
             match self.evaluate_node_in_context(arg, cell) {
-                CalcResult::Number(value) => values.push(format!("{value}")),
+                CalcResult::Number(value) => join(&format!("{value}")),
                 CalcResult::Range { left, right } => {
                     if left.sheet != right.sheet {
                         return CalcResult::new_error(
@@ -1032,22 +1032,13 @@ impl<'a> Model<'a> {
                                 row,
                                 column,
                             }) {
-                                CalcResult::Number(value) => {
-                                    values.push(format!("{value}"));
-                                }
-                                CalcResult::String(value) => values.push(value),
+                                CalcResult::Number(value) => join(&format!("{value}")),
+                                CalcResult::String(value) => join(&value),
                                 CalcResult::Boolean(value) => {
-                                    if value {
-                                        values.push("TRUE".to_string())
-                                    } else {
-                                        values.push("FALSE".to_string())
-                                    }
+                                    join(if value { "TRUE" } else { "FALSE" })
                                 }
-                                CalcResult::EmptyCell => {
-                                    if !ignore_empty {
-                                        values.push("".to_string())
-                                    }
-                                }
+                                CalcResult::EmptyCell if ignore_empty => {}
+                                CalcResult::EmptyCell => join(""),
                                 error @ CalcResult::Error { .. } => return error,
                                 CalcResult::EmptyArg | CalcResult::Range { .. } => {}
                                 CalcResult::Array(_) | CalcResult::Lambda(_) => {
@@ -1062,19 +1053,10 @@ impl<'a> Model<'a> {
                     }
                 }
                 error @ CalcResult::Error { .. } => return error,
-                CalcResult::String(value) => values.push(value),
-                CalcResult::Boolean(value) => {
-                    if value {
-                        values.push("TRUE".to_string())
-                    } else {
-                        values.push("FALSE".to_string())
-                    }
-                }
-                CalcResult::EmptyCell => {
-                    if !ignore_empty {
-                        values.push("".to_string())
-                    }
-                }
+                CalcResult::String(value) => join(&value),
+                CalcResult::Boolean(value) => join(if value { "TRUE" } else { "FALSE" }),
+                CalcResult::EmptyCell if ignore_empty => {}
+                CalcResult::EmptyCell => join(""),
                 CalcResult::EmptyArg => {}
                 CalcResult::Array(_) | CalcResult::Lambda(_) => {
                     return CalcResult::Error {
@@ -1085,8 +1067,10 @@ impl<'a> Model<'a> {
                 }
             };
         }
-        let result = values.join(&delimiter);
-        CalcResult::String(result)
+        match joined.into_string() {
+            Ok(text) => CalcResult::String(text),
+            Err(TextTooLong) => text_too_long(cell),
+        }
     }
 
     // SUBSTITUTE(text, old_text, new_text, [instance_num])
@@ -1127,10 +1111,22 @@ impl<'a> Model<'a> {
             if old_text.is_empty() {
                 return CalcResult::String(text);
             }
-            CalcResult::String(substitute(&text, &old_text, &new_text, num))
+            // At most the length of its operands together, so it is measured once built.
+            let result = substitute(&text, &old_text, &new_text, num);
+            if text_length(&result) > MAX_TEXT_LENGTH {
+                return text_too_long(cell);
+            }
+            CalcResult::String(result)
         } else {
             if old_text.is_empty() {
                 return CalcResult::String(text);
+            }
+            // Measured before it is built: every occurrence can add the whole of new_text.
+            let occurrences = text.matches(old_text.as_str()).count();
+            let length = (text_length(&text) - occurrences * text_length(&old_text))
+                .saturating_add(occurrences.saturating_mul(text_length(&new_text)));
+            if length > MAX_TEXT_LENGTH {
+                return text_too_long(cell);
             }
             CalcResult::String(text.replace(&old_text, &new_text))
         }
@@ -1140,15 +1136,18 @@ impl<'a> Model<'a> {
         if arg_count == 0 {
             return CalcResult::new_args_number_error(cell);
         }
-        let mut text_array = Vec::new();
+        let mut result = LimitedText::default();
         for arg in args {
             let text = match self.get_string(arg, cell) {
                 Ok(s) => s,
                 Err(error) => return error,
             };
-            text_array.push(text)
+            result.push(&text);
         }
-        CalcResult::String(text_array.join(""))
+        match result.into_string() {
+            Ok(text) => CalcResult::String(text),
+            Err(TextTooLong) => text_too_long(cell),
+        }
     }
 
     pub(crate) fn fn_exact(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {

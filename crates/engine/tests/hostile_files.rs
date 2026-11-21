@@ -793,3 +793,23 @@ fn styles_without_cell_style_formats_open_edit_and_save() {
         assert!(reopened.cell(SheetId(0), a1).style.bold, "{reader:?}");
     }
 }
+
+// Joined thousands of times, or with every number of a large SEQUENCE, a long text grew to
+// tens of gigabytes on the first evaluation; past Excel's 32,767 characters each is #VALUE!.
+#[test]
+fn text_joins_past_the_text_limit_open_as_value_errors() {
+    let chain = format!("{}A1", "A1&amp;".repeat(2_500));
+    let cells = format!(
+        r#"<c r="A1"><f>REPT("x",30000)</f></c><c r="B1"><f>{chain}</f></c><c r="C1" cm="1"><f t="array" ref="C1">REPT("x",32000)&amp;SEQUENCE(1000000)</f></c>"#
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-joins.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet(&cells))).unwrap();
+    let started = Instant::now();
+    let book = open_xlsx(&path).unwrap().workbook;
+    assert!(started.elapsed() < Duration::from_secs(30));
+    for cell in ["B1", "C1"] {
+        let view = book.cell(SheetId(0), CellPos::parse_a1(cell).unwrap());
+        assert_eq!(view.text, "#VALUE!", "{cell}");
+    }
+}
