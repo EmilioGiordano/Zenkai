@@ -68,21 +68,18 @@ impl<'a> TextPiece<'a> {
     }
 }
 
-/// An operand of `&`: a single text, or the text of each element of an array.
+/// An operand of `&`: a single text, or an array whose elements are read as text one at a
+/// time, so no copy of it is kept.
 enum ConcatOperand<'a> {
     Text(TextPiece<'a>),
-    Array(Vec<Vec<Result<TextPiece<'a>, Error>>>),
+    Array(&'a [Vec<ArrayNode>]),
 }
 
 impl<'a> ConcatOperand<'a> {
     fn new(operand: &'a StringOrArray) -> Self {
         match operand {
             StringOrArray::String(s) => ConcatOperand::Text(TextPiece::new(Cow::Borrowed(s))),
-            StringOrArray::Array(a) => ConcatOperand::Array(
-                a.iter()
-                    .map(|row| row.iter().map(TextPiece::from_node).collect())
-                    .collect(),
-            ),
+            StringOrArray::Array(a) => ConcatOperand::Array(a),
         }
     }
 
@@ -97,15 +94,18 @@ impl<'a> ConcatOperand<'a> {
 
     /// The element at (`row`, `column`) with Excel's size-1 broadcasting, or `None` past
     /// the shape of an array.
-    fn piece(&self, row: usize, column: usize) -> Option<Result<&TextPiece<'a>, Error>> {
+    fn piece(&self, row: usize, column: usize) -> Option<Result<TextPiece<'_>, Error>> {
         match self {
-            ConcatOperand::Text(piece) => Some(Ok(piece)),
+            ConcatOperand::Text(piece) => Some(Ok(TextPiece {
+                text: Cow::Borrowed(piece.text.as_ref()),
+                length: piece.length,
+            })),
             ConcatOperand::Array(a) => {
                 let columns = a.first().map(|r| r.len()).unwrap_or(0);
                 bcast_idx(a.len(), row)
                     .and_then(|i| a.get(i))
                     .and_then(|r| bcast_idx(columns, column).and_then(|j| r.get(j)))
-                    .map(|piece| piece.as_ref().map_err(|e| e.clone()))
+                    .map(TextPiece::from_node)
             }
         }
     }
@@ -114,10 +114,10 @@ impl<'a> ConcatOperand<'a> {
 /// The two texts one element of `&` joins, or the error it gives, as in Excel: `#VALUE!`
 /// for a missing element, the left error before the right one, and `#VALUE!` when the two
 /// texts together are longer than a text can be.
-fn joined<'p, 'a>(
-    left: Option<Result<&'p TextPiece<'a>, Error>>,
-    right: Option<Result<&'p TextPiece<'a>, Error>>,
-) -> Result<(&'p TextPiece<'a>, &'p TextPiece<'a>), Error> {
+fn joined<'a>(
+    left: Option<Result<TextPiece<'a>, Error>>,
+    right: Option<Result<TextPiece<'a>, Error>>,
+) -> Result<(TextPiece<'a>, TextPiece<'a>), Error> {
     match (left, right) {
         (Some(Ok(l)), Some(Ok(r))) if l.length + r.length > MAX_TEXT_LENGTH => Err(Error::VALUE),
         (Some(Ok(l)), Some(Ok(r))) => Ok((l, r)),
@@ -279,8 +279,8 @@ impl<'a> Model<'a> {
         };
         let (l, r) = (ConcatOperand::new(&l), ConcatOperand::new(&r));
 
-        if let (ConcatOperand::Text(s1), ConcatOperand::Text(s2)) = (&l, &r) {
-            return match joined(Some(Ok(s1)), Some(Ok(s2))) {
+        if matches!((&l, &r), (ConcatOperand::Text(_), ConcatOperand::Text(_))) {
+            return match joined(l.piece(0, 0), r.piece(0, 0)) {
                 Ok((s1, s2)) => CalcResult::String(format!("{}{}", s1.text, s2.text)),
                 Err(_) => text_too_long(cell),
             };
