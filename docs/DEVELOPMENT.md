@@ -10,7 +10,7 @@ Requirements: Windows 10/11, the MSVC build tools (Visual Studio Build Tools wit
 `rust-toolchain.toml` and installs itself on the first build.
 
 ```powershell
-cargo build --release -p zenkai -p zenkai-mcp -p zenkai-pdf-host -j 4
+cargo build --release -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host -j 4
 .\target\release\zenkai.exe                    # empty workbook
 .\target\release\zenkai.exe path\to\book.xlsx  # open a file
 ```

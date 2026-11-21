@@ -399,6 +399,7 @@ El instalador y el zip portable usan la misma estructura:
   app\              lo único que reemplaza el actualizador
     zenkai.exe      la app real
     zenkai-pdf-host.exe
+    zenkai-values-host.exe
     pdfium.dll
     pdfium-LICENSE.txt
   app.old\          solo durante un reemplazo o después de un fallo
