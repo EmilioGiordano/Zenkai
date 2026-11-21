@@ -65,7 +65,8 @@ the contributor commands in `AGENTS.md` for the maintainer's own branches.
   it, and is never fixed inside that PR.
 
 Local builds happen only in staging, once per batch: one `cargo` process at a time, `-j 4`,
-and no heavy measurement alongside a build.
+and no heavy measurement alongside a build. The repo lives in OneDrive, so every build sets
+`target-dir` under `C:/yien-compiled/zenkai/`; a target dir inside OneDrive is never allowed.
 
 A batch with a single branch runs the full gate directly in that branch's worktree and
 copies the release exe from there; no staging branch is created.
@@ -101,9 +102,9 @@ in a staging branch.
    one at a time with `--no-ff` into a fresh staging branch. After each merge it runs
    `cargo check --workspace --all-targets` to attribute breakage to a branch. Then, once,
    it runs the full gate, vendor suites included. It copies the release exe to
-   `C:\Users\giord\Desktop\zenkai-test\zenkai.exe`, overwriting; if the file is locked it
+   `C:\Users\giord\OneDrive\Desktop\Zenkai.exe`, overwriting; if the file is locked it
    reports it and never kills the process. Staging uses the persistent target dir
-   `D:/More-Code-Projects/Zenkai-compiled/staging`, which is never cleaned. When the batch
+   `C:/yien-compiled/zenkai/staging`, which is never cleaned. When the batch
    enters staging the lead marks its PRs ready (`gh pr ready <n>`); the result is
    commented on each PR of the batch.
 5. **Failures.** A fix for one branch goes back to the owning branch and is validated in
