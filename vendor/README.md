@@ -89,6 +89,11 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   or the number 0, and no longer prints a line per cell of an unexpected or unsupported
   type (`src/import/worksheets.rs`). Stands on its own. Test:
   `test_formula_without_cached_value_is_unevaluated` in `tests/test.rs`.
+- The xlsx import leaves the text of phonetic runs (`<rPh>`, the furigana reading) out of a
+  shared or inline string, as Excel does, instead of appending it to the cell's text
+  (`src/import/shared_strings.rs`, `src/import/worksheets.rs`). Stands on its own. Tests:
+  `test_phonetic_runs_are_not_part_of_the_text` in `src/import/shared_strings.rs`,
+  `test_phonetic_runs_are_not_part_of_inline_text` in `tests/test.rs`.
 
 Zenkai-only, not for upstream:
 

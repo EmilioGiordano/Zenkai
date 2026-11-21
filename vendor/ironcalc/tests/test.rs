@@ -607,6 +607,29 @@ fn test_formula_without_cached_value_is_unevaluated() {
     assert_eq!(value(702), "2");
 }
 
+#[test]
+fn test_phonetic_runs_are_not_part_of_inline_text() {
+    let last_row = std::cell::Cell::new(0);
+    let edited = example_with_part_edited("xl/worksheets/sheet1.xml", |text| {
+        let row_start = text.rfind("<row r=\"").unwrap() + "<row r=\"".len();
+        let row_end = row_start + text[row_start..].find('"').unwrap();
+        let row = text[row_start..row_end].parse::<i32>().unwrap();
+        last_row.set(row);
+        let end = text.rfind("</row>").unwrap();
+        let cell = format!(
+            "<c r=\"ZZ{row}\" t=\"inlineStr\"><is><r><t>東京</t></r><rPh sb=\"0\" eb=\"2\"><t>トウキョウ</t></rPh></is></c>"
+        );
+        format!("{}{cell}{}", &text[..end], &text[end..])
+    });
+    let workbook = load_from_xlsx_bytes(&edited, "home", "en", "UTC").unwrap();
+    let Some(ironcalc_base::types::Cell::SharedString { si, .. }) =
+        workbook.worksheets[0].cell(last_row.get(), 702).cloned()
+    else {
+        panic!("the inline string was not read as text");
+    };
+    assert_eq!(workbook.shared_strings[si as usize], "東京");
+}
+
 fn example_with_part_edited(part: &str, edit: impl Fn(String) -> String) -> Vec<u8> {
     let bytes = fs::read("tests/example.xlsx").unwrap();
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();

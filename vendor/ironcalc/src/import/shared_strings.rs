@@ -27,13 +27,19 @@ fn read_shared_strings_from_string(text: &str) -> Result<Vec<String>, XlsxError>
     for node in nodes {
         let text = node
             .descendants()
-            .filter(|n| n.has_tag_name("t"))
+            .filter(|n| n.has_tag_name("t") && !is_phonetic_run_text(*n))
             .map(|n| decode_xlsx_escapes(n.text().unwrap_or("")))
             .collect::<Vec<String>>()
             .join("");
         shared_strings.push(text);
     }
     Ok(shared_strings)
+}
+
+/// A phonetic run (`<rPh>`) holds the reading of the text above it (furigana), not part of
+/// the text itself, so Excel leaves it out of the cell's value.
+pub(crate) fn is_phonetic_run_text(node: Node) -> bool {
+    node.ancestors().any(|n| n.has_tag_name("rPh"))
 }
 
 /// Decodes Excel's `_xXXXX_` escape sequences for characters that are invalid in XML 1.0.
@@ -116,6 +122,13 @@ mod tests {
                 "Hello World".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn test_phonetic_runs_are_not_part_of_the_text() {
+        let xml_string = r#"<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2"><si><t>東京</t><rPh sb="0" eb="2"><t>トウキョウ</t></rPh><phoneticPr fontId="1"/></si><si><r><t>大</t></r><r><t>阪</t></r><rPh sb="0" eb="1"><t>オオ</t></rPh><rPh sb="1" eb="2"><t>サカ</t></rPh></si></sst>"#;
+        let shared_strings = read_shared_strings_from_string(xml_string).unwrap();
+        assert_eq!(shared_strings, ["東京".to_string(), "大阪".to_string()]);
     }
 
     #[test]
