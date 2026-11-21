@@ -27,6 +27,16 @@ fn unloads_when_refused(reason: RestReason, holds_unsaved_work: bool) -> bool {
     matches!(reason, RestReason::Idle { .. }) && !holds_unsaved_work
 }
 
+// Without a recovery directory nothing can be dumped, so only a saved workbook can rest, by
+// unloading.
+fn rests_idle(has_recovery_dir: bool, can_dump: bool, can_unload: bool) -> bool {
+    if has_recovery_dir {
+        can_dump
+    } else {
+        can_unload
+    }
+}
+
 impl Workspace {
     pub(super) fn start_memory_sampler(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.memory_sampler = Some(cx.spawn_in(window, async move |this, cx| {
@@ -113,7 +123,6 @@ impl Workspace {
         }
         // A close writes its own copies, and a dump could outlive a workbook it discards.
         if self.hibernating.is_some()
-            || self.recovery_dir.is_none()
             || self.lifecycle == Lifecycle::Closing
             || self.departure.is_some()
             || self.close_dialog.is_some()
@@ -146,12 +155,13 @@ impl Workspace {
             && self.chart.is_none();
         let wanted = self.documents.wanted();
         let awaiting_approval = self.awaiting_approval();
+        let has_recovery_dir = self.recovery_dir.is_some();
         self.documents
             .iter()
             .filter(|document| {
                 Some(document.id) != wanted
                     && Some(document.id) != awaiting_approval
-                    && document.can_dump()
+                    && rests_idle(has_recovery_dir, document.can_dump(), document.can_unload())
                     && (Some(document.id) != shown || can_leave_screen)
             })
             .map(|document| Sleeper {
@@ -176,7 +186,11 @@ impl Workspace {
             }
             self.present_active(window, cx);
         }
-        self.begin_hibernation(id, RestReason::Idle { minutes }, window, cx);
+        if self.recovery_dir.is_some() {
+            self.begin_hibernation(id, RestReason::Idle { minutes }, window, cx);
+        } else {
+            self.unload_workbook(id, cx);
+        }
     }
 
     // The window is shown again: the workbook that rested with it comes back, loading if it
@@ -347,7 +361,7 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{RestReason, unloads_when_refused};
+    use super::{RestReason, rests_idle, unloads_when_refused};
     use std::path::PathBuf;
 
     use zenkai_engine::Workbook;
@@ -361,6 +375,14 @@ mod tests {
         assert!(unloads_when_refused(IDLE, false));
         assert!(!unloads_when_refused(IDLE, true));
         assert!(!unloads_when_refused(RestReason::MemoryPressure, false));
+    }
+
+    #[test]
+    fn without_a_recovery_directory_only_saved_workbooks_rest_idle() {
+        assert!(rests_idle(false, false, true));
+        assert!(!rests_idle(false, true, false));
+        assert!(rests_idle(true, true, false));
+        assert!(!rests_idle(true, false, true));
     }
 
     #[test]
