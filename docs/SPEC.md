@@ -350,7 +350,7 @@ pesado corre a la vez en la máquina.
 | 3a | `perf/cell-store-api` | El acceso a `sheet_data` en `vendor/ironcalc_base` pasa por una interfaz propia. Refactor puro: mismo comportamiento, mismas pruebas, benchmark sin regresión. |
 | 3b | `perf/compact-cells` | Almacén de celdas compacto por bloques detrás de esa interfaz. Meta: archivo grande ≤ 2 GB en reposo. |
 | 3c | `perf/shared-formulas` | Una fórmula repetida en un rango se guarda una vez en memoria, como la fórmula compartida del xlsx. |
-| 4 | `feat/workbook-hibernation` | Dos niveles de reposo para libros inactivos: descargado (guardado, se recarga del archivo) e hibernado (con cambios sin guardar, se vuelca a disco en binario con su historial de deshacer y vuelve sin releer el xlsx). Los volcados se borran al guardar o cerrar. |
+| 4 | `feat/workbook-hibernation` | Dos niveles de reposo para libros inactivos: descargado (guardado, se recarga del archivo) e hibernado (con cambios sin guardar, se vuelca a disco en binario con su historial de deshacer y vuelve sin releer el xlsx). Los volcados se borran al guardar o cerrar. Además de la falta de memoria, un libro fuera de pantalla pasa a reposo tras el tiempo configurable en Ajustes, General (con la ventana oculta en la bandeja, también el abierto): si está guardado se vuelca igual, con su historial de deshacer, y solo se descarga del todo cuando el volcado es rechazado o no hay carpeta de recuperación. |
 | 5 | `perf/grid-scale` | El grid con el archivo grande: alto de filas, barra de scroll, saltos y selección de columnas enteras cumplen el presupuesto de frame. |
 
 ## Proceso de trabajo para el agente
