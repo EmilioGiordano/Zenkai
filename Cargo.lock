@@ -10144,6 +10144,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zenkai-launcher"
+version = "0.1.0"
+dependencies = [
+ "embed-resource",
+ "sys-locale",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "winsafe",
+]
+
+[[package]]
 name = "zenkai-mcp"
 version = "0.1.0"
 dependencies = [
