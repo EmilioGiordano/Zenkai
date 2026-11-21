@@ -70,10 +70,8 @@ impl Notice {
     }
 }
 
-// Info goes to the status bar only. A warning, an error or an update notice also gets a card
-// that stays until it is dismissed or replaced, so an unread problem survives a later
-// "Saved". The card is a single slot: an update card never takes it from a problem, and one
-// a problem displaced comes back when that problem closes.
+// Info goes to the status bar only; a warning, an error or an update notice also gets a card.
+// The card is one slot: an update card never takes it from a problem, and gets it back after.
 #[derive(Default)]
 pub(super) struct Notices {
     status: Option<Notice>,

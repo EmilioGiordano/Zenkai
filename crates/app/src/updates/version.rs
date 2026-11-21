@@ -58,9 +58,8 @@ fn component(text: &str) -> Option<u32> {
 #[error("the response is not a list of releases")]
 pub struct NotAReleaseList;
 
-// The list is read as a stream that keeps only the best stable version, never as a tree, and
-// only its first MAX_RELEASES elements. An element that is not a release is skipped, so one
-// odd release cannot hide a newer one.
+// A stream that keeps only the best stable version of the first MAX_RELEASES elements; one
+// element that is not a release is skipped so it cannot hide a newer one.
 pub fn newest_stable(body: &[u8]) -> Result<Option<Version>, NotAReleaseList> {
     let mut scan = Scan::default();
     let mut deserializer = serde_json::Deserializer::from_slice(body);
