@@ -38,6 +38,10 @@ fn root_of(exe: &Path) -> Option<PathBuf> {
     (in_app_folder && root.join(LAUNCHER).is_file()).then(|| root.to_path_buf())
 }
 
+pub fn update_folder() -> Option<PathBuf> {
+    Some(root()?.join(UPDATE))
+}
+
 // The taskbar groups the app with the shortcuts, which point at the launcher, only when both
 // carry the same explicit identity. Must run before the first window.
 #[cfg(windows)]
