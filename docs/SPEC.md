@@ -356,7 +356,7 @@ pesado corre a la vez en la máquina.
 ## Versión y publicación
 
 - Una sola versión del proyecto, en `[workspace.package]` del `Cargo.toml` raíz; todos los crates la heredan. Un solo cambio actualiza la versión en todas partes.
-- La app muestra la versión en Acerca de (About) y, si el binario acepta argumentos, en `--version`.
+- La app muestra la versión en Acerca de (About) y en `zenkai --version`; `zenkai-mcp --version` imprime la misma. En el binario de Windows, que no tiene consola, `--version` solo llega a una terminal si la salida se redirige.
 - Un tag `v*` dispara un workflow que compila los binarios en release para Windows, Linux y macOS y los adjunta a un release de GitHub. Las notas del release son la sección de esa versión en `CHANGELOG.md`.
 - El binario de Windows no está firmado con Authenticode.
 
