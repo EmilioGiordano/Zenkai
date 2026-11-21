@@ -9,18 +9,22 @@ const LIST_INDENT: usize = 2;
 // (quotes and list levels) plus the inline nesting (open brackets and emphasis), and stops at
 // the first line over the limit.
 pub fn too_deep(text: &str) -> bool {
+    deeper_than(text, MAX_NESTING)
+}
+
+pub fn deeper_than(text: &str, limit: usize) -> bool {
     // CommonMark ends a line at a line feed, a carriage return or both; the empty piece between
     // a carriage return and its line feed is harmless.
     text.split(['\n', '\r'])
-        .any(|line| line_depth(line) > MAX_NESTING)
+        .any(|line| line_depth(line, limit) > limit)
 }
 
-fn line_depth(line: &str) -> usize {
-    let (blocks, rest) = block_depth(line);
-    blocks + inline_depth(rest)
+fn line_depth(line: &str, limit: usize) -> usize {
+    let (blocks, rest) = block_depth(line, limit);
+    blocks + inline_depth(rest, limit)
 }
 
-fn block_depth(line: &str) -> (usize, &str) {
+fn block_depth(line: &str, limit: usize) -> (usize, &str) {
     let bytes = line.as_bytes();
     let mut depth = 0;
     let mut indent = 0;
@@ -31,7 +35,7 @@ fn block_depth(line: &str) -> (usize, &str) {
             b'\t' => indent += TAB_WIDTH,
             b'>' => {
                 depth += 1;
-                if depth > MAX_NESTING {
+                if depth > limit {
                     return (depth, "");
                 }
             }
@@ -43,7 +47,7 @@ fn block_depth(line: &str) -> (usize, &str) {
     (depth + indent / LIST_INDENT, &line[at..])
 }
 
-fn inline_depth(text: &str) -> usize {
+fn inline_depth(text: &str, limit: usize) -> usize {
     let bytes = text.as_bytes();
     let mut brackets = 0usize;
     let mut deepest = 0usize;
@@ -76,7 +80,7 @@ fn inline_depth(text: &str) -> usize {
             }
             _ => {}
         }
-        if deepest > MAX_NESTING {
+        if deepest > limit {
             return deepest;
         }
         at += 1;
@@ -130,6 +134,14 @@ mod tests {
     fn the_limit_itself_is_allowed() {
         assert!(!too_deep(&">".repeat(MAX_NESTING)));
         assert!(too_deep(&">".repeat(MAX_NESTING + 1)));
+    }
+
+    #[test]
+    fn a_stricter_limit_refuses_what_the_default_allows() {
+        let text = ">".repeat(20);
+        assert!(!too_deep(&text));
+        assert!(deeper_than(&text, 16));
+        assert!(!deeper_than(&">".repeat(16), 16));
     }
 
     #[test]

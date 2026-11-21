@@ -13,7 +13,7 @@ pub enum LinkTarget {
 
 const SHOWN_TARGET_CHARS: usize = 80;
 
-fn is_invisible_or_bidi(character: char) -> bool {
+pub(crate) fn is_invisible_or_bidi(character: char) -> bool {
     character.is_control()
         || matches!(
             character,

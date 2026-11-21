@@ -41,6 +41,7 @@ mod markdown_highlight;
 mod markdown_images;
 mod markdown_links;
 mod markdown_pane;
+mod markdown_restricted;
 mod memory;
 mod open_loads;
 mod palette;
