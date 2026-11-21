@@ -22,9 +22,9 @@ mockup `docs/design/auto-update/WhatsNew.dc.html` and the "What's new" section o
 
 As in the mockup, inside the normal workbook area (sidebar and status bar unchanged):
 
-1. A banner, only while an update is available: "Zenkai 0.1.3 is available. You have 0.1.0.",
-   a "View on GitHub" link button (opens the Releases page, a build-time constant, no
-   confirmation) and the primary "Update now" button (the existing `UpdateNow` action; in this
+1. A banner, while an update is known (also during a re-check or after a failed one, from the
+   notes kept before): "Zenkai 0.1.3 is available. You have 0.1.0.",
+   a "View on GitHub" link button (the Releases page, through the same prompt as any link) and the primary "Update now" button (the existing `UpdateNow` action; in this
    branch it opens Releases, the install comes in a later branch). Both are Tab stops.
 2. A 640 px column, centred, scrolling inside the tab. A "What's new" title, then one section
    per version, newest first, up to 20. Each section is:
@@ -57,9 +57,12 @@ mode added to them (`restricted_extensions` in `markdown_pane`); there is no sec
 The tab does not use the whole pane, which carries an editor, because each version is its own
 body under a heading the tab draws.
 
-- Text goes through `markdown_restricted::clean` before it reaches the parser: control and
-  bidirectional characters removed, line endings normalised, nesting limit 16. A note that
-  nests deeper is treated like an empty one.
+- Text goes through `markdown_restricted::check` before it reaches the renderer: control and
+  bidirectional characters removed, line endings normalised, then parsed with the `markdown`
+  crate and refused if the tree is deeper than 32 levels (64 in the Markdown pane, which uses
+  the same check). The tree is measured without recursion, in the background for long text.
+  A refused note is treated like an empty one. Each body gets its text only after its view has
+  the restricted extensions, so no note is ever parsed without them.
 - Raw HTML is shown as text by the pane's existing plugin. Images are replaced by their alt
   text and no image is ever loaded (a plugin, plus an image source that is always blocked).
 - Every link is judged by `markdown_restricted::vetted_link` (https, exactly `github.com`, no
@@ -94,7 +97,7 @@ Each state says what is going on in words, never by colour alone.
 | Up to date, nothing newer | Centred: "Zenkai is up to date." and a "Check for Updates" button (`CheckForUpdates`). |
 | Never checked, or failed with nothing cached | Centred: "No release notes yet. Zenkai fetches them when it checks for updates, which needs a connection." and the same button. |
 | A version whose note is too large (over 64 KiB), empty, or too deeply nested | Its heading stays, followed by "The notes for this version are not shown here." and its link row, which always has the release page. The update stays available. |
-| More than 20 versions behind | After the last note: "Older versions are on the Releases page on GitHub." with an "All releases on GitHub" link button. |
+| More than 20 versions behind (the list was cut, not merely full) | After the last note: "Older versions are on the Releases page on GitHub." with an "All releases on GitHub" link button. |
 | Cache file corrupt or over 4 MiB | Ignored, as if there were no cache; the next check writes a new one. |
 
 The tab does not make its own request: it shows what the update check already fetched and
@@ -123,6 +126,6 @@ keys work inside the tab.
 - Versions are kept only above the installed one when fetched, and cut again when read, since
   the installed version changes after an update.
 - A link with an explicit port, including `:443`, is refused as written, even though the URL
-  parser would drop a default port. The nesting limit in restricted mode is 16 (64 elsewhere).
+  parser would drop a default port. The nesting limit is on the parsed tree: 32 in restricted mode, 64 in the Markdown pane.
 - New direct dependencies: `url` for the link check and `markdown` (the parser GPUI already
   uses, pinned to the same version) to find a version's links; neither changes the build.
