@@ -13,7 +13,9 @@ use gpui_kit::*;
 
 use crate::agent_settings::AgentConfig;
 use fetch::FetchError;
-pub use notes::{Day, MAX_NOTES, Note, Notes};
+#[cfg(test)]
+pub use notes::MAX_NOTES;
+pub use notes::{Day, Note, Notes};
 use record::Record;
 use releases::Releases;
 pub use state::{Report, Source, Status, Updates, known_update};

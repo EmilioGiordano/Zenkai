@@ -107,7 +107,7 @@ pub fn blocks_of(tree: &Node) -> Option<Vec<Block>> {
         } = work;
         let mut text = Text::default();
         let kind = match node {
-            Node::BlockQuote(quote) => {
+            Node::Blockquote(quote) => {
                 push_children(&mut pending, &quote.children, indent, true, None);
                 continue;
             }

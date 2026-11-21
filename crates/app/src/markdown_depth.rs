@@ -456,7 +456,7 @@ pub(crate) fn tree_depth(tree: &Node) -> usize {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use markdown::mdast::BlockQuote;
+    use markdown::mdast::Blockquote;
     use proptest::prelude::*;
 
     use super::*;
@@ -616,7 +616,7 @@ mod tests {
             position: None,
         });
         for _ in 0..100_000 {
-            tree = Node::BlockQuote(BlockQuote {
+            tree = Node::Blockquote(Blockquote {
                 children: vec![tree],
                 position: None,
             });
