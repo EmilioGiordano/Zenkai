@@ -111,7 +111,6 @@ impl<'de> Visitor<'de> for ReleaseList<'_> {
     }
 }
 
-// The version of a release that is neither a draft nor a prerelease, if its tag is valid.
 struct Element(Option<Version>);
 
 impl<'de> Deserialize<'de> for Element {
@@ -226,7 +225,7 @@ impl Visitor<'_> for FieldVisitor {
     }
 }
 
-// The value of a field: a tag text is parsed on the spot, so a long string is never kept.
+// A tag text is parsed on the spot, so a long string is never kept.
 enum Scalar {
     Text(Option<Version>),
     Flag(bool),

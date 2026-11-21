@@ -19,8 +19,7 @@ pub enum SaveError {
     Encode(#[from] serde_json::Error),
 }
 
-// What survives between sessions. `last_check` is the last attempt and decides when the next
-// automatic check is due; `last_success` and `newest` are what the last answer said.
+// `last_check` is the last attempt and decides when the next automatic check is due.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Record {
     pub last_check: Option<u64>,
