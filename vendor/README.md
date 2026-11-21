@@ -438,7 +438,9 @@ Zenkai-only, not for upstream:
 - `Model::evaluate_opened` (and `UserModel::evaluate_opened`) runs the first evaluation of
   a model `from_workbook` built and refuses it with the same message when the text its
   formulas return grows past what the estimate left: each formula's charge pays for 200
-  bytes, the rest comes from the budget's headroom at the same 1.2x margin. Growth is
+  bytes, less the text the cells already hold, which the estimate charged; the rest comes
+  from the budget's headroom at the same 1.2x margin, so a shrinking cell only refunds
+  charged bytes. Growth is
   charged where `set_cells_with_result` writes a value and refunded where a spill is
   cleared; a cell or row a spill adds costs what the estimate charges one read from the
   file. Past the budget no spill writes another cell and `evaluate_cell` evaluates

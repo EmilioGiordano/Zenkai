@@ -198,11 +198,15 @@ impl OpenAllowance {
 
     // Text past what each formula already pays for is charged 1.2 times, the margin of
     // every other cost, so the headroom the estimate leaves buys 5/6 of its bytes in text.
+    // The text the cells hold has used its share of what the formulas pay for, so what
+    // is left plus what they hold never exceeds what was charged, and a refund only
+    // returns charged bytes.
     fn result_text_bytes(self) -> u64 {
         let headroom = self.budget_bytes.saturating_sub(needed_bytes(self.cost));
         self.cost
             .formulas
             .saturating_mul(TEXT_BYTES_PER_FORMULA)
+            .saturating_sub(self.cost.result_text)
             .saturating_add(headroom.saturating_mul(5) / 6)
     }
 
@@ -218,9 +222,9 @@ impl OpenAllowance {
 }
 
 // What result text the first evaluation of an opened workbook may still add, which the
-// estimate cannot know before evaluating. Charged by growth over what each cell held, so
-// the cached values a file carries are not charged again. Unbounded in every other
-// evaluation.
+// estimate cannot know before evaluating. Charged by growth over what each cell held: the
+// estimate charged the values a file caches, so they are not charged again. Unbounded in
+// every other evaluation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum ResultText {
     #[default]
@@ -453,6 +457,67 @@ mod tests {
             ..cost
         };
         assert_eq!(needed_bytes(one_more), needed_bytes(cost) + 2);
+    }
+
+    // ROWS formulas returning `returned` characters, each caching `cached` other ones.
+    fn recached_book(returned: u64, cached: usize) -> Workbook {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        for row in 1..=ROWS {
+            model
+                .set_user_input(0, row, 1, format!("=REPT(\"x\",{returned})"))
+                .unwrap();
+        }
+        let mut book = model.workbook;
+        for row in 1..=ROWS {
+            let Some(Cell::CellFormula { v, .. }) = book.worksheets[0].sheet_data.get_mut(row, 1)
+            else {
+                panic!("no formula in row {row}");
+            };
+            *v = FormulaValue::Text("y".repeat(cached));
+        }
+        book
+    }
+
+    #[test]
+    fn cached_text_leaves_the_first_evaluation_only_the_allowance_it_did_not_use() {
+        let fits = |returned| {
+            let book = recached_book(returned, 150);
+            let budget = needed_bytes(open_cost(&book));
+            let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+            model.evaluate_opened().is_ok()
+        };
+        assert!(fits(TEXT_BYTES_PER_FORMULA));
+        assert!(!fits(TEXT_BYTES_PER_FORMULA + 1));
+    }
+
+    #[test]
+    fn what_is_left_and_what_is_held_never_exceed_what_the_estimate_charged() {
+        let formula = |len: usize| Cell::CellFormula {
+            f: 0,
+            s: 0,
+            v: FormulaValue::Text("x".repeat(len)),
+        };
+        let cost = OpenCost {
+            cells: 1,
+            formulas: 1,
+            shapes: 1,
+            rows: 1,
+            bytes: 0,
+            result_text: 1000,
+        };
+        let allowance = OpenAllowance {
+            cost,
+            budget_bytes: needed_bytes(cost),
+        };
+        let (cached, short, longer) = (formula(1000), formula(1), formula(1001));
+        let mut left = ResultText::Left(allowance.result_text_bytes());
+        assert_eq!(left, ResultText::Left(0));
+        left.replace(|| Some(&cached), &short);
+        assert_eq!(left, ResultText::Left(999));
+        left.replace(|| Some(&short), &cached);
+        assert_eq!(left, ResultText::Left(0));
+        left.replace(|| Some(&cached), &longer);
+        assert_eq!(left, ResultText::Spent);
     }
 
     // 100,000 formulas each caching the longest text a cell holds: about 3.2 GB of text,
