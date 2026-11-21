@@ -32,6 +32,16 @@ impl Owned {
     fn all(&self) -> BTreeSet<Unsupported> {
         self.elements.union(&self.linked).copied().collect()
     }
+
+    // Compared source by source: an element written without, such as a slicer list, is lost
+    // even while the relationships still point at parts of the same kind.
+    fn lost_in(&self, after: &Owned) -> BTreeSet<Unsupported> {
+        self.elements
+            .difference(&after.elements)
+            .chain(self.linked.difference(&after.linked))
+            .copied()
+            .collect()
+    }
 }
 
 fn kind_of(link: SheetLink) -> Unsupported {
@@ -126,7 +136,7 @@ impl Held {
                 Relationships::Dropped => BTreeSet::new(),
             },
         };
-        let lost = owned.all().difference(&after.all()).copied().collect();
+        let lost = owned.lost_in(&after);
         *owned = after;
         Ok(lost)
     }
@@ -240,6 +250,21 @@ mod tests {
                 Unsupported::AutoFilter
             ])
         );
+    }
+
+    #[test]
+    fn an_element_written_without_is_lost_while_its_relationships_stay() {
+        let found = [
+            ("xl/worksheets/sheet1.xml".to_string(), Unsupported::Slicers),
+            ("xl/slicers/slicer1.xml".to_string(), Unsupported::Slicers),
+        ];
+        let mut held = Held::of(&found, &layout(vec![SheetLinks::Unknown]));
+        assert_eq!(
+            held.rewrite(0, BTreeSet::new(), Relationships::Kept)
+                .unwrap(),
+            set(&[Unsupported::Slicers])
+        );
+        assert_eq!(held.all(), set(&[Unsupported::Slicers]));
     }
 
     #[test]
