@@ -10,24 +10,29 @@ pub const SYNC_BYTES: usize = 4 * 1024;
 
 // The parser's cost grows faster than the text, so a preview is not offered past this size;
 // a longer file is still edited in Source.
-pub const MAX_PREVIEW_BYTES: usize = 256 * 1024;
+pub const MAX_PREVIEW_BYTES: usize = 64 * 1024;
 
 // Budgets on the shape of the whole document, for what the text view does per node, per
-// inline HTML tag (it pairs them among siblings, and each pair recurses), and per cell of a
-// table (it pads every row to the header).
-const MAX_NODES: usize = 100_000;
+// inline HTML tag (it pairs them among siblings, and each pair recurses), per marked inline
+// child of one parent (it combines the marks of a paragraph pairwise), and per cell of a table
+// (it pads every row to the header).
+const MAX_NODES: usize = 30_000;
 const MAX_HTML_NODES: usize = 2_000;
+const MAX_MARKED_CHILDREN: usize = 3_000;
 const MAX_TABLE_CELLS: usize = 50_000;
 
 // Closers of emphasis that have no opener: the parser looks back over them again and again.
 const MAX_LONE_CLOSERS: usize = 3_000;
 
+// Delimiter runs (`*`, `_`, `~`) in one paragraph: the parser resolves them against each
+// other, which costs more than their number.
+const MAX_DELIMITER_RUNS: usize = 5_000;
+
 const TAB_WIDTH: usize = 4;
 const LIST_INDENT: usize = 2;
-const VOID_TAGS: [&str; 14] = [
-    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
-    "track", "wbr",
-];
+
+// The inline HTML tags the text view pairs, each matched only by its own name.
+const PAIRED_TAGS: [&str; 8] = ["strong", "b", "em", "i", "u", "s", "del", "strike"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
@@ -83,7 +88,7 @@ fn parse_options() -> ParseOptions {
 }
 
 // Depth counts the inline HTML tags still open around a node as levels: the text view pairs
-// the tags of a parent's children and recurses once per open tag, inside every level above.
+// the tags of a parent's children and recurses once per open pair, inside every level above.
 fn over_budget(tree: &Node, limit: usize) -> Option<Refusal> {
     let mut nodes = 0usize;
     let mut html = 0usize;
@@ -106,44 +111,78 @@ fn over_budget(tree: &Node, limit: usize) -> Option<Refusal> {
             }
         }
         if let Some(children) = node.children() {
-            let mut open = 0usize;
+            let mut open = TagBalance::default();
+            let mut marked = 0usize;
             for child in children {
+                if matches!(
+                    child,
+                    Node::Emphasis(_)
+                        | Node::Strong(_)
+                        | Node::Delete(_)
+                        | Node::Link(_)
+                        | Node::Html(_)
+                ) {
+                    marked += 1;
+                    if marked > MAX_MARKED_CHILDREN {
+                        return Some(Refusal::TooLarge);
+                    }
+                }
                 if let Node::Html(tag) = child {
                     html += 1;
                     if html > MAX_HTML_NODES {
                         return Some(Refusal::TooLarge);
                     }
-                    open = tag_balance(&tag.value, open);
+                    open.apply(&tag.value);
                 }
-                pending.push((child, depth + 1 + open));
+                pending.push((child, depth + 1 + open.total()));
             }
         }
     }
     None
 }
 
-// The number of tags open after this piece of HTML: an opening tag adds one, a closing tag
-// takes one off, and comments, void and self-closing tags change nothing.
-fn tag_balance(html: &str, open: usize) -> usize {
-    let Some(inner) = html.strip_prefix('<') else {
-        return open;
-    };
-    if let Some(closing) = inner.strip_prefix('/') {
-        return if closing.starts_with(|c: char| c.is_ascii_alphabetic()) {
-            open.saturating_sub(1)
-        } else {
-            open
-        };
+// How many tags of each paired name are open among the siblings so far. A closing tag takes
+// one off its own name only, as the text view matches it, so a closer of another name cannot
+// hide the nesting of the openers.
+#[derive(Default)]
+struct TagBalance {
+    open: [usize; PAIRED_TAGS.len()],
+}
+
+impl TagBalance {
+    fn total(&self) -> usize {
+        self.open.iter().sum()
     }
-    let name: String = inner
-        .chars()
-        .take_while(char::is_ascii_alphanumeric)
-        .collect::<String>()
-        .to_ascii_lowercase();
-    let opens = inner.starts_with(|c: char| c.is_ascii_alphabetic())
-        && !html.ends_with("/>")
-        && !VOID_TAGS.contains(&name.as_str());
-    open + usize::from(opens)
+
+    fn apply(&mut self, html: &str) {
+        let Some(inner) = html
+            .trim()
+            .strip_prefix('<')
+            .and_then(|rest| rest.strip_suffix('>'))
+        else {
+            return;
+        };
+        if inner.ends_with('/') {
+            return;
+        }
+        let (closing, rest) = match inner.strip_prefix('/') {
+            Some(rest) => (true, rest),
+            None => (false, inner),
+        };
+        let name = rest
+            .chars()
+            .take_while(char::is_ascii_alphanumeric)
+            .collect::<String>()
+            .to_ascii_lowercase();
+        let Some(slot) = PAIRED_TAGS.iter().position(|paired| *paired == name) else {
+            return;
+        };
+        if closing {
+            self.open[slot] = self.open[slot].saturating_sub(1);
+        } else {
+            self.open[slot] += 1;
+        }
+    }
 }
 
 // Dropping a deep tree recurses once per level; taking the children out first does not.
@@ -199,7 +238,9 @@ fn line_exceeds(
     if starts_item || is_atx_heading(rest) {
         paragraph.clear();
     }
-    blocks + paragraph.scan(rest, limit) > limit || paragraph.lone_closers > MAX_LONE_CLOSERS
+    blocks + paragraph.scan(rest, limit) > limit
+        || paragraph.lone_closers > MAX_LONE_CLOSERS
+        || paragraph.runs > MAX_DELIMITER_RUNS
 }
 
 // A code fence as CommonMark has it: up to three spaces of indent, then three or more
@@ -321,6 +362,7 @@ fn ordered_marker_end(bytes: &[u8], start: usize) -> Option<usize> {
 struct Inline {
     brackets: usize,
     emphasis: Vec<u8>,
+    runs: usize,
     // Over the whole text, not only the paragraph: the cost adds up across paragraphs.
     lone_closers: usize,
 }
@@ -329,6 +371,7 @@ impl Inline {
     fn clear(&mut self) {
         self.brackets = 0;
         self.emphasis.clear();
+        self.runs = 0;
     }
 
     // How deep the open inline constructs get on this line, counting those carried in. A run of
@@ -355,6 +398,7 @@ impl Inline {
                         .is_some_and(|next| !next.is_ascii_whitespace());
                     let closes = at > 0 && !bytes[at - 1].is_ascii_whitespace();
                     let levels = run.div_ceil(2).min(limit + 1);
+                    self.runs += 1;
                     if closes && self.emphasis.last() == Some(&delimiter) {
                         for _ in 0..levels {
                             if self.emphasis.last() == Some(&delimiter) {
@@ -479,7 +523,9 @@ mod tests {
     #[test]
     fn many_lines_that_are_each_shallow_are_fine() {
         assert!(!too_deep(&"> quoted line\n".repeat(200_000)));
-        assert!(!too_deep(&"**bold** and *it* and [x](y)\n".repeat(100_000)));
+        assert!(!too_deep(
+            &"**bold** and *it* and [x](y)\n\n".repeat(100_000)
+        ));
     }
 
     fn opened_per_line(open: &str, close: &str, times: usize) -> String {
@@ -654,10 +700,36 @@ mod tests {
         );
     }
 
+    // A closer of another name does not close a tag, so it cannot hide that the openers nest.
+    #[test]
+    fn a_closer_of_another_name_does_not_hide_the_nesting_of_the_openers() {
+        let foreign = format!("{}x{}", "<b>".repeat(MAX_NESTING + 1), "</i>".repeat(200));
+        assert_eq!(preview_refusal(&foreign), Some(Refusal::TooDeep));
+        let mixed = format!("{}x", "<b><i>".repeat(MAX_NESTING / 2 + 1));
+        assert_eq!(preview_refusal(&mixed), Some(Refusal::TooDeep));
+        let unknown = format!("{}x", "<span>".repeat(MAX_NESTING + 1));
+        assert_eq!(preview_refusal(&unknown), None);
+        let balanced = format!("{}x{}", "<b><i>".repeat(20), "</i></b>".repeat(20));
+        assert_eq!(preview_refusal(&balanced), None);
+        let strays = "</b></i></u>".repeat(500);
+        assert_eq!(preview_refusal(&strays), None);
+    }
+
+    // The text view combines the marks of a paragraph pairwise, so there is a cap per parent.
+    #[test]
+    fn thousands_of_marked_children_of_one_parent_are_refused_at_the_byte_cap() {
+        let text = "[a](b) ".repeat(MAX_PREVIEW_BYTES / 7);
+        assert!(text.len() <= MAX_PREVIEW_BYTES);
+        assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
+        assert_eq!(preview_refusal(&"[a](b) ".repeat(500)), None);
+        let two = format!("{}\n\n", "[a](b) ".repeat(2_000)).repeat(2);
+        assert_eq!(preview_refusal(&two), None);
+    }
+
     #[test]
     fn a_wide_header_over_many_rows_is_refused_at_the_byte_cap() {
         let header = format!("{}|\n{}|\n", "|a".repeat(4_000), "|-".repeat(4_000));
-        let text = format!("{header}{}", "|x|\n".repeat(40_000));
+        let text = format!("{header}{}", "|x|\n".repeat(11_000));
         assert!(text.len() <= MAX_PREVIEW_BYTES);
         assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
         assert_eq!(preview_refusal("|a|b|\n|-|-|\n|1|2|\n"), None);
@@ -680,10 +752,29 @@ mod tests {
 
     #[test]
     fn more_nodes_than_the_budget_are_refused_at_the_byte_cap() {
-        let text = "*a* ".repeat(MAX_PREVIEW_BYTES / 4);
+        let text = "a\n\n".repeat(MAX_PREVIEW_BYTES / 3);
         assert!(text.len() <= MAX_PREVIEW_BYTES);
         assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
-        assert_eq!(preview_refusal(&"*a* ".repeat(1000)), None);
+        assert_eq!(preview_refusal(&"a\n\n".repeat(1000)), None);
+    }
+
+    // The case that is quadratic inside the parser: attention runs that resolve against each
+    // other, in one paragraph. It is turned away before the parse, and fast.
+    #[test]
+    fn a_paragraph_of_emphasis_runs_is_turned_away_before_parsing_at_the_byte_cap() {
+        let text = "*a* ".repeat(MAX_PREVIEW_BYTES / 4);
+        assert_eq!(text.len(), MAX_PREVIEW_BYTES);
+        let started = Instant::now();
+        assert!(deeper_than(&text, MAX_NESTING));
+        assert_eq!(preview_refusal(&text), Some(Refusal::TooDeep));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert_eq!(preview_refusal(&"*a* ".repeat(500)), None);
+        assert_eq!(
+            preview_refusal(&"*a* and _b_ and ~~c~~\n\n".repeat(1_500)),
+            None
+        );
+        let tildes = "~a~ ".repeat(MAX_PREVIEW_BYTES / 4);
+        assert_eq!(preview_refusal(&tildes), Some(Refusal::TooDeep));
     }
 
     #[test]
@@ -694,11 +785,8 @@ mod tests {
         assert_eq!(preview_refusal(&text), Some(Refusal::TooDeep));
         let underscores = "a_ ".repeat(MAX_PREVIEW_BYTES / 3);
         assert_eq!(preview_refusal(&underscores), Some(Refusal::TooDeep));
-        assert_eq!(preview_refusal(&"snake_case_word ".repeat(10_000)), None);
-        assert_eq!(
-            preview_refusal(&"*a* and **b** and _c_ ".repeat(2_000)),
-            None
-        );
+        assert_eq!(preview_refusal(&"snake_case_word ".repeat(1_500)), None);
+        assert_eq!(preview_refusal(&"*a* and **b** and _c_ ".repeat(500)), None);
     }
 
     #[test]
