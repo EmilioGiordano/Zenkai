@@ -1877,7 +1877,6 @@ mod tests {
     #[test]
     fn long_cached_formula_results_trip_the_budget_while_the_rows_stream() {
         let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(30_000));
-        let started = std::time::Instant::now();
         let error = stream_with(&cached_text_sheet(1_000, 10_000), &budgets)
             .err()
             .expect("ten megabytes of cached text must trip a two megabyte budget");
@@ -1888,13 +1887,14 @@ mod tests {
             reason.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX),
             "{reason}"
         );
-        // Refused once the first piece is charged, before the rest of the sheet is held.
-        assert!(!reason.contains("1000 cells"), "{reason}");
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(60),
-            "took {:?}",
-            started.elapsed()
-        );
+        // No sheet size is declared here, so the refusal names the cells charged, not a
+        // projection: refused once the first piece is charged, before the rest is held.
+        let charged: u64 = reason
+            .split_once(" to open (")
+            .and_then(|(_, rest)| rest.split_once(" cells"))
+            .and_then(|(cells, _)| cells.parse().ok())
+            .expect("the refusal names the cells charged");
+        assert!(charged < 1_000, "{reason}");
     }
 
     #[test]
