@@ -433,6 +433,31 @@ fn long_text_results_without_cached_values_open_whole() {
     assert_eq!(last.text, format!("{}1000", "x".repeat(30_000)));
 }
 
+// The same results cached by the file are charged once, while the rows are read, and
+// evaluating them again adds nothing.
+#[test]
+fn long_text_results_with_cached_values_open_whole() {
+    let data: String = (1..=1_000)
+        .map(|row| {
+            let text = format!("{}{row}", "x".repeat(30_000));
+            format!(
+                r#"<row r="{row}"><c r="A{row}" t="str"><f>REPT("x",30000)&amp;{row}</f><v>{text}</v></c></row>"#
+            )
+        })
+        .collect();
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{data}</sheetData></worksheet>"#
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-cached-text.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet)).unwrap();
+    let book = open_xlsx(&path).unwrap();
+    let last = book
+        .workbook
+        .cell(SheetId(0), CellPos::parse_a1("A1000").unwrap());
+    assert_eq!(last.text, format!("{}1000", "x".repeat(30_000)));
+}
+
 // The reader parses a formula's shape while the rows stream once it repeats, on its sheet
 // and row threads too; the longest and deepest formulas the limits allow, filled down, still
 // open, in a small sheet and in one past 8 MB, which streams on its own threads.
