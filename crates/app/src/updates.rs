@@ -88,6 +88,7 @@ pub fn mark_announced(cx: &mut App, version: Version) {
 pub fn check(cx: &mut App, source: Source) {
     let (Some(installed), Some(started_at)) = (Version::installed(), now()) else {
         tracing::error!("the update check needs the installed version and the clock");
+        cx.update_global::<Updates, _>(|updates, _| updates.fail_to_start(source));
         return;
     };
     if !cx.update_global::<Updates, _>(|updates, _| updates.begin_check(source)) {

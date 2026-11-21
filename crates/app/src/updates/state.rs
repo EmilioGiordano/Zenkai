@@ -159,6 +159,21 @@ impl Updates {
         }
     }
 
+    // A check that cannot start is a failure only for the user who asked for it.
+    pub fn fail_to_start(&mut self, source: Source) {
+        if self.status == Status::Checking {
+            return;
+        }
+        match source {
+            Source::Startup => {}
+            Source::Settings => self.status = Status::Failed,
+            Source::Palette => {
+                self.status = Status::Failed;
+                self.report = Some(Report::Failed);
+            }
+        }
+    }
+
     pub fn mark_announced(&mut self, version: Version) {
         self.record.announced = Some(version);
     }
@@ -286,6 +301,36 @@ mod tests {
         checking(&mut updates, Source::Palette);
         updates.finish_failed(900);
         assert_eq!(updates.report, Some(Report::Failed));
+    }
+
+    #[test]
+    fn a_manual_check_that_cannot_start_says_so() {
+        let mut settings = loaded(Record::default());
+        settings.fail_to_start(Source::Settings);
+        assert_eq!(settings.status(), Status::Failed);
+        assert_eq!(settings.report, None);
+
+        let mut palette = loaded(Record::default());
+        palette.fail_to_start(Source::Palette);
+        assert_eq!(palette.status(), Status::Failed);
+        assert_eq!(palette.report, Some(Report::Failed));
+    }
+
+    #[test]
+    fn an_automatic_check_that_cannot_start_stays_quiet() {
+        let mut updates = loaded(Record::default());
+        updates.fail_to_start(Source::Startup);
+        assert_eq!(updates.status(), Status::Unchecked);
+        assert_eq!(updates.report, None);
+    }
+
+    #[test]
+    fn a_request_that_cannot_start_leaves_a_running_check_alone() {
+        let mut updates = loaded(Record::default());
+        checking(&mut updates, Source::Startup);
+        updates.fail_to_start(Source::Palette);
+        assert_eq!(updates.status(), Status::Checking);
+        assert_eq!(updates.report, None);
     }
 
     #[test]
