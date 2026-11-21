@@ -212,11 +212,19 @@ impl Updates {
     // Saves run on background threads in any order: the number lets the writer drop a stale snapshot.
     pub fn snapshot_for_save(&mut self) -> Snapshot {
         self.saves_started += 1;
-        let notes = std::mem::take(&mut self.notes_unsaved).then(|| self.notes.clone());
+        let notes = self.notes_unsaved.then(|| self.notes.clone());
         Snapshot {
             record: self.record.clone(),
             notes,
             order: self.saves_started,
+        }
+    }
+
+    // The notes stay owed until a write of this very list lands, so a failed write is tried
+    // again with the next snapshot; a newer list that arrived meanwhile still owes its own.
+    pub fn notes_saved(&mut self, saved: &Arc<Notes>) {
+        if Arc::ptr_eq(&self.notes, saved) {
+            self.notes_unsaved = false;
         }
     }
 
@@ -494,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn the_notes_of_a_check_are_saved_once() {
+    fn the_notes_of_a_check_are_owed_until_a_write_of_them_lands() {
         let mut updates = loaded(Record::default());
         checking(&mut updates, Source::Startup);
         updates.finish_ok(
@@ -504,9 +512,30 @@ mod tests {
         );
         assert_eq!(updates.notes().newer_than(installed()).count(), 1);
         let after_check = updates.snapshot_for_save();
-        assert!(after_check.notes.is_some());
+        let written = after_check.notes.unwrap();
         updates.mark_announced(version("0.1.1"));
+        let retried = updates.snapshot_for_save();
+        assert!(retried.notes.is_some());
+        updates.notes_saved(&written);
         assert!(updates.snapshot_for_save().notes.is_none());
+    }
+
+    #[test]
+    fn a_write_of_older_notes_does_not_clear_what_a_newer_check_owes() {
+        let mut updates = loaded(Record::default());
+        updates.finish_ok(
+            found_with_notes("0.1.1", vec![note("0.1.1")]),
+            installed(),
+            900,
+        );
+        let older = updates.snapshot_for_save().notes.unwrap();
+        updates.finish_ok(
+            found_with_notes("0.1.2", vec![note("0.1.2")]),
+            installed(),
+            901,
+        );
+        updates.notes_saved(&older);
+        assert!(updates.snapshot_for_save().notes.is_some());
     }
 
     #[test]

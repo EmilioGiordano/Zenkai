@@ -132,16 +132,28 @@ fn finish(cx: &mut App, installed: Version, checked_at: u64, result: Result<Rele
 }
 
 fn save_in_background(snapshot: Snapshot, cx: &mut App) {
-    cx.background_executor()
-        .spawn(async move {
-            if let Err(error) = snapshot.record.save(snapshot.order) {
-                tracing::warn!(%error, "could not save the update check record");
-            }
-            if let Some(notes) = snapshot.notes
-                && let Err(error) = notes.save(snapshot.order)
-            {
-                tracing::warn!(%error, "could not save the release notes cache");
-            }
-        })
-        .detach();
+    cx.spawn(async move |cx| {
+        let written = cx
+            .background_executor()
+            .spawn(async move {
+                if let Err(error) = snapshot.record.save(snapshot.order) {
+                    tracing::warn!(%error, "could not save the update check record");
+                }
+                let notes = snapshot.notes?;
+                match notes.save(snapshot.order) {
+                    Ok(()) => Some(notes),
+                    Err(error) => {
+                        tracing::warn!(%error, "could not save the release notes cache");
+                        None
+                    }
+                }
+            })
+            .await;
+        if let Some(notes) = written {
+            cx.update(|cx| {
+                cx.update_global::<Updates, _>(|updates, _| updates.notes_saved(&notes))
+            });
+        }
+    })
+    .detach();
 }
