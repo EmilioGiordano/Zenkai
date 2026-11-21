@@ -42,6 +42,7 @@ pub enum StartupCheck {
 pub struct Updates {
     pub record: Record,
     pub report: Option<Report>,
+    saves_started: u64,
     record_loaded: bool,
     startup_decided: bool,
     status: Status,
@@ -54,6 +55,7 @@ impl Default for Updates {
         Updates {
             record: Record::default(),
             report: None,
+            saves_started: 0,
             record_loaded: false,
             startup_decided: false,
             status: Status::Unchecked,
@@ -172,6 +174,12 @@ impl Updates {
                 self.report = Some(Report::Failed);
             }
         }
+    }
+
+    // Saves run on background threads in any order: the number lets the writer drop a stale snapshot.
+    pub fn snapshot_for_save(&mut self) -> (Record, u64) {
+        self.saves_started += 1;
+        (self.record.clone(), self.saves_started)
     }
 
     pub fn mark_announced(&mut self, version: Version) {
@@ -409,6 +417,16 @@ mod tests {
         updates.finish_ok(Some(installed()), installed(), 900);
         assert_eq!(updates.report, None);
         assert_eq!(updates.status(), Status::UpToDate { at: 900 });
+    }
+
+    #[test]
+    fn each_snapshot_for_saving_is_numbered_after_the_last() {
+        let mut updates = loaded(Record::default());
+        let (_, first) = updates.snapshot_for_save();
+        updates.mark_announced(version("0.1.1"));
+        let (record, second) = updates.snapshot_for_save();
+        assert!(second > first);
+        assert_eq!(record.announced, Some(version("0.1.1")));
     }
 
     #[test]

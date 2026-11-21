@@ -78,11 +78,11 @@ pub fn take_report(cx: &mut App) -> Option<Report> {
 
 // Called once the notice is on screen: a version counts as announced only when it was seen.
 pub fn mark_announced(cx: &mut App, version: Version) {
-    let record = cx.update_global::<Updates, _>(|updates, _| {
+    let (record, order) = cx.update_global::<Updates, _>(|updates, _| {
         updates.mark_announced(version);
-        updates.record.clone()
+        updates.snapshot_for_save()
     });
-    save_in_background(record, cx);
+    save_in_background(record, order, cx);
 }
 
 pub fn check(cx: &mut App, source: Source) {
@@ -110,7 +110,7 @@ fn finish(
     checked_at: u64,
     result: Result<Option<Version>, FetchError>,
 ) {
-    let record = cx.update_global::<Updates, _>(|updates, _| {
+    let (record, order) = cx.update_global::<Updates, _>(|updates, _| {
         match result {
             Ok(newest) => updates.finish_ok(newest, installed, checked_at),
             Err(error) => {
@@ -118,15 +118,15 @@ fn finish(
                 updates.finish_failed(checked_at);
             }
         }
-        updates.record.clone()
+        updates.snapshot_for_save()
     });
-    save_in_background(record, cx);
+    save_in_background(record, order, cx);
 }
 
-fn save_in_background(record: Record, cx: &mut App) {
+fn save_in_background(record: Record, order: u64, cx: &mut App) {
     cx.background_executor()
         .spawn(async move {
-            if let Err(error) = record.save() {
+            if let Err(error) = record.save(order) {
                 tracing::warn!(%error, "could not save the update check record");
             }
         })

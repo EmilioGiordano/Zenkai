@@ -96,23 +96,33 @@ impl Record {
         }
     }
 
-    pub fn save(&self) -> Result<(), SaveError> {
+    pub fn save(&self, order: u64) -> Result<(), SaveError> {
+        static LAST_WRITTEN: Mutex<u64> = Mutex::new(0);
         let file = file().ok_or(SaveError::NoDirectory)?;
-        self.write_to(&file)
+        self.write_to(&file, order, &LAST_WRITTEN)
     }
 
-    fn write_to(&self, file: &Path) -> Result<(), SaveError> {
+    // A snapshot older than the one on disk is skipped: the newer one already holds its data.
+    fn write_to(
+        &self,
+        file: &Path,
+        order: u64,
+        last_written: &Mutex<u64>,
+    ) -> Result<(), SaveError> {
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let text = self.to_json()?;
-        static SAVING: Mutex<()> = Mutex::new(());
-        let _saving = SAVING
+        let mut last_written = last_written
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if order <= *last_written {
+            return Ok(());
+        }
         let temp = file.with_extension("tmp");
         std::fs::write(&temp, text)?;
         std::fs::rename(&temp, file)?;
+        *last_written = order;
         Ok(())
     }
 }
@@ -124,6 +134,8 @@ fn file() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::super::version::Version;
+    use std::sync::Mutex;
+
     use super::{CHECK_INTERVAL_SECS, Record, SaveError};
 
     fn version(text: &str) -> Version {
@@ -210,7 +222,7 @@ mod tests {
             announced: Some(version("1.2.3")),
             ..Record::default()
         };
-        record.write_to(&file).unwrap();
+        record.write_to(&file, 1, &Mutex::new(0)).unwrap();
         assert_eq!(
             Record::parse(&std::fs::read(&file).unwrap()).unwrap(),
             record
@@ -218,11 +230,44 @@ mod tests {
     }
 
     #[test]
+    fn an_older_snapshot_landing_late_does_not_overwrite_a_newer_one() {
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("updates.json");
+        let last_written = Mutex::new(0);
+        let newer = Record {
+            announced: Some(version("1.2.3")),
+            ..Record::default()
+        };
+        newer.write_to(&file, 2, &last_written).unwrap();
+        Record::default().write_to(&file, 1, &last_written).unwrap();
+        Record::default().write_to(&file, 2, &last_written).unwrap();
+        assert_eq!(
+            Record::parse(&std::fs::read(&file).unwrap()).unwrap(),
+            newer
+        );
+    }
+
+    #[test]
+    fn a_failed_write_does_not_move_the_order_forward() {
+        let folder = tempfile::tempdir().unwrap();
+        let blocker = folder.path().join("blocker");
+        std::fs::write(&blocker, b"").unwrap();
+        let last_written = Mutex::new(0);
+        let record = Record::default();
+        assert!(
+            record
+                .write_to(&blocker.join("updates.json"), 5, &last_written)
+                .is_err()
+        );
+        assert_eq!(*last_written.lock().unwrap(), 0);
+    }
+
+    #[test]
     fn a_record_that_cannot_be_written_is_an_error() {
         let folder = tempfile::tempdir().unwrap();
         let blocker = folder.path().join("blocker");
         std::fs::write(&blocker, b"").unwrap();
-        let result = Record::default().write_to(&blocker.join("updates.json"));
+        let result = Record::default().write_to(&blocker.join("updates.json"), 1, &Mutex::new(0));
         assert!(matches!(result, Err(SaveError::Write(_))));
     }
 
