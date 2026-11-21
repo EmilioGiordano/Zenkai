@@ -9,12 +9,15 @@ const MAX_DIGITS: usize = 5;
 pub struct Version(String);
 
 impl Version {
-    // `^[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$`, so the version is safe inside a folder name.
+    // `^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$`: the app's own grammar,
+    // no leading zero, so the text the app confirms with is this same text; and safe in a path.
     pub fn parse(text: &str) -> Option<Version> {
         let parts: Vec<&str> = text.split('.').collect();
         let valid = parts.len() == 3
             && parts.iter().all(|part| {
-                (1..=MAX_DIGITS).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_digit())
+                (1..=MAX_DIGITS).contains(&part.len())
+                    && part.bytes().all(|b| b.is_ascii_digit())
+                    && (*part == "0" || !part.starts_with('0'))
             });
         valid.then(|| Version(text.to_owned()))
     }
@@ -82,7 +85,14 @@ mod tests {
 
     #[test]
     fn versions_within_the_pattern_parse() {
-        for text in ["0.1.0", "1.2.3", "99999.99999.99999", "00.01.002"] {
+        for text in [
+            "0.0.0",
+            "0.1.0",
+            "1.2.3",
+            "0.10.0",
+            "10.0.0",
+            "99999.99999.99999",
+        ] {
             assert_eq!(
                 Version::parse(text).map(|v| v.to_string()),
                 Some(text.to_owned())
@@ -97,6 +107,11 @@ mod tests {
             "1",
             "1.2",
             "1.2.3.4",
+            "00.01.002",
+            "01.2.3",
+            "1.02.3",
+            "1.2.03",
+            "00.0.0",
             "1..3",
             ".1.2",
             "1.2.",
