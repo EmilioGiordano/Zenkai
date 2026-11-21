@@ -93,7 +93,8 @@ fn previous_app_closed(folders: &Folders, timing: &Timing) -> bool {
 }
 
 // The marker must name this very version. Without it, the new version is ended if it still runs:
-// it is the launcher's own child, and it never showed a window.
+// it is the launcher's own child, and a version that shows a window but cannot write the marker
+// closes itself well before this deadline.
 fn confirmed(folders: &Folders, version: &Version, mut started: Child, timing: &Timing) -> bool {
     let deadline = Instant::now() + timing.confirmation;
     loop {
@@ -109,6 +110,9 @@ fn confirmed(folders: &Folders, version: &Version, mut started: Child, timing: &
             Err(error) => tracing::warn!(%error, "could not tell whether the new version runs"),
         }
         if Instant::now() >= deadline {
+            if disk::confirms(folders, version) {
+                return true;
+            }
             tracing::warn!("the new version did not confirm in time; ending it");
             if let Err(error) = started.kill() {
                 tracing::warn!(%error, "could not end the new version");

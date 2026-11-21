@@ -156,13 +156,13 @@ fn main() {
                 Ok((window, workspace)) => {
                     restart::register(window, &workspace, cx);
                     tray::install(window, &workspace, claim, cx);
-                    installation::after_first_window(cx);
+                    installation::after_first_window(window, &workspace, cx);
                     cx.activate(true)
                 }
                 #[cfg(not(windows))]
                 Ok((window, workspace)) => {
                     restart::register(window, &workspace, cx);
-                    installation::after_first_window(cx);
+                    installation::after_first_window(window, &workspace, cx);
                     cx.activate(true)
                 }
                 Err(error) => {

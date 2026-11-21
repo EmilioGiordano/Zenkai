@@ -5,8 +5,11 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::time::Duration;
 
-use gpui_kit::App;
+use gpui_kit::*;
+
+use crate::view::Workspace;
 
 const APP_FOLDER: &str = "app";
 const LAUNCHER: &str = "zenkai.exe";
@@ -14,6 +17,9 @@ const OLD_APP: &str = "app.old";
 const UPDATE: &str = ".update";
 const CONFIRMED: &str = "confirmed";
 const MAX_MARKER_BYTES: u64 = 32;
+// Ten tries two seconds apart end well inside the launcher's two minutes of waiting.
+const CONFIRM_ATTEMPTS: u32 = 10;
+const CONFIRM_RETRY: Duration = Duration::from_secs(2);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(windows)]
 const APP_USER_MODEL_ID: &str = "EmilioGiordano.Zenkai";
@@ -54,21 +60,51 @@ pub fn identify_process() {
     }
 }
 
-pub fn after_first_window(cx: &mut App) {
+// A version that cannot confirm its start closes itself, through the normal close with its save
+// prompt, so the launcher restores the previous one without ever ending a window the user sees.
+pub fn after_first_window(window: AnyWindowHandle, workspace: &Entity<Workspace>, cx: &mut App) {
     let Some(root) = root() else {
         return;
     };
-    cx.background_executor()
-        .spawn(async move {
-            match confirm_start(root, VERSION) {
-                Ok(Confirmation::Written) => tracing::info!("confirmed that this version starts"),
-                Ok(Confirmation::NotUpdating | Confirmation::AlreadyWritten) => {}
-                Err(error) => tracing::error!(%error, "could not confirm that this version starts"),
+    let workspace = workspace.downgrade();
+    cx.spawn(async move |cx| {
+        if !confirm_with_retries(root, cx).await {
+            let closed = window.update(cx, |_, window, cx| {
+                workspace.update(cx, |workspace, cx| workspace.close_unconfirmed(window, cx))
+            });
+            if let Ok(Err(error)) | Err(error) = closed {
+                tracing::error!(%error, "the main window is gone; quitting");
+                cx.update(|cx| cx.quit());
             }
-            #[cfg(windows)]
-            uninstall_entry::record_version(root);
-        })
-        .detach();
+            return;
+        }
+        #[cfg(windows)]
+        cx.background_executor()
+            .spawn(async move { uninstall_entry::record_version(root) })
+            .await;
+    })
+    .detach();
+}
+
+async fn confirm_with_retries(root: &'static Path, cx: &mut AsyncApp) -> bool {
+    for attempt in 1..=CONFIRM_ATTEMPTS {
+        let confirmed = cx
+            .background_executor()
+            .spawn(async move { confirm_start(root, VERSION) })
+            .await;
+        match confirmed {
+            Ok(Confirmation::Written) => {
+                tracing::info!("confirmed that this version starts");
+                return true;
+            }
+            Ok(Confirmation::NotUpdating | Confirmation::AlreadyWritten) => return true,
+            Err(error) => {
+                tracing::warn!(%error, attempt, "could not confirm that this version starts");
+            }
+        }
+        cx.background_executor().timer(CONFIRM_RETRY).await;
+    }
+    false
 }
 
 #[derive(Debug, PartialEq, Eq)]

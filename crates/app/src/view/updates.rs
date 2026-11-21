@@ -3,6 +3,7 @@ use zenkai_i18n::t;
 
 use super::Workspace;
 use super::notices::{Lifetime, Severity};
+use crate::close_prompt::CloseGoal;
 use crate::updates::{self, LauncherNotice, Report, Version};
 
 impl Workspace {
@@ -35,6 +36,19 @@ impl Workspace {
         };
         self.post(Severity::Warning, text, None, Lifetime::UntilReplaced);
         cx.notify();
+    }
+
+    pub(crate) fn close_unconfirmed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        tracing::error!(
+            "this version could not confirm its start; closing so the launcher restores the previous one"
+        );
+        self.post(
+            Severity::Error,
+            t!("update.unconfirmed").into(),
+            None,
+            Lifetime::UntilReplaced,
+        );
+        self.request_close(CloseGoal::Quit, window, cx);
     }
 
     fn notify_update_available(&mut self, version: Version, cx: &mut Context<Self>) {

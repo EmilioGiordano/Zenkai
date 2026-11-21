@@ -426,7 +426,7 @@ Aplicar una actualización:
 5. Abre la versión nueva y espera la marca `confirmed` con esa misma versión, hasta 120 s, o a que el proceso termine.
 6. Con la marca, borra `app.old`, después `applying` y al final la marca. El resto de `.update\` no se toca: el bloqueo, el registro del lanzador (`launcher.log`, que es su único modo de informar errores), las descargas y otras carpetas `new-*` son de quien los escribió, que puede ser una app ya preparando la siguiente actualización. Sin la marca, si el proceso sigue vivo termina ese proceso, que es su propio hijo, y restaura.
 
-La app, al mostrar la primera ventana, crea `confirmed` con su propia versión y lo sincroniza a disco, si existe `app.old` y no hay una marca de esa versión. No depende de ningún argumento. Una marca de otra versión no cuenta.
+La app, al mostrar la primera ventana, crea `confirmed` con su propia versión y lo sincroniza a disco, si existe `app.old` y no hay una marca de esa versión. No depende de ningún argumento. Una marca de otra versión no cuenta. Lo escribe fuera del hilo de la interfaz y lo reintenta hasta 10 veces, cada 2 s; si no lo logra, la app se cierra sola por el cierre normal, con su aviso de guardar, y el lanzador restaura la anterior, así nunca termina una ventana que el usuario ve. Al vencer los 120 s el lanzador vuelve a leer la marca antes de terminar el proceso.
 
 Cada inicio del lanzador resuelve lo que encuentre en disco:
 
