@@ -11,7 +11,7 @@ use crate::nesting::{NestingCheck, is_xml_part};
 
 pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
 
-const CHECKED_ELEMENTS: [&[u8]; 19] = [
+const CHECKED_ELEMENTS: [&[u8]; 20] = [
     b"f",
     b"formula",
     b"formula1",
@@ -31,38 +31,27 @@ const CHECKED_ELEMENTS: [&[u8]; 19] = [
     b"slicerList",
     b"timelineRefs",
     b"workbookProtection",
+    b"rPh",
 ];
-
-// Looked for in worksheets alone: shared strings and comments hold one for every text, and
-// inflating those parts whole to find it would cost far more than the check.
-const WORKSHEET_ELEMENTS: [&[u8]; 1] = [b"phoneticPr"];
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PartRole {
-    Worksheet,
-    Other,
-}
 
 // XML forbids entities or whitespace between '<' and an element name, so a part with
 // no '<name' or '<prefix:name' start tag for these names cannot contain them; the
 // full parse is skipped for it. Text that only looks like a tag merely costs a parse.
-pub fn has_checked_element(bytes: &[u8], role: PartRole) -> bool {
-    let mut rest = bytes;
-    while let Some(at) = rest.iter().position(|b| *b == b'<') {
-        rest = &rest[at + 1..];
+pub fn has_checked_element(bytes: &[u8]) -> bool {
+    start_tag_names(bytes).any(|local| CHECKED_ELEMENTS.contains(&local))
+}
+
+// The local name after every '<', read without parsing: an end tag gives an empty name and a
+// tag inside a comment counts too.
+pub fn start_tag_names(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
+    bytes.split(|b| *b == b'<').skip(1).map(|rest| {
         let name_end = rest
             .iter()
-            .position(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/' | b'<'))
+            .position(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/'))
             .unwrap_or(rest.len());
         let name = &rest[..name_end];
-        let local = name.rsplit(|b| *b == b':').next().unwrap_or(name);
-        if CHECKED_ELEMENTS.contains(&local)
-            || (role == PartRole::Worksheet && WORKSHEET_ELEMENTS.contains(&local))
-        {
-            return true;
-        }
-    }
-    false
+        name.rsplit(|b| *b == b':').next().unwrap_or(name)
+    })
 }
 
 // Watches streamed bytes for the elements above, so parts without any are never
@@ -70,7 +59,6 @@ pub fn has_checked_element(bytes: &[u8], role: PartRole) -> bool {
 // scans the tail of the previous one. Only a tag whose name alone is longer than
 // the overlap escapes, and such a prefix cannot name a checked element in practice.
 pub(crate) struct Prefilter {
-    role: PartRole,
     overlap: Vec<u8>,
     hit: bool,
 }
@@ -78,9 +66,8 @@ pub(crate) struct Prefilter {
 const PREFILTER_OVERLAP: usize = 64;
 
 impl Prefilter {
-    pub(crate) fn new(role: PartRole) -> Prefilter {
+    pub(crate) fn new() -> Prefilter {
         Prefilter {
-            role,
             overlap: Vec::new(),
             hit: false,
         }
@@ -93,7 +80,7 @@ impl Prefilter {
         let mut window = Vec::with_capacity(self.overlap.len() + chunk.len());
         window.extend_from_slice(&self.overlap);
         window.extend_from_slice(chunk);
-        if has_checked_element(&window, self.role) {
+        if has_checked_element(&window) {
             self.hit = true;
             return;
         }
@@ -719,7 +706,6 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
     meter: &CompressedMeter,
     budgets: &Budgets,
     count_cells: bool,
-    role: PartRole,
     dom_loads: NonZeroU64,
 ) -> Result<(String, Vec<u8>, Usage), ReadError> {
     let (name, usage) = {
@@ -728,7 +714,7 @@ pub(crate) fn read_part_if_checked<R: Read + Seek>(
             .map_err(|e| ReadError::Unreadable(e.to_string()))?;
         let name = entry.name().to_string();
         let mut guard = budgets.stream(entry, meter, &name);
-        let mut filter = Prefilter::new(role);
+        let mut filter = Prefilter::new();
         let mut counter = CellCounter::new();
         let mut nesting = is_xml_part(&name).then(|| NestingCheck::new(&name));
         let mut chunk = [0u8; CHUNK_BYTES];
@@ -930,7 +916,7 @@ mod tests {
 
     #[test]
     fn the_prefilter_sees_tags_split_across_chunks() {
-        let mut filter = Prefilter::new(PartRole::Other);
+        let mut filter = Prefilter::new();
         filter.push(b"<worksheet><sheetData><row><c><");
         assert!(!filter.hit());
         filter.push(b"f>A1*2</f></c></row>");
@@ -939,10 +925,10 @@ mod tests {
 
     #[test]
     fn the_prefilter_ignores_lookalikes_and_clean_parts() {
-        let mut filter = Prefilter::new(PartRole::Other);
+        let mut filter = Prefilter::new();
         filter.push(b"<fonts><font><sz val=\"11\"/></font></fonts>");
         assert!(!filter.hit());
-        let mut split = Prefilter::new(PartRole::Other);
+        let mut split = Prefilter::new();
         split.push(b"<defined");
         assert!(!split.hit());
         split.push(b"Name name=\"x\">1</definedName>");
@@ -950,18 +936,21 @@ mod tests {
     }
 
     #[test]
-    fn phonetic_settings_are_looked_for_in_worksheets_alone() {
-        let strings = b"<sst><si><t>x</t><phoneticPr fontId=\"0\"/></si></sst>";
-        let mut other = Prefilter::new(PartRole::Other);
-        other.push(strings);
-        assert!(!other.hit());
-        let mut sheet = Prefilter::new(PartRole::Worksheet);
-        sheet.push(b"<worksheet><sheetData/><x:phoneticPr fontId=\"0\"/></worksheet>");
-        assert!(sheet.hit());
-        assert!(has_checked_element(
-            b"<workbook><workbookProtection lockStructure=\"1\"/></workbook>",
-            PartRole::Other
-        ));
+    fn phonetic_runs_are_found_and_phonetic_settings_alone_are_not() {
+        let mut settings = Prefilter::new();
+        settings.push(b"<sst><si><t>x</t><phoneticPr fontId=\"0\"/></si></sst>");
+        assert!(!settings.hit());
+        let mut runs = Prefilter::new();
+        runs.push(b"<sst><si><t>x</t><rPh sb=\"0\" eb=\"1\"><t>y</t></rPh></si></sst>");
+        assert!(runs.hit());
+    }
+
+    #[test]
+    fn tag_names_are_read_without_their_prefix() {
+        let names: Vec<&[u8]> =
+            start_tag_names(b"<?xml?><x:sst><x:si/><!-- <rPh --></x:sst>").collect();
+        let expected: [&[u8]; 6] = [b"?xml?", b"sst", b"si", b"!--", b"rPh", b""];
+        assert_eq!(names, expected);
     }
 
     #[test]
@@ -1021,28 +1010,14 @@ mod tests {
         let meter = CompressedMeter::new();
         let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
         let budgets = budgets();
-        let (name, clean, _) = read_part_if_checked(
-            &mut archive,
-            0,
-            &meter,
-            &budgets,
-            false,
-            PartRole::Other,
-            NonZeroU64::MIN,
-        )
-        .unwrap();
+        let (name, clean, _) =
+            read_part_if_checked(&mut archive, 0, &meter, &budgets, false, NonZeroU64::MIN)
+                .unwrap();
         assert_eq!(name, "xl/styles.xml");
         assert!(clean.is_empty(), "a clean part needs no bytes");
-        let (name, checked, _) = read_part_if_checked(
-            &mut archive,
-            1,
-            &meter,
-            &budgets,
-            false,
-            PartRole::Other,
-            NonZeroU64::MIN,
-        )
-        .unwrap();
+        let (name, checked, _) =
+            read_part_if_checked(&mut archive, 1, &meter, &budgets, false, NonZeroU64::MIN)
+                .unwrap();
         assert_eq!(name, "xl/workbook.xml");
         assert!(!checked.is_empty(), "a checked part is inflated");
     }
@@ -1070,7 +1045,6 @@ mod tests {
             &meter,
             budgets,
             count_cells,
-            PartRole::Other,
             NonZeroU64::MIN,
         )
         .map(|(_, part, _)| part.len())

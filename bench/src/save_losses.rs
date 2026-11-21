@@ -24,12 +24,18 @@ impl Loss {
     }
 }
 
-// Elements that describe the application that wrote the file rather than its content.
-// workbookPr's one content flag, date1904, is checked as an attribute below.
-const NOT_CONTENT: [(&str, &str); 2] = [
+// Elements that describe the application that wrote the file rather than its content, or
+// that show nothing by themselves. workbookPr's one content flag, date1904, is checked as an
+// attribute below; the phonetic settings show only with phonetic runs, checked in any part.
+const NOT_CONTENT: [(&str, &str); 3] = [
     ("fileVersion", "writer version (not content)"),
     ("workbookPr", "workbook flags (not content)"),
+    ("phoneticPr", "phonetic settings (not content)"),
 ];
+
+// Markup whose loss matters in whichever part holds it, such as the shared strings.
+const IN_ANY_PART: [(&str, &str, &[Unsupported]); 1] =
+    [("<rPh", "phonetic guides", &[Unsupported::Phonetic])];
 
 const DRAWN: &[Unsupported] = &[
     Unsupported::Images,
@@ -83,7 +89,7 @@ const CUSTOM_VIEWS: &[Unsupported] = &[Unsupported::CustomViews];
 
 // Top-level elements of the workbook and worksheet parts, by local name. Their extension
 // lists are compared by what each extension holds, below.
-const BY_ELEMENT: [(&str, &str, &[Unsupported]); 28] = [
+const BY_ELEMENT: [(&str, &str, &[Unsupported]); 27] = [
     ("sheetPr", "sheet properties", &[]),
     ("sheetFormatPr", "default sizes", &[]),
     ("cols", "column widths", &[]),
@@ -116,7 +122,6 @@ const BY_ELEMENT: [(&str, &str, &[Unsupported]); 28] = [
     ("bookViews", "window settings", &[]),
     ("customSheetViews", "custom views", CUSTOM_VIEWS),
     ("customWorkbookViews", "custom views", CUSTOM_VIEWS),
-    ("phoneticPr", "phonetic guides", &[Unsupported::Phonetic]),
     ("scenarios", "scenarios", &[Unsupported::Scenarios]),
     ("cellWatches", "watched cells", &[Unsupported::CellWatches]),
     (
@@ -294,6 +299,14 @@ pub fn dropped(original: &[u8], saved: &[u8]) -> Result<Vec<Loss>, String> {
         BY_ATTRIBUTE
             .iter()
             .filter(|(marker, ..)| has_attribute(&before, marker) && !has_attribute(&after, marker))
+            .map(|(_, label, warned_by)| Loss::new(label, warned_by)),
+    );
+    let has_markup =
+        |set: &[(String, String)], marker: &str| set.iter().any(|(_, xml)| xml.contains(marker));
+    lost.extend(
+        IN_ANY_PART
+            .iter()
+            .filter(|(marker, ..)| has_markup(&before, marker) && !has_markup(&after, marker))
             .map(|(_, label, warned_by)| Loss::new(label, warned_by)),
     );
     let mut seen = BTreeSet::new();

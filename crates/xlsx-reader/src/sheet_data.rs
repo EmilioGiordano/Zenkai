@@ -21,9 +21,9 @@ use crate::text::parse_bool_false;
 use values::{ValueCell, formula_cell};
 
 // Anything the checker in the engine's preflight looks at; inside <sheetData> only <f> is
-// expected, so any other one means a file this reader does not handle. Phonetic settings
-// are left out: a cell's inline text holds them, and the preflight reports only the sheet's.
-const CHECKED_ELEMENTS: [&[u8]; 18] = [
+// expected, so any other one means a file this reader does not handle. That includes the
+// phonetic runs of an inline string, which only the preflight of a whole sheet reports.
+const CHECKED_ELEMENTS: [&[u8]; 19] = [
     b"formula",
     b"formula1",
     b"formula2",
@@ -42,6 +42,7 @@ const CHECKED_ELEMENTS: [&[u8]; 18] = [
     b"slicerList",
     b"timelineRefs",
     b"workbookProtection",
+    b"rPh",
 ];
 
 const DEFAULT_ROW_HEIGHT: f64 = 14.5;

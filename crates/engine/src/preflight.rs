@@ -1,6 +1,9 @@
+use std::collections::BTreeSet;
+
+use zenkai_xlsx_reader::start_tag_names;
+
 use crate::error::EngineError;
 use crate::file::Unsupported;
-use zenkai_xlsx_reader::{PartRole, has_checked_element};
 
 pub const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
 // Engine parsing and evaluation recurse on the formula tree; a dedicated stack
@@ -10,6 +13,18 @@ pub const ENGINE_STACK_BYTES: usize = 256 * 1024 * 1024;
 fn reject(reason: String) -> EngineError {
     EngineError::Unsafe(reason)
 }
+
+// The part is parsed only for these: formulas are checked against the limits, and where a
+// page setup or an extension rule sits decides what it holds.
+const PARSED_ELEMENTS: [&str; 7] = [
+    "f",
+    "formula",
+    "formula1",
+    "formula2",
+    "definedName",
+    "pageSetup",
+    "conditionalFormattings",
+];
 
 // IronCalc reads these rule types from a sheet's extension list; it drops any other.
 const EXTENDED_RULES_READ: [&str; 3] = ["dataBar", "iconSet", "expression"];
@@ -23,10 +38,14 @@ pub fn check_part(bytes: &[u8]) -> Result<Vec<Unsupported>, EngineError> {
         return Ok(found);
     };
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    // A part reaches here with its bytes only as a worksheet or once the reader's prefilter
-    // found a checked element in it, so the worksheet's wider set is the one to look for.
-    if !has_checked_element(text.as_bytes(), PartRole::Worksheet) {
-        return Ok(found);
+    let names: BTreeSet<&str> = start_tag_names(text.as_bytes())
+        .filter_map(|name| std::str::from_utf8(name).ok())
+        .collect();
+    // Shared strings with phonetic runs, or a sheet without formulas, are judged by their tag
+    // names alone, so a large part is never built into a tree for them.
+    if !names.iter().any(|name| PARSED_ELEMENTS.contains(name)) {
+        let kinds: BTreeSet<Unsupported> = names.into_iter().filter_map(element_kind).collect();
+        return Ok(kinds.into_iter().collect());
     }
     // The engine reads parts with this same roxmltree, so a part it cannot parse can
     // never feed it a formula; rejecting here would only refuse valid files (VML).
@@ -67,6 +86,7 @@ pub(crate) fn element_kind(name: &str) -> Option<Unsupported> {
         "scenarios" => Some(Unsupported::Scenarios),
         "cellWatches" => Some(Unsupported::CellWatches),
         "workbookProtection" => Some(Unsupported::WorkbookProtection),
+        "rPh" => Some(Unsupported::Phonetic),
         _ => None,
     }
 }
@@ -75,9 +95,6 @@ pub(crate) fn element_kind(name: &str) -> Option<Unsupported> {
 fn placed_kind(node: roxmltree::Node<'_, '_>) -> Option<Unsupported> {
     let parent = node.parent_element()?;
     match node.tag_name().name() {
-        // Shared strings and inline texts hold one for each text; only the sheet's own is
-        // looked for, as the reader's prefilter does.
-        "phoneticPr" if is_worksheet_root(parent) => Some(Unsupported::Phonetic),
         // The relationship names the printer settings part; the page setup is written
         // back without it.
         "pageSetup" if node.attributes().any(|a| is_relationship_id(&a)) => {
@@ -88,10 +105,6 @@ fn placed_kind(node: roxmltree::Node<'_, '_>) -> Option<Unsupported> {
         }
         _ => None,
     }
-}
-
-fn is_worksheet_root(node: roxmltree::Node<'_, '_>) -> bool {
-    node.tag_name().name() == "worksheet" && node.parent().is_some_and(|p| p.is_root())
 }
 
 fn is_relationship_id(attribute: &roxmltree::Attribute<'_, '_>) -> bool {
@@ -147,6 +160,8 @@ pub fn run_with_engine_stack<T: Send>(
 
 #[cfg(test)]
 mod tests {
+    use zenkai_xlsx_reader::has_checked_element;
+
     use super::*;
 
     fn sheet(cell: &str) -> String {
@@ -203,28 +218,19 @@ mod tests {
 
     #[test]
     fn prefilter_finds_formula_tags_in_any_spelling() {
-        assert!(has_checked_element(b"<c><f>1</f></c>", PartRole::Worksheet));
-        assert!(has_checked_element(
-            b"<x:c><x:f t='array'>1</x:f></x:c>",
-            PartRole::Worksheet
-        ));
+        assert!(has_checked_element(b"<c><f>1</f></c>"));
+        assert!(has_checked_element(b"<x:c><x:f t='array'>1</x:f></x:c>"));
         assert!(has_checked_element(
             b"<f
- t=\"shared\">1</f>",
-            PartRole::Worksheet
+ t=\"shared\">1</f>"
         ));
         assert!(has_checked_element(
-            b"<definedNames><definedName name=\"a\">1</definedName>",
-            PartRole::Worksheet
+            b"<definedNames><definedName name=\"a\">1</definedName>"
         ));
-        assert!(has_checked_element(
-            "<ñ:f>1</ñ:f>".as_bytes(),
-            PartRole::Worksheet
-        ));
-        assert!(has_checked_element(b"<f>1</f", PartRole::Worksheet));
+        assert!(has_checked_element("<ñ:f>1</ñ:f>".as_bytes()));
+        assert!(has_checked_element(b"<f>1</f"));
         assert!(!has_checked_element(
-            b"<row r=\"1\"><c r=\"A1\"><v>12</v></c><font/><fill/></row>",
-            PartRole::Worksheet
+            b"<row r=\"1\"><c r=\"A1\"><v>12</v></c><font/><fill/></row>"
         ));
     }
 
@@ -283,7 +289,6 @@ mod tests {
                 Unsupported::Sparklines,
                 Unsupported::Slicers,
                 Unsupported::CustomViews,
-                Unsupported::Phonetic,
                 Unsupported::Scenarios,
                 Unsupported::CellWatches,
                 Unsupported::PrinterSettings
@@ -306,15 +311,28 @@ mod tests {
         );
     }
 
-    // Shared strings and cell texts hold phonetic settings for each text; IronCalc reads
-    // the text, and only the sheet's own settings are a sheet-level loss.
+    // A phonetic run holds the furigana of a text, which IronCalc reads past and a save that
+    // writes the strings again loses; the phonetic settings alone show nothing.
     #[test]
-    fn phonetic_settings_count_only_as_a_child_of_the_sheet() {
-        let strings = r#"<sst><si><t>x</t><phoneticPr fontId="0"/></si></sst>"#;
-        assert!(kinds(strings).is_empty());
-        let inline =
-            sheet(r#"<c r="A1" t="inlineStr"><is><t>x</t><phoneticPr fontId="0"/></is></c>"#);
-        assert!(kinds(&inline).is_empty());
+    fn phonetic_runs_are_reported_wherever_they_are() {
+        let strings = r#"<sst><si><t>x</t><rPh sb="0" eb="1"><t>y</t></rPh></si></sst>"#;
+        assert_eq!(kinds(strings), [Unsupported::Phonetic]);
+        let inline = sheet(
+            r#"<c r="A1" t="inlineStr"><is><t>x</t><rPh sb="0" eb="1"><t>y</t></rPh></is></c>"#,
+        );
+        assert_eq!(kinds(&inline), [Unsupported::Phonetic]);
+        let settings = r#"<worksheet><sheetData/><phoneticPr fontId="0"/></worksheet>"#;
+        assert!(kinds(settings).is_empty());
+    }
+
+    // Without a formula to check, the part is never parsed, so even a damaged one is judged.
+    #[test]
+    fn a_part_without_formulas_is_judged_by_its_tag_names() {
+        assert_eq!(
+            kinds(r#"<sst><si><t>x</t><rPh sb="0" eb="1"><t>y</t>"#),
+            [Unsupported::Phonetic]
+        );
+        assert!(kinds("<sst><si><t>plain</t></si></sst>").is_empty());
     }
 
     #[test]

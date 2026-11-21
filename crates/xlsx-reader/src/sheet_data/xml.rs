@@ -211,7 +211,8 @@ impl<'a> Scanner<'a, '_> {
         }
     }
 
-    // All <t> texts under <is>, phonetic runs included, joined as IronCalc joins them.
+    // All <t> texts under <is>, joined as IronCalc joins them. A phonetic run, whose text
+    // IronCalc leaves out, is a checked element and leaves the file to IronCalc first.
     pub(super) fn inline_string(&mut self) -> Result<String, ReadError> {
         let mut joined = String::new();
         let mut depth = 0usize;

@@ -51,7 +51,7 @@ use crate::parallel::{Job, Open, ReadPlan, SheetStreams, SheetTask};
 use crate::sheet_stream::{StreamedSheet, Tuning, stream_config, stream_worksheet};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, read_part_if_checked};
 
-pub use stream::{PartRole, has_checked_element};
+pub use stream::{has_checked_element, start_tag_names};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
@@ -426,30 +426,11 @@ fn stream_entries<R: Read + Seek>(
             inspect(&entry_name, &[])?;
             continue;
         }
-        let (_, part, _) = read_part_if_checked(
-            archive,
-            index,
-            meter,
-            budgets,
-            false,
-            PartRole::Other,
-            NonZeroU64::MIN,
-        )?;
+        let (_, part, _) =
+            read_part_if_checked(archive, index, meter, budgets, false, NonZeroU64::MIN)?;
         inspect(&entry_name, &part)?;
     }
     Ok(sheets)
-}
-
-// A part the importer loads as a worksheet is checked as one; where the package has no
-// readable index, every part may be one.
-fn role_in(
-    package_sheets: Option<&std::collections::HashMap<String, NonZeroU64>>,
-    part: &str,
-) -> PartRole {
-    match package_sheets {
-        Some(sheets) if !sheets.contains_key(part) => PartRole::Other,
-        _ => PartRole::Worksheet,
-    }
 }
 
 // Every part of the archive, streamed once with the budgets enforced and handed to
@@ -461,7 +442,6 @@ pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> 
         .map_err(|e| ReadError::Unreadable(e.to_string()))?;
     limits::check_archive(&mut archive)?;
     let budgets = Budgets::production();
-    let package_sheets = importer_worksheet_paths(&mut archive, &meter, &budgets)?;
     for index in 0..archive.len() {
         let entry_name = {
             let entry = archive
@@ -479,7 +459,6 @@ pub fn scan_parts(bytes: &[u8], inspect: &Inspect<'_>) -> Result<(), ReadError> 
             &meter,
             &budgets,
             false,
-            role_in(package_sheets.as_ref(), &entry_name),
             NonZeroU64::MIN,
         )?;
         inspect(&entry_name, &part)?;
@@ -547,7 +526,6 @@ fn scan_archive<R: Read + Seek>(
             meter,
             budgets,
             count_cells,
-            role_in(package_sheets.as_ref(), &entry_name),
             comment_loads
                 .get(&entry_name)
                 .copied()

@@ -4,11 +4,12 @@
 use std::path::{Path, PathBuf};
 
 use rust_xlsxwriter::{ConditionalFormatDataBar, Sparkline};
-use zenkai_engine::{Unsupported, open_xlsx};
+use zenkai_engine::{Engine, Unsupported, open_xlsx};
+use zenkai_types::SheetId;
 
 use super::{
-    Edit, HELD_PART, assert_sound, held_sheet, inserted_row, kept_by_each_path, part, saved_after,
-    scan, source, with_held_sheet_replaced, with_part_replaced, with_parts,
+    Edit, HELD_PART, assert_sound, held_sheet, inserted_row, kept_by_each_path, part, pos,
+    saved_after, scan, source, with_held_sheet_replaced, with_part_replaced, with_parts,
 };
 
 const WORKBOOK_PART: &str = "xl/workbook.xml";
@@ -155,14 +156,42 @@ fn custom_sheet_views_are_reported_when_their_sheet_is_written() {
     dropped_when_its_sheet_is_written(&path, Unsupported::CustomViews, "customSheetViews");
 }
 
+const PHONETIC_TEXT: &str = r#"<t>東京</t><rPh sb="0" eb="2"><t>トウキョウ</t></rPh>"#;
+
+// The reading is not part of the text, as in Excel, and the shared strings part is copied
+// whole by every save that does not write the strings again.
 #[test]
-fn phonetic_settings_are_reported_when_their_sheet_is_written() {
+fn phonetic_runs_in_shared_strings_are_dropped_only_by_a_full_save() {
     let dir = tempfile::tempdir().unwrap();
-    let path = after_cells(
-        dir.path(),
-        r#"<phoneticPr fontId="0" type="noConversion"/>"#,
+    let path = source(dir.path(), |held| {
+        held.write_string(7, 0, "東京").unwrap();
+    });
+    with_part_replaced(
+        &path,
+        "xl/sharedStrings.xml",
+        &[("<t>東京</t>", PHONETIC_TEXT)],
     );
-    dropped_when_its_sheet_is_written(&path, Unsupported::Phonetic, "phoneticPr");
+    assert_eq!(warned_on_open(&path), [Unsupported::Phonetic]);
+    let book = open_xlsx(&path).unwrap().workbook;
+    assert_eq!(book.input(SheetId(0), pos("A8")), "東京");
+    kept_by_each_path(&path, None);
+}
+
+// The streaming reader leaves a sheet whose inline text holds a phonetic run to IronCalc's,
+// which reads the text without it.
+#[test]
+fn phonetic_runs_in_an_inline_string_are_read_past_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = source(dir.path(), |_| {});
+    let cell = format!(r#"<c r="E1" t="inlineStr"><is>{PHONETIC_TEXT}</is></c></row>"#);
+    with_held_sheet_replaced(&path, &[("</row>", cell.as_str())]);
+    let opened = open_xlsx(&path).unwrap();
+    assert!(opened.fallback.is_some());
+    assert_eq!(opened.unsupported, [Unsupported::Phonetic]);
+    assert_eq!(opened.workbook.input(SheetId(0), pos("E1")), "東京");
+    let saved = saved_after(&path, Edit::OtherSheet);
+    assert_eq!(saved.dropped, [Unsupported::Phonetic]);
+    assert!(scan(&saved.bytes).is_empty(), "{:?}", scan(&saved.bytes));
 }
 
 #[test]

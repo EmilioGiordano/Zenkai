@@ -11,6 +11,7 @@ use rust_xlsxwriter::{Sparkline, Workbook};
 const SHEET: &str = "xl/worksheets/sheet1.xml";
 const SHEET_RELATIONSHIPS: &str = "xl/worksheets/_rels/sheet1.xml.rels";
 const WORKBOOK: &str = "xl/workbook.xml";
+const SHARED_STRINGS: &str = "xl/sharedStrings.xml";
 const WORKBOOK_RELATIONSHIPS: &str = "xl/_rels/workbook.xml.rels";
 const CONTENT_TYPES: &str = "[Content_Types].xml";
 // Every element added after the cells goes before the page margins, which follow them.
@@ -193,6 +194,11 @@ fn phonetic(dir: &Path) -> Result<()> {
     let mut book = numbers("Names")?;
     book.worksheet_from_index(0)?.write_string(5, 0, "東京")?;
     let mut package = Package::of(&mut book)?;
+    package.insert(
+        SHARED_STRINGS,
+        "</si>",
+        r#"<rPh sb="0" eb="2"><t>とうきょう</t></rPh><phoneticPr fontId="0" type="Hiragana"/>"#,
+    )?;
     package.insert(
         SHEET,
         PAGE_MARGINS,
