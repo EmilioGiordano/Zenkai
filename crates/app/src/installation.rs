@@ -1,8 +1,17 @@
+use std::fs::File;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use gpui_kit::App;
+
 const APP_FOLDER: &str = "app";
 const LAUNCHER: &str = "zenkai.exe";
+const OLD_APP: &str = "app.old";
+const UPDATE: &str = ".update";
+const CONFIRMED: &str = "confirmed";
+const MAX_MARKER_BYTES: u64 = 32;
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // The Windows install keeps the app in `<root>\app\` and the launcher at `<root>\zenkai.exe`.
 // Anywhere else, such as a development checkout, there is no root and the updater stays off.
@@ -24,12 +33,58 @@ fn root_of(exe: &Path) -> Option<PathBuf> {
     (in_app_folder && root.join(LAUNCHER).is_file()).then(|| root.to_path_buf())
 }
 
+pub fn after_first_window(cx: &mut App) {
+    let Some(root) = root() else {
+        return;
+    };
+    cx.background_executor()
+        .spawn(async move {
+            match confirm_start(root, VERSION) {
+                Ok(Confirmation::Written) => tracing::info!("confirmed that this version starts"),
+                Ok(Confirmation::NotUpdating | Confirmation::AlreadyWritten) => {}
+                Err(error) => tracing::error!(%error, "could not confirm that this version starts"),
+            }
+        })
+        .detach();
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Confirmation {
+    NotUpdating,
+    AlreadyWritten,
+    Written,
+}
+
+// While `app.old` exists the launcher waits for this marker before it drops the previous
+// version. It must hold this exact version and be on disk before the launcher reads it.
+fn confirm_start(root: &Path, version: &str) -> io::Result<Confirmation> {
+    if !root.join(OLD_APP).try_exists()? {
+        return Ok(Confirmation::NotUpdating);
+    }
+    let marker = root.join(UPDATE).join(CONFIRMED);
+    match File::open(&marker) {
+        Ok(file) => {
+            let mut written = Vec::new();
+            file.take(MAX_MARKER_BYTES + 1).read_to_end(&mut written)?;
+            if written == version.as_bytes() {
+                return Ok(Confirmation::AlreadyWritten);
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    let mut file = File::create(&marker)?;
+    file.write_all(version.as_bytes())?;
+    file.sync_all()?;
+    Ok(Confirmation::Written)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::path::Path;
 
-    use super::root_of;
+    use super::{Confirmation, confirm_start, root_of};
 
     fn install(root: &Path) {
         fs::create_dir_all(root.join("app")).unwrap();
@@ -67,5 +122,43 @@ mod tests {
         assert_eq!(root_of(&exe), None);
         fs::create_dir(folder.path().join("zenkai.exe")).unwrap();
         assert_eq!(root_of(&exe), None);
+    }
+
+    #[test]
+    fn without_an_update_in_progress_nothing_is_written() {
+        let folder = tempfile::tempdir().unwrap();
+        install(folder.path());
+        assert_eq!(
+            confirm_start(folder.path(), "0.2.0").unwrap(),
+            Confirmation::NotUpdating
+        );
+        assert!(!folder.path().join(".update").join("confirmed").exists());
+    }
+
+    #[test]
+    fn a_start_during_an_update_writes_exactly_its_version() {
+        let folder = tempfile::tempdir().unwrap();
+        install(folder.path());
+        fs::create_dir(folder.path().join("app.old")).unwrap();
+        let marker = folder.path().join(".update").join("confirmed");
+        fs::write(&marker, b"0.1.9").unwrap();
+        assert_eq!(
+            confirm_start(folder.path(), "0.2.0").unwrap(),
+            Confirmation::Written
+        );
+        assert_eq!(fs::read(&marker).unwrap(), b"0.2.0");
+        assert_eq!(
+            confirm_start(folder.path(), "0.2.0").unwrap(),
+            Confirmation::AlreadyWritten
+        );
+    }
+
+    #[test]
+    fn a_marker_that_cannot_be_written_is_an_error() {
+        let folder = tempfile::tempdir().unwrap();
+        install(folder.path());
+        fs::create_dir(folder.path().join("app.old")).unwrap();
+        fs::remove_dir(folder.path().join(".update")).unwrap();
+        assert!(confirm_start(folder.path(), "0.2.0").is_err());
     }
 }
