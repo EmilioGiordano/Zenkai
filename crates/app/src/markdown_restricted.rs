@@ -1,3 +1,4 @@
+use markdown::mdast::Node;
 use url::Url;
 
 use crate::markdown_depth;
@@ -55,6 +56,25 @@ pub fn vetted_link(raw: &str) -> Option<String> {
         && url.port().is_none()
         && in_repository;
     allowed.then(|| url.into())
+}
+
+// What a node shows as plain text, for a link or an image the restricted mode does not draw.
+// Walks with its own stack: nesting is bounded by `clean`, but not exactly.
+pub fn plain_text(children: &[Node]) -> String {
+    let mut text = String::new();
+    let mut pending: Vec<&Node> = children.iter().rev().collect();
+    while let Some(node) = pending.pop() {
+        match node {
+            Node::Text(found) => text.push_str(&found.value),
+            Node::InlineCode(found) => text.push_str(&found.value),
+            other => {
+                if let Some(nested) = other.children() {
+                    pending.extend(nested.iter().rev());
+                }
+            }
+        }
+    }
+    text
 }
 
 // The parser resolves `..` before the path is checked, which would hide it; a link that
@@ -156,6 +176,18 @@ mod tests {
     fn a_dot_dot_in_the_query_or_fragment_is_not_a_path_segment() {
         assert!(vetted_link(&format!("{REPOSITORY}/issues?q=../x")).is_some());
         assert!(vetted_link(&format!("{REPOSITORY}#../x")).is_some());
+    }
+
+    #[test]
+    fn the_text_of_a_link_is_its_plain_text() {
+        let tree = markdown::to_mdast(
+            "[a **b** `c` *d*](https://x.y)",
+            &markdown::ParseOptions::gfm(),
+        )
+        .unwrap();
+        let paragraph = tree.children().unwrap()[0].children().unwrap();
+        let link = paragraph[0].children().unwrap();
+        assert_eq!(plain_text(link), "a b c d");
     }
 
     #[test]

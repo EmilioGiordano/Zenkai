@@ -9984,6 +9984,7 @@ dependencies = [
  "gpui-kit",
  "image",
  "interprocess",
+ "markdown",
  "memory-stats",
  "png 0.18.1",
  "proptest",

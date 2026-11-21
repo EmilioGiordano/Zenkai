@@ -51,7 +51,7 @@ fn scaled(style: TextViewStyle, code_size: Pixels, factor: f32) -> TextViewStyle
         .with_code_block(code_block)
 }
 
-pub(super) fn zoomed(theme: &Theme, factor: f32) -> TextViewStyle {
+pub(crate) fn zoomed(theme: &Theme, factor: f32) -> TextViewStyle {
     scaled(themed(theme), theme.mono_font_size, factor)
 }
 
