@@ -276,7 +276,10 @@ impl<'a> Model<'a> {
                             "Ranges are in different sheets".to_string(),
                         );
                     }
-                    let mut cells = RangeCells::new(left, right);
+                    let mut cells = match RangeCells::new(self, left, right, cell) {
+                        Ok(cells) => cells,
+                        Err(error) => return error,
+                    };
                     while let Some(reference) = cells.next(self, RangeWalk::Occupied) {
                         match self.evaluate_cell(reference) {
                             CalcResult::String(value) => result.push(&value),
@@ -1055,7 +1058,10 @@ impl<'a> Model<'a> {
                             "Ranges are in different sheets".to_string(),
                         );
                     }
-                    let mut cells = RangeCells::new(left, right);
+                    let mut cells = match RangeCells::new(self, left, right, cell) {
+                        Ok(cells) => cells,
+                        Err(error) => return error,
+                    };
                     while let Some(reference) = cells.next(self, walk(&joined)) {
                         match self.evaluate_cell(reference) {
                             CalcResult::Number(value) => join(&mut joined, &format!("{value}")),
