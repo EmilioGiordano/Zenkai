@@ -23,8 +23,10 @@ AppVersion={#AppVersion}
 AppVerName=Zenkai {#AppVersion}
 AppPublisher=Zenkai
 ; Per user only, in a folder the user owns: the updater swaps app\ without ever asking for
-; elevation, which a Program Files install would need.
+; elevation, which a Program Files install would need. The folder is fixed, so neither a shared
+; or protected folder nor one holding other files can be picked; per-user installs need no choice.
 DefaultDirName={localappdata}\Programs\Zenkai
+DisableDirPage=yes
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
@@ -44,11 +46,12 @@ WizardStyle=modern
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx, .csv, Markdown and PDF files"; GroupDescription: "File types:"; Flags: unchecked
 
-; A reinstall starts from a clean slate: what an update left behind goes before the files land.
+; A reinstall starts from a clean slate: what an update left behind goes before the files land,
+; and only from a folder that already holds a Zenkai install.
 [InstallDelete]
-Type: filesandordirs; Name: "{app}\app"
-Type: filesandordirs; Name: "{app}\app.old"
-Type: filesandordirs; Name: "{app}\.update"
+Type: filesandordirs; Name: "{app}\app"; Check: IsZenkaiInstall
+Type: filesandordirs; Name: "{app}\app.old"; Check: IsZenkaiInstall
+Type: filesandordirs; Name: "{app}\.update"; Check: IsZenkaiInstall
 
 [Files]
 Source: "{#LayoutDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -82,9 +85,30 @@ Root: HKA; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; V
 [Run]
 Filename: "{app}\zenkai.exe"; Description: "{cm:LaunchProgram,Zenkai}"; Flags: nowait postinstall skipifsilent
 
-; An update replaces app\ with files the installer never wrote, and leaves app.old\ and .update\
-; (its marker and lock included). %LOCALAPPDATA%\Zenkai, with the recovery files, is kept.
-[UninstallDelete]
-Type: filesandordirs; Name: "{app}\app"
-Type: filesandordirs; Name: "{app}\app.old"
-Type: filesandordirs; Name: "{app}\.update"
+[Code]
+var
+  RemoveUpdateFolders: Boolean;
+
+// The launcher at the root and the app under app\ mark a folder as a Zenkai install; nothing is
+// ever deleted wholesale from a folder without both.
+function IsZenkaiInstall(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\zenkai.exe')) and
+    FileExists(ExpandConstant('{app}\app\zenkai.exe'));
+end;
+
+// An update replaces app\ with files the installer never wrote, and leaves app.old\ and .update\
+// (its marker and lock included). They go after the uninstaller removed its own files, but only
+// if the folder was a Zenkai install before it started. %LOCALAPPDATA%\Zenkai is kept.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    RemoveUpdateFolders := IsZenkaiInstall();
+  if (CurUninstallStep = usPostUninstall) and RemoveUpdateFolders then
+  begin
+    DelTree(ExpandConstant('{app}\app'), True, True, True);
+    DelTree(ExpandConstant('{app}\app.old'), True, True, True);
+    DelTree(ExpandConstant('{app}\.update'), True, True, True);
+    RemoveDir(ExpandConstant('{app}'));
+  end;
+end;

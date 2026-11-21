@@ -77,8 +77,10 @@ app\                  the only folder an update replaces
   `%LOCALAPPDATA%\Programs\Zenkai`, where the updater can swap `app\` without elevation. Adds a
   Start Menu entry, and optionally a desktop icon and an "Open with" entry for `.xlsx`, `.csv`,
   Markdown and PDF files (it never becomes the default program). Shortcuts and file types
-  point at the launcher. Reinstalling, and the uninstaller, remove `app\`, `app.old\` and
-  `.update\`; the uninstaller keeps `%LOCALAPPDATA%\Zenkai` (settings and recovery files).
+  point at the launcher. The folder is fixed (no folder page). Reinstalling, and the
+  uninstaller, remove `app\`, `app.old\` and `.update\`, only from a folder that holds the
+  launcher and `app\zenkai.exe`; the uninstaller keeps `%LOCALAPPDATA%\Zenkai` (settings and
+  recovery files).
 
 At run time the install also has `app.old\` during an update, and `.update\`, where the
 launcher keeps its lock, the `confirmed` marker, the extracted `new-<version>\`, a
