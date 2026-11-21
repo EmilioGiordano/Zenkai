@@ -6,7 +6,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
-use zenkai_formats::{Block, MAX_ALLOCATED_CELLS, MAX_TEXT_BYTES, SheetValues};
+use zenkai_formats::{Block, MAX_ALLOCATED_CELLS, MAX_CELL_BYTES, MAX_TEXT_BYTES, SheetValues};
 use zenkai_pdf_host::frame::{Frame, read_frame};
 use zenkai_pdf_host::process::{kill_and_wait, spawn_piped};
 
@@ -166,12 +166,14 @@ impl Drop for KillOnDrop {
 struct Collected {
     sheets: Vec<SheetValues>,
     allocated: usize,
+    text_bytes: usize,
     payload_bytes: usize,
 }
 
 impl Collected {
-    // Some once the host said it is done. Whatever the host sends is held to the same caps as
-    // the reader itself, so a misbehaving host cannot make the app allocate without bound.
+    // Some once the host said it is done. The host's rows are checked again against the reader's
+    // caps on allocated cells, bytes per cell and total text; with the sheet cap and the payload
+    // budget, a misbehaving host cannot make the app allocate without bound.
     fn accept(
         &mut self,
         message: Message,
@@ -194,10 +196,16 @@ impl Collected {
                 if rows.is_empty() {
                     return Err(broken("a block without rows"));
                 }
-                self.allocated = rows.iter().fold(self.allocated, |total, row| {
-                    total.saturating_add(row.len().max(1))
-                });
-                if self.allocated > MAX_ALLOCATED_CELLS {
+                for row in &rows {
+                    self.allocated = self.allocated.saturating_add(row.len().max(1));
+                    for cell in row {
+                        if cell.len() > MAX_CELL_BYTES {
+                            return Err(ReadError::TooLarge);
+                        }
+                        self.text_bytes = self.text_bytes.saturating_add(cell.len());
+                    }
+                }
+                if self.allocated > MAX_ALLOCATED_CELLS || self.text_bytes > MAX_TEXT_BYTES {
                     return Err(ReadError::TooLarge);
                 }
                 let sheet = self
@@ -214,5 +222,62 @@ impl Collected {
             Message::Failed(failure) => return Err(ReadError::Failed(failure)),
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn block(cell: String) -> (Message, Vec<Vec<String>>) {
+        let message = Message::Block {
+            first_row: 0,
+            first_col: 0,
+        };
+        (message, vec![vec![cell]])
+    }
+
+    fn with_sheet() -> Collected {
+        let mut collected = Collected::default();
+        let sheet = Message::Sheet { name: "S".into() };
+        assert!(collected.accept(sheet, Vec::new()).unwrap().is_none());
+        collected
+    }
+
+    #[test]
+    fn a_cell_over_the_cell_cap_is_too_large() {
+        let mut collected = with_sheet();
+        let (message, rows) = block("x".repeat(MAX_CELL_BYTES));
+        assert!(collected.accept(message, rows).unwrap().is_none());
+        let (message, rows) = block("x".repeat(MAX_CELL_BYTES + 1));
+        assert!(matches!(
+            collected.accept(message, rows),
+            Err(ReadError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn text_past_the_total_cap_is_too_large() {
+        let mut collected = with_sheet();
+        collected.text_bytes = MAX_TEXT_BYTES - 2;
+        let (message, rows) = block("ab".to_string());
+        assert!(collected.accept(message, rows).unwrap().is_none());
+        let (message, rows) = block("c".to_string());
+        assert!(matches!(
+            collected.accept(message, rows),
+            Err(ReadError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn text_is_counted_across_blocks_and_sheets() {
+        let mut collected = with_sheet();
+        for _ in 0..2 {
+            let (message, rows) = block("abc".to_string());
+            assert!(collected.accept(message, rows).unwrap().is_none());
+            let sheet = Message::Sheet { name: "T".into() };
+            assert!(collected.accept(sheet, Vec::new()).unwrap().is_none());
+        }
+        assert_eq!(collected.text_bytes, 6);
     }
 }

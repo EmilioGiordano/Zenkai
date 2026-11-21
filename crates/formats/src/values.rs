@@ -10,7 +10,7 @@ pub const MAX_CELLS: usize = 20_000_000;
 const MAX_GAP: u32 = 8;
 pub const MAX_ALLOCATED_CELLS: usize = 40_000_000;
 // Excel holds 32,767 characters in a cell; this leaves room for any encoding of them.
-const MAX_CELL_BYTES: usize = 128 * 1024;
+pub const MAX_CELL_BYTES: usize = 128 * 1024;
 pub const MAX_TEXT_BYTES: usize = 512 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
