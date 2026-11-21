@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use crate::arithmetic::{BYTES_PER_ELEMENT, MAX_TEXT_ARRAY_BYTES};
 use crate::test::util::new_empty_model;
 
 // Excel holds at most 32,767 characters in a text, counted in UTF-16 code units, and a
@@ -102,17 +103,52 @@ fn ampersand_over_arrays_is_value_only_where_the_text_is_too_long() {
     assert_eq!(model._get_text("D4"), "#VALUE!");
 }
 
-// 16,384 elements of 16,384 bytes fill the 256 MiB an `&` array may hold; one more is
-// refused before any element is built.
+// 16,384 elements of 16,384 bytes, node included, fill the 256 MiB an `&` array may hold;
+// one more is refused before any element is built.
 #[test]
-fn ampersand_array_text_stops_at_its_byte_cap() {
+fn ampersand_array_stops_at_its_byte_cap() {
+    assert_eq!(16_384 * 16_384, MAX_TEXT_ARRAY_BYTES);
+    let repeated = 16_384 - BYTES_PER_ELEMENT - "TRUE".len();
     let mut model = new_empty_model();
-    model._set("A1", r#"=COUNTA(REPT("x",16380)&(SEQUENCE(16384)>0))"#);
-    model._set("B1", r#"=REPT("x",16380)&(SEQUENCE(16385)>0)"#);
+    model._set(
+        "A1",
+        &format!(r#"=COUNTA(REPT("x",{repeated})&(SEQUENCE(16384)>0))"#),
+    );
+    model._set(
+        "B1",
+        &format!(r#"=REPT("x",{repeated})&(SEQUENCE(16385)>0)"#),
+    );
     model.evaluate();
     assert_eq!(model._get_text("A1"), "16384");
     assert_eq!(model._get_text("B1"), "#VALUE!");
     assert_eq!(model._get_text("B2"), "");
+}
+
+// A million texts of 244 bytes fit the cap on their own, but not with the node each needs.
+#[test]
+fn ampersand_array_counts_each_element_toward_its_byte_cap() {
+    assert!(1_000_000 * 244 < MAX_TEXT_ARRAY_BYTES);
+    let mut model = new_empty_model();
+    model._set("A1", r#"=REPT("x",240)&(SEQUENCE(1000000)>0)"#);
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "#VALUE!");
+}
+
+// A column broadcast against a row holds more elements than either; past the million SEQUENCE
+// allows it is refused before a single one is visited, even for empty ranges. An operand as
+// large as a whole column is not.
+#[test]
+fn ampersand_broadcast_stops_at_the_array_size_limit() {
+    let mut model = new_empty_model();
+    model._set("B2", "=A1:A1048576&A1:XFD1");
+    model._set("B3", "=SEQUENCE(2000)&SEQUENCE(1,1000)");
+    model._set("B4", "=COUNTA(SEQUENCE(1000)&SEQUENCE(1,1000))");
+    model._set("C1", r#"=COUNTA(A1:A1048576&"")"#);
+    model.evaluate();
+    assert_eq!(model._get_text("B2"), "#VALUE!");
+    assert_eq!(model._get_text("B3"), "#VALUE!");
+    assert_eq!(model._get_text("B4"), "1000000");
+    assert_eq!(model._get_text("C1"), "1048576");
 }
 
 #[test]

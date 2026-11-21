@@ -8,15 +8,18 @@ use crate::{
         token::{Error, OpCompare},
         types::CellReferenceIndex,
     },
-    functions::util::compare_values,
+    functions::{math_and_trigonometry::array_size::check_array_size, util::compare_values},
     model::Model,
     text_limit::{text_length, text_too_long, MAX_TEXT_LENGTH},
 };
 
-// The text one `&` may build into an array. Each element stays within MAX_TEXT_LENGTH, but a
-// million of them would still hold 32 GB or more; this allows 256 bytes per element at that
-// size. Excel has no such limit; past it the result is the `#VALUE!` of a text too long.
-const MAX_TEXT_ARRAY_BYTES: usize = 256 * 1024 * 1024;
+// What one `&` may build into an array, the nodes of its elements included. Each text stays
+// within MAX_TEXT_LENGTH, but a million of them would still hold 32 GB or more. Excel has no
+// such limit; past it the result is the `#VALUE!` of a text too long.
+pub(crate) const MAX_TEXT_ARRAY_BYTES: usize = 256 * 1024 * 1024;
+// An element's node plus about what the allocator adds to its text, so a million short texts
+// count for what they hold and not only for their bytes.
+pub(crate) const BYTES_PER_ELEMENT: usize = std::mem::size_of::<ArrayNode>() + 16;
 
 /// Maps an output index `i` back to the source array index, applying Excel's
 /// size-1 broadcasting rule: a length-1 dimension repeats its only element, an
@@ -287,22 +290,34 @@ impl<'a> Model<'a> {
         let (n2, m2) = r.dims();
         let rows = n1.max(n2);
         let cols = m1.max(m2);
+        let elements = rows.saturating_mul(cols);
+
+        // A row broadcast against a column holds more elements than either operand, limited
+        // as SEQUENCE is; an array no larger than an operand is not, as a whole column already
+        // holds 1,048,576. #VALUE!, as #ERROR! is not an xlsx error value.
+        if elements > (n1 * m1).max(n2 * m2) {
+            if let Some((_, message)) = check_array_size(rows, cols) {
+                return CalcResult::new_error(Error::VALUE, cell, message);
+            }
+        }
 
         // Counted before any element is built, so a refused array never builds one.
-        let mut bytes = 0;
-        for ri in 0..rows {
-            for ci in 0..cols {
-                if let Ok((s1, s2)) = joined(l.piece(ri, ci), r.piece(ri, ci)) {
-                    bytes += s1.text.len() + s2.text.len();
-                    if bytes > MAX_TEXT_ARRAY_BYTES {
-                        return CalcResult::new_error(
-                            Error::VALUE,
-                            cell,
-                            format!("Text of the array longer than {MAX_TEXT_ARRAY_BYTES} bytes"),
-                        );
-                    }
-                }
+        let mut bytes = elements.saturating_mul(BYTES_PER_ELEMENT);
+        let mut positions = (0..rows).flat_map(|ri| (0..cols).map(move |ci| (ri, ci)));
+        while bytes <= MAX_TEXT_ARRAY_BYTES {
+            let Some((ri, ci)) = positions.next() else {
+                break;
+            };
+            if let Ok((s1, s2)) = joined(l.piece(ri, ci), r.piece(ri, ci)) {
+                bytes += s1.text.len() + s2.text.len();
             }
+        }
+        if bytes > MAX_TEXT_ARRAY_BYTES {
+            return CalcResult::new_error(
+                Error::VALUE,
+                cell,
+                format!("Array of texts larger than {MAX_TEXT_ARRAY_BYTES} bytes"),
+            );
         }
 
         CalcResult::Array(
