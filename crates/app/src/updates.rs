@@ -16,7 +16,7 @@ use fetch::FetchError;
 pub use notes::{Day, MAX_NOTES, Note, Notes};
 use record::Record;
 use releases::Releases;
-pub use state::{Report, Source, Status, Updates};
+pub use state::{Report, Source, Status, Updates, known_update};
 use state::{SettingsReading, Snapshot, StartupCheck};
 pub use version::Version;
 
@@ -79,6 +79,12 @@ pub fn status(cx: &App) -> Status {
 
 pub fn notes(cx: &App) -> Arc<Notes> {
     cx.global::<Updates>().notes()
+}
+
+pub fn update_known(cx: &App) -> bool {
+    Version::installed()
+        .and_then(|installed| known_update(status(cx), &notes(cx), installed))
+        .is_some()
 }
 
 // Called from an observer of `Updates`: updating the global when there is nothing to take would

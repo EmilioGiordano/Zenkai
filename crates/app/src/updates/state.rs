@@ -43,6 +43,18 @@ pub enum StartupCheck {
     Run,
 }
 
+// The newest version above the installed one that is known to exist: what the last check found,
+// or, while a check runs or after one failed, the newest in the notes kept from before.
+pub fn known_update(status: Status, notes: &Notes, installed: Version) -> Option<Version> {
+    match status {
+        Status::Available(version) => Some(version),
+        Status::Checking | Status::Failed => {
+            notes.newer_than(installed).next().map(|note| note.version)
+        }
+        Status::Unchecked | Status::UpToDate { .. } => None,
+    }
+}
+
 // What one save writes. `notes` is there only when a check replaced them, so announcing a
 // version does not rewrite a file of up to a megabyte or more.
 pub struct Snapshot {
@@ -238,7 +250,7 @@ mod tests {
     use super::super::notes::Note;
     use super::{
         Notes, Record, Releases, Report, SettingsReading, Source, StartupCheck, Status, Updates,
-        Version,
+        Version, known_update,
     };
 
     fn version(text: &str) -> Version {
@@ -474,6 +486,22 @@ mod tests {
         updates.finish_ok(found(Some(installed())), installed(), 900);
         assert_eq!(updates.report, None);
         assert_eq!(updates.status(), Status::UpToDate { at: 900 });
+    }
+
+    #[test]
+    fn an_update_stays_known_while_a_check_runs_or_after_it_failed() {
+        let notes = Notes::from_releases(vec![note("0.1.1"), note("0.1.2")]);
+        let known = |status| known_update(status, &notes, installed());
+        assert_eq!(
+            known(Status::Available(version("0.1.3"))),
+            Some(version("0.1.3"))
+        );
+        assert_eq!(known(Status::Checking), Some(version("0.1.2")));
+        assert_eq!(known(Status::Failed), Some(version("0.1.2")));
+        assert_eq!(known(Status::Unchecked), None);
+        assert_eq!(known(Status::UpToDate { at: 5 }), None);
+        let none = Notes::default();
+        assert_eq!(known_update(Status::Failed, &none, installed()), None);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use super::links::{NoteLink, links_of};
 use crate::markdown_restricted;
-use crate::updates::{Day, Note, Notes, Status, Version};
+use crate::updates::{Day, Note, Notes, Status, Version, known_update};
 
 pub struct SectionPlan {
     pub version: Version,
@@ -35,10 +35,7 @@ pub struct Plan {
 
 pub fn plan(status: Status, notes: &Notes, installed: Version) -> Plan {
     let sections: Vec<SectionPlan> = notes.newer_than(installed).map(section).collect();
-    let banner = match status {
-        Status::Available(version) => Some(version),
-        _ => None,
-    };
+    let banner = known_update(status, notes, installed);
     let line = match status {
         Status::Checking => Some(Line::Checking),
         Status::Failed if !sections.is_empty() => Some(Line::CheckFailed),
@@ -150,7 +147,7 @@ mod tests {
         let plan = plan(Status::Failed, &notes, installed());
         assert_eq!(plan.line, Some(Line::CheckFailed));
         assert_eq!(sections(&plan).len(), 1);
-        assert_eq!(plan.banner, None);
+        assert_eq!(plan.banner, Some(version("0.1.1")));
     }
 
     #[test]
@@ -158,9 +155,11 @@ mod tests {
         let plan = plan(Status::Checking, &Notes::default(), installed());
         assert_eq!(plan.line, Some(Line::Checking));
         assert!(matches!(plan.body, Body::Nothing));
+        assert_eq!(plan.banner, None);
         let notes = Notes::from_releases(vec![note("0.1.1", Some("one"))]);
         let plan = super::plan(Status::Checking, &notes, installed());
         assert_eq!(plan.line, Some(Line::Checking));
+        assert_eq!(plan.banner, Some(version("0.1.1")));
         assert_eq!(sections(&plan).len(), 1);
     }
 
