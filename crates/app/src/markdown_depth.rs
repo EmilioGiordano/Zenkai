@@ -764,7 +764,7 @@ mod tests {
         assert_eq!(preview_refusal(&images), Some(Refusal::TooDeep));
         let tildes = "x~~~y ".repeat(10_000);
         assert_eq!(preview_refusal(&tildes), Some(Refusal::TooDeep));
-        let separated = "x~~~y \n2.\n".repeat(5_000);
+        let separated = "x~~~y \n2.\n".repeat(6_000);
         assert_eq!(preview_refusal(&separated), Some(Refusal::TooDeep));
         let group = format!("{}\n2.\n", "[".repeat(63));
         let brackets = format!("{}{}", group.repeat(490), "]".repeat(31_000));
