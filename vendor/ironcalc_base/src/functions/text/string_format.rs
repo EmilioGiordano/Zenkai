@@ -55,7 +55,8 @@ fn format_abs(abs_value: f64, decimals: i32, use_thousands: bool) -> String {
         }
     } else {
         // Negative decimals: round to 10^(-decimals) places
-        let factor = 10f64.powi(-decimals);
+        // -i32::MIN overflows; past 308 decimals any number rounds to 0 all the same.
+        let factor = 10f64.powi(decimals.saturating_neg());
         let rounded = ((abs_value / factor).round() * factor) as u64;
         if use_thousands {
             format_thousands(rounded)

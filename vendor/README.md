@@ -438,8 +438,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `src/test/mathematical/test_base.rs`.
 - FIXED and DOLLAR return `#VALUE!`, as Excel does, for more than 127 decimals instead of
   padding their result to whatever width a file asks for
-  (`src/functions/text/string_format.rs`). Stands on its own. Test:
-  `test_fixed_and_dollar_decimals_past_127_are_value` in `src/test/text_functions/mod.rs`.
+  (`src/functions/text/string_format.rs`). The most negative decimals a file can give no
+  longer overflow when negated; they round to 0 as any count past 308 does. Stands on its
+  own. Tests: `test_fixed_and_dollar_*` in `src/test/text_functions/mod.rs`.
 - ARRAYTOTEXT builds its text piece by piece through `LimitedText` and returns `#VALUE!`, as
   Excel does, once it would pass 32,767 characters, instead of formatting every element,
   joining each row and then the rows, about three times the result at its peak

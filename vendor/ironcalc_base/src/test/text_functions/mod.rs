@@ -87,6 +87,21 @@ fn test_fixed_and_dollar_decimals_past_127_are_value() {
     assert_eq!(model._get_text("B3"), "#VALUE!");
 }
 
+// The most negative decimals a file can give used to overflow when negated.
+#[test]
+fn test_fixed_and_dollar_with_huge_negative_decimals_round_to_zero() {
+    let mut model = new_empty_model();
+    model._set("A1", "=FIXED(1234, -2)");
+    model._set("A2", "=FIXED(1234, -1E+10)");
+    model._set("A3", "=DOLLAR(-1234, -1E+10)");
+    model._set("A4", "=FIXED(1234, -400)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "1,200");
+    assert_eq!(model._get_text("A2"), "0");
+    assert_eq!(model._get_text("A3"), "($0)");
+    assert_eq!(model._get_text("A4"), "0");
+}
+
 // ── NUMBERVALUE ───────────────────────────────────────────────────────────────
 
 #[test]
