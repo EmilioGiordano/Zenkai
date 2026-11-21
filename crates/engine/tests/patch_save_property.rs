@@ -11,8 +11,8 @@ use std::path::Path;
 
 use proptest::prelude::*;
 use rust_xlsxwriter::{
-    Chart, ChartType, ConditionalFormatCell, ConditionalFormatCellRule, Format, Formula, Table,
-    Workbook as Source,
+    Chart, ChartType, ConditionalFormatCell, ConditionalFormatCellRule, Format, Formula, Image,
+    Note, Table, Workbook as Source,
 };
 use zenkai_engine::{
     Engine, EngineError, SaveTarget, Workbook, XlsxReader, open_xlsx, open_xlsx_with, save_xlsx,
@@ -21,11 +21,12 @@ use zenkai_engine::{
 use zenkai_types::{CellPos, ColIdx, NumberFormat, Range, Rgb, RowIdx, SheetId, StyleChange};
 
 mod support;
-use support::cell_xfs;
+use support::{PIXEL_PNG, cell_xfs};
 
 const SIDE: i64 = 7;
 const SHEETS: [&str; 4] = ["Data", "Calc", "Notes", "Untouched"];
 const UNTOUCHED_PART: &str = "xl/worksheets/sheet4.xml";
+const UNTOUCHED_RELS: &str = "xl/worksheets/_rels/sheet4.xml.rels";
 const RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
 fn pos(row: i64, col: i64) -> CellPos {
@@ -72,6 +73,11 @@ fn base_file(path: &Path) {
     let untouched = book.add_worksheet().set_name("Untouched").unwrap();
     untouched.write_string(0, 0, "never edited").unwrap();
     untouched.write_number(1, 1, 3.0).unwrap();
+    // What its relationships point at names only its own cells, so moves elsewhere keep it.
+    untouched.insert_note(0, 0, &Note::new("checked")).unwrap();
+    let pixel = Image::new_from_buffer(&PIXEL_PNG).unwrap();
+    untouched.insert_image(3, 1, &pixel).unwrap();
+    untouched.write_url(5, 0, "https://example.com").unwrap();
     book.save(path).unwrap();
 }
 
@@ -189,6 +195,25 @@ fn raw_part(file: &Path, name: &str) -> Option<(u32, Vec<u8>)> {
     let mut bytes = Vec::new();
     entry.read_to_end(&mut bytes).unwrap();
     Some((entry.crc32(), bytes))
+}
+
+// The untouched sheet's relationships part and the parts it points at inside the package.
+fn untouched_parts(file: &Path) -> Vec<String> {
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
+    let rels = inflated(&mut archive, UNTOUCHED_RELS).unwrap();
+    let document = roxmltree::Document::parse(&rels).unwrap();
+    let mut parts = vec![UNTOUCHED_RELS.to_string()];
+    for relationship in document
+        .descendants()
+        .filter(|n| n.has_tag_name("Relationship"))
+    {
+        if relationship.attribute("TargetMode") == Some("External") {
+            continue;
+        }
+        let target = relationship.attribute("Target").unwrap();
+        parts.push(format!("xl/{}", target.strip_prefix("../").unwrap()));
+    }
+    parts
 }
 
 fn inflated(archive: &mut zip::ZipArchive<std::fs::File>, name: &str) -> Option<String> {
@@ -324,6 +349,9 @@ proptest! {
         // The saves above copy from the other application's file: a sheet no op touched
         // is as it was, and the styles it points at are the same, new ones at the end.
         prop_assert_eq!(raw_part(&document, UNTOUCHED_PART), raw_part(&base, UNTOUCHED_PART));
+        for name in untouched_parts(&base) {
+            prop_assert_eq!(raw_part(&document, &name), raw_part(&base, &name), "{}", name);
+        }
         let styles_of = |file: &Path| cell_xfs(&inflated(&mut zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap(), "xl/styles.xml").unwrap());
         let (old, new) = (styles_of(&base), styles_of(&document));
         prop_assert!(new.starts_with(&old), "an existing style changed");
@@ -337,10 +365,10 @@ fn opened(dir: &Path) -> (std::path::PathBuf, Workbook) {
     (document, book)
 }
 
-// Rows inserted on one sheet drop the links of the others, which may name cells there; a
-// sheet that has none is not rewritten for it.
+// Rows inserted on one sheet drop the links of the others that may name cells there; a
+// sheet whose links name only its own cells is not rewritten for it.
 #[test]
-fn rows_moved_on_one_sheet_leave_a_sheet_without_links_as_it_was() {
+fn rows_moved_on_one_sheet_leave_a_sheet_naming_only_its_own_cells_as_it_was() {
     let dir = tempfile::tempdir().unwrap();
     let (document, mut book) = opened(dir.path());
     let base = dir.path().join("base.xlsx");
@@ -351,6 +379,12 @@ fn rows_moved_on_one_sheet_leave_a_sheet_without_links_as_it_was() {
         raw_part(&document, UNTOUCHED_PART),
         raw_part(&base, UNTOUCHED_PART)
     );
+    let linked = untouched_parts(&base);
+    assert_eq!(linked.len(), 4, "{linked:?}");
+    for name in linked {
+        assert!(raw_part(&base, &name).is_some(), "{name}");
+        assert_eq!(raw_part(&document, &name), raw_part(&base, &name), "{name}");
+    }
     for name in ["xl/charts/chart1.xml", "xl/tables/table1.xml"] {
         assert_eq!(raw_part(&document, name), raw_part(&base, name), "{name}");
     }
