@@ -206,10 +206,10 @@ impl<'a> Model<'a> {
     pub(crate) fn fn_concat(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         let mut result = LimitedText::default();
         for arg in args {
-            let pushed = match self.evaluate_node_in_context(arg, cell) {
+            match self.evaluate_node_in_context(arg, cell) {
                 CalcResult::String(value) => result.push(&value),
                 CalcResult::Number(value) => result.push(&format!("{value}")),
-                CalcResult::EmptyCell | CalcResult::EmptyArg => Ok(()),
+                CalcResult::EmptyCell | CalcResult::EmptyArg => {}
                 CalcResult::Boolean(value) => result.push(if value { "TRUE" } else { "FALSE" }),
                 error @ CalcResult::Error { .. } => return error,
                 CalcResult::Range { left, right } => {
@@ -222,7 +222,7 @@ impl<'a> Model<'a> {
                     }
                     for row in left.row..(right.row + 1) {
                         for column in left.column..(right.column + 1) {
-                            let pushed = match self.evaluate_cell(CellReferenceIndex {
+                            match self.evaluate_cell(CellReferenceIndex {
                                 sheet: left.sheet,
                                 row,
                                 column,
@@ -233,8 +233,8 @@ impl<'a> Model<'a> {
                                     result.push(if value { "TRUE" } else { "FALSE" })
                                 }
                                 error @ CalcResult::Error { .. } => return error,
-                                CalcResult::EmptyCell | CalcResult::EmptyArg => Ok(()),
-                                CalcResult::Range { .. } => Ok(()),
+                                CalcResult::EmptyCell | CalcResult::EmptyArg => {}
+                                CalcResult::Range { .. } => {}
                                 CalcResult::Array(_) | CalcResult::Lambda(_) => {
                                     return CalcResult::Error {
                                         error: Error::NIMPL,
@@ -242,13 +242,9 @@ impl<'a> Model<'a> {
                                         message: "Arrays not supported yet".to_string(),
                                     }
                                 }
-                            };
-                            if pushed.is_err() {
-                                return text_too_long(cell);
                             }
                         }
                     }
-                    Ok(())
                 }
                 CalcResult::Array(_) | CalcResult::Lambda(_) => {
                     return CalcResult::Error {
@@ -258,11 +254,11 @@ impl<'a> Model<'a> {
                     }
                 }
             };
-            if pushed.is_err() {
-                return text_too_long(cell);
-            }
         }
-        CalcResult::String(result.into_string())
+        match result.into_string() {
+            Ok(text) => CalcResult::String(text),
+            Err(TextTooLong) => text_too_long(cell),
+        }
     }
     pub(crate) fn fn_text(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         use crate::expressions::parser::ArrayNode;
@@ -981,15 +977,15 @@ impl<'a> Model<'a> {
         };
         let mut joined = LimitedText::default();
         let mut is_first = true;
-        let mut join = |value: &str| -> Result<(), TextTooLong> {
+        let mut join = |value: &str| {
             if !is_first {
-                joined.push(&delimiter)?;
+                joined.push(&delimiter);
             }
             is_first = false;
-            joined.push(value)
+            joined.push(value);
         };
         for arg in &args[2..] {
-            let pushed = match self.evaluate_node_in_context(arg, cell) {
+            match self.evaluate_node_in_context(arg, cell) {
                 CalcResult::Number(value) => join(&format!("{value}")),
                 CalcResult::Range { left, right } => {
                     if left.sheet != right.sheet {
@@ -1029,7 +1025,7 @@ impl<'a> Model<'a> {
                     }
                     for row in row1..row2 + 1 {
                         for column in column1..(column2 + 1) {
-                            let pushed = match self.evaluate_cell(CellReferenceIndex {
+                            match self.evaluate_cell(CellReferenceIndex {
                                 sheet: left.sheet,
                                 row,
                                 column,
@@ -1039,10 +1035,10 @@ impl<'a> Model<'a> {
                                 CalcResult::Boolean(value) => {
                                     join(if value { "TRUE" } else { "FALSE" })
                                 }
-                                CalcResult::EmptyCell if ignore_empty => Ok(()),
+                                CalcResult::EmptyCell if ignore_empty => {}
                                 CalcResult::EmptyCell => join(""),
                                 error @ CalcResult::Error { .. } => return error,
-                                CalcResult::EmptyArg | CalcResult::Range { .. } => Ok(()),
+                                CalcResult::EmptyArg | CalcResult::Range { .. } => {}
                                 CalcResult::Array(_) | CalcResult::Lambda(_) => {
                                     return CalcResult::Error {
                                         error: Error::NIMPL,
@@ -1050,20 +1046,16 @@ impl<'a> Model<'a> {
                                         message: "Arrays not supported yet".to_string(),
                                     }
                                 }
-                            };
-                            if pushed.is_err() {
-                                return text_too_long(cell);
                             }
                         }
                     }
-                    Ok(())
                 }
                 error @ CalcResult::Error { .. } => return error,
                 CalcResult::String(value) => join(&value),
                 CalcResult::Boolean(value) => join(if value { "TRUE" } else { "FALSE" }),
-                CalcResult::EmptyCell if ignore_empty => Ok(()),
+                CalcResult::EmptyCell if ignore_empty => {}
                 CalcResult::EmptyCell => join(""),
-                CalcResult::EmptyArg => Ok(()),
+                CalcResult::EmptyArg => {}
                 CalcResult::Array(_) | CalcResult::Lambda(_) => {
                     return CalcResult::Error {
                         error: Error::NIMPL,
@@ -1072,11 +1064,11 @@ impl<'a> Model<'a> {
                     }
                 }
             };
-            if pushed.is_err() {
-                return text_too_long(cell);
-            }
         }
-        CalcResult::String(joined.into_string())
+        match joined.into_string() {
+            Ok(text) => CalcResult::String(text),
+            Err(TextTooLong) => text_too_long(cell),
+        }
     }
 
     // SUBSTITUTE(text, old_text, new_text, [instance_num])
@@ -1148,11 +1140,12 @@ impl<'a> Model<'a> {
                 Ok(s) => s,
                 Err(error) => return error,
             };
-            if result.push(&text).is_err() {
-                return text_too_long(cell);
-            }
+            result.push(&text);
         }
-        CalcResult::String(result.into_string())
+        match result.into_string() {
+            Ok(text) => CalcResult::String(text),
+            Err(TextTooLong) => text_too_long(cell),
+        }
     }
 
     pub(crate) fn fn_exact(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {

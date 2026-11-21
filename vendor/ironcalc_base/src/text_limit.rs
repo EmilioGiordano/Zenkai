@@ -30,22 +30,32 @@ pub(crate) struct TextTooLong;
 pub(crate) struct LimitedText {
     text: String,
     length: usize,
+    too_long: bool,
 }
 
 impl LimitedText {
-    /// Appends `piece`, or leaves the text as it was when the result would be too long.
-    pub(crate) fn push(&mut self, piece: &str) -> Result<(), TextTooLong> {
+    // Once a piece does not fit the text stays too long and later pieces are dropped, so a
+    // caller can still evaluate its other arguments and give the error one of them holds.
+    pub(crate) fn push(&mut self, piece: &str) {
+        if self.too_long {
+            return;
+        }
         let length = self.length + text_length(piece);
         if length > MAX_TEXT_LENGTH {
-            return Err(TextTooLong);
+            self.too_long = true;
+            self.text = String::new();
+            return;
         }
         self.text.push_str(piece);
         self.length = length;
-        Ok(())
     }
 
-    pub(crate) fn into_string(self) -> String {
-        self.text
+    pub(crate) fn into_string(self) -> Result<String, TextTooLong> {
+        if self.too_long {
+            Err(TextTooLong)
+        } else {
+            Ok(self.text)
+        }
     }
 }
 
@@ -64,13 +74,20 @@ mod tests {
     #[test]
     fn limited_text_takes_pieces_up_to_the_limit_only() {
         let mut text = LimitedText::default();
-        assert_eq!(text.push(&"x".repeat(MAX_TEXT_LENGTH - 1)), Ok(()));
-        assert_eq!(text.push("😀"), Err(TextTooLong));
-        assert_eq!(text.push("é"), Ok(()));
-        assert_eq!(text.push(""), Ok(()));
-        assert_eq!(text.push("x"), Err(TextTooLong));
+        text.push(&"x".repeat(MAX_TEXT_LENGTH - 1));
+        text.push("é");
+        text.push("");
         let text = text.into_string();
-        assert_eq!(text_length(&text), MAX_TEXT_LENGTH);
-        assert!(text.ends_with('é'));
+        assert_eq!(text.as_deref().map(text_length), Ok(MAX_TEXT_LENGTH));
+        assert!(text.is_ok_and(|text| text.ends_with('é')));
+    }
+
+    #[test]
+    fn limited_text_stays_too_long_once_a_piece_does_not_fit() {
+        let mut text = LimitedText::default();
+        text.push(&"x".repeat(MAX_TEXT_LENGTH - 1));
+        text.push("😀");
+        text.push("é");
+        assert_eq!(text.into_string(), Err(TextTooLong));
     }
 }

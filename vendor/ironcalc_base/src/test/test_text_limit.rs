@@ -205,3 +205,20 @@ fn substitute_stops_at_the_text_limit() {
     assert_eq!(model._get_text("A5"), format!("y{}", x(32_766)));
     assert_eq!(model._get_text("A6"), "#VALUE!");
 }
+
+// An argument holding an error gives that error even after the text grew too long, as the
+// text limit is only #VALUE! once every argument is read.
+#[test]
+fn an_error_argument_after_the_text_limit_gives_its_error() {
+    let mut model = new_empty_model();
+    model._set("A1", r#"=CONCAT(REPT("x",32767),"y",NA())"#);
+    model._set("A2", r#"=CONCATENATE(REPT("x",32767),"y",NA())"#);
+    model._set("A3", r#"=TEXTJOIN(",",TRUE,REPT("x",32767),"y",NA())"#);
+    model._set("A4", r#"=CONCAT(REPT("x",32767),"y",B1:B2)"#);
+    model._set("B2", "=1/0");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "#N/A");
+    assert_eq!(model._get_text("A2"), "#N/A");
+    assert_eq!(model._get_text("A3"), "#N/A");
+    assert_eq!(model._get_text("A4"), "#DIV/0!");
+}

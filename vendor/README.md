@@ -401,8 +401,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
 - `&`, CONCAT, CONCATENATE, TEXTJOIN and SUBSTITUTE return `#VALUE!`, as Excel does, when
   their result would be longer than 32,767 characters counted in UTF-16 code units, and
   measure it before building it; they built it whole, so a formula joining a long text with
-  itself took tens of gigabytes. CONCAT appends to one buffer instead of copying the text so
-  far for each piece, and TEXTJOIN no longer copies every piece before joining them. `&` over
+  itself took tens of gigabytes. CONCAT, CONCATENATE and TEXTJOIN still read every argument
+  after the text grew too long and give an error one of them holds instead. CONCAT appends to
+  one buffer instead of copying the text so far for each piece, and TEXTJOIN no longer copies
+  every piece before joining them. `&` over
   arrays also gives `#VALUE!` for an array that would pass 256 MiB (`MAX_TEXT_ARRAY_BYTES`),
   its texts plus `BYTES_PER_ELEMENT` for each element, and for a row broadcast against a
   column past the million elements SEQUENCE allows (`check_array_size`, now reachable through
