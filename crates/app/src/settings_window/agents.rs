@@ -77,10 +77,13 @@ pub fn cycle_default_agent(cx: &mut App) {
     });
 }
 
-// The command that registers Zenkai in Claude Code, pointing at the relay shipped next to
-// this executable.
+// The command that registers Zenkai in Claude Code. In the Windows install it points at the
+// relay at the root, which an update never moves; elsewhere at the one next to this executable.
 pub fn relay_program() -> Option<std::path::PathBuf> {
-    Some(std::env::current_exe().ok()?.with_file_name(RELAY_EXE))
+    match crate::installation::root() {
+        Some(root) => Some(root.join(RELAY_EXE)),
+        None => Some(std::env::current_exe().ok()?.with_file_name(RELAY_EXE)),
+    }
 }
 
 pub fn claude_command() -> Option<String> {

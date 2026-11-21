@@ -30,6 +30,7 @@ mod format_category;
 mod format_dialog;
 mod generate_dialog;
 mod go_to;
+mod installation;
 mod interface_scale;
 mod job_pill;
 mod jump;
