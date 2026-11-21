@@ -33,7 +33,15 @@ fn format_thousands(n: u64) -> String {
 /// Returns the formatted string without sign.
 fn format_abs(abs_value: f64, decimals: i32, use_thousands: bool) -> String {
     if decimals >= 0 {
-        let factor = 10f64.powi(decimals);
+        // Excel shows at most 15 significant digits and pads the decimals past them with
+        // zeros; computing them would overflow and print the binary noise of the number.
+        let magnitude = if abs_value > 0.0 {
+            abs_value.log10().floor() as i32
+        } else {
+            0
+        };
+        let shown = decimals.min((14 - magnitude).max(0));
+        let factor = 10f64.powi(shown);
         let rounded = (abs_value * factor).round() / factor;
         let int_part = rounded.floor() as u64;
         let int_str = if use_thousands {
@@ -42,17 +50,16 @@ fn format_abs(abs_value: f64, decimals: i32, use_thousands: bool) -> String {
             int_part.to_string()
         };
         if decimals == 0 {
-            int_str
-        } else {
+            return int_str;
+        }
+        let mut text = format!("{int_str}.");
+        if shown > 0 {
             let frac = rounded - rounded.floor();
             let frac_digits = (frac * factor).round() as u64;
-            format!(
-                "{}.{:0>width$}",
-                int_str,
-                frac_digits,
-                width = decimals as usize
-            )
+            text.push_str(&format!("{:0>width$}", frac_digits, width = shown as usize));
         }
+        text.push_str(&"0".repeat((decimals - shown) as usize));
+        text
     } else {
         // Negative decimals: round to 10^(-decimals) places
         // -i32::MIN overflows; past 308 decimals any number rounds to 0 all the same.
