@@ -184,12 +184,12 @@ impl Workspace {
                 self.documents.want(id, Intent::Switch);
                 self.begin_load(id, window, cx);
             }
-            Some(Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_))
+            Some(Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_) | Entry::Notes(_))
                 if self.documents.shown_id() == Some(id) =>
             {
                 self.documents.activate(id);
             }
-            Some(Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_)) => {
+            Some(Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_) | Entry::Notes(_)) => {
                 self.park_active(window, cx);
                 self.documents.activate(id);
                 self.present_active(window, cx);
@@ -261,6 +261,10 @@ impl Workspace {
         }
         if let Some(id) = self.documents.shown_pdf().map(|pdf| pdf.id) {
             self.present_pdf(id, window, cx);
+            return;
+        }
+        if self.documents.shown_notes().is_some() {
+            self.present_notes(window, cx);
             return;
         }
         let Some(view) = self.documents.active().map(|document| document.view) else {
@@ -340,11 +344,12 @@ impl Workspace {
                 .recovery_dir
                 .as_deref()
                 .map(|directory| recovery::text_file(directory, id)),
-            Some(Entry::Pdf(_)) => None,
+            Some(Entry::Pdf(_) | Entry::Notes(_)) => None,
             None => None,
         };
         self.forget_text(id);
         self.forget_pdf(id, window, cx);
+        self.forget_notes(id);
         if let Some(file) = recovery_copy {
             cx.background_executor()
                 .spawn(async move { recovery::remove_with_lock(&file) })
@@ -699,7 +704,7 @@ impl Workspace {
                     .clone()
                     .filter(|path| !files::is_remote_or_device(path))
                     .map(|path| (link.id, path)),
-                Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_) => None,
+                Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_) | Entry::Notes(_) => None,
             })
             .collect();
         for (id, path) in probes {

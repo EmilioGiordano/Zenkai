@@ -78,6 +78,7 @@ pub fn describe(entry: Entry, active: bool) -> FileItem {
             (t!("markdown.status.name").to_string(), state)
         }
         Entry::Pdf(_) => (t!("pdf.status.name").to_string(), FileState::Ready),
+        Entry::Notes(_) => (t!("status.read_only").to_string(), FileState::Ready),
         Entry::Link(link) => {
             let state = match link.status {
                 LinkStatus::Loading => FileState::Loading,
@@ -91,10 +92,15 @@ pub fn describe(entry: Entry, active: bool) -> FileItem {
         .path()
         .and_then(folder_name)
         .unwrap_or_else(|| t!("sidebar.not_saved").to_string());
+    let place = if matches!(entry, Entry::Notes(_)) {
+        meta
+    } else {
+        format!("{folder}, {meta}")
+    };
     FileItem {
         id: entry.id(),
         name: entry.name(),
-        place: format!("{folder}, {meta}"),
+        place,
         state,
         active,
     }
@@ -187,6 +193,18 @@ mod tests {
         assert_eq!(clean.place, "notes, Markdown");
         text.edited();
         assert_eq!(describe(Entry::Text(&text), false).state, FileState::Dirty);
+    }
+
+    #[test]
+    fn the_whats_new_tab_is_read_only_and_has_no_folder() {
+        let tab = crate::notes_tab::NotesTab {
+            id: WorkbookId(3),
+            space: SpaceId(0),
+        };
+        let item = describe(Entry::Notes(&tab), false);
+        assert_eq!(item.name, "What's new");
+        assert_eq!(item.place, "Read-only");
+        assert_eq!(item.state, FileState::Ready);
     }
 
     #[test]

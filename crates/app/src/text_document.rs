@@ -24,6 +24,7 @@ pub enum DocumentKind {
     Workbook,
     Markdown,
     Pdf,
+    WhatsNew,
 }
 
 impl DocumentKind {

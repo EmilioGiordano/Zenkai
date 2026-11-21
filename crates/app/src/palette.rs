@@ -82,6 +82,7 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.close_window"), CloseWindow),
                 item(t!("palette.quit"), Quit),
                 item(t!("palette.check_for_updates"), CheckForUpdates),
+                item(t!("palette.whats_new"), ShowWhatsNew),
             ],
         ),
         group(

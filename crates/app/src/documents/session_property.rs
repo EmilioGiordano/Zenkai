@@ -327,6 +327,7 @@ impl Model {
                     "an unloaded workbook lost its unsaved work"
                 ),
                 Some(Entry::Pdf(_)) => panic!("a pdf is never dirty"),
+                Some(Entry::Notes(_)) => panic!("the notes tab is never dirty"),
                 None => panic!("a workbook with unsaved work vanished"),
             }
         }
@@ -334,7 +335,7 @@ impl Model {
             assert!(
                 matches!(
                     self.documents.entry(id),
-                    Some(Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_))
+                    Some(Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_) | Entry::Notes(_))
                 ),
                 "the screen shows a link"
             );

@@ -1,22 +1,22 @@
 # What's new tab (updater branch 2)
 
-Design note for `feat/update-notes`. Based on the approved mockup
-`docs/design/auto-update/WhatsNew.dc.html` and the "What's new" section of `docs/SPEC.md`.
-Nothing of the UI described here is implemented yet; the data side (release fetch, cache,
-restricted filter, link check) is.
+Design note for `feat/update-notes`, approved with the decisions below. Based on the approved
+mockup `docs/design/auto-update/WhatsNew.dc.html` and the "What's new" section of
+`docs/SPEC.md`.
 
 ## Opening it
 
 - Action `ShowWhatsNew`, palette entry "What's New" (File group, next to "Check for Updates"),
   shortcut `Ctrl+Alt+Shift+U` (Cmd+Option+Shift+U on macOS), the pair of `Ctrl+Alt+U`.
 - A "What's new" button on the update notice card, before "Later" and "Update now", as in
-  `Main.dc.html`. It dispatches the same action, so it shows the shortcut in its tooltip.
-- One tab at most: the action focuses it when it is already open. It joins the current
-  space like any new tab and is named "What's new" in the sidebar, with "Read only" as its
-  line of detail instead of a folder.
+  `Main.dc.html`. It dispatches the same action, so its tooltip shows the shortcut.
+- One tab at most: the action focuses it when it is already open. It joins the current space
+  like any new tab and is named "What's new" in the sidebar, with "Read-only" as its line of
+  detail instead of a folder.
 - It is not written to the session and is never offered for recovery: it holds no user data,
-  and after an update its content would be stale. Close it with the normal Close tab action,
-  which never asks to save.
+  and after an update its content would be stale. A session file that names one is ignored.
+  Close it with the normal Close tab action, which never asks to save; Save and Save As do
+  nothing there, as with a PDF tab.
 
 ## Layout
 
@@ -25,83 +25,94 @@ As in the mockup, inside the normal workbook area (sidebar and status bar unchan
 1. A banner, only while an update is available: "Zenkai 0.1.3 is available. You have 0.1.0.",
    a "View on GitHub" link button (opens the Releases page, a build-time constant, no
    confirmation) and the primary "Update now" button (the existing `UpdateNow` action; in this
-   branch it opens Releases, the install comes in a later branch). Both are focusable.
-2. The notes, in the existing Markdown preview, centred, 640 px column (the mockup's width),
-   scrolling inside the pane. Heading "What's new", then one `##` section per version,
-   newest first, up to 20, each followed by that release's text.
-3. The status bar says "Read only" (existing `status.read_only` string). There is no Source or
-   Split toggle, no caret position and no encoding: the pane renders the preview only and
-   ignores typing, Find, Replace and mode cycling.
+   branch it opens Releases, the install comes in a later branch). Both are Tab stops.
+2. A 640 px column, centred, scrolling inside the tab. A "What's new" title, then one section
+   per version, newest first, up to 20. Each section is:
+   - a heading the tab draws itself: the version at 15 px semibold and the date beside it,
+     lighter and in the muted colour;
+   - the release text, drawn by the Markdown text view in restricted mode (below);
+   - a row of link buttons (below).
+3. The status bar says "What's new" and "Read-only". There is no Source or Split toggle, no
+   caret position and no encoding: the tab shows the preview only and takes no typing, Find or
+   Replace.
 
-Zoom (`Ctrl+wheel`, `Ctrl+Plus/Minus`) works as in any Markdown tab and is not remembered.
+Zoom with `Ctrl+Plus`, `Ctrl+Minus` and `Ctrl+0` scales the notes as in a Markdown tab and is
+not remembered. Ctrl+wheel zoom is not wired in this tab.
+Up, Down, Page Up, Page Down, Home and End scroll the notes wherever the focus is inside it.
 
-Two small differences from the mockup, to be approved: the date sits in the heading in
-parentheses, `0.1.3 (2026-12-04)`, because a Markdown heading cannot style part of itself in a
-muted colour; the column is 640 px where other Markdown tabs use 860.
+## Link buttons (keyboard access to links)
+
+Under each version, a row of link buttons lists that version's vetted links, in the order they
+appear in its text, without repeats and at most 12. The release page of the version is always
+first, so a version with no other links shows only that button. Each button is a Tab stop with
+a focus ring and Enter activates it, and goes through the same confirmation as a click. Labels
+come from the target: "Release 0.1.3 on GitHub", "Issue #301", "Pull request #13", and for
+any other link the link text (cut at 60 characters), or its address when it has no text.
+Links inside the Markdown stay clickable with the mouse as well.
 
 ## Restricted mode
 
-The existing Markdown pane gets a restricted mode instead of a second renderer. It is on
-whenever the tab is a What's new tab and cannot be turned off.
+The notes use the Markdown pane's own text view, extensions and HTML plugin, with a restricted
+mode added to them (`restricted_extensions` in `markdown_pane`); there is no second renderer.
+The tab does not use the whole pane, which carries an editor, because each version is its own
+body under a heading the tab draws.
 
 - Text goes through `markdown_restricted::clean` before it reaches the parser: control and
-  bidirectional characters removed, line endings normalised, nesting limit 16.
-- Raw HTML is already shown as text by the pane's existing plugin. Images are replaced by their
-  alt text and no image is ever loaded (a plugin, plus the pane's image source always blocked).
+  bidirectional characters removed, line endings normalised, nesting limit 16. A note that
+  nests deeper is treated like an empty one.
+- Raw HTML is shown as text by the pane's existing plugin. Images are replaced by their alt
+  text and no image is ever loaded (a plugin, plus an image source that is always blocked).
 - Every link is judged by `markdown_restricted::vetted_link` (https, exactly `github.com`, no
   user, no port, no `..`, path `/EmilioGiordano/Zenkai` or below). A link that passes is
   rendered as a link; any other link, including reference links and bare URLs, is rendered as
-  its plain text. The click handler checks again, so a link can never open on the strength of
-  how it was drawn.
+  its plain text. The click handler checks again, so a link never opens on the strength of how
+  it was drawn.
 
 ## Opening a link
 
-A click on a valid link asks first, with the existing web-link prompt (warning style, the same
-focus and keyboard handling as the prompt for links in other documents):
+A click on a link, or Enter on a link button, asks first with the existing web-link prompt
+(warning style, the same focus and keyboard handling as the prompt for links in other
+documents):
 
 > Open this link in your browser?
 > Site: github.com  Link: https://github.com/EmilioGiordano/Zenkai/releases/tag/v0.1.3
 > [Open in browser]  [Cancel]
 
-The text shown and the address opened are both the normalised address returned by
-`vetted_link`, never the text of the note, so what is confirmed is what the browser gets. The
-prompt cuts a link past 80 characters with an ellipsis, as it does elsewhere. Enter confirms,
-Esc cancels.
+The text shown and the address opened are both the normalised address `vetted_link` returns,
+never the text of the note, so what is confirmed is what the browser gets. The prompt cuts a
+link past 80 characters with an ellipsis, as it does elsewhere. Enter confirms, Esc cancels.
 
 ## States
 
-Each state says what is going on in words and an icon, never by colour alone.
+Each state says what is going on in words, never by colour alone.
 
 | State | Shows |
 |---|---|
 | Notes available | Banner (if an update is available) and the notes. |
 | Checking | A line "Checking for updates..." above the notes or the empty message. |
-| Offline or failed check, notes cached | The cached notes with a warning line, icon included: "Could not check for updates. Showing the notes saved from the last check." |
+| Offline or failed check, notes cached | The cached notes with a warning line led by a warning mark: "Could not check for updates. Showing the notes saved from the last check." |
 | Up to date, nothing newer | Centred: "Zenkai is up to date." and a "Check for Updates" button (`CheckForUpdates`). |
 | Never checked, or failed with nothing cached | Centred: "No release notes yet. Zenkai fetches them when it checks for updates, which needs a connection." and the same button. |
-| A version whose note is too large (over 64 KiB), empty, or too deeply nested | Its heading stays, followed by "The notes for this version are not shown here." and a link "Read them on GitHub" to that version's release page. The update stays available. |
-| More than 20 versions behind | After the last note: "Older versions are on the Releases page on GitHub." with a link to it. |
+| A version whose note is too large (over 64 KiB), empty, or too deeply nested | Its heading stays, followed by "The notes for this version are not shown here." and its link row, which always has the release page. The update stays available. |
+| More than 20 versions behind | After the last note: "Older versions are on the Releases page on GitHub." with an "All releases on GitHub" link button. |
 | Cache file corrupt or over 4 MiB | Ignored, as if there were no cache; the next check writes a new one. |
 
-The tab does not make its own request: it shows what the update check already fetched, and
-refreshes when a check finishes while it is open.
+The tab does not make its own request: it shows what the update check already fetched and
+refreshes when a check finishes while it is open. The restricted filter and the search for
+links run in the background.
 
 ## Hosting
 
 A new tab variant next to the text and PDF ones, `Entry::Notes` / `Slot::Notes` with
-`DocumentKind::WhatsNew`, following how `PdfTab` is wired: the sidebar item, the window title,
-agent routing (not a workbook), close and restore (skipped, see above) and the status bar each
-get an arm. Save and Save As do nothing there, with the same treatment as a PDF tab
-(to be confirmed against that code when implementing).
+`DocumentKind::WhatsNew`, wired like `PdfTab`: the sidebar item, the window title, agent
+routing (not a workbook), close, restore (skipped) and the status bar each get an arm.
 
 ## Keyboard path
 
-`Ctrl+Alt+Shift+U` opens or focuses the tab and puts focus in its pane (focus ring as in the
-preview); Tab reaches "View on GitHub" and "Update now" in the banner; Esc in the link prompt
-cancels. One gap, shared with the existing Markdown preview: links inside the notes are
-reachable by mouse only, because the text view does not expose keyboard activation of links.
-The banner's "View on GitHub" and `UpdateNow` cover the Releases page from the keyboard; a
-specific release link has no keyboard path until the text view gains one.
+`Ctrl+Alt+Shift+U` opens or focuses the tab and puts focus in it (focus ring on the tab, as in
+a Markdown preview); Tab reaches "View on GitHub", "Update now", and then each link button of
+each version; Enter activates; Esc in the link prompt cancels; the scroll keys and the zoom
+keys work inside the tab.
 
 ## Decisions taken in the parts already built
 
@@ -113,12 +124,5 @@ specific release link has no keyboard path until the text view gains one.
   the installed version changes after an update.
 - A link with an explicit port, including `:443`, is refused as written, even though the URL
   parser would drop a default port. The nesting limit in restricted mode is 16 (64 elsewhere).
-- The one new dependency is the `url` crate for the link check, already in the build through
-  GPUI; no network or licence change.
-
-## Open points for approval
-
-1. The two mockup differences above (date in the heading, 640 px column).
-2. `Ctrl+Alt+Shift+U` as the shortcut.
-3. The tab not surviving a restart.
-4. The keyboard gap for links inside the notes.
+- New direct dependencies: `url` for the link check and `markdown` (the parser GPUI already
+  uses, pinned to the same version) to find a version's links; neither changes the build.
