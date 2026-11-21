@@ -4,7 +4,7 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    zenkai_pdf_host::host::init_logging();
+    zenkai_pdf_host::logging::init();
     match zenkai_pdf_host::host::run_stdio() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {

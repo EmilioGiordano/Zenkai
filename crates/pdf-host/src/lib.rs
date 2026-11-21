@@ -5,5 +5,8 @@ pub mod codec;
 pub mod frame;
 #[cfg(feature = "host")]
 pub mod host;
+#[cfg(feature = "logging")]
+pub mod logging;
+pub mod process;
 pub mod textmatch;
 pub mod wire;

@@ -9,17 +9,12 @@ use crate::wire::{Job, OpenError, Reply};
 
 mod document;
 mod library;
-mod logging;
 mod outline;
 mod page_text;
 #[cfg(test)]
 mod tests;
 
 use document::{Documents, failure_reply, process};
-
-pub fn init_logging() {
-    logging::init();
-}
 
 // A test sets this in the environment of the host it starts, so that the abort request
 // has an effect there and nowhere else.
