@@ -436,7 +436,7 @@ Cada inicio del lanzador resuelve lo que encuentre en disco:
 | `app.old`, sin `app` | Se cortó entre los dos renombres | Restaura `app.old` y abre la app, avisando que la actualización se interrumpió. |
 | Ambas, con `confirmed` | Se cortó antes de limpiar | Borra `app.old` y después la marca, sin tocar el resto de `.update\`. Abre la app. |
 | Ambas, sin `confirmed`, la app corriendo | Está arrancando | Abre la app, que pasa el pedido a la instancia en marcha, y termina. |
-| Ambas, sin `confirmed`, la app sin correr | La versión nueva no arrancó | Mueve `app` a `.update\rejected-<pid>`, restaura `app.old` y abre la anterior, con el aviso de restauración, que nombra la versión anotada en `applying` si la hay. |
+| Ambas, sin `confirmed`, la app sin correr | La versión nueva no arrancó | Borra los `rejected-*` anteriores, así queda solo el más nuevo, mueve `app` a `.update\rejected-<pid>`, restaura `app.old` y abre la anterior, con el aviso de restauración, que nombra la versión anotada en `applying` si la hay. |
 | Ninguna | Daño externo | Avisa que hay que reinstalar desde Releases. |
 
 - La app está corriendo si abrir `app\zenkai.exe` para escritura falla con violación de uso compartido. Cualquier otro error cuenta como desconocido, y con un estado desconocido nunca se restaura. Si mover `app` a `rejected-<pid>` falla tras 10 s de reintentos, tampoco se restaura, y esa versión no se abre, porque al abrirla se confirmaría sola: el lanzador avisa que la versión nueva no arrancó y el próximo inicio vuelve a intentarlo.

@@ -286,3 +286,22 @@ fn an_unreadable_record_of_the_version_in_flight_is_not_a_name() {
         Settled::Clean(Some(Notice::Restored(None)))
     ));
 }
+
+#[test]
+fn only_the_newest_version_set_aside_is_kept() {
+    let install = Install::new();
+    install.put_version("app.old", "old");
+    install.put_version("app", "new");
+    install.put_version(".update/rejected-1", "older failure");
+    install.put_version(".update/rejected-2", "old failure");
+    install.put_version(".update/new-0.3.0", "next");
+    settle(&install.folders(), &TEST_TIMING);
+    let mut left: Vec<String> = fs::read_dir(install.path(".update"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    let newest = install.rejected();
+    let newest = newest.file_name().unwrap().to_string_lossy();
+    assert_eq!(left, ["new-0.3.0".to_owned(), newest.into_owned()]);
+}

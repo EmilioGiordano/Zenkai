@@ -89,9 +89,7 @@ pub fn settle(folders: &Folders, timing: &Timing) -> Settled {
 // and the next start tries again.
 pub fn reject(folders: &Folders, version: Option<Version>, timing: &Timing) -> Settled {
     let rejected = folders.rejected();
-    if let Err(error) = disk::remove_tree(&rejected) {
-        tracing::warn!(%error, "could not clear an earlier rejected folder");
-    }
+    disk::remove_rejected(folders);
     if let Err(error) =
         disk::rename_retrying(&folders.app(), &rejected, timing.move_app, timing.poll)
     {

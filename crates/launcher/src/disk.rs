@@ -6,7 +6,7 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use crate::arguments::Version;
-use crate::folders::Folders;
+use crate::folders::{Folders, REJECTED_PREFIX};
 
 pub const ERROR_SHARING_VIOLATION: i32 = 32;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
@@ -188,6 +188,33 @@ pub fn rename_retrying(from: &Path, to: &Path, limit: Duration, poll: Duration) 
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(error),
             Err(error) if Instant::now() >= deadline => return Err(error),
             Err(_) => sleep(poll),
+        }
+    }
+}
+
+// Called before a version is set aside, so only the newest one is ever kept.
+pub fn remove_rejected(folders: &Folders) {
+    let entries = match fs::read_dir(folders.update()) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::warn!(%error, "could not list the versions set aside before");
+            return;
+        }
+    };
+    for entry in entries {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(error) => {
+                tracing::warn!(%error, "could not list the versions set aside before");
+                continue;
+            }
+        };
+        let rejected = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(REJECTED_PREFIX));
+        if rejected && let Err(error) = remove_tree(&path) {
+            tracing::warn!(%error, path = %path.display(), "could not remove a version set aside before");
         }
     }
 }

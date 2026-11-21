@@ -11,6 +11,7 @@ const LOCK: &str = "lock";
 const CONFIRMED: &str = "confirmed";
 const NOTICE: &str = "notice";
 const APPLYING: &str = "applying";
+pub const REJECTED_PREFIX: &str = "rejected-";
 const JOURNAL: &str = "launcher.log";
 
 // Every path the launcher touches comes from its own folder, never from an argument.
@@ -82,6 +83,6 @@ impl Folders {
 
     pub fn rejected(&self) -> PathBuf {
         self.update()
-            .join(format!("rejected-{}", std::process::id()))
+            .join(format!("{REJECTED_PREFIX}{}", std::process::id()))
     }
 }
