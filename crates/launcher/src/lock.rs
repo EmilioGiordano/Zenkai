@@ -1,4 +1,4 @@
-use std::fs::{self, File, OpenOptions};
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::Path;
@@ -12,7 +12,7 @@ const GENERIC_WRITE: u32 = 0x4000_0000;
 const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
 
 // Open without sharing and deleted by Windows when the handle closes, so a launcher that crashes
-// or is killed never leaves the lock held.
+// or is killed never leaves the lock held. Its folder must already be checked as plain.
 pub struct Lock {
     _file: File,
 }
@@ -24,11 +24,6 @@ pub enum Taken {
 }
 
 pub fn take(path: &Path, wait: Duration, poll: Duration) -> Taken {
-    if let Some(folder) = path.parent()
-        && let Err(error) = fs::create_dir_all(folder)
-    {
-        return Taken::Unavailable(error);
-    }
     let deadline = Instant::now() + wait;
     loop {
         match open(path) {
@@ -65,7 +60,7 @@ mod tests {
     #[test]
     fn a_second_launcher_waits_and_then_gives_up() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join(".update").join("lock");
+        let path = root.path().join("lock");
         let Taken::Held(first) = take(&path, Duration::ZERO, POLL) else {
             panic!("the first launcher did not get the lock");
         };
@@ -82,7 +77,7 @@ mod tests {
     #[test]
     fn the_lock_file_goes_away_with_its_holder() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join(".update").join("lock");
+        let path = root.path().join("lock");
         let Taken::Held(lock) = take(&path, Duration::ZERO, POLL) else {
             panic!("no lock");
         };
@@ -94,8 +89,7 @@ mod tests {
     #[test]
     fn a_lock_file_left_behind_does_not_block() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join(".update").join("lock");
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let path = root.path().join("lock");
         std::fs::write(&path, b"left by something else").unwrap();
         assert!(matches!(take(&path, Duration::ZERO, POLL), Taken::Held(_)));
     }

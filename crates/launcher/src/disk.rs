@@ -50,6 +50,22 @@ pub fn running(program: &Path) -> Running {
     }
 }
 
+// The launcher writes and deletes only inside `.update`; one that is a link or a junction could
+// lead anywhere, so it is refused and nothing is evaluated, locked or logged.
+pub fn prepare_update_folder(folders: &Folders) -> io::Result<()> {
+    match fs::create_dir(folders.update()) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let metadata = fs::symlink_metadata(folders.update())?;
+    if metadata.is_dir() && !is_reparse_point(&metadata) {
+        Ok(())
+    } else {
+        Err(io::Error::other(".update is not a plain folder"))
+    }
+}
+
 // A marker that is not a version, or is too long to be one, does not count.
 pub fn marker(folders: &Folders) -> Presence {
     match read_marker(folders) {

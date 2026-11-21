@@ -1,5 +1,6 @@
 use std::fs::{self, File, OpenOptions};
 use std::os::windows::fs::OpenOptionsExt;
+use std::process::Command;
 
 use tempfile::TempDir;
 
@@ -60,5 +61,18 @@ impl Install {
 
     pub fn rejected(&self) -> std::path::PathBuf {
         self.folders().rejected()
+    }
+
+    // A junction, which needs no privilege to create, unlike a symbolic link.
+    pub fn link(&self, link: &str, target: &str) {
+        let linked = Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(self.path(link))
+            .arg(self.path(target))
+            .output()
+            .unwrap();
+        assert!(linked.status.success(), "{linked:?}");
     }
 }

@@ -120,3 +120,18 @@ fn without_a_place_for_the_lock_the_app_still_opens_untouched() {
     assert_eq!(fake_app::started_with(install.root.path()), ARGUMENTS);
     assert!(install.exists("app.old"));
 }
+
+#[test]
+fn an_update_folder_that_leads_elsewhere_is_never_used() {
+    let install = Install::new();
+    fake_app::place(&install.path("app"), Behavior::Exit);
+    install.put_version("app.old", "old");
+    fs::remove_dir_all(install.path(".update")).unwrap();
+    fs::create_dir(install.path("elsewhere")).unwrap();
+    install.link(".update", "elsewhere");
+    let message = run(&install.folders(), Request::Open, &passed(), &TEST_TIMING);
+    assert!(message.is_none(), "{message:?}");
+    assert_eq!(fake_app::started_with(install.root.path()), ARGUMENTS);
+    assert!(install.exists("app.old"));
+    assert_eq!(fs::read_dir(install.path("elsewhere")).unwrap().count(), 0);
+}

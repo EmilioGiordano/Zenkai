@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::apply::apply;
 use crate::arguments::{self, Request};
+use crate::disk;
 use crate::folders::Folders;
 use crate::lock::{self, Taken};
 use crate::message::{self, Message};
@@ -60,6 +61,10 @@ pub fn run(
     passed: &[OsString],
     timing: &Timing,
 ) -> Option<Message> {
+    if let Err(error) = disk::prepare_update_folder(folders) {
+        tracing::warn!(%error, "no usable .update folder, so the install is left as it is");
+        return open(folders, passed, &[]).err();
+    }
     let _lock = match lock::take(&folders.lock(), timing.lock, timing.poll) {
         Taken::Held(lock) => lock,
         Taken::Busy => return Some(Message::Busy),

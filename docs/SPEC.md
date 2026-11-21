@@ -415,7 +415,7 @@ El instalador y el zip portable usan la misma estructura:
 - "Restart now" vuelve a verificar el zip y lo extrae de cero en `.update\new-<versión>`, pasa por el cierre normal de la app con su aviso de guardar, y al terminar abre `..\zenkai.exe --apply=<versión>`. Si el cierre se cancela, la app sigue abierta y la actualización espera.
 - La app nunca pide elevación ni instala servicios, y no se actualiza en rutas de red. Sin permiso de escritura, por ejemplo instalado para todos los usuarios, ofrece abrir Releases.
 - La versión de `--apply` debe cumplir `^[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$`. Toda ruta sale de la carpeta del propio lanzador; nunca se lee una ruta de los argumentos. Los demás argumentos pasan a la app sin cambios.
-- El lanzador toma `.update\lock`, abierto en exclusiva y con borrado al cerrarse, de modo que no puede quedar colgado. Un segundo inicio espera hasta 90 s y luego avisa que Zenkai está terminando una actualización. Ningún estado se evalúa sin el bloqueo.
+- El lanzador toma `.update\lock`, abierto en exclusiva y con borrado al cerrarse, de modo que no puede quedar colgado. Un segundo inicio espera hasta 90 s y luego avisa que Zenkai está terminando una actualización. Ningún estado se evalúa sin el bloqueo. Si `.update` no es una carpeta real, por ejemplo un enlace o un punto de reanálisis, el lanzador no lo usa: no toma el bloqueo, no escribe su registro ni evalúa nada, y abre `app` tal como está.
 
 Aplicar una actualización:
 

@@ -1,6 +1,7 @@
 use std::fs::OpenOptions;
 use std::sync::Mutex;
 
+use crate::disk;
 use crate::folders::Folders;
 
 const MAX_BYTES: u64 = 256 * 1024;
@@ -9,7 +10,7 @@ const MAX_BYTES: u64 = 256 * 1024;
 // `.update\launcher.log`, which outlives the cleanup after an update. Without it, it stays silent.
 pub fn init(folders: &Folders) {
     let path = folders.journal();
-    if std::fs::create_dir_all(folders.update()).is_err() {
+    if disk::prepare_update_folder(folders).is_err() {
         return;
     }
     let over_cap = std::fs::metadata(&path).is_ok_and(|metadata| metadata.len() > MAX_BYTES);

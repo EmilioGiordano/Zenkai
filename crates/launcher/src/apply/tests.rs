@@ -186,15 +186,7 @@ fn a_new_version_that_is_a_link_elsewhere_is_not_applied() {
     let install = Install::new();
     install.put_version("app", "old");
     install.put_version("elsewhere", "planted");
-    let linked = Command::new("cmd")
-        .arg("/C")
-        .arg("mklink")
-        .arg("/J")
-        .arg(install.path(".update\\new-0.2.0"))
-        .arg(install.path("elsewhere"))
-        .output()
-        .unwrap();
-    assert!(linked.status.success(), "{linked:?}");
+    install.link(".update\\new-0.2.0", "elsewhere");
     let finish = run(&install, &TEST_TIMING);
     assert!(
         matches!(&finish, Finish::Open(notices) if *notices == [Notice::NotApplied(version("0.2.0"))]),
