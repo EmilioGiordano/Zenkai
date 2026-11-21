@@ -196,7 +196,7 @@ pub fn generate(dir: &Path) -> Result<()> {
     sheet.set_vertical_page_breaks(&[3])?;
     save(&mut book, dir, "page-layout-outline.xlsx")?;
 
-    Ok(())
+    crate::compat_kinds::generate(dir)
 }
 
 #[derive(Default)]
@@ -381,9 +381,8 @@ pub fn report(dir: &Path, out: &Path) -> Result<()> {
         "- **Cached = recalculated**: each value saved in the file (read with calamine) ",
         "against the value Zenkai shows after recalculating.\n",
         "- **Round trip**: save, reopen and compare every filled cell.\n\n",
-        "Content of a kind Zenkai does not detect (embedded objects, form controls, slicers, ",
-        "printer settings) is never warned about and may be dropped when the sheet holding it ",
-        "is written again.\n\n",
+        "Content of a kind Zenkai does not detect (embedded objects, form controls) is never ",
+        "warned about and may be dropped when the sheet holding it is written again.\n\n",
         "| File | Opens | Warned on open | Dropped by save | Dropped without warning | Cached = recalculated | Round trip |\n",
         "| --- | --- | --- | --- | --- | --- | --- |\n",
     ));

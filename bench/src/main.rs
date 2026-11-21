@@ -2,6 +2,7 @@
 
 mod baseline;
 mod compat;
+mod compat_kinds;
 mod coverage;
 mod fixtures;
 mod ironcalc_run;
