@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used)]
-
 use crate::arithmetic::{BYTES_PER_ELEMENT, MAX_TEXT_ARRAY_BYTES};
 use crate::test::util::new_empty_model;
 
