@@ -187,6 +187,7 @@ impl Usage {
             shapes: self.shapes,
             rows: self.rows,
             bytes: self.bytes,
+            result_text: 0,
         }
     }
 }

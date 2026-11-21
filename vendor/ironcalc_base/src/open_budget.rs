@@ -16,7 +16,8 @@ pub const BYTES_PER_CELL: u64 = 70;
 // returning 200 characters sets it, the lookups alone would need 110-140 B.
 pub const BYTES_PER_FORMULA: u64 = 240;
 // The result text BYTES_PER_FORMULA already pays for: the formula it was fitted on returns
-// 200 characters. Text past it is charged while the first evaluation runs.
+// 200 characters. Text past it is charged 1.2 times, the margin of every other cost: what
+// the file caches by the estimate, what the first evaluation adds while it runs.
 pub const TEXT_BYTES_PER_FORMULA: u64 = 200;
 // Extra per distinct formula shape over its text: its key while reading and its parsed
 // tree in the model, fitted on 628,902 distinct shapes in 859,659 formula cells.
@@ -48,6 +49,7 @@ pub struct OpenCost {
     pub shapes: u64,
     pub rows: u64,
     pub bytes: u64,
+    pub result_text: u64,
 }
 
 pub fn open_cost(book: &Workbook) -> OpenCost {
@@ -56,6 +58,7 @@ pub fn open_cost(book: &Workbook) -> OpenCost {
         cost.rows += sheet.sheet_data.row_count() as u64;
         for (_, _, cell) in sheet.sheet_data.iter() {
             cost.cells += 1;
+            cost.result_text += cell_text_bytes(cell);
             if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula { .. }) {
                 cost.formulas += 1;
             }
@@ -78,6 +81,7 @@ pub fn needed_bytes(cost: OpenCost) -> u64 {
         .saturating_add(cost.shapes.saturating_mul(BYTES_PER_SHAPE))
         .saturating_add(cost.bytes)
         .saturating_add(cost.rows.saturating_mul(BYTES_PER_ROW))
+        .saturating_add(result_text_past_allowance(cost))
 }
 
 pub fn importer_needed_bytes(cost: OpenCost) -> u64 {
@@ -86,6 +90,14 @@ pub fn importer_needed_bytes(cost: OpenCost) -> u64 {
         .saturating_add(cost.formulas.saturating_mul(IMPORTER_BYTES_PER_FORMULA))
         .saturating_add(cost.bytes)
         .saturating_add(cost.rows.saturating_mul(IMPORTER_BYTES_PER_ROW))
+        .saturating_add(result_text_past_allowance(cost))
+}
+
+fn result_text_past_allowance(cost: OpenCost) -> u64 {
+    cost.result_text
+        .saturating_sub(cost.formulas.saturating_mul(TEXT_BYTES_PER_FORMULA))
+        .saturating_mul(6)
+        .div_ceil(5)
 }
 
 pub fn describe_bytes(bytes: u64) -> String {
@@ -232,14 +244,14 @@ impl ResultText {
         }
         match old() {
             Some(old) => {
-                let (old, new) = (text_len(old), text_len(new));
+                let (old, new) = (cell_text_bytes(old), cell_text_bytes(new));
                 if new <= old {
                     self.refund(old - new);
                 } else {
                     self.charge(new - old);
                 }
             }
-            None => self.charge(text_len(new) + ADDED_CELL_BYTES),
+            None => self.charge(cell_text_bytes(new) + ADDED_CELL_BYTES),
         }
     }
 
@@ -272,16 +284,12 @@ impl ResultText {
     }
 }
 
-fn text_len(cell: &Cell) -> u64 {
+// The text a cell owns beside its value: a formula's result, cached by the file or
+// evaluated, and a spilled text. A shared string is charged once, with the string table.
+pub fn cell_text_bytes(cell: &Cell) -> u64 {
     let len = match cell {
-        Cell::CellFormula {
-            v: FormulaValue::Text(text),
-            ..
-        } => text.len(),
-        Cell::ArrayFormula(array) => match &array.v {
-            FormulaValue::Text(text) => text.len(),
-            _ => 0,
-        },
+        Cell::CellFormula { v, .. } => formula_text_len(v),
+        Cell::ArrayFormula(array) => formula_text_len(&array.v),
         Cell::SpillCell(spill) => match &spill.v {
             SpillValue::Text(text) => text.len(),
             _ => 0,
@@ -289,6 +297,15 @@ fn text_len(cell: &Cell) -> u64 {
         _ => 0,
     };
     len as u64
+}
+
+// A file sets an error's message and, through the sheet name, its origin as long as a text.
+fn formula_text_len(value: &FormulaValue) -> usize {
+    match value {
+        FormulaValue::Text(text) => text.len(),
+        FormulaValue::Error(error) => error.o.len() + error.m.len(),
+        _ => 0,
+    }
 }
 
 impl Model<'_> {
@@ -394,6 +411,80 @@ mod tests {
         let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
         model.evaluate_opened().unwrap();
         assert_eq!(model.result_text, ResultText::Unbounded);
+    }
+
+    #[test]
+    fn cached_result_text_past_the_formula_allowance_is_charged_before_the_model_is_built() {
+        let book = long_text_book(true);
+        let cost = open_cost(&book);
+        assert_eq!(cost.result_text, results_text_bytes());
+        let uncached = needed_bytes(OpenCost {
+            result_text: 0,
+            ..cost
+        });
+        let past_allowance = results_text_bytes() - cost.formulas * TEXT_BYTES_PER_FORMULA;
+        assert_eq!(
+            needed_bytes(cost) - uncached,
+            (past_allowance * 6).div_ceil(5)
+        );
+        let error = Model::from_workbook_within(book, "en", needed_bytes(cost) - 1)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(error.starts_with(BUDGET_REFUSAL_PREFIX), "{error}");
+    }
+
+    #[test]
+    fn cached_result_text_within_the_formula_allowance_costs_nothing_more() {
+        let cost = OpenCost {
+            cells: 1000,
+            formulas: 1000,
+            shapes: 1,
+            rows: 1000,
+            bytes: 0,
+            result_text: 1000 * TEXT_BYTES_PER_FORMULA,
+        };
+        let uncached = OpenCost {
+            result_text: 0,
+            ..cost
+        };
+        assert_eq!(needed_bytes(cost), needed_bytes(uncached));
+        let one_more = OpenCost {
+            result_text: cost.result_text + 1,
+            ..cost
+        };
+        assert_eq!(needed_bytes(one_more), needed_bytes(cost) + 2);
+    }
+
+    // 100,000 formulas each caching the longest text a cell holds: about 3.2 GB of text,
+    // which the per formula charge alone put at 54 MB.
+    #[test]
+    fn long_cached_results_are_charged_more_than_the_text_they_hold() {
+        let cost = OpenCost {
+            cells: 100_000,
+            formulas: 100_000,
+            shapes: 1,
+            rows: 100_000,
+            bytes: 0,
+            result_text: 100_000 * 32_767,
+        };
+        assert!(needed_bytes(cost) > cost.result_text);
+        assert!(importer_needed_bytes(cost) > cost.result_text);
+    }
+
+    #[test]
+    fn a_cached_error_owns_its_message_and_origin() {
+        let error = Cell::CellFormula {
+            f: 0,
+            s: 0,
+            v: FormulaValue::error(
+                crate::expressions::token::Error::NA,
+                "Sheet1!A1".to_string(),
+                "#N/A".to_string(),
+            ),
+        };
+        assert_eq!(cell_text_bytes(&error), 13);
+        let shared = Cell::SharedString { si: 0, s: 0 };
+        assert_eq!(cell_text_bytes(&shared), 0);
     }
 
     #[test]
@@ -544,6 +635,7 @@ mod tests {
             shapes: 163,
             rows: 1_002_334,
             bytes: 213_068 * (60 + BYTES_PER_UNIQUE_STRING),
+            result_text: 0,
         };
         let allowance = 17_043_439_616 * RAM_SHARE_PERCENT / 100;
         assert!(needed_bytes(cost) <= allowance, "{}", needed_bytes(cost));
@@ -558,6 +650,7 @@ mod tests {
             shapes: 0,
             rows: 10,
             bytes: 0,
+            result_text: 0,
         });
         let formulas = needed_bytes(OpenCost {
             cells: 1000,
@@ -565,6 +658,7 @@ mod tests {
             shapes: 0,
             rows: 10,
             bytes: 0,
+            result_text: 0,
         });
         assert!(formulas > values);
         assert_eq!(formulas - values, 1000 * BYTES_PER_FORMULA);
@@ -637,6 +731,7 @@ mod tests {
                 shapes,
                 rows,
                 bytes,
+                result_text: 0,
             });
             assert!(
                 charged * 10 >= peak * mebibyte * 12,
@@ -653,6 +748,7 @@ mod tests {
             shapes: 0,
             rows: 10,
             bytes: 0,
+            result_text: 0,
         };
         assert!(importer_needed_bytes(cost) > needed_bytes(cost));
     }
@@ -667,6 +763,7 @@ mod tests {
             shapes: 0,
             rows: 0,
             bytes: 0,
+            result_text: 0,
         };
         let error = refusal(cost, budget + 1, budget);
         assert!(error.contains("needs about 9.5 GB"), "{error}");
@@ -690,6 +787,7 @@ mod tests {
             shapes: 0,
             rows: 0,
             bytes: 0,
+            result_text: 0,
         };
         assert!(check_cost(cost, needed_bytes(cost)).is_ok());
         let error = check_cost(cost, needed_bytes(cost) - 1).unwrap_err();
