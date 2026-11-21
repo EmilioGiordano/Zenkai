@@ -13,6 +13,11 @@ use crate::{
     text_limit::{text_length, text_too_long, MAX_TEXT_LENGTH},
 };
 
+// The text one `&` may build into an array. Each element stays within MAX_TEXT_LENGTH, but a
+// million of them would still hold 32 GB or more; this allows 256 bytes per element at that
+// size. Excel has no such limit; past it the result is the `#VALUE!` of a text too long.
+const MAX_TEXT_ARRAY_BYTES: usize = 256 * 1024 * 1024;
+
 /// Maps an output index `i` back to the source array index, applying Excel's
 /// size-1 broadcasting rule: a length-1 dimension repeats its only element, an
 /// equal-length dimension maps one-to-one, and any other mismatch is out of range.
@@ -282,6 +287,23 @@ impl<'a> Model<'a> {
         let (n2, m2) = r.dims();
         let rows = n1.max(n2);
         let cols = m1.max(m2);
+
+        // Counted before any element is built, so a refused array never builds one.
+        let mut bytes = 0;
+        for ri in 0..rows {
+            for ci in 0..cols {
+                if let Ok((s1, s2)) = joined(l.piece(ri, ci), r.piece(ri, ci)) {
+                    bytes += s1.text.len() + s2.text.len();
+                    if bytes > MAX_TEXT_ARRAY_BYTES {
+                        return CalcResult::new_error(
+                            Error::VALUE,
+                            cell,
+                            format!("Text of the array longer than {MAX_TEXT_ARRAY_BYTES} bytes"),
+                        );
+                    }
+                }
+            }
+        }
 
         CalcResult::Array(
             (0..rows)

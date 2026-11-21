@@ -102,6 +102,19 @@ fn ampersand_over_arrays_is_value_only_where_the_text_is_too_long() {
     assert_eq!(model._get_text("D4"), "#VALUE!");
 }
 
+// 16,384 elements of 16,384 bytes fill the 256 MiB an `&` array may hold; one more is
+// refused before any element is built.
+#[test]
+fn ampersand_array_text_stops_at_its_byte_cap() {
+    let mut model = new_empty_model();
+    model._set("A1", r#"=COUNTA(REPT("x",16380)&(SEQUENCE(16384)>0))"#);
+    model._set("B1", r#"=REPT("x",16380)&(SEQUENCE(16385)>0)"#);
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "16384");
+    assert_eq!(model._get_text("B1"), "#VALUE!");
+    assert_eq!(model._get_text("B2"), "");
+}
+
 #[test]
 fn concat_over_a_range_stops_at_the_text_limit() {
     let mut model = new_empty_model();
