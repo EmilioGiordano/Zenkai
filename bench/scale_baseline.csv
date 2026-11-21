@@ -8,6 +8,8 @@ scale-small.xlsx,edit_save_ms,71.2
 scale-small.xlsx,edit_save_peak_mb,16.6
 scale-small.xlsx,save_ms,78.4
 scale-small.xlsx,save_peak_mb,17.4
+scale-small.xlsx,move_save_ms,0.0
+scale-small.xlsx,move_save_peak_mb,0.0
 scale-full.xlsx,open_ms,4612.3
 scale-full.xlsx,open_peak_mb,979.0
 scale-full.xlsx,steady_mb,247.7
@@ -17,6 +19,8 @@ scale-full.xlsx,edit_save_ms,6528.8
 scale-full.xlsx,edit_save_peak_mb,1246.7
 scale-full.xlsx,save_ms,6620.0
 scale-full.xlsx,save_peak_mb,1246.4
+scale-full.xlsx,move_save_ms,0.0
+scale-full.xlsx,move_save_peak_mb,0.0
 scale-drawings.xlsx,open_ms,0.0
 scale-drawings.xlsx,open_peak_mb,0.0
 scale-drawings.xlsx,steady_mb,0.0
@@ -24,6 +28,8 @@ scale-drawings.xlsx,edit_save_ms,0.0
 scale-drawings.xlsx,edit_save_peak_mb,0.0
 scale-drawings.xlsx,save_ms,0.0
 scale-drawings.xlsx,save_peak_mb,0.0
+scale-drawings.xlsx,move_save_ms,0.0
+scale-drawings.xlsx,move_save_peak_mb,0.0
 zenkai-pesado.xlsx,open_ms,14187.0
 zenkai-pesado.xlsx,open_peak_mb,2269.9
 zenkai-pesado.xlsx,steady_mb,717.1
@@ -31,3 +37,5 @@ zenkai-pesado.xlsx,edit_save_ms,18208.4
 zenkai-pesado.xlsx,edit_save_peak_mb,3032.8
 zenkai-pesado.xlsx,save_ms,18400.6
 zenkai-pesado.xlsx,save_peak_mb,3031.5
+zenkai-pesado.xlsx,move_save_ms,0.0
+zenkai-pesado.xlsx,move_save_peak_mb,0.0
