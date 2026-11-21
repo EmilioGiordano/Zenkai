@@ -581,6 +581,22 @@ mod tests {
         );
     }
 
+    // Drawings are not inflated on the way in, so one that fails here leaves the open going.
+    #[test]
+    fn a_drawing_that_cannot_be_inflated_names_cells() {
+        let drawing = r#"<xdr:wsDr xmlns:xdr="urn:xdr"><!--intact--></xdr:wsDr>"#;
+        let mut bytes = zipped(
+            &with_drawing(drawing.to_string()),
+            zip::CompressionMethod::Stored,
+        );
+        let at = bytes.windows(6).position(|w| w == b"intact").unwrap();
+        bytes[at] = b'I';
+        assert_eq!(
+            links_in(bytes, &[SHEET]),
+            [known(&[SheetLink::Drawing, SheetLink::CellReference])]
+        );
+    }
+
     #[test]
     fn drawings_past_the_workbook_budget_name_cells() {
         assert_eq!(MAX_WORKBOOK_DRAWING_BYTES, 4 * MAX_DRAWING_BYTES);
