@@ -829,10 +829,11 @@ fn fixed_and_dollar_past_their_decimals_limit_open_as_value_errors() {
 // past Excel's 32,767 characters it is #VALUE!.
 #[test]
 fn arraytotext_past_the_text_limit_opens_as_value_error() {
-    let texts = texts_on_open(
-        r#"<c r="A1"><f>ARRAYTOTEXT(REPT("x",30000)&amp;SEQUENCE(1000))</f></c><c r="B1"><f>ARRAYTOTEXT(REPT("x",30000)&amp;SEQUENCE(1000),1)</f></c>"#,
-        &["A1", "B1"],
-    );
+    let cells = [
+        dynamic_formula("A1", r#"ARRAYTOTEXT(REPT("x",30000)&amp;SEQUENCE(1000))"#),
+        dynamic_formula("B1", r#"ARRAYTOTEXT(REPT("x",30000)&amp;SEQUENCE(1000),1)"#),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["A1", "B1"]);
     assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
 }
 
@@ -840,10 +841,11 @@ fn arraytotext_past_the_text_limit_opens_as_value_error() {
 // whole column against a whole row; past the million SEQUENCE allows each is #VALUE!.
 #[test]
 fn text_broadcasts_past_the_array_size_limit_open_as_value_errors() {
-    let texts = texts_on_open(
-        r#"<c r="A1"><f>LEFT(B2:B1048576,C2:XFD2)</f></c><c r="B1"><f>MID(B2:B1048576,1,C2:XFD2)</f></c>"#,
-        &["A1", "B1"],
-    );
+    let cells = [
+        dynamic_formula("A1", "LEFT(B2:B1048576,C2:XFD2)"),
+        dynamic_formula("B1", "MID(B2:B1048576,1,C2:XFD2)"),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["A1", "B1"]);
     assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
 }
 
@@ -873,10 +875,12 @@ fn regexreplace_past_the_text_limit_opens_as_value_error() {
 // a range past the 256 MiB an array may hold is #VALUE!, while a whole column still works.
 #[test]
 fn whole_sheet_ranges_turned_into_arrays_open_as_value_errors() {
-    let texts = texts_on_open(
-        r#"<c r="A1"><f>LEFT(A1:XFD1048576,1)</f></c><c r="B1"><f>ARRAYTOTEXT(A1:XFD1048576)</f></c><c r="C1"><f>COUNTA(LEFT(A:A,1))</f></c>"#,
-        &["A1", "B1", "C1"],
-    );
+    let cells = [
+        dynamic_formula("A1", "LEFT(A1:XFD1048576,1)"),
+        dynamic_formula("B1", "ARRAYTOTEXT(A1:XFD1048576)"),
+        dynamic_formula("C1", "COUNTA(LEFT(A:A,1))"),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["A1", "B1", "C1"]);
     assert_eq!(texts, ["#VALUE!", "#VALUE!", "1048576"]);
 }
 
