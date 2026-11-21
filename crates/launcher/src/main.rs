@@ -7,7 +7,8 @@ mod apply;
 mod arguments;
 #[cfg(windows)]
 mod disk;
-#[cfg(all(windows, test))]
+#[cfg(windows)]
+#[cfg(test)]
 mod fake_app;
 #[cfg(windows)]
 mod folders;
@@ -23,7 +24,8 @@ mod notice;
 mod settle;
 #[cfg(windows)]
 mod start;
-#[cfg(all(windows, test))]
+#[cfg(windows)]
+#[cfg(test)]
 mod test_install;
 
 #[cfg(windows)]

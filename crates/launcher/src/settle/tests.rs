@@ -52,7 +52,9 @@ fn nothing_moves_on_an_unknown_fact() {
                         || (both && marker == Presence::Unknown)
                         || (both && marker == Presence::Absent && running == Running::Unknown);
                     let case = format!("{app:?} {old:?} {marker:?} {running:?} -> {chosen:?}");
-                    assert!(!(moves && unknown), "{case}");
+                    if moves {
+                        assert!(!unknown, "{case}");
+                    }
                     assert_eq!(unknown, chosen == Plan::Unknown, "{case}");
                 }
             }
