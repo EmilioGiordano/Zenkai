@@ -56,11 +56,29 @@ pub fn take(update_folder: &Path) -> Option<LauncherNotice> {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::{LauncherNotice, take};
     use crate::updates::Version;
 
     fn version(text: &str) -> Version {
         Version::parse_bare(text).unwrap()
+    }
+
+    proptest! {
+        #[test]
+        fn only_what_the_launcher_writes_is_ever_a_notice(
+            bytes in proptest::collection::vec(any::<u8>(), 0..80)
+        ) {
+            if LauncherNotice::parse(&bytes).is_some() {
+                prop_assert!(
+                    bytes == b"restored"
+                        || bytes == b"interrupted"
+                        || bytes.starts_with(b"restored ")
+                        || bytes.starts_with(b"not-applied ")
+                );
+            }
+        }
     }
 
     #[test]
