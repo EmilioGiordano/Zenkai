@@ -8,6 +8,10 @@ pub const MIN_AUTOSAVE_SECONDS: u32 = 10;
 pub const MAX_AUTOSAVE_SECONDS: u32 = 600;
 pub const AUTOSAVE_STEP_SECONDS: u32 = 10;
 const DEFAULT_AUTOSAVE_SECONDS: u32 = 60;
+pub const MIN_REST_MINUTES: u32 = 5;
+pub const MAX_REST_MINUTES: u32 = 240;
+pub const REST_STEP_MINUTES: u32 = 5;
+const DEFAULT_REST_MINUTES: u32 = 15;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +37,12 @@ pub struct GeneralSettings {
         description = "Seconds between recovery copies of work that is not saved."
     )]
     pub autosave_seconds: u32,
+    #[serde(default = "default_rest", deserialize_with = "clamped_rest")]
+    #[schemars(
+        range(min = 5, max = 240),
+        description = "Minutes a workbook can stay off screen before it rests to free memory, undo history kept; null never rests them. While the window is hidden in the tray the workbook on screen rests too."
+    )]
+    pub rest_after_minutes: Option<u32>,
     #[serde(default)]
     #[schemars(
         description = "How a Markdown file opens: \"preview\" shows it rendered, \"split\" shows the source beside the preview."
@@ -99,6 +109,22 @@ fn default_autosave() -> u32 {
     DEFAULT_AUTOSAVE_SECONDS
 }
 
+fn default_rest() -> Option<u32> {
+    Some(DEFAULT_REST_MINUTES)
+}
+
+// `null` is "never"; a number lands on the nearest allowed step instead of failing the file.
+fn clamped_rest<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u32>, D::Error> {
+    let minutes = Option::<u64>::deserialize(deserializer)?;
+    Ok(minutes.map(|minutes| {
+        let step = u64::from(REST_STEP_MINUTES);
+        let clamped = minutes.clamp(u64::from(MIN_REST_MINUTES), u64::from(MAX_REST_MINUTES));
+        ((clamped + step / 2) / step * step) as u32
+    }))
+}
+
 // A value out of range never fails the whole file; it lands on the nearest allowed one.
 fn clamped_autosave<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
     let seconds = u64::deserialize(deserializer)?;
@@ -115,6 +141,7 @@ impl Default for GeneralSettings {
             close_with_unsaved: CloseWithUnsaved::default(),
             close_window_with_unsaved: keep_when_closing_window(),
             autosave_seconds: DEFAULT_AUTOSAVE_SECONDS,
+            rest_after_minutes: default_rest(),
             markdown_opens_in: MarkdownOpensIn::default(),
             status_summary: StatusSummary::default(),
         }
@@ -129,6 +156,21 @@ impl GeneralSettings {
             self.autosave_seconds.saturating_sub(AUTOSAVE_STEP_SECONDS)
         };
         seconds.clamp(MIN_AUTOSAVE_SECONDS, MAX_AUTOSAVE_SECONDS)
+    }
+
+    // Past the longest wait comes "never", and stepping down from it lands on the longest wait.
+    pub fn rest_stepped(&self, up: bool) -> Option<u32> {
+        match (self.rest_after_minutes, up) {
+            (None, true) => None,
+            (None, false) => Some(MAX_REST_MINUTES),
+            (Some(minutes), true) if minutes >= MAX_REST_MINUTES => None,
+            (Some(minutes), true) => Some(minutes + REST_STEP_MINUTES),
+            (Some(minutes), false) => Some(
+                minutes
+                    .saturating_sub(REST_STEP_MINUTES)
+                    .max(MIN_REST_MINUTES),
+            ),
+        }
     }
 }
 
@@ -433,6 +475,7 @@ mod tests {
         assert_eq!(general.close_with_unsaved, CloseWithUnsaved::Ask);
         assert_eq!(general.close_window_with_unsaved, CloseWithUnsaved::Keep);
         assert_eq!(general.autosave_seconds, 60);
+        assert_eq!(general.rest_after_minutes, Some(15));
     }
 
     #[test]
@@ -586,5 +629,49 @@ mod tests {
             serde_json::from_str::<AppearanceSettings>(&json).unwrap(),
             appearance
         );
+    }
+
+    #[test]
+    fn the_rest_delay_defaults_to_fifteen_minutes_and_null_means_never() {
+        let missing: GeneralSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(missing.rest_after_minutes, Some(15));
+        let never: GeneralSettings =
+            serde_json::from_str(r#"{ "rest_after_minutes": null }"#).unwrap();
+        assert_eq!(never.rest_after_minutes, None);
+        let set: GeneralSettings = serde_json::from_str(r#"{ "rest_after_minutes": 45 }"#).unwrap();
+        assert_eq!(set.rest_after_minutes, Some(45));
+    }
+
+    #[test]
+    fn a_rest_delay_out_of_range_is_clamped_and_snapped_not_rejected() {
+        let parse = |text: &str| {
+            serde_json::from_str::<GeneralSettings>(text)
+                .unwrap()
+                .rest_after_minutes
+        };
+        assert_eq!(parse(r#"{ "rest_after_minutes": 0 }"#), Some(5));
+        assert_eq!(parse(r#"{ "rest_after_minutes": 99999 }"#), Some(240));
+        assert_eq!(parse(r#"{ "rest_after_minutes": 17 }"#), Some(15));
+        assert_eq!(parse(r#"{ "rest_after_minutes": 18 }"#), Some(20));
+        assert!(
+            serde_json::from_str::<GeneralSettings>(r#"{ "rest_after_minutes": -5 }"#).is_err()
+        );
+        assert!(
+            serde_json::from_str::<GeneralSettings>(r#"{ "rest_after_minutes": "soon" }"#).is_err()
+        );
+    }
+
+    #[test]
+    fn the_rest_delay_steps_through_never() {
+        let mut general = GeneralSettings::default();
+        assert_eq!(general.rest_stepped(true), Some(20));
+        assert_eq!(general.rest_stepped(false), Some(10));
+        general.rest_after_minutes = Some(MIN_REST_MINUTES);
+        assert_eq!(general.rest_stepped(false), Some(MIN_REST_MINUTES));
+        general.rest_after_minutes = Some(MAX_REST_MINUTES);
+        assert_eq!(general.rest_stepped(true), None);
+        general.rest_after_minutes = None;
+        assert_eq!(general.rest_stepped(true), None);
+        assert_eq!(general.rest_stepped(false), Some(MAX_REST_MINUTES));
     }
 }

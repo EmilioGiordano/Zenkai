@@ -102,7 +102,10 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
         .as_ref()
         .and_then(|rested| rested.hibernation.as_ref());
     let mut dump_lost = false;
-    if let Some(hibernation) = hibernation {
+    // The file of a workbook that held no unsaved work is the truth if it changed meanwhile.
+    let wake_from =
+        hibernation.filter(|_| !(holds_only_saved_work(link) && file_changed_since_rest(link)));
+    if let Some(hibernation) = wake_from {
         match Workbook::wake(&hibernation.dump, &hibernation.kept) {
             Ok(workbook) => {
                 if cancelled() {
@@ -163,7 +166,7 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
     } else if link.recovery.is_some() {
         recovery_lost = true;
     }
-    if dump_lost {
+    if dump_lost && !holds_only_saved_work(link) {
         // The file holds none of the unsaved work, so loading it would show the user an older
         // workbook as if nothing was lost. The link and its dump stay for another try.
         return Some(LinkLoad::Failed(t!("open.hibernation_lost").to_string()));
@@ -181,13 +184,25 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
             provenance: Provenance::File,
             copy: None,
             recovery_lost,
-            dump_lost: false,
+            dump_lost,
             file_changed: changed_while_out_of_memory(link, path),
-            spent_dump: None,
+            spent_dump: hibernation.map(|hibernation| hibernation.dump.clone()),
         },
         Err(LoadFailure::Missing) => LinkLoad::Missing,
         Err(failure) => LinkLoad::Failed(open_failure(path, &failure).text),
     })
+}
+
+// What rested without unsaved work has its file to come back from when the dump cannot serve.
+fn holds_only_saved_work(link: &Link) -> bool {
+    !link.dirty && link.recovery.is_none() && link.path.is_some()
+}
+
+fn hibernation_lost_text(name: &str, provenance: Provenance) -> String {
+    match provenance {
+        Provenance::File => t!("notice.undo_history_lost", name = name),
+        Provenance::Dump | Provenance::Recovery => t!("notice.hibernation_lost", name = name),
+    }
 }
 
 // Checked after the read, so a change between the check and the read is never missed.
@@ -694,7 +709,7 @@ impl Workspace {
                     }
                     Installed::Background => {
                         if dump_lost {
-                            let text = t!("notice.hibernation_lost", name = name);
+                            let text = hibernation_lost_text(&name, provenance);
                             self.notify(Severity::Warning, text, cx);
                         }
                         cx.notify();
@@ -769,7 +784,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if dump_lost {
-            let text = t!("notice.hibernation_lost", name = name);
+            let text = hibernation_lost_text(name, provenance);
             self.notify(Severity::Warning, text, cx);
         } else if recovery_lost {
             let text = t!("notice.recovery_lost", name = name);
@@ -1141,5 +1156,85 @@ mod tests {
         let mut setup = hibernated();
         setup.link.rested = None;
         assert!(!changed_while_out_of_memory(&setup.link, &path));
+    }
+
+    fn write_file(path: &Path, content: &str) {
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_input(SheetId(0), CellPos::default(), content)
+            .unwrap();
+        recovery::write(book.save_snapshot(path, SaveTarget::Copy).unwrap()).unwrap();
+    }
+
+    // The hibernated workbook as the app puts a saved one to rest: its file holds "saved", and
+    // there is no recovery copy.
+    fn rested_saved() -> Setup {
+        let mut setup = hibernated();
+        let file = setup._dir.path().join("saved.xlsx");
+        write_file(&file, "saved");
+        std::fs::remove_file(&setup.copy).unwrap();
+        let hibernation = setup.link.rested.take().unwrap().hibernation;
+        setup.link.rested = Some(Box::new(Rested {
+            file: FileSeen {
+                stamp: Some(Stamp::of(&file).unwrap()),
+                at: SystemTime::now(),
+            },
+            hibernation,
+        }));
+        setup.link.path = Some(file);
+        setup.link.recovery = None;
+        setup.link.dirty = false;
+        setup
+    }
+
+    #[test]
+    fn a_saved_workbook_wakes_from_its_dump_with_its_history() {
+        let setup = rested_saved();
+        let (file, provenance, dump_lost) = loaded(read(&setup.link));
+        assert_eq!(provenance, Provenance::Dump);
+        assert!(!dump_lost);
+        let mut workbook = file.workbook;
+        assert_eq!(text(&workbook), "42");
+        workbook.undo().unwrap();
+        assert_eq!(text(&workbook), "");
+    }
+
+    #[test]
+    fn a_saved_workbook_whose_dump_is_lost_loads_its_file_and_says_so() {
+        let setup = rested_saved();
+        damage(&setup.dump);
+        let load = read(&setup.link);
+        assert_eq!(
+            load.as_ref().and_then(LinkLoad::spent_dump),
+            Some(setup.dump.clone())
+        );
+        let (file, provenance, dump_lost) = loaded(load);
+        assert_eq!(provenance, Provenance::File);
+        assert!(dump_lost);
+        assert_eq!(text(&file.workbook), "saved");
+    }
+
+    #[test]
+    fn a_saved_workbook_whose_file_changed_while_it_rested_loads_the_file_not_the_dump() {
+        let setup = rested_saved();
+        write_file(setup.link.path.as_ref().unwrap(), "changed elsewhere");
+        let load = read(&setup.link);
+        assert_eq!(
+            load.as_ref().and_then(LinkLoad::spent_dump),
+            Some(setup.dump.clone())
+        );
+        let Some(LinkLoad::Loaded {
+            file,
+            provenance,
+            file_changed,
+            dump_lost,
+            ..
+        }) = load
+        else {
+            panic!("the link did not load");
+        };
+        assert_eq!(provenance, Provenance::File);
+        assert!(file_changed);
+        assert!(!dump_lost);
+        assert_eq!(text(&file.workbook), "changed elsewhere");
     }
 }

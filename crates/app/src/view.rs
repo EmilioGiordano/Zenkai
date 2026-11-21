@@ -499,11 +499,15 @@ impl Workspace {
             asked.is_err()
         });
         #[cfg(windows)]
-        workspace._subscriptions.push(
-            cx.observe_window_visibility(window, |_, visibility, _, cx| {
-                crate::tray::note_visibility(visibility, cx)
-            }),
-        );
+        workspace._subscriptions.push(cx.observe_window_visibility(
+            window,
+            |this, visibility, window, cx| {
+                crate::tray::note_visibility(visibility, cx);
+                if visibility.is_visible() {
+                    this.wake_stepped_aside(window, cx);
+                }
+            },
+        ));
         workspace.start_memory_sampler(window, cx);
         workspace.start_session(initial, window, cx);
         workspace.load_recent(cx);

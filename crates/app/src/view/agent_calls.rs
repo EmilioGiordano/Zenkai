@@ -153,6 +153,12 @@ impl Workspace {
     }
 
     fn handle_tool_call(&mut self, call: ToolCall, window: &mut Window, cx: &mut Context<Self>) {
+        if let ToolRequest::GetSelection(id)
+        | ToolRequest::Read(id, _)
+        | ToolRequest::Write(id, _) = &call.request
+        {
+            self.documents.touch(*id);
+        }
         match call.request.clone() {
             ToolRequest::ListWorkbooks => {
                 let listed = agent_routing::summaries(&self.documents, Self::permission(cx));

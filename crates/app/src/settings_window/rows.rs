@@ -57,6 +57,7 @@ pub enum RowId {
     CloseWindowWithUnsaved,
     Language,
     Autosave,
+    RestAfter,
     MarkdownOpensIn,
     ColorMode,
     DarkTheme,
@@ -89,12 +90,13 @@ pub struct RowInfo {
 }
 
 impl RowId {
-    pub const ALL: [RowId; 26] = [
+    pub const ALL: [RowId; 27] = [
         RowId::RestoreSession,
         RowId::CloseWithUnsaved,
         RowId::CloseWindowWithUnsaved,
         RowId::Language,
         RowId::Autosave,
+        RowId::RestAfter,
         RowId::MarkdownOpensIn,
         RowId::ColorMode,
         RowId::DarkTheme,
@@ -161,6 +163,21 @@ impl RowId {
                 t!("settings.row.autosave"),
                 t!("settings.row.autosave.description"),
                 &["recovery", "backup", "seconds", "interval"],
+            ),
+            RowId::RestAfter => row(
+                Section::General,
+                t!("settings.group.memory"),
+                t!("settings.row.rest_after"),
+                t!("settings.row.rest_after.description"),
+                &[
+                    "memory",
+                    "idle",
+                    "rest",
+                    "hibernate",
+                    "minutes",
+                    "tray",
+                    "ram",
+                ],
             ),
             RowId::MarkdownOpensIn => row(
                 Section::General,
@@ -347,6 +364,9 @@ impl RowId {
             RowId::Autosave => {
                 settings.general.autosave_seconds != default.general.autosave_seconds
             }
+            RowId::RestAfter => {
+                settings.general.rest_after_minutes != default.general.rest_after_minutes
+            }
             RowId::MarkdownOpensIn => {
                 settings.general.markdown_opens_in != default.general.markdown_opens_in
             }
@@ -393,6 +413,9 @@ impl RowId {
             }
             RowId::Language => settings.language = default.language,
             RowId::Autosave => settings.general.autosave_seconds = default.general.autosave_seconds,
+            RowId::RestAfter => {
+                settings.general.rest_after_minutes = default.general.rest_after_minutes
+            }
             RowId::MarkdownOpensIn => {
                 settings.general.markdown_opens_in = default.general.markdown_opens_in
             }
@@ -588,6 +611,7 @@ mod tests {
                 RowId::CloseWindowWithUnsaved,
                 RowId::Language,
                 RowId::Autosave,
+                RowId::RestAfter,
                 RowId::MarkdownOpensIn
             ]
         );

@@ -3,8 +3,8 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::*;
 use zenkai_agent::preferences::{
-    CloseWithUnsaved, ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS, MarkdownOpensIn,
-    XlsxReaderChoice,
+    CloseWithUnsaved, ColorMode, MAX_AUTOSAVE_SECONDS, MIN_AUTOSAVE_SECONDS, MIN_REST_MINUTES,
+    MarkdownOpensIn, XlsxReaderChoice,
 };
 use zenkai_agent::settings::{PermissionMode, Settings, ToolCallDisplay};
 use zenkai_i18n::t;
@@ -288,6 +288,26 @@ impl SettingsWindow {
                         agent_settings::change(cx, move |settings| {
                             settings.general.autosave_seconds =
                                 settings.general.autosave_stepped(up)
+                        })
+                    },
+                    cx,
+                ));
+            }
+            RowId::RestAfter => {
+                let minutes = settings.general.rest_after_minutes;
+                let value = minutes.map_or_else(
+                    || t!("settings.rest_after.never").to_string(),
+                    |minutes| t!("settings.rest_after.minutes", minutes = minutes).to_string(),
+                );
+                parts.control = Some(controls::stepper(
+                    "rest-after",
+                    t!("settings.rest_after_delay"),
+                    value,
+                    minutes.is_none_or(|minutes| minutes > MIN_REST_MINUTES),
+                    minutes.is_some(),
+                    |up, _, cx| {
+                        agent_settings::change(cx, move |settings| {
+                            settings.general.rest_after_minutes = settings.general.rest_stepped(up)
                         })
                     },
                     cx,
