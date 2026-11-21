@@ -11,7 +11,7 @@
 #[path = "../src/markdown_depth.rs"]
 mod markdown_depth;
 
-use markdown_depth::{MAX_NESTING, MAX_PREVIEW_BYTES, Refusal, parse_within, preview_refusal};
+use markdown_depth::{MAX_NESTING, MAX_PREVIEW_BYTES, Refusal, parse_within, preview_tree};
 use proptest::prelude::*;
 
 const SEEDS: &[&str] = &[
@@ -123,7 +123,7 @@ proptest! {
             prop_assert!(markdown_depth::tree_depth(&tree) <= MAX_NESTING);
         }
         prop_assert_eq!(
-            preview_refusal(&text).is_none(),
+            preview_tree(&text).err().is_none(),
             parse_within(&text, MAX_NESTING).is_ok()
         );
     }
@@ -146,7 +146,7 @@ proptest! {
     ) {
         let times = MAX_PREVIEW_BYTES / piece.len() * fraction / 100;
         let text = piece.repeat(times);
-        match preview_refusal(&text) {
+        match preview_tree(&text).err() {
             None => {
                 let tree = parse_within(&text, MAX_NESTING).unwrap();
                 prop_assert!(markdown_depth::tree_depth(&tree) <= MAX_NESTING);
