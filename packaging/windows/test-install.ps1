@@ -1,8 +1,8 @@
 #Requires -Version 5.1
 # Installs a setup.exe silently for the current user and checks what the updater relies on: the
 # launcher layout, a per-user folder the user can write and rename in, and an uninstall entry
-# under HKCU only. Then reinstalls over an update's leftovers and uninstalls, checking both clean
-# them and keep %LOCALAPPDATA%\Zenkai.
+# under HKCU only. Checks that setup and the uninstaller refuse while Zenkai runs. Then reinstalls
+# over an update's leftovers and uninstalls, checking both clean them and keep %LOCALAPPDATA%\Zenkai.
 # It really installs into the current user's profile: meant for a CI runner or a test account.
 param(
     [Parameter(Mandatory = $true)]
@@ -62,6 +62,27 @@ Remove-Item -LiteralPath $probe
 Rename-Item -LiteralPath (Join-Path $root 'app') -NewName 'app.old'
 Rename-Item -LiteralPath (Join-Path $root 'app.old') -NewName 'app'
 Assert-Layout $root
+
+# While Zenkai runs, setup and the uninstaller refuse to start. Holding app\zenkai.exe open
+# without write sharing looks to them like a running program.
+$uninstaller = (Get-ItemProperty -LiteralPath $userEntry).UninstallString.Trim('"')
+$stray = Join-Path $root 'app\stray.txt'
+Set-Content -LiteralPath $stray -Value 'kept while Zenkai runs'
+$held = [IO.File]::Open((Join-Path $root 'app\zenkai.exe'), 'Open', 'Read', 'Read')
+try {
+    $silent = '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-'
+    $process = Start-Process -FilePath $Setup -ArgumentList $silent -Wait -PassThru
+    Assert-True ($process.ExitCode -ne 0) 'setup ran while Zenkai was running'
+    Start-Process -FilePath $uninstaller -ArgumentList $silent -Wait | Out-Null
+    # The uninstaller hands over to a copy of itself in TEMP; give that copy time to act.
+    Start-Sleep -Seconds 15
+    Assert-True (Test-Path $userEntry) 'uninstalling ran while Zenkai was running'
+    Assert-Layout $root
+    Assert-True (Test-Path -LiteralPath $stray) 'setup cleaned the install while Zenkai was running'
+} finally {
+    $held.Dispose()
+}
+Remove-Item -LiteralPath $stray
 
 Add-Leftovers $root
 Invoke-Silently $Setup

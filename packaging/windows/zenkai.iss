@@ -97,6 +97,46 @@ begin
     FileExists(ExpandConstant('{app}\app\zenkai.exe'));
 end;
 
+// Windows refuses to open a running program for writing. Any failure counts as running, so
+// nothing is replaced or removed while Zenkai, its launcher or a helper may still run from here.
+function IsRunning(const Path: String): Boolean;
+var
+  Stream: TFileStream;
+begin
+  Result := False;
+  if not FileExists(Path) then
+    Exit;
+  try
+    Stream := TFileStream.Create(Path, fmOpenReadWrite);
+    Stream.Free;
+  except
+    Result := True;
+  end;
+end;
+
+function ZenkaiRunning(): Boolean;
+begin
+  Result := IsRunning(ExpandConstant('{app}\zenkai.exe')) or
+    IsRunning(ExpandConstant('{app}\app\zenkai.exe')) or
+    IsRunning(ExpandConstant('{app}\app\zenkai-pdf-host.exe')) or
+    IsRunning(ExpandConstant('{app}\app\zenkai-values-host.exe')) or
+    IsRunning(ExpandConstant('{app}\app.old\zenkai.exe'));
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := '';
+  if ZenkaiRunning() then
+    Result := 'Zenkai is running. Close it, then run Setup again.';
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  Result := not ZenkaiRunning();
+  if not Result then
+    SuppressibleMsgBox('Zenkai is running. Close it, then uninstall again.', mbError, MB_OK, IDOK);
+end;
+
 // An update replaces app\ with files the installer never wrote, and leaves app.old\ and .update\
 // (its marker and lock included). They go after the uninstaller removed its own files, but only
 // if the folder was a Zenkai install before it started. %LOCALAPPDATA%\Zenkai is kept.
