@@ -9973,6 +9973,7 @@ dependencies = [
  "png 0.18.1",
  "proptest",
  "raw-window-handle",
+ "rust_xlsxwriter",
  "serde",
  "serde_json",
  "sys-locale",
