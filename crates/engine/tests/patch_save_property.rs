@@ -21,7 +21,8 @@ use zenkai_engine::{
 use zenkai_types::{CellPos, ColIdx, NumberFormat, Range, Rgb, RowIdx, SheetId, StyleChange};
 
 mod support;
-use support::{PIXEL_PNG, cell_xfs};
+use support::cell_xfs;
+use support::pixel_png::PIXEL_PNG;
 
 const SIDE: i64 = 7;
 const SHEETS: [&str; 4] = ["Data", "Calc", "Notes", "Untouched"];

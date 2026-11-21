@@ -7,6 +7,8 @@ mod fixtures;
 mod ironcalc_run;
 mod logisheets_run;
 mod measure;
+#[path = "../../test-support/pixel_png.rs"]
+mod pixel_png;
 mod reader;
 mod save_losses;
 mod scale;

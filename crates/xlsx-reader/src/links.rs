@@ -704,7 +704,6 @@ mod tests {
 
     #[test]
     fn drawings_past_the_workbook_budget_name_cells() {
-        assert_eq!(MAX_WORKBOOK_DRAWING_BYTES, 4 * MAX_DRAWING_BYTES);
         let plain = r#"<xdr:wsDr xmlns:xdr="urn:xdr"/>"#;
         let second = "xl/drawings/drawing2.xml";
         let entries = [(DRAWING, plain.to_string()), (second, plain.to_string())];

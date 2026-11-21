@@ -18,7 +18,7 @@ use zenkai_engine::{
 use zenkai_types::{ColIdx, RowIdx, SheetId};
 
 mod support;
-use support::PIXEL_PNG;
+use support::pixel_png::PIXEL_PNG;
 
 const HELD: &str = "xl/worksheets/sheet1.xml";
 const HELD_RELS: &str = "xl/worksheets/_rels/sheet1.xml.rels";
