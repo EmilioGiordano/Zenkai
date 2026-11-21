@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -11,6 +12,7 @@ use interprocess::local_socket::{GenericNamespaced, Stream};
 const PIPE_VARIABLE: &str = "ZENKAI_MCP_PIPE";
 const TOKEN_VARIABLE: &str = "ZENKAI_MCP_TOKEN";
 const ENDPOINT_FILE: &str = "mcp-endpoint.txt";
+const VERSION_FLAG: &str = "--version";
 // Zenkai refuses longer messages; the relay stops before buffering one.
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 
@@ -101,7 +103,23 @@ fn relay() -> Result<(), String> {
     copy(receive, std::io::stdout().lock()).map_err(|error| format!("pipe closed: {error}"))
 }
 
+fn version_requested(mut arguments: impl Iterator<Item = OsString>) -> bool {
+    arguments
+        .next()
+        .is_some_and(|argument| argument == VERSION_FLAG)
+}
+
 fn main() -> ExitCode {
+    if version_requested(std::env::args_os().skip(1)) {
+        return match writeln!(
+            std::io::stdout().lock(),
+            "zenkai-mcp {}",
+            env!("CARGO_PKG_VERSION")
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::FAILURE,
+        };
+    }
     match relay() {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -109,5 +127,27 @@ fn main() -> ExitCode {
             eprintln!("zenkai-mcp: {message}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::version_requested;
+
+    fn arguments(values: &[&str]) -> impl Iterator<Item = OsString> {
+        values
+            .iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn only_the_flag_as_the_first_argument_asks_for_the_version() {
+        assert!(version_requested(arguments(&["--version"])));
+        assert!(!version_requested(arguments(&[])));
+        assert!(!version_requested(arguments(&["serve", "--version"])));
     }
 }
