@@ -62,8 +62,8 @@ padding and re-parsing cost more than any check on the tree can bound.
   removed, line endings normalised, then parsed once with the `markdown` crate and refused if
   the tree is deeper than 32 levels or past the budgets of `markdown_depth` (the same check the
   Markdown pane uses, with 64 levels). A cheap pass before the parse turns away the shapes the
-  parser is quadratic on: deep nesting, closers of emphasis without openers, paragraphs of
-  thousands of delimiter runs, nested footnote definitions. The tree is measured without
+  parser is quadratic on: deep nesting, closers of emphasis without openers, thousands of
+  delimiter runs or link openers in the text, nested footnote definitions. The tree is measured without
   recursion, in the background.
 - `whats_new/blocks.rs` turns that tree into a flat list of lines with an iterative walk and a
   hard budget on nodes visited, lines and text bytes; a note past it, or past 5,000 lines in

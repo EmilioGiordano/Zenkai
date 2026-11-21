@@ -12,21 +12,23 @@ pub const SYNC_BYTES: usize = 4 * 1024;
 // a longer file is still edited in Source.
 pub const MAX_PREVIEW_BYTES: usize = 64 * 1024;
 
-// Budgets on the shape of the whole document, for what the text view does per node, per
-// inline HTML tag (it pairs them among siblings, and each pair recurses), per marked inline
-// child of one parent (it combines the marks of a paragraph pairwise), and per cell of a table
-// (it pads every row to the header).
+// Budgets on the shape of the whole document, for what the text view does per node, per inline
+// object that it pairs or measures among siblings (raw HTML tags, which it pairs and recurses
+// into, and math spans), per marked inline child of one parent (it combines the marks of a
+// paragraph pairwise), and per cell of a table (it pads every row to the header).
 const MAX_NODES: usize = 30_000;
-const MAX_HTML_NODES: usize = 2_000;
-const MAX_MARKED_CHILDREN: usize = 3_000;
-const MAX_TABLE_CELLS: usize = 50_000;
+const MAX_INLINE_OBJECTS: usize = 2_000;
+const MAX_MARKED_CHILDREN: usize = 2_000;
+const MAX_TABLE_CELLS: usize = 5_000;
 
 // Closers of emphasis that have no opener: the parser looks back over them again and again.
 const MAX_LONE_CLOSERS: usize = 3_000;
 
-// Delimiter runs (`*`, `_`, `~`) in one paragraph: the parser resolves them against each
-// other, which costs more than their number.
+// Totals over the whole text, not per paragraph, because what ends a paragraph is for the
+// parser to say: delimiter runs (`*`, `_`, `~`), which it resolves against each other, and
+// openers of links and images (`[`), which it resolves against each closer.
 const MAX_DELIMITER_RUNS: usize = 5_000;
+const MAX_BRACKET_OPENERS: usize = 2_000;
 
 const TAB_WIDTH: usize = 4;
 const LIST_INDENT: usize = 2;
@@ -91,7 +93,7 @@ fn parse_options() -> ParseOptions {
 // the tags of a parent's children and recurses once per open pair, inside every level above.
 fn over_budget(tree: &Node, limit: usize) -> Option<Refusal> {
     let mut nodes = 0usize;
-    let mut html = 0usize;
+    let mut objects = 0usize;
     let mut cells = 0usize;
     let mut pending = vec![(tree, 0usize)];
     while let Some((node, depth)) = pending.pop() {
@@ -120,6 +122,12 @@ fn over_budget(tree: &Node, limit: usize) -> Option<Refusal> {
                         | Node::Strong(_)
                         | Node::Delete(_)
                         | Node::Link(_)
+                        | Node::LinkReference(_)
+                        | Node::Image(_)
+                        | Node::ImageReference(_)
+                        | Node::InlineCode(_)
+                        | Node::InlineMath(_)
+                        | Node::FootnoteReference(_)
                         | Node::Html(_)
                 ) {
                     marked += 1;
@@ -127,11 +135,13 @@ fn over_budget(tree: &Node, limit: usize) -> Option<Refusal> {
                         return Some(Refusal::TooLarge);
                     }
                 }
-                if let Node::Html(tag) = child {
-                    html += 1;
-                    if html > MAX_HTML_NODES {
+                if matches!(child, Node::Html(_) | Node::InlineMath(_)) {
+                    objects += 1;
+                    if objects > MAX_INLINE_OBJECTS {
                         return Some(Refusal::TooLarge);
                     }
+                }
+                if let Node::Html(tag) = child {
                     open.apply(&tag.value);
                 }
                 pending.push((child, depth + 1 + open.total()));
@@ -235,12 +245,15 @@ fn line_exceeds(
     if blocks > limit {
         return true;
     }
-    if starts_item || is_atx_heading(rest) {
+    // Only what truly ends a paragraph clears it: an item that has content (an empty one, or a
+    // number other than 1, cannot interrupt a paragraph) and a real heading.
+    if (starts_item && !rest.trim().is_empty()) || is_atx_heading(rest) {
         paragraph.clear();
     }
     blocks + paragraph.scan(rest, limit) > limit
         || paragraph.lone_closers > MAX_LONE_CLOSERS
         || paragraph.runs > MAX_DELIMITER_RUNS
+        || paragraph.openers > MAX_BRACKET_OPENERS
 }
 
 // A code fence as CommonMark has it: up to three spaces of indent, then three or more
@@ -303,7 +316,7 @@ fn block_depth(line: &str, limit: usize) -> (usize, bool, &str) {
             b'0'..=b'9' => match ordered_marker_end(bytes, at) {
                 Some(end) => {
                     depth += 1;
-                    starts_item = true;
+                    starts_item |= &bytes[at..end - 1] == b"1";
                     at = end - 1;
                 }
                 None => break,
@@ -311,7 +324,6 @@ fn block_depth(line: &str, limit: usize) -> (usize, bool, &str) {
             b'[' => match footnote_marker_end(bytes, at) {
                 Some(end) => {
                     depth += 1;
-                    starts_item = true;
                     at = end - 1;
                 }
                 None => break,
@@ -357,13 +369,14 @@ fn ordered_marker_end(bytes: &[u8], start: usize) -> Option<usize> {
     (marker && ends_marker(bytes, delimiter + 1)).then_some(delimiter + 1)
 }
 
-// The brackets and emphasis opened so far in a paragraph and not yet closed.
+// The brackets and emphasis opened so far in a paragraph and not yet closed, and the totals
+// over the whole text, which a paragraph's end does not reset.
 #[derive(Default)]
 struct Inline {
     brackets: usize,
     emphasis: Vec<u8>,
     runs: usize,
-    // Over the whole text, not only the paragraph: the cost adds up across paragraphs.
+    openers: usize,
     lone_closers: usize,
 }
 
@@ -371,7 +384,6 @@ impl Inline {
     fn clear(&mut self) {
         self.brackets = 0;
         self.emphasis.clear();
-        self.runs = 0;
     }
 
     // How deep the open inline constructs get on this line, counting those carried in. A run of
@@ -384,6 +396,7 @@ impl Inline {
             match bytes[at] {
                 b'\\' => at += 1,
                 b'[' => {
+                    self.openers += 1;
                     self.brackets += 1;
                     deepest = deepest.max(self.brackets + self.emphasis.len());
                 }
@@ -523,9 +536,7 @@ mod tests {
     #[test]
     fn many_lines_that_are_each_shallow_are_fine() {
         assert!(!too_deep(&"> quoted line\n".repeat(200_000)));
-        assert!(!too_deep(
-            &"**bold** and *it* and [x](y)\n\n".repeat(100_000)
-        ));
+        assert!(!too_deep(&"**bold** and *it* and [x](y)\n\n".repeat(1_000)));
     }
 
     fn opened_per_line(open: &str, close: &str, times: usize) -> String {
@@ -718,12 +729,60 @@ mod tests {
     // The text view combines the marks of a paragraph pairwise, so there is a cap per parent.
     #[test]
     fn thousands_of_marked_children_of_one_parent_are_refused_at_the_byte_cap() {
-        let text = "[a](b) ".repeat(MAX_PREVIEW_BYTES / 7);
-        assert!(text.len() <= MAX_PREVIEW_BYTES);
-        assert_eq!(preview_refusal(&text), Some(Refusal::TooLarge));
-        assert_eq!(preview_refusal(&"[a](b) ".repeat(500)), None);
-        let two = format!("{}\n\n", "[a](b) ".repeat(2_000)).repeat(2);
+        let code = "`a` ".repeat(14_000);
+        assert!(code.len() <= MAX_PREVIEW_BYTES);
+        assert_eq!(preview_refusal(&code), Some(Refusal::TooLarge));
+        let links = "[a](b) ".repeat(MAX_PREVIEW_BYTES / 7);
+        assert!(preview_refusal(&links).is_some());
+        let images = "![a](b) ".repeat(MAX_PREVIEW_BYTES / 8);
+        assert!(preview_refusal(&images).is_some());
+        let footnotes = "x[^1] ".repeat(MAX_PREVIEW_BYTES / 6);
+        assert!(preview_refusal(&footnotes).is_some());
+        assert_eq!(preview_refusal(&"`a` ".repeat(500)), None);
+        let two = format!("{}\n\n", "`a` ".repeat(1_500)).repeat(2);
         assert_eq!(preview_refusal(&two), None);
+    }
+
+    // Math spans and raw tags are measured per document: the view lays each one out apart.
+    #[test]
+    fn thousands_of_math_spans_and_tags_are_refused_at_the_byte_cap() {
+        let math = "$a$ ".repeat(14_000);
+        assert!(math.len() <= MAX_PREVIEW_BYTES);
+        assert_eq!(preview_refusal(&math), Some(Refusal::TooLarge));
+        assert_eq!(preview_refusal(&"$a$ ".repeat(500)), None);
+        let apart = format!("{}\n\n", "$a$ ".repeat(900)).repeat(3);
+        assert_eq!(preview_refusal(&apart), Some(Refusal::TooLarge));
+    }
+
+    // What ends a paragraph is for the parser to say, so the totals are for the whole text and
+    // a line that only looks like a new item does not reset them.
+    #[test]
+    fn totals_are_for_the_text_and_false_item_lines_do_not_reset_a_paragraph() {
+        let images = "![*a\n2.\n".repeat(MAX_PREVIEW_BYTES / 8);
+        assert!(images.len() <= MAX_PREVIEW_BYTES);
+        assert!(deeper_than(&images, MAX_NESTING));
+        assert_eq!(preview_refusal(&images), Some(Refusal::TooDeep));
+        let tildes = "x~~~y ".repeat(10_000);
+        assert_eq!(preview_refusal(&tildes), Some(Refusal::TooDeep));
+        let separated = "x~~~y \n2.\n".repeat(5_000);
+        assert_eq!(preview_refusal(&separated), Some(Refusal::TooDeep));
+        let group = format!("{}\n2.\n", "[".repeat(63));
+        let brackets = format!("{}{}", group.repeat(490), "]".repeat(31_000));
+        assert!(brackets.len() <= MAX_PREVIEW_BYTES);
+        assert_eq!(preview_refusal(&brackets), Some(Refusal::TooDeep));
+        let started = Instant::now();
+        let once = format!("{}\n2.\n{}", "[".repeat(63), "]".repeat(31_000));
+        let _ = preview_refusal(&once);
+        assert!(started.elapsed() < Duration::from_secs(20));
+    }
+
+    #[test]
+    fn only_an_item_that_can_interrupt_a_paragraph_ends_it() {
+        assert!(too_deep(&"*a\n2. b\n".repeat(200)));
+        assert!(too_deep(&"*a\n-\n".repeat(200)));
+        assert!(too_deep(&"*a\n1.\n".repeat(200)));
+        assert!(!too_deep(&"*a\n1. b\n".repeat(200)));
+        assert!(!too_deep(&"*a\n- b\n".repeat(200)));
     }
 
     #[test]
@@ -740,9 +799,9 @@ mod tests {
     fn many_tables_that_are_each_within_the_cell_budget_are_refused_together() {
         let table = format!(
             "{}|\n{}|\n{}\n",
-            "|a".repeat(100),
-            "|-".repeat(100),
-            "|x|\n".repeat(300)
+            "|a".repeat(40),
+            "|-".repeat(40),
+            "|x|\n".repeat(100)
         );
         assert_eq!(preview_refusal(&table), None);
         let text = table.repeat(2);
@@ -770,7 +829,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
         assert_eq!(preview_refusal(&"*a* ".repeat(500)), None);
         assert_eq!(
-            preview_refusal(&"*a* and _b_ and ~~c~~\n\n".repeat(1_500)),
+            preview_refusal(&"*a* and _b_ and ~~c~~\n\n".repeat(700)),
             None
         );
         let tildes = "~a~ ".repeat(MAX_PREVIEW_BYTES / 4);
