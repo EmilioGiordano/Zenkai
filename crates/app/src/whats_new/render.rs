@@ -1,6 +1,5 @@
 use gpui_kit::base::{TextView, h_flex, v_flex};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::text::TextViewState;
 use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -8,7 +7,7 @@ use zenkai_i18n::t;
 
 use super::links::{MAX_LINKS, NoteLink, Target};
 use super::plan::{Body, Line, SectionPlan};
-use super::{CONTEXT, NotesEvent, NotesView};
+use super::{CONTEXT, Drawn, NotesEvent, NotesView};
 use crate::actions::{CheckForUpdates, UpdateNow};
 use crate::interface_scale::rem_px;
 use crate::keymap;
@@ -105,7 +104,7 @@ impl NotesView {
         &self,
         index: usize,
         section: &SectionPlan,
-        body: Option<&Entity<TextViewState>>,
+        body: Option<&Drawn>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let factor = self.zoom.factor();
@@ -113,7 +112,7 @@ impl NotesView {
         let style = (!self.zoom.is_default()).then(|| zoomed(cx.theme(), factor));
         let weak = cx.entity().downgrade();
         let text = match body {
-            Some(state) => TextView::new(state)
+            Some(body) => TextView::new(&body.state)
                 .when_some(style, |view, style| view.style(style))
                 .markdown_extensions(restricted_extensions())
                 .selectable(true)
@@ -210,6 +209,7 @@ fn label_of(link: &NoteLink) -> String {
 
 impl Render for NotesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.load_drawn_bodies(window);
         let (background, ring) = {
             let theme = cx.theme();
             (theme.background, theme.ring)

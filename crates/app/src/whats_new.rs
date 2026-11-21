@@ -19,9 +19,15 @@ pub enum NotesEvent {
     OpenLink(String),
 }
 
+struct Drawn {
+    state: Entity<TextViewState>,
+    text: SharedString,
+    loaded: bool,
+}
+
 struct Shown {
     plan: Plan,
-    bodies: Vec<Option<Entity<TextViewState>>>,
+    bodies: Vec<Option<Drawn>>,
 }
 
 // The What's new tab: the notes the update check fetched, read-only. Each version is a heading
@@ -106,16 +112,44 @@ impl NotesView {
             Body::Sections { sections, .. } => sections
                 .iter()
                 .map(|section| {
-                    section
-                        .text
-                        .as_ref()
-                        .map(|text| cx.new(|cx| TextViewState::markdown(text, cx)))
+                    section.text.as_ref().map(|text| Drawn {
+                        state: cx.new(|cx| TextViewState::markdown("", cx)),
+                        text: SharedString::from(text.clone()),
+                        loaded: false,
+                    })
                 })
                 .collect(),
             Body::UpToDate | Body::NoNotes | Body::Nothing => Vec::new(),
         };
         self.shown = Some(Shown { plan, bodies });
         cx.notify();
+    }
+
+    // A text view parses with the extensions it has when it is given text, and it takes them
+    // from the element that draws it. So each body starts empty and gets its text only after a
+    // frame has drawn it, and no note is ever parsed without the restricted extensions.
+    fn load_drawn_bodies(&mut self, window: &mut Window) {
+        let Some(shown) = &mut self.shown else {
+            return;
+        };
+        let pending: Vec<(Entity<TextViewState>, SharedString)> = shown
+            .bodies
+            .iter_mut()
+            .flatten()
+            .filter(|body| !body.loaded)
+            .map(|body| {
+                body.loaded = true;
+                (body.state.clone(), body.text.clone())
+            })
+            .collect();
+        if pending.is_empty() {
+            return;
+        }
+        window.on_next_frame(move |_, cx| {
+            for (state, text) in pending {
+                state.update(cx, |state, cx| state.set_text(&text, cx));
+            }
+        });
     }
 
     // The arrow, page and home keys scroll the notes wherever the focus is inside the tab.
