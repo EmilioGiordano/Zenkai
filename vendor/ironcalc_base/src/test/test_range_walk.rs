@@ -135,3 +135,23 @@ fn concat_and_textjoin_over_the_whole_sheet_read_only_its_cells() {
     assert_eq!(model._get_text("C1"), "xy");
     assert_eq!(model._get_text("D1"), "#VALUE!");
 }
+
+// Numbers past the text limit are no longer formatted, but the cells are still read, so an
+// error after them is still the result.
+#[test]
+fn numbers_after_the_text_limit_still_reach_a_later_error() {
+    let mut model = new_empty_model();
+    model._set("B1", "1");
+    model._set("B2", "2");
+    model._set("C1", "1");
+    model._set("C2", "=1/0");
+    model._set("A1", "=CONCAT(REPT(\"x\",32767),B1:B2)");
+    model._set("A2", "=CONCAT(REPT(\"x\",32767),3,C1:C2)");
+    model._set("A3", "=TEXTJOIN(\"\",TRUE,REPT(\"x\",32767),B1:B2,4)");
+    model._set("A4", "=TEXTJOIN(\"\",TRUE,REPT(\"x\",32767),5,C1:C2)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "#VALUE!");
+    assert_eq!(model._get_text("A2"), "#DIV/0!");
+    assert_eq!(model._get_text("A3"), "#VALUE!");
+    assert_eq!(model._get_text("A4"), "#DIV/0!");
+}

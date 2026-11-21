@@ -264,6 +264,8 @@ impl<'a> Model<'a> {
         for arg in args {
             match self.evaluate_node_in_context(arg, cell) {
                 CalcResult::String(value) => result.push(&value),
+                // Once the text is too long only an error argument still matters.
+                CalcResult::Number(_) if result.is_too_long() => {}
                 CalcResult::Number(value) => result.push(&format!("{value}")),
                 CalcResult::EmptyCell | CalcResult::EmptyArg => {}
                 CalcResult::Boolean(value) => result.push(if value { "TRUE" } else { "FALSE" }),
@@ -283,6 +285,7 @@ impl<'a> Model<'a> {
                     while let Some(reference) = cells.next(self, RangeWalk::Occupied) {
                         match self.evaluate_cell(reference) {
                             CalcResult::String(value) => result.push(&value),
+                            CalcResult::Number(_) if result.is_too_long() => {}
                             CalcResult::Number(value) => result.push(&format!("{value}")),
                             CalcResult::Boolean(value) => {
                                 result.push(if value { "TRUE" } else { "FALSE" })
@@ -1049,6 +1052,7 @@ impl<'a> Model<'a> {
         };
         for arg in &args[2..] {
             match self.evaluate_node_in_context(arg, cell) {
+                CalcResult::Number(_) if joined.is_too_long() => {}
                 CalcResult::Number(value) => join(&mut joined, &format!("{value}")),
                 CalcResult::Range { left, right } => {
                     if left.sheet != right.sheet {
@@ -1064,6 +1068,7 @@ impl<'a> Model<'a> {
                     };
                     while let Some(reference) = cells.next(self, walk(&joined)) {
                         match self.evaluate_cell(reference) {
+                            CalcResult::Number(_) if joined.is_too_long() => {}
                             CalcResult::Number(value) => join(&mut joined, &format!("{value}")),
                             CalcResult::String(value) if ignore_empty && value.is_empty() => {}
                             CalcResult::String(value) => join(&mut joined, &value),
