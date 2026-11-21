@@ -90,22 +90,31 @@ impl<R: Read> Read for Utf8Checked<R> {
     }
 }
 
+// Names are matched without case: a reader as lenient as VML's may take any spelling.
 fn names_a_cell(element: &BytesStart) -> bool {
     let name = element.local_name();
     let name = name.as_ref();
+    let is = |marker: &[u8]| name.eq_ignore_ascii_case(marker);
     // VML controls name their cells in FmlaLink, FmlaRange, FmlaPict and the like.
-    if name.starts_with(b"Fmla") || name == b"cameraTool" {
+    let control = name
+        .get(..4)
+        .is_some_and(|start| start.eq_ignore_ascii_case(b"Fmla"));
+    if control || is(b"cameraTool") {
         return true;
     }
     element
         .attributes()
         .with_checks(true)
         .any(|attribute| match attribute {
-            Ok(attribute) => match attribute.key.local_name().as_ref() {
-                b"textlink" | b"cellRange" => !attribute.value.trim_ascii().is_empty(),
-                b"type" => name == b"fld" && attribute.value.eq_ignore_ascii_case(b"TxLink"),
-                _ => false,
-            },
+            Ok(attribute) => {
+                let key = attribute.key.local_name();
+                let key_is = |marker: &[u8]| key.as_ref().eq_ignore_ascii_case(marker);
+                if key_is(b"textlink") || key_is(b"cellRange") {
+                    !attribute.value.trim_ascii().is_empty()
+                } else {
+                    key_is(b"type") && is(b"fld") && attribute.value.eq_ignore_ascii_case(b"TxLink")
+                }
+            }
             Err(_) => true,
         })
 }
@@ -150,6 +159,11 @@ mod tests {
             r#"<a:p><a:fld id="{1}" type="TxLink"/></a:p>"#,
             r#"<a14:cameraTool xmlns:a14="urn:a14" cellRange="Sheet1!$A$1:$C$5" spid="s1"/>"#,
             r#"<a14:cameraTool xmlns:a14="urn:a14"/>"#,
+            r#"<xdr:sp TextLink="Sheet3!A1"/>"#,
+            r#"<a:FLD TYPE="txlink"/>"#,
+            r#"<a14:CAMERATOOL xmlns:a14="urn:a14"/>"#,
+            r#"<a14:pic xmlns:a14="urn:a14" CellRange="Sheet1!A1"/>"#,
+            r#"<x:fmlalink xmlns:x="urn:x">B2</x:fmlalink>"#,
         ] {
             assert!(scan(&drawing(body)), "{body}");
         }
