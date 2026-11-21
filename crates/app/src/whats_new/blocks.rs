@@ -1,52 +1,15 @@
-use std::collections::HashMap;
-use std::ops::Range;
-
 use markdown::mdast::Node;
 
 pub const MAX_INDENT: u8 = 4;
-const MAX_URL_BYTES: usize = 4096;
-const MAX_DEFINITIONS: usize = 5_000;
-
-// How much of a parsed text is drawn. A note is short, shows its links as plain text and has a
-// tight budget; a document keeps its links, and its budget is the parse budget's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    Note,
-    Document,
-}
-
-struct Limits {
-    visited: usize,
-    blocks: usize,
-    text: usize,
-    links: bool,
-}
-
-impl Mode {
-    fn limits(self) -> Limits {
-        match self {
-            Mode::Note => Limits {
-                visited: 20_000,
-                blocks: 1_000,
-                text: 128 * 1024,
-                links: false,
-            },
-            Mode::Document => Limits {
-                visited: 150_000,
-                blocks: 30_000,
-                text: 512 * 1024,
-                links: true,
-            },
-        }
-    }
-}
+const MAX_VISITED: usize = 20_000;
+const MAX_BLOCKS: usize = 1_000;
+const MAX_TEXT_BYTES: usize = 128 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Style {
     pub bold: bool,
     pub italic: bool,
     pub code: bool,
-    pub link: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,15 +25,7 @@ pub enum Kind {
     Code,
 }
 
-// Where a link is in the text of a block, and where it goes as the document wrote it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LinkRange {
-    pub range: Range<usize>,
-    pub url: String,
-}
-
-// One line of the flat list a text is drawn from: its text, the styles of its runs and its
-// links. `start` is where it begins in the source, for following the caret.
+// One line of the flat list a note is drawn from: its text, and the styles of its runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Block {
     pub kind: Kind,
@@ -79,12 +34,10 @@ pub struct Block {
     pub marker: Option<String>,
     pub text: String,
     pub spans: Vec<Span>,
-    pub links: Vec<LinkRange>,
-    pub start: usize,
 }
 
+#[derive(Default)]
 struct Budget {
-    limits: Limits,
     visited: usize,
     blocks: usize,
     text: usize,
@@ -93,7 +46,7 @@ struct Budget {
 impl Budget {
     fn visit(&mut self) -> Option<()> {
         self.visited += 1;
-        (self.visited <= self.limits.visited).then_some(())
+        (self.visited <= MAX_VISITED).then_some(())
     }
 }
 
@@ -101,7 +54,6 @@ impl Budget {
 struct Text {
     text: String,
     spans: Vec<Span>,
-    links: Vec<LinkRange>,
 }
 
 impl Text {
@@ -110,7 +62,7 @@ impl Text {
             return Some(());
         }
         budget.text += value.len();
-        if budget.text > budget.limits.text {
+        if budget.text > MAX_TEXT_BYTES {
             return None;
         }
         self.text.push_str(value);
@@ -132,26 +84,12 @@ struct Work<'a> {
     marker: Option<String>,
 }
 
-// The text as a flat list of lines, from the tree the checks already measured. The walk is
-// iterative and has a budget on nodes, lines and text, so a text that is past it is not drawn
-// at all (None). Only headings, paragraphs, list items, quotes, code and, in a document, links
-// keep their shape; images, HTML, tables and footnotes are drawn as their plain text.
-pub fn blocks_of(tree: &Node, mode: Mode) -> Option<Vec<Block>> {
-    let mut budget = Budget {
-        limits: mode.limits(),
-        visited: 0,
-        blocks: 0,
-        text: 0,
-    };
-    let definitions = if budget.limits.links {
-        definitions_of(tree)
-    } else {
-        HashMap::new()
-    };
-    let links = Links {
-        keep: budget.limits.links,
-        definitions: &definitions,
-    };
+// The note as a flat list of lines, from the tree the restricted checks already measured. The
+// walk is iterative and has a budget on nodes, lines and text, so a note that is past it is
+// not drawn at all (None). Only headings, paragraphs, list items, quotes and code keep their
+// shape; links, images, HTML, math, tables and footnotes are drawn as their plain text.
+pub fn blocks_of(tree: &Node) -> Option<Vec<Block>> {
+    let mut budget = Budget::default();
     let mut blocks = Vec::new();
     let mut pending = vec![Work {
         node: tree,
@@ -196,11 +134,11 @@ pub fn blocks_of(tree: &Node, mode: Mode) -> Option<Vec<Block>> {
                 continue;
             }
             Node::Heading(heading) => {
-                inline_into(&heading.children, &mut text, &mut budget, &links)?;
+                inline_into(&heading.children, &mut text, &mut budget)?;
                 Kind::Heading(heading.depth.clamp(1, 3))
             }
             Node::Paragraph(paragraph) => {
-                inline_into(&paragraph.children, &mut text, &mut budget, &links)?;
+                inline_into(&paragraph.children, &mut text, &mut budget)?;
                 Kind::Paragraph
             }
             Node::TableRow(row) => {
@@ -209,7 +147,7 @@ pub fn blocks_of(tree: &Node, mode: Mode) -> Option<Vec<Block>> {
                         text.push(" | ", Style::default(), &mut budget)?;
                     }
                     if let Some(children) = cell.children() {
-                        inline_into(children, &mut text, &mut budget, &links)?;
+                        inline_into(children, &mut text, &mut budget)?;
                     }
                 }
                 Kind::Paragraph
@@ -226,6 +164,10 @@ pub fn blocks_of(tree: &Node, mode: Mode) -> Option<Vec<Block>> {
                 text.push(&html.value, Style::default(), &mut budget)?;
                 Kind::Paragraph
             }
+            Node::Math(math) => {
+                text.push(&math.value, Style::default(), &mut budget)?;
+                Kind::Paragraph
+            }
             Node::ThematicBreak(_) | Node::Definition(_) => continue,
             other => {
                 if let Some(children) = other.children() {
@@ -238,7 +180,7 @@ pub fn blocks_of(tree: &Node, mode: Mode) -> Option<Vec<Block>> {
             continue;
         }
         budget.blocks += 1;
-        if budget.blocks > budget.limits.blocks {
+        if budget.blocks > MAX_BLOCKS {
             return None;
         }
         blocks.push(Block {
@@ -248,35 +190,9 @@ pub fn blocks_of(tree: &Node, mode: Mode) -> Option<Vec<Block>> {
             marker,
             text: text.text,
             spans: text.spans,
-            links: text.links,
-            start: node.position().map_or(0, |position| position.start.offset),
         });
     }
     Some(blocks)
-}
-
-struct Links<'a> {
-    keep: bool,
-    definitions: &'a HashMap<String, String>,
-}
-
-// What `[text][label]` points at: the first definition of each label, as CommonMark has it.
-fn definitions_of(tree: &Node) -> HashMap<String, String> {
-    let mut found = HashMap::new();
-    let mut pending = vec![tree];
-    while let Some(node) = pending.pop() {
-        if let Node::Definition(definition) = node
-            && found.len() < MAX_DEFINITIONS
-        {
-            found
-                .entry(definition.identifier.clone())
-                .or_insert_with(|| definition.url.clone());
-        }
-        if let Some(children) = node.children() {
-            pending.extend(children.iter().rev());
-        }
-    }
-    found
 }
 
 // The first child takes the list marker of its item.
@@ -297,39 +213,18 @@ fn push_children<'a>(
     }
 }
 
-enum Item<'a> {
-    Node(&'a Node, Style),
-    EndLink { start: usize, url: String },
+// The children with a style, last first, for the stack.
+fn nested(children: &[Node], style: Style) -> impl Iterator<Item = (&Node, Style)> {
+    children.iter().rev().map(move |child| (child, style))
 }
 
-// The children with a style, last first, for the stack.
-fn nested(children: &[Node], style: Style) -> impl Iterator<Item = Item<'_>> {
-    children
+fn inline_into(children: &[Node], text: &mut Text, budget: &mut Budget) -> Option<()> {
+    let mut pending: Vec<(&Node, Style)> = children
         .iter()
         .rev()
-        .map(move |child| Item::Node(child, style))
-}
-
-fn inline_into(
-    children: &[Node],
-    text: &mut Text,
-    budget: &mut Budget,
-    links: &Links<'_>,
-) -> Option<()> {
-    let mut pending: Vec<Item> = nested(children, Style::default()).collect();
-    while let Some(item) = pending.pop() {
-        let (node, style) = match item {
-            Item::Node(node, style) => (node, style),
-            Item::EndLink { start, url } => {
-                if text.text.len() > start {
-                    text.links.push(LinkRange {
-                        range: start..text.text.len(),
-                        url,
-                    });
-                }
-                continue;
-            }
-        };
+        .map(|child| (child, Style::default()))
+        .collect();
+    while let Some((node, style)) = pending.pop() {
         budget.visit()?;
         match node {
             Node::Text(found) => text.push(&found.value, style, budget)?,
@@ -354,24 +249,9 @@ fn inline_into(
                 };
                 pending.extend(nested(&found.children, italic));
             }
-            Node::Link(found) => open_link(
-                &mut pending,
-                text,
-                links,
-                Some(found.url.as_str()),
-                &found.children,
-                style,
-            ),
-            Node::LinkReference(found) => open_link(
-                &mut pending,
-                text,
-                links,
-                links.definitions.get(&found.identifier).map(String::as_str),
-                &found.children,
-                style,
-            ),
             Node::Break(_) => text.push("\n", style, budget)?,
             Node::Html(found) => text.push(&found.value, style, budget)?,
+            Node::InlineMath(found) => text.push(&found.value, style, budget)?,
             Node::Image(found) => text.push(&found.alt, style, budget)?,
             Node::ImageReference(found) => text.push(&found.alt, style, budget)?,
             Node::FootnoteReference(found) => {
@@ -387,34 +267,6 @@ fn inline_into(
     Some(())
 }
 
-// A link keeps its address when the mode keeps links and the address is of a sane size;
-// otherwise its children are drawn as the plain text they are.
-fn open_link<'a>(
-    pending: &mut Vec<Item<'a>>,
-    text: &Text,
-    links: &Links<'_>,
-    url: Option<&str>,
-    children: &'a [Node],
-    style: Style,
-) {
-    match url.filter(|url| links.keep && !url.is_empty() && url.len() <= MAX_URL_BYTES) {
-        Some(url) => {
-            pending.push(Item::EndLink {
-                start: text.text.len(),
-                url: url.to_owned(),
-            });
-            pending.extend(nested(
-                children,
-                Style {
-                    link: true,
-                    ..style
-                },
-            ));
-        }
-        None => pending.extend(nested(children, style)),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -424,7 +276,7 @@ mod tests {
 
     fn blocks(text: &str) -> Vec<Block> {
         let checked = markdown_restricted::check(text).unwrap();
-        blocks_of(&checked.tree, Mode::Note).unwrap()
+        blocks_of(&checked.tree).unwrap()
     }
 
     fn lines(blocks: &[Block]) -> Vec<String> {
@@ -527,7 +379,7 @@ mod tests {
             Some(Style {
                 bold: true,
                 italic: true,
-                ..Style::default()
+                code: false
             })
         );
         let total: usize = found[0].spans.iter().map(|span| span.len).sum();
@@ -549,7 +401,7 @@ mod tests {
                     <b>html</b> $m$ note[^1]\n\n<div>block</div>\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n---\n\n[^1]: the note\n";
         let found = blocks(text);
         let all = lines(&found).join("\n");
-        assert!(all.contains("the link and the logo <b>html</b> $m$ note[1]"));
+        assert!(all.contains("the link and the logo <b>html</b> m note[1]"));
         assert!(all.contains("<div>block</div>"));
         assert!(all.contains("a | b"));
         assert!(all.contains("1 | 2"));
@@ -566,21 +418,20 @@ mod tests {
 
     #[test]
     fn a_note_past_the_budget_is_not_drawn() {
-        let many_lines = "a\n\n".repeat(Mode::Note.limits().blocks + 1);
+        let many_lines = "a\n\n".repeat(MAX_BLOCKS + 1);
         let tree = markdown_restricted::check(&many_lines).unwrap().tree;
-        assert!(blocks_of(&tree, Mode::Note).is_none());
-        let many_nodes = "`a` ".repeat(Mode::Note.limits().visited);
+        assert!(blocks_of(&tree).is_none());
+        let many_nodes = "*a* ".repeat(MAX_VISITED);
         let tree = markdown_restricted::check(&many_nodes).unwrap().tree;
-        assert!(blocks_of(&tree, Mode::Note).is_none());
-        let fine = markdown_restricted::check("fine\n").unwrap();
-        assert!(blocks_of(&fine.tree, Mode::Note).is_some());
+        assert!(blocks_of(&tree).is_none());
+        assert!(blocks_of(&markdown_restricted::check("fine\n").unwrap().tree).is_some());
     }
 
     #[test]
     fn text_past_the_budget_is_not_drawn() {
-        let text = "word ".repeat(Mode::Note.limits().text / 5 + 10);
+        let text = "word ".repeat(MAX_TEXT_BYTES / 5 + 10);
         let tree = markdown_restricted::check(&text).unwrap().tree;
-        assert!(blocks_of(&tree, Mode::Note).is_none());
+        assert!(blocks_of(&tree).is_none());
     }
 
     #[test]
@@ -622,9 +473,9 @@ mod tests {
             parts in prop::collection::vec(prop::sample::select(PIECES.to_vec()), 0..60)
         ) {
             if let Some(checked) = markdown_restricted::check(&parts.concat())
-                && let Some(found) = blocks_of(&checked.tree, Mode::Note)
+                && let Some(found) = blocks_of(&checked.tree)
             {
-                prop_assert!(found.len() <= Mode::Note.limits().blocks);
+                prop_assert!(found.len() <= MAX_BLOCKS);
                 for block in &found {
                     prop_assert!(block.indent <= MAX_INDENT);
                     prop_assert!(!block.text.trim().is_empty());
@@ -635,70 +486,6 @@ mod tests {
                     }
                 }
             }
-        }
-    }
-
-    fn document(text: &str) -> Vec<Block> {
-        let tree =
-            crate::markdown_depth::parse_within(text, crate::markdown_depth::MAX_NESTING).unwrap();
-        blocks_of(&tree, Mode::Document).unwrap()
-    }
-
-    #[test]
-    fn a_note_draws_links_as_their_text_and_a_document_keeps_them() {
-        let text = "see [the docs](https://x.y/a?b=1) and [ref][r] and <https://z.w>\n\n[r]: https://r.s/t\n";
-        let note = blocks(text);
-        assert_eq!(note[0].text, "see the docs and ref and https://z.w");
-        assert!(note[0].links.is_empty());
-        let found = document(text);
-        assert_eq!(found.len(), 1);
-        let urls: Vec<(&str, &str)> = found[0]
-            .links
-            .iter()
-            .map(|link| (&found[0].text[link.range.clone()], link.url.as_str()))
-            .collect();
-        assert_eq!(
-            urls,
-            [
-                ("the docs", "https://x.y/a?b=1"),
-                ("ref", "https://r.s/t"),
-                ("https://z.w", "https://z.w"),
-            ]
-        );
-        assert!(found[0].spans.iter().any(|span| span.style.link));
-    }
-
-    #[test]
-    fn a_link_inside_emphasis_and_a_link_without_text_or_target() {
-        let found = document("*a [b](u) c* [](v) [e]()\n");
-        assert_eq!(found[0].text, "a b c  e");
-        assert_eq!(found[0].links.len(), 1);
-        assert_eq!(&found[0].text[found[0].links[0].range.clone()], "b");
-        assert_eq!(found[0].links[0].url, "u");
-    }
-
-    #[test]
-    fn a_very_long_address_is_not_a_link() {
-        let long = format!("[a](https://x.y/{})", "a".repeat(MAX_URL_BYTES));
-        assert!(document(&long)[0].links.is_empty());
-    }
-
-    #[test]
-    fn a_block_remembers_where_it_starts_in_the_source() {
-        let found = document("# one\n\ntwo\n\n- three\n");
-        let starts: Vec<usize> = found.iter().map(|block| block.start).collect();
-        assert_eq!(starts, [0, 7, 14]);
-    }
-
-    #[test]
-    fn a_document_has_a_wider_budget_than_a_note() {
-        let many_lines = "a\n\n".repeat(Mode::Note.limits().blocks + 1);
-        assert_eq!(document(&many_lines).len(), Mode::Note.limits().blocks + 1);
-        let too_many = "a\n\n".repeat(Mode::Document.limits().blocks + 1);
-        let tree =
-            crate::markdown_depth::parse_within(&too_many, crate::markdown_depth::MAX_NESTING);
-        if let Ok(tree) = tree {
-            assert!(blocks_of(&tree, Mode::Document).is_none());
         }
     }
 }

@@ -56,31 +56,21 @@ are the only way to open one.
 The tab does not use the Markdown text view, or any gpui Markdown parsing, for the notes. This
 deviates from the SPEC's "pestaña Markdown de solo lectura", for security and at the user's
 decision: the text of a release is not signed, and the text view's inline HTML pairing, table
-padding and re-parsing cost more than any check on the tree can bound. The Markdown pane's
-preview uses the same renderer, at the user's decision, for the same reason.
+padding and re-parsing cost more than any depth check can bound.
 
 - Text goes through `markdown_restricted::check`: control and bidirectional characters
-  removed, line endings normalised, then parsed once with the `markdown` crate (GitHub
-  flavour; a dollar sign is only a dollar sign) and refused if the tree is deeper than 32
-  levels (64 in the Markdown pane) or past the node budget. A cheap pass before the parse turns
-  away the shapes the parser is quadratic on: deep nesting, closers of emphasis without
-  openers, paragraphs of thousands of delimiter runs, nested footnote definitions. The tree is
-  measured without recursion, in the background.
-- `markdown_render/blocks.rs` turns that tree into a flat list of lines with an iterative walk
-  and a hard budget on nodes visited, lines and text bytes; a note past it, or past 5,000
-  lines in all the notes together, is shown as "not shown here". Headings keep three sizes
-  (deeper ones use the third), paragraphs, bullet and ordered list items (marker beside the
-  text, indent capped at four levels), block quotes (a rule and muted text), code blocks and
-  inline code (monospace), and bold and italic runs.
-- Everything else is its plain text: links (in a note), images (the alt text), raw HTML,
-  tables (one line per row, cells joined by " | "), footnotes and thematic breaks (nothing).
-- `markdown_render/draw.rs` draws each line as plain GPUI text with per-run fonts and colours.
-- The Markdown pane's preview draws a document the same way, in a list that draws only the
-  lines on screen, with the 256 KiB preview cap and a larger line budget. Its links are
-  clickable (an underlined run) and go through the same prompt as before for links in a
-  document, not limited to github.com; reference links are resolved; images show their alt
-  text; the caret in Split mode scrolls the preview to its line. Text in the preview cannot be
-  selected; the Source can.
+  removed, line endings normalised, then parsed once with the `markdown` crate and refused if
+  the tree is deeper than 32 levels or past the node, HTML-sibling or table budgets (the same
+  check the Markdown pane uses, with 64 levels). The tree is measured without recursion, in
+  the background.
+- `whats_new/blocks.rs` turns that tree into a flat list of lines with an iterative walk and a
+  hard budget on nodes visited, lines and text bytes; a note past it is shown as "not shown
+  here". Headings keep three sizes (deeper ones use the third), paragraphs, bullet and ordered
+  list items (marker beside the text, indent capped at four levels), block quotes (a rule and
+  muted text), code blocks and inline code (monospace), and bold and italic runs.
+- Everything else is its plain text: links, images (the alt text), raw HTML, math, tables (one
+  line per row, cells joined by " | "), footnotes and thematic breaks (nothing).
+- `whats_new/draw.rs` draws each line as plain GPUI text with per-run fonts and colours.
 
 ## Opening a link
 

@@ -1,5 +1,5 @@
+use super::blocks::{Block, blocks_of};
 use super::links::{NoteLink, links_of};
-use crate::markdown_render::{Block, Mode, blocks_of};
 use crate::markdown_restricted;
 use crate::updates::{Day, Note, Notes, Status, Version, known_update};
 
@@ -83,9 +83,7 @@ fn section(note: &Note) -> SectionPlan {
         version: note.version,
         published: note.published,
         links: links_of(note.version, tree),
-        blocks: tree
-            .and_then(|tree| blocks_of(tree, Mode::Note))
-            .filter(|blocks| !blocks.is_empty()),
+        blocks: tree.and_then(blocks_of).filter(|blocks| !blocks.is_empty()),
     }
 }
 

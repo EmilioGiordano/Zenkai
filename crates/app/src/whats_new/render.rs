@@ -4,16 +4,15 @@ use gpui_kit::component::{ActiveTheme, Sizable};
 use gpui_kit::*;
 use zenkai_i18n::t;
 
+use super::draw::{Look, draw_block};
 use super::links::{MAX_LINKS, NoteLink, Target};
 use super::plan::{Body, Line, SectionPlan};
 use super::{CONTEXT, NotesEvent, NotesView};
 use crate::actions::{CheckForUpdates, UpdateNow};
 use crate::interface_scale::rem_px;
 use crate::keymap;
-use crate::markdown_render::{Look, draw_block};
 use crate::updates::{RELEASES_PAGE, Version};
 
-const LINES_PER_NOTE: usize = 10_000;
 const COLUMN_WIDTH: f32 = 640.0;
 const TITLE_SIZE: f32 = 20.0;
 const VERSION_SIZE: f32 = 15.0;
@@ -111,22 +110,21 @@ impl NotesView {
     ) -> impl IntoElement {
         let factor = self.zoom.factor();
         let muted = cx.theme().muted_foreground;
-        let text =
-            match &section.blocks {
-                Some(blocks) => v_flex()
-                    .gap_1p5()
-                    .children(blocks.iter().zip(texts).enumerate().map(
-                        |(position, (block, text))| {
-                            let id = index * LINES_PER_NOTE + position;
-                            draw_block(block, text, look, id, None)
-                        },
-                    ))
-                    .into_any_element(),
-                None => div()
-                    .text_color(muted)
-                    .child(t!("whats_new.not_shown"))
-                    .into_any_element(),
-            };
+        let text = match &section.blocks {
+            Some(blocks) => v_flex()
+                .gap_1p5()
+                .children(
+                    blocks
+                        .iter()
+                        .zip(texts)
+                        .map(|(block, text)| draw_block(block, text, look)),
+                )
+                .into_any_element(),
+            None => div()
+                .text_color(muted)
+                .child(t!("whats_new.not_shown"))
+                .into_any_element(),
+        };
         v_flex()
             .gap_2()
             .child(

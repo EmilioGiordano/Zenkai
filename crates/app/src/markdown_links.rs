@@ -169,6 +169,7 @@ pub fn classify_link(url: &str, folder: Option<&Path>) -> LinkTarget {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::markdown_images::image_path;
 
     fn folder() -> &'static Path {
         Path::new("docs")
@@ -307,6 +308,7 @@ mod tests {
                 LinkTarget::Refused,
                 "{name}"
             );
+            assert_eq!(image_path(name, Some(folder())), None, "{name}");
         }
         for fine in [
             "console.md",
@@ -320,6 +322,8 @@ mod tests {
                 "{fine}"
             );
         }
+        assert!(image_path("icons/aux.png", Some(folder())).is_none());
+        assert!(image_path("icons/auxiliary.png", Some(folder())).is_some());
     }
 
     #[test]
