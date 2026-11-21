@@ -49,9 +49,10 @@ pub fn init(cx: &mut App) {
             let restored = cx.update_global::<Updates, _>(|updates, _| {
                 updates.load_record(record, installed);
                 updates.load_notes(notes);
-                let changed = notices.into_iter().fold(false, |changed, notice| {
-                    updates.receive_launcher_notice(notice) || changed
-                });
+                let mut changed = false;
+                for notice in notices {
+                    changed |= updates.receive_launcher_notice(notice);
+                }
                 changed.then(|| updates.snapshot_for_save())
             });
             if let Some(snapshot) = restored {
