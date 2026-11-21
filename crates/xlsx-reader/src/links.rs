@@ -236,10 +236,13 @@ impl<'a, R: Read + Seek> Reader<'a, R> {
         let Some(&Some(index)) = self.names.get(drawing) else {
             return Ok(true);
         };
-        let entry = self
-            .archive
-            .by_index(index)
-            .map_err(|e| ReadError::Unreadable(e.to_string()))?;
+        let entry = match self.archive.by_index(index) {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::debug!(%error, drawing, "a drawing that cannot be opened may name cells");
+                return Ok(true);
+            }
+        };
         let cap = MAX_DRAWING_BYTES.min(self.drawing_bytes_left);
         if entry.size() > cap as u64 {
             return Ok(true);
@@ -596,6 +599,39 @@ mod tests {
         );
         assert_eq!(
             links_with(sized(MAX_DRAWING_BYTES + 1)),
+            [known(&[SheetLink::Drawing, SheetLink::CellReference])]
+        );
+    }
+
+    const LOCAL_HEADER: [u8; 4] = 0x0403_4b50u32.to_le_bytes();
+    const CENTRAL_HEADER: [u8; 4] = 0x0201_4b50u32.to_le_bytes();
+
+    // The local and central headers of `name`, set to a compression method zip cannot read.
+    fn with_method(mut bytes: Vec<u8>, name: &str, method: u16) -> Vec<u8> {
+        let starts: Vec<usize> = bytes
+            .windows(name.len())
+            .enumerate()
+            .filter(|(_, window)| *window == name.as_bytes())
+            .map(|(at, _)| at)
+            .collect();
+        for start in starts {
+            let (local, central) = (start.checked_sub(30), start.checked_sub(46));
+            let field = match (local, central) {
+                (Some(header), _) if bytes[header..].starts_with(&LOCAL_HEADER) => header + 8,
+                (_, Some(header)) if bytes[header..].starts_with(&CENTRAL_HEADER) => header + 10,
+                _ => continue,
+            };
+            bytes[field..field + 2].copy_from_slice(&method.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn a_drawing_zip_cannot_open_names_cells() {
+        let stored = zipped(&with_drawing(String::new()), zip::CompressionMethod::Stored);
+        let bzip2 = 12;
+        assert_eq!(
+            links_in(with_method(stored, DRAWING, bzip2), &[SHEET]),
             [known(&[SheetLink::Drawing, SheetLink::CellReference])]
         );
     }
