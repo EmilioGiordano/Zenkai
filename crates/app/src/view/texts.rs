@@ -9,7 +9,7 @@ use zenkai_types::WorkbookId;
 use super::{Severity, Workspace, file_label};
 use crate::documents::{Installed, Provenance, TextLoad};
 use crate::entry::{Entry, Link, LinkStatus};
-use crate::markdown_pane::{MarkdownPane, PaneEvent, PaneState, folder_of};
+use crate::markdown_pane::{MarkdownPane, PaneEvent, PaneState};
 use crate::open_loads::OpenId;
 use crate::recovery;
 use crate::text_disk::RecoveredFile;
@@ -105,7 +105,6 @@ impl Workspace {
         self.documents
             .text(id)
             .map_or_else(PaneState::default, |text| PaneState {
-                folder: folder_of(text.path.as_deref()),
                 notice: text.notice,
             })
     }
