@@ -258,9 +258,11 @@ impl<'a, R: Read + Seek> Reader<'a, R> {
         };
         let scanned = drawing_cells::names_cells(&mut inflating);
         self.drawing_bytes_left = self.drawing_bytes_left.saturating_sub(inflating.read);
-        // The open walk never inflated the drawing, so one that fails here must not stop it.
+        // The open walk never inflated the drawing, so one past a ratio or size check, or
+        // damaged, counts as naming cells instead of stopping it; only a cancel stops it.
         match scanned {
             Ok(names) => Ok(names || inflating.read > cap),
+            Err(_) if self.budgets.cancelled() => Err(ReadError::Cancelled),
             Err(error) => {
                 tracing::debug!(%error, part, "a drawing that cannot be read may name cells");
                 Ok(true)
@@ -634,6 +636,21 @@ mod tests {
             links_in(with_method(stored, DRAWING, bzip2), &[SHEET]),
             [known(&[SheetLink::Drawing, SheetLink::CellReference])]
         );
+    }
+
+    #[test]
+    fn a_cancel_during_a_drawing_stops_the_links_pass() {
+        let entries = with_drawing(String::new());
+        let bytes = zipped(&entries, zip::CompressionMethod::Deflated);
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes))).unwrap();
+        let budgets = Budgets::production();
+        let mut reader = Reader::new(&mut archive, &meter, &budgets).unwrap();
+        budgets.cancel();
+        assert!(matches!(
+            reader.drawing_names_cells(DRAWING),
+            Err(ReadError::Cancelled)
+        ));
     }
 
     // Drawings are not inflated on the way in, so one that fails here leaves the open going.
