@@ -235,8 +235,10 @@ impl Notices {
         Expiry::Closed
     }
 
-    // The history is kept: it is what the Messages panel shows.
-    pub fn clear_on_open(&mut self) {
+    // The history is kept: it is what the Messages panel shows. Returns the version of an update
+    // card this call put back on screen, so the caller announces it.
+    #[must_use]
+    pub fn clear_on_open(&mut self) -> Option<Version> {
         let until_open = |notice: &mut Option<Notice>| {
             if notice
                 .as_ref()
@@ -248,6 +250,7 @@ impl Notices {
         until_open(&mut self.status);
         until_open(&mut self.card);
         self.restore_held_update();
+        self.take_shown_update()
     }
 }
 
@@ -533,8 +536,9 @@ a.xlsx: Access denied (os error 5)",
             Lifetime::UntilOpen,
         );
         post_update(&mut notices, "Zenkai 0.1.1");
-        notices.clear_on_open();
+        assert_eq!(notices.clear_on_open(), Some(version("0.1.1")));
         assert_eq!(card_text(&notices).as_deref(), Some("Zenkai 0.1.1"));
+        assert_eq!(notices.take_shown_update(), None);
     }
 
     #[test]
@@ -650,7 +654,7 @@ a.xlsx: Access denied (os error 5)",
             "Unsupported",
             Lifetime::UntilOpen,
         );
-        notices.clear_on_open();
+        assert_eq!(notices.clear_on_open(), None);
         assert!(notices.card().is_none());
         assert!(notices.status().is_none());
         assert_eq!(notices.len(), 1);
@@ -665,7 +669,7 @@ a.xlsx: Access denied (os error 5)",
             "Disk full",
             Lifetime::UntilReplaced,
         );
-        notices.clear_on_open();
+        assert_eq!(notices.clear_on_open(), None);
         assert!(notices.card().is_some());
         assert!(notices.status().is_some());
     }

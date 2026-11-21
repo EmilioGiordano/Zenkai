@@ -252,7 +252,9 @@ impl Workspace {
     }
 
     pub(super) fn present_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.notices.clear_on_open();
+        if let Some(version) = self.notices.clear_on_open() {
+            crate::updates::mark_announced(cx, version);
+        }
         if let Some(id) = self.documents.shown_text().map(|text| text.id) {
             self.present_text(id, window, cx);
             return;
