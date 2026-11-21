@@ -289,9 +289,10 @@ impl<'a> Model<'a> {
         let value_result = self.evaluate_node_in_context(&args[0], cell);
         // Normalise a range to an array so both broadcast (spill) the same way.
         let value_result = match value_result {
-            CalcResult::Range { left, right } => {
-                CalcResult::Array(self.evaluate_range(left, right))
-            }
+            CalcResult::Range { left, right } => match self.evaluate_range(left, right, cell) {
+                Ok(array) => CalcResult::Array(array),
+                Err(error) => return error,
+            },
             other => other,
         };
         match value_result {
@@ -659,7 +660,7 @@ impl<'a> Model<'a> {
         match self.evaluate_node_in_context(node, cell) {
             err @ CalcResult::Error { .. } => Err(err),
             CalcResult::Range { left, right } => {
-                Ok(TextArg::Array(self.evaluate_range(left, right)))
+                Ok(TextArg::Array(self.evaluate_range(left, right, cell)?))
             }
             CalcResult::Array(a) => Ok(TextArg::Array(a)),
             CalcResult::Lambda(_) => Err(CalcResult::new_error(

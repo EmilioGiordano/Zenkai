@@ -470,6 +470,15 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   Needs the text limit patch and `LimitedText::is_too_long` from the ARRAYTOTEXT patch.
   Tests: the module (against `Regex::replace_all` on random replacements) and
   `test_regexreplace_*` in `src/test/text_functions/fn_regex.rs`.
+- `Model::evaluate_range` returns the `#VALUE!` of the calling cell, before building any
+  element, for a range whose nodes would pass the 256 MiB an `&` array may hold
+  (`MAX_TEXT_ARRAY_BYTES` over `BYTES_PER_ELEMENT`, 5,592,405 elements): five whole columns
+  or 341 whole rows fit, six columns, 342 rows or the whole sheet do not. Every range a
+  function turns into an array goes through it, the arithmetic operands of
+  `get_number_or_array` included, which built their own copy; functions that read a range
+  cell by cell, such as SUM, are unchanged (`src/model.rs`, `src/cast.rs` and the callers in
+  `src/functions`). A limit Excel does not have. Needs the text limit patch for the
+  constants. Tests: `src/test/test_range_array_limit.rs`.
 
 Zenkai-only, not for upstream:
 

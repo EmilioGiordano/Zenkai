@@ -29,7 +29,10 @@ impl<'a> Model<'a> {
         let strict = format == 1;
 
         let array = match self.evaluate_node_in_context(&args[0], cell) {
-            CalcResult::Range { left, right } => self.evaluate_range(left, right),
+            CalcResult::Range { left, right } => match self.evaluate_range(left, right, cell) {
+                Ok(array) => array,
+                Err(error) => return error,
+            },
             CalcResult::Array(a) => a,
             CalcResult::Number(n) => {
                 return CalcResult::String(format_array_value(&ArrayNode::Number(n), strict));

@@ -868,3 +868,14 @@ fn regexreplace_past_the_text_limit_opens_as_value_error() {
     );
     assert_eq!(texts, ["#VALUE!"]);
 }
+
+// LEFT and ARRAYTOTEXT turned the whole sheet into 1.7e10 array elements before any limit;
+// a range past the 256 MiB an array may hold is #VALUE!, while a whole column still works.
+#[test]
+fn whole_sheet_ranges_turned_into_arrays_open_as_value_errors() {
+    let texts = texts_on_open(
+        r#"<c r="A1"><f>LEFT(A1:XFD1048576,1)</f></c><c r="B1"><f>ARRAYTOTEXT(A1:XFD1048576)</f></c><c r="C1"><f>COUNTA(LEFT(A:A,1))</f></c>"#,
+        &["A1", "B1", "C1"],
+    );
+    assert_eq!(texts, ["#VALUE!", "#VALUE!", "1048576"]);
+}

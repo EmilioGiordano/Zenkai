@@ -37,6 +37,7 @@ use crate::{
     utils as common,
 };
 
+use crate::arithmetic::{BYTES_PER_ELEMENT, MAX_TEXT_ARRAY_BYTES};
 use crate::cf_runs::CfRun;
 use crate::criteria_ranges::CriteriaRanges;
 use crate::incremental::{circular_cells_fit, Dependencies, Recalculation};
@@ -1343,11 +1344,24 @@ impl<'a> Model<'a> {
     }
 
     /// Evaluates all cells in a given range and returns the results in a 2D vector.
+    /// A range whose nodes would pass `MAX_TEXT_ARRAY_BYTES` is the `#VALUE!` of `cell`
+    /// before any is built: five whole columns fit, six or the whole sheet do not.
     pub(crate) fn evaluate_range(
         &mut self,
         left: CellReferenceIndex,
         right: CellReferenceIndex,
-    ) -> Vec<Vec<ArrayNode>> {
+        cell: CellReferenceIndex,
+    ) -> Result<Vec<Vec<ArrayNode>>, CalcResult> {
+        let rows = (i64::from(right.row) - i64::from(left.row) + 1).max(0);
+        let columns = (i64::from(right.column) - i64::from(left.column) + 1).max(0);
+        let elements = usize::try_from(rows * columns).unwrap_or(usize::MAX);
+        if elements.saturating_mul(BYTES_PER_ELEMENT) > MAX_TEXT_ARRAY_BYTES {
+            return Err(CalcResult::new_error(
+                Error::VALUE,
+                cell,
+                format!("Range larger than {MAX_TEXT_ARRAY_BYTES} bytes as an array"),
+            ));
+        }
         let mut result = Vec::new();
         for r in left.row..=right.row {
             let mut row_result = Vec::new();
@@ -1373,7 +1387,7 @@ impl<'a> Model<'a> {
             }
             result.push(row_result);
         }
-        result
+        Ok(result)
     }
 
     #[inline(always)]
@@ -1500,8 +1514,10 @@ impl<'a> Model<'a> {
                                 "Spill would exceed worksheet bounds".to_string(),
                             )
                         } else {
-                            let array = self.evaluate_range(left, right);
-                            CalcResult::Array(array)
+                            match self.evaluate_range(left, right, cell_reference) {
+                                Ok(array) => CalcResult::Array(array),
+                                Err(error) => error,
+                            }
                         }
                     }
                 } else if matches!(result, CalcResult::Lambda(_)) {
