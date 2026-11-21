@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use super::version::{NotAReleaseList, Version, newest_stable};
 
-// Fixed at build time: no setting or argument can point the check somewhere else. The proxy
-// variables ureq reads (ALL_PROXY, HTTPS_PROXY) only route the same TLS connection to GitHub.
+// Fixed at build time: no setting or argument can point the check somewhere else. ureq's
+// standard proxy environment variables only route the same TLS connection to GitHub.
 const RELEASES_API: &str =
     "https://api.github.com/repos/EmilioGiordano/Zenkai/releases?per_page=30";
 const USER_AGENT: &str = "Zenkai";
