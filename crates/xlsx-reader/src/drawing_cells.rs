@@ -5,8 +5,12 @@
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 
-// A drawing that is not well-formed may name anything.
+// A drawing that is not well-formed UTF-8 XML may name anything. XML forbids NUL, so one
+// means another encoding, such as UTF-16, whose names this scan would not see.
 pub(crate) fn names_cells(drawing: &[u8]) -> bool {
+    if drawing.contains(&0) || std::str::from_utf8(drawing).is_err() {
+        return true;
+    }
     let mut reader = Reader::from_reader(drawing);
     let config = reader.config_mut();
     config.check_end_names = true;
@@ -111,6 +115,20 @@ mod tests {
         ] {
             assert!(names_cells(&broken), "{}", String::from_utf8_lossy(&broken));
         }
+    }
+
+    #[test]
+    fn a_drawing_in_another_encoding_may_name_cells() {
+        let utf16: Vec<u8> = String::from_utf8(drawing(""))
+            .unwrap()
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert!(names_cells(&utf16));
+        let mut latin1 = drawing("<!--Caf-->");
+        let after = latin1.windows(3).position(|w| w == b"Caf").unwrap() + 3;
+        latin1.insert(after, 0xE9);
+        assert!(names_cells(&latin1));
     }
 
     // A deep or long drawing is scanned as it streams, with no tree built for it.
