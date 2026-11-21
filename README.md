@@ -15,10 +15,16 @@ machine: no account, no cloud.
 Download the latest build from [Releases](https://github.com/EmilioGiordano/Zenkai/releases).
 Windows is the main platform; Linux and macOS (Apple silicon) builds are experimental.
 
-The Windows build is not signed yet, so SmartScreen asks first: click "More info", then
-"Run anyway".
+On Windows, `zenkai-<version>-windows-x64-setup.exe` installs Zenkai for your user only, without
+admin rights, in `%LOCALAPPDATA%\Programs\Zenkai`. The zip holds the same folder, to run from
+anywhere you can write.
 
 Zenkai checks GitHub for new versions when it opens, at most once a day; GitHub sees your IP address, or your proxy's if you use one, and nothing else is sent. Turn it off in Settings > About.
+
+## Known limitations
+
+- The Windows build is not signed with Authenticode, so SmartScreen warns when you run the
+  installer: click "More info", then "Run anyway".
 
 ## Status
 

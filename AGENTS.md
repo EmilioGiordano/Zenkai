@@ -53,6 +53,9 @@ Design principle: reinvent nothing. Shortcuts, menu names, selection, formula er
 - `pdf-host` holds the PDF wire format and client the `app` uses, plus the
   `zenkai-pdf-host` binary, the only code that loads pdfium. PDFs are read in that
   process so a pdfium crash never takes the app down.
+- `launcher` is the `zenkai.exe` at the root of the Windows install: it opens the app in
+  `app\`, applies updates and restores the previous version when a new one does not start.
+  Windows only, it depends on no Zenkai crate, and no update ever replaces it.
 - Dependencies flow one way: `app` uses `grid`, `engine` and `formats`; `grid` does not
   know the engine; only `engine` knows IronCalc or logisheets. Where `formats` sits
   relative to `engine` is decided in Phase 1 and recorded in the decisions log (`MAINTAINERS.md`).
