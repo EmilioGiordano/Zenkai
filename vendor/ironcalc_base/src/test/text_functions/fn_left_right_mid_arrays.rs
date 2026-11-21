@@ -1,4 +1,5 @@
 #![allow(clippy::unwrap_used)]
+use crate::arithmetic::{BYTES_PER_ELEMENT, MAX_TEXT_ARRAY_BYTES};
 use crate::test::util::new_empty_model;
 
 // ── Scalar behaviour is preserved ─────────────────────────────────────────────
@@ -119,4 +120,46 @@ fn roundtrip_mid_array_formula() {
     model.evaluate();
     let f = model.get_cell_formula(0, 1, 1).unwrap().unwrap();
     assert_eq!(f, "=MID(N2,SEQUENCE(LEN(N2)),1)");
+}
+
+// ── Size limits of a broadcast result ─────────────────────────────────────────
+
+// A column broadcast against a row holds more elements than either; past the million SEQUENCE
+// allows it is #VALUE!, as `&` gives, before any element is built. A result no larger than an
+// operand, such as a whole column, is not limited.
+#[test]
+fn broadcast_past_the_array_size_limit_is_value() {
+    let mut model = new_empty_model();
+    model._set("B2", "=LEFT(A1:A1048576, A1:XFD1)");
+    model._set("B3", "=RIGHT(A1:A2000, SEQUENCE(1, 1000))");
+    model._set("B4", "=MID(A1:A1000, 1, SEQUENCE(1, 1001))");
+    model._set("B5", "=COUNTA(LEFT(A1:A1000, SEQUENCE(1, 1000)))");
+    model._set("B6", "=COUNTA(LEFT(A1:A1048576, 1))");
+    model.evaluate();
+    assert_eq!(model._get_text("B2"), "#VALUE!");
+    assert_eq!(model._get_text("B3"), "#VALUE!");
+    assert_eq!(model._get_text("B4"), "#VALUE!");
+    assert_eq!(model._get_text("B5"), "1000000");
+    assert_eq!(model._get_text("B6"), "1048576");
+}
+
+// 16,384 elements of 16,384 bytes, node included, fill the 256 MiB `&` allows an array; one
+// more element is #VALUE!.
+#[test]
+fn broadcast_stops_at_the_array_byte_cap() {
+    assert_eq!(16_384 * 16_384, MAX_TEXT_ARRAY_BYTES);
+    let length = 16_384 - BYTES_PER_ELEMENT;
+    let mut model = new_empty_model();
+    model._set(
+        "A1",
+        &format!("=COUNTA(LEFT(REPT(\"x\",{length}), SEQUENCE(16384)*0+{length}))"),
+    );
+    model._set(
+        "B1",
+        &format!("=LEFT(REPT(\"x\",{length}), SEQUENCE(16385)*0+{length})"),
+    );
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "16384");
+    assert_eq!(model._get_text("B1"), "#VALUE!");
+    assert_eq!(model._get_text("B2"), "");
 }

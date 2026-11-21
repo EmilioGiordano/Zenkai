@@ -445,6 +445,13 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   joining each row and then the rows, about three times the result at its peak
   (`src/functions/text/arraytotext.rs`, `LimitedText::is_too_long` in `src/text_limit.rs`).
   Needs the text limit patch. Tests: `src/test/text_functions/fn_arraytotext.rs`.
+- LEFT, RIGHT and MID return `#VALUE!` for an array result that is larger than every operand
+  and past the million elements SEQUENCE allows (`check_array_size`), as `&` does, and for
+  one whose texts pass the 256 MiB `&` allows an array (`MAX_TEXT_ARRAY_BYTES`, counting
+  `BYTES_PER_ELEMENT` for each element), limits Excel does not have; a column broadcast
+  against a row built every pair (`broadcast_text` in `src/functions/text/common.rs`). Needs
+  the text limit patch for the `&` limits. Tests: `broadcast_*` in
+  `src/test/text_functions/fn_left_right_mid_arrays.rs`.
 
 Zenkai-only, not for upstream:
 

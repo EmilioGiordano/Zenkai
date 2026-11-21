@@ -1,5 +1,5 @@
 use crate::{
-    arithmetic::bcast_idx,
+    arithmetic::{bcast_idx, BYTES_PER_ELEMENT, MAX_TEXT_ARRAY_BYTES},
     calc_result::CalcResult,
     cast::{array_node_to_string, calc_result_to_array_node},
     constants::{LAST_COLUMN, LAST_ROW},
@@ -10,6 +10,7 @@ use crate::{
     },
     formatter::format::{format_number, parse_formatted_number},
     functions::{
+        math_and_trigonometry::array_size::check_array_size,
         text::util::{substitute, text_after, text_before, Case},
         util::from_wildcard_to_regex,
     },
@@ -137,10 +138,12 @@ fn broadcast_text(
 ) -> CalcResult {
     let mut rows = 1;
     let mut cols = 1;
+    let mut largest_operand = 1;
     for operand in operands {
         let (r, c) = operand.dims();
         rows = rows.max(r);
         cols = cols.max(c);
+        largest_operand = largest_operand.max(r * c);
     }
 
     // All scalars: return a single value.
@@ -154,11 +157,34 @@ fn broadcast_text(
         };
     }
 
+    // A row broadcast against a column holds more elements than any operand. It is limited as
+    // SEQUENCE is, with the #VALUE! of `&`, as #ERROR! is not an xlsx error value.
+    if rows.saturating_mul(cols) > largest_operand {
+        if let Some((_, message)) = check_array_size(rows, cols) {
+            return CalcResult::new_error(Error::VALUE, cell, message);
+        }
+    }
+
+    // Even within that size, a long text repeated over a large operand would hold gigabytes,
+    // so the result stops at the bytes `&` allows an array, a limit Excel does not have.
+    let mut bytes: usize = 0;
     let mut result = Vec::with_capacity(rows);
     for i in 0..rows {
         let mut data_row = Vec::with_capacity(cols);
         for j in 0..cols {
-            data_row.push(compute(i, j).unwrap_or_else(ArrayNode::Error));
+            let node = compute(i, j).unwrap_or_else(ArrayNode::Error);
+            bytes += BYTES_PER_ELEMENT;
+            if let ArrayNode::String(text) = &node {
+                bytes += text.len();
+            }
+            if bytes > MAX_TEXT_ARRAY_BYTES {
+                return CalcResult::new_error(
+                    Error::VALUE,
+                    cell,
+                    format!("Array of texts larger than {MAX_TEXT_ARRAY_BYTES} bytes"),
+                );
+            }
+            data_row.push(node);
         }
         result.push(data_row);
     }

@@ -835,3 +835,14 @@ fn arraytotext_past_the_text_limit_opens_as_value_error() {
     );
     assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
 }
+
+// LEFT, RIGHT and MID broadcast a column against a row into every pair, 1.7e10 elements for a
+// whole column against a whole row; past the million SEQUENCE allows each is #VALUE!.
+#[test]
+fn text_broadcasts_past_the_array_size_limit_open_as_value_errors() {
+    let texts = texts_on_open(
+        r#"<c r="A1"><f>LEFT(B2:B1048576,C2:XFD2)</f></c><c r="B1"><f>MID(B2:B1048576,1,C2:XFD2)</f></c>"#,
+        &["A1", "B1"],
+    );
+    assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
+}
