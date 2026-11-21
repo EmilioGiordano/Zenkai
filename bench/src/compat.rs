@@ -116,6 +116,23 @@ pub fn generate(dir: &Path) -> Result<()> {
     sheet.insert_note(0, 0, &Note::new("A reviewer note"))?;
     save(&mut book, dir, "notes.xlsx")?;
 
+    // Content on sheets other than the one an edit moves rows on (#246).
+    let mut book = Workbook::new();
+    let data = book.add_worksheet().set_name("Data")?;
+    for row in 0..5u32 {
+        data.write_number(row, 0, f64::from(row + 1))?;
+    }
+    let held = book.add_worksheet().set_name("Held")?;
+    held.write_string(0, 0, "note, picture and link")?;
+    held.insert_note(0, 0, &Note::new("A reviewer note"))?;
+    held.write_url(1, 0, Url::new("https://example.com"))?;
+    held.insert_image(3, 0, &Image::new_from_buffer(&PIXEL_PNG)?)?;
+    let charted = book.add_worksheet().set_name("Charted")?;
+    let mut chart = Chart::new(ChartType::Column);
+    chart.add_series().set_values("Data!$A$1:$A$5");
+    charted.insert_chart(0, 0, &chart)?;
+    save(&mut book, dir, "content-on-other-sheets.xlsx")?;
+
     let mut book = Workbook::new();
     let sheet = book.add_worksheet();
     for row in 0..10u32 {
