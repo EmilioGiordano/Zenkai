@@ -37,59 +37,113 @@ const CHECKED_ELEMENTS: [&[u8]; 19] = [
 // no '<name' or '<prefix:name' start tag for these names cannot contain them; the
 // full parse is skipped for it. Text that only looks like a tag merely costs a parse.
 pub fn has_checked_element(bytes: &[u8]) -> bool {
-    start_tag_names(bytes).any(|local| CHECKED_ELEMENTS.contains(&local))
+    start_tag_names(bytes).any(is_checked)
+}
+
+fn is_checked(local: &[u8]) -> bool {
+    CHECKED_ELEMENTS.contains(&local)
+}
+
+// A local name longer than this cannot be a checked one.
+const LONGEST_CHECKED: usize = {
+    let mut longest = 0;
+    let mut index = 0;
+    while index < CHECKED_ELEMENTS.len() {
+        if CHECKED_ELEMENTS[index].len() > longest {
+            longest = CHECKED_ELEMENTS[index].len();
+        }
+        index += 1;
+    }
+    longest
+};
+
+// Where the name that starts `rest`, right after a '<', ends; None when `rest` ends first.
+fn name_end(rest: &[u8]) -> Option<usize> {
+    rest.iter()
+        .position(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/' | b'<'))
+}
+
+fn local_part(name: &[u8]) -> &[u8] {
+    name.rsplit(|b| *b == b':').next().unwrap_or(name)
 }
 
 // The local name after every '<', read without parsing: an end tag gives an empty name and a
 // tag inside a comment counts too.
 pub fn start_tag_names(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
     bytes.split(|b| *b == b'<').skip(1).map(|rest| {
-        let name_end = rest
-            .iter()
-            .position(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/'))
-            .unwrap_or(rest.len());
-        let name = &rest[..name_end];
-        name.rsplit(|b| *b == b':').next().unwrap_or(name)
+        let name = &rest[..name_end(rest).unwrap_or(rest.len())];
+        local_part(name)
     })
 }
 
-// Watches streamed bytes for the elements above, so parts without any are never
-// inflated whole. A tag start split across chunks is still seen: every push also
-// scans the tail of the previous one. Only a tag whose name alone is longer than
-// the overlap escapes, and such a prefix cannot name a checked element in practice.
+// Watches streamed bytes for the elements above, so parts without any are never inflated
+// whole. A tag name a chunk ends in is carried into the next chunk however long its prefix
+// is: only its local part after the last ':' is kept, and of that no more than a checked
+// name could take, so the state stays a few bytes.
 pub(crate) struct Prefilter {
-    overlap: Vec<u8>,
+    // The local part read so far of the name the last chunk ended in.
+    unfinished: Option<Vec<u8>>,
     hit: bool,
 }
-
-const PREFILTER_OVERLAP: usize = 64;
 
 impl Prefilter {
     pub(crate) fn new() -> Prefilter {
         Prefilter {
-            overlap: Vec::new(),
+            unfinished: None,
             hit: false,
         }
     }
 
     pub(crate) fn push(&mut self, chunk: &[u8]) {
-        if self.hit || chunk.is_empty() {
+        if self.hit {
             return;
         }
-        let mut window = Vec::with_capacity(self.overlap.len() + chunk.len());
-        window.extend_from_slice(&self.overlap);
-        window.extend_from_slice(chunk);
-        if has_checked_element(&window) {
-            self.hit = true;
-            return;
+        let mut rest = chunk;
+        if let Some(mut local) = self.unfinished.take() {
+            let end = name_end(rest);
+            keep_local(&mut local, &rest[..end.unwrap_or(rest.len())]);
+            let Some(end) = end else {
+                self.unfinished = Some(local);
+                return;
+            };
+            if is_checked(&local) {
+                self.hit = true;
+                return;
+            }
+            rest = &rest[end..];
         }
-        let keep = window.len().min(PREFILTER_OVERLAP);
-        self.overlap = window[window.len() - keep..].to_vec();
+        while let Some(at) = rest.iter().position(|b| *b == b'<') {
+            rest = &rest[at + 1..];
+            let Some(end) = name_end(rest) else {
+                let mut local = Vec::with_capacity(LONGEST_CHECKED + 1);
+                keep_local(&mut local, rest);
+                self.unfinished = Some(local);
+                return;
+            };
+            if is_checked(local_part(&rest[..end])) {
+                self.hit = true;
+                return;
+            }
+        }
     }
 
+    // A name the bytes end in counts, as `has_checked_element` counts it.
     pub(crate) fn hit(&self) -> bool {
-        self.hit
+        self.hit || self.unfinished.as_deref().is_some_and(is_checked)
     }
+}
+
+// Adds the next piece of a name to the local part kept of it.
+fn keep_local(local: &mut Vec<u8>, piece: &[u8]) {
+    let piece = match piece.iter().rposition(|b| *b == b':') {
+        Some(colon) => {
+            local.clear();
+            &piece[colon + 1..]
+        }
+        None => piece,
+    };
+    let room = (LONGEST_CHECKED + 1).saturating_sub(local.len());
+    local.extend_from_slice(&piece[..piece.len().min(room)]);
 }
 
 // Counts worksheet cells, formulas and rows while their bytes stream past, so
@@ -920,6 +974,79 @@ mod tests {
         assert!(!filter.hit());
         filter.push(b"f>A1*2</f></c></row>");
         assert!(filter.hit());
+    }
+
+    // Pushes `bytes` in the pieces `cuts` marks.
+    fn filtered(bytes: &[u8], cuts: &[usize]) -> bool {
+        let mut filter = Prefilter::new();
+        let mut start = 0;
+        for &cut in cuts.iter().chain([bytes.len()].iter()) {
+            let cut = cut.clamp(start, bytes.len());
+            filter.push(&bytes[start..cut]);
+            start = cut;
+        }
+        filter.hit()
+    }
+
+    // Where the tag under test starts in what `tag` builds.
+    const TAG_START: usize = 17;
+
+    fn tag(prefix_length: usize, name: &[u8]) -> Vec<u8> {
+        let mut bytes = b"<root><x>text</x><".to_vec();
+        if prefix_length > 0 {
+            bytes.extend(vec![b'p'; prefix_length]);
+            bytes.push(b':');
+        }
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(b" a=\"1\"/></root>");
+        bytes
+    }
+
+    // A namespace prefix longer than a fixed overlap between chunks would hide the name behind
+    // it when a chunk boundary falls inside the tag.
+    #[test]
+    fn long_prefixes_across_chunk_boundaries_hide_no_checked_element() {
+        for name in CHECKED_ELEMENTS {
+            for prefix_length in [0, 1, 63, 64, 65, 200, CHUNK_BYTES + 3] {
+                let bytes = tag(prefix_length, name);
+                let colon = TAG_START + 1 + prefix_length;
+                let mut cuts: Vec<usize> = (TAG_START..bytes.len())
+                    .step_by(1 + prefix_length / 64)
+                    .collect();
+                cuts.extend(colon - 1..(colon + name.len() + 2).min(bytes.len()));
+                for cut in cuts {
+                    assert!(filtered(&bytes, &[cut]), "{prefix_length} at {cut}");
+                }
+                let chunks: Vec<usize> = (0..bytes.len()).step_by(CHUNK_BYTES / 3).collect();
+                assert!(filtered(&bytes, &chunks), "{prefix_length}");
+            }
+        }
+        let unchecked: [&[u8]; 3] = [b"fonts", b"formula11", b"xf"];
+        for unchecked in unchecked {
+            for prefix_length in [0, 70, 300] {
+                let bytes = tag(prefix_length, unchecked);
+                for cut in 0..bytes.len().min(400) {
+                    assert!(!filtered(&bytes, &[cut]));
+                }
+            }
+        }
+        let parts: [&[u8]; 3] = [b"<", &[b'q'; 300], b":definedName>1</definedName>"];
+        assert!(filtered(&parts.concat(), &[150]));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn any_split_of_a_prefixed_checked_tag_is_seen(
+            name in 0..CHECKED_ELEMENTS.len(),
+            prefix_length in 0usize..300,
+            cuts in proptest::collection::vec(0usize..400, 0..6),
+        ) {
+            let mut cuts = cuts;
+            cuts.sort_unstable();
+            let bytes = tag(prefix_length, CHECKED_ELEMENTS[name]);
+            proptest::prop_assert!(filtered(&bytes, &cuts));
+            proptest::prop_assert_eq!(filtered(&bytes, &cuts), has_checked_element(&bytes));
+        }
     }
 
     #[test]
