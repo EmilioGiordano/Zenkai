@@ -6,8 +6,7 @@ use crate::folders::Folders;
 
 const MAX_BYTES: u64 = 256 * 1024;
 
-// The launcher has no window to report to, so what it does and every error it meets go to
-// `.update\launcher.log`, which outlives the cleanup after an update. Without it, it stays silent.
+// This log is the launcher's only way to report, so failing to open it cannot be reported.
 pub fn init(folders: &Folders) {
     let path = folders.journal();
     if disk::prepare_update_folder(folders).is_err() {

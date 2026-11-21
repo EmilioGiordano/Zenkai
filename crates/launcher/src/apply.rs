@@ -68,7 +68,7 @@ fn swap(folders: &Folders, version: &Version, passed: &[OsString], timing: &Timi
         Ok(child) => child,
         Err(error) => {
             tracing::error!(%error, "the new version could not start");
-            return finish_rejected(folders, version, timing);
+            return settle::reject(folders, Some(version.clone()), timing).into();
         }
     };
     if confirmed(folders, version, started, timing) {
@@ -78,7 +78,7 @@ fn swap(folders: &Folders, version: &Version, passed: &[OsString], timing: &Timi
         tracing::info!(%version, "the update is in place");
         return Finish::Running;
     }
-    finish_rejected(folders, version, timing)
+    settle::reject(folders, Some(version.clone()), timing).into()
 }
 
 fn previous_app_closed(folders: &Folders, timing: &Timing) -> bool {
@@ -120,10 +120,6 @@ fn confirmed(folders: &Folders, version: &Version, mut started: Child, timing: &
         }
         sleep(timing.poll);
     }
-}
-
-fn finish_rejected(folders: &Folders, version: &Version, timing: &Timing) -> Finish {
-    settle::reject(folders, Some(version.clone()), timing).into()
 }
 
 #[cfg(test)]

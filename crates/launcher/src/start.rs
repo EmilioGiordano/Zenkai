@@ -75,10 +75,10 @@ pub fn run(
     };
     let finish = match request {
         Request::Apply(version) => apply(folders, &version, passed, timing),
-        Request::Open => open_as_settled(folders, timing),
+        Request::Open => settle(folders, timing).into(),
         Request::Malformed => {
             tracing::warn!("ignored a malformed --apply argument");
-            open_as_settled(folders, timing)
+            settle(folders, timing).into()
         }
     };
     tracing::info!(?finish, "done");
@@ -88,10 +88,6 @@ pub fn run(
         Finish::Running => None,
         Finish::Tell(message) => Some(message),
     }
-}
-
-fn open_as_settled(folders: &Folders, timing: &Timing) -> Finish {
-    settle(folders, timing).into()
 }
 
 impl From<Settled> for Finish {
