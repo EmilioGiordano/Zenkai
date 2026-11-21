@@ -5,7 +5,7 @@
 use std::io::{self, BufReader, Read};
 
 use quick_xml::Reader;
-use quick_xml::events::{BytesStart, Event};
+use quick_xml::events::{BytesDecl, BytesStart, Event};
 
 use crate::nesting::MAX_XML_DEPTH;
 
@@ -30,6 +30,9 @@ pub(crate) fn names_cells(drawing: impl Read) -> io::Result<bool> {
             }
             Ok(Event::Empty(element)) if names_a_cell(&element) => return Ok(true),
             Ok(Event::End(_)) => depth = depth.saturating_sub(1),
+            // A document type may declare entities the scan never expands.
+            Ok(Event::DocType(_)) => return Ok(true),
+            Ok(Event::Decl(declaration)) if !declares_utf8(&declaration) => return Ok(true),
             Ok(Event::Eof) => return Ok(false),
             Ok(_) => {}
             Err(quick_xml::Error::Io(error)) if !reader.get_ref().get_ref().invalid => {
@@ -37,6 +40,18 @@ pub(crate) fn names_cells(drawing: impl Read) -> io::Result<bool> {
             }
             Err(_) => return Ok(true),
         }
+    }
+}
+
+// No encoding means UTF-8; any other, even one whose bytes read as UTF-8, may spell the
+// names differently.
+fn declares_utf8(declaration: &BytesDecl) -> bool {
+    match declaration.encoding() {
+        None => true,
+        Some(Ok(encoding)) => {
+            encoding.eq_ignore_ascii_case(b"UTF-8") || encoding.eq_ignore_ascii_case(b"UTF8")
+        }
+        Some(Err(_)) => false,
     }
 }
 
@@ -198,6 +213,27 @@ mod tests {
             drawing(r#"<xdr:sp textlink="A1/>"#),
         ] {
             assert!(scan(&broken), "{}", String::from_utf8_lossy(&broken));
+        }
+    }
+
+    #[test]
+    fn a_declared_encoding_other_than_utf8_or_a_document_type_may_name_cells() {
+        let declared =
+            |declaration: &str| format!("{declaration}{}", String::from_utf8(drawing("")).unwrap());
+        for utf8 in [
+            "",
+            r#"<?xml version="1.0"?>"#,
+            r#"<?xml version="1.0" encoding="utf-8" standalone="yes"?>"#,
+        ] {
+            assert!(!scan(declared(utf8).as_bytes()), "{utf8}");
+        }
+        for other in [
+            r#"<?xml version="1.0" encoding="windows-1252"?>"#,
+            r#"<?xml version="1.0" encoding="UTF-16"?>"#,
+            r#"<?xml version="1.0" encoding='utf-8?>"#,
+            r#"<!DOCTYPE wsDr [<!ENTITY link "Sheet2!A1">]>"#,
+        ] {
+            assert!(scan(declared(other).as_bytes()), "{other}");
         }
     }
 
