@@ -6,13 +6,14 @@ mod state;
 mod store;
 mod version;
 
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui_kit::*;
 
 use crate::agent_settings::AgentConfig;
 use fetch::FetchError;
-use notes::Notes;
+pub use notes::{Day, MAX_NOTES, Note, Notes};
 use record::Record;
 use releases::Releases;
 pub use state::{Report, Source, Status, Updates};
@@ -74,6 +75,10 @@ fn now() -> Option<u64> {
 
 pub fn status(cx: &App) -> Status {
     cx.global::<Updates>().status()
+}
+
+pub fn notes(cx: &App) -> Arc<Notes> {
+    cx.global::<Updates>().notes()
 }
 
 // Called from an observer of `Updates`: updating the global when there is nothing to take would

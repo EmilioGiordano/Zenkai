@@ -43,6 +43,7 @@ mod markdown_links;
 mod markdown_pane;
 mod markdown_restricted;
 mod memory;
+mod notes_tab;
 mod open_loads;
 mod palette;
 mod panel_edge;
@@ -82,6 +83,7 @@ mod toolbar;
 mod tray;
 mod updates;
 mod view;
+mod whats_new;
 
 use std::path::PathBuf;
 
