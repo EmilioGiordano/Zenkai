@@ -382,7 +382,9 @@ pub fn report(dir: &Path, out: &Path) -> Result<()> {
         "against the value Zenkai shows after recalculating.\n",
         "- **Round trip**: save, reopen and compare every filled cell.\n\n",
         "Content of a kind Zenkai does not detect (embedded objects, form controls) is never ",
-        "warned about and may be dropped when the sheet holding it is written again.\n\n",
+        "warned about and may be dropped when the sheet holding it is written again. Slicers, ",
+        "timelines and the data model are detected as the engine tests show; the corpus has no ",
+        "file for them yet.\n\n",
         "| File | Opens | Warned on open | Dropped by save | Dropped without warning | Cached = recalculated | Round trip |\n",
         "| --- | --- | --- | --- | --- | --- | --- |\n",
     ));
