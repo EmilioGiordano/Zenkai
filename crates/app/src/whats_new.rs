@@ -1,5 +1,3 @@
-mod blocks;
-mod draw;
 mod links;
 mod plan;
 mod render;
