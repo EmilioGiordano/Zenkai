@@ -119,14 +119,18 @@ impl Workspace {
             self.hidden_since.get_or_insert_with(Instant::now);
         } else {
             self.hidden_since = None;
-            self.wake_stepped_aside(window, cx);
         }
         // A close writes its own copies, and a dump could outlive a workbook it discards.
-        if self.hibernating.is_some()
-            || self.lifecycle == Lifecycle::Closing
+        if self.lifecycle == Lifecycle::Closing
             || self.departure.is_some()
             || self.close_dialog.is_some()
         {
+            return;
+        }
+        if !hidden {
+            self.wake_stepped_aside(window, cx);
+        }
+        if self.hibernating.is_some() {
             return;
         }
         let minutes = agent_settings::settings(cx).general.rest_after_minutes;
