@@ -163,3 +163,42 @@ fn broadcast_stops_at_the_array_byte_cap() {
     assert_eq!(model._get_text("B1"), "#VALUE!");
     assert_eq!(model._get_text("B2"), "");
 }
+
+#[test]
+fn cuts_count_characters_not_bytes() {
+    let mut model = new_empty_model();
+    model._set("A1", "=LEFT(\"héllo\", 2)");
+    model._set("A2", "=RIGHT(\"héllo😀\", 2)");
+    model._set("A3", "=MID(\"héllo\", 2, 3)");
+    model._set("A4", "=RIGHT(\"abc\", 0)");
+    model._set("A5", "=RIGHT(\"abc\", 5)");
+    model._set("A6", "=MID(\"abc\", 5, 2)");
+    model._set("A7", "=MID(\"abc\", 2, 0)");
+    model._set("A8", "=LEFT(\"abc\", 1E+300)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "hé");
+    assert_eq!(model._get_text("A2"), "o😀");
+    assert_eq!(model._get_text("A3"), "éll");
+    assert_eq!(model._get_text("A4"), "");
+    assert_eq!(model._get_text("A5"), "abc");
+    assert_eq!(model._get_text("A6"), "");
+    assert_eq!(model._get_text("A7"), "");
+    assert_eq!(model._get_text("A8"), "abc");
+}
+
+// Cutting a little from a long text a million times walks only what each cut needs, and
+// walking far into it each time counts toward the array's byte cap: a million cuts at its
+// end walk 33 GB and are #VALUE!.
+#[test]
+fn broadcast_cuts_walk_only_what_they_need() {
+    let mut model = new_empty_model();
+    model._set("A1", "=REPT(\"x\",32767)");
+    model._set("C1", "=COUNTA(LEFT(A1, SEQUENCE(1000000)*0))");
+    model._set("C2", "=COUNTA(RIGHT(A1, SEQUENCE(1000000)*0+1))");
+    model._set("C3", "=MID(A1, SEQUENCE(1000000)*0+32767, 1)");
+    model.evaluate();
+    assert_eq!(model._get_text("C1"), "1000000");
+    assert_eq!(model._get_text("C2"), "1000000");
+    assert_eq!(model._get_text("C3"), "#VALUE!");
+    assert_eq!(model._get_text("C4"), "");
+}

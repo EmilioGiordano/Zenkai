@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{
     arithmetic::{bcast_idx, BYTES_PER_ELEMENT, MAX_TEXT_ARRAY_BYTES},
     calc_result::CalcResult,
@@ -61,36 +63,71 @@ fn text_num_arg(node: &ArrayNode) -> Result<f64, Error> {
     }
 }
 
+// The text of an element, borrowed when it is one: a long text cut from a million times must
+// not be copied a million times.
+fn element_text(node: &ArrayNode) -> Result<Cow<'_, str>, Error> {
+    match node {
+        ArrayNode::String(text) => Ok(Cow::Borrowed(text)),
+        other => array_node_to_string(other).map(Cow::Owned),
+    }
+}
+
+fn end_of_chars(text: &str, count: usize) -> usize {
+    text.char_indices()
+        .nth(count)
+        .map_or(text.len(), |(index, _)| index)
+}
+
+// A LEFT, RIGHT or MID result and the bytes of text walked to find it, the result included,
+// which a broadcast charges to its budget.
+struct Cut {
+    text: String,
+    walked: usize,
+}
+
 /// Computes a single LEFT result from one element of each argument.
-fn left_element(text: Option<&ArrayNode>, num: Option<&ArrayNode>) -> Result<ArrayNode, Error> {
+fn left_element(text: Option<&ArrayNode>, num: Option<&ArrayNode>) -> Result<Cut, Error> {
     let (text, num) = match (text, num) {
         (Some(t), Some(n)) => (t, n),
         // A broadcast hole (incompatible dimensions) yields #N/A, as in Excel.
         _ => return Err(Error::NA),
     };
-    let s = array_node_to_string(text)?;
+    let s = element_text(text)?;
     let num = text_num_arg(num)?;
     if num < 0.0 {
         return Err(Error::VALUE);
     }
-    let num_chars = num.floor() as usize;
-    Ok(ArrayNode::String(s.chars().take(num_chars).collect()))
+    let end = end_of_chars(&s, num.floor() as usize);
+    Ok(Cut {
+        text: s[..end].to_string(),
+        walked: end,
+    })
 }
 
 /// Computes a single RIGHT result from one element of each argument.
-fn right_element(text: Option<&ArrayNode>, num: Option<&ArrayNode>) -> Result<ArrayNode, Error> {
+fn right_element(text: Option<&ArrayNode>, num: Option<&ArrayNode>) -> Result<Cut, Error> {
     let (text, num) = match (text, num) {
         (Some(t), Some(n)) => (t, n),
         _ => return Err(Error::NA),
     };
-    let s = array_node_to_string(text)?;
+    let s = element_text(text)?;
     let num = text_num_arg(num)?;
     if num < 0.0 {
         return Err(Error::VALUE);
     }
     let num_chars = num.floor() as usize;
-    let skip = s.chars().count().saturating_sub(num_chars);
-    Ok(ArrayNode::String(s.chars().skip(skip).collect()))
+    let start = match num_chars.checked_sub(1) {
+        Some(last) => s
+            .char_indices()
+            .rev()
+            .nth(last)
+            .map_or(0, |(index, _)| index),
+        None => s.len(),
+    };
+    Ok(Cut {
+        text: s[start..].to_string(),
+        walked: s.len() - start,
+    })
 }
 
 /// Computes a single MID result from one element of each argument.
@@ -98,12 +135,12 @@ fn mid_element(
     text: Option<&ArrayNode>,
     start: Option<&ArrayNode>,
     length: Option<&ArrayNode>,
-) -> Result<ArrayNode, Error> {
+) -> Result<Cut, Error> {
     let (text, start, length) = match (text, start, length) {
         (Some(t), Some(s), Some(l)) => (t, s, l),
         _ => return Err(Error::NA),
     };
-    let s = array_node_to_string(text)?;
+    let s = element_text(text)?;
     let start = text_num_arg(start)?;
     let length = text_num_arg(length)?;
     if start < 1.0 {
@@ -112,20 +149,12 @@ fn mid_element(
     if length < 0.0 {
         return Err(Error::VALUE);
     }
-    let start_num = start.floor() as usize;
-    let num_chars = length.floor() as usize;
-    let mut result = String::new();
-    let mut count: usize = 0;
-    for (index, ch) in s.chars().enumerate() {
-        if count >= num_chars {
-            break;
-        }
-        if index + 1 >= start_num {
-            result.push(ch);
-            count += 1;
-        }
-    }
-    Ok(ArrayNode::String(result))
+    let begin = end_of_chars(&s, (start.floor() as usize).saturating_sub(1));
+    let end = begin + end_of_chars(&s[begin..], length.floor() as usize);
+    Ok(Cut {
+        text: s[begin..end].to_string(),
+        walked: end,
+    })
 }
 
 /// Broadcasts `compute` over the (possibly array) `operands`. When every operand
@@ -134,7 +163,7 @@ fn mid_element(
 fn broadcast_text(
     cell: CellReferenceIndex,
     operands: &[&TextArg],
-    compute: impl Fn(usize, usize) -> Result<ArrayNode, Error>,
+    compute: impl Fn(usize, usize) -> Result<Cut, Error>,
 ) -> CalcResult {
     let mut rows = 1;
     let mut cols = 1;
@@ -149,11 +178,8 @@ fn broadcast_text(
     // All scalars: return a single value.
     if rows <= 1 && cols <= 1 {
         return match compute(0, 0) {
-            Ok(ArrayNode::String(s)) => CalcResult::String(s),
-            Ok(ArrayNode::Number(n)) => CalcResult::Number(n),
-            Ok(ArrayNode::Boolean(b)) => CalcResult::Boolean(b),
-            Ok(ArrayNode::Empty) => CalcResult::String(String::new()),
-            Ok(ArrayNode::Error(e)) | Err(e) => CalcResult::new_error(e, cell, String::new()),
+            Ok(cut) => CalcResult::String(cut.text),
+            Err(e) => CalcResult::new_error(e, cell, String::new()),
         };
     }
 
@@ -166,17 +192,21 @@ fn broadcast_text(
     }
 
     // Even within that size, a long text repeated over a large operand would hold gigabytes,
-    // so the result stops at the bytes `&` allows an array, a limit Excel does not have.
+    // or be walked billions of times, so the result stops at the bytes `&` allows an array,
+    // the text walked for each element counted with it, a limit Excel does not have.
     let mut bytes: usize = 0;
     let mut result = Vec::with_capacity(rows);
     for i in 0..rows {
         let mut data_row = Vec::with_capacity(cols);
         for j in 0..cols {
-            let node = compute(i, j).unwrap_or_else(ArrayNode::Error);
             bytes += BYTES_PER_ELEMENT;
-            if let ArrayNode::String(text) = &node {
-                bytes += text.len();
-            }
+            let node = match compute(i, j) {
+                Ok(cut) => {
+                    bytes += cut.walked;
+                    ArrayNode::String(cut.text)
+                }
+                Err(error) => ArrayNode::Error(error),
+            };
             if bytes > MAX_TEXT_ARRAY_BYTES {
                 return CalcResult::new_error(
                     Error::VALUE,

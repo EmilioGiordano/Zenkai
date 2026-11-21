@@ -452,6 +452,13 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   against a row built every pair (`broadcast_text` in `src/functions/text/common.rs`). Needs
   the text limit patch for the `&` limits. Tests: `broadcast_*` in
   `src/test/text_functions/fn_left_right_mid_arrays.rs`.
+- LEFT, RIGHT and MID borrow each element's text instead of copying it, walk only the
+  characters a cut needs (RIGHT from the end, MID up to its end), and an array they broadcast
+  charges the bytes each element walked to that byte cap, so cutting from a long text a
+  million times is cheap when the cuts are short and `#VALUE!` when they walk gigabytes
+  (`src/functions/text/common.rs`). Needs the broadcast limits above. Tests:
+  `cuts_count_characters_not_bytes` and `broadcast_cuts_walk_only_what_they_need` in
+  `src/test/text_functions/fn_left_right_mid_arrays.rs`.
 - CONCAT, and TEXTJOIN when an empty cell adds nothing to its text, read only the cells a
   range holds (`RangeCells` in `src/range_cells.rs`, `CellStore::next_column` and
   `CellStore::last_row`), instead of evaluating every cell of it, 1.7e10 for a whole sheet.

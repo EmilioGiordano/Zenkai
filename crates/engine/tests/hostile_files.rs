@@ -879,3 +879,21 @@ fn whole_sheet_ranges_turned_into_arrays_open_as_value_errors() {
     );
     assert_eq!(texts, ["#VALUE!", "#VALUE!", "1048576"]);
 }
+
+// A dynamic array formula, so no argument is narrowed to one value as in a legacy formula.
+fn dynamic_formula(cell: &str, formula: &str) -> String {
+    format!(r#"<c r="{cell}" cm="1"><f t="array" ref="{cell}">{formula}</f></c>"#)
+}
+
+// LEFT, RIGHT and MID copied and walked a 32,767 character text for each of a million
+// elements, tens of gigabytes of copies; now a short cut is cheap and a long walk is #VALUE!.
+#[test]
+fn text_cuts_from_a_long_text_a_million_times_open_quickly() {
+    let cells = [
+        r#"<c r="A1"><f>REPT("x",32767)</f></c>"#.to_string(),
+        dynamic_formula("B1", "COUNTA(LEFT(A1,SEQUENCE(1000000)*0))"),
+        dynamic_formula("C1", "MID(A1,SEQUENCE(1000000)*0+32767,1)"),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["B1", "C1"]);
+    assert_eq!(texts, ["1000000", "#VALUE!"]);
+}
