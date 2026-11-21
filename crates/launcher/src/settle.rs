@@ -85,7 +85,8 @@ pub fn settle(folders: &Folders, timing: &Timing) -> Settled {
 }
 
 // The version in `app` did not start: it moves aside and the previous one comes back. If it
-// cannot move, nothing is restored and the next start decides.
+// cannot move, nothing opens: opening it would let it confirm itself, so it stays unconfirmed
+// and the next start tries again.
 pub fn reject(folders: &Folders, version: Option<Version>, timing: &Timing) -> Settled {
     let rejected = folders.rejected();
     if let Err(error) = disk::remove_tree(&rejected) {
@@ -95,7 +96,7 @@ pub fn reject(folders: &Folders, version: Option<Version>, timing: &Timing) -> S
         disk::rename_retrying(&folders.app(), &rejected, timing.move_app, timing.poll)
     {
         tracing::error!(%error, "could not move aside the version that did not start");
-        return Settled::AsIs;
+        return Settled::NoApp(Message::NotSetAside);
     }
     match restore(folders, timing) {
         Ok(()) => {

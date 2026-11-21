@@ -223,16 +223,21 @@ fn a_crash_while_restoring_restores_on_the_next_start() {
 }
 
 #[test]
-fn a_version_that_cannot_be_moved_aside_is_opened_as_it_is() {
+fn a_version_that_cannot_be_moved_aside_is_not_opened_and_stays_unconfirmed() {
     let install = Install::new();
     install.put_version("app.old", "old");
     install.put_version("app", "new");
     let held = install.hold("app/pdfium.dll");
     let settled = settle(&install.folders(), &TEST_TIMING);
     drop(held);
-    assert!(matches!(settled, Settled::AsIs));
+    assert!(matches!(settled, Settled::NoApp(Message::NotSetAside)));
     assert_eq!(install.version_in("app").as_deref(), Some("new"));
     assert_eq!(install.version_in("app.old").as_deref(), Some("old"));
+    assert!(matches!(
+        settle(&install.folders(), &TEST_TIMING),
+        Settled::Clean(Some(Notice::Restored(None)))
+    ));
+    assert_eq!(install.version_in("app").as_deref(), Some("old"));
 }
 
 #[test]

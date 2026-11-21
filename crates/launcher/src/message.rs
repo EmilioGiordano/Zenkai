@@ -11,6 +11,7 @@ pub enum Message {
     Reinstall,
     Interrupted,
     NotClosed,
+    NotSetAside,
     CouldNotStart(io::Error),
 }
 
@@ -50,6 +51,14 @@ impl Message {
             (Message::NotClosed, Language::Spanish) => {
                 "Zenkai no se cerró a tiempo, así que la actualización no se instaló.".to_owned()
             }
+            (Message::NotSetAside, Language::English) => {
+                "The new version of Zenkai did not start, and part of it is still running. Open Zenkai again in a moment to go back to the previous version."
+                    .to_owned()
+            }
+            (Message::NotSetAside, Language::Spanish) => {
+                "La nueva versión de Zenkai no arrancó y una parte sigue en marcha. Abre Zenkai de nuevo en un momento para volver a la versión anterior."
+                    .to_owned()
+            }
             (Message::CouldNotStart(error), Language::English) => {
                 format!("Zenkai could not start: {error}")
             }
@@ -87,6 +96,7 @@ mod tests {
             Message::Reinstall,
             Message::Interrupted,
             Message::NotClosed,
+            Message::NotSetAside,
             Message::CouldNotStart(std::io::Error::other("boom")),
         ];
         for message in &messages {
