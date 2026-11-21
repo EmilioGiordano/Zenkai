@@ -6,6 +6,17 @@ use crate::{
     model::Model,
 };
 
+// Excel's FIXED and DOLLAR take at most 127 decimals and are #VALUE! past it.
+const MAX_DECIMALS: i32 = 127;
+
+fn decimals_too_many(cell: CellReferenceIndex) -> CalcResult {
+    CalcResult::new_error(
+        Error::VALUE,
+        cell,
+        format!("Decimals must be at most {MAX_DECIMALS}"),
+    )
+}
+
 fn format_thousands(n: u64) -> String {
     let s = n.to_string();
     let mut result = String::with_capacity(s.len() + s.len() / 3);
@@ -73,6 +84,9 @@ impl<'a> Model<'a> {
         } else {
             2
         };
+        if decimals > MAX_DECIMALS {
+            return decimals_too_many(cell);
+        }
         let formatted = format_abs(value.abs(), decimals, true);
         let result = if value < 0.0 {
             format!("(${})", formatted)
@@ -107,6 +121,9 @@ impl<'a> Model<'a> {
         } else {
             false
         };
+        if decimals > MAX_DECIMALS {
+            return decimals_too_many(cell);
+        }
         let use_thousands = !no_commas;
         let formatted = format_abs(value.abs(), decimals, use_thousands);
         let result = if value < 0.0 {

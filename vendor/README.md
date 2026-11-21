@@ -436,6 +436,10 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   result to whatever length a file asks for
   (`src/functions/math_and_trigonometry/mathematical.rs`). Stands on its own. Tests:
   `src/test/mathematical/test_base.rs`.
+- FIXED and DOLLAR return `#VALUE!`, as Excel does, for more than 127 decimals instead of
+  padding their result to whatever width a file asks for
+  (`src/functions/text/string_format.rs`). Stands on its own. Test:
+  `test_fixed_and_dollar_decimals_past_127_are_value` in `src/test/text_functions/mod.rs`.
 
 Zenkai-only, not for upstream:
 

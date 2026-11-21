@@ -813,3 +813,14 @@ fn base_past_its_minimum_length_limit_opens_as_num() {
     let texts = texts_on_open(r#"<c r="A1"><f>BASE(1,2,2000000000)</f></c>"#, &["A1"]);
     assert_eq!(texts, ["#NUM!"]);
 }
+
+// FIXED and DOLLAR padded their decimals to the two billion digits the file asked for; Excel
+// allows 127.
+#[test]
+fn fixed_and_dollar_past_their_decimals_limit_open_as_value_errors() {
+    let texts = texts_on_open(
+        r#"<c r="A1"><f>FIXED(1,2000000000)</f></c><c r="B1"><f>DOLLAR(1,2000000000)</f></c>"#,
+        &["A1", "B1"],
+    );
+    assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
+}

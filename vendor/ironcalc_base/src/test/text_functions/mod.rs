@@ -67,6 +67,26 @@ fn test_fixed_basic() {
     assert_eq!(model._get_text("A4"), "-1,234.50");
 }
 
+// Excel takes up to 127 decimals in FIXED and DOLLAR and gives #VALUE! past them; a file
+// asking for billions of decimals used to allocate them.
+#[test]
+fn test_fixed_and_dollar_decimals_past_127_are_value() {
+    let mut model = new_empty_model();
+    model._set("A1", "=FIXED(1, 127)");
+    model._set("A2", "=FIXED(1, 128)");
+    model._set("A3", "=FIXED(1, 1E+300, TRUE)");
+    model._set("B1", "=DOLLAR(1, 127)");
+    model._set("B2", "=DOLLAR(1, 128)");
+    model._set("B3", "=DOLLAR(-1, 1E+300)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), format!("1.{}", "0".repeat(127)));
+    assert_eq!(model._get_text("A2"), "#VALUE!");
+    assert_eq!(model._get_text("A3"), "#VALUE!");
+    assert_eq!(model._get_text("B1"), format!("$1.{}", "0".repeat(127)));
+    assert_eq!(model._get_text("B2"), "#VALUE!");
+    assert_eq!(model._get_text("B3"), "#VALUE!");
+}
+
 // ── NUMBERVALUE ───────────────────────────────────────────────────────────────
 
 #[test]
