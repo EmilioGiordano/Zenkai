@@ -421,10 +421,10 @@ Aplicar una actualización:
 
 1. Espera a que termine la app anterior, hasta 60 s. Si no termina, abre la app actual y avisa, sin tocar nada. Después resuelve el estado en disco según la tabla, para que un `app.old` viejo no bloquee esta actualización.
 2. Exige que `new-<versión>` sea una carpeta real y que tenga un `zenkai.exe` regular, sin puntos de reanálisis. La lista exacta de archivos la controla el extractor, que sí se puede actualizar.
-3. Borra cualquier `confirmed` anterior y renombra `app` a `app.old`, con reintentos durante 10 s. Si falla, algo sigue corriendo desde `app`: abre la versión anterior y avisa.
+3. Borra cualquier `confirmed` anterior, anota la versión en `.update\applying`, sincronizado a disco, y renombra `app` a `app.old`, con reintentos durante 10 s. Si falla, algo sigue corriendo desde `app`: abre la versión anterior y avisa.
 4. Renombra `new-<versión>` a `app`, con reintentos durante 30 s. Si falla, devuelve `app.old` a `app` y avisa.
 5. Abre la versión nueva y espera la marca `confirmed` con esa misma versión, hasta 120 s, o a que el proceso termine.
-6. Con la marca, borra `app.old` y después la marca. El resto de `.update\` no se toca: descargas, otras carpetas `new-*` y el registro del lanzador son de quien los escribió, que puede ser una app ya preparando la siguiente actualización. Sin la marca, si el proceso sigue vivo termina ese proceso, que es su propio hijo, y restaura.
+6. Con la marca, borra `app.old`, después `applying` y al final la marca. El resto de `.update\` no se toca: descargas, otras carpetas `new-*` y el registro del lanzador son de quien los escribió, que puede ser una app ya preparando la siguiente actualización. Sin la marca, si el proceso sigue vivo termina ese proceso, que es su propio hijo, y restaura.
 
 La app, al mostrar la primera ventana, crea `confirmed` con su propia versión y lo sincroniza a disco, si existe `app.old` y no hay una marca de esa versión. No depende de ningún argumento. Una marca de otra versión no cuenta.
 
@@ -436,7 +436,7 @@ Cada inicio del lanzador resuelve lo que encuentre en disco:
 | `app.old`, sin `app` | Se cortó entre los dos renombres | Restaura `app.old` y abre la app, avisando que la actualización se interrumpió. |
 | Ambas, con `confirmed` | Se cortó antes de limpiar | Borra `app.old` y después la marca, sin tocar el resto de `.update\`. Abre la app. |
 | Ambas, sin `confirmed`, la app corriendo | Está arrancando | Abre la app, que pasa el pedido a la instancia en marcha, y termina. |
-| Ambas, sin `confirmed`, la app sin correr | La versión nueva no arrancó | Mueve `app` a `.update\rejected-<pid>`, restaura `app.old` y abre la anterior, con el aviso de restauración. |
+| Ambas, sin `confirmed`, la app sin correr | La versión nueva no arrancó | Mueve `app` a `.update\rejected-<pid>`, restaura `app.old` y abre la anterior, con el aviso de restauración, que nombra la versión anotada en `applying` si la hay. |
 | Ninguna | Daño externo | Avisa que hay que reinstalar desde Releases. |
 
 - La app está corriendo si abrir `app\zenkai.exe` para escritura falla con violación de uso compartido. Cualquier otro error cuenta como desconocido, y con un estado desconocido nunca se restaura. Si mover `app` falla tras 10 s de reintentos, tampoco se restaura: se abre `app` normalmente y se decide en el próximo inicio.

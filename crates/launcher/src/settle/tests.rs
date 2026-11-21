@@ -253,3 +253,31 @@ fn an_old_folder_that_cannot_be_removed_keeps_the_marker_for_the_next_start() {
     ));
     assert!(!install.exists("app.old"));
 }
+
+#[test]
+fn a_version_left_in_flight_is_named_when_it_is_set_aside() {
+    let install = Install::new();
+    install.put_version("app.old", "old");
+    install.put_version("app", "new");
+    install.write(".update/applying", "0.2.0");
+    let settled = settle(&install.folders(), &TEST_TIMING);
+    let expected = Notice::Restored(Some(crate::arguments::Version::parse("0.2.0").unwrap()));
+    assert!(
+        matches!(&settled, Settled::Clean(Some(notice)) if *notice == expected),
+        "{settled:?}"
+    );
+    assert!(!install.exists(".update/applying"));
+}
+
+#[test]
+fn an_unreadable_record_of_the_version_in_flight_is_not_a_name() {
+    let install = Install::new();
+    install.put_version("app.old", "old");
+    install.put_version("app", "new");
+    install.write(".update/applying", "../../x");
+    let settled = settle(&install.folders(), &TEST_TIMING);
+    assert!(matches!(
+        settled,
+        Settled::Clean(Some(Notice::Restored(None)))
+    ));
+}

@@ -61,7 +61,10 @@ pub fn settle(folders: &Folders, timing: &Timing) -> Settled {
     match plan {
         Plan::Normal => Settled::Clean(None),
         Plan::Interrupted => match restore(folders, timing) {
-            Ok(()) => Settled::Clean(Some(Notice::Interrupted)),
+            Ok(()) => {
+                disk::forget_applying(folders);
+                Settled::Clean(Some(Notice::Interrupted))
+            }
             Err(message) => Settled::NoApp(message),
         },
         Plan::Unfinished => match disk::finish_update(folders) {
@@ -76,14 +79,14 @@ pub fn settle(folders: &Folders, timing: &Timing) -> Settled {
             }
         },
         Plan::Starting | Plan::Unknown => Settled::AsIs,
-        Plan::NotStarted => reject(folders, None, timing),
+        Plan::NotStarted => reject(folders, disk::applying_version(folders), timing),
         Plan::Missing => Settled::NoApp(Message::Reinstall),
     }
 }
 
 // The version in `app` did not start: it moves aside and the previous one comes back. If it
 // cannot move, nothing is restored and the next start decides.
-pub fn reject(folders: &Folders, version: Option<&Version>, timing: &Timing) -> Settled {
+pub fn reject(folders: &Folders, version: Option<Version>, timing: &Timing) -> Settled {
     let rejected = folders.rejected();
     if let Err(error) = disk::remove_tree(&rejected) {
         tracing::warn!(%error, "could not clear an earlier rejected folder");
@@ -95,7 +98,10 @@ pub fn reject(folders: &Folders, version: Option<&Version>, timing: &Timing) -> 
         return Settled::AsIs;
     }
     match restore(folders, timing) {
-        Ok(()) => Settled::Clean(Some(Notice::Restored(version.cloned()))),
+        Ok(()) => {
+            disk::forget_applying(folders);
+            Settled::Clean(Some(Notice::Restored(version)))
+        }
         Err(message) => Settled::NoApp(message),
     }
 }

@@ -32,11 +32,16 @@ pub fn apply(folders: &Folders, version: &Version, passed: &[OsString], timing: 
         tracing::error!(%error, "could not remove an earlier confirmation marker");
         return not_applied();
     }
+    if let Err(error) = disk::record_applying(folders, version) {
+        tracing::error!(%error, "could not record the version being applied");
+        return not_applied();
+    }
     let new_app = folders.new_app(version);
     if let Err(error) =
         disk::rename_retrying(&folders.app(), &folders.old(), timing.move_app, timing.poll)
     {
         tracing::error!(%error, "something still runs from the app folder");
+        disk::forget_applying(folders);
         return not_applied();
     }
     if let Err(error) =
@@ -44,7 +49,10 @@ pub fn apply(folders: &Folders, version: &Version, passed: &[OsString], timing: 
     {
         tracing::error!(%error, "could not move the new version into place");
         return match settle::restore(folders, timing) {
-            Ok(()) => not_applied(),
+            Ok(()) => {
+                disk::forget_applying(folders);
+                not_applied()
+            }
             Err(message) => Finish::Tell(message),
         };
     }
@@ -107,7 +115,7 @@ fn confirmed(folders: &Folders, version: &Version, mut started: Child, timing: &
 }
 
 fn finish_rejected(folders: &Folders, version: &Version, timing: &Timing) -> Finish {
-    settle::reject(folders, Some(version), timing).into()
+    settle::reject(folders, Some(version.clone()), timing).into()
 }
 
 #[cfg(test)]

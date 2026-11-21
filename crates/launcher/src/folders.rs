@@ -10,6 +10,7 @@ const PROGRAM: &str = "zenkai.exe";
 const LOCK: &str = "lock";
 const CONFIRMED: &str = "confirmed";
 const NOTICE: &str = "notice";
+const APPLYING: &str = "applying";
 const JOURNAL: &str = "launcher.log";
 
 // Every path the launcher touches comes from its own folder, never from an argument.
@@ -57,6 +58,10 @@ impl Folders {
 
     pub fn confirmed(&self) -> PathBuf {
         self.update().join(CONFIRMED)
+    }
+
+    pub fn applying(&self) -> PathBuf {
+        self.update().join(APPLYING)
     }
 
     pub fn notice(&self) -> PathBuf {

@@ -38,6 +38,7 @@ fn assert_restored(install: &Install, finish: &Finish) {
     assert_eq!(install.version_in("app").as_deref(), Some("old"));
     assert!(!install.exists("app.old"));
     assert!(install.rejected().join("zenkai.exe").is_file());
+    assert!(!install.exists(".update/applying"));
 }
 
 fn assert_untouched(install: &Install, finish: &Finish) {
@@ -48,6 +49,7 @@ fn assert_untouched(install: &Install, finish: &Finish) {
     assert_eq!(install.version_in("app").as_deref(), Some("old"));
     assert!(!install.exists("app.old"));
     assert!(install.exists(".update/new-0.2.0/zenkai.exe"));
+    assert!(!install.exists(".update/applying"));
 }
 
 #[test]
@@ -62,6 +64,7 @@ fn a_new_version_that_confirms_takes_the_place_of_the_old_one() {
     assert!(!install.exists(".update/new-0.2.0"));
     assert!(install.exists(".update/new-0.3.0"));
     assert!(!install.exists(".update/confirmed"));
+    assert!(!install.exists(".update/applying"));
 }
 
 #[test]

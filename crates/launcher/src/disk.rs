@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 use std::thread::sleep;
@@ -10,7 +10,7 @@ use crate::folders::Folders;
 
 pub const ERROR_SHARING_VIOLATION: i32 = 32;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-const MAX_MARKER_BYTES: u64 = 32;
+const MAX_VERSION_FILE_BYTES: u64 = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Presence {
@@ -77,14 +77,47 @@ fn text_version(bytes: &[u8]) -> Option<Version> {
 }
 
 fn read_marker(folders: &Folders) -> io::Result<Option<Vec<u8>>> {
-    let file = match File::open(folders.confirmed()) {
+    read_version_file(&folders.confirmed())
+}
+
+fn read_version_file(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    let file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error),
     };
     let mut bytes = Vec::new();
-    file.take(MAX_MARKER_BYTES + 1).read_to_end(&mut bytes)?;
+    file.take(MAX_VERSION_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
     Ok(Some(bytes))
+}
+
+// Written before the swap, so a later start that has to set this version aside can still name
+// it in the notice and the app does not offer it again on its own.
+pub fn record_applying(folders: &Folders, version: &Version) -> io::Result<()> {
+    let mut file = File::create(folders.applying())?;
+    file.write_all(version.as_bytes())?;
+    file.sync_all()
+}
+
+pub fn applying_version(folders: &Folders) -> Option<Version> {
+    match read_version_file(&folders.applying()) {
+        Ok(bytes) => text_version(&bytes?),
+        Err(error) => {
+            tracing::warn!(%error, "could not read the version being applied");
+            None
+        }
+    }
+}
+
+pub fn forget_applying(folders: &Folders) {
+    match fs::remove_file(folders.applying()) {
+        Ok(()) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            tracing::warn!(%error, "could not remove the record of the version being applied")
+        }
+    }
 }
 
 pub fn remove_marker(folders: &Folders) -> io::Result<()> {
@@ -156,5 +189,6 @@ pub fn remove_tree(path: &Path) -> io::Result<()> {
 // next start take the new version for one that never started.
 pub fn finish_update(folders: &Folders) -> io::Result<()> {
     remove_tree(&folders.old())?;
+    forget_applying(folders);
     remove_marker(folders)
 }
