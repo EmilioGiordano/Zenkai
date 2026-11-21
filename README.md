@@ -18,7 +18,7 @@ Windows is the main platform; Linux and macOS (Apple silicon) builds are experim
 The Windows build is not signed yet, so SmartScreen asks first: click "More info", then
 "Run anyway".
 
-Zenkai checks GitHub for new versions when it opens, at most once a day; GitHub sees your IP address and nothing else is sent. Turn it off in Settings > About.
+Zenkai checks GitHub for new versions when it opens, at most once a day; GitHub sees your IP address, or your proxy's if you use one, and nothing else is sent. Turn it off in Settings > About.
 
 ## Status
 

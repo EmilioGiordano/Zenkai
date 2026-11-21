@@ -40,7 +40,7 @@ pub struct GeneralSettings {
     pub markdown_opens_in: MarkdownOpensIn,
     #[serde(default = "on_by_default")]
     #[schemars(
-        description = "Ask GitHub for a newer Zenkai release when Zenkai starts, at most once a day. GitHub sees the IP address; nothing else is sent."
+        description = "Ask GitHub for a newer Zenkai release when Zenkai starts, at most once a day. GitHub sees the IP address, or the proxy's if one is set; nothing else is sent."
     )]
     pub check_for_updates: bool,
     #[serde(default)]
