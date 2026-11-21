@@ -92,6 +92,11 @@ pub fn labels(kinds: &[Unsupported]) -> String {
     labels.join(", ")
 }
 
+// The original stays as it was, but a user who deletes it keeps only the copy.
+pub fn copy_lacks_notice(lacks: &[Unsupported]) -> Option<String> {
+    (!lacks.is_empty()).then(|| t!("notice.copy_lacks", list = labels(lacks)))
+}
+
 fn unsupported_label(unsupported: Unsupported) -> &'static str {
     match unsupported {
         Unsupported::Charts => t!("unsupported.charts"),
@@ -717,13 +722,20 @@ pub fn save_document_file(
     }
 }
 
-// For a file Save As gave a name of its own, which nothing is lost from. Returns what the
-// written file holds that Zenkai does not show.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CopyWritten {
+    // What the written file holds that Zenkai does not show.
+    pub kept: Vec<Unsupported>,
+    // What the original file holds that the written one does not.
+    pub lacks: Vec<Unsupported>,
+}
+
+// For a file Save As gave a name of its own: the original is never written.
 pub fn write_document_copy(
     shared: &RwLock<Workbook>,
     target: &Path,
     write: impl Fn(SaveSnapshot) -> Result<(), EngineError>,
-) -> Result<Vec<Unsupported>, EngineError> {
+) -> Result<CopyWritten, EngineError> {
     with_snapshot(
         shared,
         FileJob::Saving,
@@ -731,8 +743,11 @@ pub fn write_document_copy(
         SaveTarget::Document,
         ChangedFile::Replace,
         |snapshot| {
-            let kept = snapshot.kept().to_vec();
-            write(snapshot).map(|()| kept)
+            let copy = CopyWritten {
+                kept: snapshot.kept().to_vec(),
+                lacks: snapshot.dropped().to_vec(),
+            };
+            write(snapshot).map(|()| copy)
         },
     )
 }
@@ -1216,6 +1231,64 @@ mod tests {
         );
         assert_eq!(saved.unwrap(), DocumentSave::Written { kept: Vec::new() });
         assert!(std::fs::read(&target).unwrap().starts_with(b"PK"));
+    }
+
+    fn filtered_file(path: &Path) {
+        let mut source = rust_xlsxwriter::Workbook::new();
+        let sheet = source.add_worksheet();
+        for row in 0..3 {
+            sheet.write_number(row, 0, f64::from(row)).unwrap();
+        }
+        sheet.autofilter(0, 0, 2, 0).unwrap();
+        source.save(path).unwrap();
+    }
+
+    #[test]
+    fn a_copy_saved_after_an_edit_that_dropped_content_names_it_and_leaves_the_original() {
+        use zenkai_engine::Engine;
+        use zenkai_types::RowIdx;
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("original.xlsx");
+        let copy = dir.path().join("copy.xlsx");
+        filtered_file(&original);
+        let before = std::fs::read(&original).unwrap();
+        let opened = zenkai_engine::open_xlsx(&original).unwrap();
+        assert_eq!(opened.unsupported, [Unsupported::AutoFilter]);
+        let mut book = opened.workbook;
+        // Zenkai cannot shift the range a filter names, so a row inserted through it drops it.
+        book.insert_rows(SheetId(0), RowIdx::clamped(1), 1).unwrap();
+        let shared = RwLock::new(book);
+
+        let written = write_document_copy(&shared, &copy, zenkai_engine::save_xlsx).unwrap();
+
+        assert_eq!(
+            written,
+            CopyWritten {
+                kept: Vec::new(),
+                lacks: vec![Unsupported::AutoFilter],
+            }
+        );
+        assert_eq!(
+            copy_lacks_notice(&written.lacks).unwrap(),
+            "The copy does not include: filters (AutoFilter)"
+        );
+        assert!(zenkai_engine::open_xlsx(&copy).is_ok());
+        assert_eq!(std::fs::read(&original).unwrap(), before);
+    }
+
+    #[test]
+    fn a_copy_that_drops_nothing_says_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("original.xlsx");
+        let copy = dir.path().join("copy.xlsx");
+        filtered_file(&original);
+        let shared = RwLock::new(zenkai_engine::open_xlsx(&original).unwrap().workbook);
+
+        let written = write_document_copy(&shared, &copy, zenkai_engine::save_xlsx).unwrap();
+
+        assert_eq!(written.kept, [Unsupported::AutoFilter]);
+        assert!(written.lacks.is_empty());
+        assert_eq!(copy_lacks_notice(&written.lacks), None);
     }
 
     #[test]

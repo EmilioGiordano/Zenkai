@@ -292,6 +292,8 @@ impl Overwrite {
 enum Saved {
     Written {
         kept: Vec<Unsupported>,
+        // What a copy under a new name lacks of the original; empty for a save over a file.
+        lacks: Vec<Unsupported>,
     },
     Refused {
         dropped: Vec<Unsupported>,
@@ -2376,8 +2378,12 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     let Some(overwrite) = overwrite else {
-                        return document::write_document_copy(&shared, &target, save_xlsx)
-                            .map(|kept| Saved::Written { kept });
+                        return document::write_document_copy(&shared, &target, save_xlsx).map(
+                            |copy| Saved::Written {
+                                kept: copy.kept,
+                                lacks: copy.lacks,
+                            },
+                        );
                     };
                     document::save_document_file(
                         &shared,
@@ -2388,7 +2394,10 @@ impl Workspace {
                         save_xlsx,
                     )
                     .map(|saved| match saved {
-                        DocumentSave::Written { kept } => Saved::Written { kept },
+                        DocumentSave::Written { kept } => Saved::Written {
+                            kept,
+                            lacks: Vec::new(),
+                        },
                         DocumentSave::Refused { dropped } => Saved::Refused { dropped, overwrite },
                         DocumentSave::BaseChanged => Saved::BaseChanged { overwrite },
                     })
@@ -2424,7 +2433,7 @@ impl Workspace {
                 };
                 let fully_saved;
                 match result {
-                    Ok(Saved::Written { kept }) => {
+                    Ok(Saved::Written { kept, lacks }) => {
                         document.saved_over_file(kept);
                         document.path = Some(path);
                         let edited_meanwhile = document.edit_count() != edits_at_start;
@@ -2433,7 +2442,10 @@ impl Workspace {
                         if shown {
                             window.set_window_title(&this.documents.shown_title());
                         }
-                        this.notify(Severity::Info, t!("notice.saved"), cx);
+                        match document::copy_lacks_notice(&lacks) {
+                            Some(notice) => this.notify(Severity::Warning, notice, cx),
+                            None => this.notify(Severity::Info, t!("notice.saved"), cx),
+                        }
                     }
                     // Nothing was written; the file on disk is as it was.
                     Ok(Saved::Refused { dropped, overwrite }) => {
