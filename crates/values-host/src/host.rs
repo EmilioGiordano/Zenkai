@@ -24,7 +24,7 @@ pub fn exit_when_stdin_closes() -> std::io::Result<()> {
         .name("values-host-watchdog".to_string())
         .spawn(|| {
             if let Err(error) = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink()) {
-                tracing::debug!(%error, "stdin failed; the app can no longer be heard");
+                tracing::warn!(%error, "stdin failed; the app can no longer be heard");
             }
             std::process::exit(1);
         })?;
