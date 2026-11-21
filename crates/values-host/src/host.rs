@@ -13,6 +13,8 @@ pub enum HostError {
     Wire(#[from] WireError),
     #[error(transparent)]
     Frame(#[from] FrameError),
+    #[error("a row lies past the last row a block can address")]
+    RowOutOfRange,
 }
 
 // The client holds stdin open for the whole read and never writes to it, so its closing, on
@@ -77,8 +79,12 @@ fn send_sheets(sheets: &[SheetValues], out: &mut impl Write) -> Result<(), HostE
                         .sum::<usize>();
                     end += 1;
                 }
+                let first_row = u32::try_from(start)
+                    .ok()
+                    .and_then(|offset| block.first_row.checked_add(offset))
+                    .ok_or(HostError::RowOutOfRange)?;
                 let message = Message::Block {
-                    first_row: block.first_row + start as u32,
+                    first_row,
                     first_col: block.first_col,
                 };
                 write_frame(out, &encode(&message, &block.rows[start..end])?)?;
@@ -91,6 +97,8 @@ fn send_sheets(sheets: &[SheetValues], out: &mut impl Write) -> Result<(), HostE
 
 #[cfg(test)]
 mod tests {
+    use zenkai_formats::Block;
+
     use super::*;
 
     #[test]
@@ -113,5 +121,20 @@ mod tests {
         }];
         let error = send_sheets(&sheets, &mut Vec::new()).unwrap_err();
         assert_eq!(send_failure(&error).kind, FailureKind::TooLarge);
+    }
+
+    #[test]
+    fn a_block_past_the_last_row_fails_instead_of_wrapping() {
+        let sheets = vec![SheetValues {
+            name: "S".into(),
+            blocks: vec![Block {
+                first_row: u32::MAX,
+                first_col: 0,
+                rows: vec![vec!["x".repeat(TARGET_ROWS_BYTES)], vec!["y".into()]],
+            }],
+        }];
+        let error = send_sheets(&sheets, &mut Vec::new()).unwrap_err();
+        assert!(matches!(error, HostError::RowOutOfRange));
+        assert_eq!(send_failure(&error).kind, FailureKind::Unreadable);
     }
 }
