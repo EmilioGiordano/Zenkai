@@ -67,6 +67,7 @@ LICENSE, README.md
 app\                  the only folder an update replaces
   zenkai.exe          the app
   zenkai-pdf-host.exe
+  zenkai-values-host.exe
   pdfium.dll, pdfium-LICENSE.txt
 ```
 

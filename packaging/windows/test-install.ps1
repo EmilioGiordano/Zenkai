@@ -29,10 +29,10 @@ function Invoke-Silently([string]$program) {
 }
 
 function Assert-Layout([string]$root) {
-    foreach ($file in 'zenkai.exe', 'zenkai-mcp.exe', 'LICENSE', 'README.md', 'app\zenkai.exe', 'app\zenkai-pdf-host.exe', 'app\pdfium.dll', 'app\pdfium-LICENSE.txt') {
+    foreach ($file in 'zenkai.exe', 'zenkai-mcp.exe', 'LICENSE', 'README.md', 'app\zenkai.exe', 'app\zenkai-pdf-host.exe', 'app\zenkai-values-host.exe', 'app\pdfium.dll', 'app\pdfium-LICENSE.txt') {
         Assert-True (Test-Path -LiteralPath (Join-Path $root $file) -PathType Leaf) "$file is missing"
     }
-    foreach ($file in 'zenkai-pdf-host.exe', 'pdfium.dll') {
+    foreach ($file in 'zenkai-pdf-host.exe', 'zenkai-values-host.exe', 'pdfium.dll') {
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $root $file))) "$file is at the root instead of in app"
     }
 }

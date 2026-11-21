@@ -4,7 +4,7 @@
 #   <name>\zenkai.exe        the launcher (zenkai-launcher.exe from the build)
 #   <name>\zenkai-mcp.exe    the relay agents register
 #   <name>\LICENSE, README.md
-#   <name>\app\              the app, its helpers and pdfium; the only folder the updater replaces
+#   <name>\app\              the app, its helper hosts and pdfium; the only folder the updater replaces
 # Run by build.ps1 and by the release workflow.
 param(
     [Parameter(Mandatory = $true)]
@@ -34,7 +34,7 @@ Copy-Item -LiteralPath (Join-Path $ExeDir 'zenkai-launcher.exe') -Destination (J
 foreach ($file in (Join-Path $ExeDir 'zenkai-mcp.exe'), (Join-Path $root 'LICENSE'), (Join-Path $root 'README.md')) {
     Copy-Item -LiteralPath $file -Destination $layout
 }
-foreach ($file in 'zenkai.exe', 'zenkai-pdf-host.exe', 'pdfium.dll', 'pdfium-LICENSE.txt') {
+foreach ($file in 'zenkai.exe', 'zenkai-pdf-host.exe', 'zenkai-values-host.exe', 'pdfium.dll', 'pdfium-LICENSE.txt') {
     Copy-Item -LiteralPath (Join-Path $ExeDir $file) -Destination $app
 }
 
