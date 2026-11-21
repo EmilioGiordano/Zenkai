@@ -4,21 +4,16 @@ use crate::{
     model::Model,
 };
 
-/// Which cells of a range a [`RangeCells`] walk gives.
+// `Occupied` skips the positions without a cell, which evaluate as empty with no effect, so
+// only a function an empty cell adds nothing to may use it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum RangeWalk {
-    /// Every cell of the range, empty or not.
     Every,
-    /// Only the cells the worksheet holds. A position without a cell evaluates as an empty
-    /// cell and changes nothing, so a function an empty cell adds nothing to can skip it.
     Occupied,
 }
 
-/// The cells of a range in the order a loop over its rows and then its columns visits them.
-/// The worksheet is read as the walk goes, so a cell that evaluating an earlier one writes,
-/// such as a spill, is given as that loop would give it. A walk over `Occupied` cells costs
-/// the cells it gives plus one look at each row of the range, and stops at the worksheet's
-/// last row once the range has more rows left than the worksheet holds.
+// The worksheet is read as the walk goes, so a cell that evaluating an earlier one writes,
+// such as a spill, is given as a loop over every cell would give it.
 pub(crate) struct RangeCells {
     sheet: u32,
     first_column: i32,
@@ -33,8 +28,6 @@ pub(crate) struct RangeCells {
 }
 
 impl RangeCells {
-    /// The cells from `left` to `right`, both on the same sheet, or the error of `cell` when
-    /// that sheet does not exist.
     pub(crate) fn new(
         model: &Model,
         left: CellReferenceIndex,

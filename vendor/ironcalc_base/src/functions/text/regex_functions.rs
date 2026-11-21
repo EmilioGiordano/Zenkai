@@ -14,7 +14,6 @@ use crate::{
     text_limit::{text_too_long, LimitedText, TextTooLong},
 };
 
-// A piece of a REGEXREPLACE replacement: text, or the capture group whose match goes there.
 #[derive(Debug, PartialEq)]
 enum ReplacementPiece<'r> {
     Text(&'r str),
@@ -71,8 +70,7 @@ fn replacement_pieces<'r>(re: &Regex, mut replacement: &'r str) -> Vec<Replaceme
     pieces
 }
 
-// What `re.replace_all(text, replacement)` gives, built piece by piece so that a replacement
-// repeating a long match stops at Excel's text limit instead of multiplying the text.
+// Gives what `re.replace_all` gives, or stops at Excel's text limit.
 fn replace_all_within_limit(
     re: &Regex,
     text: &str,

@@ -63,8 +63,6 @@ impl<'a> Model<'a> {
             }
         };
 
-        // Built piece by piece and abandoned once past Excel's text limit, so an array of long
-        // texts is never joined whole.
         let mut text = LimitedText::default();
         if strict {
             // Strict: {col1,col2;row2col1,row2col2}

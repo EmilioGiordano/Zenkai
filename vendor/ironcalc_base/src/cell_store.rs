@@ -168,14 +168,13 @@ impl CellStore {
         self.rows.get(&row).map_or(0, |cells| cells.columns.len())
     }
 
-    /// The first column from `column` on that holds a cell in `row`.
     pub fn next_column(&self, row: i32, column: i32) -> Option<i32> {
         let cells = self.rows.get(&row)?;
         let at = cells.columns.partition_point(|existing| *existing < column);
         cells.columns.get(at).copied()
     }
 
-    /// The highest row number, a row with no cells included. It reads every row.
+    /// The highest row, a row with no cells included. It reads every row.
     pub fn last_row(&self) -> Option<i32> {
         self.rows().max()
     }
