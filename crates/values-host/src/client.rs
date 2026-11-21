@@ -43,8 +43,7 @@ pub enum ReadError {
     HostBroken(String),
 }
 
-// Reads a workbook's values by running the reader host as a child process, one process per
-// read. Nothing the child does, however it ends, can do more than make the read fail.
+// One child process per read, so nothing the child does can do more than fail that read.
 #[derive(Clone, Debug)]
 pub struct ValuesClient {
     host: Option<PathBuf>,
@@ -171,9 +170,8 @@ struct Collected {
 }
 
 impl Collected {
-    // Some once the host said it is done. The host's rows are checked again against the reader's
-    // caps on allocated cells, bytes per cell and total text; with the sheet cap and the payload
-    // budget, a misbehaving host cannot make the app allocate without bound.
+    // The reader's caps are checked again here, so a misbehaving host cannot make the app
+    // allocate without bound.
     fn accept(
         &mut self,
         message: Message,

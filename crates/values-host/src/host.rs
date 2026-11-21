@@ -31,9 +31,8 @@ pub fn exit_when_stdin_closes() -> std::io::Result<()> {
     Ok(())
 }
 
-// Reads the workbook and writes it to `out` as frames. A read that fails is reported to the
-// client as a Failed frame; a panic inside calamine is caught by `read_values` and arrives the
-// same way. Only a failure to write the last frame is an error here.
+// Read failures and calamine panics reach the client as a Failed frame; only a failure to
+// write the last frame is an error here.
 pub fn run(path: &Path, out: &mut impl Write) -> Result<(), HostError> {
     let last = match read_values(path) {
         Ok(sheets) => match send_sheets(sheets, out) {

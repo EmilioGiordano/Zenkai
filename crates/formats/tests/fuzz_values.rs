@@ -1,8 +1,5 @@
-// Structured fuzzing of the in-process fallback reader (calamine) on .xlsb and .xlsx: valid
-// files are damaged the way a corrupt or hostile file would be. Reading must end in values or
-// an error, within a bounded time, and a panic inside calamine must not unwind through the
-// caller. .xls and .ods can hang or abort calamine, so they are fuzzed through the child
-// process in `crates/values-host/tests`.
+// Only .xlsb and .xlsx are fuzzed in process; .xls and .ods can hang or abort calamine, so
+// `crates/values-host/tests` fuzzes them through the child process.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};

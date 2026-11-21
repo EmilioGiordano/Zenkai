@@ -9,16 +9,12 @@ const KILL_WAITS: u32 = 40;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-// Helper processes are looked for next to the running exe and nowhere else, so nothing that
-// can be planted in the working directory or on the path is ever started. None when the
-// system cannot say where the exe is.
+// Only next to the exe, so a binary planted in the working directory or on the path never runs.
 pub fn host_next_to_exe(file: &str) -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
     Some(exe.parent()?.join(file))
 }
 
-// Starts a helper process with stdin and stdout piped and no console window. Shared by every
-// helper the app talks to over frames, so they start and stop the same way.
 pub fn spawn_piped(
     path: &Path,
     arguments: &[OsString],
@@ -48,7 +44,6 @@ pub fn spawn_piped(
     }
 }
 
-// Kills the process and waits a little for it to go; one that will not go is left to the system.
 pub fn kill_and_wait(child: &mut Child) {
     if let Err(error) = child.kill() {
         tracing::debug!(%error, "the helper process was already gone");

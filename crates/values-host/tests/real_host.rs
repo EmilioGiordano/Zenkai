@@ -1,6 +1,5 @@
-// The real host on real and hostile workbooks. .xls and .ods are fuzzed here, not in process:
-// calamine can hang or abort on them, and only a child process turns that into an error.
-// Seeds that reproduced such failures are generated in code.
+// .xls and .ods are fuzzed here, not in process: calamine can hang or abort on them, and only
+// a child process turns that into an error.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
