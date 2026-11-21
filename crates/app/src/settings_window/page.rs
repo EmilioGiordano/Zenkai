@@ -157,6 +157,7 @@ impl SettingsWindow {
             modified,
             first,
             control: None,
+            status_line: None,
             below: None,
             overlay: None,
             code: None,
@@ -411,7 +412,7 @@ impl SettingsWindow {
                     super::rows::external_agents_on(settings),
                     |on, _, cx| agents::set_external_agents(on, cx),
                 ));
-                parts.below = Some(info::bridge_status(cx));
+                parts.status_line = Some(info::bridge_status(cx));
             }
             RowId::ConnectionCommand => {
                 parts.code = self.claude_command.clone();
@@ -481,7 +482,7 @@ impl SettingsWindow {
                     t!("palette.check_for_updates"),
                     |_, cx| updates::check(cx, updates::Source::Settings),
                 ));
-                parts.below = Some(info::update_status(cx));
+                parts.status_line = Some(info::update_status(cx));
             }
             RowId::License => {
                 parts.control = Some(info::value(env!("CARGO_PKG_LICENSE"), cx));
