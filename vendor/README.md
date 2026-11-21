@@ -474,6 +474,9 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   `LimitedText::is_too_long` from the ARRAYTOTEXT patch. Tests: `src/test/test_range_walk.rs`
   (each function over a range against the same cells listed one by one, on random sheets
   with spills), `next_column_and_last_row` in `src/cell_store.rs`.
+- TEXTJOIN with `ignore_empty` TRUE skips empty texts, such as a cell holding `=""`, as Excel
+  does, not only empty cells (`src/functions/text/common.rs`). Stands on its own. Test:
+  `ignore_empty_skips_empty_texts` in `src/test/text_functions/fn_textjoin.rs`.
 - REGEXREPLACE returns `#VALUE!`, as Excel does, for a result past 32,767 characters. It
   reads the replacement once into text and group references, as `Captures::expand` reads it,
   and adds each match's pieces to a `LimitedText`, so a replacement repeating `$0` over a long

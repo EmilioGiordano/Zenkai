@@ -1059,6 +1059,7 @@ impl<'a> Model<'a> {
                     while let Some(reference) = cells.next(self, walk(&joined)) {
                         match self.evaluate_cell(reference) {
                             CalcResult::Number(value) => join(&mut joined, &format!("{value}")),
+                            CalcResult::String(value) if ignore_empty && value.is_empty() => {}
                             CalcResult::String(value) => join(&mut joined, &value),
                             CalcResult::Boolean(value) => {
                                 join(&mut joined, if value { "TRUE" } else { "FALSE" })
@@ -1078,6 +1079,8 @@ impl<'a> Model<'a> {
                     }
                 }
                 error @ CalcResult::Error { .. } => return error,
+                // Excel's ignore_empty skips empty texts too, not only empty cells.
+                CalcResult::String(value) if ignore_empty && value.is_empty() => {}
                 CalcResult::String(value) => join(&mut joined, &value),
                 CalcResult::Boolean(value) => {
                     join(&mut joined, if value { "TRUE" } else { "FALSE" })
