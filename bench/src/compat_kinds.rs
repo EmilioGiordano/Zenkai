@@ -45,7 +45,6 @@ impl Package {
         Ok(Package { parts })
     }
 
-    // Puts `text` right before the first `before` in the part.
     fn insert(&mut self, part: &str, before: &str, text: &str) -> Result<()> {
         let (_, content) = self
             .parts
@@ -60,7 +59,6 @@ impl Package {
         Ok(())
     }
 
-    // A part declared with its own content type.
     fn add(&mut self, name: &str, content_type: &str, content: &[u8]) -> Result<()> {
         let declared = format!(r#"<Override PartName="/{name}" ContentType="{content_type}"/>"#);
         self.insert(CONTENT_TYPES, "</Types>", &declared)?;

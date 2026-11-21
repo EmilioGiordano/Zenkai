@@ -132,6 +132,7 @@ const BY_ELEMENT: [(&str, &str, &[Unsupported]); 27] = [
 ];
 
 const EXTENSION_LIST: &str = "extLst";
+const EXTENSION_CONTENT_DEPTH: usize = 3;
 
 // What an extension of a workbook or worksheet extension list holds, by local name.
 const BY_EXTENSION: [(&str, &str, &[Unsupported]); 8] = [
@@ -195,9 +196,7 @@ pub fn parts(bytes: &[u8]) -> Result<Vec<(String, String)>, String> {
 
 #[derive(Default)]
 struct Elements {
-    // The local names of the root's children.
     top: BTreeSet<String>,
-    // The local names of what each extension of the root's extension list holds.
     extensions: BTreeSet<String>,
 }
 
@@ -228,8 +227,7 @@ fn elements_of(xml: &str) -> Elements {
             in_extensions = local == EXTENSION_LIST;
             elements.top.insert(local.to_string());
         }
-        // extLst, then ext, then what the extension holds.
-        if depth == 3 && in_extensions {
+        if depth == EXTENSION_CONTENT_DEPTH && in_extensions {
             elements.extensions.insert(local.to_string());
         }
         if !tag.ends_with('/') {

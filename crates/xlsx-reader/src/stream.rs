@@ -44,7 +44,6 @@ fn is_checked(local: &[u8]) -> bool {
     CHECKED_ELEMENTS.contains(&local)
 }
 
-// A local name longer than this cannot be a checked one.
 const LONGEST_CHECKED: usize = {
     let mut longest = 0;
     let mut index = 0;
@@ -133,7 +132,6 @@ impl Prefilter {
     }
 }
 
-// Adds the next piece of a name to the local part kept of it.
 fn keep_local(local: &mut Vec<u8>, piece: &[u8]) {
     let piece = match piece.iter().rposition(|b| *b == b':') {
         Some(colon) => {
@@ -976,7 +974,6 @@ mod tests {
         assert!(filter.hit());
     }
 
-    // Pushes `bytes` in the pieces `cuts` marks.
     fn filtered(bytes: &[u8], cuts: &[usize]) -> bool {
         let mut filter = Prefilter::new();
         let mut start = 0;
@@ -988,7 +985,6 @@ mod tests {
         filter.hit()
     }
 
-    // Where the tag under test starts in what `tag` builds.
     const TAG_START: usize = 17;
 
     fn tag(prefix_length: usize, name: &[u8]) -> Vec<u8> {
