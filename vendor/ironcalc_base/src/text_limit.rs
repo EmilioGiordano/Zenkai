@@ -21,11 +21,9 @@ pub(crate) fn text_too_long(cell: CellReferenceIndex) -> CalcResult {
     )
 }
 
-/// The piece that would take a [`LimitedText`] past [`MAX_TEXT_LENGTH`].
 #[derive(Debug, PartialEq)]
 pub(crate) struct TextTooLong;
 
-/// A text built piece by piece that never grows past [`MAX_TEXT_LENGTH`].
 #[derive(Default)]
 pub(crate) struct LimitedText {
     text: String,

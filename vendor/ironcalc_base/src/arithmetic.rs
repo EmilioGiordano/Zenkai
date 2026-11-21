@@ -48,7 +48,6 @@ fn to_f64(value: &ArrayNode) -> Result<f64, Error> {
     }
 }
 
-/// The text of one element of an operand of `&`, with its length as Excel counts it.
 struct TextPiece<'a> {
     text: Cow<'a, str>,
     length: usize,
@@ -68,8 +67,7 @@ impl<'a> TextPiece<'a> {
     }
 }
 
-/// An operand of `&`: a single text, or an array whose elements are read as text one at a
-/// time, so no copy of it is kept.
+// An array's elements are read as text one at a time, so no copy of the operand is kept.
 enum ConcatOperand<'a> {
     Text(TextPiece<'a>),
     Array(&'a [Vec<ArrayNode>]),
@@ -83,8 +81,7 @@ impl<'a> ConcatOperand<'a> {
         }
     }
 
-    /// The (rows, columns) shape. A text has none of its own: it repeats over the shape of
-    /// the other operand.
+    // A text has no shape of its own: it repeats over the shape of the other operand.
     fn dims(&self) -> (usize, usize) {
         match self {
             ConcatOperand::Text(_) => (0, 0),
@@ -92,8 +89,6 @@ impl<'a> ConcatOperand<'a> {
         }
     }
 
-    /// The element at (`row`, `column`) with Excel's size-1 broadcasting, or `None` past
-    /// the shape of an array.
     fn piece(&self, row: usize, column: usize) -> Option<Result<TextPiece<'_>, Error>> {
         match self {
             ConcatOperand::Text(piece) => Some(Ok(TextPiece {
