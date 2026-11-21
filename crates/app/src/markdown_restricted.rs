@@ -184,6 +184,12 @@ mod tests {
     }
 
     #[test]
+    fn the_releases_page_the_app_opens_is_an_allowed_link() {
+        let page = crate::updates::RELEASES_PAGE;
+        assert_eq!(vetted_link(page).as_deref(), Some(page));
+    }
+
+    #[test]
     fn a_dot_dot_in_the_query_or_fragment_is_not_a_path_segment() {
         assert!(vetted_link(&format!("{REPOSITORY}/issues?q=../x")).is_some());
         assert!(vetted_link(&format!("{REPOSITORY}#../x")).is_some());

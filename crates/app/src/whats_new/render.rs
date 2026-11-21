@@ -49,7 +49,9 @@ impl NotesView {
                         Button::new("whats-new-github")
                             .link()
                             .label(t!("whats_new.view_on_github"))
-                            .on_click(|_, _, cx| cx.open_url(RELEASES_PAGE)),
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.emit(NotesEvent::OpenLink(RELEASES_PAGE.to_owned()))
+                            })),
                     )
                     .child(
                         Button::new("whats-new-update")

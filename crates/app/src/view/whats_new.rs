@@ -3,7 +3,6 @@ use gpui_kit::*;
 use zenkai_types::WorkbookId;
 
 use super::Workspace;
-use crate::markdown_restricted::vetted_link;
 use crate::whats_new::{NotesEvent, NotesView};
 
 pub(super) struct NotesPane {
@@ -38,15 +37,11 @@ impl Workspace {
         self.present_notes(window, cx);
     }
 
-    // Links reach here as text from the tab; only what `vetted_link` accepts is asked about,
-    // and the prompt shows and opens the address it returns.
+    // Only what `vetted_link` accepts is asked about, and the prompt shows and opens the address
+    // it returns.
     fn on_notes_event(&mut self, event: &NotesEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
-            NotesEvent::OpenLink(link) => {
-                if let Some(address) = vetted_link(link) {
-                    self.confirm_web_link(address, window, cx);
-                }
-            }
+            NotesEvent::OpenLink(link) => self.confirm_vetted_link(link, window, cx),
         }
     }
 
