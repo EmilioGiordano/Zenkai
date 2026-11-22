@@ -212,6 +212,12 @@ fn a_move_on_the_sheet_itself_drops_its_notes_picture_and_link() {
     open_xlsx(&saved.path).unwrap();
 }
 
+struct Naming<'a> {
+    case: &'a str,
+    linked: &'a dyn Fn(&mut Worksheet),
+    lost: &'a [Unsupported],
+}
+
 // Sheet1 holds a note and `linked`, which names a cell on Sheet2.
 fn naming_source(dir: &Path, linked: impl FnOnce(&mut Worksheet)) -> PathBuf {
     let path = dir.join("naming.xlsx");
@@ -240,23 +246,23 @@ fn a_shape_or_picture_naming_a_moved_cell_is_dropped_and_reported() {
         let image = pixel().set_url("internal:Sheet2!A1").unwrap();
         held.insert_image(2, 1, &image).unwrap();
     };
-    let cases: [(&str, &dyn Fn(&mut Worksheet), &[Unsupported]); 2] = [
-        (
-            "text link",
-            &text_link,
-            &[Unsupported::Images, Unsupported::Comments],
-        ),
-        (
-            "picture link",
-            &picture_link,
-            &[
+    let cases = [
+        Naming {
+            case: "text link",
+            linked: &text_link,
+            lost: &[Unsupported::Images, Unsupported::Comments],
+        },
+        Naming {
+            case: "picture link",
+            linked: &picture_link,
+            lost: &[
                 Unsupported::Images,
                 Unsupported::Comments,
                 Unsupported::Hyperlinks,
             ],
-        ),
+        },
     ];
-    for (case, linked, lost) in cases {
+    for Naming { case, linked, lost } in cases {
         let dir = tempfile::tempdir().unwrap();
         let path = naming_source(dir.path(), linked);
         let mut book = open_xlsx(&path).unwrap().workbook;
