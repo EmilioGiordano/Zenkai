@@ -18,6 +18,7 @@ mod mention_parse;
 mod mention_picker;
 mod mention_prepare;
 mod menus;
+mod message_text;
 mod model_search;
 mod name_guard;
 mod permissions;
@@ -37,7 +38,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Instant, SystemTime};
 
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
-use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use zenkai_agent::chat::history::{History, RecordId};
 use zenkai_agent::chat::session::{CONTEXT_MARKER, PermissionAsk};
@@ -52,6 +52,7 @@ use crate::chat_layout::ChatLayout;
 use crate::view::Workspace;
 use access::Access;
 use launch::{Live, Prepared};
+use message_text::MessageText;
 use reference::Reference;
 use sent_books::SentBooks;
 use zenkai_i18n::t;
@@ -105,7 +106,7 @@ struct Problem {
 
 struct Backup {
     thread: Thread,
-    texts: BTreeMap<MessageId, Entity<TextViewState>>,
+    texts: BTreeMap<MessageId, Entity<MessageText>>,
     title: Option<String>,
 }
 
@@ -121,8 +122,7 @@ pub struct ChatPanel {
     composer: Entity<TextareaState>,
     scroll: ScrollHandle,
     thread: Thread,
-    texts: BTreeMap<MessageId, Entity<TextViewState>>,
-    linked_messages: BTreeSet<MessageId>,
+    texts: BTreeMap<MessageId, Entity<MessageText>>,
     sent_books: SentBooks,
     references: Vec<Reference>,
     link: Link,
@@ -311,7 +311,6 @@ impl ChatPanel {
             scroll: ScrollHandle::new(),
             thread: Thread::default(),
             texts: BTreeMap::new(),
-            linked_messages: BTreeSet::new(),
             sent_books: SentBooks::default(),
             references: Vec::new(),
             link: Link::Idle,
@@ -522,7 +521,6 @@ impl ChatPanel {
         self.tools = tools::ToolViews::default();
         self.editing_blocked = None;
         self.texts.clear();
-        self.linked_messages.clear();
         self.sent_books.clear();
         self.references.clear();
         self.queued = None;
