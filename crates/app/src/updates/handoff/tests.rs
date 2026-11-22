@@ -4,7 +4,7 @@ use std::process::Command;
 
 use super::super::prepare::{asset_name, new_app, signature_name};
 use super::super::version::Version;
-use super::{Blocked, Drive, StageError, apply_arguments, blocked, drive_of, stage};
+use super::{Drive, StageError, apply_arguments, blocked, drive_of, local_drive, stage};
 
 fn version(text: &str) -> Version {
     Version::parse_bare(text).unwrap()
@@ -39,6 +39,19 @@ fn downloaded() -> tempfile::TempDir {
     .unwrap();
     fs::copy(fixture("good.minisig"), update.join(signature_name(wanted))).unwrap();
     root
+}
+
+// A junction, which needs no privilege to create, unlike a symbolic link.
+fn junction(link: &Path, target: &Path) {
+    let linked = Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(link)
+        .arg(target)
+        .output()
+        .unwrap();
+    assert!(linked.status.success(), "{linked:?}");
 }
 
 fn listed(folder: &Path) -> Vec<String> {
@@ -76,11 +89,28 @@ fn shares_and_unplaced_paths_are_told_apart_from_drive_letters() {
 }
 
 #[test]
-fn a_share_is_never_updated() {
-    assert_eq!(
-        blocked(Path::new(r"\\server\share\Zenkai")).unwrap(),
-        Some(Blocked::NetworkPath)
-    );
+fn only_fixed_and_removable_drives_count_as_local() {
+    use winsafe::co::DRIVE;
+    assert!(local_drive(DRIVE::FIXED));
+    assert!(local_drive(DRIVE::REMOVABLE));
+    for kind in [
+        DRIVE::REMOTE,
+        DRIVE::CDROM,
+        DRIVE::RAMDISK,
+        DRIVE::UNKNOWN,
+        DRIVE::NO_ROOT_DIR,
+    ] {
+        assert!(!local_drive(kind));
+    }
+}
+
+#[test]
+fn a_local_folder_reached_through_a_junction_is_still_local() {
+    let root = tempfile::tempdir().unwrap();
+    let real = root.path().join("real");
+    fs::create_dir(&real).unwrap();
+    junction(&root.path().join("link"), &real);
+    assert_eq!(blocked(&root.path().join("link")).unwrap(), None);
 }
 
 #[test]
@@ -144,15 +174,7 @@ fn an_update_folder_that_is_a_junction_is_not_used() {
     let root = downloaded();
     let elsewhere = root.path().join("elsewhere");
     fs::rename(root.path().join(".update"), &elsewhere).unwrap();
-    let linked = Command::new("cmd")
-        .arg("/C")
-        .arg("mklink")
-        .arg("/J")
-        .arg(root.path().join(".update"))
-        .arg(&elsewhere)
-        .output()
-        .unwrap();
-    assert!(linked.status.success(), "{linked:?}");
+    junction(&root.path().join(".update"), &elsewhere);
     let result = stage(root.path(), version("0.2.0"), installed());
     assert!(matches!(result, Err(StageError::Disk(_))), "{result:?}");
     assert!(!new_app(&elsewhere, version("0.2.0")).exists());

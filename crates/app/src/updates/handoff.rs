@@ -1,5 +1,5 @@
 use std::fmt;
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::process::CommandExt;
@@ -63,16 +63,22 @@ fn drive_of(path: &Path) -> Drive {
     }
 }
 
-// A path that cannot be placed on a local drive counts as a network one: updating never runs
-// where it is unsure.
-fn on_network(root: &Path) -> bool {
-    match drive_of(root) {
+fn local_drive(kind: winsafe::co::DRIVE) -> bool {
+    kind == winsafe::co::DRIVE::FIXED || kind == winsafe::co::DRIVE::REMOVABLE
+}
+
+// The real path, so a junction or a mapped letter that leads to a share is seen as the share.
+// Anything that is not plainly a local drive counts as a network one: updating never runs where
+// it is unsure.
+fn on_network(root: &Path) -> io::Result<bool> {
+    let real = fs::canonicalize(root)?;
+    Ok(match drive_of(&real) {
         Drive::Letter(letter) => {
             let drive = format!("{}:\\", char::from(letter));
-            winsafe::GetDriveType(Some(&drive)) == winsafe::co::DRIVE::REMOTE
+            !local_drive(winsafe::GetDriveType(Some(&drive)))
         }
         Drive::Share | Drive::Unplaced => true,
-    }
+    })
 }
 
 // The launcher renames `app` inside the root, so the root itself must be writable. The probe is
@@ -99,7 +105,7 @@ fn writable(root: &Path) -> io::Result<bool> {
 
 // Blocks on the disk: run it in the background.
 pub fn blocked(root: &Path) -> io::Result<Option<Blocked>> {
-    if on_network(root) {
+    if on_network(root)? {
         return Ok(Some(Blocked::NetworkPath));
     }
     Ok((!writable(root)?).then_some(Blocked::NoWriteAccess))
