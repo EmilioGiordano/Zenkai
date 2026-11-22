@@ -2,15 +2,19 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::Workspace;
-use super::notices::{Lifetime, Severity};
+use super::notices::{Lifetime, NoticeKind, Severity};
 use crate::close_prompt::CloseGoal;
 use crate::updates::{self, LauncherNotice, Report, Version};
+#[cfg(windows)]
+use crate::updates::{DownloadOutcome, DownloadPhase};
 
 impl Workspace {
     pub(super) fn show_update_report(&mut self, cx: &mut Context<Self>) {
         for notice in updates::take_launcher_notices(cx) {
             self.show_launcher_notice(notice, cx);
         }
+        #[cfg(windows)]
+        self.show_download_outcome(cx);
         let Some(report) = updates::take_report(cx) else {
             return;
         };
@@ -57,10 +61,18 @@ impl Workspace {
             version = version,
             installed = env!("CARGO_PKG_VERSION")
         );
-        let time = chrono::Local::now().format("%H:%M:%S").to_string();
-        self.notices
-            .post_update_available(version, text.into(), time.into());
+        self.post_update_card(NoticeKind::UpdateAvailable(version), text, cx);
         self.announce_shown_update(cx);
+    }
+
+    fn post_update_card(
+        &mut self,
+        kind: NoticeKind,
+        text: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        let time = chrono::Local::now().format("%H:%M:%S").to_string();
+        self.notices.post_update(kind, text.into(), time.into());
         cx.notify();
     }
 
@@ -72,17 +84,94 @@ impl Workspace {
     }
 
     pub(super) fn update_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let on_card = self
-            .notices
-            .card()
-            .is_some_and(|card| card.is_update_available());
-        if on_card {
-            self.confirm_vetted_link(updates::RELEASES_PAGE, window, cx);
-            self.dismiss_notice(window, cx);
-        } else if updates::update_known(cx) {
-            self.confirm_vetted_link(updates::RELEASES_PAGE, window, cx);
-        } else {
-            self.notify(Severity::Info, t!("update.none_available"), cx);
+        match updates::update_known(cx) {
+            None => self.notify(Severity::Info, t!("update.none_available"), cx),
+            #[cfg(windows)]
+            Some(version) if updates::can_download() => self.download_update(version, cx),
+            Some(_) => {
+                let on_card = self
+                    .notices
+                    .card()
+                    .is_some_and(|card| card.is_update_available());
+                self.confirm_vetted_link(updates::RELEASES_PAGE, window, cx);
+                if on_card {
+                    self.dismiss_notice(window, cx);
+                }
+            }
         }
     }
+
+    #[cfg(windows)]
+    pub(super) fn cancel_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !updates::cancel_download(cx) {
+            self.notify(Severity::Info, t!("update.none_downloading"), cx);
+            return;
+        }
+        if self.notices.card().is_some_and(is_download_card) {
+            self.dismiss_notice(window, cx);
+        }
+        self.notices.drop_download_card();
+        cx.notify();
+    }
+
+    // Only Windows downloads updates; elsewhere "Update now" opens the Releases page.
+    #[cfg(not(windows))]
+    pub(super) fn cancel_update(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.notify(Severity::Info, t!("update.none_downloading"), cx);
+    }
+
+    #[cfg(windows)]
+    fn download_update(&mut self, version: Version, cx: &mut Context<Self>) {
+        match updates::download_phase(cx) {
+            DownloadPhase::Ready(ready) if ready >= version => self.post_update_card(
+                NoticeKind::UpdateReady(ready),
+                t!("update.ready", version = ready),
+                cx,
+            ),
+            DownloadPhase::Downloading { version, .. } => self.post_update_card(
+                NoticeKind::UpdateDownloading(version),
+                t!("update.downloading"),
+                cx,
+            ),
+            DownloadPhase::Stopping => self.notify(Severity::Info, t!("update.still_stopping"), cx),
+            DownloadPhase::Idle | DownloadPhase::Ready(_) => {
+                updates::start_download(cx, version);
+                self.post_update_card(
+                    NoticeKind::UpdateDownloading(version),
+                    t!("update.downloading"),
+                    cx,
+                );
+            }
+        }
+    }
+
+    // Runs on every change to the update state, so the progress on screen follows the download.
+    #[cfg(windows)]
+    fn show_download_outcome(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
+        let Some(outcome) = updates::take_download_outcome(cx) else {
+            return;
+        };
+        match outcome {
+            DownloadOutcome::Ready(version) => self.post_update_card(
+                NoticeKind::UpdateReady(version),
+                t!("update.ready", version = version),
+                cx,
+            ),
+            DownloadOutcome::NotVerified(version) => self.post_update_card(
+                NoticeKind::UpdateNotVerified(version),
+                t!("update.not_verified", version = version),
+                cx,
+            ),
+            DownloadOutcome::Failed => {
+                self.notices.drop_download_card();
+                self.notify(Severity::Warning, t!("update.download_failed"), cx);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn is_download_card(card: &super::notices::Notice) -> bool {
+    matches!(card.kind, NoticeKind::UpdateDownloading(_))
 }

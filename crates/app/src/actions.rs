@@ -258,6 +258,7 @@ actions!(
         CopyNotice,
         FocusNotice,
         UpdateNow,
+        CancelUpdate,
         CheckForUpdates,
         ShowWhatsNew,
         ShowMessages,
