@@ -916,6 +916,16 @@ mod tests {
     }
 
     #[test]
+    fn printer_settings_name_no_cell_a_move_elsewhere_shifts() {
+        let mut sheet = elements(NOTES_IMAGE_AND_LINK);
+        let mut links = OWN_SHEET.to_vec();
+        links.push(SheetLink::PrinterSettings);
+        sheet.links_read(&known(&links));
+        assert_eq!(sheet.moved_elsewhere(), None);
+        assert_eq!(sheet.relationships(), Relationships::Kept);
+    }
+
+    #[test]
     fn a_move_elsewhere_drops_what_may_name_cells_on_other_sheets() {
         for named in [
             SheetLink::Chart,

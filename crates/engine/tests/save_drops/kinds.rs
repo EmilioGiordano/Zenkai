@@ -3,13 +3,13 @@
 
 use std::path::{Path, PathBuf};
 
-use rust_xlsxwriter::{ConditionalFormatDataBar, Sparkline};
+use rust_xlsxwriter::{ConditionalFormatDataBar, Note, Sparkline};
 use zenkai_engine::{Engine, Unsupported, open_xlsx};
-use zenkai_types::SheetId;
+use zenkai_types::{RowIdx, SheetId};
 
 use super::{
-    Edit, HELD_PART, assert_sound, held_sheet, inserted_row, kept_by_each_path, part, pos,
-    saved_after, scan, source, with_held_sheet_replaced, with_part_replaced, with_parts,
+    Edit, HELD_PART, HELD_RELS, assert_sound, held_sheet, inserted_row, kept_by_each_path, part,
+    pos, save, saved_after, scan, source, with_held_sheet_replaced, with_part_replaced, with_parts,
 };
 
 const WORKBOOK_PART: &str = "xl/workbook.xml";
@@ -238,6 +238,51 @@ fn printer_settings_are_reported_when_their_sheet_is_written() {
         ],
     );
     dropped_when_its_sheet_is_written(&path, Unsupported::PrinterSettings, "r:id=");
+}
+
+// Printer settings name no cell, so rows moved on another sheet leave the sheet pointing at
+// them, and its notes, as they are.
+#[test]
+fn a_move_on_another_sheet_keeps_a_sheet_with_printer_settings_as_it_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = source(dir.path(), |held| {
+        held.set_paper_size(9);
+        held.insert_note(0, 0, &Note::new("checked")).unwrap();
+    });
+    with_held_sheet_replaced(
+        &path,
+        &[("<pageSetup ", r#"<pageSetup r:id="rIdPrinter" "#)],
+    );
+    with_part_replaced(
+        &path,
+        HELD_RELS,
+        &[(
+            "</Relationships>",
+            concat!(
+                r#"<Relationship Id="rIdPrinter" "#,
+                r#"Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/printerSettings" "#,
+                r#"Target="../printerSettings/printerSettings1.bin"/></Relationships>"#
+            ),
+        )],
+    );
+    with_parts(
+        &path,
+        &[(
+            "xl/printerSettings/printerSettings1.bin",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.printerSettings",
+            "printer",
+        )],
+    );
+    let original = std::fs::read(&path).unwrap();
+    let mut book = open_xlsx(&path).unwrap().workbook;
+    book.insert_rows(SheetId(1), RowIdx::clamped(20), 1)
+        .unwrap();
+    let saved = save(&book, &dir.path().join("moved.xlsx"));
+    assert!(saved.dropped.is_empty(), "{:?}", saved.dropped);
+    assert_eq!(part(&saved.bytes, HELD_PART), part(&original, HELD_PART));
+    assert_eq!(part(&saved.bytes, HELD_RELS), part(&original, HELD_RELS));
+    assert_eq!(saved.kept, scan(&saved.bytes));
+    assert!(saved.kept.contains(&Unsupported::PrinterSettings));
 }
 
 const CONNECTIONS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
