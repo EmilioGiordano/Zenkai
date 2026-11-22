@@ -87,6 +87,11 @@ launcher keeps its lock, the `confirmed` marker, the extracted `new-<version>\`,
 `rejected-<pid>\` version that did not start, a notice for the app and `launcher.log`. The
 launcher takes every path from its own folder, never from its arguments.
 
+"Restart now" checks the install first (not a network path; the root writable, probed with a
+`.zenkai-write-check-<pid>` file that Windows deletes when its handle closes), verifies and
+extracts the download again into `new-<version>\`, closes the app through the normal close and
+starts `zenkai.exe --apply=<version> --restarted`, so the session comes back on the new version.
+
 The release workflow does the same on a tag: it installs a pinned Inno Setup, builds the zip
 and the installer with `package.ps1`, publishes `<setup>.exe.sha256` next to them, and first
 runs `packaging\windows\test-install.ps1`, which installs silently, checks the layout and

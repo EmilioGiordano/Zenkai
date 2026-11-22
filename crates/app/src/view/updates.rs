@@ -6,7 +6,7 @@ use super::notices::{Lifetime, NoticeKind, Severity};
 use crate::close_prompt::CloseGoal;
 use crate::updates::{self, LauncherNotice, Report, Version};
 #[cfg(windows)]
-use crate::updates::{DownloadOutcome, DownloadPhase};
+use crate::updates::{Blocked, DownloadOutcome, DownloadPhase, StageError};
 
 impl Workspace {
     pub(super) fn show_update_report(&mut self, cx: &mut Context<Self>) {
@@ -137,6 +137,9 @@ impl Workspace {
                 cx,
             ),
             DownloadPhase::Stopping => self.notify(Severity::Info, t!("update.still_stopping"), cx),
+            DownloadPhase::Staging(_) => {
+                self.notify(Severity::Info, t!("update.still_preparing"), cx)
+            }
             DownloadPhase::Idle | DownloadPhase::Ready(_) => {
                 updates::start_download(cx, version);
                 self.post_update_card(
@@ -166,6 +169,11 @@ impl Workspace {
                 t!("update.not_verified", version = version),
                 cx,
             ),
+            DownloadOutcome::Blocked(version, blocked) => self.post_update_card(
+                NoticeKind::UpdateBlocked(version),
+                blocked_text(blocked, version),
+                cx,
+            ),
             DownloadOutcome::NotPublished(version) => {
                 self.notices.drop_download_card();
                 self.notify(
@@ -180,6 +188,100 @@ impl Workspace {
             }
         }
     }
+
+    // "Restart now": the update is verified and extracted again in the background, then the app
+    // goes through its normal close, unsaved work prompt included, and hands over to the launcher.
+    #[cfg(windows)]
+    pub(super) fn restart_to_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(updates::download_phase(cx), DownloadPhase::Staging(_)) {
+            self.notify(Severity::Info, t!("update.still_preparing"), cx);
+            return;
+        }
+        let Some((version, staging)) = updates::stage_update(cx) else {
+            self.notify(Severity::Info, t!("update.none_ready"), cx);
+            return;
+        };
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let staged = staging.await;
+            let shown = this.update_in(cx, |this, window, cx| {
+                this.staged(version, staged, window, cx)
+            });
+            if let Err(error) = shown {
+                tracing::debug!(%error, "workspace gone while the update was prepared");
+            }
+        })
+        .detach();
+    }
+
+    // Only Windows installs updates; elsewhere nothing is ever ready.
+    #[cfg(not(windows))]
+    pub(super) fn restart_to_update(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        self.notify(Severity::Info, t!("update.none_ready"), cx);
+    }
+
+    // If the close is cancelled the app stays open and the update stays ready.
+    #[cfg(windows)]
+    fn staged(
+        &mut self,
+        version: Version,
+        staged: Result<(), StageError>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        updates::end_stage(cx, version, &staged);
+        match staged {
+            Ok(()) => self.request_close(CloseGoal::Update(version), window, cx),
+            Err(StageError::Blocked(blocked)) => self.post_update_card(
+                NoticeKind::UpdateBlocked(version),
+                blocked_text(blocked, version),
+                cx,
+            ),
+            Err(StageError::NotVerified(error)) => {
+                tracing::warn!(%error, %version, "the update did not verify again and was deleted");
+                self.post_update_card(
+                    NoticeKind::UpdateNotVerified(version),
+                    t!("update.not_verified", version = version),
+                    cx,
+                );
+            }
+            Err(StageError::Disk(error)) => {
+                tracing::warn!(%error, %version, "could not prepare the update");
+                self.notify(
+                    Severity::Warning,
+                    t!("update.prepare_failed", error = error),
+                    cx,
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    pub(super) fn open_releases(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let on_card = self.notices.card().is_some_and(is_blocked_card);
+        self.confirm_vetted_link(updates::RELEASES_PAGE, window, cx);
+        if on_card {
+            self.dismiss_notice(window, cx);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn blocked_text(blocked: Blocked, version: Version) -> String {
+    match blocked {
+        Blocked::NetworkPath => t!("update.blocked_network", version = version),
+        Blocked::NoWriteAccess => t!("update.blocked_no_write", version = version),
+    }
+}
+
+#[cfg(windows)]
+fn is_blocked_card(card: &super::notices::Notice) -> bool {
+    matches!(card.kind, NoticeKind::UpdateBlocked(_))
+}
+
+#[cfg(not(windows))]
+fn is_blocked_card(_: &super::notices::Notice) -> bool {
+    false
 }
 
 #[cfg(windows)]

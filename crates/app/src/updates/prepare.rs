@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::archive::{self, ArchiveError, FILE_ATTRIBUTE_REPARSE_POINT};
 use super::download::{self, DownloadError};
+use super::handoff::Blocked;
 use super::signature::{self, MAX_SIGNATURE_BYTES, MAX_ZIP_BYTES, PLATFORM, SignatureError};
 use super::store::{self, ReadError};
 use super::version::Version;
@@ -70,6 +71,8 @@ pub enum PrepareError {
     Download(#[from] DownloadError),
     #[error("could not read or write the update files: {0}")]
     Disk(#[source] io::Error),
+    #[error("this install cannot update itself to {0}: {1}")]
+    Blocked(Version, Blocked),
     #[error("the download stopped without an answer")]
     Lost,
 }
@@ -239,7 +242,7 @@ fn fresh_file(path: &Path) -> io::Result<File> {
     OpenOptions::new().write(true).create_new(true).open(path)
 }
 
-fn plain_folder(update: &Path) -> io::Result<()> {
+pub fn plain_folder(update: &Path) -> io::Result<()> {
     if let Err(error) = fs::create_dir(update)
         && error.kind() != io::ErrorKind::AlreadyExists
     {

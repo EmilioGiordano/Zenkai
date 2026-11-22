@@ -223,6 +223,8 @@ pub fn table() -> Vec<Group> {
                 item(t!("palette.copy_notice"), CopyNotice),
                 item(t!("update.now"), UpdateNow),
                 item(t!("palette.cancel_update"), CancelUpdate),
+                item(t!("palette.restart_to_update"), RestartToUpdate),
+                item(t!("palette.open_releases"), OpenReleases),
                 item(t!("palette.toggle_sidebar"), ToggleSidebar),
                 item(t!("palette.cycle_space_color"), CycleSpaceColor),
                 item(t!("palette.customize_space"), CustomizeSpace),

@@ -4603,6 +4603,12 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &CancelUpdate, window, cx| this.cancel_update(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &RestartToUpdate, window, cx| {
+                this.restart_to_update(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &OpenReleases, window, cx| this.open_releases(window, cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &ShowWhatsNew, window, cx| this.show_whats_new(window, cx)),
             )

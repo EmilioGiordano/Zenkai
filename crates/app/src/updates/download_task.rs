@@ -1,6 +1,7 @@
 use async_channel::Sender;
 use gpui_kit::*;
 
+use super::handoff::{self, StageError};
 use super::prepare::{self, PrepareError};
 use super::transfer::{Event, Outcome, Phase};
 use super::{Updates, Version, download, notes, signature};
@@ -30,9 +31,11 @@ pub fn cancel(cx: &mut App) -> bool {
 // Starts only from "Update now". The download, the checks and the extraction run on their own
 // thread; the UI hears about them through a channel and never waits.
 pub fn start(cx: &mut App, chosen: Version) {
-    let (Some(update), Some(installed)) =
-        (crate::installation::update_folder(), Version::installed())
-    else {
+    let (Some(root), Some(update), Some(installed)) = (
+        crate::installation::root(),
+        crate::installation::update_folder(),
+        Version::installed(),
+    ) else {
         tracing::error!("an update download needs the install folder and the installed version");
         return;
     };
@@ -51,13 +54,24 @@ pub fn start(cx: &mut App, chosen: Version) {
     let spawned = std::thread::Builder::new()
         .name("update download".to_owned())
         .spawn(move || {
-            let agent = download::agent();
-            let result = prepare::prepare(&update, chosen, &older, installed, &cancel, |version| {
-                send(&sender, Event::Trying(version));
-                prepare::fetch_release(&agent, &update, version, &cancel, |received, total| {
-                    send(&sender, Event::Received { received, total })
-                })
-            });
+            // Nothing is downloaded that this install could never put in place.
+            let result = match handoff::blocked(root) {
+                Ok(Some(blocked)) => Err(PrepareError::Blocked(chosen, blocked)),
+                Err(error) => Err(PrepareError::Disk(error)),
+                Ok(None) => {
+                    let agent = download::agent();
+                    prepare::prepare(&update, chosen, &older, installed, &cancel, |version| {
+                        send(&sender, Event::Trying(version));
+                        prepare::fetch_release(
+                            &agent,
+                            &update,
+                            version,
+                            &cancel,
+                            |received, total| send(&sender, Event::Received { received, total }),
+                        )
+                    })
+                }
+            };
             send(&sender, Event::Finished(result));
         });
     if let Err(error) = spawned {
@@ -98,4 +112,43 @@ fn send(sender: &Sender<Event>, event: Event) {
 
 pub fn ready_for(cx: &App, wanted: Version) -> Option<Version> {
     cx.global::<Updates>().transfer.ready_for(wanted)
+}
+
+// "Restart now": the ready update is checked again in the background. None when no update is
+// ready, or its checks already run.
+pub fn stage(cx: &mut App) -> Option<(Version, Task<Result<(), StageError>>)> {
+    let (Some(root), Some(installed)) = (crate::installation::root(), Version::installed()) else {
+        tracing::error!("an update handoff needs the install folder and the installed version");
+        return None;
+    };
+    let version = cx.update_global::<Updates, _>(|updates, _| updates.transfer.begin_staging())?;
+    let staging = cx
+        .background_executor()
+        .spawn(async move { handoff::stage(root, version, installed) });
+    Some((version, staging))
+}
+
+// A disk error leaves the update ready to try again; a refusal ends it.
+pub fn end_stage(cx: &mut App, version: Version, staged: &Result<(), StageError>) {
+    cx.update_global::<Updates, _>(|updates, _| match staged {
+        Ok(()) | Err(StageError::Disk(_)) => updates.transfer.keep_staged(version),
+        Err(StageError::Blocked(_) | StageError::NotVerified(_)) => {
+            updates.transfer.drop_staged(version)
+        }
+    });
+}
+
+// Runs once the session is saved, right before the app quits. When the staged update is no
+// longer the ready one, or the launcher does not start, the app restarts as it is, so the user
+// is never left without it.
+pub fn restart_into(version: Version, cx: &App) {
+    let staged = cx.global::<Updates>().transfer.phase() == Phase::Ready(version);
+    match crate::installation::root() {
+        Some(root) if staged => match handoff::launch(root, version) {
+            Ok(()) => return,
+            Err(error) => tracing::error!(%error, "could not start the launcher; restarting as is"),
+        },
+        _ => tracing::warn!(%version, "the staged update is no longer ready; restarting as is"),
+    }
+    crate::restart::relaunch();
 }

@@ -2,12 +2,13 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, Theme};
 use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::notices::NoticeKind;
-use crate::actions::{CancelUpdate, DismissNotice, UpdateNow};
+use crate::actions::{CancelUpdate, DismissNotice, OpenReleases, RestartToUpdate, UpdateNow};
 use crate::keymap;
 use crate::updates::{self, DownloadPhase};
 
@@ -32,7 +33,10 @@ pub(super) fn download_heading(
         NoticeKind::UpdateDownloading(started) => {
             let version = match updates::download_phase(cx) {
                 DownloadPhase::Downloading { version, .. } => version,
-                DownloadPhase::Idle | DownloadPhase::Stopping | DownloadPhase::Ready(_) => started,
+                DownloadPhase::Idle
+                | DownloadPhase::Stopping
+                | DownloadPhase::Ready(_)
+                | DownloadPhase::Staging(_) => started,
             };
             Some((
                 t!("update.downloading_title", version = version).into(),
@@ -45,6 +49,10 @@ pub(super) fn download_heading(
         )),
         NoticeKind::UpdateNotVerified(_) => Some((
             t!("update.not_verified_title").into(),
+            Icon::new(IconName::TriangleAlert).text_color(theme.warning),
+        )),
+        NoticeKind::UpdateBlocked(_) => Some((
+            t!("update.blocked_title").into(),
             Icon::new(IconName::TriangleAlert).text_color(theme.warning),
         )),
         NoticeKind::Plain | NoticeKind::UpdateAvailable(_) => None,
@@ -82,7 +90,32 @@ pub(super) fn download_parts(kind: NoticeKind, cx: &App) -> Vec<AnyElement> {
             parts.push(button_row(vec![cancel]));
             parts
         }
-        NoticeKind::UpdateReady(_) => vec![button_row(vec![later_button(cx)])],
+        NoticeKind::UpdateReady(_) => {
+            let restart = Button::new("update-restart-now")
+                .primary()
+                .small()
+                .label(t!("update.restart_now"))
+                .tooltip(keymap::labeled(
+                    cx,
+                    t!("update.restart_now"),
+                    &RestartToUpdate,
+                ))
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(RestartToUpdate), cx));
+            vec![button_row(vec![later_button(cx), restart])]
+        }
+        NoticeKind::UpdateBlocked(_) => {
+            let releases = Button::new("update-open-releases")
+                .primary()
+                .small()
+                .label(t!("update.open_releases"))
+                .tooltip(keymap::labeled(
+                    cx,
+                    t!("update.open_releases"),
+                    &OpenReleases,
+                ))
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenReleases), cx));
+            vec![button_row(vec![later_button(cx), releases])]
+        }
         NoticeKind::UpdateNotVerified(_) => {
             let again = Button::new("update-try-again")
                 .primary()
@@ -98,12 +131,14 @@ pub(super) fn download_parts(kind: NoticeKind, cx: &App) -> Vec<AnyElement> {
 
 pub(super) fn download_status(cx: &App) -> Option<AnyElement> {
     let phase = updates::download_phase(cx);
-    if !matches!(phase, DownloadPhase::Downloading { .. }) {
-        return None;
-    }
-    let text: SharedString = match phase.percent() {
-        Some(percent) => t!("update.status_downloading", percent = percent).into(),
-        None => t!("update.status_downloading_unknown").into(),
+    let text: SharedString = match phase {
+        DownloadPhase::Downloading { .. } => match phase.percent() {
+            Some(percent) => t!("update.status_downloading", percent = percent).into(),
+            None => t!("update.status_downloading_unknown").into(),
+        },
+        DownloadPhase::Staging(_) => t!("update.status_preparing").into(),
+        DownloadPhase::Ready(_) => return Some(restart_status(cx)),
+        DownloadPhase::Idle | DownloadPhase::Stopping => return None,
     };
     Some(
         h_flex()
@@ -113,6 +148,30 @@ pub(super) fn download_status(cx: &App) -> Option<AnyElement> {
             .child(text)
             .into_any_element(),
     )
+}
+
+fn restart_status(cx: &App) -> AnyElement {
+    let label = t!("update.status_restart");
+    h_flex()
+        .id("status-restart-to-update")
+        .role(Role::Button)
+        .aria_label(label.clone())
+        .gap_1()
+        .items_center()
+        .cursor_pointer()
+        .text_color(cx.theme().primary)
+        .tooltip(|window, cx| {
+            Tooltip::new(keymap::labeled(
+                cx,
+                t!("update.restart_now"),
+                &RestartToUpdate,
+            ))
+            .build(window, cx)
+        })
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(RestartToUpdate), cx))
+        .child(Icon::new(IconName::CircleCheck).size_3())
+        .child(label)
+        .into_any_element()
 }
 
 fn render_progress(phase: DownloadPhase, cx: &App) -> Option<AnyElement> {

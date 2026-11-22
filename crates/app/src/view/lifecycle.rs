@@ -852,8 +852,15 @@ impl Workspace {
             let goal = this
                 .update(cx, |this, _| this.settled_goal(plan.goal))
                 .unwrap_or(plan.goal);
-            if goal == CloseGoal::Restart {
-                crate::restart::relaunch();
+            match goal {
+                CloseGoal::Restart => crate::restart::relaunch(),
+                #[cfg(windows)]
+                CloseGoal::Update(version) => {
+                    cx.update(|cx| crate::updates::restart_into(version, cx))
+                }
+                CloseGoal::Quit => {}
+                #[cfg(windows)]
+                CloseGoal::Hide => {}
             }
             cx.update(|cx| cx.quit());
         })

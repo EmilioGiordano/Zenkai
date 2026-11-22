@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::download::DownloadError;
+use super::handoff::Blocked;
 use super::prepare::PrepareError;
 use super::version::Version;
 
@@ -16,6 +17,7 @@ pub enum Phase {
     },
     Stopping,
     Ready(Version),
+    Staging(Version),
 }
 
 impl Phase {
@@ -41,6 +43,7 @@ pub enum Outcome {
     Ready(Version),
     NotVerified(Version),
     NotPublished(Version),
+    Blocked(Version, Blocked),
     Failed,
 }
 
@@ -67,7 +70,10 @@ impl Transfer {
     // None while a download runs or winds down: a second request never starts a second one
     // writing the same files.
     pub fn begin(&mut self, version: Version) -> Option<Arc<AtomicBool>> {
-        if matches!(self.phase, Phase::Downloading { .. } | Phase::Stopping) {
+        if matches!(
+            self.phase,
+            Phase::Downloading { .. } | Phase::Stopping | Phase::Staging(_)
+        ) {
             return None;
         }
         let cancel = Arc::new(AtomicBool::new(false));
@@ -132,6 +138,30 @@ impl Transfer {
         (wanted <= covered).then_some(ready)
     }
 
+    // The checks before the handoff run in the background; meanwhile no download may start, as
+    // it would delete what they extract.
+    pub fn begin_staging(&mut self) -> Option<Version> {
+        let Phase::Ready(version) = self.phase else {
+            return None;
+        };
+        self.phase = Phase::Staging(version);
+        Some(version)
+    }
+
+    // The update stays ready to try again, as after a disk error or a close the user cancelled.
+    pub fn keep_staged(&mut self, version: Version) {
+        if self.phase == Phase::Staging(version) {
+            self.phase = Phase::Ready(version);
+        }
+    }
+
+    // The update cannot be installed from here: it did not verify again or the install refuses it.
+    pub fn drop_staged(&mut self, version: Version) {
+        if self.phase == Phase::Staging(version) {
+            self.phase = Phase::Idle;
+        }
+    }
+
     pub fn cleaned_up(&mut self) {
         if self.phase == Phase::Stopping {
             self.phase = Phase::Idle;
@@ -170,6 +200,9 @@ impl Transfer {
             }
             Err(PrepareError::NotVerified(version)) => Some(Outcome::NotVerified(version)),
             Err(PrepareError::NotPublished(version)) => Some(Outcome::NotPublished(version)),
+            Err(PrepareError::Blocked(version, blocked)) => {
+                Some(Outcome::Blocked(version, blocked))
+            }
             Err(error) => {
                 tracing::warn!(%error, "the update download failed");
                 Some(Outcome::Failed)
@@ -185,7 +218,10 @@ mod tests {
     use std::io;
     use std::sync::atomic::Ordering;
 
+    use proptest::prelude::*;
+
     use super::super::download::DownloadError;
+    use super::super::handoff::Blocked;
     use super::super::prepare::PrepareError;
     use super::super::version::Version;
     use super::{Event, Outcome, Phase, Transfer};
@@ -394,5 +430,138 @@ mod tests {
         assert_eq!(transfer.ready_for(version("0.2.0")), None);
         transfer.begin(version("0.2.0")).unwrap();
         assert_eq!(transfer.ready_for(version("0.2.0")), None);
+    }
+
+    #[test]
+    fn staging_holds_off_downloads_until_it_ends() {
+        let mut transfer = ready("0.3.0", "0.3.0");
+        assert_eq!(transfer.begin_staging(), Some(version("0.3.0")));
+        assert_eq!(transfer.phase(), Phase::Staging(version("0.3.0")));
+        assert!(transfer.begin(version("0.4.0")).is_none());
+        assert!(!transfer.cancel());
+        assert_eq!(transfer.begin_staging(), None);
+        assert_eq!(transfer.ready_for(version("0.3.0")), None);
+        transfer.keep_staged(version("0.3.0"));
+        assert_eq!(transfer.phase(), Phase::Ready(version("0.3.0")));
+        assert_eq!(transfer.begin_staging(), Some(version("0.3.0")));
+        transfer.drop_staged(version("0.3.0"));
+        assert_eq!(transfer.phase(), Phase::Idle);
+        assert!(transfer.begin(version("0.4.0")).is_some());
+    }
+
+    #[test]
+    fn only_a_ready_update_is_staged_and_only_its_own_end_counts() {
+        let mut transfer = Transfer::default();
+        assert_eq!(transfer.begin_staging(), None);
+        transfer.begin(version("0.3.0")).unwrap();
+        assert_eq!(transfer.begin_staging(), None);
+        transfer.receive(Event::Finished(Ok(version("0.3.0"))));
+        transfer.begin_staging().unwrap();
+        transfer.drop_staged(version("0.2.0"));
+        transfer.keep_staged(version("0.2.0"));
+        assert_eq!(transfer.phase(), Phase::Staging(version("0.3.0")));
+    }
+
+    #[test]
+    fn an_install_that_refuses_updates_is_reported_with_the_version() {
+        let mut transfer = Transfer::default();
+        transfer.begin(version("0.3.0")).unwrap();
+        transfer.receive(Event::Finished(Err(PrepareError::Blocked(
+            version("0.3.0"),
+            Blocked::NoWriteAccess,
+        ))));
+        assert_eq!(transfer.phase(), Phase::Idle);
+        assert_eq!(
+            transfer.outcome,
+            Some(Outcome::Blocked(version("0.3.0"), Blocked::NoWriteAccess))
+        );
+    }
+
+    #[derive(Clone, Debug)]
+    enum Step {
+        Begin(u8),
+        Cancel,
+        Ready(u8),
+        Failed,
+        CleanedUp,
+        Stage,
+        Keep(u8),
+        Drop(u8),
+    }
+
+    fn step() -> impl Strategy<Value = Step> {
+        prop_oneof![
+            (0u8..4).prop_map(Step::Begin),
+            Just(Step::Cancel),
+            (0u8..4).prop_map(Step::Ready),
+            Just(Step::Failed),
+            Just(Step::CleanedUp),
+            Just(Step::Stage),
+            (0u8..4).prop_map(Step::Keep),
+            (0u8..4).prop_map(Step::Drop),
+        ]
+    }
+
+    fn numbered(patch: u8) -> Version {
+        version(&format!("0.2.{patch}"))
+    }
+
+    proptest! {
+        // The files staged for the launcher are deleted only by a new download; none may start
+        // while they are being checked, and only the end of that same check releases them.
+        #[test]
+        fn a_staged_update_is_released_only_by_its_own_end(
+            steps in proptest::collection::vec(step(), 1..40)
+        ) {
+            let mut transfer = Transfer::default();
+            // Only a download thread that runs sends its last word.
+            let mut running = false;
+            for step in steps {
+                let before = transfer.phase();
+                let releasing = match (&step, before) {
+                    (Step::Keep(patch) | Step::Drop(patch), Phase::Staging(staged)) => {
+                        numbered(*patch) == staged
+                    }
+                    _ => false,
+                };
+                match step {
+                    Step::Begin(patch) => {
+                        let began = transfer.begin(numbered(patch)).is_some();
+                        if matches!(before, Phase::Staging(_)) {
+                            prop_assert!(!began);
+                        }
+                        running |= began;
+                    }
+                    Step::Cancel => {
+                        transfer.cancel();
+                    }
+                    Step::Ready(patch) if running => {
+                        running = false;
+                        transfer.receive(Event::Finished(Ok(numbered(patch))));
+                    }
+                    Step::Failed if running => {
+                        running = false;
+                        transfer.receive(Event::Finished(Err(PrepareError::Lost)));
+                    }
+                    Step::Ready(_) | Step::Failed => {}
+                    Step::CleanedUp => transfer.cleaned_up(),
+                    Step::Stage => {
+                        let staged = transfer.begin_staging();
+                        if let Phase::Ready(version) = before {
+                            prop_assert_eq!(staged, Some(version));
+                        } else {
+                            prop_assert_eq!(staged, None);
+                        }
+                    }
+                    Step::Keep(patch) => transfer.keep_staged(numbered(patch)),
+                    Step::Drop(patch) => transfer.drop_staged(numbered(patch)),
+                }
+                if let Phase::Staging(_) = before
+                    && !releasing
+                {
+                    prop_assert_eq!(transfer.phase(), before);
+                }
+            }
+        }
     }
 }

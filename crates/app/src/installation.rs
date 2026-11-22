@@ -12,9 +12,9 @@ use gpui_kit::*;
 use crate::view::Workspace;
 
 const APP_FOLDER: &str = "app";
-const LAUNCHER: &str = "zenkai.exe";
+pub const LAUNCHER: &str = "zenkai.exe";
 const OLD_APP: &str = "app.old";
-const UPDATE: &str = ".update";
+pub const UPDATE: &str = ".update";
 const CONFIRMED: &str = "confirmed";
 const MAX_MARKER_BYTES: u64 = 32;
 // Ten tries two seconds apart end well inside the launcher's two minutes of waiting.

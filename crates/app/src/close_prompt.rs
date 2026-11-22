@@ -4,6 +4,8 @@ use std::time::Duration;
 use zenkai_types::WorkbookId;
 
 use crate::documents::Unsaved;
+#[cfg(windows)]
+use crate::updates::Version;
 
 const MINUTE: u64 = 60;
 const HOUR: u64 = 60 * MINUTE;
@@ -35,6 +37,10 @@ pub enum CloseGoal {
     Quit,
     // Quits, then starts the app again so a setting read only at startup takes effect.
     Restart,
+    // Quits, then has the launcher put this staged version in place and start it: a restart
+    // that also installs.
+    #[cfg(windows)]
+    Update(Version),
     // The window goes to the tray and every workbook stays in memory.
     #[cfg(windows)]
     Hide,
@@ -42,19 +48,40 @@ pub enum CloseGoal {
 
 impl CloseGoal {
     pub fn keeps_running(self) -> bool {
-        !matches!(self, CloseGoal::Quit | CloseGoal::Restart)
+        match self {
+            CloseGoal::Quit | CloseGoal::Restart => false,
+            #[cfg(windows)]
+            CloseGoal::Update(_) => false,
+            #[cfg(windows)]
+            CloseGoal::Hide => true,
+        }
+    }
+
+    // The app starts again on its own, so the whole session comes back.
+    pub fn restarts(self) -> bool {
+        match self {
+            CloseGoal::Restart => true,
+            #[cfg(windows)]
+            CloseGoal::Update(_) => true,
+            CloseGoal::Quit => false,
+            #[cfg(windows)]
+            CloseGoal::Hide => false,
+        }
     }
 
     fn rank(self) -> u8 {
         match self {
-            CloseGoal::Quit => 3,
+            CloseGoal::Quit => 4,
+            #[cfg(windows)]
+            CloseGoal::Update(_) => 3,
             CloseGoal::Restart => 2,
             #[cfg(windows)]
             CloseGoal::Hide => 1,
         }
     }
 
-    // Quit beats Restart beats Hide, so a later request can only make a close stronger.
+    // Quit beats Update beats Restart beats Hide, so a later request can only make a close
+    // stronger. An update restart also applies whatever a plain restart was for.
     pub fn outranking(self, other: CloseGoal) -> CloseGoal {
         if other.rank() > self.rank() {
             other
@@ -105,7 +132,7 @@ impl Choices {
 
     // A restart brings the session back whatever the reopen choice or setting says.
     pub fn starts_empty(&self) -> bool {
-        !self.reopen && self.goal != CloseGoal::Restart
+        !self.reopen && !self.goal.restarts()
     }
 
     pub fn items(&self) -> &[Unsaved] {
@@ -261,6 +288,22 @@ mod tests {
         let choices = Choices::new(Vec::new(), false);
         assert!(choices.clone().starts_empty());
         assert!(!choices.closing_to(CloseGoal::Restart).starts_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_update_restarts_with_the_session_and_only_a_quit_beats_it() {
+        use CloseGoal::{Hide, Quit, Restart, Update};
+        let update = Update(Version::parse_bare("0.2.0").unwrap());
+        assert!(!update.keeps_running());
+        assert!(update.restarts());
+        assert_eq!(update.outranking(Restart), update);
+        assert_eq!(Restart.outranking(update), update);
+        assert_eq!(Hide.outranking(update), update);
+        assert_eq!(update.outranking(Quit), Quit);
+        assert_eq!(Quit.outranking(update), Quit);
+        let choices = Choices::new(Vec::new(), false);
+        assert!(!choices.closing_to(update).starts_empty());
     }
 
     fn unsaved(id: u64, name: &str) -> Unsaved {

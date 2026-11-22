@@ -38,6 +38,8 @@ pub(super) enum NoticeKind {
     UpdateReady(Version),
     #[cfg(windows)]
     UpdateNotVerified(Version),
+    #[cfg(windows)]
+    UpdateBlocked(Version),
 }
 
 #[derive(Clone, Debug)]
