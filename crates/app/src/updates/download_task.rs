@@ -19,9 +19,10 @@ pub fn phase(cx: &App) -> Phase {
 // Called from an observer of `Updates`, like `take_report`: it updates the global only when
 // there is something to take.
 pub fn take_outcome(cx: &mut App) -> Option<Outcome> {
-    let outcome = cx.global::<Updates>().transfer.outcome?;
-    cx.update_global::<Updates, _>(|updates, _| updates.transfer.outcome = None);
-    Some(outcome)
+    if cx.global::<Updates>().transfer.outcome.is_none() {
+        return None;
+    }
+    cx.update_global::<Updates, _>(|updates, _| updates.transfer.outcome.take())
 }
 
 pub fn cancel(cx: &mut App) -> bool {
@@ -57,7 +58,7 @@ pub fn start(cx: &mut App, chosen: Version) {
             // Nothing is downloaded that this install could never put in place.
             let result = match handoff::blocked(root) {
                 Ok(Some(blocked)) => Err(PrepareError::Blocked(chosen, blocked)),
-                Err(error) => Err(PrepareError::Disk(error)),
+                Err(error) => Err(PrepareError::InstallCheck(error)),
                 Ok(None) => {
                     let agent = download::agent();
                     prepare::prepare(&update, chosen, &older, installed, &cancel, |version| {

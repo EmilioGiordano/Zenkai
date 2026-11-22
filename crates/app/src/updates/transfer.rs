@@ -38,12 +38,13 @@ impl Phase {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Outcome {
     Ready(Version),
     NotVerified(Version),
     NotPublished(Version),
     Blocked(Version, Blocked),
+    InstallCheckFailed(String),
     Failed,
 }
 
@@ -202,6 +203,10 @@ impl Transfer {
             Err(PrepareError::NotPublished(version)) => Some(Outcome::NotPublished(version)),
             Err(PrepareError::Blocked(version, blocked)) => {
                 Some(Outcome::Blocked(version, blocked))
+            }
+            Err(PrepareError::InstallCheck(error)) => {
+                tracing::warn!(%error, "could not check whether this install can update itself");
+                Some(Outcome::InstallCheckFailed(error.to_string()))
             }
             Err(error) => {
                 tracing::warn!(%error, "the update download failed");
@@ -474,6 +479,19 @@ mod tests {
         assert_eq!(
             transfer.outcome,
             Some(Outcome::Blocked(version("0.3.0"), Blocked::NoWriteAccess))
+        );
+    }
+
+    #[test]
+    fn an_install_that_cannot_be_checked_is_reported_with_the_error() {
+        let mut transfer = Transfer::default();
+        transfer.begin(version("0.3.0")).unwrap();
+        transfer.receive(Event::Finished(Err(PrepareError::InstallCheck(
+            io::Error::other("denied"),
+        ))));
+        assert_eq!(
+            transfer.outcome,
+            Some(Outcome::InstallCheckFailed("denied".to_owned()))
         );
     }
 

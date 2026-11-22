@@ -165,6 +165,14 @@ impl Workspace {
                 blocked_text(blocked, version),
                 cx,
             ),
+            DownloadOutcome::InstallCheckFailed(error) => {
+                self.notices.drop_download_card();
+                self.notify(
+                    Severity::Warning,
+                    t!("update.prepare_failed", error = error),
+                    cx,
+                );
+            }
             DownloadOutcome::NotPublished(version) => {
                 self.notices.drop_download_card();
                 self.notify(

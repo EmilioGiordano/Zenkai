@@ -73,6 +73,8 @@ pub enum PrepareError {
     Disk(#[source] io::Error),
     #[error("this install cannot update itself to {0}: {1}")]
     Blocked(Version, Blocked),
+    #[error("could not check whether this install can update itself: {0}")]
+    InstallCheck(#[source] io::Error),
     #[error("the download stopped without an answer")]
     Lost,
 }
