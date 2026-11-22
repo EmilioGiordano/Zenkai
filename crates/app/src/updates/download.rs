@@ -424,7 +424,7 @@ mod tests {
     }
 
     const QUICK: Patience = Patience {
-        stall: Duration::from_millis(300),
+        stall: Duration::from_secs(1),
         poll: Duration::from_millis(10),
     };
 
@@ -514,7 +514,7 @@ mod tests {
         let steps = vec![
             Step::Send(Piece::Head(Some(100))),
             bytes(10),
-            Step::Wait(Duration::from_secs(2)),
+            Step::Wait(QUICK.stall * 7),
             bytes(90),
             Step::Send(Piece::End),
         ];
@@ -526,7 +526,7 @@ mod tests {
 
     #[test]
     fn a_server_that_never_answers_is_given_up() {
-        let steps = vec![Step::Wait(Duration::from_secs(2))];
+        let steps = vec![Step::Wait(QUICK.stall * 7)];
         assert!(matches!(
             take(steps, 100, &calm()),
             Err(DownloadError::Stalled)
@@ -538,7 +538,7 @@ mod tests {
     fn a_slow_steady_transfer_is_not_cut_short() {
         let mut steps = vec![Step::Send(Piece::Head(Some(30)))];
         for _ in 0..30 {
-            steps.push(Step::Wait(Duration::from_millis(50)));
+            steps.push(Step::Wait(Duration::from_millis(150)));
             steps.push(bytes(1));
         }
         steps.push(Step::Send(Piece::End));
