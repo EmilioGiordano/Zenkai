@@ -508,20 +508,22 @@ fn a_change_on_disk_after_the_snapshot_fails_the_save_and_only_a_replace_works()
     assert_eq!(reopened.cell(SheetId(2), pos(0, 0)).text, "mine");
 }
 
-// Rewrites one part of a zip in place, keeping the others.
+// Rewrites one part of a zip in place, keeping the others byte for byte, pictures included.
 fn replace_part(file: &Path, name: &str, edit: impl Fn(String) -> String) {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(file).unwrap()).unwrap();
     let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).unwrap();
-        let mut text = String::new();
-        entry.read_to_string(&mut text).unwrap();
+        let mut body = Vec::new();
+        entry.read_to_end(&mut body).unwrap();
         let entry_name = entry.name().to_string();
-        let body = if entry_name == name { edit(text) } else { text };
+        if entry_name == name {
+            body = edit(String::from_utf8(body).unwrap()).into_bytes();
+        }
         writer
             .start_file(entry_name, zip::write::FileOptions::default())
             .unwrap();
-        std::io::Write::write_all(&mut writer, body.as_bytes()).unwrap();
+        std::io::Write::write_all(&mut writer, &body).unwrap();
     }
     let bytes = writer.finish().unwrap().into_inner();
     drop(archive);
