@@ -230,10 +230,8 @@ impl MarkdownPane {
         }
     }
 
-    // The text view appends when it is given text that extends what it holds, and then parses the
-    // last block again with the new text: a parse the depth check never saw, which can nest
-    // deeper than the whole text or make the parser panic. Emptying it first makes every hand
-    // over a replacement of exactly the text that was checked.
+    // The view appends when given text that extends what it holds, and parses an unchecked tail;
+    // emptying it first makes every hand over a replacement of exactly the checked text.
     fn show_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if text == self.previewed {
             return;

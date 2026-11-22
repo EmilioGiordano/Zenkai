@@ -895,9 +895,8 @@ mod tests {
         .is_err()
     }
 
-    // The tail an append makes the parser read is a text no check has seen: the parser accepts
-    // the text before and the whole text and still panics on it, so text is replaced, never
-    // appended.
+    // An append makes the parser read a tail no check has seen: it can panic on it although it
+    // accepts the text before and the whole text, so text is replaced, never appended.
     #[test]
     fn the_tail_of_an_append_can_panic_the_parser_although_the_whole_text_does_not() {
         let prefix = "****1) 1. 1) 
