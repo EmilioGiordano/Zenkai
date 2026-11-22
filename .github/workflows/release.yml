@@ -172,14 +172,22 @@ jobs:
           cp target/dist/zenkai target/dist/zenkai-mcp target/dist/zenkai-pdf-host target/dist/zenkai-values-host LICENSE README.md "$name"
           tar -czf "$name.tar.gz" "$name"
 
+      # Only the Windows build may hand over a zip: the sign job signs every zip it is given.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: runner.os == 'Windows'
         with:
           name: zenkai-${{ matrix.target }}
           path: |
             zenkai-*.zip
             zenkai-*-setup.exe
             zenkai-*-setup.exe.sha256
-            zenkai-*.tar.gz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: runner.os != 'Windows'
+        with:
+          name: zenkai-${{ matrix.target }}
+          path: zenkai-*.tar.gz
           if-no-files-found: error
 
   # Holds the signing secret, so it runs no code from the repository or its dependencies:
@@ -201,8 +209,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: zenkai-*
-          merge-multiple: true
+          name: zenkai-windows-x64
           path: artifacts
 
       # jedisct1/minisign 0.12; the hash is of the tarball its author's key signs.
@@ -244,9 +251,9 @@ jobs:
             name=$(basename "$zip")
             platform="${name#"zenkai-$REF_NAME-"}"
             platform="${platform%.zip}"
-            # The updater's PLATFORM names (crates/app/src/updates/signature.rs).
+            # An updater PLATFORM name (crates/app/src/updates/signature.rs) that release builds.
             case "$platform" in
-              windows-x64 | windows-arm64) ;;
+              windows-x64) ;;
               *)
                 echo "::error::$name is not named zenkai-$REF_NAME-<platform>.zip for a platform the updater knows."
                 exit 1
@@ -283,8 +290,21 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: zenkai-*
-          merge-multiple: true
+          name: zenkai-windows-x64
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zenkai-linux-x64
+          path: unix
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zenkai-macos-arm64
+          path: unix
+
+      # The zips come from the Windows build alone, the one the sign job signed.
+      - name: Take only the tarballs from the Linux and macOS builds
+        run: mv unix/zenkai-*.tar.gz .
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
