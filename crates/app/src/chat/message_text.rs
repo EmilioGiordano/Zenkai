@@ -24,24 +24,23 @@ enum Phase {
     },
 }
 
-// One assistant message. It is plain text while it streams and is shown formatted once the
-// turn is over and the depth check has passed on all of it; hostile Markdown stays plain text.
-// The text view is given the checked text once, as a replacement. Text appended to what the
-// view holds would make it parse the last block again with the new text, a parse no check has
-// seen, which can nest deeper than the whole text or make the parser panic.
+// One assistant message: plain text while it streams, formatted once it is complete and checked.
+// The view is given the checked text once and never more: its append parses an unchecked tail.
 pub(super) struct MessageText {
     panel: WeakEntity<ChatPanel>,
-    raw: String,
+    text: SharedString,
     phase: Phase,
     state: Entity<TextViewState>,
     // The text view parses with the extensions of the element that draws it, so text waits
     // until a frame has drawn it; the checked tree is then the one that is rendered.
     extensions: Extensions,
+    // Bumped when the view is replaced, so a frame callback of the old view attaches nothing.
+    generation: u64,
     check: Option<Task<()>>,
 }
 
-// A panic in the parser or the reference scan on a hostile text must not end a task unseen:
-// the text counts as one that cannot be shown.
+// A panic in the parser or the reference scan on a hostile text counts as a text that cannot
+// be shown, instead of ending a task unseen.
 fn guarded<T>(work: impl FnOnce() -> Result<T, Refusal>) -> Result<T, Refusal> {
     panic::catch_unwind(AssertUnwindSafe(work)).unwrap_or_else(|_| {
         tracing::error!("a chat message made its check panic; it is shown as plain text");
@@ -56,9 +55,8 @@ fn verdict(text: String) -> Result<String, Refusal> {
     }
 }
 
-// The check for the UI thread: the references of the message are links, and Ok(None) says the
-// linked text is longer than what the text view parses synchronously, so it is left for the
-// background.
+// The check for the UI thread, on the message with its references linked; Ok(None) leaves it
+// for the background when that text is longer than the view parses synchronously.
 fn check_here(raw: &str) -> Result<Option<String>, Refusal> {
     guarded(|| {
         let text = reference_scan::link_references(raw);
@@ -102,10 +100,11 @@ impl MessageText {
     ) -> MessageText {
         let mut message = MessageText {
             panel,
-            raw: first.to_owned(),
+            text: SharedString::from(first.to_owned()),
             phase: Phase::Streaming,
             state: cx.new(|cx| TextViewState::markdown("", cx)),
             extensions: Extensions::NotDrawn,
+            generation: 0,
             check: None,
         };
         message.refuse_if_oversized();
@@ -119,14 +118,15 @@ impl MessageText {
         if !matches!(self.phase, Phase::Streaming) {
             self.reopen(cx);
         }
-        self.raw.push_str(added);
+        self.text = SharedString::from(format!("{}{added}", self.text));
         self.refuse_if_oversized();
         cx.notify();
     }
 
-    // The agent went on after the message was closed: the text view holds text that is no
-    // longer the whole message, and a view is never given more text, so it gets a new one.
+    // The agent went on after the message was closed; the view cannot be given more text, so it
+    // gets a new one.
     fn reopen(&mut self, cx: &mut Context<Self>) {
+        self.generation += 1;
         self.check = None;
         self.state = cx.new(|cx| TextViewState::markdown("", cx));
         self.extensions = Extensions::NotDrawn;
@@ -134,7 +134,7 @@ impl MessageText {
     }
 
     fn refuse_if_oversized(&mut self) {
-        if self.raw.len() > markdown_depth::MAX_PREVIEW_BYTES {
+        if self.text.len() > markdown_depth::MAX_PREVIEW_BYTES {
             self.refuse(Refusal::TooLarge);
         }
     }
@@ -142,20 +142,20 @@ impl MessageText {
     fn refuse(&mut self, refusal: Refusal) {
         tracing::debug!(?refusal, "chat message shown as plain text");
         self.phase = Phase::Refused {
-            text: start_of(&self.raw),
+            text: start_of(&self.text),
             refusal,
         };
-        self.raw = String::new();
+        self.text = SharedString::default();
         self.check = None;
     }
 
-    // The turn is over: the message is checked, on the UI thread up to the size the text view
-    // parses there and in the background past it.
+    // The turn is over: the message is checked on the UI thread up to the size the view parses
+    // there, and in the background past it.
     pub(super) fn complete(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.phase, Phase::Streaming) {
             return;
         }
-        match check_here(&self.raw) {
+        match check_here(&self.text) {
             Ok(Some(text)) => self.accept(text, cx),
             Ok(None) => self.check_in_background(cx),
             Err(refusal) => self.refuse(refusal),
@@ -165,7 +165,7 @@ impl MessageText {
 
     fn check_in_background(&mut self, cx: &mut Context<Self>) {
         self.phase = Phase::Checking;
-        let raw = self.raw.clone();
+        let raw = self.text.to_string();
         self.check = Some(cx.spawn(async move |this, cx| {
             let checked = cx
                 .background_executor()
@@ -191,7 +191,10 @@ impl MessageText {
         self.hand_over_checked_text(cx);
     }
 
-    fn attach_extensions(&mut self, cx: &mut Context<Self>) {
+    fn attach_extensions(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if generation != self.generation {
+            return;
+        }
         self.extensions = Extensions::Attached;
         self.hand_over_checked_text(cx);
         cx.notify();
@@ -212,14 +215,15 @@ impl MessageText {
 impl Render for MessageText {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match &self.phase {
-            Phase::Streaming | Phase::Checking => plain(self.raw.clone()).into_any_element(),
+            Phase::Streaming | Phase::Checking => plain(self.text.clone()).into_any_element(),
             Phase::Rich { held } => {
                 if self.extensions == Extensions::NotDrawn {
                     self.extensions = Extensions::Drawing;
                     let message = cx.entity().downgrade();
+                    let generation = self.generation;
                     window.on_next_frame(move |_, cx| {
-                        if let Err(error) =
-                            message.update(cx, |message, cx| message.attach_extensions(cx))
+                        if let Err(error) = message
+                            .update(cx, |message, cx| message.attach_extensions(generation, cx))
                         {
                             tracing::debug!(%error, "chat message dropped before it was drawn");
                         }
@@ -231,7 +235,7 @@ impl Render for MessageText {
                     .line_height(relative(1.6));
                 if held.is_some() {
                     v_flex()
-                        .child(plain(self.raw.clone()))
+                        .child(plain(self.text.clone()))
                         .child(formatted)
                         .into_any_element()
                 } else {
