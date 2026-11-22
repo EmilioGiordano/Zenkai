@@ -47,6 +47,7 @@ embed-resource = "3"
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
+rust_xlsxwriter = "0.103"
 tempfile = "3"
 
 [lints]
