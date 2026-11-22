@@ -5,6 +5,8 @@ mod download;
 mod fetch;
 mod launcher_notice;
 mod notes;
+#[cfg(windows)]
+mod prepare;
 mod record;
 mod releases;
 #[cfg(windows)]
