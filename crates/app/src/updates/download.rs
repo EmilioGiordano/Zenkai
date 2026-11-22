@@ -1,6 +1,8 @@
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use ureq::http::Response;
 use url::{Host, Url};
@@ -19,11 +21,22 @@ const DOWNLOAD_HOSTS: [&str; 4] = [
 pub const MAX_REDIRECTS: usize = 5;
 const USER_AGENT: &str = "Zenkai";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
-// A stalled transfer must end on its own: cancelling is only seen between two reads.
-const BODY_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const READ_CHUNK: usize = 64 * 1024;
+const QUEUED_CHUNKS: usize = 16;
 pub const PROGRESS_STEP: u64 = 1024 * 1024;
+
+// `stall` is how long the server may stay quiet, headers included; `poll` is how often a cancel
+// is looked at while it is quiet.
+#[derive(Clone, Copy, Debug)]
+pub struct Patience {
+    pub stall: Duration,
+    pub poll: Duration,
+}
+
+pub const PATIENCE: Patience = Patience {
+    stall: Duration::from_secs(60),
+    poll: Duration::from_millis(200),
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DownloadError {
@@ -43,6 +56,8 @@ pub enum DownloadError {
     TooLarge(u64),
     #[error("the transfer broke off: {0}")]
     Transfer(#[source] io::Error),
+    #[error("the server stopped sending")]
+    Stalled,
     #[error("could not write the download: {0}")]
     Write(#[source] io::Error),
     #[error("the download was cancelled")]
@@ -91,11 +106,12 @@ pub fn follow<B>(
     Err(DownloadError::TooManyRedirects)
 }
 
+// No response timeout: ureq turns it into a fixed deadline for the whole body. A quiet server is
+// caught by `receive`; the per-read body timeout only ends a transfer thread nobody waits for.
 pub fn agent() -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_connect(Some(CONNECT_TIMEOUT))
-        .timeout_recv_response(Some(RESPONSE_TIMEOUT))
-        .timeout_recv_body(Some(BODY_TIMEOUT))
+        .timeout_recv_body(Some(PATIENCE.stall))
         .https_only(true)
         .max_redirects(0)
         .http_status_as_error(false)
@@ -120,56 +136,115 @@ fn request(agent: &ureq::Agent, url: &Url) -> Result<Answer<Response<ureq::Body>
     }
 }
 
-// Blocks on the network: call it from a background thread only.
+pub enum Piece {
+    Head(Option<u64>),
+    Bytes(Vec<u8>),
+    End,
+    Failed(DownloadError),
+}
+
+// Blocks: call it from a background thread only. The network is read on a thread of its own, so
+// a server that goes quiet never keeps the caller from seeing a cancel or giving up.
 pub fn download(
     agent: &ureq::Agent,
     url: Url,
     sink: &mut impl Write,
     limit: u64,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(u64, Option<u64>),
+    progress: impl FnMut(u64, Option<u64>),
 ) -> Result<u64, DownloadError> {
-    let response = follow(url, |url| request(agent, url))?;
-    let total = response.body().content_length();
-    if total.is_some_and(|total| total > limit) {
-        return Err(DownloadError::TooLarge(limit));
-    }
-    let mut body = response.into_body().into_reader();
-    copy_limited(&mut body, sink, limit, cancel, |received| {
-        progress(received, total)
-    })
+    let (sender, pieces) = mpsc::sync_channel(QUEUED_CHUNKS);
+    let agent = agent.clone();
+    thread::Builder::new()
+        .name("update transfer".to_owned())
+        .spawn(move || transfer(&agent, url, &sender))
+        .map_err(DownloadError::Transfer)?;
+    receive(&pieces, sink, limit, cancel, PATIENCE, progress)
 }
 
-// The limit counts what arrives, whatever the headers announced.
-pub fn copy_limited(
-    source: &mut impl Read,
+// A failed send means `receive` gave up; this thread then just ends.
+fn transfer(agent: &ureq::Agent, url: Url, pieces: &SyncSender<Piece>) {
+    let response = match follow(url, |url| request(agent, url)) {
+        Ok(response) => response,
+        Err(error) => {
+            offer(pieces, Piece::Failed(error));
+            return;
+        }
+    };
+    if !offer(pieces, Piece::Head(response.body().content_length())) {
+        return;
+    }
+    let mut body = response.into_body().into_reader();
+    let mut buffer = vec![0; READ_CHUNK];
+    loop {
+        let piece = match body.read(&mut buffer) {
+            Ok(0) => Piece::End,
+            Ok(read) => Piece::Bytes(buffer[..read].to_vec()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => Piece::Failed(DownloadError::Transfer(error)),
+        };
+        let more = matches!(piece, Piece::Bytes(_));
+        if !offer(pieces, piece) || !more {
+            return;
+        }
+    }
+}
+
+fn offer(pieces: &SyncSender<Piece>, piece: Piece) -> bool {
+    pieces.send(piece).is_ok()
+}
+
+// The limit counts what arrives, whatever the headers announced. Only silence counts against the
+// server: a slow transfer that keeps sending may take as long as it needs.
+pub fn receive(
+    pieces: &Receiver<Piece>,
     sink: &mut impl Write,
     limit: u64,
     cancel: &AtomicBool,
-    mut progress: impl FnMut(u64),
+    patience: Patience,
+    mut progress: impl FnMut(u64, Option<u64>),
 ) -> Result<u64, DownloadError> {
-    let mut buffer = vec![0; READ_CHUNK];
+    let mut total = None;
     let mut received = 0u64;
     let mut reported = 0u64;
+    let mut heard = Instant::now();
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(DownloadError::Cancelled);
         }
-        let read = match source.read(&mut buffer) {
-            Ok(0) => return Ok(received),
-            Ok(read) => read,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) => return Err(DownloadError::Transfer(error)),
+        let piece = match pieces.recv_timeout(patience.poll) {
+            Ok(piece) => piece,
+            Err(RecvTimeoutError::Timeout) if heard.elapsed() >= patience.stall => {
+                return Err(DownloadError::Stalled);
+            }
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(DownloadError::Transfer(io::Error::other(
+                    "the transfer ended without finishing",
+                )));
+            }
         };
-        received += read as u64;
-        if received > limit {
-            return Err(DownloadError::TooLarge(limit));
-        }
-        sink.write_all(&buffer[..read])
-            .map_err(DownloadError::Write)?;
-        if received - reported >= PROGRESS_STEP {
-            reported = received;
-            progress(received);
+        heard = Instant::now();
+        match piece {
+            Piece::Head(length) => {
+                if length.is_some_and(|length| length > limit) {
+                    return Err(DownloadError::TooLarge(limit));
+                }
+                total = length;
+            }
+            Piece::Bytes(bytes) => {
+                received += bytes.len() as u64;
+                if received > limit {
+                    return Err(DownloadError::TooLarge(limit));
+                }
+                sink.write_all(&bytes).map_err(DownloadError::Write)?;
+                if received - reported >= PROGRESS_STEP {
+                    reported = received;
+                    progress(received, total);
+                }
+            }
+            Piece::End => return Ok(received),
+            Piece::Failed(error) => return Err(error),
         }
     }
 }
@@ -177,14 +252,18 @@ pub fn copy_limited(
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{self, Receiver};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     use url::Url;
 
     use super::super::version::Version;
     use super::{
-        Answer, DownloadError, MAX_REDIRECTS, PROGRESS_STEP, allowed, asset_url, copy_limited,
-        follow,
+        Answer, DownloadError, MAX_REDIRECTS, PROGRESS_STEP, Patience, Piece, allowed, asset_url,
+        follow, receive,
     };
 
     fn url(text: &str) -> Url {
@@ -315,64 +394,191 @@ mod tests {
         );
     }
 
+    enum Step {
+        Send(Piece),
+        Wait(Duration),
+    }
+
+    // Plays a server on its own thread; when the steps run out the channel closes.
+    fn feed(steps: Vec<Step>) -> Receiver<Piece> {
+        let (sender, pieces) = mpsc::sync_channel(4);
+        thread::spawn(move || {
+            for step in steps {
+                match step {
+                    Step::Send(piece) => {
+                        if sender.send(piece).is_err() {
+                            return;
+                        }
+                    }
+                    Step::Wait(time) => thread::sleep(time),
+                }
+            }
+        });
+        pieces
+    }
+
+    fn bytes(count: usize) -> Step {
+        Step::Send(Piece::Bytes(vec![7; count]))
+    }
+
+    const QUICK: Patience = Patience {
+        stall: Duration::from_millis(300),
+        poll: Duration::from_millis(10),
+    };
+
+    fn take(steps: Vec<Step>, limit: u64, cancel: &AtomicBool) -> Result<Vec<u8>, DownloadError> {
+        let mut sink = Vec::new();
+        receive(&feed(steps), &mut sink, limit, cancel, QUICK, |_, _| {})?;
+        Ok(sink)
+    }
+
+    fn calm() -> AtomicBool {
+        AtomicBool::new(false)
+    }
+
     #[test]
     fn a_body_within_the_limit_is_copied_whole() {
-        let mut sink = Vec::new();
-        let received = copy_limited(
-            &mut &b"12345"[..],
-            &mut sink,
-            5,
-            &AtomicBool::new(false),
-            |_| {},
-        )
-        .unwrap();
-        assert_eq!(received, 5);
-        assert_eq!(sink, b"12345");
+        let steps = vec![
+            Step::Send(Piece::Head(Some(5))),
+            Step::Send(Piece::Bytes(b"12345".to_vec())),
+            Step::Send(Piece::End),
+        ];
+        assert_eq!(take(steps, 5, &calm()).unwrap(), b"12345");
     }
 
     #[test]
-    fn a_body_past_the_limit_stops_there() {
-        let mut sink = Vec::new();
-        let result = copy_limited(
-            &mut std::io::repeat(b'x'),
-            &mut sink,
-            1000,
-            &AtomicBool::new(false),
-            |_| {},
-        );
-        assert!(matches!(result, Err(DownloadError::TooLarge(1000))));
-        assert!(sink.len() <= 1000);
+    fn an_announced_size_past_the_limit_stops_before_any_byte() {
+        let steps = vec![Step::Send(Piece::Head(Some(1001))), bytes(10)];
+        assert!(matches!(
+            take(steps, 1000, &calm()),
+            Err(DownloadError::TooLarge(1000))
+        ));
     }
 
     #[test]
-    fn a_cancelled_download_stops_before_the_next_read() {
-        let cancel = AtomicBool::new(true);
-        let mut sink = Vec::new();
-        let result = copy_limited(
-            &mut std::io::repeat(b'x'),
-            &mut sink,
+    fn a_body_past_the_limit_stops_there_whatever_was_announced() {
+        let steps = vec![
+            Step::Send(Piece::Head(Some(10))),
+            bytes(600),
+            bytes(600),
+            Step::Send(Piece::End),
+        ];
+        assert!(matches!(
+            take(steps, 1000, &calm()),
+            Err(DownloadError::TooLarge(1000))
+        ));
+    }
+
+    #[test]
+    fn a_cancelled_download_stops_before_the_next_piece() {
+        let steps = vec![Step::Send(Piece::Head(None)), bytes(10)];
+        assert!(matches!(
+            take(steps, u64::MAX, &AtomicBool::new(true)),
+            Err(DownloadError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn a_cancel_is_seen_while_the_server_is_quiet() {
+        let patient = Patience {
+            stall: Duration::from_secs(30),
+            poll: Duration::from_millis(10),
+        };
+        let cancel = Arc::new(AtomicBool::new(false));
+        let raised = Arc::clone(&cancel);
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            raised.store(true, Ordering::Relaxed);
+        });
+        let pieces = feed(vec![
+            Step::Send(Piece::Head(None)),
+            Step::Wait(Duration::from_secs(5)),
+        ]);
+        let started = Instant::now();
+        let result = receive(
+            &pieces,
+            &mut Vec::new(),
             u64::MAX,
             &cancel,
-            |_| {},
+            patient,
+            |_, _| {},
         );
         assert!(matches!(result, Err(DownloadError::Cancelled)));
-        assert!(sink.is_empty());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn a_server_that_goes_quiet_mid_body_is_given_up() {
+        let steps = vec![
+            Step::Send(Piece::Head(Some(100))),
+            bytes(10),
+            Step::Wait(Duration::from_secs(2)),
+            bytes(90),
+            Step::Send(Piece::End),
+        ];
+        assert!(matches!(
+            take(steps, 100, &calm()),
+            Err(DownloadError::Stalled)
+        ));
+    }
+
+    #[test]
+    fn a_server_that_never_answers_is_given_up() {
+        let steps = vec![Step::Wait(Duration::from_secs(2))];
+        assert!(matches!(
+            take(steps, 100, &calm()),
+            Err(DownloadError::Stalled)
+        ));
+    }
+
+    // Many times the stall limit in total, but never quiet for that long: it must finish.
+    #[test]
+    fn a_slow_steady_transfer_is_not_cut_short() {
+        let mut steps = vec![Step::Send(Piece::Head(Some(30)))];
+        for _ in 0..30 {
+            steps.push(Step::Wait(Duration::from_millis(50)));
+            steps.push(bytes(1));
+        }
+        steps.push(Step::Send(Piece::End));
+        let started = Instant::now();
+        assert_eq!(take(steps, 30, &calm()).unwrap().len(), 30);
+        assert!(started.elapsed() > QUICK.stall * 3);
+    }
+
+    #[test]
+    fn a_transfer_that_ends_without_finishing_is_an_error() {
+        let steps = vec![Step::Send(Piece::Head(None)), bytes(10)];
+        assert!(matches!(
+            take(steps, 100, &calm()),
+            Err(DownloadError::Transfer(_))
+        ));
+        let failed = vec![Step::Send(Piece::Failed(DownloadError::Status(500)))];
+        assert!(matches!(
+            take(failed, 100, &calm()),
+            Err(DownloadError::Status(500))
+        ));
     }
 
     #[test]
     fn progress_is_reported_once_per_step() {
-        let size = PROGRESS_STEP * 3 + 10;
+        let chunk = 64 * 1024;
+        let mut steps = vec![Step::Send(Piece::Head(None))];
+        for _ in 0..(3 * PROGRESS_STEP as usize / chunk) {
+            steps.push(bytes(chunk));
+        }
+        steps.push(bytes(10));
+        steps.push(Step::Send(Piece::End));
         let mut reported = Vec::new();
-        let mut source = std::io::Read::take(std::io::repeat(0), size);
-        copy_limited(
-            &mut source,
+        receive(
+            &feed(steps),
             &mut std::io::sink(),
-            size,
-            &AtomicBool::new(false),
-            |received| reported.push(received),
+            u64::MAX,
+            &calm(),
+            QUICK,
+            |received, total| reported.push((received, total)),
         )
         .unwrap();
         assert_eq!(reported.len(), 3);
-        assert!(reported.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(reported.windows(2).all(|pair| pair[0].0 < pair[1].0));
     }
 }
