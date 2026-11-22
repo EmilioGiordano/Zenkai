@@ -68,6 +68,15 @@ impl Notice {
         matches!(self.kind, NoticeKind::UpdateAvailable(_))
     }
 
+    // The cards whose way forward is the Releases page.
+    pub fn leads_to_releases(&self) -> bool {
+        #[cfg(windows)]
+        if matches!(self.kind, NoticeKind::UpdateBlocked(_)) {
+            return true;
+        }
+        self.is_update_available()
+    }
+
     pub fn is_update(&self) -> bool {
         self.kind != NoticeKind::Plain
     }

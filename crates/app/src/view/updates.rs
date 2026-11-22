@@ -88,16 +88,7 @@ impl Workspace {
             None => self.notify(Severity::Info, t!("update.none_available"), cx),
             #[cfg(windows)]
             Some(version) if updates::can_download() => self.download_update(version, cx),
-            Some(_) => {
-                let on_card = self
-                    .notices
-                    .card()
-                    .is_some_and(|card| card.is_update_available());
-                self.confirm_vetted_link(updates::RELEASES_PAGE, window, cx);
-                if on_card {
-                    self.dismiss_notice(window, cx);
-                }
-            }
+            Some(_) => self.open_releases(window, cx),
         }
     }
 
@@ -258,7 +249,10 @@ impl Workspace {
     }
 
     pub(super) fn open_releases(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let on_card = self.notices.card().is_some_and(is_blocked_card);
+        let on_card = self
+            .notices
+            .card()
+            .is_some_and(|card| card.leads_to_releases());
         self.confirm_vetted_link(updates::RELEASES_PAGE, window, cx);
         if on_card {
             self.dismiss_notice(window, cx);
@@ -278,16 +272,6 @@ fn blocked_text(blocked: Blocked, version: Version) -> String {
         Blocked::NetworkPath => t!("update.blocked_network", version = version),
         Blocked::NoWriteAccess => t!("update.blocked_no_write", version = version),
     }
-}
-
-#[cfg(windows)]
-fn is_blocked_card(card: &super::notices::Notice) -> bool {
-    matches!(card.kind, NoticeKind::UpdateBlocked(_))
-}
-
-#[cfg(not(windows))]
-fn is_blocked_card(_: &super::notices::Notice) -> bool {
-    false
 }
 
 #[cfg(windows)]
