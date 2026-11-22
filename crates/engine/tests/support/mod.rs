@@ -1,5 +1,8 @@
-// Shared by the tests that read a saved file's styles part; each uses some of it.
+// Shared by the engine tests; each uses some of it.
 #![allow(clippy::unwrap_used, dead_code)]
+
+#[path = "../../../../test-support/pixel_png.rs"]
+pub mod pixel_png;
 
 // The `<xf>` elements of cellXfs as written, in order.
 pub fn cell_xfs(styles: &str) -> Vec<String> {

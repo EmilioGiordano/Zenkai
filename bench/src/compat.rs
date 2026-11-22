@@ -10,16 +10,8 @@ use zenkai_engine::{Engine, open_xlsx};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 
 use crate::coverage::{CASES, SETUP, Want};
+use crate::pixel_png::PIXEL_PNG;
 use crate::save_losses;
-
-// A 1x1 transparent PNG, so the image fixture needs no file on disk.
-const PIXEL_PNG: [u8; 67] = [
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-    0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
-    0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
-    0x42, 0x60, 0x82,
-];
 
 fn save(book: &mut Workbook, dir: &Path, name: &str) -> Result<()> {
     book.save(dir.join(name))
@@ -115,6 +107,22 @@ pub fn generate(dir: &Path) -> Result<()> {
     sheet.write_number(0, 0, 10.0)?;
     sheet.insert_note(0, 0, &Note::new("A reviewer note"))?;
     save(&mut book, dir, "notes.xlsx")?;
+
+    let mut book = Workbook::new();
+    let data = book.add_worksheet().set_name("Data")?;
+    for row in 0..5u32 {
+        data.write_number(row, 0, f64::from(row + 1))?;
+    }
+    let held = book.add_worksheet().set_name("Held")?;
+    held.write_string(0, 0, "note, picture and link")?;
+    held.insert_note(0, 0, &Note::new("A reviewer note"))?;
+    held.write_url(1, 0, Url::new("https://example.com"))?;
+    held.insert_image(3, 0, &Image::new_from_buffer(&PIXEL_PNG)?)?;
+    let charted = book.add_worksheet().set_name("Charted")?;
+    let mut chart = Chart::new(ChartType::Column);
+    chart.add_series().set_values("Data!$A$1:$A$5");
+    charted.insert_chart(0, 0, &chart)?;
+    save(&mut book, dir, "content-on-other-sheets.xlsx")?;
 
     let mut book = Workbook::new();
     let sheet = book.add_worksheet();

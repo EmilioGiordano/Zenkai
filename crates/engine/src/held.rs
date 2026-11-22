@@ -58,15 +58,17 @@ const LINKABLE: [Unsupported; 9] = [
     Unsupported::PrinterSettings,
 ];
 
-fn kind_of(link: SheetLink) -> Unsupported {
+// A cell reference rides on a drawing or a hyperlink, whose kind reports its loss.
+fn kind_of(link: SheetLink) -> Option<Unsupported> {
     match link {
-        SheetLink::Drawing | SheetLink::Image => Unsupported::Images,
-        SheetLink::Chart => Unsupported::Charts,
-        SheetLink::PivotTable => Unsupported::PivotTables,
-        SheetLink::Comments => Unsupported::Comments,
-        SheetLink::Table => Unsupported::Tables,
-        SheetLink::Hyperlink => Unsupported::Hyperlinks,
-        SheetLink::PrinterSettings => Unsupported::PrinterSettings,
+        SheetLink::Drawing | SheetLink::Image => Some(Unsupported::Images),
+        SheetLink::Chart => Some(Unsupported::Charts),
+        SheetLink::PivotTable => Some(Unsupported::PivotTables),
+        SheetLink::Comments => Some(Unsupported::Comments),
+        SheetLink::Table => Some(Unsupported::Tables),
+        SheetLink::Hyperlink => Some(Unsupported::Hyperlinks),
+        SheetLink::PrinterSettings => Some(Unsupported::PrinterSettings),
+        SheetLink::CellReference => None,
     }
 }
 
@@ -101,7 +103,7 @@ impl Held {
                     .cloned()
                     .unwrap_or_default(),
                 linked: match links {
-                    SheetLinks::Known(links) => links.iter().map(|l| kind_of(*l)).collect(),
+                    SheetLinks::Known(links) => links.iter().filter_map(|l| kind_of(*l)).collect(),
                     // Whatever the other parts hold that a sheet can point at may hang off it.
                     SheetLinks::Unknown => book
                         .iter()
@@ -336,6 +338,21 @@ mod tests {
         assert!(
             held.rewrite(2, BTreeSet::new(), Relationships::Dropped)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn a_cell_reference_is_reported_through_what_carries_it() {
+        let links = set_of_links(&[
+            SheetLink::Drawing,
+            SheetLink::Hyperlink,
+            SheetLink::CellReference,
+        ]);
+        let mut held = Held::of(&[], &layout(vec![SheetLinks::Known(links)]));
+        assert_eq!(
+            held.rewrite(0, BTreeSet::new(), Relationships::Dropped)
+                .unwrap(),
+            set(&[Unsupported::Images, Unsupported::Hyperlinks])
         );
     }
 

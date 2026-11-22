@@ -3,6 +3,7 @@
 mod assemble;
 mod base;
 mod diff;
+mod drawing_cells;
 mod formulas;
 mod layout;
 pub mod limits;
