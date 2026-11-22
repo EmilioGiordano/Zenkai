@@ -92,7 +92,9 @@ impl Transfer {
         true
     }
 
-    pub fn receive(&mut self, event: Event) {
+    // A version comes back when its download finished after a cancel: its files are still on
+    // disk, the phase stays Stopping, and `cleaned_up` ends it once they are deleted.
+    pub fn receive(&mut self, event: Event) -> Option<Version> {
         match event {
             Event::Trying(version) => {
                 if matches!(self.phase, Phase::Downloading { .. }) {
@@ -112,7 +114,14 @@ impl Transfer {
                     };
                 }
             }
-            Event::Finished(result) => self.finish(result),
+            Event::Finished(result) => return self.finish(result),
+        }
+        None
+    }
+
+    pub fn cleaned_up(&mut self) {
+        if self.phase == Phase::Stopping {
+            self.phase = Phase::Idle;
         }
     }
 
@@ -129,12 +138,14 @@ impl Transfer {
     }
 
     // A download the user cancelled ends quietly, even if it got to the end first.
-    fn finish(&mut self, result: Result<Version, PrepareError>) {
+    fn finish(&mut self, result: Result<Version, PrepareError>) -> Option<Version> {
         let cancelled = self.phase == Phase::Stopping;
         self.cancel = None;
+        if let (true, Ok(version)) = (cancelled, &result) {
+            return Some(*version);
+        }
         self.phase = Phase::Idle;
         let outcome = match result {
-            Ok(_) if cancelled => None,
             Ok(version) => {
                 self.phase = Phase::Ready(version);
                 Some(Outcome::Ready(version))
@@ -152,6 +163,7 @@ impl Transfer {
             }
         };
         self.outcome = outcome;
+        None
     }
 }
 
@@ -228,13 +240,36 @@ mod tests {
     }
 
     #[test]
-    fn a_download_that_finishes_after_cancel_is_not_offered() {
+    fn a_download_that_finishes_after_cancel_is_not_offered_and_is_handed_back_to_delete() {
         let mut transfer = Transfer::default();
         transfer.begin(version("0.3.0")).unwrap();
         transfer.cancel();
-        transfer.receive(Event::Finished(Ok(version("0.3.0"))));
+        let late = transfer.receive(Event::Finished(Ok(version("0.3.0"))));
+        assert_eq!(late, Some(version("0.3.0")));
+        assert_eq!(transfer.phase(), Phase::Stopping);
+        assert!(transfer.begin(version("0.3.0")).is_none());
+        assert_eq!(transfer.outcome, None);
+        transfer.cleaned_up();
         assert_eq!(transfer.phase(), Phase::Idle);
         assert_eq!(transfer.outcome, None);
+        assert!(transfer.begin(version("0.3.0")).is_some());
+    }
+
+    #[test]
+    fn only_a_download_that_finished_after_cancel_is_handed_back() {
+        let mut transfer = Transfer::default();
+        transfer.begin(version("0.3.0")).unwrap();
+        assert_eq!(
+            transfer.receive(Event::Finished(Ok(version("0.3.0")))),
+            None
+        );
+        transfer.begin(version("0.3.1")).unwrap();
+        transfer.cancel();
+        let ended = Event::Finished(Err(PrepareError::Download(DownloadError::Cancelled)));
+        assert_eq!(transfer.receive(ended), None);
+        assert_eq!(transfer.phase(), Phase::Idle);
+        transfer.cleaned_up();
+        assert_eq!(transfer.phase(), Phase::Idle);
     }
 
     #[test]

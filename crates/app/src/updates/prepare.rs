@@ -267,14 +267,14 @@ fn remove_file(path: &Path) -> io::Result<()> {
     }
 }
 
-fn discard(update: &Path, version: Version) {
+pub fn discard(update: &Path, version: Version) {
     let removed = [
         remove_file(&update.join(asset_name(version))),
         remove_file(&update.join(signature_name(version))),
         remove_tree(&new_app(update, version)),
     ];
     for error in removed.into_iter().filter_map(Result::err) {
-        tracing::warn!(%error, %version, "could not delete an update that did not verify");
+        tracing::warn!(%error, %version, "could not delete the files of an update");
     }
 }
 

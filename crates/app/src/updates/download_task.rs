@@ -46,6 +46,7 @@ pub fn start(cx: &mut App, chosen: Version) {
         return;
     };
     let watched = cancel.clone();
+    let folder = update.clone();
     let (sender, receiver) = async_channel::unbounded();
     let spawned = std::thread::Builder::new()
         .name("update download".to_owned())
@@ -69,9 +70,17 @@ pub fn start(cx: &mut App, chosen: Version) {
     }
     cx.spawn(async move |cx| {
         while let Ok(event) = receiver.recv().await {
-            cx.update(|cx| {
+            let late = cx.update(|cx| {
                 cx.update_global::<Updates, _>(|updates, _| updates.transfer.receive(event))
             });
+            if let Some(version) = late {
+                let folder = folder.clone();
+                cx.background_spawn(async move { prepare::discard(&folder, version) })
+                    .await;
+                cx.update(|cx| {
+                    cx.update_global::<Updates, _>(|updates, _| updates.transfer.cleaned_up())
+                });
+            }
         }
         // Closed without `Finished` only if the thread panicked; otherwise this does nothing.
         cx.update(|cx| {
