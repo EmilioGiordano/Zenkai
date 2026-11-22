@@ -13,8 +13,8 @@ const ALLOWED_REGRESSION: f64 = 0.15;
 const RUN_TIMEOUT: Duration = Duration::from_secs(600);
 
 // Baselined per file; info keys the workers also print (open_ms inside steady,
-// fill_rows, edit_ms and save_ms inside edit-save) are not compared.
-pub const METRICS: [&str; 9] = [
+// fill_rows, edit_ms, move_ms and save_ms inside edit-save and move-save) are not compared.
+pub const METRICS: [&str; 11] = [
     "open_ms",
     "open_peak_mb",
     "steady_mb",
@@ -24,6 +24,8 @@ pub const METRICS: [&str; 9] = [
     "edit_save_peak_mb",
     "save_ms",
     "save_peak_mb",
+    "move_save_ms",
+    "move_save_peak_mb",
 ];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -239,6 +241,13 @@ fn run_case(exe: &PathBuf, workdir: &Path, case: &scale_cases::Case) -> Result<V
             "save",
             &[("save_ms", "save_ms"), ("peak_commit_mb", "save_peak_mb")][..],
         ),
+        (
+            "move-save",
+            &[
+                ("move_save_ms", "move_save_ms"),
+                ("peak_commit_mb", "move_save_peak_mb"),
+            ][..],
+        ),
     ] {
         let out = scale_stage::out_path(workdir, &case.name, stage)
             .to_string_lossy()
@@ -326,9 +335,9 @@ fn print_table(measurements: &[Measurement]) {
         .into_iter()
         .collect();
     println!(
-        "| File | Open ms | Open peak MB | Steady MB | Fill ms | Fill peak MB | Edit+save ms | Edit+save peak MB | Save ms | Save peak MB |"
+        "| File | Open ms | Open peak MB | Steady MB | Fill ms | Fill peak MB | Edit+save ms | Edit+save peak MB | Save ms | Save peak MB | Move+save ms | Move+save peak MB |"
     );
-    println!("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
+    println!("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
     for file in files {
         println!(
             "| {} | {} |",

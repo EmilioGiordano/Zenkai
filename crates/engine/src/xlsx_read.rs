@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ironcalc::base::types::Workbook as Book;
-use zenkai_xlsx_reader::{ReadError, SheetLinks, list_sheets, workbook_differences};
+use zenkai_xlsx_reader::{ReadError, list_sheets, workbook_differences};
 
 pub use zenkai_xlsx_reader::ListedSheet;
 
@@ -257,9 +257,7 @@ fn read_streaming(
                 return SheetSettings::default();
             }
             let mut settings = sheet_settings::read(config, &mut budget);
-            if matches!(links, SheetLinks::Known(known) if known.is_empty()) {
-                settings.elements.nothing_linked();
-            }
+            settings.elements.links_read(links);
             settings
         })
         .collect();

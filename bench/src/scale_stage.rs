@@ -24,6 +24,7 @@ pub fn run(args: &[&str]) -> Result<()> {
         ["steady", file] => steady_stage(Path::new(file)),
         ["fill", "--rows", rows] => fill_stage(rows.parse().map_err(|e| anyhow!("bad rows: {e}"))?),
         ["edit-save", file, "--out", out] => edit_save_stage(Path::new(file), Path::new(out)),
+        ["move-save", file, "--out", out] => move_save_stage(Path::new(file), Path::new(out)),
         ["save", file, "--out", out] => save_stage(Path::new(file), Path::new(out)),
         ["hibernate", "--rows", rows, "--out", out] => scale_hibernate::run(
             rows.parse().map_err(|e| anyhow!("bad rows: {e}"))?,
@@ -31,7 +32,8 @@ pub fn run(args: &[&str]) -> Result<()> {
         ),
         _ => bail!(
             "usage: scale-stage open <file> | steady <file> | fill --rows <n> | \
-             edit-save <file> --out <file> | save <file> --out <file> | \
+             edit-save <file> --out <file> | move-save <file> --out <file> | \
+             save <file> --out <file> | \
              hibernate --rows <n> --out <dump file>"
         ),
     }
@@ -95,6 +97,23 @@ fn edit_save_stage(path: &Path, out: &Path) -> Result<()> {
     emit("edit_ms", edit_ms);
     emit("save_ms", save_ms);
     emit("edit_save_ms", edit_ms + save_ms);
+    emit("peak_commit_mb", mem::to_mb(mem::peak_commit_bytes()?));
+    Ok(())
+}
+
+// One row inserted near the top of the first sheet, which every other sheet's content
+// either survives or loses, then the save that writes the result.
+fn move_save_stage(path: &Path, out: &Path) -> Result<()> {
+    let (mut workbook, open_ms) = open_workbook(path)?;
+    let start = Instant::now();
+    workbook.insert_rows(SHEET, RowIdx::clamped(1), 1)?;
+    let move_ms = ms(start);
+    let save_ms = save_to(workbook, out)?;
+    mem::check_cap("move-save")?;
+    emit("open_ms", open_ms);
+    emit("move_ms", move_ms);
+    emit("save_ms", save_ms);
+    emit("move_save_ms", move_ms + save_ms);
     emit("peak_commit_mb", mem::to_mb(mem::peak_commit_bytes()?));
     Ok(())
 }
