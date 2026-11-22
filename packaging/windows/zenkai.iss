@@ -28,6 +28,7 @@ AppPublisher=Zenkai
 DefaultDirName={localappdata}\Programs\Zenkai
 DisableDirPage=yes
 DisableProgramGroupPage=yes
+LicenseFile={#LayoutDir}\LICENSE
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
