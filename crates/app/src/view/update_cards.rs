@@ -170,7 +170,7 @@ fn restart_status(cx: &App) -> AnyElement {
     h_flex()
         .id("status-restart-to-update")
         .role(Role::Button)
-        .aria_label(label.clone())
+        .aria_label(label)
         .gap_1()
         .items_center()
         .cursor_pointer()
