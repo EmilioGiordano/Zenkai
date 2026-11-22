@@ -133,7 +133,7 @@ pub fn stage(cx: &mut App) -> Option<(Version, Task<Result<(), StageError>>)> {
 pub fn end_stage(cx: &mut App, version: Version, staged: &Result<(), StageError>) {
     cx.update_global::<Updates, _>(|updates, _| match staged {
         Ok(()) | Err(StageError::Disk(_)) => updates.transfer.keep_staged(version),
-        Err(StageError::Blocked(_) | StageError::NotVerified(_)) => {
+        Err(StageError::Gone(_) | StageError::Blocked(_) | StageError::NotVerified(_)) => {
             updates.transfer.drop_staged(version)
         }
     });

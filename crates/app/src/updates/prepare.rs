@@ -258,7 +258,7 @@ pub fn plain_folder(update: &Path) -> io::Result<()> {
     }
 }
 
-fn remove_tree(path: &Path) -> io::Result<()> {
+pub fn remove_tree(path: &Path) -> io::Result<()> {
     match fs::remove_dir_all(path) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         removed => removed,

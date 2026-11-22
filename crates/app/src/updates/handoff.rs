@@ -41,6 +41,8 @@ pub enum StageError {
     Blocked(Blocked),
     #[error("the update did not verify again: {0}")]
     NotVerified(PendingError),
+    #[error("the downloaded update is gone: {0}")]
+    Gone(#[source] io::Error),
     #[error("could not prepare the update files: {0}")]
     Disk(#[source] io::Error),
 }
@@ -121,7 +123,18 @@ pub fn stage(root: &Path, version: Version, installed: Version) -> Result<(), St
     prepare::plain_folder(&update).map_err(StageError::Disk)?;
     match prepare::verify_and_extract(&update, version, installed) {
         Ok(()) => Ok(()),
-        Err(PendingError::Disk(error)) => Err(StageError::Disk(error)),
+        // Without its zip or signature the update can only be downloaded again.
+        Err(PendingError::Disk(error)) if error.kind() == io::ErrorKind::NotFound => {
+            prepare::discard(&update, version);
+            Err(StageError::Gone(error))
+        }
+        // A half-written extraction must never reach the launcher; the zip stays for a retry.
+        Err(PendingError::Disk(error)) => {
+            if let Err(removed) = prepare::remove_tree(&prepare::new_app(&update, version)) {
+                tracing::warn!(error = %removed, %version, "could not delete a partial extraction");
+            }
+            Err(StageError::Disk(error))
+        }
         Err(refused) => {
             prepare::discard(&update, version);
             Err(StageError::NotVerified(refused))

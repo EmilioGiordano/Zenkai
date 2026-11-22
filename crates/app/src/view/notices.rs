@@ -249,6 +249,23 @@ impl Notices {
         }
     }
 
+    // An update whose download is gone takes its Ready card with it, also one held behind a
+    // problem, so it never offers a restart that has nothing to install.
+    #[cfg(windows)]
+    pub fn drop_ready_card(&mut self, version: Version) {
+        let ready = |notice: &Option<Notice>| {
+            notice
+                .as_ref()
+                .is_some_and(|notice| notice.kind == NoticeKind::UpdateReady(version))
+        };
+        if ready(&self.held_update) {
+            self.held_update = None;
+        }
+        if ready(&self.card) {
+            self.dismiss_card();
+        }
+    }
+
     // Only a warning times out, and never while the user is reading it.
     pub fn expire_warning(&mut self, id: u64, held: bool) -> Expiry {
         let is_that_warning = self

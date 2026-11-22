@@ -1,10 +1,13 @@
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::super::prepare::{asset_name, new_app, signature_name};
 use super::super::version::Version;
 use super::{Drive, StageError, apply_arguments, blocked, drive_of, local_drive, stage};
+
+const FILE_SHARE_READ: u32 = 1;
 
 fn version(text: &str) -> Version {
     Version::parse_bare(text).unwrap()
@@ -26,7 +29,7 @@ fn fixture(name: &str) -> PathBuf {
     .collect()
 }
 
-// An install root whose `.update` holds the verified 0.2.0 download, as branch 4 leaves it.
+// An install root whose `.update` holds the verified 0.2.0 download.
 fn downloaded() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     let update = root.path().join(".update");
@@ -156,17 +159,39 @@ fn a_zip_changed_since_the_download_is_refused_and_deleted() {
 }
 
 #[test]
-fn a_download_that_is_gone_is_a_disk_error_and_nothing_else_is_touched() {
+fn a_download_that_is_gone_is_discarded_and_nothing_else_is_touched() {
+    for missing in [
+        asset_name(version("0.2.0")),
+        signature_name(version("0.2.0")),
+    ] {
+        let root = downloaded();
+        let update = root.path().join(".update");
+        fs::remove_file(update.join(missing)).unwrap();
+        fs::write(update.join("confirmed"), b"0.1.0").unwrap();
+        let result = stage(root.path(), version("0.2.0"), installed());
+        assert!(matches!(result, Err(StageError::Gone(_))), "{result:?}");
+        assert_eq!(listed(&update), ["confirmed"]);
+    }
+}
+
+#[test]
+fn a_disk_error_keeps_the_download_for_another_try() {
     let root = downloaded();
     let update = root.path().join(".update");
-    fs::remove_file(update.join(asset_name(version("0.2.0")))).unwrap();
-    fs::write(update.join("confirmed"), b"0.1.0").unwrap();
+    let folder = new_app(&update, version("0.2.0"));
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(folder.join("held.dll"), b"in use").unwrap();
+    let held = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(folder.join("held.dll"))
+        .unwrap();
     let result = stage(root.path(), version("0.2.0"), installed());
+    drop(held);
     assert!(matches!(result, Err(StageError::Disk(_))), "{result:?}");
-    assert_eq!(
-        listed(&update),
-        ["confirmed", "zenkai-v0.2.0-windows-x64.zip.minisig"]
-    );
+    assert!(update.join(asset_name(version("0.2.0"))).is_file());
+    assert!(update.join(signature_name(version("0.2.0"))).is_file());
+    assert!(!folder.join("zenkai.exe").exists());
 }
 
 #[test]

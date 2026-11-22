@@ -244,6 +244,11 @@ impl Workspace {
                     cx,
                 );
             }
+            Err(StageError::Gone(error)) => {
+                tracing::warn!(%error, %version, "the downloaded update is gone");
+                self.notices.drop_ready_card(version);
+                self.notify(Severity::Warning, t!("update.download_gone"), cx);
+            }
             Err(StageError::Disk(error)) => {
                 tracing::warn!(%error, %version, "could not prepare the update");
                 self.notify(
