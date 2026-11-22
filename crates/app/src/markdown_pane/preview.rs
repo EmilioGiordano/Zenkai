@@ -203,8 +203,7 @@ impl MarkdownPane {
         self.refusal = refusal;
         let shown = if refusal.is_none() { text } else { "" };
         if self.extensions == Extensions::Attached {
-            self.preview
-                .update(cx, |preview, cx| preview.set_text(shown, cx));
+            self.show_text(shown, cx);
         } else {
             self.held_text = Some(shown.to_owned());
         }
@@ -227,9 +226,26 @@ impl MarkdownPane {
     fn attach_extensions(&mut self, cx: &mut Context<Self>) {
         self.extensions = Extensions::Attached;
         if let Some(text) = self.held_text.take() {
-            self.preview
-                .update(cx, |preview, cx| preview.set_text(&text, cx));
+            self.show_text(&text, cx);
         }
+    }
+
+    // The text view appends when it is given text that extends what it holds, and then parses the
+    // last block again with the new text: a parse the depth check never saw, which can nest
+    // deeper than the whole text or make the parser panic. Emptying it first makes every hand
+    // over a replacement of exactly the text that was checked.
+    fn show_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if text == self.previewed {
+            return;
+        }
+        let extends = !self.previewed.is_empty() && text.starts_with(&self.previewed);
+        self.preview.update(cx, |preview, cx| {
+            if extends {
+                preview.set_text("", cx);
+            }
+            preview.set_text(text, cx);
+        });
+        self.previewed = text.to_owned();
     }
 
     pub(super) fn schedule_follow(&mut self, cx: &mut Context<Self>) {
