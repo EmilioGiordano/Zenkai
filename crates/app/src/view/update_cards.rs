@@ -38,7 +38,8 @@ pub(super) fn download_heading(
                 DownloadPhase::Idle
                 | DownloadPhase::Stopping
                 | DownloadPhase::Ready(_)
-                | DownloadPhase::Staging(_) => started,
+                | DownloadPhase::Staging(_)
+                | DownloadPhase::Staged(_) => started,
             };
             Some((
                 t!("update.downloading_title", version = version).into(),
@@ -151,7 +152,9 @@ pub(super) fn download_status(cx: &App) -> Option<AnyElement> {
             Some(percent) => t!("update.status_downloading", percent = percent).into(),
             None => t!("update.status_downloading_unknown").into(),
         },
-        DownloadPhase::Staging(_) => t!("update.status_preparing").into(),
+        DownloadPhase::Staging(_) | DownloadPhase::Staged(_) => {
+            t!("update.status_preparing").into()
+        }
         DownloadPhase::Ready(_) => return Some(restart_status(cx)),
         DownloadPhase::Idle | DownloadPhase::Stopping => return None,
     };

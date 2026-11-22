@@ -2,6 +2,8 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::Workspace;
+#[cfg(windows)]
+use super::lifecycle::Lifecycle;
 use super::notices::{Lifetime, NoticeKind, Severity};
 use crate::close_prompt::CloseGoal;
 use crate::updates::{self, LauncherNotice, Report, Version};
@@ -128,7 +130,7 @@ impl Workspace {
                 cx,
             ),
             DownloadPhase::Stopping => self.notify(Severity::Info, t!("update.still_stopping"), cx),
-            DownloadPhase::Staging(_) => {
+            DownloadPhase::Staging(_) | DownloadPhase::Staged(_) => {
                 self.notify(Severity::Info, t!("update.still_preparing"), cx)
             }
             DownloadPhase::Idle | DownloadPhase::Ready(_) => {
@@ -192,17 +194,27 @@ impl Workspace {
     // goes through its normal close, unsaved work prompt included, and hands over to the launcher.
     #[cfg(windows)]
     pub(super) fn restart_to_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(updates::download_phase(cx), DownloadPhase::Staging(_)) {
+        if self.close_under_way() {
+            tracing::debug!("a close is already under way; Restart now waits");
+            return;
+        }
+        if matches!(
+            updates::download_phase(cx),
+            DownloadPhase::Staging(_) | DownloadPhase::Staged(_)
+        ) {
             self.notify(Severity::Info, t!("update.still_preparing"), cx);
             return;
         }
-        let Some((version, staging)) = updates::stage_update(cx) else {
+        let Some((version, checked)) = updates::stage_update(cx) else {
             self.notify(Severity::Info, t!("update.none_ready"), cx);
             return;
         };
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
-            let staged = staging.await;
+            let Ok(staged) = checked.recv().await else {
+                tracing::debug!("the update checks ended without a word for this window");
+                return;
+            };
             let shown = this.update_in(cx, |this, window, cx| {
                 this.staged(version, staged, window, cx)
             });
@@ -211,6 +223,22 @@ impl Workspace {
             }
         })
         .detach();
+    }
+
+    #[cfg(windows)]
+    fn close_under_way(&self) -> bool {
+        self.lifecycle == Lifecycle::Closing
+            || self.pending_goal.is_some()
+            || self.close_dialog.is_some()
+            || self.departure.is_some()
+    }
+
+    // Every way a close of the app is called off ends here, so a staged update goes back to
+    // waiting, ready, and is checked again next time.
+    pub(super) fn close_called_off(&mut self, cx: &mut Context<Self>) {
+        #[cfg(windows)]
+        updates::unstage(cx);
+        cx.notify();
     }
 
     // Only Windows installs updates; elsewhere nothing is ever ready.
@@ -228,9 +256,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        updates::end_stage(cx, version, &staged);
         match staged {
-            Ok(()) => self.request_close(CloseGoal::Update(version), window, cx),
+            Ok(()) => self.close_to_update(version, window, cx),
             Err(StageError::Blocked(blocked)) => self.post_update_card(
                 NoticeKind::UpdateBlocked(version),
                 blocked_text(blocked, version),
@@ -249,7 +276,7 @@ impl Workspace {
                 self.notices.drop_ready_card(version);
                 self.notify(Severity::Warning, t!("update.download_gone"), cx);
             }
-            Err(StageError::Disk(error)) => {
+            Err(error @ (StageError::Disk(_) | StageError::Lost)) => {
                 tracing::warn!(%error, %version, "could not prepare the update");
                 self.notify(
                     Severity::Warning,
@@ -259,6 +286,19 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    // Like a restart for a new language: the window comes back from the tray for the unsaved
+    // work prompt. A close that cannot start now says so instead of waiting silently.
+    #[cfg(windows)]
+    fn close_to_update(&mut self, version: Version, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.close_under_way() && self.prompts.blocks_input() {
+            updates::unstage(cx);
+            self.notify(Severity::Warning, t!("update.close_blocked"), cx);
+            return;
+        }
+        crate::tray::request_show(cx);
+        self.request_close(CloseGoal::Update(version), window, cx);
     }
 
     pub(super) fn open_releases(&mut self, window: &mut Window, cx: &mut Context<Self>) {

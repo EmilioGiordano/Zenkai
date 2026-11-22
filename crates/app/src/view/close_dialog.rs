@@ -174,6 +174,7 @@ impl Workspace {
 
     pub(super) fn cancel_close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_close_dialog(window, cx);
+        self.close_called_off(cx);
     }
 
     // Tab wraps around inside the dialog; focus never lands on the window behind it.

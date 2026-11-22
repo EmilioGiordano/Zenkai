@@ -1,9 +1,9 @@
-use async_channel::Sender;
+use async_channel::{Receiver, Sender};
 use gpui_kit::*;
 
 use super::handoff::{self, StageError};
 use super::prepare::{self, PrepareError};
-use super::transfer::{Event, Outcome, Phase};
+use super::transfer::{Event, NextStart, Outcome, Phase, StageEnd};
 use super::{Updates, Version, download, notes, signature};
 
 // Only an install laid out for the launcher, with a key to check what arrives, downloads an
@@ -115,41 +115,71 @@ pub fn ready_for(cx: &App, wanted: Version) -> Option<Version> {
     cx.global::<Updates>().transfer.ready_for(wanted)
 }
 
-// "Restart now": the ready update is checked again in the background. None when no update is
-// ready, or its checks already run.
-pub fn stage(cx: &mut App) -> Option<(Version, Task<Result<(), StageError>>)> {
+// "Restart now": the ready update is checked again on its own thread. None when no update is
+// ready, or its checks already run. The receiver gets the result once the transfer has heard it,
+// so the check always ends, even with no window left to show it.
+pub fn stage(cx: &mut App) -> Option<(Version, Receiver<Result<(), StageError>>)> {
     let (Some(root), Some(installed)) = (crate::installation::root(), Version::installed()) else {
         tracing::error!("an update handoff needs the install folder and the installed version");
         return None;
     };
     let version = cx.update_global::<Updates, _>(|updates, _| updates.transfer.begin_staging())?;
-    let staging = cx
-        .background_executor()
-        .spawn(async move { handoff::stage(root, version, installed) });
-    Some((version, staging))
-}
-
-// A disk error leaves the update ready to try again; a refusal ends it.
-pub fn end_stage(cx: &mut App, version: Version, staged: &Result<(), StageError>) {
-    cx.update_global::<Updates, _>(|updates, _| match staged {
-        Ok(()) | Err(StageError::Disk(_)) => updates.transfer.keep_staged(version),
-        Err(StageError::Gone(_) | StageError::Blocked(_) | StageError::NotVerified(_)) => {
-            updates.transfer.drop_staged(version)
+    let (done, checked) = async_channel::bounded(1);
+    let spawned = std::thread::Builder::new()
+        .name("update staging".to_owned())
+        .spawn(move || {
+            if done
+                .send_blocking(handoff::stage(root, version, installed))
+                .is_err()
+            {
+                tracing::debug!("nothing listens to the update checks any more");
+            }
+        });
+    if let Err(error) = spawned {
+        tracing::error!(%error, "could not start the update checks");
+    }
+    let (sender, receiver) = async_channel::bounded(1);
+    cx.spawn(async move |cx| {
+        // Closed without an answer only if the thread panicked or never started.
+        let staged = checked.recv().await.unwrap_or(Err(StageError::Lost));
+        cx.update(|cx| end_stage(cx, version, &staged));
+        if sender.send(staged).await.is_err() {
+            tracing::debug!("no window waits for the update checks any more");
         }
-    });
+    })
+    .detach();
+    Some((version, receiver))
 }
 
-// Runs once the session is saved, right before the app quits. When the staged update is no
-// longer the ready one, or the launcher does not start, the app restarts as it is, so the user
-// is never left without it.
+fn end_stage(cx: &mut App, version: Version, staged: &Result<(), StageError>) {
+    let end = match staged {
+        Ok(()) => StageEnd::Staged,
+        Err(StageError::Disk(_) | StageError::Lost) => StageEnd::Retry,
+        Err(StageError::Gone(_) | StageError::Blocked(_) | StageError::NotVerified(_)) => {
+            StageEnd::Gone
+        }
+    };
+    cx.update_global::<Updates, _>(|updates, _| updates.transfer.end_staging(version, end));
+}
+
+// Called whenever a close of the app is called off: the update waits and is checked again.
+pub fn unstage(cx: &mut App) {
+    if matches!(cx.global::<Updates>().transfer.phase(), Phase::Staged(_)) {
+        cx.update_global::<Updates, _>(|updates, _| updates.transfer.unstage());
+    }
+}
+
+// Runs once the session is saved, right before the app quits. Only the update staged for this
+// close goes to the launcher; otherwise, or when the launcher does not start, the app restarts as
+// it is, so the user is never left without it.
 pub fn restart_into(version: Version, cx: &App) {
-    let staged = cx.global::<Updates>().transfer.phase() == Phase::Ready(version);
-    match crate::installation::root() {
-        Some(root) if staged => match handoff::launch(root, version) {
+    let next = cx.global::<Updates>().transfer.next_start(version);
+    match (next, crate::installation::root()) {
+        (NextStart::Launcher, Some(root)) => match handoff::launch(root, version) {
             Ok(()) => return,
             Err(error) => tracing::error!(%error, "could not start the launcher; restarting as is"),
         },
-        _ => tracing::warn!(%version, "the staged update is no longer ready; restarting as is"),
+        _ => tracing::warn!(%version, "the update is not staged; restarting as is"),
     }
     crate::restart::relaunch();
 }

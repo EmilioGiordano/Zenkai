@@ -18,6 +18,23 @@ pub enum Phase {
     Stopping,
     Ready(Version),
     Staging(Version),
+    // Checked and extracted again for the close in progress: the only state the launcher is
+    // started from.
+    Staged(Version),
+}
+
+// How a "Restart now" check ended, for the update it checked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StageEnd {
+    Staged,
+    Retry,
+    Gone,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NextStart {
+    Launcher,
+    Itself,
 }
 
 impl Phase {
@@ -73,7 +90,7 @@ impl Transfer {
     pub fn begin(&mut self, version: Version) -> Option<Arc<AtomicBool>> {
         if matches!(
             self.phase,
-            Phase::Downloading { .. } | Phase::Stopping | Phase::Staging(_)
+            Phase::Downloading { .. } | Phase::Stopping | Phase::Staging(_) | Phase::Staged(_)
         ) {
             return None;
         }
@@ -149,17 +166,31 @@ impl Transfer {
         Some(version)
     }
 
-    // The update stays ready to try again, as after a disk error or a close the user cancelled.
-    pub fn keep_staged(&mut self, version: Version) {
-        if self.phase == Phase::Staging(version) {
+    // Retry keeps the update ready, as after a passing disk error; Gone ends it, as when it did
+    // not verify again, its download is gone or the install refuses it.
+    pub fn end_staging(&mut self, version: Version, end: StageEnd) {
+        if self.phase != Phase::Staging(version) {
+            return;
+        }
+        self.phase = match end {
+            StageEnd::Staged => Phase::Staged(version),
+            StageEnd::Retry => Phase::Ready(version),
+            StageEnd::Gone => Phase::Idle,
+        };
+    }
+
+    // The close was called off: the update waits, ready, and is checked again next time.
+    pub fn unstage(&mut self) {
+        if let Phase::Staged(version) = self.phase {
             self.phase = Phase::Ready(version);
         }
     }
 
-    // The update cannot be installed from here: it did not verify again or the install refuses it.
-    pub fn drop_staged(&mut self, version: Version) {
-        if self.phase == Phase::Staging(version) {
-            self.phase = Phase::Idle;
+    pub fn next_start(&self, version: Version) -> NextStart {
+        if self.phase == Phase::Staged(version) {
+            NextStart::Launcher
+        } else {
+            NextStart::Itself
         }
     }
 
@@ -229,7 +260,7 @@ mod tests {
     use super::super::handoff::Blocked;
     use super::super::prepare::PrepareError;
     use super::super::version::Version;
-    use super::{Event, Outcome, Phase, Transfer};
+    use super::{Event, NextStart, Outcome, Phase, StageEnd, Transfer};
 
     fn version(text: &str) -> Version {
         Version::parse_bare(text).unwrap()
@@ -446,10 +477,10 @@ mod tests {
         assert!(!transfer.cancel());
         assert_eq!(transfer.begin_staging(), None);
         assert_eq!(transfer.ready_for(version("0.3.0")), None);
-        transfer.keep_staged(version("0.3.0"));
+        transfer.end_staging(version("0.3.0"), StageEnd::Retry);
         assert_eq!(transfer.phase(), Phase::Ready(version("0.3.0")));
         assert_eq!(transfer.begin_staging(), Some(version("0.3.0")));
-        transfer.drop_staged(version("0.3.0"));
+        transfer.end_staging(version("0.3.0"), StageEnd::Gone);
         assert_eq!(transfer.phase(), Phase::Idle);
         assert!(transfer.begin(version("0.4.0")).is_some());
     }
@@ -462,9 +493,57 @@ mod tests {
         assert_eq!(transfer.begin_staging(), None);
         transfer.receive(Event::Finished(Ok(version("0.3.0"))));
         transfer.begin_staging().unwrap();
-        transfer.drop_staged(version("0.2.0"));
-        transfer.keep_staged(version("0.2.0"));
+        transfer.end_staging(version("0.2.0"), StageEnd::Gone);
+        transfer.end_staging(version("0.2.0"), StageEnd::Staged);
         assert_eq!(transfer.phase(), Phase::Staging(version("0.3.0")));
+    }
+
+    #[test]
+    fn a_staged_update_holds_until_its_close_is_called_off() {
+        let mut transfer = ready("0.3.0", "0.3.0");
+        transfer.begin_staging().unwrap();
+        transfer.end_staging(version("0.3.0"), StageEnd::Staged);
+        assert_eq!(transfer.phase(), Phase::Staged(version("0.3.0")));
+        assert!(transfer.begin(version("0.4.0")).is_none());
+        assert_eq!(transfer.begin_staging(), None);
+        assert!(!transfer.cancel());
+        assert_eq!(transfer.ready_for(version("0.3.0")), None);
+        transfer.end_staging(version("0.3.0"), StageEnd::Gone);
+        assert_eq!(transfer.phase(), Phase::Staged(version("0.3.0")));
+        transfer.unstage();
+        assert_eq!(transfer.phase(), Phase::Ready(version("0.3.0")));
+        transfer.unstage();
+        assert_eq!(transfer.phase(), Phase::Ready(version("0.3.0")));
+    }
+
+    #[test]
+    fn only_the_staged_version_starts_the_launcher() {
+        let mut transfer = ready("0.3.0", "0.3.0");
+        assert_eq!(transfer.next_start(version("0.3.0")), NextStart::Itself);
+        transfer.begin_staging().unwrap();
+        assert_eq!(transfer.next_start(version("0.3.0")), NextStart::Itself);
+        transfer.end_staging(version("0.3.0"), StageEnd::Staged);
+        assert_eq!(transfer.next_start(version("0.3.0")), NextStart::Launcher);
+        assert_eq!(transfer.next_start(version("0.2.0")), NextStart::Itself);
+        transfer.unstage();
+        assert_eq!(transfer.next_start(version("0.3.0")), NextStart::Itself);
+        assert_eq!(
+            Transfer::default().next_start(version("0.3.0")),
+            NextStart::Itself
+        );
+    }
+
+    #[test]
+    fn an_install_that_cannot_be_checked_is_reported_with_the_error() {
+        let mut transfer = Transfer::default();
+        transfer.begin(version("0.3.0")).unwrap();
+        transfer.receive(Event::Finished(Err(PrepareError::InstallCheck(
+            io::Error::other("denied"),
+        ))));
+        assert_eq!(
+            transfer.outcome,
+            Some(Outcome::InstallCheckFailed("denied".to_owned()))
+        );
     }
 
     #[test]
@@ -482,19 +561,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_install_that_cannot_be_checked_is_reported_with_the_error() {
-        let mut transfer = Transfer::default();
-        transfer.begin(version("0.3.0")).unwrap();
-        transfer.receive(Event::Finished(Err(PrepareError::InstallCheck(
-            io::Error::other("denied"),
-        ))));
-        assert_eq!(
-            transfer.outcome,
-            Some(Outcome::InstallCheckFailed("denied".to_owned()))
-        );
-    }
-
     #[derive(Clone, Debug)]
     enum Step {
         Begin(u8),
@@ -503,11 +569,16 @@ mod tests {
         Failed,
         CleanedUp,
         Stage,
-        Keep(u8),
-        Drop(u8),
+        End(u8, StageEnd),
+        Unstage,
     }
 
     fn step() -> impl Strategy<Value = Step> {
+        let end = prop_oneof![
+            Just(StageEnd::Staged),
+            Just(StageEnd::Retry),
+            Just(StageEnd::Gone)
+        ];
         prop_oneof![
             (0u8..4).prop_map(Step::Begin),
             Just(Step::Cancel),
@@ -515,8 +586,8 @@ mod tests {
             Just(Step::Failed),
             Just(Step::CleanedUp),
             Just(Step::Stage),
-            (0u8..4).prop_map(Step::Keep),
-            (0u8..4).prop_map(Step::Drop),
+            (0u8..4, end).prop_map(|(patch, end)| Step::End(patch, end)),
+            Just(Step::Unstage),
         ]
     }
 
@@ -526,7 +597,8 @@ mod tests {
 
     proptest! {
         // The files staged for the launcher are deleted only by a new download; none may start
-        // while they are being checked, and only the end of that same check releases them.
+        // while they are checked or staged, a check is released only by its own end, and a
+        // staged update only when its close is called off.
         #[test]
         fn a_staged_update_is_released_only_by_its_own_end(
             steps in proptest::collection::vec(step(), 1..40)
@@ -537,15 +609,14 @@ mod tests {
             for step in steps {
                 let before = transfer.phase();
                 let releasing = match (&step, before) {
-                    (Step::Keep(patch) | Step::Drop(patch), Phase::Staging(staged)) => {
-                        numbered(*patch) == staged
-                    }
+                    (Step::End(patch, _), Phase::Staging(staged)) => numbered(*patch) == staged,
+                    (Step::Unstage, Phase::Staged(_)) => true,
                     _ => false,
                 };
                 match step {
                     Step::Begin(patch) => {
                         let began = transfer.begin(numbered(patch)).is_some();
-                        if matches!(before, Phase::Staging(_)) {
+                        if matches!(before, Phase::Staging(_) | Phase::Staged(_)) {
                             prop_assert!(!began);
                         }
                         running |= began;
@@ -571,13 +642,14 @@ mod tests {
                             prop_assert_eq!(staged, None);
                         }
                     }
-                    Step::Keep(patch) => transfer.keep_staged(numbered(patch)),
-                    Step::Drop(patch) => transfer.drop_staged(numbered(patch)),
+                    Step::End(patch, end) => transfer.end_staging(numbered(patch), end),
+                    Step::Unstage => transfer.unstage(),
                 }
-                if let Phase::Staging(_) = before
-                    && !releasing
-                {
+                if matches!(before, Phase::Staging(_) | Phase::Staged(_)) && !releasing {
                     prop_assert_eq!(transfer.phase(), before);
+                }
+                if let Phase::Staged(version) = transfer.phase() {
+                    prop_assert_eq!(transfer.next_start(version), NextStart::Launcher);
                 }
             }
         }

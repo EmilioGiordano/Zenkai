@@ -45,6 +45,8 @@ pub enum StageError {
     Gone(#[source] io::Error),
     #[error("could not prepare the update files: {0}")]
     Disk(#[source] io::Error),
+    #[error("the update checks stopped without an answer")]
+    Lost,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

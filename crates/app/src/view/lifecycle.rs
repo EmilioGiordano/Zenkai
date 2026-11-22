@@ -898,6 +898,7 @@ impl Workspace {
                     this.pending_goal = None;
                     this.lifecycle = Lifecycle::Running;
                     this.clear_busy(t!("busy.closing"), cx);
+                    this.close_called_off(cx);
                 }
             });
             if let Err(error) = update {
