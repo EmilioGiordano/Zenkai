@@ -87,6 +87,16 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
 
+      # The TEST update keys have committed secrets: the app as shipped must never trust them.
+      - name: Refuse the test update keys in the default build
+        shell: bash
+        run: |
+          tree=$(cargo tree -e features --prefix none -i zenkai -p zenkai)
+          if grep -F 'zenkai feature "test-keys"' <<< "$tree"; then
+            echo "the default build of zenkai enables the test-keys feature" >&2
+            exit 1
+          fi
+
       - name: Test
         if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && !github.event.pull_request.draft)
         run: cargo test

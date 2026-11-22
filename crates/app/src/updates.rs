@@ -1,10 +1,22 @@
+#[cfg(windows)]
+mod archive;
+#[cfg(windows)]
+mod download;
+#[cfg(windows)]
+mod download_task;
 mod fetch;
 mod launcher_notice;
 mod notes;
+#[cfg(windows)]
+mod prepare;
 mod record;
 mod releases;
+#[cfg(windows)]
+mod signature;
 mod state;
 mod store;
+#[cfg(windows)]
+mod transfer;
 mod version;
 
 use std::sync::Arc;
@@ -13,6 +25,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use gpui_kit::*;
 
 use crate::agent_settings::AgentConfig;
+#[cfg(windows)]
+pub use download_task::{
+    can_download, cancel as cancel_download, phase as download_phase, start as start_download,
+    take_outcome as take_download_outcome,
+};
 use fetch::FetchError;
 pub use launcher_notice::LauncherNotice;
 #[cfg(test)]
@@ -22,6 +39,8 @@ use record::Record;
 use releases::Releases;
 pub use state::{Report, Source, Status, Updates, known_update};
 use state::{SettingsReading, Snapshot, StartupCheck};
+#[cfg(windows)]
+pub use transfer::{Outcome as DownloadOutcome, Phase as DownloadPhase};
 pub use version::Version;
 
 pub const RELEASES_PAGE: &str = "https://github.com/EmilioGiordano/Zenkai/releases";
@@ -98,10 +117,8 @@ pub fn notes(cx: &App) -> Arc<Notes> {
     cx.global::<Updates>().notes()
 }
 
-pub fn update_known(cx: &App) -> bool {
-    Version::installed()
-        .and_then(|installed| known_update(status(cx), &notes(cx), installed))
-        .is_some()
+pub fn update_known(cx: &App) -> Option<Version> {
+    Version::installed().and_then(|installed| known_update(status(cx), &notes(cx), installed))
 }
 
 // Called from an observer of `Updates`: updating the global when there is nothing to take would

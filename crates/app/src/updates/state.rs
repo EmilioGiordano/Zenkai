@@ -4,6 +4,8 @@ use super::launcher_notice::LauncherNotice;
 use super::notes::Notes;
 use super::record::Record;
 use super::releases::Releases;
+#[cfg(windows)]
+use super::transfer::Transfer;
 use super::version::{Version, newer_than};
 
 // Ordered by how much the user asked to hear: a stronger request joins a running check.
@@ -68,6 +70,8 @@ pub struct Updates {
     pub record: Record,
     pub report: Option<Report>,
     pub launcher_notices: Vec<LauncherNotice>,
+    #[cfg(windows)]
+    pub transfer: Transfer,
     notes: Arc<Notes>,
     notes_from_check: bool,
     notes_unsaved: bool,
@@ -85,6 +89,8 @@ impl Default for Updates {
             record: Record::default(),
             report: None,
             launcher_notices: Vec::new(),
+            #[cfg(windows)]
+            transfer: Transfer::default(),
             notes: Arc::default(),
             notes_from_check: false,
             notes_unsaved: false,

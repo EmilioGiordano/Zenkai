@@ -32,6 +32,12 @@ pub(super) enum Lifetime {
 pub(super) enum NoticeKind {
     Plain,
     UpdateAvailable(Version),
+    #[cfg(windows)]
+    UpdateDownloading(Version),
+    #[cfg(windows)]
+    UpdateReady(Version),
+    #[cfg(windows)]
+    UpdateNotVerified(Version),
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +62,10 @@ impl Notice {
 
     pub fn is_update_available(&self) -> bool {
         matches!(self.kind, NoticeKind::UpdateAvailable(_))
+    }
+
+    pub fn is_update(&self) -> bool {
+        self.kind != NoticeKind::Plain
     }
 
     pub fn copy_text(&self) -> String {
@@ -95,7 +105,7 @@ impl Notices {
         let id = notice.id;
         if severity != Severity::Info {
             if let Some(displaced) = self.card.take()
-                && displaced.is_update_available()
+                && displaced.is_update()
             {
                 self.held_update = Some(displaced);
             }
@@ -105,25 +115,17 @@ impl Notices {
         id
     }
 
-    pub fn post_update_available(
-        &mut self,
-        version: Version,
-        text: SharedString,
-        time: SharedString,
-    ) {
+    // `kind` is one of the update kinds; their cards never time out.
+    pub fn post_update(&mut self, kind: NoticeKind, text: SharedString, time: SharedString) {
         let notice = self.record(
-            NoticeKind::UpdateAvailable(version),
+            kind,
             Severity::Info,
             text,
             None,
             Lifetime::UntilReplaced,
             time,
         );
-        if self
-            .card
-            .as_ref()
-            .is_some_and(|card| !card.is_update_available())
-        {
+        if self.card.as_ref().is_some_and(|card| !card.is_update()) {
             self.held_update = Some(notice);
         } else {
             self.show_update(notice);
@@ -217,6 +219,23 @@ impl Notices {
         self.restore_held_update();
     }
 
+    // A download that ended without a card of its own takes its progress card with it, also
+    // one held behind a problem, so it never comes back stale.
+    #[cfg(windows)]
+    pub fn drop_download_card(&mut self) {
+        let downloading = |notice: &Option<Notice>| {
+            notice
+                .as_ref()
+                .is_some_and(|notice| matches!(notice.kind, NoticeKind::UpdateDownloading(_)))
+        };
+        if downloading(&self.held_update) {
+            self.held_update = None;
+        }
+        if downloading(&self.card) {
+            self.dismiss_card();
+        }
+    }
+
     // Only a warning times out, and never while the user is reading it.
     pub fn expire_warning(&mut self, id: u64, held: bool) -> Expiry {
         let is_that_warning = self
@@ -254,7 +273,7 @@ impl Notices {
 
 #[cfg(test)]
 mod tests {
-    use super::{Expiry, HISTORY_LIMIT, Lifetime, Notices, Severity};
+    use super::{Expiry, HISTORY_LIMIT, Lifetime, NoticeKind, Notices, Severity};
     use crate::updates::Version;
 
     fn post(notices: &mut Notices, severity: Severity, text: &str, lifetime: Lifetime) -> u64 {
@@ -413,7 +432,11 @@ a.xlsx: Access denied (os error 5)",
     }
 
     fn post_update(notices: &mut Notices, text: &str) {
-        notices.post_update_available(version("0.1.1"), text.to_string().into(), "12:00:00".into());
+        notices.post_update(
+            NoticeKind::UpdateAvailable(version("0.1.1")),
+            text.to_string().into(),
+            "12:00:00".into(),
+        );
     }
 
     fn card_text(notices: &Notices) -> Option<String> {
@@ -518,7 +541,11 @@ a.xlsx: Access denied (os error 5)",
     fn a_newer_update_notice_replaces_the_one_on_screen() {
         let mut notices = Notices::default();
         post_update(&mut notices, "Zenkai 0.1.1");
-        notices.post_update_available(version("0.1.2"), "Zenkai 0.1.2".into(), "12:00:00".into());
+        notices.post_update(
+            NoticeKind::UpdateAvailable(version("0.1.2")),
+            "Zenkai 0.1.2".into(),
+            "12:00:00".into(),
+        );
         assert_eq!(card_text(&notices).as_deref(), Some("Zenkai 0.1.2"));
         notices.dismiss_card();
         assert!(notices.card().is_none());
@@ -701,5 +728,57 @@ a.xlsx: Access denied (os error 5)",
             );
         }
         assert_eq!(notices.index_of(selected), 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_download_card_waits_behind_a_problem_and_announces_nothing() {
+        let mut notices = Notices::default();
+        post(
+            &mut notices,
+            Severity::Error,
+            "Disk full",
+            Lifetime::UntilReplaced,
+        );
+        notices.post_update(
+            NoticeKind::UpdateDownloading(version("0.1.1")),
+            "Downloading".into(),
+            "12:00:00".into(),
+        );
+        assert_eq!(card_text(&notices).as_deref(), Some("Disk full"));
+        notices.dismiss_card();
+        assert_eq!(card_text(&notices).as_deref(), Some("Downloading"));
+        assert!(notices.card().is_some_and(|card| card.is_update()));
+        assert_eq!(notices.take_shown_update(), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_dropped_download_card_does_not_come_back() {
+        let mut notices = Notices::default();
+        notices.post_update(
+            NoticeKind::UpdateDownloading(version("0.1.1")),
+            "Downloading".into(),
+            "12:00:00".into(),
+        );
+        notices.drop_download_card();
+        assert!(notices.card().is_none());
+        assert!(notices.status().is_none());
+
+        notices.post_update(
+            NoticeKind::UpdateDownloading(version("0.1.1")),
+            "Downloading".into(),
+            "12:00:00".into(),
+        );
+        post(
+            &mut notices,
+            Severity::Error,
+            "Disk full",
+            Lifetime::UntilReplaced,
+        );
+        notices.drop_download_card();
+        assert_eq!(card_text(&notices).as_deref(), Some("Disk full"));
+        notices.dismiss_card();
+        assert!(notices.card().is_none());
     }
 }

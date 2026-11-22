@@ -9,6 +9,11 @@ publish.workspace = true
 name = "zenkai"
 path = "src/main.rs"
 
+# Trusts the TEST update keys outside unit tests, for the full test between two versions.
+# Never enabled in a release build.
+[features]
+test-keys = []
+
 [dependencies]
 async-channel = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -39,10 +44,12 @@ zenkai-types = { path = "../types" }
 
 [target.'cfg(windows)'.dependencies]
 interprocess = "=2.4.4"
+minisign-verify = "=0.3.0"
 png = "=0.18.1"
 raw-window-handle = "=0.6.2"
 tray-icon = { version = "=0.26.1", default-features = false }
 winsafe = { version = "=0.0.29", default-features = false, features = ["advapi", "shell", "user"] }
+zip = { version = "=9.3.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "3"

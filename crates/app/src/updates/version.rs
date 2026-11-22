@@ -1,7 +1,8 @@
 use std::fmt;
 
 const MAX_TAG_BYTES: usize = 24;
-const MAX_COMPONENT_DIGITS: usize = 9;
+// The launcher's `--apply` takes 1 to 5 digits per part; a longer version could never be applied.
+const MAX_COMPONENT_DIGITS: usize = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Version {
@@ -97,6 +98,17 @@ mod tests {
             "v1.2.3\0",
         ] {
             assert_eq!(Version::parse_tag(tag), None, "{tag:?}");
+        }
+    }
+
+    #[test]
+    fn a_part_has_at_most_five_digits_as_the_launcher_accepts() {
+        assert_eq!(
+            Version::parse_bare("99999.99999.99999"),
+            Some(version(99_999, 99_999, 99_999))
+        );
+        for text in ["100000.0.0", "0.100000.0", "0.0.100000", "123456789.0.0"] {
+            assert_eq!(Version::parse_bare(text), None, "{text}");
         }
     }
 

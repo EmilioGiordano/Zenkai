@@ -42,6 +42,8 @@ mod text_actions;
 mod text_save;
 mod text_watch;
 mod texts;
+#[cfg(windows)]
+mod update_cards;
 mod updates;
 mod whats_new;
 
@@ -3807,6 +3809,10 @@ impl Workspace {
                 )
             })
             .children(access_chip);
+        #[cfg(windows)]
+        {
+            right = right.children(update_cards::download_status(cx));
+        }
         if let Some(text) = self.documents.shown_text() {
             let (line, column) = self
                 .shown_pane()
@@ -4606,6 +4612,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
             .on_action(cx.listener(|this, _: &UpdateNow, window, cx| this.update_now(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &CancelUpdate, window, cx| this.cancel_update(window, cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &ShowWhatsNew, window, cx| this.show_whats_new(window, cx)),
             )

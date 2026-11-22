@@ -159,12 +159,20 @@ impl Workspace {
             .set(self.notice_focus.contains_focused(window, cx));
         let theme = cx.theme();
         let (icon, color) = severity_icon(notice.severity, theme);
+        let icon = Icon::new(icon).text_color(color);
         let update_available = notice.is_update_available();
         let title = if update_available {
             SharedString::from(t!("update.title"))
         } else {
             severity_title(notice.severity)
         };
+        #[cfg(windows)]
+        let (title, icon) =
+            super::update_cards::download_heading(notice.kind, theme, cx).unwrap_or((title, icon));
+        #[cfg(windows)]
+        let download_parts = super::update_cards::download_parts(notice.kind, cx);
+        #[cfg(not(windows))]
+        let download_parts: Vec<AnyElement> = Vec::new();
         Some(
             div()
                 .absolute()
@@ -199,7 +207,7 @@ impl Workspace {
                             h_flex()
                                 .gap_2()
                                 .items_center()
-                                .child(Icon::new(icon).text_color(color))
+                                .child(icon)
                                 .child(
                                     div()
                                         .flex_1()
@@ -309,7 +317,8 @@ impl Workspace {
                                             }),
                                     ),
                             )
-                        }),
+                        })
+                        .children(download_parts),
                 ),
         )
     }
