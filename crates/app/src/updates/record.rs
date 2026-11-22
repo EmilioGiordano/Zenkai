@@ -1,23 +1,13 @@
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
+use super::store::{self, ReadError, SaveError};
 use super::version::Version;
 
 const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const MAX_FILE_BYTES: u64 = 4096;
-
-#[derive(Debug, thiserror::Error)]
-pub enum SaveError {
-    #[error("the session directory is unknown")]
-    NoDirectory,
-    #[error("could not write the record: {0}")]
-    Write(#[from] std::io::Error),
-    #[error("could not encode the record: {0}")]
-    Encode(#[from] serde_json::Error),
-}
 
 // `last_check` is the last attempt and decides when the next automatic check is due.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -80,15 +70,14 @@ impl Record {
         let Some(file) = file() else {
             return Record::default();
         };
-        let mut bytes = Vec::new();
-        let read = std::fs::File::open(&file)
-            .and_then(|file| file.take(MAX_FILE_BYTES).read_to_end(&mut bytes));
-        match read {
-            Ok(_) => Record::parse(&bytes).unwrap_or_else(|error| {
+        match store::read_capped(&file, MAX_FILE_BYTES) {
+            Ok(bytes) => Record::parse(&bytes).unwrap_or_else(|error| {
                 tracing::warn!(%error, "the update check record is damaged; starting a new one");
                 Record::default()
             }),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Record::default(),
+            Err(ReadError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Record::default()
+            }
             Err(error) => {
                 tracing::warn!(%error, "could not read the update check record");
                 Record::default()
@@ -102,28 +91,13 @@ impl Record {
         self.write_to(&file, order, &LAST_WRITTEN)
     }
 
-    // A snapshot older than the one on disk is skipped: the newer one already holds its data.
     fn write_to(
         &self,
-        file: &Path,
+        file: &std::path::Path,
         order: u64,
         last_written: &Mutex<u64>,
     ) -> Result<(), SaveError> {
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let text = self.to_json()?;
-        let mut last_written = last_written
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if order <= *last_written {
-            return Ok(());
-        }
-        let temp = file.with_extension("tmp");
-        std::fs::write(&temp, text)?;
-        std::fs::rename(&temp, file)?;
-        *last_written = order;
-        Ok(())
+        store::write_ordered(file, &self.to_json()?, order, last_written)
     }
 }
 
@@ -227,39 +201,6 @@ mod tests {
             Record::parse(&std::fs::read(&file).unwrap()).unwrap(),
             record
         );
-    }
-
-    #[test]
-    fn an_older_snapshot_landing_late_does_not_overwrite_a_newer_one() {
-        let folder = tempfile::tempdir().unwrap();
-        let file = folder.path().join("updates.json");
-        let last_written = Mutex::new(0);
-        let newer = Record {
-            announced: Some(version("1.2.3")),
-            ..Record::default()
-        };
-        newer.write_to(&file, 2, &last_written).unwrap();
-        Record::default().write_to(&file, 1, &last_written).unwrap();
-        Record::default().write_to(&file, 2, &last_written).unwrap();
-        assert_eq!(
-            Record::parse(&std::fs::read(&file).unwrap()).unwrap(),
-            newer
-        );
-    }
-
-    #[test]
-    fn a_failed_write_does_not_move_the_order_forward() {
-        let folder = tempfile::tempdir().unwrap();
-        let blocker = folder.path().join("blocker");
-        std::fs::write(&blocker, b"").unwrap();
-        let last_written = Mutex::new(0);
-        let record = Record::default();
-        assert!(
-            record
-                .write_to(&blocker.join("updates.json"), 5, &last_written)
-                .is_err()
-        );
-        assert_eq!(*last_written.lock().unwrap(), 0);
     }
 
     #[test]

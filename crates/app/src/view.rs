@@ -43,6 +43,7 @@ mod text_save;
 mod text_watch;
 mod texts;
 mod updates;
+mod whats_new;
 
 use crate::prompt_gate::{PROMPT_OPEN_CONTEXT, PromptGate};
 use agent_calls::{AgentLink, Decision};
@@ -241,6 +242,7 @@ pub struct Workspace {
     panels: PanelsState,
     text_panes: texts::TextPanes,
     pdf_panes: pdfs::PdfPanes,
+    notes_pane: Option<whats_new::NotesPane>,
     pdf_places: crate::pdf_places::PdfPlaces,
     pdf_client: crate::pdf::PdfClient,
     text_watch: text_watch::TextWatch,
@@ -464,6 +466,7 @@ impl Workspace {
             panels: PanelsState::new(cx),
             text_panes: texts::TextPanes::new(),
             pdf_panes: pdfs::PdfPanes::new(),
+            notes_pane: None,
             pdf_places: crate::pdf_places::PdfPlaces::default(),
             pdf_client: crate::pdf::PdfClient::next_to_exe(),
             text_watch: text_watch::TextWatch::default(),
@@ -3834,6 +3837,11 @@ impl Workspace {
                 .child(view.zoom_label())
                 .child(t!("status.read_only"));
         }
+        if self.documents.shown_notes().is_some() {
+            right = right
+                .child(t!("whats_new.name"))
+                .child(t!("status.read_only"));
+        }
         match self.stats.filter(|_| self.documents.active().is_some()) {
             Some(stats) if stats.count > 1 => {
                 let chosen = &cx.global::<AgentConfig>().settings().general.status_summary;
@@ -3863,7 +3871,10 @@ impl Workspace {
         {
             right = right.child(t!("status.read_only"));
         }
-        if self.documents.shown_text().is_none() && self.documents.shown_pdf().is_none() {
+        if self.documents.shown_text().is_none()
+            && self.documents.shown_pdf().is_none()
+            && self.documents.shown_notes().is_none()
+        {
             let zoom = self.grid.read(cx).zoom();
             right = right.child(format!("{:.0}%", zoom * 100.0));
         }
@@ -4331,6 +4342,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
                 if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(true, cx))
                     || this.forward_to_text(cx, |pane, cx| pane.zoom_in(cx))
+                    || this.forward_to_notes(cx, |view, cx| view.zoom_in(cx))
                 {
                     return;
                 }
@@ -4340,6 +4352,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
                 if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(false, cx))
                     || this.forward_to_text(cx, |pane, cx| pane.zoom_out(cx))
+                    || this.forward_to_notes(cx, |view, cx| view.zoom_out(cx))
                 {
                     return;
                 }
@@ -4349,6 +4362,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomReset, window, cx| {
                 if this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx))
                     || this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx))
+                    || this.forward_to_notes(cx, |view, cx| view.zoom_reset(cx))
                 {
                     return;
                 }
@@ -4356,8 +4370,10 @@ impl Render for Workspace {
                 this.refresh_cells(cx);
             }))
             .on_action(cx.listener(|this, _: &ResetDocumentZoom, window, cx| {
-                if !this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx)) {
-                    this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx));
+                if !this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx))
+                    && !this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx))
+                {
+                    this.forward_to_notes(cx, |view, cx| view.zoom_reset(cx));
                 }
             }))
             .on_action(cx.listener(|this, _: &NextSheet, window, cx| {
@@ -4591,6 +4607,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
             .on_action(cx.listener(|this, _: &UpdateNow, window, cx| this.update_now(window, cx)))
             .on_action(
+                cx.listener(|this, _: &ShowWhatsNew, window, cx| this.show_whats_new(window, cx)),
+            )
+            .on_action(
                 cx.listener(|this, _: &ShowMessages, window, cx| this.toggle_messages(window, cx)),
             )
             .on_action(
@@ -4647,6 +4666,9 @@ impl Render for Workspace {
                                 .into_any_element()
                         } else if let Some(view) = self.shown_pdf_view() {
                             self.render_pdf(view, busy_label.clone(), cx)
+                                .into_any_element()
+                        } else if let Some(view) = self.shown_notes_view() {
+                            self.render_notes(view, busy_label.clone(), cx)
                                 .into_any_element()
                         } else {
                             self.render_empty(busy_label.clone(), cx).into_any_element()

@@ -5,6 +5,7 @@ use zenkai_types::WorkbookId;
 use super::{Severity, Workspace};
 use crate::markdown_links::{LinkTarget, classify_link, host_of, shown_target};
 use crate::markdown_pane::folder_of;
+use crate::markdown_restricted::vetted_link;
 
 impl Workspace {
     // A link in a document is untrusted: the web asks first, files open only if Zenkai
@@ -38,13 +39,37 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let shown = shown_target(&url);
+        self.confirm_link(url, shown, window, cx);
+    }
+
+    // For the links of Zenkai's own text, whose address is short and known: the prompt shows all
+    // of what `vetted_link` accepts, which is the address the browser gets.
+    pub(super) fn confirm_vetted_link(
+        &mut self,
+        link: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(address) = vetted_link(link) {
+            self.confirm_link(address.clone(), address, window, cx);
+        }
+    }
+
+    fn confirm_link(
+        &mut self,
+        url: String,
+        shown: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let answer = self.ask(
             PromptLevel::Warning,
             t!("markdown.link.web_title"),
             Some(&t!(
                 "markdown.link.web_detail",
                 host = host_of(&url),
-                link = shown_target(&url)
+                link = shown
             )),
             &[t!("markdown.link.open_browser"), t!("button.cancel")],
             window,

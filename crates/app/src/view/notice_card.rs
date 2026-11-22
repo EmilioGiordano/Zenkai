@@ -7,7 +7,7 @@ use zenkai_i18n::t;
 
 use super::Workspace;
 use super::notices::{Expiry, Notice, Severity, WARNING_LIFETIME};
-use crate::actions::{CopyNotice, DismissNotice, ShowMessages, UpdateNow};
+use crate::actions::{CopyNotice, DismissNotice, ShowMessages, ShowWhatsNew, UpdateNow};
 use crate::interface_scale::rem_px;
 use crate::keymap;
 
@@ -266,6 +266,20 @@ impl Workspace {
                                 h_flex()
                                     .justify_end()
                                     .gap_2()
+                                    .child(
+                                        Button::new("update-whats-new")
+                                            .ghost()
+                                            .small()
+                                            .label(t!("whats_new.name"))
+                                            .tooltip(keymap::labeled(
+                                                cx,
+                                                t!("whats_new.name"),
+                                                &ShowWhatsNew,
+                                            ))
+                                            .on_click(|_, window, cx| {
+                                                window.dispatch_action(Box::new(ShowWhatsNew), cx)
+                                            }),
+                                    )
                                     .child(
                                         Button::new("update-later")
                                             .ghost()

@@ -8,6 +8,7 @@ use zenkai_i18n::t;
 use zenkai_types::{SheetId, WorkbookId};
 
 use crate::document::{Document, FileJob};
+use crate::notes_tab::NotesTab;
 use crate::pdf::PdfPosition;
 use crate::pdf_tab::PdfTab;
 use crate::spaces::SpaceId;
@@ -110,6 +111,7 @@ impl Link {
             DocumentKind::Markdown | DocumentKind::Pdf => {
                 text_name(self.path.as_deref(), self.untitled)
             }
+            DocumentKind::WhatsNew => t!("whats_new.name").to_string(),
         }
     }
 }
@@ -119,6 +121,7 @@ pub enum Slot {
     Loaded(Box<Document>),
     Text(Box<TextDocument>),
     Pdf(Box<PdfTab>),
+    Notes(Box<NotesTab>),
     Link(Link),
 }
 
@@ -128,6 +131,7 @@ pub enum Entry<'a> {
     Loaded(&'a Document),
     Text(&'a TextDocument),
     Pdf(&'a PdfTab),
+    Notes(&'a NotesTab),
     Link(&'a Link),
 }
 
@@ -137,6 +141,7 @@ impl Slot {
             Slot::Loaded(document) => Entry::Loaded(document),
             Slot::Text(text) => Entry::Text(text),
             Slot::Pdf(pdf) => Entry::Pdf(pdf),
+            Slot::Notes(notes) => Entry::Notes(notes),
             Slot::Link(link) => Entry::Link(link),
         }
     }
@@ -146,7 +151,10 @@ impl Slot {
     }
 
     pub fn is_loaded(&self) -> bool {
-        matches!(self, Slot::Loaded(_) | Slot::Text(_) | Slot::Pdf(_))
+        matches!(
+            self,
+            Slot::Loaded(_) | Slot::Text(_) | Slot::Pdf(_) | Slot::Notes(_)
+        )
     }
 
     pub fn set_space(&mut self, space: SpaceId) {
@@ -154,6 +162,7 @@ impl Slot {
             Slot::Loaded(document) => document.space = space,
             Slot::Text(text) => text.space = space,
             Slot::Pdf(pdf) => pdf.space = space,
+            Slot::Notes(notes) => notes.space = space,
             Slot::Link(link) => link.space = space,
         }
     }
@@ -161,7 +170,7 @@ impl Slot {
     pub fn loaded_mut(&mut self) -> Option<&mut Document> {
         match self {
             Slot::Loaded(document) => Some(document),
-            Slot::Text(_) | Slot::Pdf(_) | Slot::Link(_) => None,
+            Slot::Text(_) | Slot::Pdf(_) | Slot::Notes(_) | Slot::Link(_) => None,
         }
     }
 }
@@ -172,6 +181,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(document) => document.id,
             Entry::Text(text) => text.id,
             Entry::Pdf(pdf) => pdf.id,
+            Entry::Notes(notes) => notes.id,
             Entry::Link(link) => link.id,
         }
     }
@@ -181,6 +191,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(document) => document.space,
             Entry::Text(text) => text.space,
             Entry::Pdf(pdf) => pdf.space,
+            Entry::Notes(notes) => notes.space,
             Entry::Link(link) => link.space,
         }
     }
@@ -190,6 +201,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(document) => document.path.as_deref(),
             Entry::Text(text) => text.path.as_deref(),
             Entry::Pdf(pdf) => Some(pdf.path.as_path()),
+            Entry::Notes(_) => None,
             Entry::Link(link) => link.path.as_deref(),
         }
     }
@@ -198,7 +210,7 @@ impl<'a> Entry<'a> {
         match self {
             Entry::Loaded(document) => document.untitled(),
             Entry::Text(text) => text.untitled(),
-            Entry::Pdf(_) => 0,
+            Entry::Pdf(_) | Entry::Notes(_) => 0,
             Entry::Link(link) => link.untitled,
         }
     }
@@ -207,7 +219,7 @@ impl<'a> Entry<'a> {
         match self {
             Entry::Loaded(document) => document.dirty,
             Entry::Text(text) => text.needs_recovery(),
-            Entry::Pdf(_) => false,
+            Entry::Pdf(_) | Entry::Notes(_) => false,
             Entry::Link(link) => link.dirty,
         }
     }
@@ -217,6 +229,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(document) => document.name(),
             Entry::Text(text) => text.name(),
             Entry::Pdf(pdf) => pdf.name(),
+            Entry::Notes(notes) => notes.name(),
             Entry::Link(link) => link.name(),
         }
     }
@@ -224,21 +237,28 @@ impl<'a> Entry<'a> {
     pub fn loaded(self) -> Option<&'a Document> {
         match self {
             Entry::Loaded(document) => Some(document),
-            Entry::Text(_) | Entry::Pdf(_) | Entry::Link(_) => None,
+            Entry::Text(_) | Entry::Pdf(_) | Entry::Notes(_) | Entry::Link(_) => None,
         }
     }
 
     pub fn text(self) -> Option<&'a TextDocument> {
         match self {
             Entry::Text(text) => Some(text),
-            Entry::Loaded(_) | Entry::Pdf(_) | Entry::Link(_) => None,
+            Entry::Loaded(_) | Entry::Pdf(_) | Entry::Notes(_) | Entry::Link(_) => None,
         }
     }
 
     pub fn pdf(self) -> Option<&'a PdfTab> {
         match self {
             Entry::Pdf(pdf) => Some(pdf),
-            Entry::Loaded(_) | Entry::Text(_) | Entry::Link(_) => None,
+            Entry::Loaded(_) | Entry::Text(_) | Entry::Notes(_) | Entry::Link(_) => None,
+        }
+    }
+
+    pub fn notes(self) -> Option<&'a NotesTab> {
+        match self {
+            Entry::Notes(notes) => Some(notes),
+            Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_) | Entry::Link(_) => None,
         }
     }
 
@@ -247,6 +267,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(_) => DocumentKind::Workbook,
             Entry::Text(text) => text.kind,
             Entry::Pdf(_) => DocumentKind::Pdf,
+            Entry::Notes(_) => DocumentKind::WhatsNew,
             Entry::Link(link) => link.kind,
         }
     }
@@ -256,6 +277,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(document) => document.to_link(),
             Entry::Text(text) => text.to_link(),
             Entry::Pdf(pdf) => pdf.to_link(),
+            Entry::Notes(notes) => notes.to_link(),
             Entry::Link(link) => link.clone(),
         }
     }

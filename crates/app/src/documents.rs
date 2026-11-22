@@ -17,6 +17,7 @@ pub use unsaved::Unsaved;
 
 #[cfg(test)]
 mod hibernation;
+mod notes;
 mod pdfs;
 mod restore;
 #[cfg(test)]
@@ -311,6 +312,9 @@ impl Documents {
         if let Some(pdf) = self.shown_pdf() {
             return Some(pdf.name());
         }
+        if let Some(notes) = self.shown_notes() {
+            return Some(notes.name());
+        }
         self.active().map(Document::name_with_marker)
     }
 
@@ -462,7 +466,7 @@ impl Documents {
 
     // Only a loaded workbook can be on screen; a link asks for loading with `want`.
     pub fn activate(&mut self, id: WorkbookId) -> bool {
-        if self.text(id).is_some() || self.pdf(id).is_some() {
+        if self.text(id).is_some() || self.pdf(id).is_some() || self.notes(id).is_some() {
             self.show_tab(id, true);
             return true;
         }

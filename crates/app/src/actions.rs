@@ -259,6 +259,7 @@ actions!(
         FocusNotice,
         UpdateNow,
         CheckForUpdates,
+        ShowWhatsNew,
         ShowMessages,
         CloseMessages,
         NextMessage,

@@ -41,7 +41,9 @@ mod markdown_highlight;
 mod markdown_images;
 mod markdown_links;
 mod markdown_pane;
+mod markdown_restricted;
 mod memory;
+mod notes_tab;
 mod open_loads;
 mod palette;
 mod panel_edge;
@@ -82,6 +84,7 @@ mod tray;
 mod updates;
 mod version;
 mod view;
+mod whats_new;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

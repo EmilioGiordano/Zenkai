@@ -1,7 +1,8 @@
 use std::io::Read;
 use std::time::Duration;
 
-use super::version::{NotAReleaseList, Version, newest_stable};
+use super::releases::{self, NotAReleaseList, Releases};
+use super::version::Version;
 
 // Fixed at build time: no setting or argument can point the check somewhere else. ureq's
 // standard proxy environment variables only route the same TLS connection to GitHub.
@@ -27,7 +28,7 @@ pub enum FetchError {
 }
 
 // Blocks on the network: call it from a background task only.
-pub fn newest_release() -> Result<Option<Version>, FetchError> {
+pub fn latest_releases(installed: Version) -> Result<Releases, FetchError> {
     let config = ureq::Agent::config_builder()
         .timeout_connect(Some(CONNECT_TIMEOUT))
         .timeout_global(Some(TOTAL_TIMEOUT))
@@ -41,7 +42,7 @@ pub fn newest_release() -> Result<Option<Version>, FetchError> {
         .call()?;
     require_ok(response.status().as_u16())?;
     let body = read_limited(response.into_body().into_reader(), MAX_RESPONSE_BYTES)?;
-    Ok(newest_stable(&body)?)
+    Ok(releases::parse(&body, installed)?)
 }
 
 // With redirects off, ureq hands a 3xx back as a response, not as an error.

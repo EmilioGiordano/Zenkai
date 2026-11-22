@@ -3,7 +3,7 @@ use zenkai_i18n::t;
 
 use super::Workspace;
 use super::notices::Severity;
-use crate::updates::{self, Report, Status, Version};
+use crate::updates::{self, Report, Version};
 
 impl Workspace {
     pub(super) fn show_update_report(&mut self, cx: &mut Context<Self>) {
@@ -43,10 +43,10 @@ impl Workspace {
             .card()
             .is_some_and(|card| card.is_update_available());
         if on_card {
-            cx.open_url(updates::RELEASES_PAGE);
+            self.confirm_vetted_link(updates::RELEASES_PAGE, window, cx);
             self.dismiss_notice(window, cx);
-        } else if matches!(updates::status(cx), Status::Available(_)) {
-            cx.open_url(updates::RELEASES_PAGE);
+        } else if updates::update_known(cx) {
+            self.confirm_vetted_link(updates::RELEASES_PAGE, window, cx);
         } else {
             self.notify(Severity::Info, t!("update.none_available"), cx);
         }

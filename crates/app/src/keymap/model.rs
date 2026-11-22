@@ -321,7 +321,7 @@ mod tests {
             bound(&effective, "zenkai::ZoomReset"),
             [("ctrl-alt-9".to_string(), WORKSPACE)]
         );
-        assert_eq!(bound(&effective, "zenkai::ResetDocumentZoom").len(), 2);
+        assert_eq!(bound(&effective, "zenkai::ResetDocumentZoom").len(), 3);
     }
 
     #[test]
