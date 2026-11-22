@@ -64,10 +64,38 @@ impl From<ArchiveError> for PendingError {
 pub enum PrepareError {
     #[error("no version verified; the newest tried was {0}")]
     NotVerified(Version),
+    #[error("no download is published yet for {0} or the versions before it")]
+    NotPublished(Version),
     #[error(transparent)]
     Download(#[from] DownloadError),
     #[error("could not read or write the update files: {0}")]
     Disk(#[source] io::Error),
+}
+
+// What a failed download says about the release: missing, broken (the version before it may
+// still be fine), or a problem of the connection or the disk, which the next try would hit too.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Miss {
+    Unpublished,
+    Broken,
+    Stop,
+}
+
+fn miss(error: &DownloadError) -> Miss {
+    match error {
+        DownloadError::Status(NOT_FOUND) => Miss::Unpublished,
+        DownloadError::TooLarge(_)
+        | DownloadError::Forbidden(_)
+        | DownloadError::NoLocation
+        | DownloadError::TooManyRedirects
+        | DownloadError::Address(_) => Miss::Broken,
+        DownloadError::Status(_)
+        | DownloadError::Request(_)
+        | DownloadError::Transfer(_)
+        | DownloadError::Stalled
+        | DownloadError::Write(_)
+        | DownloadError::Cancelled => Miss::Stop,
+    }
 }
 
 // Blocks: run it on a background thread. `fetch` writes the zip and the signature of one version
@@ -84,6 +112,7 @@ pub fn prepare(
 ) -> Result<Version, PrepareError> {
     plain_folder(update).map_err(PrepareError::Disk)?;
     remove_leftovers(update);
+    let mut refused = false;
     for version in iter::once(chosen)
         .chain(older.iter().copied())
         .take(MAX_TRIES)
@@ -91,16 +120,19 @@ pub fn prepare(
         if cancel.load(Ordering::Relaxed) {
             return Err(DownloadError::Cancelled.into());
         }
-        match fetch(version) {
-            Ok(()) => {}
-            Err(DownloadError::Status(NOT_FOUND)) => {
-                tracing::warn!(%version, "the release has no update for this platform");
-                discard(update, version);
-                continue;
-            }
-            Err(error) => {
-                discard(update, version);
-                return Err(error.into());
+        if let Err(error) = fetch(version) {
+            discard(update, version);
+            match miss(&error) {
+                Miss::Unpublished => {
+                    tracing::warn!(%version, "the release has no update for this platform");
+                    continue;
+                }
+                Miss::Broken => {
+                    tracing::warn!(%error, %version, "the release could not be downloaded");
+                    refused = true;
+                    continue;
+                }
+                Miss::Stop => return Err(error.into()),
             }
         }
         let checked = verify_and_extract(update, version, installed);
@@ -114,13 +146,18 @@ pub fn prepare(
                 discard(update, version);
                 return Err(PrepareError::Disk(error));
             }
-            Err(refused) => {
-                tracing::warn!(%refused, %version, "the update did not verify and was deleted");
+            Err(rejection) => {
+                tracing::warn!(%rejection, %version, "the update did not verify and was deleted");
                 discard(update, version);
+                refused = true;
             }
         }
     }
-    Err(PrepareError::NotVerified(chosen))
+    if refused {
+        Err(PrepareError::NotVerified(chosen))
+    } else {
+        Err(PrepareError::NotPublished(chosen))
+    }
 }
 
 // Also the check right before the swap: a zip verified earlier is never trusted for that, so

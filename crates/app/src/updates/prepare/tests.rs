@@ -364,3 +364,74 @@ fn a_cancel_during_the_checks_removes_what_the_try_left() {
     ));
     assert!(listed(&update).is_empty());
 }
+
+#[test]
+fn when_no_try_found_a_download_the_error_says_so() {
+    let folder = tempfile::tempdir().unwrap();
+    let update = folder.path().join(".update");
+    let result = prepare(
+        &update,
+        version("0.3.0"),
+        &[version("0.2.0")],
+        installed(),
+        &calm(),
+        |_| Err(DownloadError::Status(404)),
+    );
+    assert!(matches!(
+        result,
+        Err(PrepareError::NotPublished(newest)) if newest == version("0.3.0")
+    ));
+}
+
+#[test]
+fn a_broken_release_hands_over_to_the_previous_one() {
+    for broken in [
+        DownloadError::TooLarge(1),
+        DownloadError::Forbidden("https://evil.example/".to_owned()),
+        DownloadError::NoLocation,
+        DownloadError::TooManyRedirects,
+    ] {
+        let folder = tempfile::tempdir().unwrap();
+        let update = folder.path().join(".update");
+        let mut broken = Some(broken);
+        let found = prepare(
+            &update,
+            version("0.3.0"),
+            &[version("0.2.0")],
+            installed(),
+            &calm(),
+            |wanted| {
+                if wanted == version("0.3.0") {
+                    fs::write(update.join(asset_name(wanted)), b"part").unwrap();
+                    return Err(broken.take().unwrap());
+                }
+                serve(&update, wanted, GOOD);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(found, version("0.2.0"));
+        assert!(!update.join(asset_name(version("0.3.0"))).exists());
+    }
+}
+
+#[test]
+fn a_broken_release_with_nothing_after_it_counts_as_not_verified() {
+    let folder = tempfile::tempdir().unwrap();
+    let update = folder.path().join(".update");
+    let result = prepare(
+        &update,
+        version("0.3.0"),
+        &[version("0.2.0")],
+        installed(),
+        &calm(),
+        |wanted| {
+            if wanted == version("0.3.0") {
+                Err(DownloadError::TooManyRedirects)
+            } else {
+                Err(DownloadError::Status(404))
+            }
+        },
+    );
+    assert!(matches!(result, Err(PrepareError::NotVerified(_))));
+}

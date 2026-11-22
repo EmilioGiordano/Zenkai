@@ -163,6 +163,14 @@ impl Workspace {
                 t!("update.not_verified", version = version),
                 cx,
             ),
+            DownloadOutcome::NotPublished(version) => {
+                self.notices.drop_download_card();
+                self.notify(
+                    Severity::Warning,
+                    t!("update.not_published", version = version),
+                    cx,
+                );
+            }
             DownloadOutcome::Failed => {
                 self.notices.drop_download_card();
                 self.notify(Severity::Warning, t!("update.download_failed"), cx);

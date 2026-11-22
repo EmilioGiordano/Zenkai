@@ -40,6 +40,7 @@ impl Phase {
 pub enum Outcome {
     Ready(Version),
     NotVerified(Version),
+    NotPublished(Version),
     Failed,
 }
 
@@ -132,6 +133,7 @@ impl Transfer {
                 None
             }
             Err(PrepareError::NotVerified(version)) => Some(Outcome::NotVerified(version)),
+            Err(PrepareError::NotPublished(version)) => Some(Outcome::NotPublished(version)),
             Err(error) => {
                 tracing::warn!(%error, "the update download failed");
                 Some(Outcome::Failed)
