@@ -160,6 +160,7 @@ impl Workspace {
         }
     }
 
+    #[cfg(windows)]
     pub(super) fn close_dialog_purpose(&self) -> Option<(Purpose, CloseGoal)> {
         let dialog = self.close_dialog.as_ref()?;
         Some((dialog.purpose, dialog.choices.goal))
