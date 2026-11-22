@@ -42,8 +42,19 @@ jobs:
       - name: Check the app carries the real update keys
         id: keys
         run: |
-          keys=$(awk '/^const RELEASE_KEYS/ { inside = 1 } inside { print } inside && /\];/ { exit }' \
-            crates/app/src/updates/signature.rs | grep -oE '"RW[A-Za-z0-9+/]{54}"' | tr -d '"' | sort -u)
+          # Comment lines are dropped and every other line must be one quoted key, so a key
+          # that is commented out, or trails a comment, is never counted as compiled in.
+          body=$(awk '
+            /^const RELEASE_KEYS: &\[&str\] = &\[\];$/ { exit }
+            /^const RELEASE_KEYS: &\[&str\] = &\[$/ { inside = 1; next }
+            inside && /^\];$/ { exit }
+            inside { print }
+          ' crates/app/src/updates/signature.rs | grep -vE '^[[:space:]]*(//.*)?$' || true)
+          if grep -vxE '[[:space:]]*"RW[A-Za-z0-9+/]{54}",' <<< "$body" | grep -q .; then
+            echo "::error::Every line of RELEASE_KEYS must be one quoted public key and a comma."
+            exit 1
+          fi
+          keys=$(grep -oE 'RW[A-Za-z0-9+/]{54}' <<< "$body" | sort -u || true)
           if [ "$(wc -w <<< "$keys")" -ne 2 ]; then
             echo "::error::RELEASE_KEYS in crates/app/src/updates/signature.rs must hold the current and next public keys (docs/RELEASING.md)."
             exit 1
