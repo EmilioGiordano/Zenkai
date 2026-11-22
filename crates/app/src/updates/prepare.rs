@@ -70,6 +70,8 @@ pub enum PrepareError {
     Download(#[from] DownloadError),
     #[error("could not read or write the update files: {0}")]
     Disk(#[source] io::Error),
+    #[error("the download stopped without an answer")]
+    Lost,
 }
 
 // The versions to fall back on, in the order given (newest first). A version the launcher had to

@@ -116,6 +116,18 @@ impl Transfer {
         }
     }
 
+    // The download thread ended without a last word, which only a panic does. Only the download
+    // that `cancel` belongs to is ended, so a late signal never touches a newer one.
+    pub fn lose(&mut self, cancel: &Arc<AtomicBool>) {
+        let ours = self
+            .cancel
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, cancel));
+        if ours {
+            self.finish(Err(PrepareError::Lost));
+        }
+    }
+
     // A download the user cancelled ends quietly, even if it got to the end first.
     fn finish(&mut self, result: Result<Version, PrepareError>) {
         let cancelled = self.phase == Phase::Stopping;
@@ -273,6 +285,42 @@ mod tests {
         transfer.begin(version("0.3.0")).unwrap();
         transfer.receive(Event::Finished(Ok(version("0.3.0"))));
         assert!(transfer.begin(version("0.3.1")).is_some());
+        assert_eq!(transfer.outcome, None);
+    }
+
+    #[test]
+    fn a_download_thread_that_dies_counts_as_failed() {
+        let mut transfer = Transfer::default();
+        let flag = transfer.begin(version("0.3.0")).unwrap();
+        transfer.lose(&flag);
+        assert_eq!(transfer.phase(), Phase::Idle);
+        assert_eq!(transfer.outcome, Some(Outcome::Failed));
+        assert!(transfer.begin(version("0.3.0")).is_some());
+    }
+
+    #[test]
+    fn a_late_loss_leaves_a_finished_or_newer_download_alone() {
+        let mut transfer = Transfer::default();
+        let first = transfer.begin(version("0.3.0")).unwrap();
+        transfer.receive(Event::Finished(Ok(version("0.3.0"))));
+        transfer.lose(&first);
+        assert_eq!(transfer.phase(), Phase::Ready(version("0.3.0")));
+        assert_eq!(transfer.outcome, Some(Outcome::Ready(version("0.3.0"))));
+
+        let second = transfer.begin(version("0.3.1")).unwrap();
+        transfer.lose(&first);
+        assert!(matches!(transfer.phase(), Phase::Downloading { .. }));
+        transfer.lose(&second);
+        assert_eq!(transfer.phase(), Phase::Idle);
+    }
+
+    #[test]
+    fn a_cancelled_download_whose_thread_dies_ends_quietly() {
+        let mut transfer = Transfer::default();
+        let flag = transfer.begin(version("0.3.0")).unwrap();
+        transfer.cancel();
+        transfer.lose(&flag);
+        assert_eq!(transfer.phase(), Phase::Idle);
         assert_eq!(transfer.outcome, None);
     }
 }

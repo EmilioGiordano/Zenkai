@@ -45,6 +45,7 @@ pub fn start(cx: &mut App, chosen: Version) {
     else {
         return;
     };
+    let watched = cancel.clone();
     let (sender, receiver) = async_channel::unbounded();
     let spawned = std::thread::Builder::new()
         .name("update download".to_owned())
@@ -72,6 +73,10 @@ pub fn start(cx: &mut App, chosen: Version) {
                 cx.update_global::<Updates, _>(|updates, _| updates.transfer.receive(event))
             });
         }
+        // Closed without `Finished` only if the thread panicked; otherwise this does nothing.
+        cx.update(|cx| {
+            cx.update_global::<Updates, _>(|updates, _| updates.transfer.lose(&watched))
+        });
     })
     .detach();
 }
