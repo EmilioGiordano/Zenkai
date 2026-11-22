@@ -5,7 +5,7 @@ use std::process::Command;
 
 use super::super::prepare::{asset_name, new_app, signature_name};
 use super::super::version::Version;
-use super::{Drive, StageError, apply_arguments, blocked, drive_of, local_drive, stage};
+use super::{Blocked, Drive, StageError, apply_arguments, blocked, drive_of, local_drive, stage};
 
 const FILE_SHARE_READ: u32 = 1;
 
@@ -124,9 +124,12 @@ fn a_local_folder_this_user_writes_is_not_blocked_and_the_probe_leaves_nothing()
 }
 
 #[test]
-fn a_root_that_cannot_be_probed_is_a_disk_error() {
+fn a_root_whose_real_path_cannot_be_found_is_not_updated() {
     let root = tempfile::tempdir().unwrap();
-    assert!(blocked(&root.path().join("missing")).is_err());
+    assert_eq!(
+        blocked(&root.path().join("missing")).unwrap(),
+        Some(Blocked::NetworkPath)
+    );
 }
 
 #[test]

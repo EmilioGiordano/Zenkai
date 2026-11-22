@@ -73,16 +73,22 @@ fn local_drive(kind: winsafe::co::DRIVE) -> bool {
 
 // The real path, so a junction or a mapped letter that leads to a share is seen as the share.
 // Anything that is not plainly a local drive counts as a network one: updating never runs where
-// it is unsure.
-fn on_network(root: &Path) -> io::Result<bool> {
-    let real = fs::canonicalize(root)?;
-    Ok(match drive_of(&real) {
+// it is unsure, including a path whose real place cannot be found.
+fn on_network(root: &Path) -> bool {
+    let real = match fs::canonicalize(root) {
+        Ok(real) => real,
+        Err(error) => {
+            tracing::warn!(%error, "could not find the real path of the install");
+            return true;
+        }
+    };
+    match drive_of(&real) {
         Drive::Letter(letter) => {
             let drive = format!("{}:\\", char::from(letter));
             !local_drive(winsafe::GetDriveType(Some(&drive)))
         }
         Drive::Share | Drive::Unplaced => true,
-    })
+    }
 }
 
 // The launcher renames `app` inside the root, so the root itself must be writable. The probe is
@@ -109,7 +115,7 @@ fn writable(root: &Path) -> io::Result<bool> {
 
 // Blocks on the disk: run it in the background.
 pub fn blocked(root: &Path) -> io::Result<Option<Blocked>> {
-    if on_network(root)? {
+    if on_network(root) {
         return Ok(Some(Blocked::NetworkPath));
     }
     Ok((!writable(root)?).then_some(Blocked::NoWriteAccess))
