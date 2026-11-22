@@ -1,4 +1,5 @@
 mod fetch;
+mod launcher_notice;
 mod notes;
 mod record;
 mod releases;
@@ -13,6 +14,7 @@ use gpui_kit::*;
 
 use crate::agent_settings::AgentConfig;
 use fetch::FetchError;
+pub use launcher_notice::LauncherNotice;
 #[cfg(test)]
 pub use notes::MAX_NOTES;
 pub use notes::{Day, Note, Notes};
@@ -30,19 +32,32 @@ pub fn init(cx: &mut App) {
     cx.set_global(Updates::default());
     cx.observe_global::<AgentConfig>(start_if_ready).detach();
     cx.spawn(async move |cx| {
-        let (record, notes) = cx
+        let (record, notes, notices) = cx
             .background_executor()
-            .spawn(async { (Record::load(), Notes::load()) })
+            .spawn(async {
+                let notices = crate::installation::update_folder()
+                    .map(|folder| launcher_notice::take(&folder))
+                    .unwrap_or_default();
+                (Record::load(), Notes::load(), notices)
+            })
             .await;
         cx.update(|cx| {
             let Some(installed) = Version::installed() else {
                 tracing::error!("the installed version is not a plain X.Y.Z");
                 return;
             };
-            cx.update_global::<Updates, _>(|updates, _| {
+            let restored = cx.update_global::<Updates, _>(|updates, _| {
                 updates.load_record(record, installed);
                 updates.load_notes(notes);
+                let mut changed = false;
+                for notice in notices {
+                    changed |= updates.receive_launcher_notice(notice);
+                }
+                changed.then(|| updates.snapshot_for_save())
             });
+            if let Some(snapshot) = restored {
+                save_in_background(snapshot, cx);
+            }
             start_if_ready(cx);
         });
     })
@@ -95,6 +110,15 @@ pub fn take_report(cx: &mut App) -> Option<Report> {
     let report = cx.global::<Updates>().report?;
     cx.update_global::<Updates, _>(|updates, _| updates.report = None);
     Some(report)
+}
+
+// Called from the same observer as `take_report`, so it too updates the global only when there
+// is something to take.
+pub fn take_launcher_notices(cx: &mut App) -> Vec<LauncherNotice> {
+    if cx.global::<Updates>().launcher_notices.is_empty() {
+        return Vec::new();
+    }
+    cx.update_global::<Updates, _>(|updates, _| std::mem::take(&mut updates.launcher_notices))
 }
 
 // Called once the notice is on screen: a version counts as announced only when it was seen.

@@ -10,12 +10,14 @@ const CHECK_INTERVAL_SECS: u64 = 24 * 60 * 60;
 const MAX_FILE_BYTES: u64 = 4096;
 
 // `last_check` is the last attempt and decides when the next automatic check is due.
+// `restored` is the version the launcher had to roll back from.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Record {
     pub last_check: Option<u64>,
     pub last_success: Option<u64>,
     pub newest: Option<Version>,
     pub announced: Option<Version>,
+    pub restored: Option<Version>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -28,6 +30,8 @@ struct Stored {
     newest: Option<String>,
     #[serde(default)]
     announced: Option<String>,
+    #[serde(default)]
+    restored: Option<String>,
 }
 
 impl Record {
@@ -40,9 +44,9 @@ impl Record {
     }
 
     // Different, not greater: a bogus high tag announced once must not mute the real versions
-    // that come after it.
+    // that come after it. A version that had to be restored from is never offered on its own.
     pub fn should_announce(&self, found: Version) -> bool {
-        self.announced != Some(found)
+        self.announced != Some(found) && self.restored != Some(found)
     }
 
     pub fn parse(bytes: &[u8]) -> Result<Record, serde_json::Error> {
@@ -53,6 +57,7 @@ impl Record {
             last_success: stored.last_success,
             newest: version(stored.newest),
             announced: version(stored.announced),
+            restored: version(stored.restored),
         })
     }
 
@@ -62,6 +67,7 @@ impl Record {
             last_success: self.last_success,
             newest: self.newest.map(|version| version.to_string()),
             announced: self.announced.map(|version| version.to_string()),
+            restored: self.restored.map(|version| version.to_string()),
         })
     }
 
@@ -152,6 +158,16 @@ mod tests {
     }
 
     #[test]
+    fn a_restored_version_is_not_announced_again() {
+        let record = Record {
+            restored: Some(version("0.2.0")),
+            ..Record::default()
+        };
+        assert!(!record.should_announce(version("0.2.0")));
+        assert!(record.should_announce(version("0.2.1")));
+    }
+
+    #[test]
     fn a_bogus_high_tag_does_not_mute_the_real_versions_after_it() {
         let record = Record {
             announced: Some(version("9.9.9")),
@@ -167,6 +183,7 @@ mod tests {
             last_success: Some(1_700_000_000),
             newest: Some(version("1.2.4")),
             announced: Some(version("1.2.3")),
+            restored: Some(version("1.2.4")),
         };
         let json = record.to_json().unwrap();
         assert_eq!(Record::parse(json.as_bytes()).unwrap(), record);

@@ -16,7 +16,9 @@ cargo build --release -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-value
 ```
 
 `-j 4` keeps the first build (GPUI is large) from saturating the machine; drop it on a
-dedicated build box. The release binary is `target\release\zenkai.exe`.
+dedicated build box. The release binary is `target\release\zenkai.exe`. Run from there, it is
+not in the install layout (see Packaging), so the updater stays off and Check for Updates opens
+the Releases page.
 
 PDFs are read by `zenkai-pdf-host.exe`, a separate process, so a crash inside pdfium cannot take Zenkai down. It and `pdfium.dll` are loaded from the folder of `zenkai.exe` only.
 Without either, everything else works and the PDF tab says the viewer is unavailable. To read
@@ -31,7 +33,8 @@ powershell -File packaging\windows\fetch-pdfium.ps1 -Destination target\release
 Zenkai can let an MCP client, such as Claude Code, read and edit the workbook that is open,
 live: changes recalculate, show at once and undo with Ctrl+Z; nothing is saved by the
 agent. Turn on Settings (Ctrl+,) > "Allow MCP clients outside Zenkai", then register the
-relay that ships next to `zenkai.exe` (the Settings page shows the exact command):
+relay that ships at the root of the install, next to the launcher, or next to `zenkai.exe` in a
+development build (the Settings page shows the exact command):
 
 ```powershell
 claude mcp add zenkai -- "C:\path\to\zenkai-mcp.exe"
@@ -53,20 +56,49 @@ powershell -ExecutionPolicy Bypass -File packaging\windows\build.ps1
 ```
 
 Builds with the `dist` profile (fat LTO, one codegen unit, stripped; slower than
-`--release`, which stays the profile for development and the benchmark) and writes to
-`dist\`:
+`--release`, which stays the profile for development and the benchmark).
+`packaging\windows\package.ps1` then lays out the install once and packs that same folder
+twice, into `dist\`:
 
-- `zenkai-<version>-windows-x64.zip`: portable, the exes plus `pdfium.dll`, `LICENSE` and `README.md`.
+```
+zenkai.exe            the launcher (crates/launcher); no update ever replaces it
+zenkai-mcp.exe        the relay agents register
+LICENSE, README.md
+app\                  the only folder an update replaces
+  zenkai.exe          the app
+  zenkai-pdf-host.exe
+  zenkai-values-host.exe
+  pdfium.dll, pdfium-LICENSE.txt
+```
+
+- `zenkai-<version>-windows-x64.zip`: portable, that folder.
 - `zenkai-<version>-windows-x64-setup.exe`: only when `iscc` (Inno Setup 6.3 or later)
-  is on PATH. Installs per user without admin rights, adds a Start Menu entry, and
-  optionally a desktop icon and an "Open with" entry for `.xlsx`, `.csv`, Markdown and PDF files (it never
-  becomes the default program). The uninstaller keeps `%LOCALAPPDATA%\Zenkai` (recovery files).
+  is on PATH. Installs for the current user only, without admin rights, in
+  `%LOCALAPPDATA%\Programs\Zenkai`, where the updater can swap `app\` without elevation. Adds a
+  Start Menu entry, and optionally a desktop icon and an "Open with" entry for `.xlsx`, `.csv`,
+  Markdown and PDF files (it never becomes the default program). Shortcuts and file types
+  point at the launcher. The folder is fixed (no folder page). Reinstalling, and the
+  uninstaller, remove `app\`, `app.old\` and `.update\`, only from a folder that holds the
+  launcher and `app\zenkai.exe`; the uninstaller keeps `%LOCALAPPDATA%\Zenkai` (settings and
+  recovery files).
 
-The version comes from `crates/app/Cargo.toml`; the icon (`crates/app/zenkai.ico`) is a
-placeholder. Release builds have no console window and log to
-`%LOCALAPPDATA%\Zenkai\zenkai.log` (`RUST_LOG` sets the level).
+At run time the install also has `app.old\` during an update, and `.update\`, where the
+launcher keeps its lock, the `confirmed` marker, the extracted `new-<version>\`, a
+`rejected-<pid>\` version that did not start, a notice for the app and `launcher.log`. The
+launcher takes every path from its own folder, never from its arguments.
 
-The Windows build is unsigned. SmartScreen shows "Windows protected your PC": click "More info", then "Run anyway".
+The release workflow does the same on a tag: it installs a pinned Inno Setup, builds the zip
+and the installer with `package.ps1`, publishes `<setup>.exe.sha256` next to them, and first
+runs `packaging\windows\test-install.ps1`, which installs silently, checks the layout and
+that it is writable, reinstalls over an update's leftovers and uninstalls. That script really
+installs into the current user's profile; run it only on a runner or a test account.
+
+The version comes from `crates/app/Cargo.toml`. The icon, `crates/app/zenkai.ico`, is
+embedded in both the app and the launcher, so replacing that one file changes both. Release
+builds have no console window and log to `%LOCALAPPDATA%\Zenkai\zenkai.log` (`RUST_LOG` sets
+the level).
+
+The Windows build is not signed with Authenticode. SmartScreen shows "Windows protected your PC": click "More info", then "Run anyway".
 
 Release builds cover Windows x64, Linux x64 and macOS on Apple silicon (arm64) only. Viewing PDF files works only on Windows for now, because the PDF library is bundled only there.
 

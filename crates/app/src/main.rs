@@ -30,6 +30,7 @@ mod format_category;
 mod format_dialog;
 mod generate_dialog;
 mod go_to;
+mod installation;
 mod interface_scale;
 mod job_pill;
 mod jump;
@@ -123,6 +124,8 @@ fn run() {
         );
     }
     zenkai_i18n::init(language::startup());
+    #[cfg(windows)]
+    installation::identify_process();
 
     gpui_kit::application()
         .with_assets(assets::ZenkaiAssets)
@@ -163,11 +166,13 @@ fn run() {
                 Ok((window, workspace)) => {
                     restart::register(window, &workspace, cx);
                     tray::install(window, &workspace, claim, cx);
+                    installation::after_first_window(window, &workspace, cx);
                     cx.activate(true)
                 }
                 #[cfg(not(windows))]
                 Ok((window, workspace)) => {
                     restart::register(window, &workspace, cx);
+                    installation::after_first_window(window, &workspace, cx);
                     cx.activate(true)
                 }
                 Err(error) => {

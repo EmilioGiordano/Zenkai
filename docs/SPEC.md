@@ -414,19 +414,19 @@ El instalador y el zip portable usan la misma estructura:
 
 - "Restart now" vuelve a verificar el zip y lo extrae de cero en `.update\new-<versión>`, pasa por el cierre normal de la app con su aviso de guardar, y al terminar abre `..\zenkai.exe --apply=<versión>`. Si el cierre se cancela, la app sigue abierta y la actualización espera.
 - La app nunca pide elevación ni instala servicios, y no se actualiza en rutas de red. Sin permiso de escritura, por ejemplo instalado para todos los usuarios, ofrece abrir Releases.
-- La versión de `--apply` debe cumplir `^[0-9]{1,5}\.[0-9]{1,5}\.[0-9]{1,5}$`. Toda ruta sale de la carpeta del propio lanzador; nunca se lee una ruta de los argumentos. Los demás argumentos pasan a la app sin cambios.
-- El lanzador toma `.update\lock`, abierto en exclusiva y con borrado al cerrarse, de modo que no puede quedar colgado. Un segundo inicio espera hasta 90 s y luego avisa que Zenkai está terminando una actualización. Ningún estado se evalúa sin el bloqueo.
+- La versión de `--apply` debe cumplir `^(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})$`: la misma gramática que la versión de la app, sin ceros a la izquierda, para que la marca que escribe la app coincida byte a byte. Toda ruta sale de la carpeta del propio lanzador; nunca se lee una ruta de los argumentos. Los demás argumentos pasan a la app sin cambios.
+- El lanzador toma `.update\lock`, abierto en exclusiva y con borrado al cerrarse, de modo que no puede quedar colgado. Un segundo inicio espera hasta 90 s y luego avisa que Zenkai está terminando una actualización. Ningún estado se evalúa sin el bloqueo. Si `.update` no es una carpeta real, por ejemplo un enlace o un punto de reanálisis, el lanzador no lo usa: no toma el bloqueo, no escribe su registro ni evalúa nada, y abre `app` tal como está.
 
 Aplicar una actualización:
 
 1. Espera a que termine la app anterior, hasta 60 s. Si no termina, abre la app actual y avisa, sin tocar nada. Después resuelve el estado en disco según la tabla, para que un `app.old` viejo no bloquee esta actualización.
 2. Exige que `new-<versión>` sea una carpeta real y que tenga un `zenkai.exe` regular, sin puntos de reanálisis. La lista exacta de archivos la controla el extractor, que sí se puede actualizar.
-3. Borra cualquier `confirmed` anterior y renombra `app` a `app.old`, con reintentos durante 10 s. Si falla, algo sigue corriendo desde `app`: abre la versión anterior y avisa.
+3. Borra cualquier `confirmed` anterior, anota la versión en `.update\applying`, sincronizado a disco, y renombra `app` a `app.old`, con reintentos durante 10 s. Si falla, algo sigue corriendo desde `app`: abre la versión anterior y avisa.
 4. Renombra `new-<versión>` a `app`, con reintentos durante 30 s. Si falla, devuelve `app.old` a `app` y avisa.
 5. Abre la versión nueva y espera la marca `confirmed` con esa misma versión, hasta 120 s, o a que el proceso termine.
-6. Con la marca, borra `app.old` y el contenido de `.update\`, salvo el bloqueo, y la marca al final. Sin la marca, si el proceso sigue vivo termina ese proceso, que es su propio hijo, y restaura.
+6. Con la marca, borra `app.old`, después `applying` y al final la marca. El resto de `.update\` no se toca: el bloqueo, el registro del lanzador (`launcher.log`, que es su único modo de informar errores), las descargas y otras carpetas `new-*` son de quien los escribió, que puede ser una app ya preparando la siguiente actualización. Sin la marca, si el proceso sigue vivo termina ese proceso, que es su propio hijo, y restaura.
 
-La app, al mostrar la primera ventana, crea `confirmed` con su propia versión y lo sincroniza a disco, si existe `app.old` y no hay una marca de esa versión. No depende de ningún argumento. Una marca de otra versión no cuenta.
+La app, al mostrar la primera ventana, crea `confirmed` con su propia versión y lo sincroniza a disco, si existe `app.old` y no hay una marca de esa versión. No depende de ningún argumento. Una marca de otra versión no cuenta. Lo escribe fuera del hilo de la interfaz y lo reintenta hasta 10 veces, cada 2 s; si no lo logra, la app se cierra sola por el cierre normal, con su aviso de guardar, y el lanzador restaura la anterior, así nunca termina una ventana que el usuario ve. Al vencer los 120 s el lanzador vuelve a leer la marca antes de terminar el proceso.
 
 Cada inicio del lanzador resuelve lo que encuentre en disco:
 
@@ -434,16 +434,16 @@ Cada inicio del lanzador resuelve lo que encuentre en disco:
 |---|---|---|
 | `app`, sin `app.old` | Normal | Abre la app y termina. |
 | `app.old`, sin `app` | Se cortó entre los dos renombres | Restaura `app.old` y abre la app, avisando que la actualización se interrumpió. |
-| Ambas, con `confirmed` | Se cortó antes de limpiar | Borra `app.old` y limpia `.update\`. Abre la app. |
+| Ambas, con `confirmed` | Se cortó antes de limpiar | Borra `app.old` y después la marca, sin tocar el resto de `.update\`. Abre la app. |
 | Ambas, sin `confirmed`, la app corriendo | Está arrancando | Abre la app, que pasa el pedido a la instancia en marcha, y termina. |
-| Ambas, sin `confirmed`, la app sin correr | La versión nueva no arrancó | Mueve `app` a `.update\rejected-<pid>`, restaura `app.old` y abre la anterior, con el aviso de restauración. |
+| Ambas, sin `confirmed`, la app sin correr | La versión nueva no arrancó | Borra los `rejected-*` anteriores, así queda solo el más nuevo, mueve `app` a `.update\rejected-<pid>`, restaura `app.old` y abre la anterior, con el aviso de restauración, que nombra la versión anotada en `applying` si la hay. |
 | Ninguna | Daño externo | Avisa que hay que reinstalar desde Releases. |
 
-- La app está corriendo si abrir `app\zenkai.exe` para escritura falla con violación de uso compartido. Cualquier otro error cuenta como desconocido, y con un estado desconocido nunca se restaura. Si mover `app` falla tras 10 s de reintentos, tampoco se restaura: se abre `app` normalmente y se decide en el próximo inicio.
+- La app está corriendo si abrir `app\zenkai.exe` para escritura falla con violación de uso compartido. Cualquier otro error cuenta como desconocido, y con un estado desconocido nunca se restaura. Si mover `app` a `rejected-<pid>` falla tras 10 s de reintentos, tampoco se restaura, y esa versión no se abre, porque al abrirla se confirmaría sola: el lanzador avisa que la versión nueva no arrancó y el próximo inicio vuelve a intentarlo.
 - Sin un corte, ningún proceso puede ver una mezcla de archivos viejos y nuevos, porque el reemplazo es de la carpeta entera. Entre los dos renombres, un inicio directo de `app\zenkai.exe` no encuentra el archivo; el lanzador queda esperando el bloqueo. Los agentes usan el relay de la raíz y no lo notan.
 - Una versión restaurada queda anotada en la carpeta de datos de la app, fuera de `.update\`, y no se vuelve a ofrecer sola; "Check for Updates" sí puede intentarla. Confirmar el arranque no detecta errores posteriores, y eso se acepta.
 - Las sesiones, los ajustes y los documentos no se tocan. Una versión que cambie el formato de la sesión o de los ajustes guarda antes una copia, para que la anterior siga funcionando si se restaura.
-- Instalación por usuario: la app actualiza `DisplayVersion` en la lista de programas de Windows. El desinstalador elimina `app`, `app.old` y `.update`, y reinstalar encima limpia los restos.
+- Instalación por usuario: la app actualiza `DisplayVersion` en la lista de programas de Windows. El desinstalador elimina `app`, `app.old` y `.update`, y reinstalar encima limpia los restos, pero solo en una carpeta que ya es una instalación de Zenkai: con el lanzador en la raíz y `app\zenkai.exe`. La carpeta de instalación es fija, `%LOCALAPPDATA%\Programs\Zenkai`, y el instalador no deja elegir otra. El instalador y el desinstalador no arrancan mientras corre Zenkai, su lanzador o un ayudante: si alguno de esos programas no se puede abrir para escritura, se cuenta como en marcha y avisan que hay que cerrarlo.
 - Linux y macOS: solo el aviso, con un botón a la página de Releases. El código de descarga y reemplazo no se compila en esas plataformas.
 
 **Riesgos aceptados**

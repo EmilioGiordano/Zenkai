@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::launcher_notice::LauncherNotice;
 use super::notes::Notes;
 use super::record::Record;
 use super::releases::Releases;
@@ -66,6 +67,7 @@ pub struct Snapshot {
 pub struct Updates {
     pub record: Record,
     pub report: Option<Report>,
+    pub launcher_notices: Vec<LauncherNotice>,
     notes: Arc<Notes>,
     notes_from_check: bool,
     notes_unsaved: bool,
@@ -82,6 +84,7 @@ impl Default for Updates {
         Updates {
             record: Record::default(),
             report: None,
+            launcher_notices: Vec::new(),
             notes: Arc::default(),
             notes_from_check: false,
             notes_unsaved: false,
@@ -243,14 +246,29 @@ impl Updates {
     pub fn mark_announced(&mut self, version: Version) {
         self.record.announced = Some(version);
     }
+
+    // True when the record changed and needs saving: a version the launcher had to restore from
+    // is not offered again on its own.
+    pub fn receive_launcher_notice(&mut self, notice: LauncherNotice) -> bool {
+        self.launcher_notices.push(notice);
+        match notice {
+            LauncherNotice::Restored(Some(version)) => {
+                self.record.restored = Some(version);
+                true
+            }
+            LauncherNotice::Restored(None)
+            | LauncherNotice::Interrupted
+            | LauncherNotice::NotApplied(_) => false,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::notes::Note;
     use super::{
-        Notes, Record, Releases, Report, SettingsReading, Source, StartupCheck, Status, Updates,
-        Version, known_update,
+        LauncherNotice, Notes, Record, Releases, Report, SettingsReading, Source, StartupCheck,
+        Status, Updates, Version, known_update,
     };
 
     fn version(text: &str) -> Version {
@@ -466,6 +484,36 @@ mod tests {
         checking(&mut updates, Source::Palette);
         updates.finish_ok(found(Some(version("0.1.1"))), installed(), 900);
         assert_eq!(updates.report, Some(Report::Available(version("0.1.1"))));
+    }
+
+    #[test]
+    fn a_version_the_launcher_restored_from_is_offered_only_when_asked() {
+        let mut updates = loaded(Record::default());
+        assert!(updates.receive_launcher_notice(LauncherNotice::Restored(Some(version("0.1.1")))));
+        assert_eq!(
+            updates.launcher_notices,
+            [LauncherNotice::Restored(Some(version("0.1.1")))]
+        );
+        checking(&mut updates, Source::Startup);
+        updates.finish_ok(found(Some(version("0.1.1"))), installed(), 900);
+        assert_eq!(updates.report, None);
+        checking(&mut updates, Source::Palette);
+        updates.finish_ok(found(Some(version("0.1.1"))), installed(), 901);
+        assert_eq!(updates.report, Some(Report::Available(version("0.1.1"))));
+    }
+
+    #[test]
+    fn other_launcher_notices_leave_the_record_alone() {
+        for notice in [
+            LauncherNotice::Restored(None),
+            LauncherNotice::Interrupted,
+            LauncherNotice::NotApplied(version("0.1.1")),
+        ] {
+            let mut updates = loaded(Record::default());
+            assert!(!updates.receive_launcher_notice(notice));
+            assert_eq!(updates.record, Record::default());
+            assert_eq!(updates.launcher_notices, [notice]);
+        }
     }
 
     #[test]

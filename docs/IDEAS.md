@@ -83,3 +83,9 @@ local computation); Zenkai's edge is being native: faster start, less memory, lo
     memory and CPU limits) and starting it at low integrity, or in an AppContainer, would
     also limit what a pdfium exploit could reach. A watchdog that restarts a host that stops
     answering belongs with it.
+
+13. **Sign the Windows build with Authenticode.** The installer and the exes are unsigned, so
+    SmartScreen warns on the first install and some antivirus products distrust them. A code
+    signing certificate, used by the release job, would remove the warning once the signature
+    earns reputation. It would sit next to the minisign signature the updater checks, never
+    replace it.

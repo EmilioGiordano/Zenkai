@@ -11,30 +11,21 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'cargo metadata failed' }
     $version = ($metadata.packages | Where-Object { $_.name -eq 'zenkai' }).version
 
-    cargo build --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host -j 6
+    cargo build --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host -p zenkai-launcher -j 6
     if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
     $exeDir = Join-Path $root 'target\dist'
     & (Join-Path $PSScriptRoot 'fetch-pdfium.ps1') -Destination $exeDir
     if (-not $?) { throw 'fetching pdfium.dll failed' }
 
-    $name = "zenkai-$version-windows-x64"
-    $staging = Join-Path $dist $name
-    if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
-    New-Item -ItemType Directory -Force $staging | Out-Null
-    Copy-Item (Join-Path $exeDir 'zenkai.exe'), (Join-Path $exeDir 'zenkai-mcp.exe'), (Join-Path $exeDir 'zenkai-pdf-host.exe'), (Join-Path $exeDir 'zenkai-values-host.exe'), (Join-Path $exeDir 'pdfium.dll'), (Join-Path $exeDir 'pdfium-LICENSE.txt'), (Join-Path $root 'LICENSE'), (Join-Path $root 'README.md') $staging
-    $zip = Join-Path $dist "$name.zip"
-    Compress-Archive -Path $staging -DestinationPath $zip -Force
-    Remove-Item -Recurse -Force $staging
-    Write-Host "Portable: $zip"
-
     $iscc = Get-Command iscc -ErrorAction SilentlyContinue
     if ($null -eq $iscc) {
         Write-Host 'iscc is not on PATH; skipping the installer (install Inno Setup 6.3 or later to build it).'
+        $isccPath = ''
     } else {
-        & $iscc.Source "/DAppVersion=$version" "/DExeDir=$exeDir" "/DOutputDir=$dist" (Join-Path $PSScriptRoot 'zenkai.iss')
-        if ($LASTEXITCODE -ne 0) { throw 'iscc failed' }
-        Write-Host "Installer: $(Join-Path $dist "$name-setup.exe")"
+        $isccPath = $iscc.Source
     }
+    & (Join-Path $PSScriptRoot 'package.ps1') -ExeDir $exeDir -Version $version -Name "zenkai-$version-windows-x64" -OutputDir $dist -Iscc $isccPath
+    if (-not $?) { throw 'packaging failed' }
 } finally {
     Pop-Location
 }

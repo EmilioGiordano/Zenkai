@@ -2,11 +2,15 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::Workspace;
-use super::notices::Severity;
-use crate::updates::{self, Report, Version};
+use super::notices::{Lifetime, Severity};
+use crate::close_prompt::CloseGoal;
+use crate::updates::{self, LauncherNotice, Report, Version};
 
 impl Workspace {
     pub(super) fn show_update_report(&mut self, cx: &mut Context<Self>) {
+        for notice in updates::take_launcher_notices(cx) {
+            self.show_launcher_notice(notice, cx);
+        }
         let Some(report) = updates::take_report(cx) else {
             return;
         };
@@ -15,6 +19,36 @@ impl Workspace {
             Report::UpToDate => self.notify(Severity::Info, t!("update.up_to_date"), cx),
             Report::Failed => self.notify(Severity::Warning, t!("update.check_failed"), cx),
         }
+    }
+
+    // Unlike other warnings it does not expire: it explains why the version running is not the
+    // one installed last.
+    fn show_launcher_notice(&mut self, notice: LauncherNotice, cx: &mut Context<Self>) {
+        let text: SharedString = match notice {
+            LauncherNotice::Restored(Some(version)) => {
+                t!("update.restored", version = version).into()
+            }
+            LauncherNotice::Restored(None) => t!("update.restored_unnamed").into(),
+            LauncherNotice::Interrupted => t!("update.interrupted").into(),
+            LauncherNotice::NotApplied(version) => {
+                t!("update.not_applied", version = version).into()
+            }
+        };
+        self.post(Severity::Warning, text, None, Lifetime::UntilReplaced);
+        cx.notify();
+    }
+
+    pub(crate) fn close_unconfirmed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        tracing::error!(
+            "this version could not confirm its start; closing so the launcher restores the previous one"
+        );
+        self.post(
+            Severity::Error,
+            t!("update.unconfirmed").into(),
+            None,
+            Lifetime::UntilReplaced,
+        );
+        self.request_close(CloseGoal::Quit, window, cx);
     }
 
     fn notify_update_available(&mut self, version: Version, cx: &mut Context<Self>) {
