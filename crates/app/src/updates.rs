@@ -3,6 +3,8 @@ mod launcher_notice;
 mod notes;
 mod record;
 mod releases;
+#[cfg(windows)]
+mod signature;
 mod state;
 mod store;
 mod version;
