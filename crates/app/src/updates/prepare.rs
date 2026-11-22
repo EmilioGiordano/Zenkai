@@ -72,6 +72,18 @@ pub enum PrepareError {
     Disk(#[source] io::Error),
 }
 
+// The versions to fall back on, in the order given (newest first). A version the launcher had to
+// restore from is never offered again on its own, so it is not a fallback either.
+pub fn fallbacks(
+    listed: impl Iterator<Item = Version>,
+    chosen: Version,
+    restored: Option<Version>,
+) -> Vec<Version> {
+    listed
+        .filter(|version| *version < chosen && Some(*version) != restored)
+        .collect()
+}
+
 // What a failed download says about the release: missing, broken (the version before it may
 // still be fine), or a problem of the connection or the disk, which the next try would hit too.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

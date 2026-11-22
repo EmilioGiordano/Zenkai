@@ -9,7 +9,7 @@ use super::super::download::DownloadError;
 use super::super::signature::SignatureError;
 use super::super::version::Version;
 use super::{
-    MAX_TRIES, PendingError, PrepareError, asset_name, new_app, prepare, signature_name,
+    MAX_TRIES, PendingError, PrepareError, asset_name, fallbacks, new_app, prepare, signature_name,
     verify_and_extract,
 };
 
@@ -434,4 +434,18 @@ fn a_broken_release_with_nothing_after_it_counts_as_not_verified() {
         },
     );
     assert!(matches!(result, Err(PrepareError::NotVerified(_))));
+}
+
+#[test]
+fn the_fallbacks_are_older_than_the_chosen_one_and_skip_a_restored_version() {
+    let listed = ["0.5.0", "0.4.0", "0.3.0", "0.2.0", "0.1.1"].map(version);
+    assert_eq!(
+        fallbacks(listed.into_iter(), version("0.4.0"), Some(version("0.3.0"))),
+        [version("0.2.0"), version("0.1.1")]
+    );
+    assert_eq!(
+        fallbacks(listed.into_iter(), version("0.4.0"), None),
+        [version("0.3.0"), version("0.2.0"), version("0.1.1")]
+    );
+    assert!(fallbacks(listed.into_iter(), version("0.1.1"), None).is_empty());
 }

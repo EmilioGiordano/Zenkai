@@ -36,11 +36,11 @@ pub fn start(cx: &mut App, chosen: Version) {
         tracing::error!("an update download needs the install folder and the installed version");
         return;
     };
-    let older: Vec<Version> = notes(cx)
-        .newer_than(installed)
-        .map(|note| note.version)
-        .filter(|version| *version < chosen)
-        .collect();
+    let older = prepare::fallbacks(
+        notes(cx).newer_than(installed).map(|note| note.version),
+        chosen,
+        cx.global::<Updates>().record.restored,
+    );
     let Some(cancel) = cx.update_global::<Updates, _>(|updates, _| updates.transfer.begin(chosen))
     else {
         return;
