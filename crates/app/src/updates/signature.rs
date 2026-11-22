@@ -13,10 +13,12 @@ pub const PLATFORM: &str = "windows-arm64";
 const PRODUCT: &str = "zenkai";
 const READ_CHUNK: usize = 64 * 1024;
 
-// The maintainer's real public keys, current then next, go here (docs/RELEASING.md).
+// The maintainer's real public keys, current then next (docs/RELEASING.md).
 #[cfg(any(test, not(feature = "test-keys")))]
-const RELEASE_KEYS: &[&str] = &[];
-// Without a real key compiled in, no update ever verifies, so none installs.
+const RELEASE_KEYS: &[&str] = &[
+    "RWRzxvrIpXm8tYQYJqpsts0gCaS26UJy/kZssupbEyydweKE23HDAYjN",
+    "RWTBj4N8d3kF/6HqBJ4Z7EOdhPzhQ5diqM+4vshHyN/HFoXy3IYvBsR1",
+];
 #[cfg(not(any(test, feature = "test-keys")))]
 const TRUSTED_KEYS: &[&str] = RELEASE_KEYS;
 // TEST keys, current and next: their secret seeds are in tests/fixtures/update/make-fixtures.mjs,
