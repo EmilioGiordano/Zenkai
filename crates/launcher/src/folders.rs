@@ -1,5 +1,5 @@
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::arguments::Version;
 
@@ -35,6 +35,10 @@ impl Folders {
         Folders {
             root: root.to_path_buf(),
         }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn app(&self) -> PathBuf {

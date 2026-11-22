@@ -124,11 +124,13 @@ pub fn stage(root: &Path, version: Version, installed: Version) -> Result<(), St
 }
 
 // The launcher waits for this process to end before it swaps the folders, and passes the restart
-// flag on to the app it opens, so the session comes back as after any restart.
+// flag on to the app it opens, so the session comes back as after any restart. It starts in the
+// root: a working directory inside `app` would keep that folder from moving.
 pub fn launch(root: &Path, version: Version) -> io::Result<()> {
     let mut command = Command::new(root.join(LAUNCHER));
     command
         .args(apply_arguments(version))
+        .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

@@ -24,6 +24,19 @@ fn a_normal_start_opens_the_app_with_the_arguments_unchanged() {
 }
 
 #[test]
+fn the_app_starts_in_the_install_root_and_holds_no_handle_on_its_folder() {
+    let install = Install::new();
+    fake_app::place(&install.path("app"), Behavior::Exit);
+    let message = run(&install.folders(), Request::Open, &passed(), &TEST_TIMING);
+    assert!(message.is_none(), "{message:?}");
+    let started_in = fake_app::started_in(install.root.path());
+    assert_eq!(
+        fs::canonicalize(started_in).unwrap(),
+        fs::canonicalize(install.root.path()).unwrap()
+    );
+}
+
+#[test]
 fn the_apply_argument_never_reaches_the_app() {
     let install = Install::new();
     install.put_version("app", "old");

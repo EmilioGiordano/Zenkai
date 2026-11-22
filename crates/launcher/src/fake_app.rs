@@ -4,6 +4,7 @@ use std::time::Duration;
 
 const BEHAVIOR: &str = "fake-behavior.txt";
 const STARTED_WITH: &str = "started-with.txt";
+const STARTED_IN: &str = "started-in.txt";
 // What the launcher must pass for the copy to run only `act`.
 pub const ARGUMENTS: [&str; 2] = ["fake_app::act", "--exact"];
 
@@ -38,6 +39,12 @@ pub fn started_with(root: &Path) -> Vec<String> {
     panic!("the fake app never started");
 }
 
+// The working directory the copy started in, written before its arguments.
+pub fn started_in(root: &Path) -> std::path::PathBuf {
+    started_with(root);
+    fs::read_to_string(root.join(STARTED_IN)).unwrap().into()
+}
+
 #[test]
 fn act() {
     let exe = std::env::current_exe().unwrap();
@@ -49,6 +56,8 @@ fn act() {
         .skip(1)
         .map(|argument| argument + "\n")
         .collect();
+    let folder = std::env::current_dir().unwrap();
+    fs::write(root.join(STARTED_IN), folder.to_string_lossy().as_bytes()).unwrap();
     let written = root.join("started-with.tmp");
     fs::write(&written, arguments).unwrap();
     fs::rename(written, root.join(STARTED_WITH)).unwrap();
