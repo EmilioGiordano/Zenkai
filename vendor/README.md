@@ -437,6 +437,71 @@ Meant for upstream, each with tests. Unless noted, each stands on its own:
   (`src/functions/text/common.rs`). Stands on its own. Test:
   `a_long_text_repeated_past_the_limit_is_an_error_not_an_overflow` in
   `src/test/test_fn_rept.rs`.
+- BASE returns `#NUM!`, as Excel does, for a minimum length past 255 instead of padding its
+  result to whatever length a file asks for
+  (`src/functions/math_and_trigonometry/mathematical.rs`). Stands on its own. Tests:
+  `src/test/mathematical/test_base.rs`.
+- FIXED and DOLLAR return `#VALUE!`, as Excel does, for more than 127 decimals instead of
+  padding their result to whatever width a file asks for
+  (`src/functions/text/string_format.rs`). The most negative decimals a file can give no
+  longer overflow when negated; they round to 0 as any count past 308 does. Like Excel they
+  show at most 15 significant digits and pad the decimals past them with zeros, where the
+  digits past 19 decimals overflowed (`FIXED(1.5,25)` gave `1.0000018446744073709551615`)
+  and those past the 15th printed the binary noise of the number. Stands on its own. Tests:
+  `test_fixed_*` and `test_fixed_and_dollar_*` in `src/test/text_functions/mod.rs`.
+- ARRAYTOTEXT builds its text piece by piece through `LimitedText` and returns `#VALUE!`, as
+  Excel does, once it would pass 32,767 characters, instead of formatting every element,
+  joining each row and then the rows, about three times the result at its peak
+  (`src/functions/text/arraytotext.rs`, `LimitedText::is_too_long` in `src/text_limit.rs`).
+  Needs the text limit patch. Tests: `src/test/text_functions/fn_arraytotext.rs`.
+- LEFT, RIGHT and MID return `#VALUE!` for an array result that is larger than every operand
+  and past the million elements SEQUENCE allows (`check_array_size`), as `&` does, and for
+  one whose texts pass the 256 MiB `&` allows an array (`MAX_TEXT_ARRAY_BYTES`, counting
+  `BYTES_PER_ELEMENT` for each element), limits Excel does not have; a column broadcast
+  against a row built every pair (`broadcast_text` in `src/functions/text/common.rs`). Needs
+  the text limit patch for the `&` limits. Tests: `broadcast_*` in
+  `src/test/text_functions/fn_left_right_mid_arrays.rs`.
+- LEFT, RIGHT and MID borrow each element's text instead of copying it, walk only the
+  characters a cut needs (RIGHT from the end, MID up to its end), and an array they broadcast
+  charges the bytes each element walked to that byte cap, so cutting from a long text a
+  million times is cheap when the cuts are short and `#VALUE!` when they walk gigabytes
+  (`src/functions/text/common.rs`). Needs the broadcast limits above. Tests:
+  `cuts_count_characters_not_bytes` and `broadcast_cuts_walk_only_what_they_need` in
+  `src/test/text_functions/fn_left_right_mid_arrays.rs`.
+- CONCAT, and TEXTJOIN when an empty cell adds nothing to its text, read only the cells a
+  range holds (`RangeCells` in `src/range_cells.rs`, `CellStore::next_column` and
+  `CellStore::last_row`), instead of evaluating every cell of it, 1.7e10 for a whole sheet.
+  The worksheet is read as the walk goes, so a spill written while it runs is read as before.
+  TEXTJOIN with `ignore_empty` FALSE and a delimiter reads every cell until its text passes
+  32,767 characters. TEXTJOIN no longer cuts a whole row or column at the used area, which
+  dropped the delimiters of its empty cells: like Excel it is `#VALUE!` for a whole column
+  with `ignore_empty` FALSE (`src/functions/text/common.rs`). Needs the text limit patch and
+  `LimitedText::is_too_long` from the ARRAYTOTEXT patch. Tests: `src/test/test_range_walk.rs`
+  (each function over a range against the same cells listed one by one, on random sheets
+  with spills), `next_column_and_last_row` in `src/cell_store.rs`.
+- TEXTJOIN with `ignore_empty` TRUE skips empty texts, such as a cell holding `=""`, as Excel
+  does, not only empty cells (`src/functions/text/common.rs`). Stands on its own. Test:
+  `ignore_empty_skips_empty_texts` in `src/test/text_functions/fn_textjoin.rs`.
+- REGEXREPLACE returns `#VALUE!`, as Excel does, for a result past 32,767 characters. It
+  reads the replacement once into text and group references, as `Captures::expand` reads it,
+  and adds each match's pieces to a `LimitedText`, so a replacement repeating `$0` over a long
+  match no longer builds hundreds of megabytes (`src/functions/text/regex_functions.rs`).
+  Needs the text limit patch and `LimitedText::is_too_long` from the ARRAYTOTEXT patch.
+  Tests: the module (against `Regex::replace_all` on random replacements) and
+  `test_regexreplace_*` in `src/test/text_functions/fn_regex.rs`.
+- `Model::evaluate_range` returns the `#VALUE!` of the calling cell, before building any
+  element, for a range whose nodes would pass the 256 MiB an `&` array may hold
+  (`MAX_TEXT_ARRAY_BYTES` over `BYTES_PER_ELEMENT`, 6,710,886 elements of 40 bytes on the
+  pinned compiler): six whole columns or 409 whole rows fit, seven columns, 410 rows or the
+  whole sheet do not. Every range a function turns into an array goes through it, the
+  arithmetic operands of
+  `get_number_or_array` included, which built their own copy; functions that read a range
+  cell by cell, such as SUM, are unchanged (`src/model.rs`, `src/cast.rs` and the callers in
+  `src/functions`). A limit Excel does not have. Needs the text limit patch for the
+  constants. Tests: `src/test/test_range_array_limit.rs`. The texts of the range count
+  toward the same budget as they are copied, since every cell holding one shared string got
+  its own copy: a million cells of one 32,767 character string took 32 GB. A range holding
+  more than about 200 MiB of text is now `#VALUE!` where Excel gives a result.
 
 Zenkai-only, not for upstream:
 

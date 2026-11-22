@@ -168,6 +168,17 @@ impl CellStore {
         self.rows.get(&row).map_or(0, |cells| cells.columns.len())
     }
 
+    pub fn next_column(&self, row: i32, column: i32) -> Option<i32> {
+        let cells = self.rows.get(&row)?;
+        let at = cells.columns.partition_point(|existing| *existing < column);
+        cells.columns.get(at).copied()
+    }
+
+    /// The highest row, a row with no cells included. It reads every row.
+    pub fn last_row(&self) -> Option<i32> {
+        self.rows().max()
+    }
+
     /// Every cell as (row, column, cell), in no particular order.
     pub fn iter(&self) -> impl Iterator<Item = (i32, i32, &Cell)> + '_ {
         self.rows.iter().flat_map(|(row, cells)| {
@@ -245,6 +256,24 @@ mod tests {
         assert!(store.has_row(2));
         assert_eq!(store.row_len(2), 0);
         assert!(store.take_from_column(9, 1).is_empty());
+    }
+
+    #[test]
+    fn next_column_and_last_row() {
+        let mut store = CellStore::new();
+        assert_eq!(store.last_row(), None);
+        for column in [2, 5, 9] {
+            store.insert(3, column, cell(column));
+        }
+        store.insert_row(7, []);
+        assert_eq!(store.next_column(3, 1), Some(2));
+        assert_eq!(store.next_column(3, 2), Some(2));
+        assert_eq!(store.next_column(3, 3), Some(5));
+        assert_eq!(store.next_column(3, 9), Some(9));
+        assert_eq!(store.next_column(3, 10), None);
+        assert_eq!(store.next_column(4, 1), None);
+        assert_eq!(store.next_column(7, 1), None);
+        assert_eq!(store.last_row(), Some(7));
     }
 
     #[test]

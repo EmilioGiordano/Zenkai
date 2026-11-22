@@ -174,3 +174,35 @@ fn test_regexreplace_wrong_arg_count() {
     assert_eq!(model._get_text("A1"), "#ERROR!");
     assert_eq!(model._get_text("A2"), "#ERROR!");
 }
+
+#[test]
+fn test_regexreplace_groups_and_dollar() {
+    let mut model = new_empty_model();
+    model._set("A1", "=REGEXREPLACE(\"ab\", \"(a)\", \"[$1$$]\")");
+    model._set("A2", "=REGEXREPLACE(\"ab\", \"(?P<x>b)\", \"<${x}>\")");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "[a$]b");
+    assert_eq!(model._get_text("A2"), "a<b>");
+}
+
+// A result past Excel's 32,767 characters is #VALUE!; a replacement repeating `$0` used to
+// multiply a long text into hundreds of megabytes.
+#[test]
+fn test_regexreplace_past_the_text_limit_is_value() {
+    let mut model = new_empty_model();
+    model._set(
+        "A1",
+        "=REGEXREPLACE(REPT(\"x\",16383), \"x+\", \"$0${0}y\")",
+    );
+    model._set("A2", "=REGEXREPLACE(REPT(\"x\",16384), \"x+\", \"$0$0\")");
+    model._set(
+        "A3",
+        "=REGEXREPLACE(REPT(\"x\",32767), \"x+\", REPT(\"$0\",16383))",
+    );
+    model._set("A4", "=REGEXREPLACE(REPT(\"x\",32767), \"x\", \"\")");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), format!("{}y", "x".repeat(32_766)));
+    assert_eq!(model._get_text("A2"), "#VALUE!");
+    assert_eq!(model._get_text("A3"), "#VALUE!");
+    assert_eq!(model._get_text("A4"), "");
+}

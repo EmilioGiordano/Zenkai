@@ -11,7 +11,97 @@ use crate::{
         types::CellReferenceIndex,
     },
     model::Model,
+    text_limit::{text_too_long, LimitedText, TextTooLong},
 };
+
+#[derive(Debug, PartialEq)]
+enum ReplacementPiece<'r> {
+    Text(&'r str),
+    Group(usize),
+}
+
+// Reads `replacement` as `Captures::expand` of the regex crates does: `$$` is `$`, `$name`
+// (letters, digits and `_`) and `${name}` name a group by number or name, a group the pattern
+// lacks is left out, and any other `$` is itself.
+fn replacement_pieces<'r>(re: &Regex, mut replacement: &'r str) -> Vec<ReplacementPiece<'r>> {
+    let mut pieces = Vec::new();
+    while let Some(dollar) = replacement.find('$') {
+        pieces.push(ReplacementPiece::Text(&replacement[..dollar]));
+        let after = &replacement[dollar + 1..];
+        if let Some(rest) = after.strip_prefix('$') {
+            pieces.push(ReplacementPiece::Text("$"));
+            replacement = rest;
+            continue;
+        }
+        let reference = match after.strip_prefix('{') {
+            Some(braced) => braced
+                .find('}')
+                .map(|close| (&braced[..close], &braced[close + 1..])),
+            None => {
+                let name_length = after
+                    .bytes()
+                    .take_while(|b| b.is_ascii_alphanumeric() || *b == b'_')
+                    .count();
+                if name_length == 0 {
+                    None
+                } else {
+                    Some(after.split_at(name_length))
+                }
+            }
+        };
+        match reference {
+            Some((name, rest)) => {
+                let index = match name.parse::<usize>() {
+                    Ok(index) => Some(index),
+                    Err(_) => re.capture_names().position(|group| group == Some(name)),
+                };
+                if let Some(index) = index {
+                    pieces.push(ReplacementPiece::Group(index));
+                }
+                replacement = rest;
+            }
+            None => {
+                pieces.push(ReplacementPiece::Text("$"));
+                replacement = after;
+            }
+        }
+    }
+    pieces.push(ReplacementPiece::Text(replacement));
+    pieces
+}
+
+// Gives what `re.replace_all` gives, or stops at Excel's text limit.
+fn replace_all_within_limit(
+    re: &Regex,
+    text: &str,
+    replacement: &str,
+) -> Result<String, TextTooLong> {
+    let pieces = replacement_pieces(re, replacement);
+    let mut result = LimitedText::default();
+    let mut last_end = 0;
+    for captures in re.captures_iter(text) {
+        let Some(whole) = captures.get(0) else {
+            continue;
+        };
+        result.push(&text[last_end..whole.start()]);
+        for piece in &pieces {
+            match piece {
+                ReplacementPiece::Text(piece) => result.push(piece),
+                ReplacementPiece::Group(index) => {
+                    if let Some(group) = captures.get(*index) {
+                        result.push(group.as_str());
+                    }
+                }
+            }
+        }
+        last_end = whole.end();
+        if result.is_too_long() {
+            break;
+        }
+    }
+    result.push(&text[last_end..]);
+    result.into_string()
+}
 
 impl<'a> Model<'a> {
     /// REGEXEXTRACT(text, regular_expression, [return_all])
@@ -115,7 +205,10 @@ impl<'a> Model<'a> {
                 )
             }
         };
-        CalcResult::String(re.replace_all(&text, replacement.as_str()).into_owned())
+        match replace_all_within_limit(&re, &text, &replacement) {
+            Ok(replaced) => CalcResult::String(replaced),
+            Err(TextTooLong) => text_too_long(cell),
+        }
     }
 
     /// REGEXTEST(text, regular_expression)
@@ -145,5 +238,75 @@ impl<'a> Model<'a> {
             }
         };
         CalcResult::Boolean(re.is_match(&text))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Replacements made of `$`, braces, group names and numbers, against patterns with
+    // numbered, named and optional groups, give what the regex crate gives.
+    #[test]
+    fn replace_all_within_limit_agrees_with_replace_all() {
+        let patterns = [
+            "a",
+            "(a)(b)?",
+            "(?P<word>[a-c]+)(?P<n>[0-9])?",
+            "x*",
+            "(é)|(z)",
+        ];
+        let texts = ["", "abc", "aab9 cab1 b", "xxaxx", "zéz é"];
+        let symbols = [
+            "$", "$", "{", "}", "0", "1", "2", "9", "a", "n", "word", "_", "+", " ", "é", "x",
+        ];
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut random = move |bound: usize| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % bound as u64) as usize
+        };
+        for pattern in patterns {
+            let re = Regex::new(pattern).unwrap();
+            for _ in 0..400 {
+                let length = random(9);
+                let replacement: String = (0..length)
+                    .map(|_| symbols[random(symbols.len())])
+                    .collect();
+                for text in texts {
+                    assert_eq!(
+                        replace_all_within_limit(&re, text, &replacement).as_deref(),
+                        Ok(&*re.replace_all(text, replacement.as_str())),
+                        "pattern {pattern:?}, text {text:?}, replacement {replacement:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn replacement_pieces_read_references_as_the_regex_crate_does() {
+        let re = Regex::new("(?P<first>a)(b)").unwrap();
+        assert_eq!(
+            replacement_pieces(&re, "x$1${first}$$y$first$z${3}$1a${"),
+            vec![
+                ReplacementPiece::Text("x"),
+                ReplacementPiece::Group(1),
+                ReplacementPiece::Text(""),
+                ReplacementPiece::Group(1),
+                ReplacementPiece::Text(""),
+                ReplacementPiece::Text("$"),
+                ReplacementPiece::Text("y"),
+                ReplacementPiece::Group(1),
+                ReplacementPiece::Text(""),
+                ReplacementPiece::Text(""),
+                ReplacementPiece::Group(3),
+                ReplacementPiece::Text(""),
+                ReplacementPiece::Text(""),
+                ReplacementPiece::Text("$"),
+                ReplacementPiece::Text("{"),
+            ]
+        );
     }
 }

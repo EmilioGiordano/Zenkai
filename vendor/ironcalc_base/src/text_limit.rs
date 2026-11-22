@@ -48,6 +48,10 @@ impl LimitedText {
         self.length = length;
     }
 
+    pub(crate) fn is_too_long(&self) -> bool {
+        self.too_long
+    }
+
     pub(crate) fn into_string(self) -> Result<String, TextTooLong> {
         if self.too_long {
             Err(TextTooLong)
@@ -84,8 +88,10 @@ mod tests {
     fn limited_text_stays_too_long_once_a_piece_does_not_fit() {
         let mut text = LimitedText::default();
         text.push(&"x".repeat(MAX_TEXT_LENGTH - 1));
+        assert!(!text.is_too_long());
         text.push("😀");
         text.push("é");
+        assert!(text.is_too_long());
         assert_eq!(text.into_string(), Err(TextTooLong));
     }
 }

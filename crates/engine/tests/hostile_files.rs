@@ -861,3 +861,113 @@ fn text_joins_past_the_text_limit_open_as_value_errors() {
         assert_eq!(view.text, "#VALUE!", "{cell}");
     }
 }
+
+// Opens a sheet whose formulas have no cached values, so each is evaluated on open, and
+// returns the text of the cells asked for.
+fn texts_on_open(cells: &str, wanted: &[&str]) -> Vec<String> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("evaluated.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet(cells))).unwrap();
+    let started = Instant::now();
+    let book = open_xlsx(&path).unwrap().workbook;
+    assert!(started.elapsed() < Duration::from_secs(30));
+    wanted
+        .iter()
+        .map(|cell| book.cell(SheetId(0), CellPos::parse_a1(cell).unwrap()).text)
+        .collect()
+}
+
+// BASE padded its result to the two billion characters the file asked for; Excel allows 255.
+#[test]
+fn base_past_its_minimum_length_limit_opens_as_num() {
+    let texts = texts_on_open(r#"<c r="A1"><f>BASE(1,2,2000000000)</f></c>"#, &["A1"]);
+    assert_eq!(texts, ["#NUM!"]);
+}
+
+// FIXED and DOLLAR padded their decimals to the two billion digits the file asked for; Excel
+// allows 127.
+#[test]
+fn fixed_and_dollar_past_their_decimals_limit_open_as_value_errors() {
+    let texts = texts_on_open(
+        r#"<c r="A1"><f>FIXED(1,2000000000)</f></c><c r="B1"><f>DOLLAR(1,2000000000)</f></c>"#,
+        &["A1", "B1"],
+    );
+    assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
+}
+
+// ARRAYTOTEXT joined every text of an array whole, at about three times the result's size;
+// past Excel's 32,767 characters it is #VALUE!.
+#[test]
+fn arraytotext_past_the_text_limit_opens_as_value_error() {
+    let cells = [
+        dynamic_formula("A1", r#"ARRAYTOTEXT(REPT("x",30000)&amp;SEQUENCE(1000))"#),
+        dynamic_formula("B1", r#"ARRAYTOTEXT(REPT("x",30000)&amp;SEQUENCE(1000),1)"#),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["A1", "B1"]);
+    assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
+}
+
+// LEFT, RIGHT and MID broadcast a column against a row into every pair, 1.7e10 elements for a
+// whole column against a whole row; past the million SEQUENCE allows each is #VALUE!.
+#[test]
+fn text_broadcasts_past_the_array_size_limit_open_as_value_errors() {
+    let cells = [
+        dynamic_formula("A1", "LEFT(B2:B1048576,C2:XFD2)"),
+        dynamic_formula("B1", "MID(B2:B1048576,1,C2:XFD2)"),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["A1", "B1"]);
+    assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
+}
+
+// CONCAT and TEXTJOIN over all of a sheet but its first row evaluated each of its 1.7e10
+// cells, empty or not; now they read only the cells the sheet holds.
+#[test]
+fn concat_and_textjoin_over_the_whole_sheet_open_quickly() {
+    let texts = texts_on_open(
+        r#"<c r="B1"><f>CONCAT(A2:XFD1048576)</f></c><c r="C1"><f>TEXTJOIN(",",TRUE,A2:XFD1048576)</f></c><c r="D1"><f>TEXTJOIN("",FALSE,A2:XFD1048576)</f></c><c r="E1"><f>TEXTJOIN(",",FALSE,A2:XFD1048576)</f></c>"#,
+        &["B1", "C1", "D1", "E1"],
+    );
+    assert_eq!(texts, ["", "", "", "#VALUE!"]);
+}
+
+// A REGEXREPLACE replacement repeating `$0` sixteen thousand times over a 32,767 character
+// match built half a gigabyte; past Excel's 32,767 characters it is #VALUE!.
+#[test]
+fn regexreplace_past_the_text_limit_opens_as_value_error() {
+    let texts = texts_on_open(
+        r#"<c r="A1"><f>REGEXREPLACE(REPT("x",32767),"x+",REPT("$0",16383))</f></c>"#,
+        &["A1"],
+    );
+    assert_eq!(texts, ["#VALUE!"]);
+}
+
+// LEFT and ARRAYTOTEXT turned the whole sheet into 1.7e10 array elements before any limit;
+// a range past the 256 MiB an array may hold is #VALUE!, while a whole column still works.
+#[test]
+fn whole_sheet_ranges_turned_into_arrays_open_as_value_errors() {
+    let cells = [
+        dynamic_formula("A1", "LEFT(A1:XFD1048576,1)"),
+        dynamic_formula("B1", "ARRAYTOTEXT(A1:XFD1048576)"),
+        dynamic_formula("C1", "COUNTA(LEFT(A:A,1))"),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["A1", "B1", "C1"]);
+    assert_eq!(texts, ["#VALUE!", "#VALUE!", "1048576"]);
+}
+
+// A dynamic array formula, so no argument is narrowed to one value as in a legacy formula.
+fn dynamic_formula(cell: &str, formula: &str) -> String {
+    format!(r#"<c r="{cell}" cm="1"><f t="array" ref="{cell}">{formula}</f></c>"#)
+}
+
+// LEFT, RIGHT and MID copied and walked a 32,767 character text for each of a million
+// elements, tens of gigabytes of copies; now a short cut is cheap and a long walk is #VALUE!.
+#[test]
+fn text_cuts_from_a_long_text_a_million_times_open_quickly() {
+    let cells = [
+        r#"<c r="A1"><f>REPT("x",32767)</f></c>"#.to_string(),
+        dynamic_formula("B1", "COUNTA(LEFT(A1,SEQUENCE(1000000)*0))"),
+        dynamic_formula("C1", "MID(A1,SEQUENCE(1000000)*0+32767,1)"),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["B1", "C1"]);
+    assert_eq!(texts, ["1000000", "#VALUE!"]);
+}

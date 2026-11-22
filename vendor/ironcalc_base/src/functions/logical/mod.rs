@@ -118,7 +118,10 @@ impl<'a> Model<'a> {
         // Normalize cond to a 2-D array, or take the scalar early-return path.
         let cond_array: Vec<Vec<ArrayNode>> = match cond_result {
             error @ CalcResult::Error { .. } => return error,
-            CalcResult::Range { left, right } => self.evaluate_range(left, right),
+            CalcResult::Range { left, right } => match self.evaluate_range(left, right, cell) {
+                Ok(array) => array,
+                Err(error) => return error,
+            },
             CalcResult::Array(a) => a,
             other => {
                 // Scalar cond: cast to bool and evaluate the chosen branch directly.
@@ -140,7 +143,10 @@ impl<'a> Model<'a> {
         // Evaluate branches once and normalise each to a scalar or 2-D array.
         let true_result = self.evaluate_node_in_context(&args[1], cell);
         let true_arg = match true_result {
-            CalcResult::Range { left, right } => IfArg::Array(self.evaluate_range(left, right)),
+            CalcResult::Range { left, right } => match self.evaluate_range(left, right, cell) {
+                Ok(array) => IfArg::Array(array),
+                Err(error) => return error,
+            },
             CalcResult::Array(a) => IfArg::Array(a),
             other => IfArg::Scalar(calc_result_to_array_node(other)),
         };
@@ -148,7 +154,10 @@ impl<'a> Model<'a> {
         let false_arg: Option<IfArg> = if has_else {
             let r = self.evaluate_node_in_context(&args[2], cell);
             Some(match r {
-                CalcResult::Range { left, right } => IfArg::Array(self.evaluate_range(left, right)),
+                CalcResult::Range { left, right } => match self.evaluate_range(left, right, cell) {
+                    Ok(array) => IfArg::Array(array),
+                    Err(error) => return error,
+                },
                 CalcResult::Array(a) => IfArg::Array(a),
                 other => IfArg::Scalar(calc_result_to_array_node(other)),
             })
@@ -223,7 +232,10 @@ impl<'a> Model<'a> {
 
         // Normalize value to a 2-D array, or take the scalar early-return path.
         let value_array: Vec<Vec<ArrayNode>> = match value {
-            CalcResult::Range { left, right } => self.evaluate_range(left, right),
+            CalcResult::Range { left, right } => match self.evaluate_range(left, right, cell) {
+                Ok(array) => array,
+                Err(error) => return error,
+            },
             CalcResult::Array(a) => a,
             CalcResult::Error { ref error, .. } if is_handled(error) => {
                 // Scalar handled error: evaluate the fallback branch directly.
@@ -239,7 +251,10 @@ impl<'a> Model<'a> {
         // fallback, broadcasting the fallback across positions.
         let fallback_result = self.evaluate_node_in_context(&args[1], cell);
         let fallback_arg = match fallback_result {
-            CalcResult::Range { left, right } => IfArg::Array(self.evaluate_range(left, right)),
+            CalcResult::Range { left, right } => match self.evaluate_range(left, right, cell) {
+                Ok(array) => IfArg::Array(array),
+                Err(error) => return error,
+            },
             CalcResult::Array(a) => IfArg::Array(a),
             other => IfArg::Scalar(calc_result_to_array_node(other)),
         };

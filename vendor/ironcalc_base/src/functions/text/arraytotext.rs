@@ -4,6 +4,7 @@ use crate::{
     calc_result::CalcResult,
     expressions::{parser::ArrayNode, parser::Node, token::Error, types::CellReferenceIndex},
     model::Model,
+    text_limit::{text_too_long, LimitedText, TextTooLong},
 };
 
 impl<'a> Model<'a> {
@@ -28,18 +29,20 @@ impl<'a> Model<'a> {
         let strict = format == 1;
 
         let array = match self.evaluate_node_in_context(&args[0], cell) {
-            CalcResult::Range { left, right } => self.evaluate_range(left, right),
+            CalcResult::Range { left, right } => match self.evaluate_range(left, right, cell) {
+                Ok(array) => array,
+                Err(error) => return error,
+            },
             CalcResult::Array(a) => a,
             CalcResult::Number(n) => {
                 return CalcResult::String(format_array_value(&ArrayNode::Number(n), strict));
             }
-            CalcResult::String(s) => {
-                return CalcResult::String(if strict {
-                    format!("\"{}\"", s.replace('"', "\"\""))
-                } else {
-                    s
-                });
+            CalcResult::String(s) if strict => {
+                let mut text = LimitedText::default();
+                text.push(&format_array_value(&ArrayNode::String(s), true));
+                return finished(text, cell);
             }
+            CalcResult::String(s) => return CalcResult::String(s),
             CalcResult::Boolean(b) => {
                 return CalcResult::String(if b {
                     "TRUE".to_string()
@@ -60,27 +63,45 @@ impl<'a> Model<'a> {
             }
         };
 
-        let result = if strict {
+        let mut text = LimitedText::default();
+        if strict {
             // Strict: {col1,col2;row2col1,row2col2}
-            let rows: Vec<String> = array
-                .iter()
-                .map(|row| {
-                    row.iter()
-                        .map(|v| format_array_value(v, true))
-                        .collect::<Vec<_>>()
-                        .join(",")
-                })
-                .collect();
-            format!("{{{}}}", rows.join(";"))
+            text.push("{");
+            'rows: for (i, row) in array.iter().enumerate() {
+                if i > 0 {
+                    text.push(";");
+                }
+                for (j, value) in row.iter().enumerate() {
+                    if j > 0 {
+                        text.push(",");
+                    }
+                    text.push(&format_array_value(value, true));
+                    if text.is_too_long() {
+                        break 'rows;
+                    }
+                }
+            }
+            text.push("}");
         } else {
             // Concise: flatten all elements row-by-row, join with ", "
-            let elements: Vec<String> = array
-                .iter()
-                .flat_map(|row| row.iter().map(|v| format_array_value(v, false)))
-                .collect();
-            elements.join(", ")
-        };
-        CalcResult::String(result)
+            for (i, value) in array.iter().flatten().enumerate() {
+                if i > 0 {
+                    text.push(", ");
+                }
+                text.push(&format_array_value(value, false));
+                if text.is_too_long() {
+                    break;
+                }
+            }
+        }
+        finished(text, cell)
+    }
+}
+
+fn finished(text: LimitedText, cell: CellReferenceIndex) -> CalcResult {
+    match text.into_string() {
+        Ok(text) => CalcResult::String(text),
+        Err(TextTooLong) => text_too_long(cell),
     }
 }
 

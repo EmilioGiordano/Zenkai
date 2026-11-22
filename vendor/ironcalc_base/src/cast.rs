@@ -98,43 +98,16 @@ impl<'a> Model<'a> {
             }
             CalcResult::EmptyCell | CalcResult::EmptyArg => Ok(NumberOrArray::Number(0.0)),
             CalcResult::Range { left, right } => {
-                let sheet = left.sheet;
-                if sheet != right.sheet {
+                if left.sheet != right.sheet {
                     return Err(CalcResult::Error {
                         error: Error::ERROR,
                         origin: cell,
                         message: "3D ranges are not allowed".to_string(),
                     });
                 }
-                // we need to convert the range into an array
-                let mut array = Vec::new();
-                for row in left.row..=right.row {
-                    let mut row_data = Vec::new();
-                    for column in left.column..=right.column {
-                        let value =
-                            match self.evaluate_cell(CellReferenceIndex { sheet, column, row }) {
-                                CalcResult::String(s) => ArrayNode::String(s),
-                                CalcResult::Number(f) => ArrayNode::Number(f),
-                                CalcResult::Boolean(b) => ArrayNode::Boolean(b),
-                                CalcResult::Error { error, .. } => ArrayNode::Error(error),
-                                CalcResult::Range { .. } => {
-                                    // if we do things right this can never happen.
-                                    // the evaluation of a cell should never return a range
-                                    ArrayNode::Number(0.0)
-                                }
-                                CalcResult::EmptyCell => ArrayNode::Empty,
-                                CalcResult::EmptyArg => ArrayNode::Empty,
-                                CalcResult::Array(_) | CalcResult::Lambda(_) => {
-                                    // if we do things right this can never happen.
-                                    // the evaluation of a cell should never return an array or lambda
-                                    ArrayNode::Number(0.0)
-                                }
-                            };
-                        row_data.push(value);
-                    }
-                    array.push(row_data);
-                }
-                Ok(NumberOrArray::Array(array))
+                Ok(NumberOrArray::Array(
+                    self.evaluate_range(left, right, cell)?,
+                ))
             }
             CalcResult::Array(s) => Ok(NumberOrArray::Array(s)),
             error @ CalcResult::Error { .. } => Err(error),
@@ -156,7 +129,7 @@ impl<'a> Model<'a> {
         match self.evaluate_node_in_context(node, cell) {
             error @ CalcResult::Error { .. } => Err(error),
             CalcResult::Range { left, right } => {
-                Ok(ValueOrArray::Array(self.evaluate_range(left, right)))
+                Ok(ValueOrArray::Array(self.evaluate_range(left, right, cell)?))
             }
             CalcResult::Array(arr) => Ok(ValueOrArray::Array(arr)),
             other => Ok(ValueOrArray::Value(other)),
@@ -172,9 +145,9 @@ impl<'a> Model<'a> {
     ) -> Result<StringOrArray, CalcResult> {
         match self.evaluate_node_in_context(node, cell) {
             error @ CalcResult::Error { .. } => Err(error),
-            CalcResult::Range { left, right } => {
-                Ok(StringOrArray::Array(self.evaluate_range(left, right)))
-            }
+            CalcResult::Range { left, right } => Ok(StringOrArray::Array(
+                self.evaluate_range(left, right, cell)?,
+            )),
             CalcResult::Array(arr) => Ok(StringOrArray::Array(arr)),
             other => Ok(StringOrArray::String(self.cast_to_string(other, cell)?)),
         }
