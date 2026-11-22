@@ -1,6 +1,6 @@
 [package]
 name = "zenkai-pdf-host"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -17,7 +17,8 @@ required-features = ["host"]
 
 [features]
 default = ["host"]
-host = ["dep:pdfium-render", "dep:tracing-subscriber"]
+host = ["dep:pdfium-render", "logging"]
+logging = ["dep:tracing-subscriber"]
 
 [dependencies]
 async-channel = "2"
@@ -29,6 +30,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"], optional = true }
 
 [dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
 tempfile = "3"
 
 [lints]

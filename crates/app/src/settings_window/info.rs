@@ -11,6 +11,7 @@ use zenkai_i18n::t;
 use crate::actions::{ApplyHeldSettings, KeepCurrentSettings};
 use crate::agent_settings::{self, AgentConfig, BridgeStatus};
 use crate::keymap::KeymapState;
+use crate::updates::{self, Status};
 
 pub fn held_text(held: &HeldChange, cx: &App) -> Div {
     let theme = cx.theme();
@@ -121,4 +122,39 @@ pub fn settings_file(cx: &App) -> Option<PathBuf> {
         .paths
         .as_ref()
         .map(SettingsPaths::settings)
+}
+
+pub fn update_status(cx: &App) -> AnyElement {
+    let text = match updates::status(cx) {
+        Status::Unchecked => t!("settings.update.never").to_string(),
+        Status::Checking => t!("settings.update.checking").to_string(),
+        Status::UpToDate { at } => checked_text(at),
+        Status::Available(version) => t!("settings.update.available", version = version),
+        Status::Failed => t!("settings.update.failed").to_string(),
+    };
+    div()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(text)
+        .into_any_element()
+}
+
+fn checked_text(at: u64) -> String {
+    let Some(checked) = i64::try_from(at)
+        .ok()
+        .and_then(|seconds| chrono::DateTime::from_timestamp(seconds, 0))
+    else {
+        return t!("settings.update.never").to_string();
+    };
+    let checked = checked.with_timezone(&chrono::Local);
+    let time = checked.format("%H:%M").to_string();
+    if checked.date_naive() == chrono::Local::now().date_naive() {
+        t!("settings.update.latest_today", time = time)
+    } else {
+        t!(
+            "settings.update.latest_on",
+            date = checked.format("%Y-%m-%d"),
+            time = time
+        )
+    }
 }

@@ -8,7 +8,7 @@ description: Run a Zenkai task branch end to end from a TASK file in a worktree:
 Run one Zenkai task branch end to end. Invoke as `/zk-branch <TASK file path>`.
 The TASK file lives in a git worktree, usually not the current directory.
 
-Read `AGENTS.md` first; it is the rulebook. The `.claude/agents/` briefs below are
+Read `AGENTS.md` and `MAINTAINERS.md` first; it is the rulebook. The `.claude/agents/` briefs below are
 the source of truth for each role: reference them in child prompts, never paste
 their content and never let a child inherit another agent's reasoning.
 

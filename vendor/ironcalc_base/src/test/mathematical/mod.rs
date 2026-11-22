@@ -1,3 +1,4 @@
+mod test_base;
 mod test_mdeterm;
 mod test_minverse;
 mod test_multinomial;

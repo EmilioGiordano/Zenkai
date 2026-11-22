@@ -8,6 +8,7 @@ use crate::entry::{Entry, Slot};
 use crate::session::{self, Session, SpaceRecord};
 use crate::space_appearance::SpaceAppearance;
 use crate::spaces::Spaces;
+use crate::text_document::DocumentKind;
 
 fn has_recovery_copy_to_keep(entry: Entry<'_>) -> bool {
     entry
@@ -41,7 +42,12 @@ impl Documents {
             self.spaces.expand(space, !record.collapsed);
             self.spaces.set_color(space, record.color);
             self.spaces.set_appearance(space, record.appearance);
-            for file in &record.files {
+            // The What's new tab is never written, so a file that names one is ignored.
+            for file in record
+                .files
+                .iter()
+                .filter(|file| file.kind != DocumentKind::WhatsNew)
+            {
                 let id = self.take_id();
                 let link = session::link_of(file, id, space, recovery_directory);
                 self.after.push(Slot::Link(link));
@@ -80,7 +86,10 @@ impl Documents {
         recovery_file: impl Fn(WorkbookId) -> Option<PathBuf>,
         discarded: &[WorkbookId],
     ) -> Session {
-        let active = self.wanted().or_else(|| self.shown_id());
+        let active = self
+            .wanted()
+            .or_else(|| self.shown_id())
+            .or_else(|| self.stepped_aside());
         let spaces = self
             .spaces
             .iter()
@@ -91,6 +100,7 @@ impl Documents {
                 appearance: space.appearance,
                 files: self
                     .members(space.id)
+                    .filter(|entry| entry.notes().is_none())
                     .filter(|entry| !entry.loaded().is_some_and(Document::is_pristine))
                     .filter(|entry| entry.path().is_some() || !discarded.contains(&entry.id()))
                     .map(|entry| {

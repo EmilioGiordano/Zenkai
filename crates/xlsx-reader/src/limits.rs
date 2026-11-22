@@ -144,6 +144,7 @@ pub struct Usage {
     pub shapes: u64,
     pub bytes: u64,
     pub rows: u64,
+    pub result_text: u64,
 }
 
 impl Usage {
@@ -163,6 +164,7 @@ impl Usage {
             shapes: self.shapes.saturating_mul(times),
             bytes: self.bytes.saturating_mul(times),
             rows: self.rows.saturating_mul(times),
+            result_text: self.result_text.saturating_mul(times),
         }
     }
 
@@ -177,6 +179,7 @@ impl Usage {
             shapes: scale(self.shapes),
             bytes: scale(self.bytes),
             rows: scale(self.rows),
+            result_text: scale(self.result_text),
         }
     }
 
@@ -187,6 +190,7 @@ impl Usage {
             shapes: self.shapes,
             rows: self.rows,
             bytes: self.bytes,
+            result_text: self.result_text,
         }
     }
 }
@@ -297,7 +301,8 @@ mod tests {
                     formulas: 0,
                     shapes: 0,
                     bytes: 0,
-                    rows: 0
+                    rows: 0,
+                    result_text: 0,
                 })
                 .is_ok()
         );
@@ -308,6 +313,7 @@ mod tests {
                 shapes: 0,
                 bytes: 0,
                 rows: 0,
+                result_text: 0,
             })
             .unwrap_err();
         assert!(matches!(error, ReadError::Unsafe(_)));
@@ -330,6 +336,7 @@ mod tests {
                     shapes: 0,
                     bytes: 0,
                     rows: 0,
+                    result_text: 0,
                 })
                 .is_ok()
         );
@@ -341,6 +348,7 @@ mod tests {
                     shapes: 0,
                     bytes: 0,
                     rows: 0,
+                    result_text: 0,
                 })
                 .is_err()
         );
@@ -358,6 +366,7 @@ mod tests {
                     shapes: 0,
                     bytes: supported - 99 * BYTES_PER_CELL,
                     rows: 0,
+                    result_text: 0,
                 })
                 .is_ok()
         );
@@ -369,6 +378,7 @@ mod tests {
                     shapes: 0,
                     bytes: supported - 99 * BYTES_PER_CELL + 1,
                     rows: 0,
+                    result_text: 0,
                 })
                 .is_err()
         );
@@ -380,6 +390,7 @@ mod tests {
                     shapes: 0,
                     bytes: 0,
                     rows: supported / ROW_BYTES,
+                    result_text: 0,
                 })
                 .is_ok()
         );
@@ -391,6 +402,7 @@ mod tests {
                     shapes: 0,
                     bytes: 0,
                     rows: supported / ROW_BYTES + 1,
+                    result_text: 0,
                 })
                 .is_err()
         );
@@ -409,6 +421,7 @@ mod tests {
             shapes: 0,
             bytes: 200 * 1024 * 1024,
             rows: 500_000,
+            result_text: 0,
         };
         assert!(CellBudget::from_budget_mb(9_752).check(usage).is_ok());
     }
@@ -422,6 +435,7 @@ mod tests {
             shapes: 0,
             bytes: 0,
             rows: 0,
+            result_text: 0,
         };
         assert!(budget.check_route(usage, Route::Streaming, None).is_ok());
         assert!(budget.check_route(usage, Route::Importer, None).is_err());
@@ -438,6 +452,7 @@ mod tests {
             shapes: 0,
             bytes: 0,
             rows: 0,
+            result_text: 0,
         };
         assert!(
             budget
@@ -465,6 +480,7 @@ mod tests {
             shapes: 0,
             bytes: 0,
             rows: 0,
+            result_text: 0,
         };
         for projection in [(10, 10), (5, 10), (40, 0)] {
             let error = budget
@@ -483,6 +499,7 @@ mod tests {
             shapes: 0,
             bytes: 1,
             rows: 1,
+            result_text: 0,
         };
         assert!(
             budget
@@ -500,6 +517,7 @@ mod tests {
             shapes: 0,
             bytes: 0,
             rows: 0,
+            result_text: 0,
         };
         let plain = budget.check_route(usage, Route::Streaming, None);
         let projected = budget.check_route(usage, Route::Streaming, Some((40, 10)));

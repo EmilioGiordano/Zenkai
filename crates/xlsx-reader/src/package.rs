@@ -15,6 +15,10 @@ use crate::stream::{Budgets, CompressedMeter, read_part, read_part_to_peek};
 // keeps each DOM near 128 MB at the importer's sixteen times.
 pub(crate) const PEEK_CAP_BYTES: u64 = 8 * 1024 * 1024;
 
+// Excel's limit, which it never writes past. Every error a formula caches holds its sheet's
+// name, so a longer one would multiply by the cells before the budget could charge them.
+const MAX_SHEET_NAME_CHARS: usize = 31;
+
 pub(crate) struct WorksheetPart {
     pub(crate) name: String,
     pub(crate) path: String,
@@ -59,6 +63,15 @@ fn unreadable(error: impl ToString) -> ReadError {
     ReadError::Unreadable(error.to_string())
 }
 
+fn check_sheet_name(name: &str) -> Result<(), ReadError> {
+    if name.chars().nth(MAX_SHEET_NAME_CHARS).is_some() {
+        return Err(unreadable(format!(
+            "a sheet name is longer than {MAX_SHEET_NAME_CHARS} characters"
+        )));
+    }
+    Ok(())
+}
+
 pub(crate) fn read_entry(
     entry: zip::read::ZipFile<'_>,
     meter: &CompressedMeter,
@@ -91,8 +104,10 @@ pub(crate) fn read_package<R: Read + Seek>(
             node.attribute(name)
                 .ok_or_else(|| unreadable("a sheet misses an attribute"))
         };
+        let name = attribute("name")?;
+        check_sheet_name(name)?;
         sheets.push(SheetEntry {
-            name: attribute("name")?.to_string(),
+            name: name.to_string(),
             hidden: matches!(node.attribute("state"), Some("hidden" | "veryHidden")),
             sheet_id: attribute("sheetId")?.parse::<u32>().map_err(unreadable)?,
             rel_id: node
@@ -186,7 +201,8 @@ pub(crate) fn read_package<R: Read + Seek>(
 
 // The parts IronCalc's importer loads as worksheets, with how many sheets load each,
 // found the way it finds them but tolerating what `read_package` refuses (two sheets on
-// one part, odd names, a missing attribute on a sheet the importer would reject anyway).
+// one part, a '!' in a name, a missing attribute on a sheet the importer would reject
+// anyway), except a sheet name past Excel's limit.
 // Counting a part too many is safe; missing one lets its cells in uncharged. The two
 // files are only peeked at: the walk reads and charges them afterwards. A file past the
 // cap is refused, since the sheets it names, and how often, could not be known; a file
@@ -204,9 +220,11 @@ pub(crate) fn importer_worksheet_paths<R: Read + Seek>(
         let Ok(workbook) = roxmltree::Document::parse(&workbook) else {
             return Ok(None);
         };
-        workbook
-            .descendants()
-            .filter(|n| n.has_tag_name("sheet"))
+        let sheets = || workbook.descendants().filter(|n| n.has_tag_name("sheet"));
+        for name in sheets().filter_map(|node| node.attribute("name")) {
+            check_sheet_name(name)?;
+        }
+        sheets()
             .filter_map(|node| {
                 node.attribute((
                     "http://schemas.openxmlformats.org/officeDocument/2006/relationships",

@@ -3,6 +3,7 @@
 mod assemble;
 mod base;
 mod diff;
+mod drawing_cells;
 mod formulas;
 mod layout;
 pub mod limits;
@@ -51,7 +52,7 @@ use crate::parallel::{Job, Open, ReadPlan, SheetStreams, SheetTask};
 use crate::sheet_stream::{StreamedSheet, Tuning, stream_config, stream_worksheet};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, read_part_if_checked};
 
-pub use stream::has_checked_element;
+pub use stream::{has_checked_element, start_tag_names};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {
@@ -1068,6 +1069,38 @@ mod tests {
         let workbook = workbook_of(&[("A!B", "rId1")]);
         let rels = rels_of(&[("rId1", "/data/s1.xml")]);
         assert!(archive_with_package(&workbook, &rels, "data/s1.xml"));
+    }
+
+    #[test]
+    fn a_sheet_name_up_to_excels_limit_is_read_and_a_longer_one_refused() {
+        for longest in ["N".repeat(31), "日".repeat(31)] {
+            let sheets = listed(&listing_archive(&[(longest.as_str(), "")], &[])).unwrap();
+            assert_eq!(sheets[0].name, longest);
+        }
+        let longer = "N".repeat(32);
+        let error = listed(&listing_archive(&[(longer.as_str(), "")], &[])).unwrap_err();
+        assert!(matches!(error, ReadError::Unreadable(_)), "{error}");
+    }
+
+    #[test]
+    fn the_fallback_walk_refuses_a_sheet_name_past_excels_limit() {
+        let longer = "N".repeat(32);
+        let workbook = workbook_of(&[(longer.as_str(), "rId1")]);
+        let rels = rels_of(&[("rId1", "/data/s1.xml")]);
+        let sheet = bare_cells(1);
+        let bytes = zipped(
+            &[
+                ("xl/workbook.xml", workbook.as_bytes()),
+                ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+                ("data/s1.xml", sheet.as_bytes()),
+            ],
+            false,
+        );
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(u64::MAX));
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
+        let error = scan_archive(&mut archive, &meter, &budgets, &|_, _| Ok(())).unwrap_err();
+        assert!(matches!(error, ReadError::Unreadable(_)), "{error}");
     }
 
     #[test]

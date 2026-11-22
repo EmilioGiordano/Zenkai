@@ -1,0 +1,174 @@
+use std::io::Write;
+use std::path::Path;
+
+use thiserror::Error;
+use zenkai_formats::{SheetValues, read_values};
+use zenkai_pdf_host::frame::{FrameError, write_frame};
+
+use crate::wire::{Failure, FailureKind, Message, TARGET_ROWS_BYTES, WireError, encode};
+
+#[derive(Debug, Error)]
+pub enum HostError {
+    #[error(transparent)]
+    Wire(#[from] WireError),
+    #[error(transparent)]
+    Frame(#[from] FrameError),
+    #[error("a row lies past the last row a block can address")]
+    RowOutOfRange,
+}
+
+// The client holds stdin open for the whole read and never writes to it, so its closing, on
+// purpose or because the app died, ends a host stuck in calamine instead of leaving it running.
+pub fn exit_when_stdin_closes() -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("values-host-watchdog".to_string())
+        .spawn(|| {
+            if let Err(error) = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink()) {
+                tracing::warn!(%error, "stdin failed; the app can no longer be heard");
+            }
+            std::process::exit(1);
+        })?;
+    Ok(())
+}
+
+// Read failures and calamine panics reach the client as a Failed frame; only a failure to
+// write the last frame is an error here.
+pub fn run(path: &Path, out: &mut impl Write) -> Result<(), HostError> {
+    let last = match read_values(path) {
+        Ok(sheets) => match send_sheets(sheets, out) {
+            Ok(()) => Message::Done,
+            Err(error) => Message::Failed(send_failure(&error)),
+        },
+        Err(error) => Message::Failed(Failure::from(&error)),
+    };
+    write_frame(out, &encode(&last, &[])?)?;
+    Ok(())
+}
+
+// A row or a sheet name too big for a frame is a workbook the reader cannot carry, which the
+// user is told as too large; nothing of the frame was written, so the stream stays valid.
+fn send_failure(error: &HostError) -> Failure {
+    let kind = match error {
+        HostError::Frame(FrameError::PayloadTooLarge(_) | FrameError::HeaderTooLarge(_)) => {
+            FailureKind::TooLarge
+        }
+        _ => FailureKind::Unreadable,
+    };
+    Failure {
+        kind,
+        detail: error.to_string(),
+    }
+}
+
+// Sheets are taken by value so each block is freed as soon as its frames are written.
+fn send_sheets(sheets: Vec<SheetValues>, out: &mut impl Write) -> Result<(), HostError> {
+    for SheetValues { name, blocks } in sheets {
+        write_frame(out, &encode(&Message::Sheet { name }, &[])?)?;
+        for block in blocks {
+            let mut start = 0;
+            while start < block.rows.len() {
+                let mut end = start;
+                let mut bytes = 0;
+                while end < block.rows.len() && (end == start || bytes < TARGET_ROWS_BYTES) {
+                    bytes += block.rows[end]
+                        .iter()
+                        .map(|cell| cell.len() + 3)
+                        .sum::<usize>();
+                    end += 1;
+                }
+                let first_row = u32::try_from(start)
+                    .ok()
+                    .and_then(|offset| block.first_row.checked_add(offset))
+                    .ok_or(HostError::RowOutOfRange)?;
+                let message = Message::Block {
+                    first_row,
+                    first_col: block.first_col,
+                };
+                write_frame(out, &encode(&message, &block.rows[start..end])?)?;
+                start = end;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use zenkai_formats::Block;
+    use zenkai_pdf_host::frame::read_frame;
+
+    use super::*;
+    use crate::wire::decode;
+
+    #[test]
+    fn a_frame_over_its_limit_is_reported_as_too_large() {
+        for error in [
+            FrameError::PayloadTooLarge(1),
+            FrameError::HeaderTooLarge(1),
+        ] {
+            assert_eq!(send_failure(&error.into()).kind, FailureKind::TooLarge);
+        }
+        let other = FrameError::BadMagic;
+        assert_eq!(send_failure(&other.into()).kind, FailureKind::Unreadable);
+    }
+
+    #[test]
+    fn a_sheet_name_over_the_header_limit_ends_in_a_too_large_failure() {
+        let sheets = vec![SheetValues {
+            name: "n".repeat(zenkai_pdf_host::frame::MAX_HEADER_BYTES + 1),
+            blocks: Vec::new(),
+        }];
+        let error = send_sheets(sheets, &mut Vec::new()).unwrap_err();
+        assert_eq!(send_failure(&error).kind, FailureKind::TooLarge);
+    }
+
+    #[test]
+    fn a_block_split_across_frames_sends_each_frame_at_its_own_row() {
+        let half = TARGET_ROWS_BYTES / 2;
+        let rows: Vec<Vec<String>> = ["a", "b", "c"]
+            .iter()
+            .map(|text| vec![text.repeat(half)])
+            .collect();
+        let sheets = vec![SheetValues {
+            name: "S".into(),
+            blocks: vec![Block {
+                first_row: 7,
+                first_col: 3,
+                rows: rows.clone(),
+            }],
+        }];
+        let mut out = Vec::new();
+        send_sheets(sheets, &mut out).unwrap();
+        let mut stream = out.as_slice();
+        let mut blocks = Vec::new();
+        while let Some(frame) = read_frame(&mut stream).unwrap() {
+            if let (
+                Message::Block {
+                    first_row,
+                    first_col,
+                },
+                sent,
+            ) = decode(&frame).unwrap()
+            {
+                blocks.push((first_row, first_col, sent));
+            }
+        }
+        let expected = vec![(7, 3, rows[..2].to_vec()), (9, 3, rows[2..].to_vec())];
+        assert_eq!(blocks, expected);
+    }
+
+    #[test]
+    fn a_block_past_the_last_row_fails_instead_of_wrapping() {
+        let sheets = vec![SheetValues {
+            name: "S".into(),
+            blocks: vec![Block {
+                first_row: u32::MAX,
+                first_col: 0,
+                rows: vec![vec!["x".repeat(TARGET_ROWS_BYTES)], vec!["y".into()]],
+            }],
+        }];
+        let error = send_sheets(sheets, &mut Vec::new()).unwrap_err();
+        assert!(matches!(error, HostError::RowOutOfRange));
+        assert_eq!(send_failure(&error).kind, FailureKind::Unreadable);
+    }
+}

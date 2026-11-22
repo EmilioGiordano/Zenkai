@@ -82,6 +82,7 @@ impl SheetCells {
         self.highest_style = self.highest_style.max(piece.highest_style);
         self.cell_count += piece.cell_count;
         self.job_bytes += taken.bytes;
+        self.result_text_bytes += piece.result_text_bytes;
         if piece.first_row != 0 {
             if self.first_row == 0 {
                 self.first_row = piece.first_row;

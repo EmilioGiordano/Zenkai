@@ -38,3 +38,22 @@ fn wrong_number_of_arguments() {
     assert_eq!(model._get_text("B1"), *"#ERROR!");
     assert_eq!(model._get_text("B2"), *"#ERROR!");
 }
+
+// With ignore_empty TRUE Excel skips empty texts as well as empty cells, so a cell holding
+// ="" adds no delimiter; with FALSE both add one.
+#[test]
+fn ignore_empty_skips_empty_texts() {
+    let mut model = new_empty_model();
+    model._set("A1", "a");
+    model._set("A2", "=\"\"");
+    model._set("A4", "b");
+    model._set("B1", "=TEXTJOIN(\",\", TRUE, \"a\", \"\", \"b\")");
+    model._set("B2", "=TEXTJOIN(\",\", TRUE, A1:A4)");
+    model._set("B3", "=TEXTJOIN(\",\", FALSE, A1:A4)");
+    model._set("B4", "=TEXTJOIN(\",\", FALSE, \"a\", \"\", \"b\")");
+    model.evaluate();
+    assert_eq!(model._get_text("B1"), "a,b");
+    assert_eq!(model._get_text("B2"), "a,b");
+    assert_eq!(model._get_text("B3"), "a,,,b");
+    assert_eq!(model._get_text("B4"), "a,,b");
+}

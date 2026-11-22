@@ -2,11 +2,15 @@
 
 mod baseline;
 mod compat;
+mod compat_kinds;
+mod compat_save;
 mod coverage;
 mod fixtures;
 mod ironcalc_run;
 mod logisheets_run;
 mod measure;
+#[path = "../../test-support/pixel_png.rs"]
+mod pixel_png;
 mod reader;
 mod save_losses;
 mod scale;
@@ -58,8 +62,13 @@ fn main() -> Result<()> {
         ["scale"] => scale::run(),
         ["scale-check", baseline, current] => scale::check(Path::new(baseline), Path::new(current)),
         ["scale-stage", args @ ..] => scale_stage::run(args),
+        ["scale-drawings", file] => scale_cases::write_drawings(
+            Path::new(file),
+            scale_cases::DRAWING_NOTES,
+            scale_cases::DRAWING_PICTURES,
+        ),
         _ => bail!(
-            "usage: zenkai-bench generate <dir> | measure <engine> <fixture file> <dir> | coverage | run <dir> [runs] | check <dir> <baseline.csv> <current.csv> [runs] | scale | scale-check <baseline.csv> <current.csv> | scale-stage <stage> ... | compat-generate <dir> | compat <dir> <report.md> | reader-bench <file.xlsx> [runs] | reader-probe <ironcalc|fast> <file.xlsx> | reader-compare <file or dir>..."
+            "usage: zenkai-bench generate <dir> | measure <engine> <fixture file> <dir> | coverage | run <dir> [runs] | check <dir> <baseline.csv> <current.csv> [runs] | scale | scale-check <baseline.csv> <current.csv> | scale-stage <stage> ... | scale-drawings <file.xlsx> | compat-generate <dir> | compat <dir> <report.md> | reader-bench <file.xlsx> [runs] | reader-probe <ironcalc|fast> <file.xlsx> | reader-compare <file or dir>..."
         ),
     }
 }

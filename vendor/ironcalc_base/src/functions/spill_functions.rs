@@ -152,7 +152,7 @@ impl<'a> Model<'a> {
     ) -> Result<Vec<Vec<ArrayNode>>, CalcResult> {
         let result = self.evaluate_node_in_context(node, cell);
         match result {
-            CalcResult::Range { left, right } => Ok(self.evaluate_range(left, right)),
+            CalcResult::Range { left, right } => self.evaluate_range(left, right, cell),
             CalcResult::Array(arr) => Ok(arr),
             CalcResult::Number(n) => Ok(vec![vec![ArrayNode::Number(n)]]),
             CalcResult::Boolean(b) => Ok(vec![vec![ArrayNode::Boolean(b)]]),

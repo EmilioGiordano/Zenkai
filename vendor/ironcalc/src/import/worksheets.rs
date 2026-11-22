@@ -26,7 +26,7 @@ use crate::error::XlsxError;
 
 use super::{
     conditional_formatting::load_conditional_formatting,
-    shared_strings::decode_xlsx_escapes,
+    shared_strings::{decode_xlsx_escapes, is_phonetic_run_text},
     tables::load_table,
     util::{get_attribute, get_bool_false, get_color, get_number},
 };
@@ -927,7 +927,7 @@ pub(super) fn load_sheet<R: Read + std::io::Seek>(
             } else {
                 let texts: Vec<String> = cell_rich_text_nodes[0]
                     .descendants()
-                    .filter(|n| n.has_tag_name("t"))
+                    .filter(|n| n.has_tag_name("t") && !is_phonetic_run_text(*n))
                     .filter_map(|n| n.text())
                     .map(|s| s.to_string())
                     .collect();

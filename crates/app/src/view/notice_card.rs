@@ -7,7 +7,7 @@ use zenkai_i18n::t;
 
 use super::Workspace;
 use super::notices::{Expiry, Notice, Severity, WARNING_LIFETIME};
-use crate::actions::{CopyNotice, DismissNotice, ShowMessages};
+use crate::actions::{CopyNotice, DismissNotice, ShowMessages, ShowWhatsNew, UpdateNow};
 use crate::interface_scale::rem_px;
 use crate::keymap;
 
@@ -102,6 +102,7 @@ impl Workspace {
                     let expiry = this.notices.expire_warning(id, held);
                     if expiry == Expiry::Closed {
                         this.notice_hovered = false;
+                        this.announce_shown_update(cx);
                         cx.notify();
                     }
                     expiry
@@ -121,6 +122,7 @@ impl Workspace {
         }
         let focused = self.notice_focus.contains_focused(window, cx);
         self.notices.dismiss_card();
+        self.announce_shown_update(cx);
         self.notice_hovered = false;
         if focused {
             window.focus(&self.grid.focus_handle(cx), cx);
@@ -157,7 +159,20 @@ impl Workspace {
             .set(self.notice_focus.contains_focused(window, cx));
         let theme = cx.theme();
         let (icon, color) = severity_icon(notice.severity, theme);
-        let title = severity_title(notice.severity);
+        let icon = Icon::new(icon).text_color(color);
+        let update_available = notice.is_update_available();
+        let title = if update_available {
+            SharedString::from(t!("update.title"))
+        } else {
+            severity_title(notice.severity)
+        };
+        #[cfg(windows)]
+        let (title, icon) =
+            super::update_cards::download_heading(notice.kind, theme, cx).unwrap_or((title, icon));
+        #[cfg(windows)]
+        let download_parts = super::update_cards::download_parts(notice.kind, cx);
+        #[cfg(not(windows))]
+        let download_parts: Vec<AnyElement> = Vec::new();
         Some(
             div()
                 .absolute()
@@ -192,7 +207,7 @@ impl Workspace {
                             h_flex()
                                 .gap_2()
                                 .items_center()
-                                .child(Icon::new(icon).text_color(color))
+                                .child(icon)
                                 .child(
                                     div()
                                         .flex_1()
@@ -253,7 +268,57 @@ impl Workspace {
                                         }),
                                 ),
                             )
-                        }),
+                        })
+                        .when(update_available, |card| {
+                            card.child(
+                                h_flex()
+                                    .justify_end()
+                                    .gap_2()
+                                    .child(
+                                        Button::new("update-whats-new")
+                                            .ghost()
+                                            .small()
+                                            .label(t!("whats_new.name"))
+                                            .tooltip(keymap::labeled(
+                                                cx,
+                                                t!("whats_new.name"),
+                                                &ShowWhatsNew,
+                                            ))
+                                            .on_click(|_, window, cx| {
+                                                window.dispatch_action(Box::new(ShowWhatsNew), cx)
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("update-later")
+                                            .ghost()
+                                            .small()
+                                            .label(t!("update.later"))
+                                            .tooltip(keymap::labeled(
+                                                cx,
+                                                t!("update.later"),
+                                                &DismissNotice,
+                                            ))
+                                            .on_click(|_, window, cx| {
+                                                window.dispatch_action(Box::new(DismissNotice), cx)
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("update-now")
+                                            .primary()
+                                            .small()
+                                            .label(t!("update.now"))
+                                            .tooltip(keymap::labeled(
+                                                cx,
+                                                t!("update.now"),
+                                                &UpdateNow,
+                                            ))
+                                            .on_click(|_, window, cx| {
+                                                window.dispatch_action(Box::new(UpdateNow), cx)
+                                            }),
+                                    ),
+                            )
+                        })
+                        .children(download_parts),
                 ),
         )
     }

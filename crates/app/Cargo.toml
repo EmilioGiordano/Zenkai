@@ -1,6 +1,6 @@
 [package]
 name = "zenkai"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -9,12 +9,18 @@ publish.workspace = true
 name = "zenkai"
 path = "src/main.rs"
 
+# Trusts the TEST update keys outside unit tests, for the full test between two versions.
+# Never enabled in a release build.
+[features]
+test-keys = []
+
 [dependencies]
 async-channel = "2"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 dirs = "=6.0.0"
 gpui-kit = "=0.7.1"
 image = { version = "=0.25.10", default-features = false }
+markdown = "=1.0.0"
 memory-stats = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -24,6 +30,8 @@ trash = "5.2"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ureq = { version = "=3.1.4", default-features = false, features = ["rustls"] }
+url = "2"
 zenkai-agent = { path = "../agent" }
 zenkai-datagen = { path = "../datagen" }
 zenkai-engine = { path = "../engine" }
@@ -31,20 +39,24 @@ zenkai-formats = { path = "../formats" }
 zenkai-grid = { path = "../grid" }
 zenkai-i18n = { path = "../i18n" }
 zenkai-pdf-host = { path = "../pdf-host", default-features = false }
+zenkai-values-host = { path = "../values-host" }
 zenkai-types = { path = "../types" }
 
 [target.'cfg(windows)'.dependencies]
 interprocess = "=2.4.4"
+minisign-verify = "=0.3.0"
 png = "=0.18.1"
 raw-window-handle = "=0.6.2"
 tray-icon = { version = "=0.26.1", default-features = false }
-winsafe = { version = "=0.0.19", default-features = false, features = ["user"] }
+winsafe = { version = "=0.0.29", default-features = false, features = ["advapi", "shell", "user"] }
+zip = { version = "=9.3.0", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.build-dependencies]
 embed-resource = "3"
 
 [dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
+rust_xlsxwriter = "0.103"
 tempfile = "3"
 
 [lints]

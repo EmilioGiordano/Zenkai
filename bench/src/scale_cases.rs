@@ -1,10 +1,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rust_xlsxwriter::{Color, Format, FormatAlign, FormatUnderline, Formula, Workbook};
+use rust_xlsxwriter::{
+    Chart, ChartType, Color, Format, FormatAlign, FormatUnderline, Formula, Image, Note, Workbook,
+};
 use zenkai_datagen::{
     ColumnKind, ColumnSpec, Gender, GenerationSpec, LastNameCount, Locale, Percent,
 };
+
+use crate::pixel_png::PIXEL_PNG;
 
 pub const CORPUS_ENV: &str = "ZENKAI_CORPUS_DIR";
 pub const SMALL_NAME: &str = "scale-small.xlsx";
@@ -12,14 +16,27 @@ pub const FULL_NAME: &str = "scale-full.xlsx";
 pub const SMALL_ROWS: u32 = 2_000;
 pub const FULL_ROWS: u32 = 200_000;
 pub const SEED: u64 = 0x5CA1E;
+pub const DRAWINGS_NAME: &str = "scale-drawings.xlsx";
+// At about 750 bytes of VML each, the notes drawing lands near the 16 MiB a drawing scan
+// reads on open.
+pub const DRAWING_NOTES: u32 = 20_000;
+pub const DRAWING_PICTURES: u32 = 5_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Synthetic {
+    // One sheet of this many rows (`write_synthetic`).
+    Rows(u32),
+    // Sheets of notes, pictures and a chart beside a data sheet (`write_drawings`).
+    Drawings,
+}
 
 pub struct Case {
     pub name: String,
     pub path: PathBuf,
     // Rows for the fill stage; zero means the fill stage does not run on this case.
     pub fill_rows: u32,
-    // Rows to generate when the case is synthetic; None opens an existing file.
-    pub synthetic_rows: Option<u32>,
+    // What to generate when the case is synthetic; None opens an existing file.
+    pub synthetic: Option<Synthetic>,
 }
 
 // Small synthetic always runs, even on CI. Full sizes and the private corpus run
@@ -28,8 +45,12 @@ pub fn discover(workdir: &Path) -> Result<(Vec<Case>, bool)> {
     let corpus = std::env::var_os(CORPUS_ENV).map(PathBuf::from);
     let (cases, full) = list_cases(workdir, corpus.as_deref())?;
     for case in &cases {
-        if let Some(rows) = case.synthetic_rows {
-            write_synthetic(&case.path, rows)?;
+        match case.synthetic {
+            Some(Synthetic::Rows(rows)) => write_synthetic(&case.path, rows)?,
+            Some(Synthetic::Drawings) => {
+                write_drawings(&case.path, DRAWING_NOTES, DRAWING_PICTURES)?;
+            }
+            None => {}
         }
     }
     Ok((cases, full))
@@ -40,13 +61,19 @@ fn list_cases(workdir: &Path, corpus: Option<&Path>) -> Result<(Vec<Case>, bool)
         name: name.to_string(),
         path: workdir.join(name),
         fill_rows: rows,
-        synthetic_rows: Some(rows),
+        synthetic: Some(Synthetic::Rows(rows)),
     };
     let mut cases = vec![synthetic(SMALL_NAME, SMALL_ROWS)];
     let Some(corpus) = corpus else {
         return Ok((cases, false));
     };
     cases.push(synthetic(FULL_NAME, FULL_ROWS));
+    cases.push(Case {
+        name: DRAWINGS_NAME.to_string(),
+        path: workdir.join(DRAWINGS_NAME),
+        fill_rows: 0,
+        synthetic: Some(Synthetic::Drawings),
+    });
     for file in corpus_files(corpus)? {
         cases.push(Case {
             name: file
@@ -55,7 +82,7 @@ fn list_cases(workdir: &Path, corpus: Option<&Path>) -> Result<(Vec<Case>, bool)
                 .unwrap_or_default(),
             path: file,
             fill_rows: 0,
-            synthetic_rows: None,
+            synthetic: None,
         });
     }
     Ok((cases, true))
@@ -153,6 +180,32 @@ pub fn write_synthetic(path: &Path, rows: u32) -> Result<()> {
     Ok(())
 }
 
+// Rows move on the data sheet; the other sheets hold what a move there keeps or drops.
+pub fn write_drawings(path: &Path, notes: u32, pictures: u32) -> Result<()> {
+    let mut book = Workbook::new();
+    let data = book.add_worksheet().set_name("Data")?;
+    for row in 0..SMALL_ROWS {
+        data.write_number(row, 0, f64::from(row))?;
+    }
+    let noted = book.add_worksheet().set_name("Notes")?;
+    for row in 0..notes {
+        noted.write_number(row, 0, f64::from(row))?;
+        noted.insert_note(row, 0, &Note::new(format!("Checked by reviewer {row}")))?;
+    }
+    let pictured = book.add_worksheet().set_name("Pictures")?;
+    let pixel = Image::new_from_buffer(&PIXEL_PNG)?;
+    for row in 0..pictures {
+        pictured.insert_image(row, 0, &pixel)?;
+    }
+    let charted = book.add_worksheet().set_name("Charted")?;
+    let mut chart = Chart::new(ChartType::Column);
+    let values = format!("Data!$A$1:$A${SMALL_ROWS}");
+    chart.add_series().set_values(&values);
+    charted.insert_chart(0, 0, &chart)?;
+    book.save(path)?;
+    Ok(())
+}
+
 fn distinct_formats(rows: u32) -> Vec<Format> {
     let bases = [
         Format::new().set_bold(),
@@ -176,6 +229,8 @@ fn distinct_formats(rows: u32) -> Vec<Format> {
 
 #[cfg(test)]
 mod tests {
+    use zenkai_engine::Engine;
+
     use super::*;
 
     #[test]
@@ -204,7 +259,7 @@ mod tests {
         assert!(!full);
         assert_eq!(cases.len(), 1);
         assert_eq!(cases[0].name, SMALL_NAME);
-        assert_eq!(cases[0].synthetic_rows, Some(SMALL_ROWS));
+        assert_eq!(cases[0].synthetic, Some(Synthetic::Rows(SMALL_ROWS)));
     }
 
     #[test]
@@ -218,8 +273,21 @@ mod tests {
         let (cases, full) = list_cases(dir.path(), Some(&corpus)).unwrap();
         assert!(full);
         let names: Vec<&str> = cases.iter().map(|case| case.name.as_str()).collect();
-        assert_eq!(names, [SMALL_NAME, FULL_NAME, "a.xlsx", "b.xlsx"]);
-        assert_eq!(cases[2].synthetic_rows, None);
-        assert_eq!(cases[2].fill_rows, 0);
+        assert_eq!(
+            names,
+            [SMALL_NAME, FULL_NAME, DRAWINGS_NAME, "a.xlsx", "b.xlsx"]
+        );
+        assert_eq!(cases[2].synthetic, Some(Synthetic::Drawings));
+        assert_eq!(cases[3].synthetic, None);
+        assert_eq!(cases[3].fill_rows, 0);
+    }
+
+    #[test]
+    fn the_drawings_workbook_opens_with_its_four_sheets() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("drawings.xlsx");
+        write_drawings(&path, 3, 2).unwrap();
+        let opened = zenkai_engine::open_xlsx(&path).unwrap();
+        assert_eq!(opened.workbook.sheets().len(), 4);
     }
 }

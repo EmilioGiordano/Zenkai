@@ -47,7 +47,9 @@ expect 1 "lint bad section order" "$dir/lint.sh" "feat: add pr scripts" "$fx/bad
 expect 1 "lint dot body" "$dir/lint.sh" "feat: add pr scripts" "$fx/dot-body.md"
 expect 1 "lint long body" "$dir/lint.sh" "feat: add pr scripts" "$fx/long-body.md"
 expect_output "missing '## Why'" "lint reports missing section" "$dir/lint.sh" "feat: x" "$fx/long-body.md"
-expect_output "Card" "lint reports missing card" "$dir/lint.sh" "feat: x" "$fx/long-body.md"
+expect 0 "lint accepts a body without a card" "$dir/lint.sh" "feat: add pr scripts" "$fx/good-body-no-card.md"
+expect 1 "lint rejects a malformed card" "$dir/lint.sh" "feat: add pr scripts" "$fx/bad-card-body.md"
+expect_output "Card line" "lint reports a malformed card" "$dir/lint.sh" "feat: x" "$fx/bad-card-body.md"
 
 expect 0 "review good" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"
 expect_output '"event": "COMMENT"' "review is COMMENT" "$dir/review.sh" --dry-run --files "$fx/pr-files.json" 5 "$fx/good-review.json"

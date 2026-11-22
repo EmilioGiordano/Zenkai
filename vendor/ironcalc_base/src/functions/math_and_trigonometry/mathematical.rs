@@ -150,11 +150,12 @@ impl<'a> Model<'a> {
         let min_length = if arg_count == 3 {
             match self.get_number(&args[2], cell) {
                 Ok(f) => {
-                    if f < 0.0 {
+                    // Excel allows a minimum length of at most 255; past it BASE is #NUM!.
+                    if f < 0.0 || f.trunc() > 255.0 {
                         return CalcResult::Error {
                             error: Error::NUM,
                             origin: cell,
-                            message: "Minimum length must be non-negative".to_string(),
+                            message: "Minimum length must be between 0 and 255".to_string(),
                         };
                     }
                     f.trunc() as usize

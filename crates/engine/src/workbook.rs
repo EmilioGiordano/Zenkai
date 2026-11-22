@@ -597,12 +597,7 @@ impl Workbook {
         book: ironcalc::base::types::Workbook,
     ) -> Result<Workbook, EngineError> {
         let model = engine_model(book)?;
-        Ok(evaluated(
-            model,
-            Carried::default(),
-            SavedSlot::default(),
-            Vec::new(),
-        ))
+        evaluated(model, Carried::default(), SavedSlot::default(), Vec::new())
     }
 
     // `settings` are by position among the file's worksheets, the order IronCalc loads them
@@ -625,7 +620,7 @@ impl Workbook {
                     .in_scope(|| crate::saved::opened(file, ModelData::of(&model), &carried)),
             );
         }
-        Ok(evaluated(model, carried, saved, opened.to_vec()))
+        evaluated(model, carried, saved, opened.to_vec())
     }
 
     fn sheet_id(&self, sheet: SheetId) -> Option<u32> {
@@ -2035,24 +2030,34 @@ pub fn format_preview(value: f64, code: &str) -> Result<String, EngineError> {
 }
 
 fn engine_model(book: ironcalc::base::types::Workbook) -> Result<Model<'static>, EngineError> {
-    Model::from_workbook(book, LANGUAGE).map_err(|error| {
-        if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
-            EngineError::TooLarge(error)
-        } else {
-            EngineError::InvalidFile(error)
-        }
-    })
+    Model::from_workbook(book, LANGUAGE).map_err(model_error)
 }
 
+fn model_error(error: String) -> EngineError {
+    if error.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX) {
+        EngineError::TooLarge(error)
+    } else {
+        EngineError::InvalidFile(error)
+    }
+}
+
+// The first evaluation can still refuse the file: the text its formulas return is only
+// known once evaluated. A refused model is dropped half evaluated, never shown.
 fn evaluated(
     model: Model<'static>,
     carried: Carried,
     saved: SavedSlot,
     opened: Vec<Unsupported>,
-) -> Workbook {
-    evaluated_user_model(UserModel::from_model(model), carried, saved, opened)
+) -> Result<Workbook, EngineError> {
+    let mut model = UserModel::from_model(model);
+    tracing::info_span!("open_evaluate")
+        .in_scope(|| model.evaluate_opened())
+        .map_err(model_error)?;
+    Ok(warmed(model, carried, saved, opened))
 }
 
+// A woken workbook held these results in memory when it was hibernated, so evaluating
+// it again is not charged to the open budget, and waking never refuses it for that.
 pub(crate) fn evaluated_user_model(
     mut model: UserModel<'static>,
     carried: Carried,
@@ -2060,6 +2065,15 @@ pub(crate) fn evaluated_user_model(
     opened: Vec<Unsupported>,
 ) -> Workbook {
     tracing::info_span!("open_evaluate").in_scope(|| model.evaluate());
+    warmed(model, carried, saved, opened)
+}
+
+fn warmed(
+    model: UserModel<'static>,
+    carried: Carried,
+    saved: SavedSlot,
+    opened: Vec<Unsupported>,
+) -> Workbook {
     let workbook = Workbook {
         model: CachedModel::new(model),
         carried,
@@ -2131,6 +2145,52 @@ mod tests {
         let message = format!("{BUDGET_REFUSAL_PREFIX}12.3 GB to open");
         let error = read_error(XlsxError::Workbook(message.clone()));
         assert!(matches!(&error, EngineError::TooLarge(text) if *text == message));
+    }
+
+    // A column of formulas returning a thousand characters each, without cached values.
+    fn long_text_book() -> ironcalc::base::types::Workbook {
+        use ironcalc::base::types::{Cell, FormulaValue};
+        let mut model = Model::new_empty("budget", LOCALE, "UTC", LANGUAGE).unwrap();
+        for row in 1..=100 {
+            model
+                .set_user_input(0, row, 1, format!("=REPT(\"x\",1000)&{row}"))
+                .unwrap();
+        }
+        let mut book = model.workbook;
+        for row in 1..=100 {
+            if let Some(Cell::CellFormula { v, .. }) = book.worksheets[0].sheet_data.get_mut(row, 1)
+            {
+                *v = FormulaValue::Unevaluated;
+            }
+        }
+        book
+    }
+
+    fn opened_within(budget: u64) -> Result<Workbook, EngineError> {
+        let book = long_text_book();
+        let model = Model::from_workbook_within(book, LANGUAGE, budget).map_err(model_error)?;
+        evaluated(model, Carried::default(), SavedSlot::default(), Vec::new())
+    }
+
+    #[test]
+    fn result_text_past_the_open_budget_refuses_the_file_as_too_large() {
+        use ironcalc::base::open_budget::{needed_bytes, open_cost};
+        let budget = needed_bytes(open_cost(&long_text_book()));
+        let error = opened_within(budget).map(|_| ()).unwrap_err();
+        assert!(
+            matches!(&error, EngineError::TooLarge(text) if text.starts_with(BUDGET_REFUSAL_PREFIX)),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn result_text_within_the_open_budget_opens_evaluated() {
+        let book = opened_within(u64::MAX).unwrap();
+        let pos = CellPos::parse_a1("A42").unwrap();
+        assert_eq!(
+            book.cell(SheetId(0), pos).text,
+            format!("{}42", "x".repeat(1000))
+        );
     }
 
     #[test]

@@ -91,6 +91,9 @@ fn formula() -> impl Strategy<Value = String> {
         1 => Just("=SUM(Sheet2!B:B)".to_string()),
         1 => Just("=SUMIF($A$1:$D$300,\">2\",$B$1:$E$300)".to_string()),
         1 => Just("=COUNTIF(Sheet2!$A$1:$D$300,\"<5\")".to_string()),
+        2 => range().prop_map(|r| format!("=CONCAT({r})")),
+        2 => range().prop_map(|r| format!("=TEXTJOIN(\",\",FALSE,{r})")),
+        1 => Just("=TEXTJOIN(\"-\",TRUE,Sheet2!A:D)".to_string()),
         2 => criteria_total(),
         2 => exact_lookup(),
     ]

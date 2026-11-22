@@ -14,12 +14,14 @@ pub fn column_to_number(column: &str) -> Result<i32, String> {
         return Err("Column identifier must be ASCII.".to_string());
     }
 
-    let mut column_number = 0;
+    let mut column_number: i32 = 0;
     for character in column.chars() {
         if !character.is_ascii_uppercase() {
             return Err("Column identifier can use only A-Z characters".to_string());
         }
-        column_number = column_number * 26 + ((character as i32) - 64);
+        column_number = column_number
+            .saturating_mul(26)
+            .saturating_add((character as i32) - 64);
     }
 
     match is_valid_column_number(column_number) {

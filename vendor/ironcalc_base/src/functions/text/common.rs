@@ -1,8 +1,9 @@
+use std::borrow::Cow;
+
 use crate::{
-    arithmetic::bcast_idx,
+    arithmetic::{bcast_idx, BYTES_PER_ELEMENT, MAX_TEXT_ARRAY_BYTES},
     calc_result::CalcResult,
     cast::{array_node_to_string, calc_result_to_array_node},
-    constants::{LAST_COLUMN, LAST_ROW},
     expressions::{
         parser::{ArrayNode, Node},
         token::Error,
@@ -10,11 +11,14 @@ use crate::{
     },
     formatter::format::{format_number, parse_formatted_number},
     functions::{
+        math_and_trigonometry::array_size::check_array_size,
         text::util::{substitute, text_after, text_before, Case},
         util::from_wildcard_to_regex,
     },
     model::Model,
     number_format::to_precision,
+    range_cells::{RangeCells, RangeWalk},
+    text_limit::{text_length, text_too_long, LimitedText, TextTooLong, MAX_TEXT_LENGTH},
 };
 
 /// A LEFT/RIGHT/MID argument: a single scalar value or a 2-D array of values.
@@ -59,36 +63,71 @@ fn text_num_arg(node: &ArrayNode) -> Result<f64, Error> {
     }
 }
 
+// The text of an element, borrowed when it is one: a long text cut from a million times must
+// not be copied a million times.
+fn element_text(node: &ArrayNode) -> Result<Cow<'_, str>, Error> {
+    match node {
+        ArrayNode::String(text) => Ok(Cow::Borrowed(text)),
+        other => array_node_to_string(other).map(Cow::Owned),
+    }
+}
+
+fn end_of_chars(text: &str, count: usize) -> usize {
+    text.char_indices()
+        .nth(count)
+        .map_or(text.len(), |(index, _)| index)
+}
+
+// A LEFT, RIGHT or MID result and the bytes of text walked to find it, the result included,
+// which a broadcast charges to its budget.
+struct Cut {
+    text: String,
+    walked: usize,
+}
+
 /// Computes a single LEFT result from one element of each argument.
-fn left_element(text: Option<&ArrayNode>, num: Option<&ArrayNode>) -> Result<ArrayNode, Error> {
+fn left_element(text: Option<&ArrayNode>, num: Option<&ArrayNode>) -> Result<Cut, Error> {
     let (text, num) = match (text, num) {
         (Some(t), Some(n)) => (t, n),
         // A broadcast hole (incompatible dimensions) yields #N/A, as in Excel.
         _ => return Err(Error::NA),
     };
-    let s = array_node_to_string(text)?;
+    let s = element_text(text)?;
     let num = text_num_arg(num)?;
     if num < 0.0 {
         return Err(Error::VALUE);
     }
-    let num_chars = num.floor() as usize;
-    Ok(ArrayNode::String(s.chars().take(num_chars).collect()))
+    let end = end_of_chars(&s, num.floor() as usize);
+    Ok(Cut {
+        text: s[..end].to_string(),
+        walked: end,
+    })
 }
 
 /// Computes a single RIGHT result from one element of each argument.
-fn right_element(text: Option<&ArrayNode>, num: Option<&ArrayNode>) -> Result<ArrayNode, Error> {
+fn right_element(text: Option<&ArrayNode>, num: Option<&ArrayNode>) -> Result<Cut, Error> {
     let (text, num) = match (text, num) {
         (Some(t), Some(n)) => (t, n),
         _ => return Err(Error::NA),
     };
-    let s = array_node_to_string(text)?;
+    let s = element_text(text)?;
     let num = text_num_arg(num)?;
     if num < 0.0 {
         return Err(Error::VALUE);
     }
     let num_chars = num.floor() as usize;
-    let skip = s.chars().count().saturating_sub(num_chars);
-    Ok(ArrayNode::String(s.chars().skip(skip).collect()))
+    let start = match num_chars.checked_sub(1) {
+        Some(last) => s
+            .char_indices()
+            .rev()
+            .nth(last)
+            .map_or(0, |(index, _)| index),
+        None => s.len(),
+    };
+    Ok(Cut {
+        text: s[start..].to_string(),
+        walked: s.len() - start,
+    })
 }
 
 /// Computes a single MID result from one element of each argument.
@@ -96,12 +135,12 @@ fn mid_element(
     text: Option<&ArrayNode>,
     start: Option<&ArrayNode>,
     length: Option<&ArrayNode>,
-) -> Result<ArrayNode, Error> {
+) -> Result<Cut, Error> {
     let (text, start, length) = match (text, start, length) {
         (Some(t), Some(s), Some(l)) => (t, s, l),
         _ => return Err(Error::NA),
     };
-    let s = array_node_to_string(text)?;
+    let s = element_text(text)?;
     let start = text_num_arg(start)?;
     let length = text_num_arg(length)?;
     if start < 1.0 {
@@ -110,20 +149,12 @@ fn mid_element(
     if length < 0.0 {
         return Err(Error::VALUE);
     }
-    let start_num = start.floor() as usize;
-    let num_chars = length.floor() as usize;
-    let mut result = String::new();
-    let mut count: usize = 0;
-    for (index, ch) in s.chars().enumerate() {
-        if count >= num_chars {
-            break;
-        }
-        if index + 1 >= start_num {
-            result.push(ch);
-            count += 1;
-        }
-    }
-    Ok(ArrayNode::String(result))
+    let begin = end_of_chars(&s, (start.floor() as usize).saturating_sub(1));
+    let end = begin + end_of_chars(&s[begin..], length.floor() as usize);
+    Ok(Cut {
+        text: s[begin..end].to_string(),
+        walked: end,
+    })
 }
 
 /// Broadcasts `compute` over the (possibly array) `operands`. When every operand
@@ -132,32 +163,58 @@ fn mid_element(
 fn broadcast_text(
     cell: CellReferenceIndex,
     operands: &[&TextArg],
-    compute: impl Fn(usize, usize) -> Result<ArrayNode, Error>,
+    compute: impl Fn(usize, usize) -> Result<Cut, Error>,
 ) -> CalcResult {
     let mut rows = 1;
     let mut cols = 1;
+    let mut largest_operand = 1;
     for operand in operands {
         let (r, c) = operand.dims();
         rows = rows.max(r);
         cols = cols.max(c);
+        largest_operand = largest_operand.max(r * c);
     }
 
     // All scalars: return a single value.
     if rows <= 1 && cols <= 1 {
         return match compute(0, 0) {
-            Ok(ArrayNode::String(s)) => CalcResult::String(s),
-            Ok(ArrayNode::Number(n)) => CalcResult::Number(n),
-            Ok(ArrayNode::Boolean(b)) => CalcResult::Boolean(b),
-            Ok(ArrayNode::Empty) => CalcResult::String(String::new()),
-            Ok(ArrayNode::Error(e)) | Err(e) => CalcResult::new_error(e, cell, String::new()),
+            Ok(cut) => CalcResult::String(cut.text),
+            Err(e) => CalcResult::new_error(e, cell, String::new()),
         };
     }
 
+    // A row broadcast against a column holds more elements than any operand. It is limited as
+    // SEQUENCE is, with the #VALUE! of `&`, as #ERROR! is not an xlsx error value.
+    if rows.saturating_mul(cols) > largest_operand {
+        if let Some((_, message)) = check_array_size(rows, cols) {
+            return CalcResult::new_error(Error::VALUE, cell, message);
+        }
+    }
+
+    // Even within that size, a long text repeated over a large operand would hold gigabytes,
+    // or be walked billions of times, so the result stops at the bytes `&` allows an array,
+    // the text walked for each element counted with it, a limit Excel does not have.
+    let mut bytes: usize = 0;
     let mut result = Vec::with_capacity(rows);
     for i in 0..rows {
         let mut data_row = Vec::with_capacity(cols);
         for j in 0..cols {
-            data_row.push(compute(i, j).unwrap_or_else(ArrayNode::Error));
+            bytes += BYTES_PER_ELEMENT;
+            let node = match compute(i, j) {
+                Ok(cut) => {
+                    bytes += cut.walked;
+                    ArrayNode::String(cut.text)
+                }
+                Err(error) => ArrayNode::Error(error),
+            };
+            if bytes > MAX_TEXT_ARRAY_BYTES {
+                return CalcResult::new_error(
+                    Error::VALUE,
+                    cell,
+                    format!("Array of texts larger than {MAX_TEXT_ARRAY_BYTES} bytes"),
+                );
+            }
+            data_row.push(node);
         }
         result.push(data_row);
     }
@@ -203,19 +260,15 @@ fn search(search_for: &str, text: &str, start: usize) -> Option<i32> {
 
 impl<'a> Model<'a> {
     pub(crate) fn fn_concat(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
-        let mut result = "".to_string();
+        let mut result = LimitedText::default();
         for arg in args {
             match self.evaluate_node_in_context(arg, cell) {
-                CalcResult::String(value) => result = format!("{result}{value}"),
-                CalcResult::Number(value) => result = format!("{result}{value}"),
+                CalcResult::String(value) => result.push(&value),
+                // Once the text is too long only an error argument still matters.
+                CalcResult::Number(_) if result.is_too_long() => {}
+                CalcResult::Number(value) => result.push(&format!("{value}")),
                 CalcResult::EmptyCell | CalcResult::EmptyArg => {}
-                CalcResult::Boolean(value) => {
-                    if value {
-                        result = format!("{result}TRUE");
-                    } else {
-                        result = format!("{result}FALSE");
-                    }
-                }
+                CalcResult::Boolean(value) => result.push(if value { "TRUE" } else { "FALSE" }),
                 error @ CalcResult::Error { .. } => return error,
                 CalcResult::Range { left, right } => {
                     if left.sheet != right.sheet {
@@ -225,33 +278,26 @@ impl<'a> Model<'a> {
                             "Ranges are in different sheets".to_string(),
                         );
                     }
-                    for row in left.row..(right.row + 1) {
-                        for column in left.column..(right.column + 1) {
-                            match self.evaluate_cell(CellReferenceIndex {
-                                sheet: left.sheet,
-                                row,
-                                column,
-                            }) {
-                                CalcResult::String(value) => {
-                                    result = format!("{result}{value}");
-                                }
-                                CalcResult::Number(value) => result = format!("{result}{value}"),
-                                CalcResult::Boolean(value) => {
-                                    if value {
-                                        result = format!("{result}TRUE");
-                                    } else {
-                                        result = format!("{result}FALSE");
-                                    }
-                                }
-                                error @ CalcResult::Error { .. } => return error,
-                                CalcResult::EmptyCell | CalcResult::EmptyArg => {}
-                                CalcResult::Range { .. } => {}
-                                CalcResult::Array(_) | CalcResult::Lambda(_) => {
-                                    return CalcResult::Error {
-                                        error: Error::NIMPL,
-                                        origin: cell,
-                                        message: "Arrays not supported yet".to_string(),
-                                    }
+                    let mut cells = match RangeCells::new(self, left, right, cell) {
+                        Ok(cells) => cells,
+                        Err(error) => return error,
+                    };
+                    while let Some(reference) = cells.next(self, RangeWalk::Occupied) {
+                        match self.evaluate_cell(reference) {
+                            CalcResult::String(value) => result.push(&value),
+                            CalcResult::Number(_) if result.is_too_long() => {}
+                            CalcResult::Number(value) => result.push(&format!("{value}")),
+                            CalcResult::Boolean(value) => {
+                                result.push(if value { "TRUE" } else { "FALSE" })
+                            }
+                            error @ CalcResult::Error { .. } => return error,
+                            CalcResult::EmptyCell | CalcResult::EmptyArg => {}
+                            CalcResult::Range { .. } => {}
+                            CalcResult::Array(_) | CalcResult::Lambda(_) => {
+                                return CalcResult::Error {
+                                    error: Error::NIMPL,
+                                    origin: cell,
+                                    message: "Arrays not supported yet".to_string(),
                                 }
                             }
                         }
@@ -266,7 +312,10 @@ impl<'a> Model<'a> {
                 }
             };
         }
-        CalcResult::String(result)
+        match result.into_string() {
+            Ok(text) => CalcResult::String(text),
+            Err(TextTooLong) => text_too_long(cell),
+        }
     }
     pub(crate) fn fn_text(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {
         use crate::expressions::parser::ArrayNode;
@@ -276,9 +325,10 @@ impl<'a> Model<'a> {
         let value_result = self.evaluate_node_in_context(&args[0], cell);
         // Normalise a range to an array so both broadcast (spill) the same way.
         let value_result = match value_result {
-            CalcResult::Range { left, right } => {
-                CalcResult::Array(self.evaluate_range(left, right))
-            }
+            CalcResult::Range { left, right } => match self.evaluate_range(left, right, cell) {
+                Ok(array) => CalcResult::Array(array),
+                Err(error) => return error,
+            },
             other => other,
         };
         match value_result {
@@ -646,7 +696,7 @@ impl<'a> Model<'a> {
         match self.evaluate_node_in_context(node, cell) {
             err @ CalcResult::Error { .. } => Err(err),
             CalcResult::Range { left, right } => {
-                Ok(TextArg::Array(self.evaluate_range(left, right)))
+                Ok(TextArg::Array(self.evaluate_range(left, right, cell)?))
             }
             CalcResult::Array(a) => Ok(TextArg::Array(a)),
             CalcResult::Lambda(_) => Err(CalcResult::new_error(
@@ -734,11 +784,13 @@ impl<'a> Model<'a> {
             Ok(f) => f.floor() as i32,
             Err(s) => return s,
         };
-        let text_len = text.len() as i32;
+        // In i64: an i32 product overflows for a long text, and would let its result past
+        // the limit.
+        let text_len = text.len() as i64;
 
         // We normally don't follow Excel's sometimes archaic size's restrictions
         // But this might be a security issue
-        if text_len * number_times > 32767 {
+        if text_len * number_times as i64 > 32767 {
             return CalcResult::Error {
                 error: Error::VALUE,
                 origin: cell,
@@ -983,10 +1035,27 @@ impl<'a> Model<'a> {
             Ok(b) => b,
             Err(error) => return error,
         };
-        let mut values = Vec::new();
+        let mut joined = LimitedText::default();
+        let mut is_first = true;
+        let mut join = |joined: &mut LimitedText, value: &str| {
+            if !is_first {
+                joined.push(&delimiter);
+            }
+            is_first = false;
+            joined.push(value);
+        };
+        // An empty cell adds only a delimiter to the text, and nothing once it is too long.
+        let walk = |joined: &LimitedText| {
+            if ignore_empty || delimiter.is_empty() || joined.is_too_long() {
+                RangeWalk::Occupied
+            } else {
+                RangeWalk::Every
+            }
+        };
         for arg in &args[2..] {
             match self.evaluate_node_in_context(arg, cell) {
-                CalcResult::Number(value) => values.push(format!("{value}")),
+                CalcResult::Number(_) if joined.is_too_long() => {}
+                CalcResult::Number(value) => join(&mut joined, &format!("{value}")),
                 CalcResult::Range { left, right } => {
                     if left.sheet != right.sheet {
                         return CalcResult::new_error(
@@ -995,84 +1064,42 @@ impl<'a> Model<'a> {
                             "Ranges are in different sheets".to_string(),
                         );
                     }
-                    let row1 = left.row;
-                    let mut row2 = right.row;
-                    let column1 = left.column;
-                    let mut column2 = right.column;
-                    if row1 == 1 && row2 == LAST_ROW {
-                        row2 = match self.workbook.worksheet(left.sheet) {
-                            Ok(s) => s.dimension().max_row,
-                            Err(_) => {
-                                return CalcResult::new_error(
-                                    Error::ERROR,
-                                    cell,
-                                    format!("Invalid worksheet index: '{}'", left.sheet),
-                                );
+                    let mut cells = match RangeCells::new(self, left, right, cell) {
+                        Ok(cells) => cells,
+                        Err(error) => return error,
+                    };
+                    while let Some(reference) = cells.next(self, walk(&joined)) {
+                        match self.evaluate_cell(reference) {
+                            CalcResult::Number(_) if joined.is_too_long() => {}
+                            CalcResult::Number(value) => join(&mut joined, &format!("{value}")),
+                            CalcResult::String(value) if ignore_empty && value.is_empty() => {}
+                            CalcResult::String(value) => join(&mut joined, &value),
+                            CalcResult::Boolean(value) => {
+                                join(&mut joined, if value { "TRUE" } else { "FALSE" })
                             }
-                        };
-                    }
-                    if column1 == 1 && column2 == LAST_COLUMN {
-                        column2 = match self.workbook.worksheet(left.sheet) {
-                            Ok(s) => s.dimension().max_column,
-                            Err(_) => {
-                                return CalcResult::new_error(
-                                    Error::ERROR,
-                                    cell,
-                                    format!("Invalid worksheet index: '{}'", left.sheet),
-                                );
-                            }
-                        };
-                    }
-                    for row in row1..row2 + 1 {
-                        for column in column1..(column2 + 1) {
-                            match self.evaluate_cell(CellReferenceIndex {
-                                sheet: left.sheet,
-                                row,
-                                column,
-                            }) {
-                                CalcResult::Number(value) => {
-                                    values.push(format!("{value}"));
-                                }
-                                CalcResult::String(value) => values.push(value),
-                                CalcResult::Boolean(value) => {
-                                    if value {
-                                        values.push("TRUE".to_string())
-                                    } else {
-                                        values.push("FALSE".to_string())
-                                    }
-                                }
-                                CalcResult::EmptyCell => {
-                                    if !ignore_empty {
-                                        values.push("".to_string())
-                                    }
-                                }
-                                error @ CalcResult::Error { .. } => return error,
-                                CalcResult::EmptyArg | CalcResult::Range { .. } => {}
-                                CalcResult::Array(_) | CalcResult::Lambda(_) => {
-                                    return CalcResult::Error {
-                                        error: Error::NIMPL,
-                                        origin: cell,
-                                        message: "Arrays not supported yet".to_string(),
-                                    }
+                            CalcResult::EmptyCell if ignore_empty => {}
+                            CalcResult::EmptyCell => join(&mut joined, ""),
+                            error @ CalcResult::Error { .. } => return error,
+                            CalcResult::EmptyArg | CalcResult::Range { .. } => {}
+                            CalcResult::Array(_) | CalcResult::Lambda(_) => {
+                                return CalcResult::Error {
+                                    error: Error::NIMPL,
+                                    origin: cell,
+                                    message: "Arrays not supported yet".to_string(),
                                 }
                             }
                         }
                     }
                 }
                 error @ CalcResult::Error { .. } => return error,
-                CalcResult::String(value) => values.push(value),
+                // Excel's ignore_empty skips empty texts too, not only empty cells.
+                CalcResult::String(value) if ignore_empty && value.is_empty() => {}
+                CalcResult::String(value) => join(&mut joined, &value),
                 CalcResult::Boolean(value) => {
-                    if value {
-                        values.push("TRUE".to_string())
-                    } else {
-                        values.push("FALSE".to_string())
-                    }
+                    join(&mut joined, if value { "TRUE" } else { "FALSE" })
                 }
-                CalcResult::EmptyCell => {
-                    if !ignore_empty {
-                        values.push("".to_string())
-                    }
-                }
+                CalcResult::EmptyCell if ignore_empty => {}
+                CalcResult::EmptyCell => join(&mut joined, ""),
                 CalcResult::EmptyArg => {}
                 CalcResult::Array(_) | CalcResult::Lambda(_) => {
                     return CalcResult::Error {
@@ -1083,8 +1110,10 @@ impl<'a> Model<'a> {
                 }
             };
         }
-        let result = values.join(&delimiter);
-        CalcResult::String(result)
+        match joined.into_string() {
+            Ok(text) => CalcResult::String(text),
+            Err(TextTooLong) => text_too_long(cell),
+        }
     }
 
     // SUBSTITUTE(text, old_text, new_text, [instance_num])
@@ -1125,10 +1154,22 @@ impl<'a> Model<'a> {
             if old_text.is_empty() {
                 return CalcResult::String(text);
             }
-            CalcResult::String(substitute(&text, &old_text, &new_text, num))
+            // At most the length of its operands together, so it is measured once built.
+            let result = substitute(&text, &old_text, &new_text, num);
+            if text_length(&result) > MAX_TEXT_LENGTH {
+                return text_too_long(cell);
+            }
+            CalcResult::String(result)
         } else {
             if old_text.is_empty() {
                 return CalcResult::String(text);
+            }
+            // Measured before it is built: every occurrence can add the whole of new_text.
+            let occurrences = text.matches(old_text.as_str()).count();
+            let length = (text_length(&text) - occurrences * text_length(&old_text))
+                .saturating_add(occurrences.saturating_mul(text_length(&new_text)));
+            if length > MAX_TEXT_LENGTH {
+                return text_too_long(cell);
             }
             CalcResult::String(text.replace(&old_text, &new_text))
         }
@@ -1138,15 +1179,18 @@ impl<'a> Model<'a> {
         if arg_count == 0 {
             return CalcResult::new_args_number_error(cell);
         }
-        let mut text_array = Vec::new();
+        let mut result = LimitedText::default();
         for arg in args {
             let text = match self.get_string(arg, cell) {
                 Ok(s) => s,
                 Err(error) => return error,
             };
-            text_array.push(text)
+            result.push(&text);
         }
-        CalcResult::String(text_array.join(""))
+        match result.into_string() {
+            Ok(text) => CalcResult::String(text),
+            Err(TextTooLong) => text_too_long(cell),
+        }
     }
 
     pub(crate) fn fn_exact(&mut self, args: &[Node], cell: CellReferenceIndex) -> CalcResult {

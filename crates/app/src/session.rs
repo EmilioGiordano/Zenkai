@@ -175,7 +175,7 @@ impl Session {
     }
 }
 
-const ALL_UNSUPPORTED: [Unsupported; 13] = [
+const ALL_UNSUPPORTED: [Unsupported; 26] = [
     Unsupported::Charts,
     Unsupported::Images,
     Unsupported::PivotTables,
@@ -189,6 +189,19 @@ const ALL_UNSUPPORTED: [Unsupported; 13] = [
     Unsupported::SheetProtection,
     Unsupported::Outline,
     Unsupported::PageBreaks,
+    Unsupported::Sparklines,
+    Unsupported::ExtendedConditionalFormats,
+    Unsupported::Slicers,
+    Unsupported::CustomViews,
+    Unsupported::Phonetic,
+    Unsupported::Scenarios,
+    Unsupported::CellWatches,
+    Unsupported::Connections,
+    Unsupported::QueryTables,
+    Unsupported::CustomXml,
+    Unsupported::DataModel,
+    Unsupported::WorkbookProtection,
+    Unsupported::PrinterSettings,
 ];
 
 fn unsupported_code(unsupported: Unsupported) -> &'static str {
@@ -206,6 +219,19 @@ fn unsupported_code(unsupported: Unsupported) -> &'static str {
         Unsupported::SheetProtection => "sheet-protection",
         Unsupported::Outline => "outline",
         Unsupported::PageBreaks => "page-breaks",
+        Unsupported::Sparklines => "sparklines",
+        Unsupported::ExtendedConditionalFormats => "extended-conditional-formats",
+        Unsupported::Slicers => "slicers",
+        Unsupported::CustomViews => "custom-views",
+        Unsupported::Phonetic => "phonetic",
+        Unsupported::Scenarios => "scenarios",
+        Unsupported::CellWatches => "cell-watches",
+        Unsupported::Connections => "connections",
+        Unsupported::QueryTables => "query-tables",
+        Unsupported::CustomXml => "custom-xml",
+        Unsupported::DataModel => "data-model",
+        Unsupported::WorkbookProtection => "workbook-protection",
+        Unsupported::PrinterSettings => "printer-settings",
     }
 }
 
@@ -273,8 +299,13 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
                     .stamp
                     .map_or(rested.file.at, |stamp| stamp.modified())
             })
-            // serde cannot write a time before 1970; such a file restores unguarded instead.
-            .filter(|modified| modified.duration_since(SystemTime::UNIX_EPOCH).is_ok()),
+            // serde cannot write a time before 1970, and the epoch itself means unknown: both
+            // restore unguarded, so Save asks.
+            .filter(|modified| {
+                modified
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .is_ok_and(|since| !since.is_zero())
+            }),
         pdf: link.pdf,
         text_zoom: link.text_zoom,
         unsupported: link

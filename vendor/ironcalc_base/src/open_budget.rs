@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
-use crate::types::{Cell, Workbook};
+use crate::types::{Cell, FormulaValue, SpillValue, Workbook};
+use crate::Model;
 
 // Streaming-route costs, fitted on 2026-10-14 to `measure_open --app` (release, allocator
 // peak; committed memory is 3-6% above it) over generated matrix shapes and real files:
@@ -14,6 +15,9 @@ pub const BYTES_PER_CELL: u64 = 70;
 // Extra per formula cell over a value cell, its evaluated result included: the formula
 // returning 200 characters sets it, the lookups alone would need 110-140 B.
 pub const BYTES_PER_FORMULA: u64 = 240;
+// The result text BYTES_PER_FORMULA pays for, as it was fitted on 200-character results;
+// text past it, cached or evaluated, is charged at the 1.2x margin of every other cost.
+pub const TEXT_BYTES_PER_FORMULA: u64 = 200;
 // Extra per distinct formula shape over its text: its key while reading and its parsed
 // tree in the model, fitted on 628,902 distinct shapes in 859,659 formula cells.
 pub const BYTES_PER_SHAPE: u64 = 450;
@@ -44,6 +48,7 @@ pub struct OpenCost {
     pub shapes: u64,
     pub rows: u64,
     pub bytes: u64,
+    pub result_text: u64,
 }
 
 pub fn open_cost(book: &Workbook) -> OpenCost {
@@ -52,6 +57,7 @@ pub fn open_cost(book: &Workbook) -> OpenCost {
         cost.rows += sheet.sheet_data.row_count() as u64;
         for (_, _, cell) in sheet.sheet_data.iter() {
             cost.cells += 1;
+            cost.result_text += cell_text_bytes(cell);
             if matches!(cell, Cell::CellFormula { .. } | Cell::ArrayFormula { .. }) {
                 cost.formulas += 1;
             }
@@ -74,6 +80,7 @@ pub fn needed_bytes(cost: OpenCost) -> u64 {
         .saturating_add(cost.shapes.saturating_mul(BYTES_PER_SHAPE))
         .saturating_add(cost.bytes)
         .saturating_add(cost.rows.saturating_mul(BYTES_PER_ROW))
+        .saturating_add(result_text_past_allowance(cost))
 }
 
 pub fn importer_needed_bytes(cost: OpenCost) -> u64 {
@@ -82,6 +89,14 @@ pub fn importer_needed_bytes(cost: OpenCost) -> u64 {
         .saturating_add(cost.formulas.saturating_mul(IMPORTER_BYTES_PER_FORMULA))
         .saturating_add(cost.bytes)
         .saturating_add(cost.rows.saturating_mul(IMPORTER_BYTES_PER_ROW))
+        .saturating_add(result_text_past_allowance(cost))
+}
+
+fn result_text_past_allowance(cost: OpenCost) -> u64 {
+    cost.result_text
+        .saturating_sub(cost.formulas.saturating_mul(TEXT_BYTES_PER_FORMULA))
+        .saturating_mul(6)
+        .div_ceil(5)
 }
 
 pub fn describe_bytes(bytes: u64) -> String {
@@ -165,10 +180,479 @@ pub fn check_open_budget(book: &Workbook) -> Result<(), String> {
     check_with_budget(book, production_budget_bytes())
 }
 
+// The estimate and budget a workbook passed when its model was built, kept until its first
+// evaluation, which is the only one that can still refuse it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OpenAllowance {
+    cost: OpenCost,
+    budget_bytes: u64,
+}
+
+impl OpenAllowance {
+    pub(crate) fn checked(book: &Workbook, budget_bytes: u64) -> Result<OpenAllowance, String> {
+        let cost = open_cost(book);
+        check_cost(cost, budget_bytes)?;
+        Ok(OpenAllowance { cost, budget_bytes })
+    }
+
+    // Headroom buys text at the 1.2x margin; the text cells already hold used its share of
+    // the formulas' allowance, so what is left plus what is held never exceeds the charge.
+    fn result_text_bytes(self) -> u64 {
+        let headroom = self.budget_bytes.saturating_sub(needed_bytes(self.cost));
+        self.cost
+            .formulas
+            .saturating_mul(TEXT_BYTES_PER_FORMULA)
+            .saturating_sub(self.cost.result_text)
+            .saturating_add(headroom.saturating_mul(5) / 6)
+    }
+
+    // The evaluation stops at the first result past the budget, so all that is known of
+    // the need is that it is above the allowance.
+    fn refusal(self) -> String {
+        refusal(
+            self.cost,
+            self.budget_bytes.saturating_add(1),
+            self.budget_bytes,
+        )
+    }
+}
+
+// What result text the first evaluation of an opened workbook may still add, which the
+// estimate cannot know before evaluating. Charged by growth over what each cell held: the
+// estimate charged the values a file caches, so they are not charged again. Unbounded in
+// every other evaluation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ResultText {
+    #[default]
+    Unbounded,
+    Left(u64),
+    Spent,
+}
+
+// The pool counts bytes with the 1.2x margin already taken off, while these per cell and
+// per row costs include it.
+const ADDED_CELL_BYTES: u64 = BYTES_PER_CELL * 5 / 6;
+const ADDED_ROW_BYTES: u64 = BYTES_PER_ROW * 5 / 6;
+
+impl ResultText {
+    // `old` is only looked up while a budget is armed, so other evaluations pay nothing. A
+    // cell written where none was, as a spill writes, costs what the estimate charges a
+    // cell read from the file.
+    pub(crate) fn replace<'c>(&mut self, old: impl FnOnce() -> Option<&'c Cell>, new: &Cell) {
+        if !self.is_armed() {
+            return;
+        }
+        match old() {
+            Some(old) => {
+                let (old, new) = (cell_text_bytes(old), cell_text_bytes(new));
+                if new <= old {
+                    self.refund(old - new);
+                } else {
+                    self.charge(new - old);
+                }
+            }
+            None => self.charge(cell_text_bytes(new) + ADDED_CELL_BYTES),
+        }
+    }
+
+    pub(crate) fn add_row(&mut self) {
+        self.charge(ADDED_ROW_BYTES);
+    }
+
+    pub(crate) fn is_armed(self) -> bool {
+        matches!(self, ResultText::Left(_))
+    }
+
+    pub(crate) fn is_spent(self) -> bool {
+        self == ResultText::Spent
+    }
+
+    fn charge(&mut self, bytes: u64) {
+        if let ResultText::Left(left) = self {
+            if bytes <= *left {
+                *left -= bytes;
+            } else {
+                *self = ResultText::Spent;
+            }
+        }
+    }
+
+    fn refund(&mut self, bytes: u64) {
+        if let ResultText::Left(left) = self {
+            *left = left.saturating_add(bytes);
+        }
+    }
+}
+
+// The text a cell owns beside its value: a formula's result, cached by the file or
+// evaluated, and a spilled text. A shared string is charged once, with the string table.
+pub fn cell_text_bytes(cell: &Cell) -> u64 {
+    let len = match cell {
+        Cell::CellFormula { v, .. } => formula_text_len(v),
+        Cell::ArrayFormula(array) => formula_text_len(&array.v),
+        Cell::SpillCell(spill) => match &spill.v {
+            SpillValue::Text(text) => text.len(),
+            _ => 0,
+        },
+        _ => 0,
+    };
+    len as u64
+}
+
+// A file sets an error's message and, through the sheet name, its origin as long as a text.
+fn formula_text_len(value: &FormulaValue) -> usize {
+    match value {
+        FormulaValue::Text(text) => text.len(),
+        FormulaValue::Error(error) => error.o.len() + error.m.len(),
+        _ => 0,
+    }
+}
+
+impl Model<'_> {
+    /// Evaluates a model built by [Model::from_workbook] for the first time, and refuses it
+    /// with the open budget's message when the text of its results does not fit the
+    /// budget it was built within. A refused model is left half evaluated: drop it. A
+    /// later call, or one on a model built otherwise, evaluates without the check.
+    pub fn evaluate_opened(&mut self) -> Result<(), String> {
+        let Some(allowance) = self.open_allowance.take() else {
+            self.evaluate_indexed();
+            return Ok(());
+        };
+        self.result_text = ResultText::Left(allowance.result_text_bytes());
+        self.evaluate_indexed();
+        let spent = self.result_text.is_spent();
+        self.result_text = ResultText::Unbounded;
+        if spent {
+            return Err(allowance.refusal());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Model;
+    use crate::cell::CellValue;
+
+    const ROWS: i32 = 100;
+    const TEXT_LEN: u64 = 1000;
+
+    // A column of formulas returning TEXT_LEN characters each, without the values a file
+    // would cache when `cached` is false, as openpyxl writes them.
+    fn long_text_book(cached: bool) -> Workbook {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        for row in 1..=ROWS {
+            model
+                .set_user_input(0, row, 1, format!("=REPT(\"x\",{TEXT_LEN})&{row}"))
+                .unwrap();
+        }
+        model.evaluate();
+        let mut book = model.workbook;
+        if !cached {
+            for row in 1..=ROWS {
+                let cell = book.worksheets[0].sheet_data.get_mut(row, 1).unwrap();
+                let Cell::CellFormula { v, .. } = cell else {
+                    panic!("{cell:?}");
+                };
+                *v = FormulaValue::Unevaluated;
+            }
+        }
+        book
+    }
+
+    // The least budget the text of `book`'s results fits in, with every other cost.
+    fn fitting_budget(book: &Workbook, text_bytes: u64) -> u64 {
+        let cost = open_cost(book);
+        let past_allowance = text_bytes - cost.formulas * TEXT_BYTES_PER_FORMULA;
+        needed_bytes(cost) + (past_allowance * 6).div_ceil(5)
+    }
+
+    fn results_text_bytes() -> u64 {
+        (1..=ROWS as u64)
+            .map(|row| TEXT_LEN + row.to_string().len() as u64)
+            .sum()
+    }
+
+    fn values(model: &Model) -> Vec<CellValue> {
+        (1..=ROWS)
+            .map(|row| model.get_cell_value_by_index(0, row, 1).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn result_text_past_the_budget_refuses_the_open() {
+        let book = long_text_book(false);
+        let budget = fitting_budget(&book, results_text_bytes()) - 1;
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        let error = model.evaluate_opened().unwrap_err();
+        assert!(error.starts_with(BUDGET_REFUSAL_PREFIX), "{error}");
+        assert!(error.contains("100 formulas"), "{error}");
+    }
+
+    #[test]
+    fn result_text_just_within_the_budget_opens_with_every_value() {
+        let book = long_text_book(false);
+        let mut expected = Model::from_workbook_within(book.clone(), "en", u64::MAX).unwrap();
+        expected.evaluate();
+        let budget = fitting_budget(&book, results_text_bytes());
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        model.evaluate_opened().unwrap();
+        assert_eq!(values(&model), values(&expected));
+        assert_eq!(
+            model.get_cell_value_by_index(0, 7, 1).unwrap(),
+            CellValue::String(format!("{}7", "x".repeat(TEXT_LEN as usize)))
+        );
+    }
+
+    #[test]
+    fn cached_result_text_is_not_charged_again() {
+        let book = long_text_book(true);
+        let budget = needed_bytes(open_cost(&book));
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        model.evaluate_opened().unwrap();
+        assert_eq!(model.result_text, ResultText::Unbounded);
+    }
+
+    #[test]
+    fn cached_result_text_past_the_formula_allowance_is_charged_before_the_model_is_built() {
+        let book = long_text_book(true);
+        let cost = open_cost(&book);
+        assert_eq!(cost.result_text, results_text_bytes());
+        let uncached = needed_bytes(OpenCost {
+            result_text: 0,
+            ..cost
+        });
+        let past_allowance = results_text_bytes() - cost.formulas * TEXT_BYTES_PER_FORMULA;
+        assert_eq!(
+            needed_bytes(cost) - uncached,
+            (past_allowance * 6).div_ceil(5)
+        );
+        let error = Model::from_workbook_within(book, "en", needed_bytes(cost) - 1)
+            .map(|_| ())
+            .unwrap_err();
+        assert!(error.starts_with(BUDGET_REFUSAL_PREFIX), "{error}");
+    }
+
+    #[test]
+    fn cached_result_text_within_the_formula_allowance_costs_nothing_more() {
+        let cost = OpenCost {
+            cells: 1000,
+            formulas: 1000,
+            shapes: 1,
+            rows: 1000,
+            bytes: 0,
+            result_text: 1000 * TEXT_BYTES_PER_FORMULA,
+        };
+        let uncached = OpenCost {
+            result_text: 0,
+            ..cost
+        };
+        assert_eq!(needed_bytes(cost), needed_bytes(uncached));
+        let one_more = OpenCost {
+            result_text: cost.result_text + 1,
+            ..cost
+        };
+        assert_eq!(needed_bytes(one_more), needed_bytes(cost) + 2);
+    }
+
+    // ROWS formulas returning `returned` characters, each caching `cached` other ones.
+    fn recached_book(returned: u64, cached: usize) -> Workbook {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        for row in 1..=ROWS {
+            model
+                .set_user_input(0, row, 1, format!("=REPT(\"x\",{returned})"))
+                .unwrap();
+        }
+        let mut book = model.workbook;
+        for row in 1..=ROWS {
+            let Some(Cell::CellFormula { v, .. }) = book.worksheets[0].sheet_data.get_mut(row, 1)
+            else {
+                panic!("no formula in row {row}");
+            };
+            *v = FormulaValue::Text("y".repeat(cached));
+        }
+        book
+    }
+
+    #[test]
+    fn cached_text_leaves_the_first_evaluation_only_the_allowance_it_did_not_use() {
+        let fits = |returned| {
+            let book = recached_book(returned, 150);
+            let budget = needed_bytes(open_cost(&book));
+            let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+            model.evaluate_opened().is_ok()
+        };
+        assert!(fits(TEXT_BYTES_PER_FORMULA));
+        assert!(!fits(TEXT_BYTES_PER_FORMULA + 1));
+    }
+
+    #[test]
+    fn what_is_left_and_what_is_held_never_exceed_what_the_estimate_charged() {
+        let formula = |len: usize| Cell::CellFormula {
+            f: 0,
+            s: 0,
+            v: FormulaValue::Text("x".repeat(len)),
+        };
+        let cost = OpenCost {
+            cells: 1,
+            formulas: 1,
+            shapes: 1,
+            rows: 1,
+            bytes: 0,
+            result_text: 1000,
+        };
+        let allowance = OpenAllowance {
+            cost,
+            budget_bytes: needed_bytes(cost),
+        };
+        let (cached, short, longer) = (formula(1000), formula(1), formula(1001));
+        let mut left = ResultText::Left(allowance.result_text_bytes());
+        assert_eq!(left, ResultText::Left(0));
+        left.replace(|| Some(&cached), &short);
+        assert_eq!(left, ResultText::Left(999));
+        left.replace(|| Some(&short), &cached);
+        assert_eq!(left, ResultText::Left(0));
+        left.replace(|| Some(&cached), &longer);
+        assert_eq!(left, ResultText::Spent);
+    }
+
+    // 100,000 formulas each caching the longest text a cell holds: about 3.2 GB of text,
+    // which the per formula charge alone put at 54 MB.
+    #[test]
+    fn long_cached_results_are_charged_more_than_the_text_they_hold() {
+        let cost = OpenCost {
+            cells: 100_000,
+            formulas: 100_000,
+            shapes: 1,
+            rows: 100_000,
+            bytes: 0,
+            result_text: 100_000 * 32_767,
+        };
+        assert!(needed_bytes(cost) > cost.result_text);
+        assert!(importer_needed_bytes(cost) > cost.result_text);
+    }
+
+    #[test]
+    fn a_cached_error_owns_its_message_and_origin() {
+        let error = Cell::CellFormula {
+            f: 0,
+            s: 0,
+            v: FormulaValue::error(
+                crate::expressions::token::Error::NA,
+                "Sheet1!A1".to_string(),
+                "#N/A".to_string(),
+            ),
+        };
+        assert_eq!(cell_text_bytes(&error), 13);
+        let shared = Cell::SharedString { si: 0, s: 0 };
+        assert_eq!(cell_text_bytes(&shared), 0);
+    }
+
+    #[test]
+    fn evaluations_after_the_first_are_not_charged() {
+        let book = long_text_book(false);
+        let budget = fitting_budget(&book, results_text_bytes());
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        model.evaluate_opened().unwrap();
+        // More text than the whole first evaluation was allowed.
+        for row in 1..=4 {
+            model
+                .set_user_input(0, row, 2, "=REPT(\"y\",30000)".to_string())
+                .unwrap();
+        }
+        model.evaluate_opened().unwrap();
+        assert_eq!(
+            model.get_cell_value_by_index(0, 4, 2).unwrap(),
+            CellValue::String("y".repeat(30000))
+        );
+    }
+
+    #[test]
+    fn cached_spilled_text_is_not_charged_again() {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        model
+            .set_user_input(0, 1, 1, "=REPT(\"z\",1000)&SEQUENCE(50)".to_string())
+            .unwrap();
+        model.evaluate();
+        assert_eq!(
+            model.get_cell_value_by_index(0, 50, 1).unwrap(),
+            CellValue::String(format!("{}50", "z".repeat(1000)))
+        );
+        let book = model.workbook;
+        let budget = needed_bytes(open_cost(&book));
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        model.evaluate_opened().unwrap();
+    }
+
+    #[test]
+    fn spilled_text_past_the_budget_refuses_the_open() {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        model
+            .set_user_input(0, 1, 1, "=REPT(\"z\",1000)&SEQUENCE(50)".to_string())
+            .unwrap();
+        model.evaluate();
+        let mut book = model.workbook;
+        for row in 2..=50 {
+            book.worksheets[0].sheet_data.remove(row, 1);
+        }
+        let budget = needed_bytes(open_cost(&book));
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        let error = model.evaluate_opened().unwrap_err();
+        assert!(error.starts_with(BUDGET_REFUSAL_PREFIX), "{error}");
+    }
+
+    // `columns` dynamic formulas in row 1 spilling the numbers 1 to `rows`, without the
+    // spilled cells a file would cache, and the values of every spilled cell.
+    fn number_spills(columns: i32, rows: i32) -> (Workbook, Vec<CellValue>) {
+        let mut model = Model::new_empty("budget", "en", "UTC", "en").unwrap();
+        for column in 1..=columns {
+            model
+                .set_user_input(0, 1, column, format!("=SEQUENCE({rows})"))
+                .unwrap();
+        }
+        model.evaluate();
+        let values = (1..=columns)
+            .flat_map(|column| (1..=rows).map(move |row| (row, column)))
+            .map(|(row, column)| model.get_cell_value_by_index(0, row, column).unwrap())
+            .collect();
+        let mut book = model.workbook;
+        for column in 1..=columns {
+            for row in 2..=rows {
+                book.worksheets[0].sheet_data.remove(row, column).unwrap();
+            }
+        }
+        (book, values)
+    }
+
+    #[test]
+    fn number_spills_past_the_budget_refuse_the_open() {
+        let (book, _) = number_spills(20, 1000);
+        let budget = needed_bytes(open_cost(&book));
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        let error = model.evaluate_opened().unwrap_err();
+        assert!(error.starts_with(BUDGET_REFUSAL_PREFIX), "{error}");
+    }
+
+    #[test]
+    fn a_number_spill_just_within_the_budget_opens_with_every_value() {
+        let (book, expected) = number_spills(1, 10);
+        let cost = open_cost(&book);
+        // Nine cells and nine rows added, none of them text.
+        let added = 9 * (ADDED_CELL_BYTES + ADDED_ROW_BYTES);
+        let past_allowance = added - cost.formulas * TEXT_BYTES_PER_FORMULA;
+        let budget = needed_bytes(cost) + (past_allowance * 6).div_ceil(5);
+
+        let mut refused = Model::from_workbook_within(book.clone(), "en", budget - 1).unwrap();
+        assert!(refused.evaluate_opened().is_err());
+
+        let mut model = Model::from_workbook_within(book, "en", budget).unwrap();
+        model.evaluate_opened().unwrap();
+        let values: Vec<CellValue> = (1..=10)
+            .map(|row| model.get_cell_value_by_index(0, row, 1).unwrap())
+            .collect();
+        assert_eq!(values, expected);
+        assert_eq!(values[9], CellValue::Number(10.0));
+    }
 
     #[test]
     fn counts_cells_and_formulas() {
@@ -212,6 +696,7 @@ mod tests {
             shapes: 163,
             rows: 1_002_334,
             bytes: 213_068 * (60 + BYTES_PER_UNIQUE_STRING),
+            result_text: 0,
         };
         let allowance = 17_043_439_616 * RAM_SHARE_PERCENT / 100;
         assert!(needed_bytes(cost) <= allowance, "{}", needed_bytes(cost));
@@ -226,6 +711,7 @@ mod tests {
             shapes: 0,
             rows: 10,
             bytes: 0,
+            result_text: 0,
         });
         let formulas = needed_bytes(OpenCost {
             cells: 1000,
@@ -233,6 +719,7 @@ mod tests {
             shapes: 0,
             rows: 10,
             bytes: 0,
+            result_text: 0,
         });
         assert!(formulas > values);
         assert_eq!(formulas - values, 1000 * BYTES_PER_FORMULA);
@@ -305,6 +792,7 @@ mod tests {
                 shapes,
                 rows,
                 bytes,
+                result_text: 0,
             });
             assert!(
                 charged * 10 >= peak * mebibyte * 12,
@@ -321,6 +809,7 @@ mod tests {
             shapes: 0,
             rows: 10,
             bytes: 0,
+            result_text: 0,
         };
         assert!(importer_needed_bytes(cost) > needed_bytes(cost));
     }
@@ -335,6 +824,7 @@ mod tests {
             shapes: 0,
             rows: 0,
             bytes: 0,
+            result_text: 0,
         };
         let error = refusal(cost, budget + 1, budget);
         assert!(error.contains("needs about 9.5 GB"), "{error}");
@@ -358,6 +848,7 @@ mod tests {
             shapes: 0,
             rows: 0,
             bytes: 0,
+            result_text: 0,
         };
         assert!(check_cost(cost, needed_bytes(cost)).is_ok());
         let error = check_cost(cost, needed_bytes(cost) - 1).unwrap_err();

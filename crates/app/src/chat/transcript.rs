@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::button::Button;
-use gpui_kit::component::text::{MarkdownExtensions, TextView};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable};
 use gpui_kit::*;
 use zenkai_agent::chat::thread::{Entry, FileCard, NoticeKind, ToolCallId, ToolCard, worked_label};
@@ -11,7 +10,7 @@ use zenkai_agent::chat::tool_rows::{self, Item};
 use zenkai_i18n::t;
 
 use super::ChatPanel;
-use super::badge::{self, ReferencePlugin};
+use super::badge;
 use crate::agent_settings::AgentConfig;
 use crate::text_document::DocumentKind;
 
@@ -128,16 +127,7 @@ impl ChatPanel {
                         Some(notice(*kind, text, cx).into_any_element())
                     }
                     Entry::Assistant { id, text } => Some(match self.texts.get(id) {
-                        Some(state) => TextView::new(state)
-                            .markdown_extensions(
-                                MarkdownExtensions::default()
-                                    .parser_revision(1)
-                                    .plugin(ReferencePlugin::new(panel.clone())),
-                            )
-                            .selectable(true)
-                            .stream_fade(true)
-                            .line_height(relative(1.6))
-                            .into_any_element(),
+                        Some(message) => message.clone().into_any_element(),
                         None => div().child(text.clone()).into_any_element(),
                     }),
                     Entry::File(card) => {

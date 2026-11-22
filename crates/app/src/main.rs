@@ -30,6 +30,7 @@ mod format_category;
 mod format_dialog;
 mod generate_dialog;
 mod go_to;
+mod installation;
 mod interface_scale;
 mod job_pill;
 mod jump;
@@ -41,7 +42,9 @@ mod markdown_highlight;
 mod markdown_images;
 mod markdown_links;
 mod markdown_pane;
+mod markdown_restricted;
 mod memory;
+mod notes_tab;
 mod open_loads;
 mod palette;
 mod panel_edge;
@@ -79,13 +82,25 @@ mod theme_palettes;
 mod toolbar;
 #[cfg(windows)]
 mod tray;
+mod updates;
+mod version;
 mod view;
+mod whats_new;
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use gpui_kit::*;
 
-fn main() {
+fn main() -> ExitCode {
+    if version::requested(std::env::args_os().skip(1)) {
+        return version::print();
+    }
+    run();
+    ExitCode::SUCCESS
+}
+
+fn run() {
     restart::wait_for_previous_instance();
     let initial: Option<PathBuf> = restart::file_argument();
     // Before the log starts: a launch that only hands over must not truncate the log of the
@@ -109,6 +124,8 @@ fn main() {
         );
     }
     zenkai_i18n::init(language::startup());
+    #[cfg(windows)]
+    installation::identify_process();
 
     gpui_kit::application()
         .with_assets(assets::ZenkaiAssets)
@@ -118,8 +135,12 @@ fn main() {
             theme::init(cx);
             interface_scale::init(cx);
             agent_settings::init(cx);
+            updates::init(cx);
             settings_window::register_agent_actions(cx);
             cx.on_action(|_: &actions::OpenSettings, cx| settings_window::open(cx));
+            cx.on_action(|_: &actions::CheckForUpdates, cx| {
+                updates::check(cx, updates::Source::Palette)
+            });
             cx.on_action(|_: &actions::InterfaceLarger, cx| interface_scale::larger(cx));
             cx.on_action(|_: &actions::InterfaceSmaller, cx| interface_scale::smaller(cx));
             cx.on_action(|_: &actions::InterfaceReset, cx| interface_scale::reset(cx));
@@ -145,11 +166,13 @@ fn main() {
                 Ok((window, workspace)) => {
                     restart::register(window, &workspace, cx);
                     tray::install(window, &workspace, claim, cx);
+                    installation::after_first_window(window, &workspace, cx);
                     cx.activate(true)
                 }
                 #[cfg(not(windows))]
                 Ok((window, workspace)) => {
                     restart::register(window, &workspace, cx);
+                    installation::after_first_window(window, &workspace, cx);
                     cx.activate(true)
                 }
                 Err(error) => {

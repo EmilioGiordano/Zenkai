@@ -16,7 +16,7 @@ mod information;
 mod logical;
 mod lookup_and_reference;
 mod macros;
-mod math_and_trigonometry;
+pub(crate) mod math_and_trigonometry;
 mod spill_functions;
 mod statistical;
 mod subtotal;

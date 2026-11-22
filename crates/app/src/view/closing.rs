@@ -148,6 +148,7 @@ impl Workspace {
             return;
         };
         if departure.purpose == Purpose::App {
+            self.close_called_off(cx);
             self.notify(Severity::Warning, t!("close.not_closed"), cx);
         }
     }

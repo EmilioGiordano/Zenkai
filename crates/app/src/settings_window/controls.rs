@@ -38,6 +38,7 @@ pub struct RowParts {
     pub modified: bool,
     pub first: bool,
     pub control: Option<AnyElement>,
+    pub status_line: Option<AnyElement>,
     pub below: Option<AnyElement>,
     pub overlay: Option<AnyElement>,
     pub code: Option<String>,
@@ -93,7 +94,8 @@ pub fn row(
                 .text_xs()
                 .text_color(theme.muted_foreground)
                 .child(code)
-        }));
+        }))
+        .children(parts.status_line.map(|line| div().mt_1().child(line)));
     v_flex()
         .relative()
         .w_full()

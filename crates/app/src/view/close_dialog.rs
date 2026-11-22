@@ -160,6 +160,12 @@ impl Workspace {
         }
     }
 
+    #[cfg(windows)]
+    pub(super) fn close_dialog_purpose(&self) -> Option<(Purpose, CloseGoal)> {
+        let dialog = self.close_dialog.as_ref()?;
+        Some((dialog.purpose, dialog.choices.goal))
+    }
+
     pub(super) fn retarget_close_dialog(&mut self, goal: CloseGoal) {
         if let Some(dialog) = self.close_dialog.as_mut() {
             dialog.choices.goal = dialog.choices.goal.outranking(goal);
@@ -174,6 +180,7 @@ impl Workspace {
 
     pub(super) fn cancel_close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_close_dialog(window, cx);
+        self.close_called_off(cx);
     }
 
     // Tab wraps around inside the dialog; focus never lands on the window behind it.

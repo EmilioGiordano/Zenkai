@@ -65,5 +65,5 @@ argument, they review the current directory.
 7. Do not commit, push, merge or open anything as part of this skill.
 
 When the branch has a PR, the lead (not this skill) turns each report into a `review.json`
-(shape in `AGENTS.md`, Pull requests) and posts it with `scripts/pr/review.sh <pr>
+(shape in `MAINTAINERS.md`, Pull requests) and posts it with `scripts/pr/review.sh <pr>
 <review.json>`: one review per reviewer, never an approval. This skill never fixes anything.

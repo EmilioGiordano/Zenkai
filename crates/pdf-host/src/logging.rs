@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-// The host has no console, so what stops it is written to the log the app writes to:
+// A helper host has no console, so what stops it is written to the log the app writes to:
 // %LOCALAPPDATA%\Zenkai\zenkai.log, appended to. Without a usable folder it stays silent.
 pub fn init() {
     let Some(path) = log_path() else {

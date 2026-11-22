@@ -12,7 +12,6 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use crate::interface_scale::rem_px;
-use crate::markdown_depth;
 use crate::markdown_highlight::{LANGUAGE, MarkdownHighlighter};
 use crate::markdown_images::image_path;
 use crate::text_disk::DiskNotice;
@@ -49,9 +48,13 @@ pub struct MarkdownPane {
     state: PaneState,
     focus: FocusHandle,
     preview_stale: bool,
-    too_deep: bool,
+    refusal: Option<Refusal>,
+    extensions: Extensions,
+    held_text: Option<String>,
+    previewed: String,
     images: Images,
     preview_task: Option<Task<()>>,
+    depth_task: Option<Task<()>>,
     follow_task: Option<Task<()>>,
     followed: usize,
     announced: usize,
@@ -61,6 +64,8 @@ pub struct MarkdownPane {
 mod preview;
 mod zoom_style;
 
+use crate::markdown_depth::Refusal;
+pub(crate) use preview::{Extensions, claim_html_and_math};
 use preview::{Images, blocked_image, extensions, verdicts};
 
 impl EventEmitter<PaneEvent> for MarkdownPane {}
@@ -87,9 +92,7 @@ impl MarkdownPane {
             editor.set_highlighter_factory(MarkdownHighlighter::factory(), cx);
             editor
         });
-        let too_deep = markdown_depth::too_deep(text);
-        let shown = if too_deep { "" } else { text };
-        let preview = cx.new(|cx| TextViewState::markdown(shown, cx));
+        let preview = cx.new(|cx| TextViewState::markdown("", cx));
         let changes = cx.subscribe_in(&editor, window, |this, _, event: &InputEvent, _, cx| {
             if matches!(event, InputEvent::Change) {
                 this.preview_stale = true;
@@ -113,15 +116,19 @@ impl MarkdownPane {
             state,
             focus: cx.focus_handle(),
             preview_stale: false,
-            too_deep,
+            refusal: None,
+            extensions: Extensions::NotDrawn,
+            held_text: None,
+            previewed: String::new(),
             images: Images::default(),
             preview_task: None,
+            depth_task: None,
             follow_task: None,
             followed: 0,
             announced: 0,
             _subscriptions: vec![changes, moves],
         };
-        pane.vet_images(text, cx);
+        pane.show_in_preview(text, cx);
         pane
     }
 
@@ -370,7 +377,7 @@ impl MarkdownPane {
         let folder = self.state.folder.clone();
         let images = self.images.clone();
         let centered = self.mode == ViewMode::Preview;
-        let too_deep = self.too_deep;
+        let refusal = self.refusal;
         div()
             .id("markdown-preview")
             .flex_1()
@@ -388,7 +395,7 @@ impl MarkdownPane {
                     .px_6()
                     .py_4()
                     .when(centered, |page| page.max_w(rem_px(READING_WIDTH)).mx_auto())
-                    .when(!too_deep, |page| {
+                    .when(refusal.is_none(), |page| {
                         page.child(
                         TextView::new(&self.preview)
                             .when_some(zoomed, |view, style| view.style(style))
@@ -416,7 +423,12 @@ impl MarkdownPane {
                             }),
                     )
                     })
-                    .when(too_deep, |page| page.child(t!("markdown.too_deep"))),
+                    .when_some(refusal, |page, refusal| {
+                        page.child(match refusal {
+                            Refusal::TooDeep => t!("markdown.too_deep"),
+                            Refusal::TooLarge => t!("markdown.too_large"),
+                        })
+                    }),
             )
     }
 }
@@ -434,6 +446,9 @@ impl Render for MarkdownPane {
         };
         let shows_source = self.mode != ViewMode::Preview;
         let shows_preview = self.mode != ViewMode::Source;
+        if shows_preview && self.refusal.is_none() && self.extensions == Extensions::NotDrawn {
+            self.await_extensions(window, cx);
+        }
         v_flex()
             .id("markdown-pane")
             .key_context(CONTEXT)

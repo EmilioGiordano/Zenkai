@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use crate::{
     calc_result::CalcResult,
     cast::{array_node_to_string, NumberOrArray, StringOrArray, ValueOrArray},
@@ -6,9 +8,18 @@ use crate::{
         token::{Error, OpCompare},
         types::CellReferenceIndex,
     },
-    functions::util::compare_values,
+    functions::{math_and_trigonometry::array_size::check_array_size, util::compare_values},
     model::Model,
+    text_limit::{text_length, text_too_long, MAX_TEXT_LENGTH},
 };
+
+// What one `&` may build into an array, the nodes of its elements included. Each text stays
+// within MAX_TEXT_LENGTH, but a million of them would still hold 32 GB or more. Excel has no
+// such limit; past it the result is the `#VALUE!` of a text too long.
+pub(crate) const MAX_TEXT_ARRAY_BYTES: usize = 256 * 1024 * 1024;
+// An element's node plus about what the allocator adds to its text, so a million short texts
+// count for what they hold and not only for their bytes.
+pub(crate) const BYTES_PER_ELEMENT: usize = std::mem::size_of::<ArrayNode>() + 16;
 
 /// Maps an output index `i` back to the source array index, applying Excel's
 /// size-1 broadcasting rule: a length-1 dimension repeats its only element, an
@@ -34,6 +45,79 @@ fn to_f64(value: &ArrayNode) -> Result<f64, Error> {
         },
         ArrayNode::Error(err) => Err(err.clone()),
         ArrayNode::Empty => Ok(0.0),
+    }
+}
+
+struct TextPiece<'a> {
+    text: Cow<'a, str>,
+    length: usize,
+}
+
+impl<'a> TextPiece<'a> {
+    fn new(text: Cow<'a, str>) -> Self {
+        let length = text_length(&text);
+        TextPiece { text, length }
+    }
+
+    fn from_node(node: &'a ArrayNode) -> Result<Self, Error> {
+        match node {
+            ArrayNode::String(s) => Ok(TextPiece::new(Cow::Borrowed(s))),
+            other => array_node_to_string(other).map(|s| TextPiece::new(Cow::Owned(s))),
+        }
+    }
+}
+
+// An array's elements are read as text one at a time, so no copy of the operand is kept.
+enum ConcatOperand<'a> {
+    Text(TextPiece<'a>),
+    Array(&'a [Vec<ArrayNode>]),
+}
+
+impl<'a> ConcatOperand<'a> {
+    fn new(operand: &'a StringOrArray) -> Self {
+        match operand {
+            StringOrArray::String(s) => ConcatOperand::Text(TextPiece::new(Cow::Borrowed(s))),
+            StringOrArray::Array(a) => ConcatOperand::Array(a),
+        }
+    }
+
+    // A text has no shape of its own: it repeats over the shape of the other operand.
+    fn dims(&self) -> (usize, usize) {
+        match self {
+            ConcatOperand::Text(_) => (0, 0),
+            ConcatOperand::Array(a) => (a.len(), a.first().map(|r| r.len()).unwrap_or(0)),
+        }
+    }
+
+    fn piece(&self, row: usize, column: usize) -> Option<Result<TextPiece<'_>, Error>> {
+        match self {
+            ConcatOperand::Text(piece) => Some(Ok(TextPiece {
+                text: Cow::Borrowed(piece.text.as_ref()),
+                length: piece.length,
+            })),
+            ConcatOperand::Array(a) => {
+                let columns = a.first().map(|r| r.len()).unwrap_or(0);
+                bcast_idx(a.len(), row)
+                    .and_then(|i| a.get(i))
+                    .and_then(|r| bcast_idx(columns, column).and_then(|j| r.get(j)))
+                    .map(TextPiece::from_node)
+            }
+        }
+    }
+}
+
+/// The two texts one element of `&` joins, or the error it gives, as in Excel: `#VALUE!`
+/// for a missing element, the left error before the right one, and `#VALUE!` when the two
+/// texts together are longer than a text can be.
+fn joined<'a>(
+    left: Option<Result<TextPiece<'a>, Error>>,
+    right: Option<Result<TextPiece<'a>, Error>>,
+) -> Result<(TextPiece<'a>, TextPiece<'a>), Error> {
+    match (left, right) {
+        (Some(Ok(l)), Some(Ok(r))) if l.length + r.length > MAX_TEXT_LENGTH => Err(Error::VALUE),
+        (Some(Ok(l)), Some(Ok(r))) => Ok((l, r)),
+        (Some(Err(e)), Some(_)) | (Some(Ok(_)), Some(Err(e))) => Err(e),
+        _ => Err(Error::VALUE),
     }
 }
 
@@ -188,63 +272,61 @@ impl<'a> Model<'a> {
             Ok(v) => v,
             Err(e) => return e,
         };
+        let (l, r) = (ConcatOperand::new(&l), ConcatOperand::new(&r));
 
-        // Concatenates two array elements, propagating errors as error nodes.
-        let concat_nodes = |a: &ArrayNode, b: &ArrayNode| -> ArrayNode {
-            match (array_node_to_string(a), array_node_to_string(b)) {
-                (Ok(sa), Ok(sb)) => ArrayNode::String(format!("{sa}{sb}")),
-                (Err(e), _) | (_, Err(e)) => ArrayNode::Error(e),
-            }
-        };
+        if matches!((&l, &r), (ConcatOperand::Text(_), ConcatOperand::Text(_))) {
+            return match joined(l.piece(0, 0), r.piece(0, 0)) {
+                Ok((s1, s2)) => CalcResult::String(format!("{}{}", s1.text, s2.text)),
+                Err(_) => text_too_long(cell),
+            };
+        }
 
-        match (l, r) {
-            (StringOrArray::String(s1), StringOrArray::String(s2)) => {
-                CalcResult::String(format!("{s1}{s2}"))
-            }
-            (StringOrArray::String(s1), StringOrArray::Array(a2)) => CalcResult::Array(
-                a2.iter()
-                    .map(|row| {
-                        row.iter()
-                            .map(|n| concat_nodes(&ArrayNode::String(s1.clone()), n))
-                            .collect()
-                    })
-                    .collect(),
-            ),
-            (StringOrArray::Array(a1), StringOrArray::String(s2)) => CalcResult::Array(
-                a1.iter()
-                    .map(|row| {
-                        row.iter()
-                            .map(|n| concat_nodes(n, &ArrayNode::String(s2.clone())))
-                            .collect()
-                    })
-                    .collect(),
-            ),
-            (StringOrArray::Array(a1), StringOrArray::Array(a2)) => {
-                let n1 = a1.len();
-                let m1 = a1.first().map(|r| r.len()).unwrap_or(0);
-                let n2 = a2.len();
-                let m2 = a2.first().map(|r| r.len()).unwrap_or(0);
-                let rows = n1.max(n2);
-                let cols = m1.max(m2);
-                let mut array = Vec::with_capacity(rows);
-                for ri in 0..rows {
-                    let row1 = bcast_idx(n1, ri).and_then(|i| a1.get(i));
-                    let row2 = bcast_idx(n2, ri).and_then(|i| a2.get(i));
-                    let mut data_row = Vec::with_capacity(cols);
-                    for ci in 0..cols {
-                        let v1 = row1.and_then(|r| bcast_idx(m1, ci).and_then(|j| r.get(j)));
-                        let v2 = row2.and_then(|r| bcast_idx(m2, ci).and_then(|j| r.get(j)));
-                        let node = match (v1, v2) {
-                            (Some(v1), Some(v2)) => concat_nodes(v1, v2),
-                            _ => ArrayNode::Error(Error::VALUE),
-                        };
-                        data_row.push(node);
-                    }
-                    array.push(data_row);
-                }
-                CalcResult::Array(array)
+        let (n1, m1) = l.dims();
+        let (n2, m2) = r.dims();
+        let rows = n1.max(n2);
+        let cols = m1.max(m2);
+        let elements = rows.saturating_mul(cols);
+
+        // A row broadcast against a column holds more elements than either operand, limited
+        // as SEQUENCE is; an array no larger than an operand is not, as a whole column already
+        // holds 1,048,576. #VALUE!, as #ERROR! is not an xlsx error value.
+        if elements > (n1 * m1).max(n2 * m2) {
+            if let Some((_, message)) = check_array_size(rows, cols) {
+                return CalcResult::new_error(Error::VALUE, cell, message);
             }
         }
+
+        // Counted before any element is built, so a refused array never builds one.
+        let mut bytes = elements.saturating_mul(BYTES_PER_ELEMENT);
+        let mut positions = (0..rows).flat_map(|ri| (0..cols).map(move |ci| (ri, ci)));
+        while bytes <= MAX_TEXT_ARRAY_BYTES {
+            let Some((ri, ci)) = positions.next() else {
+                break;
+            };
+            if let Ok((s1, s2)) = joined(l.piece(ri, ci), r.piece(ri, ci)) {
+                bytes += s1.text.len() + s2.text.len();
+            }
+        }
+        if bytes > MAX_TEXT_ARRAY_BYTES {
+            return CalcResult::new_error(
+                Error::VALUE,
+                cell,
+                format!("Array of texts larger than {MAX_TEXT_ARRAY_BYTES} bytes"),
+            );
+        }
+
+        CalcResult::Array(
+            (0..rows)
+                .map(|ri| {
+                    (0..cols)
+                        .map(|ci| match joined(l.piece(ri, ci), r.piece(ri, ci)) {
+                            Ok((s1, s2)) => ArrayNode::String(format!("{}{}", s1.text, s2.text)),
+                            Err(e) => ArrayNode::Error(e),
+                        })
+                        .collect()
+                })
+                .collect(),
+        )
     }
 
     /// Applies a comparison operator element-wise.

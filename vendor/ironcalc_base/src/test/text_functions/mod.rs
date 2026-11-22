@@ -67,6 +67,65 @@ fn test_fixed_basic() {
     assert_eq!(model._get_text("A4"), "-1,234.50");
 }
 
+// Excel takes up to 127 decimals in FIXED and DOLLAR and gives #VALUE! past them; a file
+// asking for billions of decimals used to allocate them.
+#[test]
+fn test_fixed_and_dollar_decimals_past_127_are_value() {
+    let mut model = new_empty_model();
+    model._set("A1", "=FIXED(1, 127)");
+    model._set("A2", "=FIXED(1, 128)");
+    model._set("A3", "=FIXED(1, 1E+300, TRUE)");
+    model._set("B1", "=DOLLAR(1, 127)");
+    model._set("B2", "=DOLLAR(1, 128)");
+    model._set("B3", "=DOLLAR(-1, 1E+300)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), format!("1.{}", "0".repeat(127)));
+    assert_eq!(model._get_text("A2"), "#VALUE!");
+    assert_eq!(model._get_text("A3"), "#VALUE!");
+    assert_eq!(model._get_text("B1"), format!("$1.{}", "0".repeat(127)));
+    assert_eq!(model._get_text("B2"), "#VALUE!");
+    assert_eq!(model._get_text("B3"), "#VALUE!");
+}
+
+// Excel shows 15 significant digits and pads the rest of the decimals with zeros; past 19
+// decimals the digits used to overflow into 18446744073709551615.
+#[test]
+fn test_fixed_pads_decimals_past_15_significant_digits_with_zeros() {
+    let mut model = new_empty_model();
+    model._set("A1", "=FIXED(1.5, 19)");
+    model._set("A2", "=FIXED(1.5, 20)");
+    model._set("A3", "=FIXED(1.5, 25)");
+    model._set("A4", "=FIXED(1.5, 127)");
+    model._set("A5", "=FIXED(1/3, 20)");
+    model._set("A6", "=FIXED(123456789012.345678, 10)");
+    model._set("A7", "=DOLLAR(-1.5, 25)");
+    model._set("A8", "=FIXED(0, 20)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), format!("1.5{}", "0".repeat(18)));
+    assert_eq!(model._get_text("A2"), format!("1.5{}", "0".repeat(19)));
+    assert_eq!(model._get_text("A3"), format!("1.5{}", "0".repeat(24)));
+    assert_eq!(model._get_text("A4"), format!("1.5{}", "0".repeat(126)));
+    assert_eq!(model._get_text("A5"), format!("0.{}00000", "3".repeat(15)));
+    assert_eq!(model._get_text("A6"), "123,456,789,012.3460000000");
+    assert_eq!(model._get_text("A7"), format!("($1.5{})", "0".repeat(24)));
+    assert_eq!(model._get_text("A8"), format!("0.{}", "0".repeat(20)));
+}
+
+// The most negative decimals a file can give used to overflow when negated.
+#[test]
+fn test_fixed_and_dollar_with_huge_negative_decimals_round_to_zero() {
+    let mut model = new_empty_model();
+    model._set("A1", "=FIXED(1234, -2)");
+    model._set("A2", "=FIXED(1234, -1E+10)");
+    model._set("A3", "=DOLLAR(-1234, -1E+10)");
+    model._set("A4", "=FIXED(1234, -400)");
+    model.evaluate();
+    assert_eq!(model._get_text("A1"), "1,200");
+    assert_eq!(model._get_text("A2"), "0");
+    assert_eq!(model._get_text("A3"), "($0)");
+    assert_eq!(model._get_text("A4"), "0");
+}
+
 // ── NUMBERVALUE ───────────────────────────────────────────────────────────────
 
 #[test]

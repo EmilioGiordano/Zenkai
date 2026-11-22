@@ -105,6 +105,7 @@ impl Workspace {
         self.pending_goal = None;
         self.lifecycle = Lifecycle::Running;
         self.clear_busy(t!("busy.closing"), cx);
+        self.close_called_off(cx);
         self.notify(Severity::Error, t!("close.not_hidden", reason = reason), cx);
     }
 }

@@ -25,6 +25,19 @@ pub enum Unsupported {
     SheetProtection,
     Outline,
     PageBreaks,
+    Sparklines,
+    ExtendedConditionalFormats,
+    Slicers,
+    CustomViews,
+    Phonetic,
+    Scenarios,
+    CellWatches,
+    Connections,
+    QueryTables,
+    CustomXml,
+    DataModel,
+    WorkbookProtection,
+    PrinterSettings,
 }
 
 impl Unsupported {
@@ -43,6 +56,19 @@ impl Unsupported {
             Unsupported::SheetProtection => "sheet protection",
             Unsupported::Outline => "row and column grouping",
             Unsupported::PageBreaks => "manual page breaks",
+            Unsupported::Sparklines => "sparklines",
+            Unsupported::ExtendedConditionalFormats => "newer conditional formatting rules",
+            Unsupported::Slicers => "slicers and timelines",
+            Unsupported::CustomViews => "custom views",
+            Unsupported::Phonetic => "phonetic guides (furigana)",
+            Unsupported::Scenarios => "scenarios",
+            Unsupported::CellWatches => "Watch Window cells",
+            Unsupported::Connections => "data connections",
+            Unsupported::QueryTables => "query tables",
+            Unsupported::CustomXml => "custom XML data",
+            Unsupported::DataModel => "data model (Power Pivot)",
+            Unsupported::WorkbookProtection => "workbook protection",
+            Unsupported::PrinterSettings => "printer settings",
         }
     }
 }
@@ -170,6 +196,15 @@ pub(crate) fn part_unsupported(name: &str, part: &[u8]) -> Result<Vec<Unsupporte
         ("xl/threadedcomments/", Unsupported::Comments),
         ("xl/externallinks/", Unsupported::ExternalLinks),
         ("xl/tables/", Unsupported::Tables),
+        ("xl/slicers/", Unsupported::Slicers),
+        ("xl/slicercaches/", Unsupported::Slicers),
+        ("xl/timelines/", Unsupported::Slicers),
+        ("xl/timelinecaches/", Unsupported::Slicers),
+        ("xl/connections.xml", Unsupported::Connections),
+        ("xl/querytables/", Unsupported::QueryTables),
+        ("customxml/", Unsupported::CustomXml),
+        ("xl/model/", Unsupported::DataModel),
+        ("xl/printersettings/", Unsupported::PrinterSettings),
     ];
     let mut found: Vec<Unsupported> = by_name
         .into_iter()

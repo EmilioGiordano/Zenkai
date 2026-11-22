@@ -13,12 +13,15 @@ members = [
     "crates/mcp-relay",
     "crates/fake-acp-agent",
     "crates/pdf-host",
+    "crates/values-host",
+    "crates/launcher",
     "crates/app",
 ]
 # Third-party code patched for Zenkai: built as a dependency, outside our fmt and clippy gates.
 exclude = ["vendor"]
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 publish = false

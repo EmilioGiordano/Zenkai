@@ -42,6 +42,10 @@ mod text_actions;
 mod text_save;
 mod text_watch;
 mod texts;
+#[cfg(windows)]
+mod update_cards;
+mod updates;
+mod whats_new;
 
 use crate::prompt_gate::{PROMPT_OPEN_CONTEXT, PromptGate};
 use agent_calls::{AgentLink, Decision};
@@ -240,6 +244,7 @@ pub struct Workspace {
     panels: PanelsState,
     text_panes: texts::TextPanes,
     pdf_panes: pdfs::PdfPanes,
+    notes_pane: Option<whats_new::NotesPane>,
     pdf_places: crate::pdf_places::PdfPlaces,
     pdf_client: crate::pdf::PdfClient,
     text_watch: text_watch::TextWatch,
@@ -292,6 +297,8 @@ impl Overwrite {
 enum Saved {
     Written {
         kept: Vec<Unsupported>,
+        // What a copy under a new name lacks of the original; empty for a save over a file.
+        lacks: Vec<Unsupported>,
     },
     Refused {
         dropped: Vec<Unsupported>,
@@ -389,6 +396,7 @@ impl Workspace {
                 agent_settings::reload(cx);
             }
         });
+        let update_reports = cx.observe_global::<crate::updates::Updates>(Self::show_update_report);
         let settings = cx.observe_global_in::<AgentConfig>(window, Self::on_settings_changed);
         let space_look = cx.observe_global::<SpaceAppearance>(|this, cx| {
             this.persist_session(cx);
@@ -460,6 +468,7 @@ impl Workspace {
             panels: PanelsState::new(cx),
             text_panes: texts::TextPanes::new(),
             pdf_panes: pdfs::PdfPanes::new(),
+            notes_pane: None,
             pdf_places: crate::pdf_places::PdfPlaces::default(),
             pdf_client: crate::pdf::PdfClient::next_to_exe(),
             text_watch: text_watch::TextWatch::default(),
@@ -486,6 +495,7 @@ impl Workspace {
                 activation,
                 settings,
                 space_look,
+                update_reports,
                 quit,
                 font_color,
                 fill_color,
@@ -499,11 +509,15 @@ impl Workspace {
             asked.is_err()
         });
         #[cfg(windows)]
-        workspace._subscriptions.push(
-            cx.observe_window_visibility(window, |_, visibility, _, cx| {
-                crate::tray::note_visibility(visibility, cx)
-            }),
-        );
+        workspace._subscriptions.push(cx.observe_window_visibility(
+            window,
+            |this, visibility, window, cx| {
+                crate::tray::note_visibility(visibility, cx);
+                if visibility.is_visible() {
+                    this.wake_stepped_aside(window, cx);
+                }
+            },
+        ));
         workspace.start_memory_sampler(window, cx);
         workspace.start_session(initial, window, cx);
         workspace.load_recent(cx);
@@ -2376,8 +2390,12 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     let Some(overwrite) = overwrite else {
-                        return document::write_document_copy(&shared, &target, save_xlsx)
-                            .map(|kept| Saved::Written { kept });
+                        return document::write_document_copy(&shared, &target, save_xlsx).map(
+                            |copy| Saved::Written {
+                                kept: copy.kept,
+                                lacks: copy.lacks,
+                            },
+                        );
                     };
                     document::save_document_file(
                         &shared,
@@ -2388,7 +2406,10 @@ impl Workspace {
                         save_xlsx,
                     )
                     .map(|saved| match saved {
-                        DocumentSave::Written { kept } => Saved::Written { kept },
+                        DocumentSave::Written { kept } => Saved::Written {
+                            kept,
+                            lacks: Vec::new(),
+                        },
                         DocumentSave::Refused { dropped } => Saved::Refused { dropped, overwrite },
                         DocumentSave::BaseChanged => Saved::BaseChanged { overwrite },
                     })
@@ -2424,7 +2445,7 @@ impl Workspace {
                 };
                 let fully_saved;
                 match result {
-                    Ok(Saved::Written { kept }) => {
+                    Ok(Saved::Written { kept, lacks }) => {
                         document.saved_over_file(kept);
                         document.path = Some(path);
                         let edited_meanwhile = document.edit_count() != edits_at_start;
@@ -2433,7 +2454,10 @@ impl Workspace {
                         if shown {
                             window.set_window_title(&this.documents.shown_title());
                         }
-                        this.notify(Severity::Info, t!("notice.saved"), cx);
+                        match document::copy_lacks_notice(&lacks) {
+                            Some(notice) => this.notify(Severity::Warning, notice, cx),
+                            None => this.notify(Severity::Info, t!("notice.saved"), cx),
+                        }
                     }
                     // Nothing was written; the file on disk is as it was.
                     Ok(Saved::Refused { dropped, overwrite }) => {
@@ -3691,6 +3715,9 @@ impl Workspace {
                         .bg(theme.popover)
                         .text_color(theme.popover_foreground)
                         .shadow_md()
+                        .occlude()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(indicator)
                         .child(busy)
                         .when(self.open_loads.newest_cancellable(), |pill| {
@@ -3703,8 +3730,8 @@ impl Workspace {
                                         t!("palette.cancel_open"),
                                         &CancelOpen,
                                     ))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.cancel_open(cx);
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.cancel_open(window, cx);
                                     })),
                             )
                         }),
@@ -3782,6 +3809,10 @@ impl Workspace {
                 )
             })
             .children(access_chip);
+        #[cfg(windows)]
+        {
+            right = right.children(update_cards::download_status(cx));
+        }
         if let Some(text) = self.documents.shown_text() {
             let (line, column) = self
                 .shown_pane()
@@ -3810,6 +3841,11 @@ impl Workspace {
                     total = view.page_count()
                 ))
                 .child(view.zoom_label())
+                .child(t!("status.read_only"));
+        }
+        if self.documents.shown_notes().is_some() {
+            right = right
+                .child(t!("whats_new.name"))
                 .child(t!("status.read_only"));
         }
         match self.stats.filter(|_| self.documents.active().is_some()) {
@@ -3841,7 +3877,10 @@ impl Workspace {
         {
             right = right.child(t!("status.read_only"));
         }
-        if self.documents.shown_text().is_none() && self.documents.shown_pdf().is_none() {
+        if self.documents.shown_text().is_none()
+            && self.documents.shown_pdf().is_none()
+            && self.documents.shown_notes().is_none()
+        {
             let zoom = self.grid.read(cx).zoom();
             right = right.child(format!("{:.0}%", zoom * 100.0));
         }
@@ -4309,6 +4348,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomIn, window, cx| {
                 if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(true, cx))
                     || this.forward_to_text(cx, |pane, cx| pane.zoom_in(cx))
+                    || this.forward_to_notes(cx, |view, cx| view.zoom_in(cx))
                 {
                     return;
                 }
@@ -4318,6 +4358,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomOut, window, cx| {
                 if this.forward_to_pdf(window, cx, |view, _, cx| view.step_zoom(false, cx))
                     || this.forward_to_text(cx, |pane, cx| pane.zoom_out(cx))
+                    || this.forward_to_notes(cx, |view, cx| view.zoom_out(cx))
                 {
                     return;
                 }
@@ -4327,6 +4368,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ZoomReset, window, cx| {
                 if this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx))
                     || this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx))
+                    || this.forward_to_notes(cx, |view, cx| view.zoom_reset(cx))
                 {
                     return;
                 }
@@ -4334,8 +4376,10 @@ impl Render for Workspace {
                 this.refresh_cells(cx);
             }))
             .on_action(cx.listener(|this, _: &ResetDocumentZoom, window, cx| {
-                if !this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx)) {
-                    this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx));
+                if !this.forward_to_pdf(window, cx, |view, _, cx| view.actual_size(cx))
+                    && !this.forward_to_text(cx, |pane, cx| pane.zoom_reset(cx))
+                {
+                    this.forward_to_notes(cx, |view, cx| view.zoom_reset(cx));
                 }
             }))
             .on_action(cx.listener(|this, _: &NextSheet, window, cx| {
@@ -4549,14 +4593,14 @@ impl Render for Workspace {
             .on_action(
                 cx.listener(|this, _: &DismissNotice, window, cx| this.dismiss_notice(window, cx)),
             )
-            .on_action(cx.listener(|this, _: &CancelOpen, _, cx| {
-                if !this.cancel_open(cx) {
+            .on_action(cx.listener(|this, _: &CancelOpen, window, cx| {
+                if !this.cancel_open(window, cx) {
                     cx.propagate();
                 }
             }))
             .on_action(cx.listener(|this, _: &zenkai_grid::Cancel, window, cx| {
                 if this.notices.card().is_none() && !this.escape_cancelled_open {
-                    this.escape_cancelled_open = this.cancel_open(cx);
+                    this.escape_cancelled_open = this.cancel_open(window, cx);
                     if this.escape_cancelled_open {
                         return;
                     }
@@ -4567,6 +4611,19 @@ impl Render for Workspace {
                 this.escape_cancelled_open = false;
             }))
             .on_action(cx.listener(|this, _: &CopyNotice, _, cx| this.copy_notice(cx)))
+            .on_action(cx.listener(|this, _: &UpdateNow, window, cx| this.update_now(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &CancelUpdate, window, cx| this.cancel_update(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &RestartToUpdate, window, cx| {
+                this.restart_to_update(window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &OpenReleases, window, cx| this.open_releases(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ShowWhatsNew, window, cx| this.show_whats_new(window, cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &ShowMessages, window, cx| this.toggle_messages(window, cx)),
             )
@@ -4624,6 +4681,9 @@ impl Render for Workspace {
                                 .into_any_element()
                         } else if let Some(view) = self.shown_pdf_view() {
                             self.render_pdf(view, busy_label.clone(), cx)
+                                .into_any_element()
+                        } else if let Some(view) = self.shown_notes_view() {
+                            self.render_notes(view, busy_label.clone(), cx)
                                 .into_any_element()
                         } else {
                             self.render_empty(busy_label.clone(), cx).into_any_element()

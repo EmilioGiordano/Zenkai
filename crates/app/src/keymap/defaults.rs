@@ -102,6 +102,7 @@ pub fn defaults() -> Vec<Binding> {
         bind("alt-2", PdfFitWidth, Some("PdfDocument")),
         bind("alt-3", PdfActualSize, Some("PdfDocument")),
         bind("ctrl-0", ResetDocumentZoom, Some("MarkdownDocument")),
+        bind("ctrl-0", ResetDocumentZoom, Some("WhatsNew")),
         bind("ctrl-0", ResetDocumentZoom, Some("PdfDocument")),
         bind("alt-o", TogglePdfOutline, Some("PdfDocument")),
         bind("ctrl-alt-up", WidenPdfPages, Some("PdfDocument")),
@@ -220,6 +221,8 @@ pub fn defaults() -> Vec<Binding> {
         bind("escape", ClosePalette, Some("Palette")),
         bind("escape", CancelThemePicker, Some("ThemePicker")),
         bind("ctrl-alt-t", SelectTheme, CONTEXT),
+        bind("ctrl-alt-u", CheckForUpdates, CONTEXT),
+        bind("ctrl-alt-shift-u", ShowWhatsNew, CONTEXT),
         bind("escape", CloseSearch, Some("SearchOverlay")),
         bind("ctrl-,", OpenSettings, CONTEXT),
         bind("ctrl-,", OpenSettings, Some("SettingsWindow")),
@@ -268,6 +271,10 @@ pub fn defaults() -> Vec<Binding> {
         bind("escape", DismissNotice, CONTEXT),
         bind("escape", CancelOpen, Some("Workspace && Opening")),
         bind("ctrl-c", CopyNotice, Some("NoticeCard")),
+        bind("alt-u", UpdateNow, Some("NoticeCard")),
+        bind("alt-c", CancelUpdate, Some("NoticeCard")),
+        bind("alt-r", RestartToUpdate, Some("NoticeCard")),
+        bind("alt-o", OpenReleases, Some("NoticeCard")),
         bind("ctrl-shift-j", ShowMessages, CONTEXT),
         bind("escape", CloseMessages, Some("MessagesPanel")),
         bind("down", NextMessage, Some("MessagesPanel")),
@@ -384,6 +391,24 @@ mod tests {
         assert_eq!(
             action_in("Workspace"),
             Some(<HideColumns as Action>::name_for_type())
+        );
+    }
+
+    #[test]
+    fn whats_new_has_its_shortcut_and_resets_its_zoom_with_ctrl_zero() {
+        let action_in = |chord: &str, context: &str| {
+            defaults()
+                .into_iter()
+                .find(|binding| binding.chord.as_str() == chord && binding.context == Some(context))
+                .map(|binding| binding.action.name())
+        };
+        assert_eq!(
+            action_in("ctrl-alt-shift-u", "Workspace"),
+            Some(<ShowWhatsNew as Action>::name_for_type())
+        );
+        assert_eq!(
+            action_in("ctrl-0", "WhatsNew"),
+            Some(<ResetDocumentZoom as Action>::name_for_type())
         );
     }
 

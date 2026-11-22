@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings, About</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#7fb894}a:hover{color:#a6d3b5}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="position: relative; width: 880px; height: 560px; overflow: hidden; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; background: #18191b; color: #e4e4e6; display: flex;">
+  <nav aria-label="Settings sections" style="width: 200px; flex-shrink: 0; box-sizing: border-box; padding: 20px 10px; background: #1f2023; display: flex; flex-direction: column; gap: 2px">
+    <a href="#" style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 7px; color: #a3a5ab; text-decoration: none">General</a><a href="#" style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 7px; color: #a3a5ab; text-decoration: none">Appearance</a><a href="#" style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 7px; color: #a3a5ab; text-decoration: none">Agents</a><a href="#" style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 7px; color: #a3a5ab; text-decoration: none">Privacy</a><a href="#" style="display: flex; align-items: center; height: 32px; padding: 0 10px; border-radius: 7px; background: #2a2b2f; color: #e4e4e6; text-decoration: none">About</a>
+  </nav>
+  <div style="flex-grow: 1; box-sizing: border-box; padding: 28px 36px; display: flex; flex-direction: column; gap: 22px">
+    <h1 style="margin: 0; font-size: 18px; font-weight: 600">About</h1>
+    <div style="display: flex; flex-direction: column; gap: 6px">
+      <div style="display: flex; align-items: center; gap: 16px; min-height: 44px">
+        <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px"><span>Version</span><span style="font-size: 12px; color: #8f9198; line-height: 1.45"></span></span>
+        <span style="color: #a3a5ab; font-variant-numeric: tabular-nums">0.1.0</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px; min-height: 44px">
+        <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px"><span>Check for updates when Zenkai opens</span><span style="font-size: 12px; color: #8f9198; line-height: 1.45">Asks GitHub for the latest release, at most once a day. GitHub sees your IP address. Zenkai sends nothing else, and downloads only when you choose Update now.</span></span>
+        <button role="switch" aria-checked="true" aria-label="Check for updates when Zenkai opens" style="width: 38px; height: 22px; flex-shrink: 0; border-radius: 11px; background: #4caf7a; display: flex; align-items: center; justify-content: flex-end; padding: 0 3px"><span style="width: 16px; height: 16px; border-radius: 8px; background: #0f1a13"></span></button>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px; min-height: 44px">
+        <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px"><span>Updates</span><span style="font-size: 12px; color: #8f9198; line-height: 1.45"><span style="display: inline-flex; align-items: center; gap: 6px"><svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4caf7a" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0"><circle cx="12" cy="12" r="9"></circle><path d="m8 12 3 3 5-6"></path></svg>You have the latest version. Checked today at 09:14.</span></span></span>
+        <button style="height: 30px; padding: 0 14px; border-radius: 7px; white-space: nowrap; background: #2a2b2f">Check for Updates</button>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px; min-height: 44px">
+        <span style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px"><span>License</span><span style="font-size: 12px; color: #8f9198; line-height: 1.45">Apache-2.0</span></span>
+        
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":880,"height":560}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

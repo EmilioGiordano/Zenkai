@@ -115,7 +115,7 @@ fn sheet(data: &str) -> String {
     )
 }
 
-const QUIRKS: [(&str, &str); 24] = [
+const QUIRKS: [(&str, &str); 25] = [
     (
         "formulas without cached values",
         r#"<row r="1"><c r="A1"><f>1+1</f></c><c r="B1"><f>A1*2</f><v/></c><c r="C1"><f>B1+1</f><v></v></c><c r="D1" t="n"><f>C1</f><v/></c><c r="E1" t="str"><f>""</f><v></v></c></row>"#,
@@ -130,7 +130,13 @@ const QUIRKS: [(&str, &str); 24] = [
     ),
     (
         "inline strings",
-        r#"<row r="1"><c r="A1" t="inlineStr"><is><t>a_x0001_b</t></is></c><c r="B1" t="inlineStr"><is><r><rPr><b/></rPr><t xml:space="preserve">x </t></r><r><t>y</t></r><rPh sb="0" eb="1"><t>z</t></rPh></is></c><c r="C1" t="inlineStr"><is><t>x y</t></is></c><c r="D1" t="inlineStr"/></row>"#,
+        r#"<row r="1"><c r="A1" t="inlineStr"><is><t>a_x0001_b</t></is></c><c r="B1" t="inlineStr"><is><r><rPr><b/></rPr><t xml:space="preserve">x </t></r><r><t>y</t></r></is></c><c r="C1" t="inlineStr"><is><t>x y</t></is></c><c r="D1" t="inlineStr"/></row>"#,
+    ),
+    // The phonetic reading is not part of the text; the fast reader leaves it to IronCalc's,
+    // whose whole-sheet check reports it.
+    (
+        "phonetic runs",
+        r#"<row r="1"><c r="A1" t="inlineStr"><is><r><t>x</t></r><rPh sb="0" eb="1"><t>z</t></rPh></is></c></row>"#,
     ),
     (
         "str values",
@@ -247,6 +253,7 @@ fn the_fast_reader_handles_the_ordinary_quirks_itself() {
         "duplicate cells",
         "bad references",
         "cdata",
+        "phonetic runs",
     ];
     for (label, data) in QUIRKS {
         let bytes = workbook(&[&sheet(data)], None);

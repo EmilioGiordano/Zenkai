@@ -176,6 +176,7 @@ impl SettingsWindow {
                 cx.notify();
             }),
             cx.observe_global::<crate::space_appearance::SpaceAppearance>(|_, cx| cx.notify()),
+            cx.observe_global::<crate::updates::Updates>(|_, cx| cx.notify()),
         ];
         SettingsWindow {
             focus,

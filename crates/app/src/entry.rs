@@ -8,6 +8,7 @@ use zenkai_i18n::t;
 use zenkai_types::{SheetId, WorkbookId};
 
 use crate::document::{Document, FileJob};
+use crate::notes_tab::NotesTab;
 use crate::pdf::PdfPosition;
 use crate::pdf_tab::PdfTab;
 use crate::spaces::SpaceId;
@@ -63,6 +64,15 @@ pub struct FileSeen {
 }
 
 impl FileSeen {
+    // Nothing is known of the file: any modification counts as a change, and the session
+    // records no time for it rather than a made-up one.
+    pub fn unknown() -> FileSeen {
+        FileSeen {
+            stamp: None,
+            at: SystemTime::UNIX_EPOCH,
+        }
+    }
+
     pub fn changed(&self, now: Stamp) -> bool {
         match self.stamp {
             Some(seen) => seen != now,
@@ -71,8 +81,8 @@ impl FileSeen {
     }
 }
 
-// What a workbook with unsaved work left in memory when it went to disk: where its dump is,
-// and the few things the engine needs to save it as it would have.
+// What a workbook left in memory when it went to disk with its undo history: where its dump
+// is, and the few things the engine needs to save it as it would have.
 #[derive(Clone, Debug)]
 pub struct Hibernation {
     pub dump: PathBuf,
@@ -101,6 +111,7 @@ impl Link {
             DocumentKind::Markdown | DocumentKind::Pdf => {
                 text_name(self.path.as_deref(), self.untitled)
             }
+            DocumentKind::WhatsNew => t!("whats_new.name").to_string(),
         }
     }
 }
@@ -110,6 +121,7 @@ pub enum Slot {
     Loaded(Box<Document>),
     Text(Box<TextDocument>),
     Pdf(Box<PdfTab>),
+    Notes(Box<NotesTab>),
     Link(Link),
 }
 
@@ -119,6 +131,7 @@ pub enum Entry<'a> {
     Loaded(&'a Document),
     Text(&'a TextDocument),
     Pdf(&'a PdfTab),
+    Notes(&'a NotesTab),
     Link(&'a Link),
 }
 
@@ -128,6 +141,7 @@ impl Slot {
             Slot::Loaded(document) => Entry::Loaded(document),
             Slot::Text(text) => Entry::Text(text),
             Slot::Pdf(pdf) => Entry::Pdf(pdf),
+            Slot::Notes(notes) => Entry::Notes(notes),
             Slot::Link(link) => Entry::Link(link),
         }
     }
@@ -137,7 +151,10 @@ impl Slot {
     }
 
     pub fn is_loaded(&self) -> bool {
-        matches!(self, Slot::Loaded(_) | Slot::Text(_) | Slot::Pdf(_))
+        matches!(
+            self,
+            Slot::Loaded(_) | Slot::Text(_) | Slot::Pdf(_) | Slot::Notes(_)
+        )
     }
 
     pub fn set_space(&mut self, space: SpaceId) {
@@ -145,6 +162,7 @@ impl Slot {
             Slot::Loaded(document) => document.space = space,
             Slot::Text(text) => text.space = space,
             Slot::Pdf(pdf) => pdf.space = space,
+            Slot::Notes(notes) => notes.space = space,
             Slot::Link(link) => link.space = space,
         }
     }
@@ -152,7 +170,7 @@ impl Slot {
     pub fn loaded_mut(&mut self) -> Option<&mut Document> {
         match self {
             Slot::Loaded(document) => Some(document),
-            Slot::Text(_) | Slot::Pdf(_) | Slot::Link(_) => None,
+            Slot::Text(_) | Slot::Pdf(_) | Slot::Notes(_) | Slot::Link(_) => None,
         }
     }
 }
@@ -163,6 +181,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(document) => document.id,
             Entry::Text(text) => text.id,
             Entry::Pdf(pdf) => pdf.id,
+            Entry::Notes(notes) => notes.id,
             Entry::Link(link) => link.id,
         }
     }
@@ -172,6 +191,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(document) => document.space,
             Entry::Text(text) => text.space,
             Entry::Pdf(pdf) => pdf.space,
+            Entry::Notes(notes) => notes.space,
             Entry::Link(link) => link.space,
         }
     }
@@ -181,6 +201,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(document) => document.path.as_deref(),
             Entry::Text(text) => text.path.as_deref(),
             Entry::Pdf(pdf) => Some(pdf.path.as_path()),
+            Entry::Notes(_) => None,
             Entry::Link(link) => link.path.as_deref(),
         }
     }
@@ -189,7 +210,7 @@ impl<'a> Entry<'a> {
         match self {
             Entry::Loaded(document) => document.untitled(),
             Entry::Text(text) => text.untitled(),
-            Entry::Pdf(_) => 0,
+            Entry::Pdf(_) | Entry::Notes(_) => 0,
             Entry::Link(link) => link.untitled,
         }
     }
@@ -198,7 +219,7 @@ impl<'a> Entry<'a> {
         match self {
             Entry::Loaded(document) => document.dirty,
             Entry::Text(text) => text.needs_recovery(),
-            Entry::Pdf(_) => false,
+            Entry::Pdf(_) | Entry::Notes(_) => false,
             Entry::Link(link) => link.dirty,
         }
     }
@@ -208,6 +229,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(document) => document.name(),
             Entry::Text(text) => text.name(),
             Entry::Pdf(pdf) => pdf.name(),
+            Entry::Notes(notes) => notes.name(),
             Entry::Link(link) => link.name(),
         }
     }
@@ -215,21 +237,28 @@ impl<'a> Entry<'a> {
     pub fn loaded(self) -> Option<&'a Document> {
         match self {
             Entry::Loaded(document) => Some(document),
-            Entry::Text(_) | Entry::Pdf(_) | Entry::Link(_) => None,
+            Entry::Text(_) | Entry::Pdf(_) | Entry::Notes(_) | Entry::Link(_) => None,
         }
     }
 
     pub fn text(self) -> Option<&'a TextDocument> {
         match self {
             Entry::Text(text) => Some(text),
-            Entry::Loaded(_) | Entry::Pdf(_) | Entry::Link(_) => None,
+            Entry::Loaded(_) | Entry::Pdf(_) | Entry::Notes(_) | Entry::Link(_) => None,
         }
     }
 
     pub fn pdf(self) -> Option<&'a PdfTab> {
         match self {
             Entry::Pdf(pdf) => Some(pdf),
-            Entry::Loaded(_) | Entry::Text(_) | Entry::Link(_) => None,
+            Entry::Loaded(_) | Entry::Text(_) | Entry::Notes(_) | Entry::Link(_) => None,
+        }
+    }
+
+    pub fn notes(self) -> Option<&'a NotesTab> {
+        match self {
+            Entry::Notes(notes) => Some(notes),
+            Entry::Loaded(_) | Entry::Text(_) | Entry::Pdf(_) | Entry::Link(_) => None,
         }
     }
 
@@ -238,6 +267,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(_) => DocumentKind::Workbook,
             Entry::Text(text) => text.kind,
             Entry::Pdf(_) => DocumentKind::Pdf,
+            Entry::Notes(_) => DocumentKind::WhatsNew,
             Entry::Link(link) => link.kind,
         }
     }
@@ -247,6 +277,7 @@ impl<'a> Entry<'a> {
             Entry::Loaded(document) => document.to_link(),
             Entry::Text(text) => text.to_link(),
             Entry::Pdf(pdf) => pdf.to_link(),
+            Entry::Notes(notes) => notes.to_link(),
             Entry::Link(link) => link.clone(),
         }
     }
@@ -284,18 +315,23 @@ impl Document {
     // A restored workbook stands on a recovery copy, whose own stamp says nothing about the
     // file, so the guard it was restored with is what carries on.
     fn file_seen(&self) -> FileSeen {
-        self.file_guard().unwrap_or_else(|| FileSeen {
-            stamp: self.workbook().and_then(|workbook| workbook.file_stamp()),
-            at: SystemTime::now(),
+        self.file_guard().unwrap_or_else(|| {
+            self.workbook()
+                .and_then(|workbook| workbook.file_stamp())
+                .map_or_else(FileSeen::unknown, |stamp| FileSeen {
+                    stamp: Some(stamp),
+                    at: stamp.modified(),
+                })
         })
     }
 
-    // The link a workbook with unsaved work becomes when it goes to disk. Its recovery copy
-    // holds the same work, and is what loads if the dump cannot be read.
-    pub fn to_hibernated_link(&self, recovery: PathBuf, dump: PathBuf, kept: Kept) -> Link {
+    // The link a workbook becomes when it goes to disk with its undo history. With unsaved work
+    // its recovery copy holds the same work, and is what loads if the dump cannot be read;
+    // a saved workbook has none and falls back to its file.
+    pub fn to_hibernated_link(&self, recovery: Option<PathBuf>, dump: PathBuf, kept: Kept) -> Link {
         Link {
             dirty: self.needs_recovery(),
-            recovery: Some(recovery),
+            recovery,
             rested: Some(Box::new(Rested {
                 file: self.file_seen(),
                 hibernation: Some(Hibernation {
@@ -325,6 +361,19 @@ impl Document {
             && !self.has_pending_save()
             && self.file_job() == FileJob::Idle
             && !self.hibernation_was_refused()
+    }
+
+    // A saved workbook doing nothing right now. It needs no recovery copy: if the dump cannot be
+    // read back, its file is loaded instead and only the undo history is lost.
+    pub fn can_hibernate_saved(&self) -> bool {
+        self.can_unload()
+            && self.review.is_empty()
+            && !self.has_pending_save()
+            && !self.hibernation_was_refused()
+    }
+
+    pub fn can_dump(&self) -> bool {
+        self.can_hibernate() || self.can_hibernate_saved()
     }
 
     // A clean workbook with a file to come back from, doing nothing right now.

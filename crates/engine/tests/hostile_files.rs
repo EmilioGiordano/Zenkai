@@ -10,6 +10,10 @@ use zenkai_engine::{
 use zenkai_types::{CellPos, SheetId};
 
 fn workbook_with_sheet(sheet_xml: &str) -> Vec<u8> {
+    workbook_with_named_sheet("Sheet1", sheet_xml)
+}
+
+fn workbook_with_named_sheet(sheet_name: &str, sheet_xml: &str) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = zip::write::FileOptions::default();
     let parts = [
@@ -23,7 +27,7 @@ fn workbook_with_sheet(sheet_xml: &str) -> Vec<u8> {
         ),
         (
             "xl/workbook.xml",
-            r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#.to_string(),
+            format!(r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="{sheet_name}" sheetId="1" r:id="rId1"/></sheets></workbook>"#),
         ),
         (
             "xl/_rels/workbook.xml.rels",
@@ -411,6 +415,72 @@ fn long_operator_chain_is_rejected_not_a_stack_overflow() {
     assert!(error.contains("characters"), "{error}");
 }
 
+// The text formulas return is charged to the open budget while the file is first
+// evaluated; a file of long results without cached values still opens whole within it.
+#[test]
+fn long_text_results_without_cached_values_open_whole() {
+    let data: String = (1..=1_000)
+        .map(|row| {
+            format!(r#"<row r="{row}"><c r="A{row}"><f>REPT("x",30000)&amp;{row}</f></c></row>"#)
+        })
+        .collect();
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{data}</sheetData></worksheet>"#
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-text.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet)).unwrap();
+    let book = open_xlsx(&path).unwrap();
+    let last = book
+        .workbook
+        .cell(SheetId(0), CellPos::parse_a1("A1000").unwrap());
+    assert_eq!(last.text, format!("{}1000", "x".repeat(30_000)));
+}
+
+// The same results cached by the file are charged once, while the rows are read, and
+// evaluating them again adds nothing.
+#[test]
+fn long_text_results_with_cached_values_open_whole() {
+    let data: String = (1..=1_000)
+        .map(|row| {
+            let text = format!("{}{row}", "x".repeat(30_000));
+            format!(
+                r#"<row r="{row}"><c r="A{row}" t="str"><f>REPT("x",30000)&amp;{row}</f><v>{text}</v></c></row>"#
+            )
+        })
+        .collect();
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{data}</sheetData></worksheet>"#
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-cached-text.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet)).unwrap();
+    let book = open_xlsx(&path).unwrap();
+    let last = book
+        .workbook
+        .cell(SheetId(0), CellPos::parse_a1("A1000").unwrap());
+    assert_eq!(last.text, format!("{}1000", "x".repeat(30_000)));
+}
+
+// Every error a formula caches holds its sheet's name, so a name past Excel's 31
+// characters is refused before any cell is read, on the fallback route too.
+#[test]
+fn a_sheet_name_past_excels_limit_is_refused_before_its_cells_are_read() {
+    let data: String = (1..=90_000)
+        .map(|row| format!(r#"<row r="{row}"><c r="A{row}" t="d"><f>1</f></c></row>"#))
+        .collect();
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{data}</sheetData></worksheet>"#
+    );
+    let started = Instant::now();
+    let error = open_bytes(workbook_with_named_sheet(&"N".repeat(100_000), &sheet)).unwrap_err();
+    assert!(
+        error.contains("a sheet name is longer than 31 characters"),
+        "{error}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(60));
+}
+
 // The reader parses a formula's shape while the rows stream once it repeats, on its sheet
 // and row threads too; the longest and deepest formulas the limits allow, filled down, still
 // open, in a small sheet and in one past 8 MB, which streams on its own threads.
@@ -770,4 +840,134 @@ fn styles_without_cell_style_formats_open_edit_and_save() {
         let reopened = open_xlsx(&path).unwrap().workbook;
         assert!(reopened.cell(SheetId(0), a1).style.bold, "{reader:?}");
     }
+}
+
+// Joined thousands of times, or with every number of a large SEQUENCE, a long text grew to
+// tens of gigabytes on the first evaluation; past Excel's 32,767 characters each is #VALUE!.
+#[test]
+fn text_joins_past_the_text_limit_open_as_value_errors() {
+    let chain = format!("{}A1", "A1&amp;".repeat(2_500));
+    let cells = format!(
+        r#"<c r="A1"><f>REPT("x",30000)</f></c><c r="B1"><f>{chain}</f></c><c r="C1" cm="1"><f t="array" ref="C1">REPT("x",32000)&amp;SEQUENCE(1000000)</f></c>"#
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-joins.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet(&cells))).unwrap();
+    let started = Instant::now();
+    let book = open_xlsx(&path).unwrap().workbook;
+    assert!(started.elapsed() < Duration::from_secs(30));
+    for cell in ["B1", "C1"] {
+        let view = book.cell(SheetId(0), CellPos::parse_a1(cell).unwrap());
+        assert_eq!(view.text, "#VALUE!", "{cell}");
+    }
+}
+
+// Opens a sheet whose formulas have no cached values, so each is evaluated on open, and
+// returns the text of the cells asked for.
+fn texts_on_open(cells: &str, wanted: &[&str]) -> Vec<String> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("evaluated.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet(cells))).unwrap();
+    let started = Instant::now();
+    let book = open_xlsx(&path).unwrap().workbook;
+    assert!(started.elapsed() < Duration::from_secs(30));
+    wanted
+        .iter()
+        .map(|cell| book.cell(SheetId(0), CellPos::parse_a1(cell).unwrap()).text)
+        .collect()
+}
+
+// BASE padded its result to the two billion characters the file asked for; Excel allows 255.
+#[test]
+fn base_past_its_minimum_length_limit_opens_as_num() {
+    let texts = texts_on_open(r#"<c r="A1"><f>BASE(1,2,2000000000)</f></c>"#, &["A1"]);
+    assert_eq!(texts, ["#NUM!"]);
+}
+
+// FIXED and DOLLAR padded their decimals to the two billion digits the file asked for; Excel
+// allows 127.
+#[test]
+fn fixed_and_dollar_past_their_decimals_limit_open_as_value_errors() {
+    let texts = texts_on_open(
+        r#"<c r="A1"><f>FIXED(1,2000000000)</f></c><c r="B1"><f>DOLLAR(1,2000000000)</f></c>"#,
+        &["A1", "B1"],
+    );
+    assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
+}
+
+// ARRAYTOTEXT joined every text of an array whole, at about three times the result's size;
+// past Excel's 32,767 characters it is #VALUE!.
+#[test]
+fn arraytotext_past_the_text_limit_opens_as_value_error() {
+    let cells = [
+        dynamic_formula("A1", r#"ARRAYTOTEXT(REPT("x",30000)&amp;SEQUENCE(1000))"#),
+        dynamic_formula("B1", r#"ARRAYTOTEXT(REPT("x",30000)&amp;SEQUENCE(1000),1)"#),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["A1", "B1"]);
+    assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
+}
+
+// LEFT, RIGHT and MID broadcast a column against a row into every pair, 1.7e10 elements for a
+// whole column against a whole row; past the million SEQUENCE allows each is #VALUE!.
+#[test]
+fn text_broadcasts_past_the_array_size_limit_open_as_value_errors() {
+    let cells = [
+        dynamic_formula("A1", "LEFT(B2:B1048576,C2:XFD2)"),
+        dynamic_formula("B1", "MID(B2:B1048576,1,C2:XFD2)"),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["A1", "B1"]);
+    assert_eq!(texts, ["#VALUE!", "#VALUE!"]);
+}
+
+// CONCAT and TEXTJOIN over all of a sheet but its first row evaluated each of its 1.7e10
+// cells, empty or not; now they read only the cells the sheet holds.
+#[test]
+fn concat_and_textjoin_over_the_whole_sheet_open_quickly() {
+    let texts = texts_on_open(
+        r#"<c r="B1"><f>CONCAT(A2:XFD1048576)</f></c><c r="C1"><f>TEXTJOIN(",",TRUE,A2:XFD1048576)</f></c><c r="D1"><f>TEXTJOIN("",FALSE,A2:XFD1048576)</f></c><c r="E1"><f>TEXTJOIN(",",FALSE,A2:XFD1048576)</f></c>"#,
+        &["B1", "C1", "D1", "E1"],
+    );
+    assert_eq!(texts, ["", "", "", "#VALUE!"]);
+}
+
+// A REGEXREPLACE replacement repeating `$0` sixteen thousand times over a 32,767 character
+// match built half a gigabyte; past Excel's 32,767 characters it is #VALUE!.
+#[test]
+fn regexreplace_past_the_text_limit_opens_as_value_error() {
+    let texts = texts_on_open(
+        r#"<c r="A1"><f>REGEXREPLACE(REPT("x",32767),"x+",REPT("$0",16383))</f></c>"#,
+        &["A1"],
+    );
+    assert_eq!(texts, ["#VALUE!"]);
+}
+
+// LEFT and ARRAYTOTEXT turned the whole sheet into 1.7e10 array elements before any limit;
+// a range past the 256 MiB an array may hold is #VALUE!, while a whole column still works.
+#[test]
+fn whole_sheet_ranges_turned_into_arrays_open_as_value_errors() {
+    let cells = [
+        dynamic_formula("A1", "LEFT(A1:XFD1048576,1)"),
+        dynamic_formula("B1", "ARRAYTOTEXT(A1:XFD1048576)"),
+        dynamic_formula("C1", "COUNTA(LEFT(A:A,1))"),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["A1", "B1", "C1"]);
+    assert_eq!(texts, ["#VALUE!", "#VALUE!", "1048576"]);
+}
+
+// A dynamic array formula, so no argument is narrowed to one value as in a legacy formula.
+fn dynamic_formula(cell: &str, formula: &str) -> String {
+    format!(r#"<c r="{cell}" cm="1"><f t="array" ref="{cell}">{formula}</f></c>"#)
+}
+
+// LEFT, RIGHT and MID copied and walked a 32,767 character text for each of a million
+// elements, tens of gigabytes of copies; now a short cut is cheap and a long walk is #VALUE!.
+#[test]
+fn text_cuts_from_a_long_text_a_million_times_open_quickly() {
+    let cells = [
+        r#"<c r="A1"><f>REPT("x",32767)</f></c>"#.to_string(),
+        dynamic_formula("B1", "COUNTA(LEFT(A1,SEQUENCE(1000000)*0))"),
+        dynamic_formula("C1", "MID(A1,SEQUENCE(1000000)*0+32767,1)"),
+    ];
+    let texts = texts_on_open(&cells.concat(), &["B1", "C1"]);
+    assert_eq!(texts, ["1000000", "#VALUE!"]);
 }

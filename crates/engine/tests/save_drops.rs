@@ -17,6 +17,9 @@ use zenkai_engine::{
 };
 use zenkai_types::{CellPos, RowIdx, SheetId};
 
+#[path = "save_drops/kinds.rs"]
+mod kinds;
+
 const HELD_PART: &str = "xl/worksheets/sheet1.xml";
 const HELD_RELS: &str = "xl/worksheets/_rels/sheet1.xml.rels";
 const RELATIONSHIPS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -155,20 +158,21 @@ fn with_parts(path: &Path, added: &[(&str, &str, &str)]) {
     write_entries(path, &parts);
 }
 
-// Replaces the first occurrence of each text in the held sheet's part.
-fn with_held_sheet_replaced(path: &Path, replaced: &[(&str, &str)]) {
+// Replaces the first occurrence of each text in the named part.
+fn with_part_replaced(path: &Path, name: &str, replaced: &[(&str, &str)]) {
     let mut parts = entries(&std::fs::read(path).unwrap());
-    let sheet = parts
-        .iter_mut()
-        .find(|(name, _)| name == HELD_PART)
-        .unwrap();
-    let mut text = String::from_utf8(sheet.1.clone()).unwrap();
+    let part = parts.iter_mut().find(|(entry, _)| entry == name).unwrap();
+    let mut text = String::from_utf8(part.1.clone()).unwrap();
     for (from, to) in replaced {
         assert!(text.contains(from), "{from}");
         text = text.replacen(from, to, 1);
     }
-    sheet.1 = text.into_bytes();
+    part.1 = text.into_bytes();
     write_entries(path, &parts);
+}
+
+fn with_held_sheet_replaced(path: &Path, replaced: &[(&str, &str)]) {
+    with_part_replaced(path, HELD_PART, replaced);
 }
 
 fn scan(bytes: &[u8]) -> Vec<Unsupported> {
@@ -498,7 +502,7 @@ fn a_pivot_table_is_kept_when_its_sheet_is_edited() {
 }
 
 // A drawing whose relationships cannot be read may hold anything, so the sheet pointing at
-// it is taken to own every part no worksheet is known to own; its relationships part goes
+// it is taken to own every part a sheet can point at; its relationships part goes
 // along unchanged, so an edit on it loses none of them.
 #[test]
 fn a_sheet_with_unreadable_links_keeps_everything_outside_the_sheets() {

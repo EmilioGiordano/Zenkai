@@ -6,7 +6,7 @@ description: Turn a plain-words request into a TASK file on a fresh branch workt
 # zk-task
 
 Turn the user's request, in plain words (`/zk-task <request>`), into a TASK file
-ready for `/zk-branch`. Read `AGENTS.md` first; it is the rulebook.
+ready for `/zk-branch`. Read `AGENTS.md` and `MAINTAINERS.md` first; it is the rulebook.
 
 ## 1. Shape the task
 

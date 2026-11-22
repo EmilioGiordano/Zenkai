@@ -433,6 +433,7 @@ impl Driver<'_> {
                 .saturating_sub(before.bytes)
                 .saturating_add(rowtags_bytes),
             rows: after.rows.saturating_sub(before.rows),
+            result_text: after.result_text.saturating_sub(before.result_text),
         };
         self.budgets.check_usage(usage)
     }
@@ -656,6 +657,7 @@ pub(crate) fn stream_config<R: Read>(
                     shapes: 0,
                     bytes: added,
                     rows: 0,
+                    result_text: 0,
                 })?;
             }
         }
@@ -1844,6 +1846,55 @@ mod tests {
             .err()
             .expect("ten cells with huge strings must trip the budget");
         assert!(error.to_string().contains("needs about"), "{error}");
+    }
+
+    // `rows` formulas each caching a text of `text_len` characters, as `str` and as
+    // `inlineStr` in turn.
+    fn cached_text_sheet(rows: u32, text_len: usize) -> String {
+        let text = "x".repeat(text_len);
+        let rows: String = (1..=rows)
+            .map(|n| {
+                let cell = if n % 2 == 0 {
+                    format!(r#"<c r="A{n}" t="str"><f>REPT("x",{text_len})</f><v>{text}</v></c>"#)
+                } else {
+                    format!(
+                        r#"<c r="A{n}" t="inlineStr"><f>REPT("x",{text_len})</f><is><t>{text}</t></is></c>"#
+                    )
+                };
+                format!(r#"<row r="{n}">{cell}</row>"#)
+            })
+            .collect();
+        format!(r#"{HEAD}{rows}{TAIL}"#)
+    }
+
+    #[test]
+    fn cached_text_within_what_each_formula_pays_for_still_streams() {
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(30_000));
+        let streamed = stream_with(&cached_text_sheet(1_000, 150), &budgets).unwrap();
+        assert_eq!(streamed.cells.totals().result_text, 1_000 * 150);
+    }
+
+    #[test]
+    fn long_cached_formula_results_trip_the_budget_while_the_rows_stream() {
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(30_000));
+        let error = stream_with(&cached_text_sheet(1_000, 10_000), &budgets)
+            .err()
+            .expect("ten megabytes of cached text must trip a two megabyte budget");
+        let ReadError::Unsafe(reason) = &error else {
+            panic!("{error}");
+        };
+        assert!(
+            reason.starts_with(ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX),
+            "{reason}"
+        );
+        // No sheet size is declared here, so the refusal names the cells charged, not a
+        // projection: refused once the first piece is charged, before the rest is held.
+        let charged: u64 = reason
+            .split_once(" to open (")
+            .and_then(|(_, rest)| rest.split_once(" cells"))
+            .and_then(|(cells, _)| cells.parse().ok())
+            .expect("the refusal names the cells charged");
+        assert!(charged < 1_000, "{reason}");
     }
 
     #[test]
