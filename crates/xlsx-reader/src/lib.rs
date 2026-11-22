@@ -52,7 +52,7 @@ use crate::parallel::{Job, Open, ReadPlan, SheetStreams, SheetTask};
 use crate::sheet_stream::{StreamedSheet, Tuning, stream_config, stream_worksheet};
 use crate::stream::{Budgets, CHUNK_BYTES, CompressedMeter, Counted, read_part_if_checked};
 
-pub use stream::has_checked_element;
+pub use stream::{has_checked_element, start_tag_names};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadError {

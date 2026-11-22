@@ -205,7 +205,7 @@ pub fn generate(dir: &Path) -> Result<()> {
     sheet.set_vertical_page_breaks(&[3])?;
     save(&mut book, dir, "page-layout-outline.xlsx")?;
 
-    Ok(())
+    crate::compat_kinds::generate(dir)
 }
 
 #[derive(Default)]
@@ -423,9 +423,10 @@ pub fn report(dir: &Path, out: &Path) -> Result<()> {
         "was saved.\n",
         "- **Dropped without warning**: what any of the three loses with no warning; the ",
         "corpus test fails unless it is empty.\n\n",
-        "Content of a kind Zenkai does not detect (embedded objects, form controls, slicers, ",
-        "printer settings) is never warned about and may be dropped when the sheet holding it ",
-        "is written again.\n\n",
+        "Content of a kind Zenkai does not detect (embedded objects, form controls) is never ",
+        "warned about and may be dropped when the sheet holding it is written again. Slicers, ",
+        "timelines and the data model are detected as the engine tests show; the corpus has no ",
+        "file for them yet.\n\n",
         "| File | Full save | App save, cell edit | App save, row insert | Dropped without warning |\n",
         "| --- | --- | --- | --- | --- |\n",
     ));

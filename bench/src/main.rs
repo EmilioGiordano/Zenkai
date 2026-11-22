@@ -2,6 +2,7 @@
 
 mod baseline;
 mod compat;
+mod compat_kinds;
 mod compat_save;
 mod coverage;
 mod fixtures;

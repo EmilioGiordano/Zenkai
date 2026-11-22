@@ -32,7 +32,31 @@ impl Owned {
     fn all(&self) -> BTreeSet<Unsupported> {
         self.elements.union(&self.linked).copied().collect()
     }
+
+    // Compared source by source: an element written without, such as a slicer list, is lost
+    // even while the relationships still point at parts of the same kind.
+    fn lost_in(&self, after: &Owned) -> BTreeSet<Unsupported> {
+        self.elements
+            .difference(&after.elements)
+            .chain(self.linked.difference(&after.linked))
+            .copied()
+            .collect()
+    }
 }
+
+// What a sheet's relationships can point at, whether the reader lists the relationship or
+// not. Everything else lives in parts a patch save copies whole.
+const LINKABLE: [Unsupported; 9] = [
+    Unsupported::Images,
+    Unsupported::Charts,
+    Unsupported::PivotTables,
+    Unsupported::Comments,
+    Unsupported::Tables,
+    Unsupported::Hyperlinks,
+    Unsupported::Slicers,
+    Unsupported::QueryTables,
+    Unsupported::PrinterSettings,
+];
 
 // A cell reference rides on a drawing or a hyperlink, whose kind reports its loss.
 fn kind_of(link: SheetLink) -> Option<Unsupported> {
@@ -43,6 +67,7 @@ fn kind_of(link: SheetLink) -> Option<Unsupported> {
         SheetLink::Comments => Some(Unsupported::Comments),
         SheetLink::Table => Some(Unsupported::Tables),
         SheetLink::Hyperlink => Some(Unsupported::Hyperlinks),
+        SheetLink::PrinterSettings => Some(Unsupported::PrinterSettings),
         SheetLink::CellReference => None,
     }
 }
@@ -79,8 +104,12 @@ impl Held {
                     .unwrap_or_default(),
                 linked: match links {
                     SheetLinks::Known(links) => links.iter().filter_map(|l| kind_of(*l)).collect(),
-                    // Whatever the other parts hold may hang off this sheet.
-                    SheetLinks::Unknown => book.clone(),
+                    // Whatever the other parts hold that a sheet can point at may hang off it.
+                    SheetLinks::Unknown => book
+                        .iter()
+                        .copied()
+                        .filter(|kind| LINKABLE.contains(kind))
+                        .collect(),
                 },
             })
             .collect();
@@ -124,11 +153,18 @@ impl Held {
         let after = Owned {
             elements: written,
             linked: match relationships {
-                Relationships::Kept => owned.linked.clone(),
+                // The page setup is written without the id of its printer settings part
+                // (`sheet_settings`), so that link goes even while the part stays.
+                Relationships::Kept => owned
+                    .linked
+                    .iter()
+                    .copied()
+                    .filter(|kind| *kind != Unsupported::PrinterSettings)
+                    .collect(),
                 Relationships::Dropped => BTreeSet::new(),
             },
         };
-        let lost = owned.all().difference(&after.all()).copied().collect();
+        let lost = owned.lost_in(&after);
         *owned = after;
         Ok(lost)
     }
@@ -231,17 +267,63 @@ mod tests {
     }
 
     #[test]
-    fn a_sheet_with_unknown_links_may_own_anything_outside_the_sheets() {
-        let mut held = Held::of(&found(), &layout(vec![SheetLinks::Unknown]));
+    fn a_sheet_with_unknown_links_may_own_any_part_a_sheet_can_point_at() {
+        let mut found = found();
+        found.extend(
+            [
+                ("xl/workbook.xml", Unsupported::WorkbookProtection),
+                ("xl/connections.xml", Unsupported::Connections),
+                ("xl/slicers/slicer1.xml", Unsupported::Slicers),
+            ]
+            .map(|(name, kind)| (name.to_string(), kind)),
+        );
+        let mut held = Held::of(&found, &layout(vec![SheetLinks::Unknown]));
         assert_eq!(
             held.rewrite(0, BTreeSet::new(), Relationships::Dropped)
                 .unwrap(),
             set(&[
                 Unsupported::PivotTables,
-                Unsupported::Macros,
-                Unsupported::AutoFilter
+                Unsupported::AutoFilter,
+                Unsupported::Slicers
             ])
         );
+        assert!(held.all().contains(&Unsupported::WorkbookProtection));
+    }
+
+    #[test]
+    fn an_element_written_without_is_lost_while_its_relationships_stay() {
+        let found = [
+            ("xl/worksheets/sheet1.xml".to_string(), Unsupported::Slicers),
+            ("xl/slicers/slicer1.xml".to_string(), Unsupported::Slicers),
+        ];
+        let mut held = Held::of(&found, &layout(vec![SheetLinks::Unknown]));
+        assert_eq!(
+            held.rewrite(0, BTreeSet::new(), Relationships::Kept)
+                .unwrap(),
+            set(&[Unsupported::Slicers])
+        );
+        assert_eq!(held.all(), set(&[Unsupported::Slicers]));
+    }
+
+    #[test]
+    fn a_rewritten_sheet_loses_its_printer_settings_even_with_its_relationships() {
+        let found = [(
+            "xl/printerSettings/printerSettings1.bin".to_string(),
+            Unsupported::PrinterSettings,
+        )];
+        let printer = SheetLinks::Known(set_of_links(&[SheetLink::PrinterSettings]));
+        let mut held = Held::of(&found, &layout(vec![printer]));
+        assert_eq!(
+            held.rewrite(0, BTreeSet::new(), Relationships::Kept)
+                .unwrap(),
+            set(&[Unsupported::PrinterSettings])
+        );
+        assert!(
+            held.rewrite(0, BTreeSet::new(), Relationships::Kept)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(held.all(), set(&[Unsupported::PrinterSettings]));
     }
 
     #[test]

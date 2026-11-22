@@ -201,9 +201,14 @@ impl Linked {
     }
 }
 
+// Printer settings name no cell at all.
 fn names_own_sheet_only(link: SheetLink) -> bool {
     match link {
-        SheetLink::Drawing | SheetLink::Image | SheetLink::Comments | SheetLink::Hyperlink => true,
+        SheetLink::Drawing
+        | SheetLink::Image
+        | SheetLink::Comments
+        | SheetLink::Hyperlink
+        | SheetLink::PrinterSettings => true,
         SheetLink::Chart | SheetLink::PivotTable | SheetLink::Table | SheetLink::CellReference => {
             false
         }
@@ -908,6 +913,16 @@ mod tests {
         // Their anchors and cells are on this sheet, which a move here shifts.
         assert_eq!(sheet.moved(Axis::Rows, 1_000_000), Some(before));
         assert_eq!(sheet.relationships(), Relationships::Dropped);
+    }
+
+    #[test]
+    fn printer_settings_name_no_cell_a_move_elsewhere_shifts() {
+        let mut sheet = elements(NOTES_IMAGE_AND_LINK);
+        let mut links = OWN_SHEET.to_vec();
+        links.push(SheetLink::PrinterSettings);
+        sheet.links_read(&known(&links));
+        assert_eq!(sheet.moved_elsewhere(), None);
+        assert_eq!(sheet.relationships(), Relationships::Kept);
     }
 
     #[test]
