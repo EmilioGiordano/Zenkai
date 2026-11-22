@@ -1,5 +1,7 @@
 #[cfg(windows)]
 mod archive;
+#[cfg(windows)]
+mod download;
 mod fetch;
 mod launcher_notice;
 mod notes;
