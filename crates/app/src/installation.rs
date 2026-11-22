@@ -68,7 +68,12 @@ pub fn after_first_window(window: AnyWindowHandle, workspace: &Entity<Workspace>
     };
     let workspace = workspace.downgrade();
     cx.spawn(async move |cx| {
-        if !confirm_with_retries(root, cx).await {
+        if confirm_with_retries(root, cx).await {
+            #[cfg(windows)]
+            cx.background_executor()
+                .spawn(async move { uninstall_entry::record_version(root) })
+                .await;
+        } else {
             let closed = window.update(cx, |_, window, cx| {
                 workspace.update(cx, |workspace, cx| workspace.close_unconfirmed(window, cx))
             });
@@ -76,12 +81,7 @@ pub fn after_first_window(window: AnyWindowHandle, workspace: &Entity<Workspace>
                 tracing::error!(%error, "the main window is gone; quitting");
                 cx.update(|cx| cx.quit());
             }
-            return;
         }
-        #[cfg(windows)]
-        cx.background_executor()
-            .spawn(async move { uninstall_entry::record_version(root) })
-            .await;
     })
     .detach();
 }
