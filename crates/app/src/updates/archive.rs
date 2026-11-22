@@ -28,7 +28,7 @@ const DEVICE_NAMES: [&str; 26] = [
 const S_IFMT: u32 = 0o170_000;
 const S_IFREG: u32 = 0o100_000;
 const S_IFDIR: u32 = 0o040_000;
-const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+pub const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 const WRITE_CHUNK: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug)]

@@ -5,7 +5,7 @@ use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-use super::archive::{self, ArchiveError};
+use super::archive::{self, ArchiveError, FILE_ATTRIBUTE_REPARSE_POINT};
 use super::download::{self, DownloadError};
 use super::signature::{self, MAX_SIGNATURE_BYTES, MAX_ZIP_BYTES, PLATFORM, SignatureError};
 use super::store::{self, ReadError};
@@ -19,7 +19,6 @@ const SIGNATURE_SUFFIX: &str = ".zip.minisig";
 const NEW_APP_PREFIX: &str = "new-";
 const NOT_FOUND: u16 = 404;
 const FILE_SHARE_READ: u32 = 0x1;
-const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
 pub fn asset_name(version: Version) -> String {
     format!("{ASSET_PREFIX}{version}-{PLATFORM}{ZIP_SUFFIX}")
