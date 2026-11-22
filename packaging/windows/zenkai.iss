@@ -48,11 +48,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx, .csv, Markdown and PDF files"; GroupDescription: "File types:"; Flags: unchecked
 
 ; A reinstall starts from a clean slate: what an update left behind goes before the files land,
-; and only from a folder that already holds a Zenkai install.
+; and only from a folder that already holds a Zenkai install. The check runs per entry and looks
+; for app\zenkai.exe, so app\ goes last or the entries after it would find no install.
 [InstallDelete]
-Type: filesandordirs; Name: "{app}\app"; Check: IsZenkaiInstall
 Type: filesandordirs; Name: "{app}\app.old"; Check: IsZenkaiInstall
 Type: filesandordirs; Name: "{app}\.update"; Check: IsZenkaiInstall
+Type: filesandordirs; Name: "{app}\app"; Check: IsZenkaiInstall
 
 [Files]
 Source: "{#LayoutDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
