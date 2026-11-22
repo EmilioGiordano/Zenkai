@@ -75,6 +75,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       REF_NAME: ${{ github.ref_name }}
+      # One list for the key guard and the build, so the guard checks what is shipped.
+      RELEASE_PACKAGES: -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host ${{ matrix.launcher }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -108,14 +110,15 @@ jobs:
       - name: Refuse the test update keys
         shell: bash
         run: |
-          tree=$(cargo tree --locked -e features --prefix none -i zenkai -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host ${{ matrix.launcher }})
+          tree=$(cargo tree --locked -e features --prefix none -i zenkai $RELEASE_PACKAGES)
           if grep -F 'zenkai feature "test-keys"' <<< "$tree"; then
             echo "the release build enables the test-keys feature" >&2
             exit 1
           fi
 
       - name: Build
-        run: cargo build --locked --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host ${{ matrix.launcher }}
+        shell: bash
+        run: cargo build --locked --profile dist $RELEASE_PACKAGES
 
       - name: Fetch pdfium (Windows)
         if: runner.os == 'Windows'
