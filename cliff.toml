@@ -1,0 +1,39 @@
+# Drafts the next CHANGELOG.md section from merge commits of pull requests titled
+# "<type>: <summary>". Output is a starting point: edit it by hand before a release.
+# Usage: git cliff --unreleased --tag v0.2.0 --prepend CHANGELOG.md (untested)
+
+[changelog]
+header = ""
+body = """
+## [{{ version | trim_start_matches(pat="v") }}]
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = false
+filter_unconventional = false
+split_commits = false
+protect_breaking_commits = false
+filter_commits = true
+topo_order = false
+sort_commits = "oldest"
+tag_pattern = "v[0-9]*"
+# Merge commits read "Merge pull request #N from owner/type/topic"; the PR title is the
+# commit body, so it is matched there and the Merge line is rewritten to the title.
+commit_preprocessors = [
+  { pattern = '(?s)^Merge pull request #(\d+) from [^\n]*\n+(.*)$', replace = "$2 (#$1)" },
+]
+commit_parsers = [
+  { message = '^feat(\(.+\))?!?: ', group = "Added" },
+  { message = '^fix(\(.+\))?!?: ', group = "Fixed" },
+  { message = '^perf(\(.+\))?!?: ', group = "Performance" },
+  { message = '^(chore|test|docs)(\(.+\))?!?: ', skip = true },
+  { message = '.*', skip = true },
+]
