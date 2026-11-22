@@ -10041,6 +10041,7 @@ dependencies = [
  "zenkai-pdf-host",
  "zenkai-types",
  "zenkai-values-host",
+ "zip 9.3.0",
 ]
 
 [[package]]
