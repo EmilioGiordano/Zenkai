@@ -65,6 +65,7 @@ mod zoom_style;
 
 use crate::markdown_depth::Refusal;
 use preview::{Extensions, Images, blocked_image, extensions, verdicts};
+pub(crate) use preview::claim_html_and_math;
 
 impl EventEmitter<PaneEvent> for MarkdownPane {}
 

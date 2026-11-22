@@ -107,12 +107,17 @@ impl MarkdownPlugin for MathAsText {
     }
 }
 
-pub(super) fn extensions() -> MarkdownExtensions {
-    MarkdownExtensions::default()
-        .parser_revision(2)
+// Every view that shows text the depth check passed claims HTML and math with these, so the
+// text view never parses them again as something the check did not measure.
+pub(crate) fn claim_html_and_math(extensions: MarkdownExtensions) -> MarkdownExtensions {
+    extensions
         .plugin(HtmlAsText { block: false })
         .plugin(HtmlAsText { block: true })
         .plugin(MathAsText)
+}
+
+pub(super) fn extensions() -> MarkdownExtensions {
+    claim_html_and_math(MarkdownExtensions::default().parser_revision(2))
 }
 
 pub(super) fn blocked_image() -> ImageSource {
