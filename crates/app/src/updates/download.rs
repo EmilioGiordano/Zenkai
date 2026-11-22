@@ -107,10 +107,12 @@ pub fn follow<B>(
 }
 
 // No response timeout: ureq turns it into a fixed deadline for the whole body. A quiet server is
-// caught by `receive`; the per-read body timeout only ends a transfer thread nobody waits for.
+// caught by `receive`; these two timeouts only end a transfer thread nobody waits for: the
+// send-request one runs on until the headers arrive, the body one is per read.
 pub fn agent() -> ureq::Agent {
     let config = ureq::Agent::config_builder()
         .timeout_connect(Some(CONNECT_TIMEOUT))
+        .timeout_send_request(Some(PATIENCE.stall))
         .timeout_recv_body(Some(PATIENCE.stall))
         .https_only(true)
         .max_redirects(0)
