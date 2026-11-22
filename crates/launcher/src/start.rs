@@ -100,8 +100,8 @@ impl From<Settled> for Finish {
     }
 }
 
-// The app outlives the launcher: dropping the child's handle does not end it. It starts in the
-// install root, so its working directory never holds `app` open against the next swap.
+// The app outlives the launcher: dropping the child's handle does not end it. It keeps the
+// launcher's working directory, so a file named relative to where Zenkai was started opens.
 fn open(folders: &Folders, passed: &[OsString], notices: &[Notice]) -> Result<(), Message> {
     if !notices.is_empty() {
         notice::leave(folders, notices);
@@ -114,7 +114,6 @@ fn open(folders: &Folders, passed: &[OsString], notices: &[Notice]) -> Result<()
 pub fn open_app(folders: &Folders, passed: &[OsString]) -> io::Result<Child> {
     Command::new(folders.program())
         .args(passed)
-        .current_dir(folders.root())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
