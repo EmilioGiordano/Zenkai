@@ -68,7 +68,7 @@ pub fn after_first_window(window: AnyWindowHandle, workspace: &Entity<Workspace>
     };
     let workspace = workspace.downgrade();
     cx.spawn(async move |cx| {
-        if !confirm_with_retries(root, cx).await {
+        let Some(confirmation) = confirm_with_retries(root, cx).await else {
             let closed = window.update(cx, |_, window, cx| {
                 workspace.update(cx, |workspace, cx| workspace.close_unconfirmed(window, cx))
             });
@@ -77,7 +77,8 @@ pub fn after_first_window(window: AnyWindowHandle, workspace: &Entity<Workspace>
                 cx.update(|cx| cx.quit());
             }
             return;
-        }
+        };
+        announce_update(confirmation, &workspace, cx);
         #[cfg(windows)]
         cx.background_executor()
             .spawn(async move { uninstall_entry::record_version(root) })
@@ -86,25 +87,49 @@ pub fn after_first_window(window: AnyWindowHandle, workspace: &Entity<Workspace>
     .detach();
 }
 
-async fn confirm_with_retries(root: &'static Path, cx: &mut AsyncApp) -> bool {
+// Only the start that writes the marker is the first start of a new version.
+#[cfg(windows)]
+fn announce_update(
+    confirmation: Confirmation,
+    workspace: &WeakEntity<Workspace>,
+    cx: &mut AsyncApp,
+) {
+    if confirmation != Confirmation::Written {
+        return;
+    }
+    let Some(version) = crate::updates::Version::installed() else {
+        return;
+    };
+    let shown = workspace.update(cx, |workspace, cx| workspace.show_updated(version, cx));
+    if let Err(error) = shown {
+        tracing::debug!(%error, "the main window is gone before the update was announced");
+    }
+}
+
+// Only Windows installs updates.
+#[cfg(not(windows))]
+fn announce_update(_: Confirmation, _: &WeakEntity<Workspace>, _: &mut AsyncApp) {}
+
+async fn confirm_with_retries(root: &'static Path, cx: &mut AsyncApp) -> Option<Confirmation> {
     for attempt in 1..=CONFIRM_ATTEMPTS {
         let confirmed = cx
             .background_executor()
             .spawn(async move { confirm_start(root, VERSION) })
             .await;
         match confirmed {
-            Ok(Confirmation::Written) => {
-                tracing::info!("confirmed that this version starts");
-                return true;
+            Ok(confirmation) => {
+                if confirmation == Confirmation::Written {
+                    tracing::info!("confirmed that this version starts");
+                }
+                return Some(confirmation);
             }
-            Ok(Confirmation::NotUpdating | Confirmation::AlreadyWritten) => return true,
             Err(error) => {
                 tracing::warn!(%error, attempt, "could not confirm that this version starts");
             }
         }
         cx.background_executor().timer(CONFIRM_RETRY).await;
     }
-    false
+    None
 }
 
 #[derive(Debug, PartialEq, Eq)]

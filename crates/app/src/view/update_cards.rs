@@ -8,7 +8,9 @@ use gpui_kit::*;
 use zenkai_i18n::t;
 
 use super::notices::NoticeKind;
-use crate::actions::{CancelUpdate, DismissNotice, OpenReleases, RestartToUpdate, UpdateNow};
+use crate::actions::{
+    CancelUpdate, DismissNotice, OpenReleases, RestartToUpdate, ShowWhatsNew, UpdateNow,
+};
 use crate::keymap;
 use crate::updates::{self, DownloadPhase};
 
@@ -54,6 +56,10 @@ pub(super) fn download_heading(
         NoticeKind::UpdateBlocked(_) => Some((
             t!("update.blocked_title").into(),
             Icon::new(IconName::TriangleAlert).text_color(theme.warning),
+        )),
+        NoticeKind::Updated(version) => Some((
+            t!("update.updated_title", version = version).into(),
+            Icon::new(IconName::CircleCheck).text_color(theme.success),
         )),
         NoticeKind::Plain | NoticeKind::UpdateAvailable(_) => None,
     }
@@ -115,6 +121,15 @@ pub(super) fn download_parts(kind: NoticeKind, cx: &App) -> Vec<AnyElement> {
                 ))
                 .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenReleases), cx));
             vec![button_row(vec![later_button(cx), releases])]
+        }
+        NoticeKind::Updated(_) => {
+            let notes = Button::new("update-whats-new")
+                .ghost()
+                .small()
+                .label(t!("whats_new.name"))
+                .tooltip(keymap::labeled(cx, t!("whats_new.name"), &ShowWhatsNew))
+                .on_click(|_, window, cx| window.dispatch_action(Box::new(ShowWhatsNew), cx));
+            vec![button_row(vec![notes])]
         }
         NoticeKind::UpdateNotVerified(_) => {
             let again = Button::new("update-try-again")

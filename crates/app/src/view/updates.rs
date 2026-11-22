@@ -264,6 +264,12 @@ impl Workspace {
             self.dismiss_notice(window, cx);
         }
     }
+
+    // The first start of a new version, the one that confirmed it to the launcher.
+    #[cfg(windows)]
+    pub(crate) fn show_updated(&mut self, version: Version, cx: &mut Context<Self>) {
+        self.post_update_card(NoticeKind::Updated(version), t!("update.updated"), cx);
+    }
 }
 
 #[cfg(windows)]
