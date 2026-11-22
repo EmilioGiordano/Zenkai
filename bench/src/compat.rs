@@ -448,6 +448,7 @@ pub fn report(dir: &Path, out: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{check, generate};
+    use crate::compat_save::Outcome;
 
     // The corpus must keep opening, matching the cached values and surviving a save.
     #[test]
