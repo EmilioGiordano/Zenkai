@@ -30,7 +30,7 @@ First release. Windows x64; the Linux and macOS (Apple silicon) builds are exper
 ### AI
 
 - Chat assistant on the open workbook through Claude, Gemini CLI, Codex, opencode or Grok;
-  edits ask for approval first. Zenkai ships no model.
+  edits ask for approval by default. Zenkai ships no model.
 - `zenkai-mcp` lets MCP clients such as Claude Code work on the open workbook. Off by default.
 
 ### Install and updates
