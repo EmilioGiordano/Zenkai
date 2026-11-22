@@ -19,7 +19,7 @@ const PREVIEW_DELAY: Duration = Duration::from_millis(150);
 const FOLLOW_DELAY: Duration = Duration::from_millis(120);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Extensions {
+pub(crate) enum Extensions {
     NotDrawn,
     Drawing,
     Attached,
