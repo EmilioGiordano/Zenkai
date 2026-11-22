@@ -31,6 +31,7 @@ Zenkai checks GitHub for new versions when it opens, at most once a day; GitHub 
 Zenkai is young. It keeps charts, images and other content it cannot edit when it saves, and
 asks before a save would drop anything. Known gaps and plans are in the
 [roadmap](docs/ROADMAP.md).
+What each version changed is in the [changelog](CHANGELOG.md).
 
 ## Contributing
 
