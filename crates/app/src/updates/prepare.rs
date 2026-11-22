@@ -3,7 +3,7 @@ use std::io::{self, Seek};
 use std::iter;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::archive::{self, ArchiveError, FILE_ATTRIBUTE_REPARSE_POINT};
 use super::download::{self, DownloadError};
@@ -73,11 +73,13 @@ pub enum PrepareError {
 // Blocks: run it on a background thread. `fetch` writes the zip and the signature of one version
 // into `update`. What does not verify is deleted and the version before it gets its turn, so
 // one bad release cannot block updates; a failed download stops, since the next would fail too.
+// A cancel is honoured between steps too, and takes with it whatever the current try left.
 pub fn prepare(
     update: &Path,
     chosen: Version,
     older: &[Version],
     installed: Version,
+    cancel: &AtomicBool,
     mut fetch: impl FnMut(Version) -> Result<(), DownloadError>,
 ) -> Result<Version, PrepareError> {
     plain_folder(update).map_err(PrepareError::Disk)?;
@@ -86,6 +88,9 @@ pub fn prepare(
         .chain(older.iter().copied())
         .take(MAX_TRIES)
     {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(DownloadError::Cancelled.into());
+        }
         match fetch(version) {
             Ok(()) => {}
             Err(DownloadError::Status(NOT_FOUND)) => {
@@ -98,7 +103,12 @@ pub fn prepare(
                 return Err(error.into());
             }
         }
-        match verify_and_extract(update, version, installed) {
+        let checked = verify_and_extract(update, version, installed);
+        if cancel.load(Ordering::Relaxed) {
+            discard(update, version);
+            return Err(DownloadError::Cancelled.into());
+        }
+        match checked {
             Ok(()) => return Ok(version),
             Err(PendingError::Disk(error)) => {
                 discard(update, version);

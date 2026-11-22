@@ -50,7 +50,7 @@ pub fn start(cx: &mut App, chosen: Version) {
         .name("update download".to_owned())
         .spawn(move || {
             let agent = download::agent();
-            let result = prepare::prepare(&update, chosen, &older, installed, |version| {
+            let result = prepare::prepare(&update, chosen, &older, installed, &cancel, |version| {
                 send(&sender, Event::Trying(version));
                 prepare::fetch_release(&agent, &update, version, &cancel, |received, total| {
                     send(&sender, Event::Received { received, total })

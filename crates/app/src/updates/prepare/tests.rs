@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::super::archive::APP_FILES;
 use super::super::download::DownloadError;
@@ -18,6 +19,10 @@ fn version(text: &str) -> Version {
 
 fn installed() -> Version {
     version("0.1.0")
+}
+
+fn calm() -> AtomicBool {
+    AtomicBool::new(false)
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -70,10 +75,17 @@ fn the_names_match_the_release_and_the_launcher() {
 fn a_verified_release_is_extracted_and_its_zip_kept() {
     let folder = tempfile::tempdir().unwrap();
     let update = folder.path().join(".update");
-    let found = prepare(&update, version("0.2.0"), &[], installed(), |asked| {
-        serve(&update, asked, GOOD);
-        Ok(())
-    })
+    let found = prepare(
+        &update,
+        version("0.2.0"),
+        &[],
+        installed(),
+        &calm(),
+        |asked| {
+            serve(&update, asked, GOOD);
+            Ok(())
+        },
+    )
     .unwrap();
     assert_eq!(found, version("0.2.0"));
     let extracted = new_app(&update, found);
@@ -97,6 +109,7 @@ fn a_release_that_does_not_verify_is_deleted_and_the_previous_one_tried() {
         version("0.3.0"),
         &[version("0.2.0")],
         installed(),
+        &calm(),
         |wanted| {
             asked.borrow_mut().push(wanted);
             serve(&update, wanted, GOOD);
@@ -117,11 +130,18 @@ fn no_more_than_three_versions_are_tried_per_request() {
     let update = folder.path().join(".update");
     let asked = RefCell::new(Vec::new());
     let older = [version("0.4.0"), version("0.3.0"), version("0.2.0")];
-    let result = prepare(&update, version("0.5.0"), &older, installed(), |wanted| {
-        asked.borrow_mut().push(wanted);
-        serve(&update, wanted, STRANGER);
-        Ok(())
-    });
+    let result = prepare(
+        &update,
+        version("0.5.0"),
+        &older,
+        installed(),
+        &calm(),
+        |wanted| {
+            asked.borrow_mut().push(wanted);
+            serve(&update, wanted, STRANGER);
+            Ok(())
+        },
+    );
     assert!(matches!(
         result,
         Err(PrepareError::NotVerified(newest)) if newest == version("0.5.0")
@@ -134,10 +154,17 @@ fn no_more_than_three_versions_are_tried_per_request() {
 fn a_hostile_zip_that_verifies_is_refused_and_leaves_nothing() {
     let folder = tempfile::tempdir().unwrap();
     let update = folder.path().join(".update");
-    let result = prepare(&update, version("0.2.0"), &[], installed(), |wanted| {
-        serve(&update, wanted, HOSTILE);
-        Ok(())
-    });
+    let result = prepare(
+        &update,
+        version("0.2.0"),
+        &[],
+        installed(),
+        &calm(),
+        |wanted| {
+            serve(&update, wanted, HOSTILE);
+            Ok(())
+        },
+    );
     assert!(matches!(result, Err(PrepareError::NotVerified(_))));
     assert!(listed(&update).is_empty());
     assert!(!folder.path().join("escaped.txt").exists());
@@ -152,6 +179,7 @@ fn a_release_without_the_file_hands_over_to_the_previous_one() {
         version("0.3.0"),
         &[version("0.2.0")],
         installed(),
+        &calm(),
         |wanted| {
             if wanted == version("0.3.0") {
                 return Err(DownloadError::Status(404));
@@ -180,6 +208,7 @@ fn a_failed_or_cancelled_download_stops_and_cleans_up() {
             version("0.3.0"),
             &[version("0.2.0")],
             installed(),
+            &calm(),
             |wanted| {
                 *asked.borrow_mut() += 1;
                 fs::write(update.join(asset_name(wanted)), b"part").unwrap();
@@ -196,10 +225,17 @@ fn a_failed_or_cancelled_download_stops_and_cleans_up() {
 fn the_kept_zip_is_verified_again_from_disk() {
     let folder = tempfile::tempdir().unwrap();
     let update = folder.path().join(".update");
-    prepare(&update, version("0.2.0"), &[], installed(), |wanted| {
-        serve(&update, wanted, GOOD);
-        Ok(())
-    })
+    prepare(
+        &update,
+        version("0.2.0"),
+        &[],
+        installed(),
+        &calm(),
+        |wanted| {
+            serve(&update, wanted, GOOD);
+            Ok(())
+        },
+    )
     .unwrap();
     verify_and_extract(&update, version("0.2.0"), installed()).unwrap();
 
@@ -248,10 +284,17 @@ fn earlier_downloads_go_and_the_launcher_files_stay() {
     ] {
         fs::write(update.join(file), b"x").unwrap();
     }
-    prepare(&update, version("0.2.0"), &[], installed(), |wanted| {
-        serve(&update, wanted, GOOD);
-        Ok(())
-    })
+    prepare(
+        &update,
+        version("0.2.0"),
+        &[],
+        installed(),
+        &calm(),
+        |wanted| {
+            serve(&update, wanted, GOOD);
+            Ok(())
+        },
+    )
     .unwrap();
     assert_eq!(
         listed(&update),
@@ -274,8 +317,50 @@ fn an_update_folder_that_is_not_a_folder_stops_everything() {
     let folder = tempfile::tempdir().unwrap();
     let update = folder.path().join(".update");
     fs::write(&update, b"not a folder").unwrap();
-    let result = prepare(&update, version("0.2.0"), &[], installed(), |_| {
+    let result = prepare(&update, version("0.2.0"), &[], installed(), &calm(), |_| {
         panic!("nothing is downloaded")
     });
     assert!(matches!(result, Err(PrepareError::Disk(_))));
+}
+
+#[test]
+fn a_cancel_before_a_try_downloads_nothing() {
+    let folder = tempfile::tempdir().unwrap();
+    let update = folder.path().join(".update");
+    let result = prepare(
+        &update,
+        version("0.2.0"),
+        &[],
+        installed(),
+        &AtomicBool::new(true),
+        |_| panic!("nothing is downloaded after a cancel"),
+    );
+    assert!(matches!(
+        result,
+        Err(PrepareError::Download(DownloadError::Cancelled))
+    ));
+}
+
+#[test]
+fn a_cancel_during_the_checks_removes_what_the_try_left() {
+    let folder = tempfile::tempdir().unwrap();
+    let update = folder.path().join(".update");
+    let cancel = AtomicBool::new(false);
+    let result = prepare(
+        &update,
+        version("0.2.0"),
+        &[],
+        installed(),
+        &cancel,
+        |wanted| {
+            serve(&update, wanted, GOOD);
+            cancel.store(true, Ordering::Relaxed);
+            Ok(())
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(PrepareError::Download(DownloadError::Cancelled))
+    ));
+    assert!(listed(&update).is_empty());
 }
