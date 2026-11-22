@@ -14,12 +14,16 @@ jobs:
   verify:
     name: Verify the tag
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      keys: ${{ steps.keys.outputs.keys }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Check the tag is on main and matches the app version
+        id: version
         run: |
           rustup toolchain install
           version="${GITHUB_REF_NAME#v}"
@@ -32,6 +36,25 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match the app version $crate."
             exit 1
           fi
+          echo "version=$crate" >> "$GITHUB_OUTPUT"
+
+      # Without the real pair the shipped app could never install an update, nor any later one.
+      - name: Check the app carries the real update keys
+        id: keys
+        run: |
+          keys=$(awk '/^const RELEASE_KEYS/ { inside = 1 } inside { print } inside && /\];/ { exit }' \
+            crates/app/src/updates/signature.rs | grep -oE '"RW[A-Za-z0-9+/]{54}"' | tr -d '"' | sort -u)
+          if [ "$(wc -w <<< "$keys")" -ne 2 ]; then
+            echo "::error::RELEASE_KEYS in crates/app/src/updates/signature.rs must hold the current and next public keys (docs/RELEASING.md)."
+            exit 1
+          fi
+          for key in $keys; do
+            if [ "$(grep -cF "\"$key\"" crates/app/src/updates/signature.rs)" -ne 1 ]; then
+              echo "::error::The release key $key is also listed as a TEST key."
+              exit 1
+            fi
+          done
+          echo "keys=$(tr '\n' ' ' <<< "$keys")" >> "$GITHUB_OUTPUT"
 
       - name: Extract the changelog section
         run: |
