@@ -13,9 +13,12 @@ pub const PLATFORM: &str = "windows-arm64";
 const PRODUCT: &str = "zenkai";
 const READ_CHUNK: usize = 64 * 1024;
 
+// The maintainer's real public keys, current then next, go here (docs/RELEASING.md).
+#[cfg(any(test, not(feature = "test-keys")))]
+const RELEASE_KEYS: &[&str] = &[];
 // Without a real key compiled in, no update ever verifies, so none installs.
 #[cfg(not(any(test, feature = "test-keys")))]
-const TRUSTED_KEYS: &[&str] = &[];
+const TRUSTED_KEYS: &[&str] = RELEASE_KEYS;
 // TEST keys, current and next: their secret seeds are in tests/fixtures/update/make-fixtures.mjs,
 // so they must never be trusted by a build that ships.
 #[cfg(any(test, feature = "test-keys"))]
@@ -166,8 +169,8 @@ mod tests {
 
     use super::super::version::Version;
     use super::{
-        MAX_SIGNATURE_BYTES, PLATFORM, SignatureError, SignedRelease, TRUSTED_KEYS, decode,
-        has_trusted_key, parse_comment, verify, verify_with_keys,
+        MAX_SIGNATURE_BYTES, PLATFORM, RELEASE_KEYS, SignatureError, SignedRelease, TRUSTED_KEYS,
+        decode, has_trusted_key, parse_comment, verify, verify_with_keys,
     };
 
     fn version(text: &str) -> Version {
@@ -217,6 +220,22 @@ mod tests {
                 minisign_verify::PublicKey::from_base64(key).is_ok(),
                 "{key}"
             );
+        }
+    }
+
+    // Empty until the real pair is added; then two distinct usable keys, neither a TEST one.
+    #[test]
+    fn a_release_build_trusts_only_the_real_pair() {
+        assert!(matches!(RELEASE_KEYS.len(), 0 | 2), "{RELEASE_KEYS:?}");
+        for key in RELEASE_KEYS {
+            assert!(
+                minisign_verify::PublicKey::from_base64(key).is_ok(),
+                "{key}"
+            );
+            assert!(!TRUSTED_KEYS.contains(key), "{key} is a TEST key");
+        }
+        if let [current, next] = RELEASE_KEYS {
+            assert_ne!(current, next);
         }
     }
 
