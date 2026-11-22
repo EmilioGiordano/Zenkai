@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn a_column_past_any_real_one_is_invalid_not_an_overflow() {
+    let invalid = Err("Column is not valid.".to_string());
+    assert_eq!(column_to_number("AAAAAAAAAAAAAAAA"), invalid);
+    assert_eq!(column_to_number(&"Z".repeat(1_000)), invalid);
+    assert_eq!(
+        column_to_number("AAAAAAAAAAAAAAA1"),
+        Err("Column identifier can use only A-Z characters".to_string())
+    );
+}
+
+#[test]
 fn test_column_to_number() {
     assert_eq!(column_to_number("A"), Ok(1));
     assert_eq!(column_to_number("Z"), Ok(26));
