@@ -163,7 +163,11 @@ fn a_helper_that_ends_in_time_lets_the_update_go_on() {
         std::thread::sleep(Duration::from_millis(200));
         drop(held);
     });
-    let finish = run(&install, &TEST_TIMING);
+    let timing = Timing {
+        previous_exit: Duration::from_secs(10),
+        ..TEST_TIMING
+    };
+    let finish = run(&install, &timing);
     release.join().unwrap();
     assert!(matches!(finish, Finish::Running), "{finish:?}");
     assert!(!install.exists("app.old"));
