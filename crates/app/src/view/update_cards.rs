@@ -16,7 +16,7 @@ const BYTES_PER_TENTH_OF_MB: u64 = 100_000;
 // Decimal megabytes with at most one decimal, as in the approved mockup: "12.4 MB of 31 MB".
 fn megabytes(bytes: u64) -> String {
     let tenths = bytes.saturating_add(BYTES_PER_TENTH_OF_MB / 2) / BYTES_PER_TENTH_OF_MB;
-    if tenths % 10 == 0 {
+    if tenths.is_multiple_of(10) {
         (tenths / 10).to_string()
     } else {
         format!("{}.{}", tenths / 10, tenths % 10)
