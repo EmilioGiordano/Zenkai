@@ -1345,7 +1345,7 @@ impl<'a> Model<'a> {
 
     /// Evaluates all cells in a given range and returns the results in a 2D vector.
     /// A range whose nodes would pass `MAX_TEXT_ARRAY_BYTES` is the `#VALUE!` of `cell`
-    /// before any is built: five whole columns fit, six or the whole sheet do not. The texts
+    /// before any is built: six whole columns fit, seven or the whole sheet do not. The texts
     /// count too as they are copied, since cells sharing one long string each get a copy.
     pub(crate) fn evaluate_range(
         &mut self,
