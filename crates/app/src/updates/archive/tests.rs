@@ -3,7 +3,7 @@ use std::io::{Cursor, Write};
 use std::path::Path;
 
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipWriter};
+use zip::{CompressionMethod, System, ZipWriter};
 
 use super::{
     APP_FILES, ArchiveError, Entry, Kind, LIMITS, Limits, MAX_ENTRIES, extract, kind_of, select,
@@ -337,7 +337,9 @@ fn a_special_file_in_the_zip_refuses_it() {
     writer
         .start_file(
             format!("{TOP}pipe"),
-            stored().external_attributes(0o010_644 << 16),
+            stored()
+                .system(System::Unix)
+                .external_attributes(0o010_644 << 16),
         )
         .unwrap();
     let zip = writer.finish().unwrap().into_inner();
