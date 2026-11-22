@@ -104,6 +104,15 @@ jobs:
             xcodebuild -downloadComponent MetalToolchain
           fi
 
+      # The TEST update keys have committed secrets: a shipped app must never trust them.
+      - name: Refuse the test update keys
+        shell: bash
+        run: |
+          if cargo tree --locked -e features --prefix none -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host ${{ matrix.launcher }} | grep -F 'zenkai feature "test-keys"'; then
+            echo "the release build enables the test-keys feature" >&2
+            exit 1
+          fi
+
       - name: Build
         run: cargo build --locked --profile dist -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host ${{ matrix.launcher }}
 
