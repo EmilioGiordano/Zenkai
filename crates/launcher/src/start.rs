@@ -100,7 +100,8 @@ impl From<Settled> for Finish {
     }
 }
 
-// The app outlives the launcher: dropping the child's handle does not end it.
+// The app outlives the launcher: dropping the child's handle does not end it. It keeps the
+// launcher's working directory, so a file named relative to where Zenkai was started opens.
 fn open(folders: &Folders, passed: &[OsString], notices: &[Notice]) -> Result<(), Message> {
     if !notices.is_empty() {
         notice::leave(folders, notices);

@@ -12,12 +12,12 @@ use crate::close_prompt::CloseGoal;
 use crate::view::Workspace;
 use crate::{agent_settings, language};
 
-const RESTARTED_FLAG: &str = "--restarted";
+pub const RESTARTED_FLAG: &str = "--restarted";
 const PARENT_EXIT_LIMIT: Duration = Duration::from_secs(15);
 // The parent's handles close in one teardown, but the lock files may lag it by a moment.
 const AFTER_PARENT_EXIT: Duration = Duration::from_millis(300);
 #[cfg(windows)]
-const DETACHED_NEW_GROUP: u32 = 0x0000_0008 | 0x0000_0200;
+pub const DETACHED_NEW_GROUP: u32 = 0x0000_0008 | 0x0000_0200;
 
 struct MainWorkspace {
     window: AnyWindowHandle,

@@ -12,9 +12,9 @@ use gpui_kit::*;
 use crate::view::Workspace;
 
 const APP_FOLDER: &str = "app";
-const LAUNCHER: &str = "zenkai.exe";
+pub const LAUNCHER: &str = "zenkai.exe";
 const OLD_APP: &str = "app.old";
-const UPDATE: &str = ".update";
+pub const UPDATE: &str = ".update";
 const CONFIRMED: &str = "confirmed";
 const MAX_MARKER_BYTES: u64 = 32;
 // Ten tries two seconds apart end well inside the launcher's two minutes of waiting.
@@ -68,12 +68,7 @@ pub fn after_first_window(window: AnyWindowHandle, workspace: &Entity<Workspace>
     };
     let workspace = workspace.downgrade();
     cx.spawn(async move |cx| {
-        if confirm_with_retries(root, cx).await {
-            #[cfg(windows)]
-            cx.background_executor()
-                .spawn(async move { uninstall_entry::record_version(root) })
-                .await;
-        } else {
+        let Some(confirmation) = confirm_with_retries(root, cx).await else {
             let closed = window.update(cx, |_, window, cx| {
                 workspace.update(cx, |workspace, cx| workspace.close_unconfirmed(window, cx))
             });
@@ -81,30 +76,60 @@ pub fn after_first_window(window: AnyWindowHandle, workspace: &Entity<Workspace>
                 tracing::error!(%error, "the main window is gone; quitting");
                 cx.update(|cx| cx.quit());
             }
-        }
+            return;
+        };
+        announce_update(confirmation, &workspace, cx);
+        #[cfg(windows)]
+        cx.background_executor()
+            .spawn(async move { uninstall_entry::record_version(root) })
+            .await;
     })
     .detach();
 }
 
-async fn confirm_with_retries(root: &'static Path, cx: &mut AsyncApp) -> bool {
+// Only the start that writes the marker is the first start of a new version.
+#[cfg(windows)]
+fn announce_update(
+    confirmation: Confirmation,
+    workspace: &WeakEntity<Workspace>,
+    cx: &mut AsyncApp,
+) {
+    if confirmation != Confirmation::Written {
+        return;
+    }
+    let Some(version) = crate::updates::Version::installed() else {
+        return;
+    };
+    let shown = workspace.update(cx, |workspace, cx| workspace.show_updated(version, cx));
+    if let Err(error) = shown {
+        tracing::debug!(%error, "the main window is gone before the update was announced");
+    }
+}
+
+// Only Windows installs updates.
+#[cfg(not(windows))]
+fn announce_update(_: Confirmation, _: &WeakEntity<Workspace>, _: &mut AsyncApp) {}
+
+async fn confirm_with_retries(root: &'static Path, cx: &mut AsyncApp) -> Option<Confirmation> {
     for attempt in 1..=CONFIRM_ATTEMPTS {
         let confirmed = cx
             .background_executor()
             .spawn(async move { confirm_start(root, VERSION) })
             .await;
         match confirmed {
-            Ok(Confirmation::Written) => {
-                tracing::info!("confirmed that this version starts");
-                return true;
+            Ok(confirmation) => {
+                if confirmation == Confirmation::Written {
+                    tracing::info!("confirmed that this version starts");
+                }
+                return Some(confirmation);
             }
-            Ok(Confirmation::NotUpdating | Confirmation::AlreadyWritten) => return true,
             Err(error) => {
                 tracing::warn!(%error, attempt, "could not confirm that this version starts");
             }
         }
         cx.background_executor().timer(CONFIRM_RETRY).await;
     }
-    false
+    None
 }
 
 #[derive(Debug, PartialEq, Eq)]

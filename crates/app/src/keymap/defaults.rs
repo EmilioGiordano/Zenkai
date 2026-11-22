@@ -273,6 +273,8 @@ pub fn defaults() -> Vec<Binding> {
         bind("ctrl-c", CopyNotice, Some("NoticeCard")),
         bind("alt-u", UpdateNow, Some("NoticeCard")),
         bind("alt-c", CancelUpdate, Some("NoticeCard")),
+        bind("alt-r", RestartToUpdate, Some("NoticeCard")),
+        bind("alt-o", OpenReleases, Some("NoticeCard")),
         bind("ctrl-shift-j", ShowMessages, CONTEXT),
         bind("escape", CloseMessages, Some("MessagesPanel")),
         bind("down", NextMessage, Some("MessagesPanel")),

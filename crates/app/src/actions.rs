@@ -259,6 +259,8 @@ actions!(
         FocusNotice,
         UpdateNow,
         CancelUpdate,
+        RestartToUpdate,
+        OpenReleases,
         CheckForUpdates,
         ShowWhatsNew,
         ShowMessages,

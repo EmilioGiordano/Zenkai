@@ -38,6 +38,10 @@ pub(super) enum NoticeKind {
     UpdateReady(Version),
     #[cfg(windows)]
     UpdateNotVerified(Version),
+    #[cfg(windows)]
+    UpdateBlocked(Version),
+    #[cfg(windows)]
+    Updated(Version),
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +66,15 @@ impl Notice {
 
     pub fn is_update_available(&self) -> bool {
         matches!(self.kind, NoticeKind::UpdateAvailable(_))
+    }
+
+    // The cards whose way forward is the Releases page.
+    pub fn leads_to_releases(&self) -> bool {
+        #[cfg(windows)]
+        if matches!(self.kind, NoticeKind::UpdateBlocked(_)) {
+            return true;
+        }
+        self.is_update_available()
     }
 
     pub fn is_update(&self) -> bool {
@@ -232,6 +245,23 @@ impl Notices {
             self.held_update = None;
         }
         if downloading(&self.card) {
+            self.dismiss_card();
+        }
+    }
+
+    // An update whose download is gone takes its Ready card with it, also one held behind a
+    // problem, so it never offers a restart that has nothing to install.
+    #[cfg(windows)]
+    pub fn drop_ready_card(&mut self, version: Version) {
+        let ready = |notice: &Option<Notice>| {
+            notice
+                .as_ref()
+                .is_some_and(|notice| notice.kind == NoticeKind::UpdateReady(version))
+        };
+        if ready(&self.held_update) {
+            self.held_update = None;
+        }
+        if ready(&self.card) {
             self.dismiss_card();
         }
     }
