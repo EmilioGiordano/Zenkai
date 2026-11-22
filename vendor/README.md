@@ -120,6 +120,11 @@ cargo test --manifest-path vendor\ironcalc_base\Cargo.toml --target-dir target\v
 
 Meant for upstream, each with tests. Unless noted, each stands on its own:
 
+- `column_to_number` saturates while it reads the letters, so a column identifier longer
+  than any real one is `Column is not valid.` instead of overflowing, which panicked in
+  debug builds and could wrap to a valid column in release (`src/expressions/utils/mod.rs`).
+  Stands on its own. Test: `a_column_past_any_real_one_is_invalid_not_an_overflow` in
+  `src/expressions/utils/test.rs`.
 - Incremental recalculation: `src/dependency_index.rs`, `src/incremental.rs`,
   `src/user_model/recalculation.rs` and the hooks in `src/model.rs`, `src/new_empty.rs`,
   `src/lib.rs`, `src/user_model/{common,undo_redo,clipboard,mod}.rs`. Builds on
