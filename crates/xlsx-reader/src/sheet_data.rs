@@ -6,6 +6,7 @@ use ironcalc::base::cell_store::CellStore;
 use ironcalc::base::expressions::utils::{
     column_to_number, is_valid_column_number, is_valid_row, parse_reference_a1,
 };
+use ironcalc::base::open_budget::cell_text_bytes;
 use ironcalc::base::types::{Cell, Row};
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
@@ -61,6 +62,7 @@ pub(crate) struct SheetCells {
     cell_count: u64,
     string_bytes: u64,
     job_bytes: u64,
+    result_text_bytes: u64,
 }
 
 // What the memory budget is charged for, so a piece pays for the difference it added.
@@ -71,6 +73,7 @@ pub(crate) struct Totals {
     pub(crate) shapes: u64,
     pub(crate) rows: u64,
     pub(crate) bytes: u64,
+    pub(crate) result_text: u64,
 }
 
 impl SheetCells {
@@ -97,6 +100,7 @@ impl SheetCells {
             shapes: self.jobs.len() as u64,
             rows: self.data.row_count() as u64,
             bytes: self.string_bytes.saturating_add(self.job_bytes),
+            result_text: self.result_text_bytes,
         }
     }
 }
@@ -464,6 +468,7 @@ impl<'a> Scanner<'a, '_> {
                 place,
             }),
         };
+        self.cells.result_text_bytes += cell_text_bytes(&cell);
         cells.push((column_index, cell));
         Ok(())
     }
@@ -591,6 +596,14 @@ mod tests {
         let rows = r#"<row r="1"><c r="A1" t="inlineStr"><is><t>ab</t></is></c><c r="B1" t="inlineStr"><is><t>ab</t></is></c><c r="C1" t="inlineStr"><is><t>cde</t></is></c></row>"#;
         let cells = scan(rows).unwrap();
         assert_eq!(cells.totals().bytes, 2 + 3 + 2 * BYTES_PER_UNIQUE_STRING);
+    }
+
+    #[test]
+    fn the_text_each_formula_caches_is_charged_as_result_text() {
+        let rows = r#"<row r="1"><c r="A1" t="str"><f>LOWER(D1)</f><v>abcd</v></c><c r="B1" t="inlineStr"><f>UPPER(D1)</f><is><t>efghij</t></is></c><c r="C1" t="e"><f>1/0</f><v>#DIV/0!</v></c><c r="D1" t="inlineStr"><is><t>shared</t></is></c><c r="E1"><f>1+1</f><v>2</v></c></row>"#;
+        let cells = scan(rows).unwrap();
+        // The error holds its origin, "Sheet1!C1", beside its message.
+        assert_eq!(cells.totals().result_text, 4 + 6 + 9 + 7);
     }
 
     #[test]

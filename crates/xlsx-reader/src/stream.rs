@@ -188,6 +188,7 @@ impl CellCounter {
             shapes: 0,
             bytes: 0,
             rows: self.rows,
+            result_text: 0,
         }
     }
 
@@ -341,6 +342,7 @@ pub(crate) struct Budgets {
     used_shapes: AtomicU64,
     used_bytes: AtomicU64,
     used_rows: AtomicU64,
+    used_result_text: AtomicU64,
     // The worksheet bytes the archive declares and the bytes read from them so far,
     // only to report what a refused file would have needed.
     sheet_declared: AtomicU64,
@@ -375,6 +377,7 @@ impl Budgets {
             used_shapes: AtomicU64::new(0),
             used_bytes: AtomicU64::new(0),
             used_rows: AtomicU64::new(0),
+            used_result_text: AtomicU64::new(0),
             sheet_declared: AtomicU64::new(0),
             sheet_read: AtomicU64::new(0),
             entry_cap,
@@ -432,6 +435,10 @@ impl Budgets {
             .used_rows
             .fetch_add(additional.rows, Ordering::Relaxed)
             .saturating_add(additional.rows);
+        let result_text = self
+            .used_result_text
+            .fetch_add(additional.result_text, Ordering::Relaxed)
+            .saturating_add(additional.result_text);
         let declared = self.sheet_declared.load(Ordering::Relaxed);
         let read = self.sheet_read.load(Ordering::Relaxed);
         self.cells.check_route(
@@ -441,6 +448,7 @@ impl Budgets {
                 shapes,
                 bytes,
                 rows,
+                result_text,
             },
             route,
             (declared > 0).then_some((declared, read)),
@@ -570,6 +578,7 @@ impl<R: Read> Guard<'_, R> {
             shapes: 0,
             bytes,
             rows: 0,
+            result_text: 0,
         })
     }
 
@@ -831,6 +840,7 @@ mod tests {
             shapes: 0,
             bytes: 0,
             rows: 0,
+            result_text: 0,
         };
         let streaming = Budgets::with_cells(CellBudget::max_cells_for_test(1_000));
         assert!(streaming.check_usage(usage).is_ok());
@@ -848,6 +858,7 @@ mod tests {
             shapes: 0,
             bytes: 0,
             rows: 0,
+            result_text: 0,
         };
         let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(1_000));
         budgets.expect_sheet_bytes(u64::MAX);

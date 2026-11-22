@@ -10,6 +10,10 @@ use zenkai_engine::{
 use zenkai_types::{CellPos, SheetId};
 
 fn workbook_with_sheet(sheet_xml: &str) -> Vec<u8> {
+    workbook_with_named_sheet("Sheet1", sheet_xml)
+}
+
+fn workbook_with_named_sheet(sheet_name: &str, sheet_xml: &str) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = zip::write::FileOptions::default();
     let parts = [
@@ -23,7 +27,7 @@ fn workbook_with_sheet(sheet_xml: &str) -> Vec<u8> {
         ),
         (
             "xl/workbook.xml",
-            r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>"#.to_string(),
+            format!(r#"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="{sheet_name}" sheetId="1" r:id="rId1"/></sheets></workbook>"#),
         ),
         (
             "xl/_rels/workbook.xml.rels",
@@ -431,6 +435,50 @@ fn long_text_results_without_cached_values_open_whole() {
         .workbook
         .cell(SheetId(0), CellPos::parse_a1("A1000").unwrap());
     assert_eq!(last.text, format!("{}1000", "x".repeat(30_000)));
+}
+
+// The same results cached by the file are charged once, while the rows are read, and
+// evaluating them again adds nothing.
+#[test]
+fn long_text_results_with_cached_values_open_whole() {
+    let data: String = (1..=1_000)
+        .map(|row| {
+            let text = format!("{}{row}", "x".repeat(30_000));
+            format!(
+                r#"<row r="{row}"><c r="A{row}" t="str"><f>REPT("x",30000)&amp;{row}</f><v>{text}</v></c></row>"#
+            )
+        })
+        .collect();
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{data}</sheetData></worksheet>"#
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long-cached-text.xlsx");
+    std::fs::write(&path, workbook_with_sheet(&sheet)).unwrap();
+    let book = open_xlsx(&path).unwrap();
+    let last = book
+        .workbook
+        .cell(SheetId(0), CellPos::parse_a1("A1000").unwrap());
+    assert_eq!(last.text, format!("{}1000", "x".repeat(30_000)));
+}
+
+// Every error a formula caches holds its sheet's name, so a name past Excel's 31
+// characters is refused before any cell is read, on the fallback route too.
+#[test]
+fn a_sheet_name_past_excels_limit_is_refused_before_its_cells_are_read() {
+    let data: String = (1..=90_000)
+        .map(|row| format!(r#"<row r="{row}"><c r="A{row}" t="d"><f>1</f></c></row>"#))
+        .collect();
+    let sheet = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{data}</sheetData></worksheet>"#
+    );
+    let started = Instant::now();
+    let error = open_bytes(workbook_with_named_sheet(&"N".repeat(100_000), &sheet)).unwrap_err();
+    assert!(
+        error.contains("a sheet name is longer than 31 characters"),
+        "{error}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(60));
 }
 
 // The reader parses a formula's shape while the rows stream once it repeats, on its sheet

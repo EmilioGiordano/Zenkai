@@ -1071,6 +1071,38 @@ mod tests {
     }
 
     #[test]
+    fn a_sheet_name_up_to_excels_limit_is_read_and_a_longer_one_refused() {
+        for longest in ["N".repeat(31), "日".repeat(31)] {
+            let sheets = listed(&listing_archive(&[(longest.as_str(), "")], &[])).unwrap();
+            assert_eq!(sheets[0].name, longest);
+        }
+        let longer = "N".repeat(32);
+        let error = listed(&listing_archive(&[(longer.as_str(), "")], &[])).unwrap_err();
+        assert!(matches!(error, ReadError::Unreadable(_)), "{error}");
+    }
+
+    #[test]
+    fn the_fallback_walk_refuses_a_sheet_name_past_excels_limit() {
+        let longer = "N".repeat(32);
+        let workbook = workbook_of(&[(longer.as_str(), "rId1")]);
+        let rels = rels_of(&[("rId1", "/data/s1.xml")]);
+        let sheet = bare_cells(1);
+        let bytes = zipped(
+            &[
+                ("xl/workbook.xml", workbook.as_bytes()),
+                ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+                ("data/s1.xml", sheet.as_bytes()),
+            ],
+            false,
+        );
+        let budgets = Budgets::with_cells(CellBudget::max_cells_for_test(u64::MAX));
+        let meter = CompressedMeter::new();
+        let mut archive = zip::ZipArchive::new(meter.wrap(Cursor::new(bytes.as_slice()))).unwrap();
+        let error = scan_archive(&mut archive, &meter, &budgets, &|_, _| Ok(())).unwrap_err();
+        assert!(matches!(error, ReadError::Unreadable(_)), "{error}");
+    }
+
+    #[test]
     fn a_sheet_under_a_skipped_prefix_is_counted_and_an_unnamed_one_is_not() {
         for prefix in ["drawings", "charts", "media", "pivotCache", "pivotTables"] {
             let workbook = workbook_of(&[("A", "rId1")]);

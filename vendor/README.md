@@ -443,13 +443,17 @@ Zenkai-only, not for upstream:
 - `src/open_budget.rs` estimates the peak memory of opening a workbook (per cell,
   formula cell, distinct formula shape and row, measured with the `measure_open`
   instrument; one set for the streaming reader and a higher one for IronCalc's
-  importer) and `Model::from_workbook` refuses with a needs-about message that also
+  importer; plus, at 1.2x, the text cells hold past 200 bytes per formula: cached
+  results, spilled text and error messages, counted by `cell_text_bytes`) and
+  `Model::from_workbook` refuses with a needs-about message that also
   names the allowance, past sixty percent of RAM, instead of hanging the machine. Tests
   in the module.
 - `Model::evaluate_opened` (and `UserModel::evaluate_opened`) runs the first evaluation of
   a model `from_workbook` built and refuses it with the same message when the text its
   formulas return grows past what the estimate left: each formula's charge pays for 200
-  bytes, the rest comes from the budget's headroom at the same 1.2x margin. Growth is
+  bytes, less the text the cells already hold, which the estimate charged; the rest comes
+  from the budget's headroom at the same 1.2x margin, so a shrinking cell only refunds
+  charged bytes. Growth is
   charged where `set_cells_with_result` writes a value and refunded where a spill is
   cleared; a cell or row a spill adds costs what the estimate charges one read from the
   file. Past the budget no spill writes another cell and `evaluate_cell` evaluates
