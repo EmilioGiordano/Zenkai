@@ -49,28 +49,31 @@ pub fn parse_within(text: &str, limit: usize) -> Result<Node, Refusal> {
     if deeper_than(text, limit) {
         return Err(Refusal::TooDeep);
     }
-    let options = parse_options();
-    // The parser unwraps in places; a panic on a hostile text must not end a background task
-    // unseen, so it counts as a text that cannot be shown.
-    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        markdown::to_mdast(text, &options)
-    }));
-    let tree = match parsed {
-        Ok(Ok(tree)) => tree,
-        Ok(Err(error)) => {
-            tracing::debug!(%error, "text that could not be parsed is not shown");
-            return Err(Refusal::TooLarge);
-        }
-        Err(_) => {
-            tracing::error!("the Markdown parser panicked on a text; it is not shown");
-            return Err(Refusal::TooLarge);
-        }
-    };
+    let tree = parse_unwinding(text, &parse_options())?;
     if let Some(refusal) = over_budget(&tree, limit) {
         dismantle(tree);
         return Err(refusal);
     }
     Ok(tree)
+}
+
+// The parser unwraps in places; a panic on a hostile text must not end a background task
+// unseen, so it counts as a text that cannot be shown.
+fn parse_unwinding(text: &str, options: &ParseOptions) -> Result<Node, Refusal> {
+    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        markdown::to_mdast(text, options)
+    }));
+    match parsed {
+        Ok(Ok(tree)) => Ok(tree),
+        Ok(Err(error)) => {
+            tracing::debug!(%error, "text that could not be parsed is not shown");
+            Err(Refusal::TooLarge)
+        }
+        Err(_) => {
+            tracing::error!("the Markdown parser panicked on a text; it is not shown");
+            Err(Refusal::TooLarge)
+        }
+    }
 }
 
 pub fn preview_refusal(text: &str) -> Option<Refusal> {
@@ -869,45 +872,63 @@ mod tests {
         assert!(fits("it cost $5 and $10, or $*a*$ in math"));
     }
 
-    // What the view builds when text is appended: the blocks before the last stay as they were
-    // parsed, and the last block is parsed again together with the new text.
-    fn appended_depth(prefix: &str, delta: &str) -> usize {
+    // What the text view builds when text is appended to what it holds: the blocks before the
+    // last stay as they were parsed, and the last block is parsed again with the new text.
+    fn appended_tail(prefix: &str, delta: &str) -> String {
         let options = parse_options();
-        let Ok(Node::Root(first)) = markdown::to_mdast(prefix, &options) else {
-            return 0;
+        let Ok(Node::Root(first)) = parse_unwinding(prefix, &options) else {
+            return delta.to_owned();
         };
-        let (kept, restart) = match first.children.last().and_then(|block| block.position()) {
-            Some(position) => (
-                &first.children[..first.children.len() - 1],
-                position.start.offset,
-            ),
-            None => (&first.children[..], prefix.len()),
-        };
-        let mut deepest = kept
-            .iter()
-            .map(|block| tree_depth(block) + 1)
-            .max()
-            .unwrap_or(0);
-        let again = format!("{}{delta}", &prefix[restart..]);
-        if let Ok(tree) = markdown::to_mdast(&again, &options) {
-            deepest = deepest.max(tree_depth(&tree));
-        }
-        deepest
+        let restart = first
+            .children
+            .last()
+            .and_then(|block| block.position())
+            .map_or(prefix.len(), |position| position.start.offset);
+        format!("{}{delta}", &prefix[restart..])
     }
 
+    fn panics(text: &str) -> bool {
+        let options = parse_options();
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            markdown::to_mdast(text, &options)
+        }))
+        .is_err()
+    }
+
+    // An append makes the parser read a tail no check has seen: it can panic on it although it
+    // accepts the text before and the whole text, so text is replaced, never appended.
     #[test]
-    fn appending_to_accepted_text_stays_within_what_the_whole_text_was_measured_at() {
-        let cases = [
-            ("- a\n  - b", "\n    - c"),
-            ("> a\n> *b", "*\n> > c"),
-            ("para *a", " b* c\n\n- d"),
-            ("1. a\n", "   1. b\n      1. c"),
-        ];
-        for (prefix, delta) in cases {
-            let whole = format!("{prefix}{delta}");
-            let measured = tree_depth(&parse_within(&whole, MAX_NESTING).unwrap());
-            assert!(appended_depth(prefix, delta) <= measured);
-        }
+    fn the_tail_of_an_append_can_panic_the_parser_although_the_whole_text_does_not() {
+        let prefix = "****1) 1. 1) 
+  1) 10. $$";
+        let delta = "__
+
+  - -		1) 1. + 
+
+![1. 10.     ";
+        assert!(!panics(prefix));
+        assert!(!panics(&format!("{prefix}{delta}")));
+        let tail = appended_tail(prefix, delta);
+        assert_ne!(tail, format!("{prefix}{delta}"));
+        assert!(panics(&tail));
+        assert_eq!(
+            parse_within(&tail, MAX_NESTING).err(),
+            Some(Refusal::TooLarge)
+        );
+    }
+
+    // The same tail can also nest deeper than the whole text that was accepted.
+    #[test]
+    fn the_tail_of_an_append_can_nest_deeper_than_the_whole_text() {
+        let (prefix, delta) = (
+            "_
+> - - - - ",
+            "10. > > *> > > ",
+        );
+        let whole = parse_within(&format!("{prefix}{delta}"), 13).unwrap();
+        let tail = parse_within(&appended_tail(prefix, delta), 20).unwrap();
+        assert!(tree_depth(&whole) <= 13);
+        assert_eq!(tree_depth(&tail), 15);
     }
 
     const PIECES: &[&str] = &[
@@ -939,18 +960,6 @@ mod tests {
             let text = piece.repeat(times);
             if let Ok(tree) = parse_within(&text, MAX_NESTING) {
                 prop_assert!(tree_depth(&tree) <= MAX_NESTING);
-            }
-        }
-
-        #[test]
-        fn appending_never_builds_a_tree_deeper_than_the_whole_text_check_accepted(
-            prefix in assembled(),
-            delta in assembled(),
-            limit in 3usize..20,
-        ) {
-            let whole = format!("{prefix}{delta}");
-            if parse_within(&prefix, limit).is_ok() && parse_within(&whole, limit).is_ok() {
-                prop_assert!(appended_depth(&prefix, &delta) <= limit);
             }
         }
     }

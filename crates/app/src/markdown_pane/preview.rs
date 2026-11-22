@@ -19,7 +19,7 @@ const PREVIEW_DELAY: Duration = Duration::from_millis(150);
 const FOLLOW_DELAY: Duration = Duration::from_millis(120);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Extensions {
+pub(crate) enum Extensions {
     NotDrawn,
     Drawing,
     Attached,
@@ -107,12 +107,17 @@ impl MarkdownPlugin for MathAsText {
     }
 }
 
-pub(super) fn extensions() -> MarkdownExtensions {
-    MarkdownExtensions::default()
-        .parser_revision(2)
+// Every view that shows text the depth check passed claims HTML and math with these, so the
+// text view never parses them again as something the check did not measure.
+pub(crate) fn claim_html_and_math(extensions: MarkdownExtensions) -> MarkdownExtensions {
+    extensions
         .plugin(HtmlAsText { block: false })
         .plugin(HtmlAsText { block: true })
         .plugin(MathAsText)
+}
+
+pub(super) fn extensions() -> MarkdownExtensions {
+    claim_html_and_math(MarkdownExtensions::default().parser_revision(2))
 }
 
 pub(super) fn blocked_image() -> ImageSource {
@@ -198,8 +203,7 @@ impl MarkdownPane {
         self.refusal = refusal;
         let shown = if refusal.is_none() { text } else { "" };
         if self.extensions == Extensions::Attached {
-            self.preview
-                .update(cx, |preview, cx| preview.set_text(shown, cx));
+            self.show_text(shown, cx);
         } else {
             self.held_text = Some(shown.to_owned());
         }
@@ -222,9 +226,24 @@ impl MarkdownPane {
     fn attach_extensions(&mut self, cx: &mut Context<Self>) {
         self.extensions = Extensions::Attached;
         if let Some(text) = self.held_text.take() {
-            self.preview
-                .update(cx, |preview, cx| preview.set_text(&text, cx));
+            self.show_text(&text, cx);
         }
+    }
+
+    // The view appends when given text that extends what it holds, and parses an unchecked tail;
+    // emptying it first makes every hand over a replacement of exactly the checked text.
+    fn show_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        if text == self.previewed {
+            return;
+        }
+        let extends = !self.previewed.is_empty() && text.starts_with(&self.previewed);
+        self.preview.update(cx, |preview, cx| {
+            if extends {
+                preview.set_text("", cx);
+            }
+            preview.set_text(text, cx);
+        });
+        self.previewed = text.to_owned();
     }
 
     pub(super) fn schedule_follow(&mut self, cx: &mut Context<Self>) {

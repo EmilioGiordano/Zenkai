@@ -1,6 +1,3 @@
-use std::borrow::Cow;
-
-use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
 use zenkai_agent::chat::history::History;
 use zenkai_agent::chat::session::{Connection, SessionError, SessionEvent};
@@ -9,8 +6,9 @@ use zenkai_agent::chat::thread::{Effect, MessageId, NoticeKind, TurnEnd};
 use zenkai_agent::presets::Preset;
 use zenkai_i18n::t;
 
+use super::launch;
+use super::message_text::MessageText;
 use super::{ChatEvent, ChatPanel, Link, MAX_PENDING_ASKS, Problem, View};
-use super::{launch, reference_scan};
 use crate::agent_settings::AgentConfig;
 
 impl ChatPanel {
@@ -39,17 +37,8 @@ impl ChatPanel {
     }
 
     pub(super) fn link_references(&mut self, cx: &mut Context<Self>) {
-        for (id, state) in &self.texts {
-            if self.linked_messages.contains(id) {
-                continue;
-            }
-            let Some(raw) = self.thread.message_text(*id) else {
-                continue;
-            };
-            if let Cow::Owned(linked) = reference_scan::link_references(raw) {
-                state.update(cx, |state, cx| state.set_text(&linked, cx));
-            }
-            self.linked_messages.insert(*id);
+        for message in self.texts.values() {
+            message.update(cx, |message, cx| message.complete(cx));
         }
     }
 
@@ -196,10 +185,11 @@ impl ChatPanel {
         cx: &mut Context<Self>,
     ) {
         match self.texts.get(&message) {
-            Some(state) => state.update(cx, |state, cx| state.push_str(&added, cx)),
+            Some(text) => text.update(cx, |text, cx| text.append(&added, cx)),
             None => {
-                let state = cx.new(|cx| TextViewState::markdown(&added, cx));
-                self.texts.insert(message, state);
+                let panel = cx.weak_entity();
+                let text = cx.new(|cx| MessageText::new(panel, &added, cx));
+                self.texts.insert(message, text);
                 self.texts
                     .retain(|id, _| self.thread.message_text(*id).is_some());
             }

@@ -51,6 +51,7 @@ pub struct MarkdownPane {
     refusal: Option<Refusal>,
     extensions: Extensions,
     held_text: Option<String>,
+    previewed: String,
     images: Images,
     preview_task: Option<Task<()>>,
     depth_task: Option<Task<()>>,
@@ -64,7 +65,8 @@ mod preview;
 mod zoom_style;
 
 use crate::markdown_depth::Refusal;
-use preview::{Extensions, Images, blocked_image, extensions, verdicts};
+pub(crate) use preview::{Extensions, claim_html_and_math};
+use preview::{Images, blocked_image, extensions, verdicts};
 
 impl EventEmitter<PaneEvent> for MarkdownPane {}
 
@@ -117,6 +119,7 @@ impl MarkdownPane {
             refusal: None,
             extensions: Extensions::NotDrawn,
             held_text: None,
+            previewed: String::new(),
             images: Images::default(),
             preview_task: None,
             depth_task: None,
