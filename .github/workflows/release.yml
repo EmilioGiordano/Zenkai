@@ -108,7 +108,7 @@ jobs:
       - name: Refuse the test update keys
         shell: bash
         run: |
-          if cargo tree --locked -e features --prefix none -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host ${{ matrix.launcher }} | grep -F 'zenkai feature "test-keys"'; then
+          if cargo tree --locked -e features --prefix none -i zenkai -p zenkai -p zenkai-mcp -p zenkai-pdf-host -p zenkai-values-host ${{ matrix.launcher }} | grep -F 'zenkai feature "test-keys"'; then
             echo "the release build enables the test-keys feature" >&2
             exit 1
           fi

@@ -91,7 +91,7 @@ jobs:
       - name: Refuse the test update keys in the default build
         shell: bash
         run: |
-          if cargo tree -e features --prefix none -p zenkai | grep -F 'zenkai feature "test-keys"'; then
+          if cargo tree -e features --prefix none -i zenkai -p zenkai | grep -F 'zenkai feature "test-keys"'; then
             echo "the default build of zenkai enables the test-keys feature" >&2
             exit 1
           fi
