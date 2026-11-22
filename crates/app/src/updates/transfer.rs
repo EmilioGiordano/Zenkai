@@ -55,6 +55,7 @@ pub enum Event {
 pub struct Transfer {
     phase: Phase,
     cancel: Option<Arc<AtomicBool>>,
+    asked: Option<Version>,
     pub outcome: Option<Outcome>,
 }
 
@@ -71,6 +72,7 @@ impl Transfer {
         }
         let cancel = Arc::new(AtomicBool::new(false));
         self.cancel = Some(cancel.clone());
+        self.asked = Some(version);
         self.phase = Phase::Downloading {
             version,
             received: 0,
@@ -117,6 +119,17 @@ impl Transfer {
             Event::Finished(result) => return self.finish(result),
         }
         None
+    }
+
+    // A ready update stands for every version up to the one asked for: when that one did not
+    // verify, an older one took its place, and asking again would only delete it and repeat the
+    // fallback. A version newer than the one asked for downloads anew.
+    pub fn ready_for(&self, wanted: Version) -> Option<Version> {
+        let Phase::Ready(ready) = self.phase else {
+            return None;
+        };
+        let covered = self.asked.map_or(ready, |asked| asked.max(ready));
+        (wanted <= covered).then_some(ready)
     }
 
     pub fn cleaned_up(&mut self) {
@@ -357,5 +370,29 @@ mod tests {
         transfer.lose(&flag);
         assert_eq!(transfer.phase(), Phase::Idle);
         assert_eq!(transfer.outcome, None);
+    }
+
+    fn ready(asked: &str, got: &str) -> Transfer {
+        let mut transfer = Transfer::default();
+        transfer.begin(version(asked)).unwrap();
+        transfer.receive(Event::Finished(Ok(version(got))));
+        transfer
+    }
+
+    #[test]
+    fn an_older_version_ready_after_a_fallback_stands_for_the_one_asked_for() {
+        let transfer = ready("0.3.0", "0.2.0");
+        assert_eq!(transfer.phase(), Phase::Ready(version("0.2.0")));
+        assert_eq!(transfer.ready_for(version("0.3.0")), Some(version("0.2.0")));
+        assert_eq!(transfer.ready_for(version("0.2.0")), Some(version("0.2.0")));
+        assert_eq!(transfer.ready_for(version("0.3.1")), None);
+    }
+
+    #[test]
+    fn nothing_is_ready_for_anyone_while_not_ready() {
+        let mut transfer = Transfer::default();
+        assert_eq!(transfer.ready_for(version("0.2.0")), None);
+        transfer.begin(version("0.2.0")).unwrap();
+        assert_eq!(transfer.ready_for(version("0.2.0")), None);
     }
 }

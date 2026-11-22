@@ -95,3 +95,7 @@ fn send(sender: &Sender<Event>, event: Event) {
         tracing::debug!("nothing listens to the update download any more");
     }
 }
+
+pub fn ready_for(cx: &App, wanted: Version) -> Option<Version> {
+    cx.global::<Updates>().transfer.ready_for(wanted)
+}

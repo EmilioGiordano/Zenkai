@@ -122,12 +122,15 @@ impl Workspace {
 
     #[cfg(windows)]
     fn download_update(&mut self, version: Version, cx: &mut Context<Self>) {
-        match updates::download_phase(cx) {
-            DownloadPhase::Ready(ready) if ready >= version => self.post_update_card(
+        if let Some(ready) = updates::ready_for(cx, version) {
+            self.post_update_card(
                 NoticeKind::UpdateReady(ready),
                 t!("update.ready", version = ready),
                 cx,
-            ),
+            );
+            return;
+        }
+        match updates::download_phase(cx) {
             DownloadPhase::Downloading { version, .. } => self.post_update_card(
                 NoticeKind::UpdateDownloading(version),
                 t!("update.downloading"),

@@ -27,8 +27,8 @@ use gpui_kit::*;
 use crate::agent_settings::AgentConfig;
 #[cfg(windows)]
 pub use download_task::{
-    can_download, cancel as cancel_download, phase as download_phase, start as start_download,
-    take_outcome as take_download_outcome,
+    can_download, cancel as cancel_download, phase as download_phase, ready_for,
+    start as start_download, take_outcome as take_download_outcome,
 };
 use fetch::FetchError;
 pub use launcher_notice::LauncherNotice;
