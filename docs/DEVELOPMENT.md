@@ -177,6 +177,9 @@ GitHub Actions, in `.github/workflows/`:
   runs): `cargo deny check` on Linux.
 - `bench.yml` (manual runs only): builds the benchmark in release on Windows and runs the
   baseline check above. Each run uploads its numbers as the `bench-current` artifact.
+- `release.yml` (`v*` tags): builds and packages every platform, signs the update zips in a
+  separate job behind the `release-signing` environment, and publishes the release. The
+  signing keys and the release procedure are in [`RELEASING.md`](RELEASING.md).
 
 The baseline in `bench\baseline.csv` comes from the Phase 0 run on a desktop machine, not
 from a CI runner, so the timing gate fails until it is refreshed: copy the `bench-current`
