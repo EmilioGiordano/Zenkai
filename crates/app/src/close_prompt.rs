@@ -190,6 +190,34 @@ pub enum Purpose {
     App,
 }
 
+// What a new request to close the app meets: nothing, a close of the app it joins, or something
+// it cannot get past (a tab being closed, a prompt waiting for an answer).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CloseRoom {
+    Free,
+    AppClosing,
+    Blocked,
+}
+
+impl CloseRoom {
+    pub fn of(
+        app_closing: bool,
+        dialog: Option<Purpose>,
+        departure: Option<Purpose>,
+        prompt_open: bool,
+    ) -> CloseRoom {
+        let app = |purpose: Option<Purpose>| purpose == Some(Purpose::App);
+        let tab = |purpose: Option<Purpose>| matches!(purpose, Some(Purpose::Tab(_)));
+        if app_closing || app(dialog) || app(departure) {
+            CloseRoom::AppClosing
+        } else if tab(dialog) || tab(departure) || prompt_open {
+            CloseRoom::Blocked
+        } else {
+            CloseRoom::Free
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Next {
     Save(WorkbookId),
@@ -288,6 +316,22 @@ mod tests {
         let choices = Choices::new(Vec::new(), false);
         assert!(choices.clone().starts_empty());
         assert!(!choices.closing_to(CloseGoal::Restart).starts_empty());
+    }
+
+    #[test]
+    fn a_close_of_the_app_under_way_is_joined_before_anything_blocks() {
+        let tab = Some(Purpose::Tab(WorkbookId(1)));
+        let app = Some(Purpose::App);
+        assert_eq!(CloseRoom::of(false, None, None, false), CloseRoom::Free);
+        assert_eq!(CloseRoom::of(true, None, None, true), CloseRoom::AppClosing);
+        assert_eq!(CloseRoom::of(false, app, None, true), CloseRoom::AppClosing);
+        assert_eq!(
+            CloseRoom::of(false, None, app, false),
+            CloseRoom::AppClosing
+        );
+        assert_eq!(CloseRoom::of(false, tab, None, false), CloseRoom::Blocked);
+        assert_eq!(CloseRoom::of(false, None, tab, false), CloseRoom::Blocked);
+        assert_eq!(CloseRoom::of(false, None, None, true), CloseRoom::Blocked);
     }
 
     #[cfg(windows)]

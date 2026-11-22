@@ -160,6 +160,11 @@ impl Workspace {
         }
     }
 
+    pub(super) fn close_dialog_purpose(&self) -> Option<(Purpose, CloseGoal)> {
+        let dialog = self.close_dialog.as_ref()?;
+        Some((dialog.purpose, dialog.choices.goal))
+    }
+
     pub(super) fn retarget_close_dialog(&mut self, goal: CloseGoal) {
         if let Some(dialog) = self.close_dialog.as_mut() {
             dialog.choices.goal = dialog.choices.goal.outranking(goal);

@@ -6,6 +6,8 @@ use super::Workspace;
 use super::lifecycle::Lifecycle;
 use super::notices::{Lifetime, NoticeKind, Severity};
 use crate::close_prompt::CloseGoal;
+#[cfg(windows)]
+use crate::close_prompt::CloseRoom;
 use crate::updates::{self, LauncherNotice, Report, Version};
 #[cfg(windows)]
 use crate::updates::{Blocked, DownloadOutcome, DownloadPhase, StageError};
@@ -194,9 +196,16 @@ impl Workspace {
     // goes through its normal close, unsaved work prompt included, and hands over to the launcher.
     #[cfg(windows)]
     pub(super) fn restart_to_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.close_under_way() {
-            tracing::debug!("a close is already under way; Restart now waits");
-            return;
+        match self.close_room() {
+            CloseRoom::Free => {}
+            CloseRoom::AppClosing => {
+                self.notify(Severity::Info, t!("update.already_closing"), cx);
+                return;
+            }
+            CloseRoom::Blocked => {
+                self.notify(Severity::Warning, t!("update.close_blocked"), cx);
+                return;
+            }
         }
         if matches!(
             updates::download_phase(cx),
@@ -226,11 +235,22 @@ impl Workspace {
     }
 
     #[cfg(windows)]
-    fn close_under_way(&self) -> bool {
-        self.lifecycle == Lifecycle::Closing
-            || self.pending_goal.is_some()
-            || self.close_dialog.is_some()
-            || self.departure.is_some()
+    fn close_room(&self) -> CloseRoom {
+        CloseRoom::of(
+            self.lifecycle == Lifecycle::Closing || self.pending_goal.is_some(),
+            self.close_dialog_purpose().map(|(purpose, _)| purpose),
+            self.departure.as_ref().map(|departure| departure.purpose),
+            self.prompts.blocks_input(),
+        )
+    }
+
+    // The goal the close of the app now carries, wherever it is held.
+    #[cfg(windows)]
+    fn close_goal_held(&self) -> Option<CloseGoal> {
+        self.close_dialog_purpose()
+            .map(|(_, goal)| goal)
+            .or_else(|| self.departure.as_ref().map(|departure| departure.plan.goal))
+            .or(self.pending_goal)
     }
 
     // Every way a close of the app is called off ends here, so a staged update goes back to
@@ -289,16 +309,26 @@ impl Workspace {
     }
 
     // Like a restart for a new language: the window comes back from the tray for the unsaved
-    // work prompt. A close that cannot start now says so instead of waiting silently.
+    // work prompt. A close that cannot start now says so instead of waiting silently, and a
+    // close that does not carry this update leaves it ready, so no staged update is left behind.
     #[cfg(windows)]
     fn close_to_update(&mut self, version: Version, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.close_under_way() && self.prompts.blocks_input() {
+        if updates::download_phase(cx) != DownloadPhase::Staged(version) {
+            return;
+        }
+        let room = self.close_room();
+        if room == CloseRoom::Blocked {
             updates::unstage(cx);
             self.notify(Severity::Warning, t!("update.close_blocked"), cx);
             return;
         }
         crate::tray::request_show(cx);
         self.request_close(CloseGoal::Update(version), window, cx);
+        let started_here = room == CloseRoom::Free && self.lifecycle == Lifecycle::Closing;
+        let carried = self.close_goal_held() == Some(CloseGoal::Update(version));
+        if !started_here && !carried {
+            updates::unstage(cx);
+        }
     }
 
     pub(super) fn open_releases(&mut self, window: &mut Window, cx: &mut Context<Self>) {
