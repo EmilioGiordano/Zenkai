@@ -192,6 +192,7 @@ pub enum Purpose {
 
 // What a new request to close the app meets: nothing, a close of the app it joins, or something
 // it cannot get past (a tab being closed, a prompt waiting for an answer).
+#[cfg(windows)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CloseRoom {
     Free,
@@ -199,6 +200,7 @@ pub enum CloseRoom {
     Blocked,
 }
 
+#[cfg(windows)]
 impl CloseRoom {
     pub fn of(
         app_closing: bool,
@@ -318,6 +320,7 @@ mod tests {
         assert!(!choices.closing_to(CloseGoal::Restart).starts_empty());
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_close_of_the_app_under_way_is_joined_before_anything_blocks() {
         let tab = Some(Purpose::Tab(WorkbookId(1)));
