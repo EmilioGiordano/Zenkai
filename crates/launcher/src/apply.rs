@@ -81,9 +81,11 @@ fn swap(folders: &Folders, version: &Version, passed: &[OsString], timing: &Timi
     settle::reject(folders, Some(version.clone()), timing).into()
 }
 
+// The app's helpers run from `app` too and may outlive it for a moment; the folder only moves
+// once none of its programs runs.
 fn previous_app_closed(folders: &Folders, timing: &Timing) -> bool {
     let deadline = Instant::now() + timing.previous_exit;
-    while disk::running(&folders.program()) == Running::Yes {
+    while disk::any_running(&folders.app()) == Running::Yes {
         if Instant::now() >= deadline {
             return false;
         }

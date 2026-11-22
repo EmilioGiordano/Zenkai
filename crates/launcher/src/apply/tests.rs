@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use super::apply;
 use crate::arguments::Version;
+use crate::disk::{self, Running};
 use crate::fake_app::{self, ARGUMENTS, Behavior};
 use crate::message::Message;
 use crate::notice::Notice;
@@ -130,6 +131,57 @@ fn a_previous_version_that_does_not_close_is_left_alone() {
     assert_eq!(
         install.version_in(".update/new-0.2.0").as_deref(),
         Some("new")
+    );
+}
+
+#[test]
+fn a_helper_of_the_previous_version_still_running_is_waited_for() {
+    let install = Install::new();
+    install.put_version("app", "old");
+    install.write("app/zenkai-pdf-host.exe", "helper");
+    install.put_version(".update/new-0.2.0", "new");
+    let held = install.hold("app/zenkai-pdf-host.exe");
+    let started = std::time::Instant::now();
+    let finish = run(&install, &TEST_TIMING);
+    drop(held);
+    assert!(started.elapsed() >= TEST_TIMING.previous_exit);
+    assert!(
+        matches!(finish, Finish::OpenAndTell(Message::NotClosed)),
+        "{finish:?}"
+    );
+    assert_eq!(install.version_in("app").as_deref(), Some("old"));
+    assert!(!install.exists("app.old"));
+    assert!(install.exists(".update/new-0.2.0/zenkai.exe"));
+}
+
+#[test]
+fn a_helper_that_ends_in_time_lets_the_update_go_on() {
+    let install = with_new_version(Behavior::Confirm("0.2.0"));
+    install.write("app/zenkai-values-host.exe", "helper");
+    let held = install.hold("app/zenkai-values-host.exe");
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        drop(held);
+    });
+    let finish = run(&install, &TEST_TIMING);
+    release.join().unwrap();
+    assert!(matches!(finish, Finish::Running), "{finish:?}");
+    assert!(!install.exists("app.old"));
+}
+
+#[test]
+fn only_programs_count_as_running() {
+    let install = Install::new();
+    install.put_version("app", "old");
+    let held = install.hold("app/pdfium.dll");
+    assert_eq!(disk::any_running(&install.path("app")), Running::No);
+    drop(held);
+    let held = install.hold("app/zenkai.exe");
+    assert_eq!(disk::any_running(&install.path("app")), Running::Yes);
+    drop(held);
+    assert_eq!(
+        disk::any_running(&install.path("missing")),
+        Running::Unknown
     );
 }
 

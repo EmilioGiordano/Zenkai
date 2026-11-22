@@ -50,6 +50,41 @@ pub fn running(program: &Path) -> Running {
     }
 }
 
+// Every program directly in `folder`, the app and its helpers. A folder that cannot be listed
+// says nothing either way.
+pub fn any_running(folder: &Path) -> Running {
+    let entries = match fs::read_dir(folder) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::warn!(%error, "could not list the programs of the app");
+            return Running::Unknown;
+        }
+    };
+    let mut answer = Running::No;
+    for entry in entries {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(error) => {
+                tracing::warn!(%error, "could not list the programs of the app");
+                answer = Running::Unknown;
+                continue;
+            }
+        };
+        let program = path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"));
+        if !program {
+            continue;
+        }
+        match running(&path) {
+            Running::Yes => return Running::Yes,
+            Running::Unknown => answer = Running::Unknown,
+            Running::No => {}
+        }
+    }
+    answer
+}
+
 // The launcher writes and deletes only inside `.update`; one that is a link or a junction could
 // lead anywhere, so it is refused and nothing is evaluated, locked or logged.
 pub fn prepare_update_folder(folders: &Folders) -> io::Result<()> {
