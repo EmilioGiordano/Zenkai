@@ -19,9 +19,7 @@ pub fn phase(cx: &App) -> Phase {
 // Called from an observer of `Updates`, like `take_report`: it updates the global only when
 // there is something to take.
 pub fn take_outcome(cx: &mut App) -> Option<Outcome> {
-    if cx.global::<Updates>().transfer.outcome.is_none() {
-        return None;
-    }
+    cx.global::<Updates>().transfer.outcome.as_ref()?;
     cx.update_global::<Updates, _>(|updates, _| updates.transfer.outcome.take())
 }
 
