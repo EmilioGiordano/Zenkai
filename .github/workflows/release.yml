@@ -14,12 +14,16 @@ jobs:
   verify:
     name: Verify the tag
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      keys: ${{ steps.keys.outputs.keys }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Check the tag is on main and matches the app version
+        id: version
         run: |
           rustup toolchain install
           version="${GITHUB_REF_NAME#v}"
@@ -32,6 +36,36 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME does not match the app version $crate."
             exit 1
           fi
+          echo "version=$crate" >> "$GITHUB_OUTPUT"
+
+      # Without the real pair the shipped app could never install an update, nor any later one.
+      - name: Check the app carries the real update keys
+        id: keys
+        run: |
+          # Comment lines are dropped and every other line must be one quoted key, so a key
+          # that is commented out, or trails a comment, is never counted as compiled in.
+          body=$(awk '
+            /^const RELEASE_KEYS: &\[&str\] = &\[\];$/ { exit }
+            /^const RELEASE_KEYS: &\[&str\] = &\[$/ { inside = 1; next }
+            inside && /^\];$/ { exit }
+            inside { print }
+          ' crates/app/src/updates/signature.rs | grep -vE '^[[:space:]]*(//.*)?$' || true)
+          if grep -vxE '[[:space:]]*"RW[A-Za-z0-9+/]{54}",' <<< "$body" | grep -q .; then
+            echo "::error::Every line of RELEASE_KEYS must be one quoted public key and a comma."
+            exit 1
+          fi
+          keys=$(grep -oE 'RW[A-Za-z0-9+/]{54}' <<< "$body" | sort -u || true)
+          if [ "$(wc -w <<< "$keys")" -ne 2 ]; then
+            echo "::error::RELEASE_KEYS in crates/app/src/updates/signature.rs must hold the current and next public keys (docs/RELEASING.md)."
+            exit 1
+          fi
+          for key in $keys; do
+            if [ "$(grep -cF "\"$key\"" crates/app/src/updates/signature.rs)" -ne 1 ]; then
+              echo "::error::The release key $key is also listed as a TEST key."
+              exit 1
+            fi
+          done
+          echo "keys=$(tr '\n' ' ' <<< "$keys")" >> "$GITHUB_OUTPUT"
 
       - name: Extract the changelog section
         run: |
@@ -149,19 +183,122 @@ jobs:
           cp target/dist/zenkai target/dist/zenkai-mcp target/dist/zenkai-pdf-host target/dist/zenkai-values-host LICENSE README.md "$name"
           tar -czf "$name.tar.gz" "$name"
 
+      # Only the Windows build may hand over a zip: the sign job signs every zip it is given.
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: runner.os == 'Windows'
         with:
           name: zenkai-${{ matrix.target }}
           path: |
             zenkai-*.zip
             zenkai-*-setup.exe
             zenkai-*-setup.exe.sha256
-            zenkai-*.tar.gz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: runner.os != 'Windows'
+        with:
+          name: zenkai-${{ matrix.target }}
+          path: zenkai-*.tar.gz
+          if-no-files-found: error
+
+  # Holds the signing secret, so it runs no code from the repository or its dependencies:
+  # it only downloads the built zips, a pinned minisign, and signs.
+  sign:
+    name: Sign the update zips
+    needs: [verify, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release-signing
+    permissions: {}
+    defaults:
+      run:
+        shell: bash
+    env:
+      REF_NAME: ${{ github.ref_name }}
+      APP_VERSION: ${{ needs.verify.outputs.version }}
+      RELEASE_KEYS: ${{ needs.verify.outputs.keys }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zenkai-windows-x64
+          path: artifacts
+
+      # jedisct1/minisign 0.12; the hash is of the tarball its author's key signs.
+      - name: Install minisign
+        run: |
+          mkdir "$RUNNER_TEMP/minisign"
+          cd "$RUNNER_TEMP/minisign"
+          curl -fsSL --proto '=https' -o minisign.tar.gz \
+            https://github.com/jedisct1/minisign/releases/download/0.12/minisign-0.12-linux.tar.gz
+          echo "9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73  minisign.tar.gz" | sha256sum --check --strict
+          tar --warning=no-unknown-keyword -xzf minisign.tar.gz minisign-linux/x86_64/minisign
+          echo "$RUNNER_TEMP/minisign/minisign-linux/x86_64" >> "$GITHUB_PATH"
+
+      - name: Sign every zip as zenkai/<version>/<platform>
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          version="${REF_NAME#v}"
+          # The updater reads only plain vX.Y.Z tags, so a prerelease is never signed.
+          if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Only a plain vX.Y.Z tag is signed; $REF_NAME is not one."
+            exit 1
+          fi
+          if [ "$version" != "$APP_VERSION" ]; then
+            echo "::error::Tag $REF_NAME does not match the app version $APP_VERSION."
+            exit 1
+          fi
+          if [ -z "$MINISIGN_SECRET_KEY" ] || [ -z "$MINISIGN_PASSWORD" ]; then
+            echo "::error::The release-signing environment lacks MINISIGN_SECRET_KEY or MINISIGN_PASSWORD."
+            exit 1
+          fi
+          key="$RUNNER_TEMP/zenkai.key"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key")
+          shopt -s nullglob
+          zips=(artifacts/zenkai-*.zip)
+          if [ "${#zips[@]}" -eq 0 ]; then
+            echo "::error::The builds produced no zip to sign."
+            exit 1
+          fi
+          mkdir signatures
+          for zip in "${zips[@]}"; do
+            name=$(basename "$zip")
+            platform="${name#"zenkai-$REF_NAME-"}"
+            platform="${platform%.zip}"
+            # An updater PLATFORM name (crates/app/src/updates/signature.rs) that release builds.
+            case "$platform" in
+              windows-x64) ;;
+              *)
+                echo "::error::$name is not named zenkai-$REF_NAME-<platform>.zip for a platform the updater knows."
+                exit 1
+                ;;
+            esac
+            comment="zenkai/$version/$platform"
+            printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$key" -m "$zip" -x "signatures/$name.minisig" -t "$comment"
+            signed=""
+            for public in $RELEASE_KEYS; do
+              if signed=$(minisign -V -Q -P "$public" -m "$zip" -x "signatures/$name.minisig" 2>/dev/null); then
+                break
+              fi
+            done
+            if [ "$signed" != "$comment" ]; then
+              echo "::error::$name.minisig does not verify as $comment with a key the app trusts."
+              exit 1
+            fi
+          done
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signatures
+          path: signatures/*.minisig
           if-no-files-found: error
 
   release:
     name: Publish release
-    needs: [verify, build]
+    needs: [verify, build, sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -170,12 +307,29 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: zenkai-*
-          merge-multiple: true
+          name: zenkai-windows-x64
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zenkai-linux-x64
+          path: unix
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: zenkai-macos-arm64
+          path: unix
+
+      # The zips come from the Windows build alone, the one the sign job signed.
+      - name: Take only the tarballs from the Linux and macOS builds
+        run: mv unix/zenkai-*.tar.gz .
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: notes
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: signatures
 
       - name: Write checksums
         run: sha256sum zenkai-*.zip zenkai-*-setup.exe zenkai-*.tar.gz > SHA256SUMS
@@ -186,6 +340,6 @@ jobs:
         run: |
           prerelease=()
           case "$GITHUB_REF_NAME" in *-*) prerelease=(--prerelease) ;; esac
-          gh release create "$GITHUB_REF_NAME" zenkai-*.zip zenkai-*-setup.exe zenkai-*-setup.exe.sha256 zenkai-*.tar.gz SHA256SUMS \
+          gh release create "$GITHUB_REF_NAME" zenkai-*.zip zenkai-*.zip.minisig zenkai-*-setup.exe zenkai-*-setup.exe.sha256 zenkai-*.tar.gz SHA256SUMS \
             --title "$GITHUB_REF_NAME" \
             --notes-file notes.md "${prerelease[@]}"
