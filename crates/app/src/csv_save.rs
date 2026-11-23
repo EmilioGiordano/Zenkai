@@ -401,7 +401,15 @@ mod tests {
     #[test]
     fn an_edited_number_reopens_as_the_same_number() {
         let dir = tempfile::tempdir().unwrap();
-        let cases: [(&str, &[u8], &str, &[u8], f64); 4] = [
+        // File name, file, typed edit, saved file, value read back.
+        type Case = (
+            &'static str,
+            &'static [u8],
+            &'static str,
+            &'static [u8],
+            f64,
+        );
+        let cases: [Case; 4] = [
             (
                 "comma.csv",
                 b"a;b\n1,5;2\n",

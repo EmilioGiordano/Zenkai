@@ -276,7 +276,9 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use zenkai_i18n::t;
+
+    use super::{KEEP_CSV, Losses, SAVE_AS_XLSX, loss_answers, loss_list};
 
     #[test]
     fn the_format_prompt_defaults_to_cancel_and_offers_both_ways_out() {
