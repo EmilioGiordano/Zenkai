@@ -483,31 +483,14 @@ impl Document {
             return;
         };
         let seen = binding.seen_edits;
-        let read = |workbook: &Workbook| {
-            (
-                workbook.format_edits(),
-                workbook.line_ops_since(seen.structure),
-            )
-        };
-        let (edits, line_ops) = match self.workbook.try_read() {
-            Ok(workbook) => read(&*workbook),
+        let read =
+            |workbook: &Workbook| (workbook.format_edits(), workbook.changes_since(seen.seq));
+        let (edits, changes) = match self.workbook.try_read() {
+            Ok(workbook) => read(&workbook),
             Err(TryLockError::WouldBlock) => return,
-            Err(TryLockError::Poisoned(poisoned)) => read(&*poisoned.into_inner()),
+            Err(TryLockError::Poisoned(poisoned)) => read(&poisoned.into_inner()),
         };
-        binding.introduced.number_formats |= edits.numbers > seen.numbers;
-        binding.introduced.formatting |= edits.other > seen.other;
-        binding.introduced.moved_cells |= edits.moved > seen.moved;
-        if edits.structure > seen.structure {
-            match line_ops {
-                Some(ops) => {
-                    for op in ops {
-                        binding.introduced.moved_cells |= !binding.lines.push(op);
-                    }
-                }
-                None => binding.introduced.moved_cells = true,
-            }
-        }
-        binding.seen_edits = edits;
+        binding.note(edits, changes);
     }
 
     pub fn sheets_stale(&self) -> bool {
@@ -1046,7 +1029,7 @@ mod tests {
         }
         document.finish_batch(generation);
         assert!(!binding(&document).introduced.any());
-        assert_eq!(binding(&document).lines.as_slice().len(), 1);
+        assert_eq!(binding(&document).log.changes().count(), 2);
 
         document
             .workbook

@@ -7,9 +7,9 @@ use zenkai_types::{SheetId, WorkbookId};
 
 use crate::csv_options::{CsvBinding, Losses};
 use crate::document::{self, Document, FileJob, SharedWorkbook};
+use crate::edit_log::EditLog;
 use crate::entry::{CsvLoad, Entry, Link, LinkStatus, Slot};
 use crate::files;
-use crate::line_map::LineOps;
 use crate::pdf_tab::PdfTab;
 use crate::spaces::{SpaceId, Spaces};
 use crate::text_document::{DocumentKind, TextDocument};
@@ -163,34 +163,11 @@ impl Loaded {
             // made no edit yet.
             document.set_autosaved_at(Some(document.edit_count()));
         }
-        if let Some(csv) = self.csv {
-            let binding = link.csv.unwrap_or_else(|| CsvBinding::new(csv.options));
-            // A workbook read from the file has the file's rows; one from a copy of the work
-            // keeps the lines moved in it.
-            let (lines, introduced) = if from_copy {
-                (binding.lines, binding.introduced)
-            } else {
-                (
-                    LineOps::default(),
-                    Losses {
-                        moved_cells: false,
-                        ..binding.introduced
-                    },
-                )
-            };
-            document.csv = Some(CsvBinding {
-                options: Some(csv.options),
-                lines,
-                introduced,
-                seen_edits: FormatEdits::default(),
-                ..binding
-            });
-            document.guard_file(csv.seen);
-        } else if let Some(binding) = link.csv {
-            document.csv = Some(CsvBinding {
-                seen_edits: FormatEdits::default(),
-                ..binding
-            });
+        if let Some(binding) = rebuilt_csv_binding(self.csv.as_ref(), link, self.provenance) {
+            document.csv = Some(binding);
+            if let Some(csv) = &self.csv {
+                document.guard_file(csv.seen);
+            }
         }
         document.origin = link.origin.unwrap_or(self.origin);
         document.view = link.view;
@@ -198,6 +175,42 @@ impl Loaded {
         document.sheet = SheetId(link.sheet.0.min(last));
         document
     }
+}
+
+// What a CSV document keeps of its binding when its workbook is built again. The engine's
+// numbers start over, so the log is renumbered. A workbook read from the file has the file's
+// rows. One from the recovery copy of unsaved work may have edits the session did not get to
+// write down, so nothing in the log can be trusted and every cell is written as it shows.
+fn rebuilt_csv_binding(
+    read: Option<&CsvLoad>,
+    link: &Link,
+    provenance: Provenance,
+) -> Option<CsvBinding> {
+    let binding = match (read, link.csv) {
+        (Some(read), binding) => CsvBinding {
+            options: Some(read.options),
+            ..binding.unwrap_or_else(|| CsvBinding::new(read.options))
+        },
+        (None, Some(binding)) => binding,
+        (None, None) => return None,
+    };
+    let mut rebuilt = CsvBinding {
+        seen_edits: FormatEdits::default(),
+        ..binding
+    };
+    match provenance {
+        Provenance::File if read.is_some() => {
+            rebuilt.log = EditLog::default();
+            rebuilt.introduced = Losses {
+                moved_cells: false,
+                ..rebuilt.introduced
+            };
+        }
+        Provenance::Recovery => rebuilt.log.lose(0),
+        _ => {}
+    }
+    rebuilt.log.rebase();
+    Some(rebuilt)
 }
 
 // Takes a loaded workbook out of the list; anything else stays where it is.

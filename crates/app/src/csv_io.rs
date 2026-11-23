@@ -161,6 +161,7 @@ pub fn workbook_from_rows(rows: Vec<Vec<String>>) -> Result<Workbook, String> {
         let mut workbook = Workbook::new_empty()?;
         workbook.set_inputs(SheetId(0), CellPos::default(), &rows)?;
         workbook.warm_used_areas();
+        workbook.forget_changes();
         Ok(workbook)
     })
     .map_err(|e| e.to_string())
@@ -187,8 +188,11 @@ pub enum Shape<'a> {
         row_lengths: &'a [usize],
         last_content_row: Option<RowIdx>,
     },
-    // Every row as wide as the used range, as Excel writes it: the file's rows no longer apply.
-    UsedRange,
+    // Every row as wide as the used range, as Excel writes it, and at least this many rows: the
+    // file's trailing empty rows, where they are now.
+    UsedRange {
+        rows_kept: u32,
+    },
 }
 
 pub struct AsRead<'a> {
@@ -264,9 +268,9 @@ fn row_count(shown: &ShownCells, layout: &Layout) -> u32 {
     match layout {
         Layout::Rectangle => shown.end.row.get() + 1,
         Layout::AsRead(AsRead {
-            shape: Shape::UsedRange,
+            shape: Shape::UsedRange { rows_kept },
             ..
-        }) => content_rows,
+        }) => content_rows.max(*rows_kept),
         Layout::AsRead(AsRead {
             shape:
                 Shape::File {
@@ -296,7 +300,7 @@ fn rows_up_to(last: Option<RowIdx>) -> impl Iterator<Item = RowIdx> {
 }
 
 // The longest row the file had, which a row it did not have is as wide as.
-pub fn widest_row(layout: &Layout) -> usize {
+fn widest_row(layout: &Layout) -> usize {
     match layout {
         Layout::AsRead(AsRead {
             shape: Shape::File { row_lengths, .. },
@@ -349,6 +353,11 @@ fn write_shown_rows(
     let mut cells = shown.cells.iter().peekable();
     let mut row_cells = Vec::new();
     let last = last_row_to_write(shown, layout);
+    let content_end = if shown.cells.is_empty() {
+        0
+    } else {
+        shown.end.row.get() + 1
+    };
     let mut blank_run = 0;
     for row in rows_up_to(last) {
         if cancel.load(Ordering::Relaxed) {
@@ -363,6 +372,10 @@ fn write_shown_rows(
                 shape: Shape::File { row_lengths, .. },
                 ..
             }) => file_row_width(&row_cells, row_lengths, row, widest),
+            Some(AsRead {
+                shape: Shape::UsedRange { .. },
+                ..
+            }) if row.get() >= content_end => 0,
             _ => sheet_width,
         };
         if width == 0 {
@@ -713,7 +726,7 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"9,2,\nx,,\n");
 
         let used_range = Layout::AsRead(AsRead {
-            shape: Shape::UsedRange,
+            shape: Shape::UsedRange { rows_kept: 0 },
             final_newline: FinalNewline::Present,
         });
         write_csv_as(&target, &shown, &lf_options(&target), &used_range, &cancel).unwrap();

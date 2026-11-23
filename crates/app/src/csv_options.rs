@@ -1,9 +1,11 @@
-use crate::line_map::LineOps;
 use serde::{Deserialize, Serialize};
 use zenkai_engine::FormatEdits;
 use zenkai_formats::{
     CsvFormat, DateOrder, DecimalMark, Delimiter, Encoding, Guess, LineEnding, ParsedCsv,
 };
+use zenkai_types::LoggedChange;
+
+use crate::edit_log::EditLog;
 
 // How a CSV was read, so that saving it writes it back the same way. The byte order mark is
 // part of the encoding: UTF-8 with BOM and both UTF-16 forms have one, the others do not.
@@ -103,10 +105,10 @@ pub struct CsvBinding {
     pub accepted: Losses,
     #[serde(default)]
     pub introduced: Losses,
-    // The rows and columns inserted or deleted since the file was read, so a save can find each
-    // cell's own field.
+    // What was written, cleared or moved since the file was read or last saved, so a save knows
+    // which cells are the user's and finds each of the others' own field.
     #[serde(default)]
-    pub lines: LineOps,
+    pub log: EditLog,
     // The engine's counters as last read. They restart with the workbook, so they are not kept.
     #[serde(skip)]
     pub seen_edits: FormatEdits,
@@ -125,9 +127,45 @@ impl CsvBinding {
             options: None,
             accepted: Losses::default(),
             introduced: Losses::default(),
-            lines: LineOps::default(),
+            log: EditLog::default(),
             seen_edits: FormatEdits::default(),
         }
+    }
+
+    // A batch of edits ended: what the engine counted and logged since the last one.
+    pub fn note(&mut self, edits: FormatEdits, changes: Option<Vec<LoggedChange>>) {
+        let seen = self.seen_edits;
+        self.introduced.number_formats |= edits.numbers > seen.numbers;
+        self.introduced.formatting |= edits.other > seen.other;
+        self.introduced.moved_cells |= edits.moved > seen.moved;
+        match changes {
+            Some(changes) => {
+                for (offset, change) in (1..).zip(changes) {
+                    self.log.push(change, seen.seq + offset);
+                }
+            }
+            None => self.log.lose(edits.seq),
+        }
+        self.seen_edits = edits;
+    }
+
+    // A save made the file what the sheet was when it read `consumed`. Edits since stay: a
+    // change made while the file was written is still to be saved, whether or not a batch
+    // had noted it by then.
+    pub fn saved(&mut self, consumed: FormatEdits) {
+        let seen = self.seen_edits;
+        self.introduced.number_formats |= consumed.numbers > seen.numbers;
+        self.introduced.formatting |= consumed.other > seen.other;
+        if seen.moved <= consumed.moved {
+            self.introduced.moved_cells = false;
+        }
+        self.log.clear_through(consumed.seq);
+        self.seen_edits = FormatEdits {
+            numbers: seen.numbers.max(consumed.numbers),
+            other: seen.other.max(consumed.other),
+            moved: seen.moved.max(consumed.moved),
+            seq: seen.seq.max(consumed.seq),
+        };
     }
 }
 
@@ -167,7 +205,7 @@ mod tests {
                             number_formats: true,
                             ..Losses::default()
                         },
-                        lines: LineOps::default(),
+                        log: EditLog::default(),
                         seen_edits: FormatEdits::default(),
                     };
                     let json = serde_json::to_string(&binding).unwrap();

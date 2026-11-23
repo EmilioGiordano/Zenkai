@@ -166,17 +166,13 @@ impl Workspace {
             return;
         };
         let fully_saved = match result {
-            Ok(CsvSave::Written(seen, options)) => {
+            Ok(CsvSave::Written(seen, options, consumed)) => {
                 document.saved_over_file(Vec::new());
                 document.guard_file(seen);
                 let edited_meanwhile = document.edit_count() != edits_at_start;
                 if let Some(binding) = document.csv.as_mut() {
                     binding.options.get_or_insert(options);
-                    // The file now has the sheet's rows, unless an edit came in while it wrote.
-                    if !edited_meanwhile {
-                        binding.lines.clear();
-                        binding.introduced.moved_cells = false;
-                    }
+                    binding.saved(consumed);
                 }
                 document.dirty = edited_meanwhile;
                 if shown {

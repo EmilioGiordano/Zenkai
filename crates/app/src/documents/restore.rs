@@ -132,15 +132,14 @@ mod tests {
     use super::super::{Installed, Intent, Provenance};
     use super::*;
     use crate::csv_options::{CsvBinding, CsvOptions, Losses};
+    use crate::edit_log::EditLog;
     use crate::entry::{CsvLoad, Entry, FileSeen, LinkStatus};
-    use crate::line_map::LineOps;
     use crate::session::{FileRecord, ViewRecord};
     use crate::spaces::SpaceId;
     use zenkai_engine::FormatEdits;
     use zenkai_engine::Unsupported;
     use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
-    use zenkai_types::SheetId;
-    use zenkai_types::{LineAxis, LineChange, LineOp};
+    use zenkai_types::{ContentSpan, LoggedChange, SheetChange, SheetId};
 
     fn member_names(documents: &Documents, space: SpaceId) -> Vec<String> {
         documents.members(space).map(Entry::name).collect()
@@ -419,21 +418,26 @@ mod tests {
                 number_formats: true,
                 ..Losses::default()
             },
-            lines: one_line_moved(),
+            log: one_edit_logged(),
             seen_edits: FormatEdits::default(),
         }
     }
 
-    fn one_line_moved() -> LineOps {
-        let mut lines = LineOps::default();
-        lines.push(LineOp {
-            sheet: 0,
-            axis: LineAxis::Row,
-            change: LineChange::Insert,
-            at: 1,
-            count: 1,
-        });
-        lines
+    fn one_edit_logged() -> EditLog {
+        let mut log = EditLog::default();
+        log.push(
+            LoggedChange {
+                sheet: 1,
+                change: SheetChange::Content(ContentSpan {
+                    row: 1,
+                    col: 1,
+                    rows: 1,
+                    cols: 1,
+                }),
+            },
+            0,
+        );
+        log
     }
 
     fn read_options() -> CsvOptions {
@@ -519,7 +523,7 @@ mod tests {
     #[test]
     fn a_workbook_rebuilt_from_its_csv_has_the_rows_of_the_file_again() {
         let binding = rebuilt_binding(Provenance::File);
-        assert!(binding.lines.is_empty());
+        assert!(binding.log.is_empty());
         assert!(!binding.introduced.moved_cells);
         assert_eq!(
             binding.introduced.number_formats,
@@ -528,12 +532,15 @@ mod tests {
     }
 
     #[test]
-    fn a_workbook_rebuilt_from_a_copy_of_the_work_keeps_the_lines_moved_in_it() {
-        for provenance in [Provenance::Recovery, Provenance::Dump] {
-            let binding = rebuilt_binding(provenance);
-            assert_eq!(binding.lines, one_line_moved());
-            assert!(binding.introduced.moved_cells);
-        }
+    fn a_workbook_rebuilt_from_a_dump_keeps_its_log_and_one_from_a_recovery_copy_distrusts_it() {
+        let dump = rebuilt_binding(Provenance::Dump);
+        assert_eq!(dump.log.changes().count(), 1);
+        assert!(!dump.log.has_lost());
+        assert!(dump.introduced.moved_cells);
+
+        let recovered = rebuilt_binding(Provenance::Recovery);
+        assert_eq!(recovered.log.changes().count(), 1);
+        assert!(recovered.log.has_lost());
     }
 
     #[test]
