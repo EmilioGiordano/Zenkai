@@ -326,22 +326,20 @@ pub struct SheetInfo {
     pub visibility: SheetVisibility,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineAxis {
-    #[default]
     Row,
     Column,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LineChange {
-    #[default]
     Insert,
     Delete,
 }
 
 // Rows or columns inserted or deleted.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineOp {
     pub axis: LineAxis,
     pub change: LineChange,
@@ -391,13 +389,6 @@ pub enum SheetChange {
 pub struct LoggedChange {
     pub sheet: u32,
     pub change: SheetChange,
-}
-
-impl LoggedChange {
-    pub const NOTHING: LoggedChange = LoggedChange {
-        sheet: 0,
-        change: SheetChange::Unknown,
-    };
 }
 
 // Excel's quick border buttons; borders are thin and automatic colour.

@@ -19,14 +19,12 @@ use crate::workbook::{col_i32, row_i32};
 pub struct CachedModel {
     model: UserModel<'static>,
     extents: Mutex<HashMap<SheetId, Extent>>,
-    // Whether a sheet has a row or column with a style of its own, which copying carries.
     line_styles: Mutex<HashMap<SheetId, bool>>,
     format_edits: FormatEdits,
     log: ChangeLog,
 }
 
-// The latest changes a save over a CSV needs to know, oldest dropped first. Each has a number,
-// counting from one; a reader that fell behind the oldest kept is told so.
+// Changes are numbered from one and the oldest are dropped first.
 const MAX_LOGGED_CHANGES: usize = 1024;
 
 #[derive(Default)]
@@ -44,8 +42,10 @@ impl ChangeLog {
         }
     }
 
-    // The changes numbered after `seen`, or `None` when some of them were dropped.
     fn since(&self, seen: u64) -> Option<Vec<LoggedChange>> {
+        if seen > self.last {
+            return None;
+        }
         let oldest = self.last + 1 - u64::try_from(self.kept.len()).ok()?;
         if seen + 1 < oldest {
             return None;
@@ -63,7 +63,6 @@ pub struct FormatEdits {
     pub other: u64,
     // Cells rearranged in a way the changes logged do not describe.
     pub moved: u64,
-    // The number of the latest change logged.
     pub seq: u64,
 }
 
@@ -199,8 +198,7 @@ impl CachedModel {
         }
     }
 
-    // For a workbook whose building was done with the commands a change is logged for: what
-    // came after is what a file read from it needs to know.
+    // Called once a workbook is built with commands that log: only what comes after matters.
     pub fn forget_changes(&mut self) {
         self.format_edits = FormatEdits::default();
         self.log = ChangeLog::default();
@@ -219,7 +217,6 @@ impl CachedModel {
         self.log.since(seen)
     }
 
-    // The stable identity of the sheet at `index`.
     pub(crate) fn sheet_key(&self, index: u32) -> Option<u32> {
         let worksheets = &self.model.get_model().workbook.worksheets;
         worksheets

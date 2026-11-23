@@ -15,6 +15,17 @@ pub struct ShownCells {
     pub cells: Vec<(CellPos, String)>,
 }
 
+impl ShownCells {
+    // The rows from the first to the last cell that shows something.
+    pub fn content_rows(&self) -> u32 {
+        if self.cells.is_empty() {
+            0
+        } else {
+            self.end.row.get() + 1
+        }
+    }
+}
+
 // One cell of a sheet as a save over its CSV needs it.
 pub struct FileCell {
     pub pos: CellPos,
@@ -96,8 +107,7 @@ impl Workbook {
 
     pub fn file_cells(&self, sheet: SheetId, seen_change: u64) -> Result<FileCells, EngineError> {
         let sheet_key = self
-            .model
-            .sheet_key(sheet.0)
+            .sheet_key(sheet)
             .ok_or(EngineError::UnknownSheet(sheet))?;
         let used = self.used_end(sheet);
         let model = self.model.get_model();

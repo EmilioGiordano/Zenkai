@@ -370,7 +370,7 @@ impl Workbook {
     // user's. Logged before the write: a command that fails leaves a cell marked that was not
     // changed, which is written as shown, never lost.
     fn log_content(&mut self, sheet: SheetId, range: Range) {
-        match self.sheet_id(sheet) {
+        match self.sheet_key(sheet) {
             Some(key) => self
                 .model
                 .record_change(key, SheetChange::Content(ContentSpan::of(range))),
@@ -379,7 +379,7 @@ impl Workbook {
     }
 
     fn log_lines(&mut self, sheet: SheetId, op: LineOp) {
-        match self.sheet_id(sheet) {
+        match self.sheet_key(sheet) {
             Some(key) => self.model.record_change(key, SheetChange::Lines(op)),
             None => self.model.record_unknown(),
         }
@@ -690,14 +690,13 @@ impl Workbook {
         evaluated(model, carried, saved, opened.to_vec())
     }
 
-    fn sheet_id(&self, sheet: SheetId) -> Option<u32> {
-        let worksheets = &self.model.get_model().workbook.worksheets;
-        let index = usize::try_from(sheet.0).ok()?;
-        worksheets.get(index).map(|ws| ws.sheet_id)
+    // The identity of a sheet that its place in the workbook does not change.
+    pub fn sheet_key(&self, sheet: SheetId) -> Option<u32> {
+        self.model.sheet_key(sheet.0)
     }
 
     fn rows_moved(&mut self, sheet: SheetId, from: RowIdx) {
-        if let Some(id) = self.sheet_id(sheet) {
+        if let Some(id) = self.sheet_key(sheet) {
             self.carried.rows_moved(id, from.get() + 1);
         }
     }
@@ -713,14 +712,9 @@ impl Workbook {
             HistoryStep::Undo => self.model.sheets_moved_by_undo(),
             HistoryStep::Redo => self.model.sheets_moved_by_redo(),
         };
-        let worksheets = &self.model.get_model().workbook.worksheets;
         moved?
             .into_iter()
-            .map(|index| {
-                worksheets
-                    .get(usize::try_from(index).ok()?)
-                    .map(|ws| ws.sheet_id)
-            })
+            .map(|index| self.model.sheet_key(index))
             .collect()
     }
 
@@ -745,7 +739,7 @@ impl Workbook {
     }
 
     fn columns_moved(&mut self, sheet: SheetId, from: ColIdx) {
-        if let Some(id) = self.sheet_id(sheet) {
+        if let Some(id) = self.sheet_key(sheet) {
             self.carried.columns_moved(id, u32::from(from.get()) + 1);
         }
     }
@@ -2006,7 +2000,9 @@ impl Engine for Workbook {
     // The copy lands right after the source, with formulas that pointed at the source
     // now pointing at the copy, as in Excel.
     fn duplicate_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError> {
-        self.model.duplicate_sheet(sheet.0).map_err(rejected)
+        self.model.duplicate_sheet(sheet.0).map_err(rejected)?;
+        self.model.record_unknown();
+        Ok(())
     }
 
     fn rename_sheet(&mut self, sheet: SheetId, name: &str) -> Result<(), EngineError> {
@@ -2398,14 +2394,14 @@ mod tests {
         book.add_sheet().unwrap();
         book.move_sheet(sheet, 1).unwrap();
         book.duplicate_sheet(sheet).unwrap();
-        assert_eq!(counts(&book), (0, 0, 0));
+        assert_eq!(counts(&book), (0, 0, 1));
         let sheet = book.sheets()[0].id;
 
         book.insert_rows(sheet, RowIdx::clamped(1), 1).unwrap();
         book.delete_rows(sheet, RowIdx::clamped(1), 1).unwrap();
         book.insert_columns(sheet, ColIdx::clamped(1), 1).unwrap();
         book.delete_columns(sheet, ColIdx::clamped(1), 1).unwrap();
-        assert_eq!(counts(&book), (0, 0, 0));
+        assert_eq!(counts(&book), (0, 0, 1));
 
         book.set_column_width(sheet, ColIdx::clamped(0), 120.0)
             .unwrap();
@@ -2415,7 +2411,7 @@ mod tests {
             .unwrap();
         book.set_frozen(sheet, 1, 0).unwrap();
         let counted = book.format_edits();
-        assert_eq!((counted.numbers, counted.other, counted.moved), (0, 4, 0));
+        assert_eq!((counted.numbers, counted.other, counted.moved), (0, 4, 1));
 
         book.apply_style(sheet, Range::single(b2), StyleChange::Bold(true))
             .unwrap();
@@ -2462,7 +2458,7 @@ mod tests {
         .unwrap();
         book.insert_rows(sheet, RowIdx::clamped(1), 2).unwrap();
         book.clear(sheet, Range::new(a1, b2)).unwrap();
-        let key = book.sheet_id(sheet).unwrap();
+        let key = book.sheet_key(sheet).unwrap();
         let logged = |change| zenkai_types::LoggedChange { sheet: key, change };
         let lines = SheetChange::Lines(LineOp {
             axis: LineAxis::Row,
@@ -2494,6 +2490,7 @@ mod tests {
         assert_eq!(book.changes_since(0), None);
         assert_eq!(book.changes_since(1099).unwrap().len(), 1);
         assert_eq!(book.changes_since(1100), Some(Vec::new()));
+        assert_eq!(book.changes_since(1101), None);
         book.forget_changes();
         assert_eq!(book.changes_since(0), Some(Vec::new()));
     }
@@ -2502,11 +2499,11 @@ mod tests {
     fn what_a_sheet_does_is_logged_by_its_identity_not_by_its_place() {
         let mut book = Workbook::new_empty().unwrap();
         let first = SheetId(0);
-        let key = book.sheet_id(first).unwrap();
+        let key = book.sheet_key(first).unwrap();
         book.add_sheet().unwrap();
         book.move_sheet(first, 1).unwrap();
         let moved = SheetId(1);
-        assert_eq!(book.sheet_id(moved), Some(key));
+        assert_eq!(book.sheet_key(moved), Some(key));
         book.set_input(moved, CellPos::default(), "1").unwrap();
         let logged = book.changes_since(0).unwrap();
         assert_eq!(logged.len(), 1);
@@ -2538,6 +2535,16 @@ mod tests {
             logged.last().map(|change| change.change),
             Some(SheetChange::Unknown)
         );
+        assert_eq!(book.format_edits().moved, 1);
+    }
+
+    #[test]
+    fn a_copy_of_a_sheet_makes_the_log_unknown_as_a_deleted_one_does() {
+        let mut book = Workbook::new_empty().unwrap();
+        book.duplicate_sheet(SheetId(0)).unwrap();
+        let logged = book.changes_since(0).unwrap();
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0].change, SheetChange::Unknown);
         assert_eq!(book.format_edits().moved, 1);
     }
 
