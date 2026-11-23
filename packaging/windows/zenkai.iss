@@ -45,7 +45,7 @@ WizardStyle=modern
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx, .csv, Markdown and PDF files"; GroupDescription: "File types:"; Flags: unchecked
+Name: "openwith"; Description: "Add Zenkai to ""Open with"" for .xlsx, .csv, .tsv, Markdown and PDF files"; GroupDescription: "File types:"; Flags: unchecked
 
 ; A reinstall starts from a clean slate: what an update left behind goes before the files land,
 ; and only from a folder that already holds a Zenkai install. The check runs per entry and looks
@@ -63,7 +63,7 @@ Source: "{#LayoutDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Name: "{autoprograms}\Zenkai"; Filename: "{app}\zenkai.exe"; AppUserModelID: "EmilioGiordano.Zenkai"
 Name: "{autodesktop}\Zenkai"; Filename: "{app}\zenkai.exe"; AppUserModelID: "EmilioGiordano.Zenkai"; Tasks: desktopicon
 
-; Only adds Zenkai to the "Open with" list. The default value of .xlsx, .csv, .md and .markdown is never
+; Only adds Zenkai to the "Open with" list. The default value of .xlsx, .csv, .tsv, .md and .markdown is never
 ; written, so the program that opens them by default does not change.
 [Registry]
 Root: HKA; Subkey: "Software\Classes\Zenkai.xlsx"; ValueType: string; ValueName: ""; ValueData: "Excel Workbook (Zenkai)"; Flags: uninsdeletekey; Tasks: openwith
@@ -74,6 +74,10 @@ Root: HKA; Subkey: "Software\Classes\Zenkai.csv"; ValueType: string; ValueName: 
 Root: HKA; Subkey: "Software\Classes\Zenkai.csv\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"",0"; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\Zenkai.csv\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"" ""%1"""; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\.csv\OpenWithProgids"; ValueType: string; ValueName: "Zenkai.csv"; ValueData: ""; Flags: uninsdeletevalue; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\Zenkai.tsv"; ValueType: string; ValueName: ""; ValueData: "TSV File (Zenkai)"; Flags: uninsdeletekey; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\Zenkai.tsv\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"",0"; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\Zenkai.tsv\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"" ""%1"""; Tasks: openwith
+Root: HKA; Subkey: "Software\Classes\.tsv\OpenWithProgids"; ValueType: string; ValueName: "Zenkai.tsv"; ValueData: ""; Flags: uninsdeletevalue; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\Zenkai.md"; ValueType: string; ValueName: ""; ValueData: "Markdown File (Zenkai)"; Flags: uninsdeletekey; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\Zenkai.md\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"",0"; Tasks: openwith
 Root: HKA; Subkey: "Software\Classes\Zenkai.md\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\zenkai.exe"" ""%1"""; Tasks: openwith
