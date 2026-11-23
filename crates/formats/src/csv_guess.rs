@@ -1,12 +1,8 @@
-use std::borrow::Cow;
-
 use serde::{Deserialize, Serialize};
 
 use crate::csv_format::{Delimiter, ParsedCsv};
-use crate::dates::{DateOrder, day_first_field, detect_date_order, normalize_day_first};
-use crate::numbers::{
-    decimal_comma_field, detect_decimal_comma, normalize_decimal_comma, number_value, same_value,
-};
+use crate::dates::{DateOrder, detect_date_order, normalize_day_first};
+use crate::numbers::{detect_decimal_comma, normalize_decimal_comma, number_value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,64 +28,6 @@ pub fn apply(decimal_mark: DecimalMark, date_order: DateOrder, rows: &mut [Vec<S
     if decimal_mark == DecimalMark::Comma {
         normalize_decimal_comma(rows);
     }
-}
-
-// What the import hands the engine for one field of the file, as `apply` does for every field.
-pub fn import_input(field: &str, decimal_mark: DecimalMark, date_order: DateOrder) -> Cow<'_, str> {
-    let mut text = Cow::Borrowed(field);
-    if date_order == DateOrder::DayFirst
-        && let Some(rewritten) = day_first_field(&text)
-    {
-        text = Cow::Owned(rewritten);
-    }
-    if decimal_mark == DecimalMark::Comma
-        && let Some(rewritten) = decimal_comma_field(&text)
-    {
-        text = Cow::Owned(rewritten);
-    }
-    text
-}
-
-// The engine writes a formula back in capitals and without spaces, except inside quotes.
-fn normalized_formula(text: &str) -> Option<String> {
-    if !text.starts_with('=') {
-        return None;
-    }
-    let mut normalized = String::with_capacity(text.len());
-    let mut quote: Option<char> = None;
-    for c in text.chars() {
-        match quote {
-            Some(open) => {
-                normalized.push(c);
-                if c == open {
-                    quote = None;
-                }
-            }
-            None if c == '"' || c == '\'' => {
-                quote = Some(c);
-                normalized.push(c);
-            }
-            None if c.is_whitespace() => {}
-            None => normalized.extend(c.to_uppercase()),
-        }
-    }
-    Some(normalized)
-}
-
-// Whether the engine's input for a cell (and its stored number, when it is one) is what
-// importing the file's field gives.
-pub fn stands_for(
-    input: &str,
-    field: &str,
-    decimal_mark: DecimalMark,
-    date_order: DateOrder,
-    stored: Option<f64>,
-) -> bool {
-    same_value(
-        input,
-        &import_input(field, decimal_mark, date_order),
-        stored,
-    ) || normalized_formula(field).is_some_and(|formula| normalized_formula(input) == Some(formula))
 }
 
 // A number as a reader of the file takes it back as the same one: no grouping, which it could
@@ -134,6 +72,7 @@ pub fn guess(parsed: &ParsedCsv) -> Guess {
 mod tests {
     use super::*;
     use crate::csv_format::parse_csv;
+    use crate::numbers::decimal_comma_field;
 
     #[test]
     fn a_semicolon_file_with_decimal_commas_reads_numbers_and_dates_that_way() {
@@ -167,26 +106,13 @@ mod tests {
         for (shown, value) in cases {
             let written = number_text(shown, DecimalMark::Comma);
             assert!(!written.contains(['$', 'E', 'e']), "{written}");
-            let read = import_input(&written, DecimalMark::Comma, DateOrder::MonthFirst);
+            let read = decimal_comma_field(&written).unwrap_or_else(|| written.clone());
             let read = number_value(&read).unwrap();
             assert!(
                 (read - value).abs() <= 1e-12 * value.abs(),
                 "{shown} {written}"
             );
         }
-    }
-
-    #[test]
-    fn a_formula_the_engine_writes_back_normalized_is_the_field_it_came_from() {
-        let stands = |input: &str, field: &str| {
-            stands_for(input, field, DecimalMark::Dot, DateOrder::MonthFirst, None)
-        };
-        assert!(stands("=SUM(A1:A2)", "=sum(a1:a2)"));
-        assert!(stands("=1+1", "=1 + 1"));
-        assert!(stands("=\"a b\"&\"c\"", "=\"a b\" & \"c\""));
-        assert!(!stands("=\"A B\"", "=\"a b\""));
-        assert!(!stands("=1+2", "=1 + 1"));
-        assert!(!stands("2", "=1 + 1"));
     }
 
     #[test]

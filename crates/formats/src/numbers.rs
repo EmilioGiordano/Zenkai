@@ -102,7 +102,10 @@ fn plain_number(value: &str) -> Option<(f64, bool)> {
         }
         position += 1;
     }
-    if groups.iter().any(|at| (digits.len() - at) % 3 != 0) {
+    if groups
+        .iter()
+        .any(|at| !(digits.len() - at).is_multiple_of(3))
+    {
         return None;
     }
     if position < len && characters[position] == '.' {
@@ -173,31 +176,6 @@ pub fn stored_number_text(shown: &str, stored: f64, formula: bool) -> String {
         whole
     } else {
         shown.to_string()
-    }
-}
-
-// Whether the engine's input for a cell is what importing `expected` gives, up to how the
-// engine writes it: the same text, the same number (against the stored one when it is known,
-// else to the 15 digits the input text keeps), or the same boolean in another case.
-pub fn same_value(input: &str, expected: &str, stored: Option<f64>) -> bool {
-    if input == expected {
-        return true;
-    }
-    match (number_value(input), number_value(expected)) {
-        (Some(typed), Some(imported)) => match stored {
-            Some(stored) => agrees(imported, expected, stored),
-            None => {
-                typed.is_finite()
-                    && imported.is_finite()
-                    && fifteen_digits(typed) == fifteen_digits(imported)
-            }
-        },
-        _ => {
-            ["true", "false"]
-                .iter()
-                .any(|word| input.eq_ignore_ascii_case(word))
-                && input.eq_ignore_ascii_case(expected)
-        }
     }
 }
 
@@ -286,44 +264,6 @@ mod tests {
     }
 
     #[test]
-    fn the_same_value_is_told_whatever_way_the_engine_writes_it() {
-        for (input, expected) in [
-            ("7", "007"),
-            ("1.5", "1.50"),
-            ("1000", "1e3"),
-            ("100000", "1E5"),
-            ("0.12345", "12.345%"),
-            ("12.345%", "12.345%"),
-            ("1.999", "$1.999"),
-            ("-5", "-$5"),
-            ("1234.5678", "1,234.5678"),
-            ("-0.1", "-0.10"),
-            ("1234567890123", "1234567890123"),
-            ("0.000000001", "1E-9"),
-            ("TRUE", "true"),
-            ("abc", "abc"),
-            ("12345678901234600", "12345678901234567"),
-            ("1.5", "1.50"),
-        ] {
-            assert!(same_value(input, expected, None), "{input} {expected}");
-        }
-        for (input, expected) in [
-            ("1.5", "1.6"),
-            ("7", "007x"),
-            ("1.5", "abc"),
-            ("abc", "abd"),
-            ("1234", "1,23"),
-            ("TRUE", "false"),
-            ("1", "inf"),
-            ("9780201379624", "9780201379625"),
-            ("1", "1.00000000000001"),
-            ("1e999", "1e998"),
-        ] {
-            assert!(!same_value(input, expected, None), "{input} {expected}");
-        }
-    }
-
-    #[test]
     fn a_number_is_what_the_engine_import_reads_and_nothing_more() {
         for (text, value) in [
             ("5", 5.0),
@@ -348,41 +288,15 @@ mod tests {
     }
 
     #[test]
-    fn a_currency_the_engine_keeps_as_text_is_not_the_number_it_looks_like() {
-        assert!(!same_value("5", "\u{a3}5", None));
-        assert!(!same_value("\u{a3}7", "7", None));
-        assert!(same_value("5", "$5", None));
-    }
-
-    #[test]
-    fn numbers_past_15_digits_are_the_same_only_when_exactly_the_same() {
-        let field = "1234567890123456";
-        assert!(same_value("1234567890123460", field, None));
-        assert!(same_value(
-            "1234567890123460",
-            field,
-            Some(1_234_567_890_123_456.0)
-        ));
-        assert!(!same_value(
-            "1234567890123460",
-            field,
-            Some(1_234_567_890_123_457.0)
-        ));
-        let long = "12345678901234567";
-        assert!(same_value(
-            "12345678901234568",
-            long,
-            Some(12_345_678_901_234_567.0)
-        ));
-        assert!(!same_value(
-            "12345678901234568",
-            long,
-            Some(12_345_678_901_234_580.0)
-        ));
-        assert!(same_value("0.5", "0.50", Some(0.5)));
+    fn a_text_reads_as_a_stored_number_to_15_digits_and_a_longer_one_exactly() {
         assert!(reads_as("1,234.5", 1234.5));
+        assert!(reads_as("0.5", 0.5));
         assert!(!reads_as("1.23457E+15", 1_234_567_890_123_457.0));
         assert!(!reads_as("text", 1.0));
+        assert!(!reads_as("\u{a3}5", 5.0));
+        assert!(reads_as("1234567890123456", 1_234_567_890_123_456.0));
+        assert!(!reads_as("1234567890123456", 1_234_567_890_123_457.0));
+        assert!(reads_as("12345678901234567", 12_345_678_901_234_567.0));
     }
 
     #[test]
@@ -397,20 +311,6 @@ mod tests {
         assert_eq!(stored_number_text("1,234.50", 1234.5, false), "1,234.50");
         assert_eq!(stored_number_text("12%", 0.12, false), "12%");
         assert_eq!(stored_number_text("1.5E+20", 1.5e20, false), "1.5E+20");
-    }
-
-    #[test]
-    fn a_decimal_comma_file_is_compared_after_the_import_rewrites_its_numbers() {
-        for (field, input) in [
-            ("1.234.567,89", "1234567.89"),
-            ("1,50", "1.5"),
-            ("00123", "123"),
-            ("12,345%", "0.12345"),
-            ("1.234", "1234"),
-        ] {
-            let expected = decimal_comma_field(field).unwrap_or_else(|| field.to_string());
-            assert!(same_value(input, &expected, None), "{field} {input}");
-        }
     }
 
     #[test]
