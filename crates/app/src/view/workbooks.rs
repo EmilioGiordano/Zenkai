@@ -1068,6 +1068,7 @@ mod tests {
             line_ending: LineEnding::Crlf,
             decimal_comma: true,
             date_order: DateOrder::MonthFirst,
+            date_layout: None,
         };
         csv_link(&mut setup, options);
         let (file, provenance, _) = loaded(read(&setup.link));

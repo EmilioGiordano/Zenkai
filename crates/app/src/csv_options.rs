@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use zenkai_formats::{CsvFormat, DateOrder, Delimiter, Encoding, FormulaText, LineEnding};
+use zenkai_formats::{
+    CsvFormat, DateLayout, DateOrder, DateSeparator, Delimiter, Encoding, FormulaText, LineEnding,
+};
 
 use crate::entry::FileSeen;
 use crate::files;
@@ -15,6 +17,9 @@ pub struct CsvOptions {
     pub line_ending: LineEnding,
     pub decimal_comma: bool,
     pub date_order: DateOrder,
+    // How a day-first file writes its dates, so saving writes them that way and not as the
+    // year-first text the import rewrote them to. `None` leaves dates as the engine shows them.
+    pub date_layout: Option<DateLayout>,
 }
 
 impl CsvOptions {
@@ -27,6 +32,7 @@ impl CsvOptions {
             line_ending: LineEnding::Crlf,
             decimal_comma: false,
             date_order: DateOrder::MonthFirst,
+            date_layout: None,
         }
     }
 
@@ -69,7 +75,30 @@ pub struct CsvRecord {
     line_ending: String,
     decimal_comma: bool,
     day_first: bool,
+    #[serde(default)]
+    date_layout: Option<DateLayoutRecord>,
     loss_accepted: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct DateLayoutRecord {
+    separator: String,
+    padded: bool,
+    two_digit_year: bool,
+}
+
+const SEPARATORS: [DateSeparator; 3] = [
+    DateSeparator::Slash,
+    DateSeparator::Dash,
+    DateSeparator::Dot,
+];
+
+fn separator_code(separator: DateSeparator) -> &'static str {
+    match separator {
+        DateSeparator::Slash => "slash",
+        DateSeparator::Dash => "dash",
+        DateSeparator::Dot => "dot",
+    }
 }
 
 const DELIMITERS: [Delimiter; 4] = [
@@ -125,6 +154,11 @@ impl CsvRecord {
             line_ending: line_ending_code(options.line_ending).to_string(),
             decimal_comma: options.decimal_comma,
             day_first: options.date_order == DateOrder::DayFirst,
+            date_layout: options.date_layout.map(|layout| DateLayoutRecord {
+                separator: separator_code(layout.separator).to_string(),
+                padded: layout.padded,
+                two_digit_year: layout.two_digit_year,
+            }),
             loss_accepted: binding.loss_accepted,
         }
     }
@@ -147,6 +181,15 @@ impl CsvRecord {
             } else {
                 DateOrder::MonthFirst
             },
+            date_layout: self.date_layout.as_ref().and_then(|record| {
+                Some(DateLayout {
+                    separator: SEPARATORS
+                        .into_iter()
+                        .find(|separator| separator_code(*separator) == record.separator)?,
+                    padded: record.padded,
+                    two_digit_year: record.two_digit_year,
+                })
+            }),
         };
         Some(CsvBinding {
             options,
@@ -176,6 +219,7 @@ mod tests {
                                 } else {
                                     DateOrder::MonthFirst
                                 },
+                                date_layout: None,
                             },
                             loss_accepted: day_first,
                         };
@@ -186,6 +230,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_date_layout_survives_the_record_and_old_records_have_none() {
+        for separator in SEPARATORS {
+            for (padded, two_digit_year) in [(false, false), (true, false), (false, true)] {
+                let mut binding = CsvBinding::new(CsvOptions::exported_as(Path::new("a.csv")));
+                binding.options.date_layout = Some(DateLayout {
+                    separator,
+                    padded,
+                    two_digit_year,
+                });
+                let json = serde_json::to_string(&CsvRecord::of(&binding)).unwrap();
+                let record: CsvRecord = serde_json::from_str(&json).unwrap();
+                assert_eq!(record.binding(), Some(binding));
+            }
+        }
+        let json = r#"{"delimiter":"semicolon","encoding":"utf-8","line_ending":"lf",
+            "decimal_comma":true,"day_first":true,"loss_accepted":false}"#;
+        let old: CsvRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(old.binding().unwrap().options.date_layout, None);
     }
 
     #[test]

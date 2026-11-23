@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
-use zenkai_engine::{Engine, EngineError, Stamp, Workbook};
-use zenkai_formats::FormulaText;
-use zenkai_types::{CellPos, CellStyle, ColIdx, RowIdx, SheetId};
+use zenkai_engine::{Engine, EngineError, ShownCells, Stamp, Workbook};
+use zenkai_formats::{DateLayout, FormulaText, NORMALIZED_NUMBER_FORMAT};
+use zenkai_types::{CellPos, CellStyle, ColIdx, RowIdx, SheetId, ValueKind};
 
 use crate::csv_options::CsvBinding;
 use crate::document::{ChangedFile, file_changed_since, read_shared};
@@ -56,6 +56,30 @@ pub fn csv_loss(shared: &RwLock<Workbook>, sheets: usize, sheet: SheetId) -> Csv
     loss
 }
 
+// The import wrote a day-first file's dates as year-first text, which the engine formats as
+// `yyyy/mm/dd`. Those cells, and only those, go back in the file's own layout; a date of any
+// other format (a genuine ISO column, say) stays as the engine shows it. That the cell is a
+// date comes from the engine's type and number format, not from the text.
+fn restore_date_layout(
+    shared: &RwLock<Workbook>,
+    sheet: SheetId,
+    shown: &mut ShownCells,
+    layout: DateLayout,
+) {
+    let workbook = read_shared(shared);
+    for (pos, text) in &mut shown.cells {
+        let Some(written) = layout.day_first_text(text) else {
+            continue;
+        };
+        let view = workbook.cell(sheet, *pos);
+        if view.kind == ValueKind::Number
+            && view.style.num_fmt.replace('\\', "") == NORMALIZED_NUMBER_FORMAT
+        {
+            *text = written;
+        }
+    }
+}
+
 pub struct CsvSaveRequest {
     pub path: PathBuf,
     pub binding: CsvBinding,
@@ -87,7 +111,10 @@ pub fn save_csv_file(
             return Ok(CsvSave::WouldLose(loss));
         }
     }
-    let shown = files::gather_export(shared, request.sheet)?;
+    let mut shown = files::gather_export(shared, request.sheet)?;
+    if let Some(layout) = request.binding.options.date_layout {
+        restore_date_layout(shared, request.sheet, &mut shown, layout);
+    }
     // The file is the user's own, so what is in its cells is not rewritten for another program.
     files::write_csv_as(
         &request.path,
@@ -172,6 +199,26 @@ mod tests {
         ] {
             assert_eq!(open_and_save(dir.path(), "plain.csv", original), original);
         }
+    }
+
+    #[test]
+    fn a_day_first_file_comes_back_day_first_in_its_own_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        for original in [
+            &b"fecha;monto\n08/10/2026;1,5\n25/10/2026;2\n"[..],
+            b"fecha;monto\n8/1/2026;1,5\n25/10/2026;2\n",
+            b"fecha;monto\n08-10-26;1,5\n25-10-26;2\n",
+            b"fecha;monto\n8.1.2026;1,5\n25.10.2026;2\n",
+        ] {
+            assert_eq!(open_and_save(dir.path(), "fechas.csv", original), original);
+        }
+    }
+
+    #[test]
+    fn a_date_the_import_did_not_rewrite_is_saved_as_the_engine_shows_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = b"fecha;creado\n08/10/2026;2026-10-25\n25/10/2026;2026-01-02\n";
+        assert_eq!(open_and_save(dir.path(), "mixto.csv", original), original);
     }
 
     #[test]

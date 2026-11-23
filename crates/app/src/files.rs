@@ -211,6 +211,7 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
                 line_ending: parsed.line_ending,
                 decimal_comma: guess.decimal_comma,
                 date_order: guess.date_order,
+                date_layout: guess.saved_date_layout(),
             }
         }
     };
