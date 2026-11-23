@@ -186,11 +186,15 @@ fn rebuilt_csv_binding(
     link: &Link,
     provenance: Provenance,
 ) -> Option<CsvBinding> {
-    let binding = match (read, link.csv) {
-        (Some(read), binding) => CsvBinding {
-            options: Some(read.options),
-            ..binding.unwrap_or_else(|| CsvBinding::new(read.options))
-        },
+    let binding = match (read, link.csv.clone()) {
+        (Some(read), linked) => {
+            let linked = linked.unwrap_or_else(|| CsvBinding::new(read.options));
+            CsvBinding {
+                options: Some(read.options),
+                file_sheet: read.sheet.or(linked.file_sheet),
+                ..linked
+            }
+        }
         (None, Some(binding)) => binding,
         (None, None) => return None,
     };

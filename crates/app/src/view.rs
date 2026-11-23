@@ -204,7 +204,7 @@ pub struct Workspace {
     save_as_flows: save_flow::SaveAsFlows,
     job_pill: JobPill,
     export_cancels: std::collections::HashMap<WorkbookId, Arc<AtomicBool>>,
-    large_csv_confirmed: std::collections::HashSet<WorkbookId>,
+    large_csv_confirmed: std::collections::HashMap<WorkbookId, u64>,
     open_loads: OpenLoads,
     escape_cancelled_open: bool,
     last_recalc: Option<Duration>,
@@ -434,7 +434,7 @@ impl Workspace {
             save_as_flows: save_flow::SaveAsFlows::default(),
             job_pill: JobPill::default(),
             export_cancels: std::collections::HashMap::new(),
-            large_csv_confirmed: std::collections::HashSet::new(),
+            large_csv_confirmed: std::collections::HashMap::new(),
             open_loads: OpenLoads::default(),
             escape_cancelled_open: false,
             last_recalc: None,
@@ -1404,7 +1404,8 @@ impl Workspace {
                 let lossy_state = |document: &Document| {
                     document
                         .csv
-                        .map(|binding| (binding.introduced, binding.log))
+                        .as_ref()
+                        .map(|binding| (binding.introduced, binding.log.clone()))
                 };
                 let lossy_before = lossy_state(document);
                 if !document.finish_batch(generation) {
@@ -1585,14 +1586,23 @@ impl Workspace {
             return;
         };
         let request = self.next_csv_request();
+        let name = preview
+            .path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let delimiter = crate::csv_preview::delimiter_label(preview.parsed.delimiter);
+        let encoding = preview.parsed.encoding.label();
         let summary = t!(
             "csv.imported",
-            name = preview
-                .path
-                .file_name()
-                .map_or_else(String::new, |n| n.to_string_lossy().into_owned()),
-            delimiter = crate::csv_preview::delimiter_label(preview.parsed.delimiter),
-            encoding = preview.parsed.encoding.label()
+            name = name,
+            delimiter = delimiter,
+            encoding = encoding
+        );
+        let untitled_summary = t!(
+            "csv.imported_untitled",
+            name = name,
+            delimiter = delimiter,
+            encoding = encoding
         );
         self.busy = Some(t!("busy.importing").into());
         cx.notify();
@@ -1631,10 +1641,11 @@ impl Workspace {
                             this.switch_to(open, window, cx);
                             return;
                         }
+                        let sheet = workbook.sheet_key(SheetId(0));
                         let id = this.open_document(workbook, Some(path), Vec::new(), window, cx);
                         if let Some(document) = this.documents.get_mut(id) {
                             document.origin = origin;
-                            document.csv = Some(CsvBinding::new(options));
+                            document.csv = Some(CsvBinding::new(options).with_sheet(sheet));
                             document.guard_file(seen);
                         }
                         this.notify(Severity::Info, summary, cx);
@@ -1644,7 +1655,7 @@ impl Workspace {
                         if let Some(document) = this.documents.get_mut(id) {
                             document.origin = origin;
                         }
-                        this.notify(Severity::Info, summary, cx);
+                        this.notify(Severity::Info, untitled_summary, cx);
                     }
                     Err((error, parsed)) => {
                         if let Some(parsed) = parsed
@@ -2048,7 +2059,7 @@ impl Workspace {
         };
         let must_rename =
             document.may_lose_unseen_content() || document.is_macro_enabled() || document.read_only;
-        match (document.path.clone(), document.csv) {
+        match (document.path.clone(), document.csv.clone()) {
             (Some(path), Some(binding)) if !must_rename => {
                 self.save_csv(id, path, binding, ChangedFile::Ask, window, cx)
             }
@@ -2255,7 +2266,7 @@ impl Workspace {
             return;
         }
         let protected = document.read_only || document.may_lose_unseen_content();
-        match (delimited_action(&probe), document.csv) {
+        match (delimited_action(&probe), document.csv.clone()) {
             (DelimitedAction::SaveInPlace, Some(_)) if protected => {
                 self.notify(Severity::Error, t!("save.original_protected"), cx);
                 self.save_ended(id, false, window, cx);
@@ -2391,7 +2402,11 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| match choice {
-                Some(CHANGED_FILE_REPLACE) => match this.documents.get(id).and_then(|d| d.csv) {
+                Some(CHANGED_FILE_REPLACE) => match this
+                    .documents
+                    .get(id)
+                    .and_then(|d| d.csv.clone())
+                {
                     Some(binding) => {
                         this.save_csv(id, path, binding, ChangedFile::Replace, window, cx)
                     }

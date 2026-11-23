@@ -409,6 +409,7 @@ mod tests {
 
     fn csv_binding() -> CsvBinding {
         CsvBinding {
+            file_sheet: Some(1),
             options: Some(read_options()),
             accepted: Losses {
                 formatting: true,
@@ -496,10 +497,14 @@ mod tests {
         read.csv = Some(CsvLoad {
             options: read_options(),
             seen: FileSeen::unknown(),
+            sheet: Some(1),
         });
         documents.install(read);
         let document = documents.active().unwrap();
-        assert_eq!(document.csv, Some(CsvBinding::new(read_options())));
+        assert_eq!(
+            document.csv,
+            Some(CsvBinding::new(read_options()).with_sheet(Some(1)))
+        );
         assert!(document.file_guard().is_some());
     }
 
@@ -515,9 +520,10 @@ mod tests {
         read.csv = Some(CsvLoad {
             options: read_options(),
             seen: FileSeen::unknown(),
+            sheet: Some(1),
         });
         documents.install(read);
-        documents.active().unwrap().csv.unwrap()
+        documents.active().unwrap().csv.clone().unwrap()
     }
 
     #[test]
@@ -548,7 +554,10 @@ mod tests {
         let mut documents = documents();
         let id = open_file(&mut documents, "export.tsv");
         let document = documents.get(id).unwrap();
-        assert_eq!(document.csv, Some(CsvBinding::unresolved()));
+        assert_eq!(
+            document.csv,
+            Some(CsvBinding::unresolved().with_sheet(Some(1)))
+        );
         let id = open_file(&mut documents, "book.xlsx");
         assert_eq!(documents.get(id).unwrap().csv, None);
     }

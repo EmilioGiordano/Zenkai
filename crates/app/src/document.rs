@@ -7,10 +7,10 @@ use zenkai_i18n::t;
 
 use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{
-    Engine, EngineError, Kept, SaveSnapshot, SaveTarget, Stamp, Unsupported, Workbook,
+    Engine, EngineError, FormatEdits, Kept, SaveSnapshot, SaveTarget, Stamp, Unsupported, Workbook,
 };
 use zenkai_grid::{GridCell, ViewState};
-use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
+use zenkai_types::{CellPos, Contents, LoggedChange, Range, SheetId, SheetInfo, WorkbookId};
 
 use crate::agent_review::Review;
 use crate::csv_options::CsvBinding;
@@ -154,7 +154,7 @@ impl Document {
         let csv = path
             .as_deref()
             .filter(|path| files::opens_as_itself(path))
-            .map(|_| CsvBinding::unresolved());
+            .map(|_| CsvBinding::unresolved().with_sheet(workbook.sheet_key(SheetId(0))));
         Document {
             id,
             space,
@@ -479,18 +479,36 @@ impl Document {
     // Every edit ends in a batch, so a CSV learns here what it cannot hold changed. The counters
     // only grow, so a batch that cannot read them leaves the binding for the next one that can.
     fn note_format_edits(&mut self) {
-        let Some(binding) = self.csv.as_mut() else {
+        let Some(seen) = self.csv.as_ref().map(|binding| binding.seen_edits) else {
             return;
         };
-        let seen = binding.seen_edits;
-        let read =
-            |workbook: &Workbook| (workbook.format_edits(), workbook.changes_since(seen.seq));
-        let (edits, changes) = match self.workbook.try_read() {
-            Ok(workbook) => read(&workbook),
-            Err(TryLockError::WouldBlock) => return,
-            Err(TryLockError::Poisoned(poisoned)) => read(&poisoned.into_inner()),
+        let Some((edits, changes)) = self.engine_changes(seen.seq) else {
+            return;
         };
-        binding.note(edits, changes);
+        if let Some(binding) = self.csv.as_mut() {
+            binding.note(edits, changes);
+        }
+    }
+
+    // The engine's counters and the changes logged after `seen`; `None` while it is busy.
+    fn engine_changes(&self, seen: u64) -> Option<(FormatEdits, Option<Vec<LoggedChange>>)> {
+        let read = |workbook: &Workbook| (workbook.format_edits(), workbook.changes_since(seen));
+        match self.workbook.try_read() {
+            Ok(workbook) => Some(read(&workbook)),
+            Err(TryLockError::WouldBlock) => None,
+            Err(TryLockError::Poisoned(poisoned)) => Some(read(&poisoned.into_inner())),
+        }
+    }
+
+    // The binding as a workbook that leaves memory should keep it: up to date with the engine, or
+    // with its log lost when the engine cannot be read.
+    pub fn settled_csv(&self) -> Option<CsvBinding> {
+        let mut binding = self.csv.clone()?;
+        match self.engine_changes(binding.seen_edits.seq) {
+            Some((edits, changes)) => binding.note(edits, changes),
+            None => binding.log.lose(u64::MAX),
+        }
+        Some(binding)
     }
 
     pub fn sheets_stale(&self) -> bool {
@@ -1010,7 +1028,7 @@ mod tests {
         let b2 = CellPos::parse_a1("B2").unwrap();
         let mut document = csv_document();
         let generation = document.generation();
-        let binding = |document: &Document| document.csv.unwrap();
+        let binding = |document: &Document| document.csv.clone().unwrap();
 
         {
             let mut workbook = document.workbook.write().unwrap();
@@ -1058,6 +1076,27 @@ mod tests {
     }
 
     #[test]
+    fn a_csv_that_leaves_memory_takes_the_changes_no_batch_noted_or_distrusts_its_log() {
+        use zenkai_engine::Engine;
+        let document = csv_document();
+        document
+            .workbook
+            .write()
+            .unwrap()
+            .set_input(SheetId(0), CellPos::default(), "1")
+            .unwrap();
+        assert!(document.csv.clone().unwrap().log.is_empty());
+        let settled = document.settled_csv().unwrap();
+        assert_eq!(settled.log.changes().count(), 1);
+        assert!(!settled.log.has_lost());
+
+        let shared = Arc::clone(&document.workbook);
+        let held = shared.write().unwrap();
+        assert!(document.settled_csv().unwrap().log.has_lost());
+        drop(held);
+    }
+
+    #[test]
     fn a_busy_workbook_leaves_the_counts_for_the_next_batch_that_can_read_them() {
         use zenkai_engine::Engine;
         let sheet = SheetId(0);
@@ -1073,10 +1112,10 @@ mod tests {
         let held = shared.write().unwrap();
         document.finish_batch(generation);
         drop(held);
-        assert!(!document.csv.unwrap().introduced.any());
+        assert!(!document.csv.clone().unwrap().introduced.any());
 
         document.finish_batch(generation);
-        assert!(document.csv.unwrap().introduced.formatting);
+        assert!(document.csv.clone().unwrap().introduced.formatting);
     }
 
     #[test]

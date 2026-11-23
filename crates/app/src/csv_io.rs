@@ -146,13 +146,18 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
     apply(options.decimal_mark, options.date_order, &mut rows);
     let workbook =
         workbook_from_rows(rows).map_err(|e| LoadFailure::Engine(EngineError::Rejected(e)))?;
+    let sheet = workbook.sheet_key(SheetId(0));
     Ok(FileLoad {
         workbook,
         unsupported: Vec::new(),
         read_only: false,
         origin: file_origin(path),
         reader_fallback: None,
-        csv: Some(CsvLoad { options, seen }),
+        csv: Some(CsvLoad {
+            options,
+            seen,
+            sheet,
+        }),
     })
 }
 
@@ -260,11 +265,7 @@ fn file_row_width(
 // Rows run to the last cell, and in a file's own shape on to the empty rows it had after its
 // content while the content still ends where it did.
 fn row_count(shown: &ShownCells, layout: &Layout) -> u32 {
-    let content_rows = if shown.cells.is_empty() {
-        0
-    } else {
-        shown.end.row.get() + 1
-    };
+    let content_rows = shown.content_rows();
     match layout {
         Layout::Rectangle => shown.end.row.get() + 1,
         Layout::AsRead(AsRead {
@@ -353,11 +354,7 @@ fn write_shown_rows(
     let mut cells = shown.cells.iter().peekable();
     let mut row_cells = Vec::new();
     let last = last_row_to_write(shown, layout);
-    let content_end = if shown.cells.is_empty() {
-        0
-    } else {
-        shown.end.row.get() + 1
-    };
+    let content_end = shown.content_rows();
     let mut blank_run = 0;
     for row in rows_up_to(last) {
         if cancel.load(Ordering::Relaxed) {

@@ -290,7 +290,7 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         read_only: link.read_only,
         kind: link.kind,
         mode: link.mode,
-        csv: link.csv,
+        csv: link.csv.clone(),
         base: link.base,
         file_modified: link
             .path
@@ -373,7 +373,7 @@ pub fn link_of(
         origin: None,
         kind: record.kind,
         mode: record.mode,
-        csv: record.csv,
+        csv: record.csv.clone(),
         base: record.base,
         pdf: record.pdf,
         text_zoom: record.text_zoom,

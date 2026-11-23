@@ -98,13 +98,17 @@ fn arrival(load: Option<LinkLoad>, delivered: bool) -> Arrival {
 // and a save reads them then, never guessing export defaults.
 fn csv_of_copy(link: &Link) -> Option<CsvLoad> {
     let path = link.path.as_deref().filter(|path| {
-        link.csv.is_none_or(|binding| binding.options.is_none()) && files::opens_as_itself(path)
+        link.csv
+            .as_ref()
+            .is_none_or(|binding| binding.options.is_none())
+            && files::opens_as_itself(path)
     })?;
     let options = csv_io::detect_csv_options(path)
         .inspect_err(|error| tracing::warn!(%error, ?path, "the options of a CSV stay unknown"))
         .ok()?;
     Some(CsvLoad {
         options,
+        sheet: None,
         seen: link
             .rested
             .as_ref()
@@ -197,7 +201,7 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
         return Some(LinkLoad::Missing);
     };
     let loaded = if files::opens_as_itself(path) {
-        csv_io::load_csv(path, link.csv.and_then(|binding| binding.options))
+        csv_io::load_csv(path, link.csv.as_ref().and_then(|binding| binding.options))
     } else {
         files::load_workbook(path, reader, cancel)
     };
@@ -468,6 +472,7 @@ impl Workspace {
                 .spawn(async move { recovery::remove(&dump) })
                 .detach();
         }
+        self.large_csv_confirmed.remove(&id);
         self.documents.close(id);
         self.refuse_orphaned_agent_change(window, cx);
         if was_active {

@@ -72,11 +72,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let large = if self.large_csv_confirmed.contains(&id) {
-            LargeWrite::Confirmed
-        } else {
-            LargeWrite::Ask
-        };
+        let large = self
+            .large_csv_confirmed
+            .get(&id)
+            .map_or(LargeWrite::Ask, |bytes| LargeWrite::Confirmed(*bytes));
         let Some(document) = self.documents.get_mut(id) else {
             self.save_ended(id, false, window, cx);
             return;
@@ -269,11 +268,11 @@ impl Workspace {
                 let confirmed = this
                     .documents
                     .get(id)
-                    .and_then(|document| document.csv)
+                    .and_then(|document| document.csv.clone())
                     .filter(|_| choice == Some(LARGE_SAVE));
                 match confirmed {
                     Some(binding) => {
-                        this.large_csv_confirmed.insert(id);
+                        this.large_csv_confirmed.insert(id, size.bytes);
                         this.save_csv(id, path, binding, changed, window, cx);
                     }
                     None => this.save_ended(id, false, window, cx),
@@ -303,7 +302,7 @@ impl Workspace {
         let accepted = self
             .documents
             .get(id)
-            .and_then(|document| document.csv)
+            .and_then(|document| document.csv.clone())
             .map_or_else(Losses::default, |binding| binding.accepted);
         let answer = self.ask(
             PromptLevel::Warning,
@@ -326,7 +325,7 @@ impl Workspace {
                         .and_then(|document| document.csv.as_mut())
                         .map(|binding| {
                             binding.accepted = binding.accepted.with(found);
-                            *binding
+                            binding.clone()
                         });
                     match kept {
                         Some(binding) => this.save_csv(id, path, binding, changed, window, cx),

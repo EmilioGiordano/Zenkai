@@ -3,7 +3,7 @@ use zenkai_types::{
     CellPos, ColIdx, ContentSpan, LineAxis, LineChange, LineOp, LoggedChange, RowIdx, SheetChange,
 };
 
-pub const MAX_LOGGED: usize = 32;
+pub const MAX_LOGGED: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Logged {
@@ -12,19 +12,13 @@ struct Logged {
     through: u64,
 }
 
-const NOTHING: Logged = Logged {
-    change: LoggedChange::NOTHING,
-    through: 0,
-};
-
-// What was written, cleared or moved in a CSV's sheets since it was read or last saved, up to a
-// bound: past it, or when the engine says it lost track, the log is `lost` and a save writes
-// every cell as it shows. A fixed array keeps the binding `Copy`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// What was written, cleared or moved in a CSV's sheets since it was read or last saved. Past the
+// bound, or when the engine says it lost track, the log is `lost` and a save writes every cell
+// as it shows.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "SavedLog", into = "SavedLog")]
 pub struct EditLog {
-    entries: [Logged; MAX_LOGGED],
-    len: usize,
+    entries: Vec<Logged>,
     // Changes up to this number may be missing from the log.
     lost_through: Option<u64>,
 }
@@ -37,21 +31,11 @@ struct SavedLog {
     lost_through: Option<u64>,
 }
 
-impl Default for EditLog {
-    fn default() -> Self {
-        EditLog {
-            entries: [NOTHING; MAX_LOGGED],
-            len: 0,
-            lost_through: None,
-        }
-    }
-}
-
 impl From<SavedLog> for EditLog {
     fn from(saved: SavedLog) -> Self {
         let mut log = EditLog {
+            entries: Vec::new(),
             lost_through: saved.lost_through,
-            ..EditLog::default()
         };
         for entry in saved.changes {
             log.append(entry.change, entry.through);
@@ -63,23 +47,31 @@ impl From<SavedLog> for EditLog {
 impl From<EditLog> for SavedLog {
     fn from(log: EditLog) -> Self {
         SavedLog {
-            changes: log.entries[..log.len].to_vec(),
+            changes: log.entries,
             lost_through: log.lost_through,
         }
     }
 }
 
+fn end(first: u32, count: u32) -> u64 {
+    u64::from(first) + u64::from(count)
+}
+
 fn within(outer: ContentSpan, inner: ContentSpan) -> bool {
     outer.row <= inner.row
         && outer.col <= inner.col
-        && u64::from(inner.row) + u64::from(inner.rows)
-            <= u64::from(outer.row) + u64::from(outer.rows)
-        && u64::from(inner.col) + u64::from(inner.cols)
-            <= u64::from(outer.col) + u64::from(outer.cols)
+        && end(inner.row, inner.rows) <= end(outer.row, outer.rows)
+        && end(inner.col, inner.cols) <= end(outer.col, outer.cols)
 }
 
 fn touch(first: u32, count: u32, other_first: u32, other_count: u32) -> bool {
-    first <= other_first.saturating_add(other_count) && other_first <= first.saturating_add(count)
+    u64::from(first) <= end(other_first, other_count) && u64::from(other_first) <= end(first, count)
+}
+
+fn extent(first: u32, other_first: u32, last: u64, other_last: u64) -> (u32, u32) {
+    let start = first.min(other_first);
+    let count = last.max(other_last) - u64::from(start);
+    (start, u32::try_from(count).unwrap_or(u32::MAX))
 }
 
 // The block both cover when together they are exactly one block; the log never grows an edit
@@ -92,22 +84,12 @@ fn merged(a: ContentSpan, b: ContentSpan) -> Option<ContentSpan> {
         return Some(b);
     }
     if a.col == b.col && a.cols == b.cols && touch(a.row, a.rows, b.row, b.rows) {
-        let row = a.row.min(b.row);
-        let end = (a.row + a.rows).max(b.row + b.rows);
-        return Some(ContentSpan {
-            row,
-            rows: end - row,
-            ..a
-        });
+        let (row, rows) = extent(a.row, b.row, end(a.row, a.rows), end(b.row, b.rows));
+        return Some(ContentSpan { row, rows, ..a });
     }
     if a.row == b.row && a.rows == b.rows && touch(a.col, a.cols, b.col, b.cols) {
-        let col = a.col.min(b.col);
-        let end = (a.col + a.cols).max(b.col + b.cols);
-        return Some(ContentSpan {
-            col,
-            cols: end - col,
-            ..a
-        });
+        let (col, cols) = extent(a.col, b.col, end(a.col, a.cols), end(b.col, b.cols));
+        return Some(ContentSpan { col, cols, ..a });
     }
     None
 }
@@ -115,7 +97,7 @@ fn merged(a: ContentSpan, b: ContentSpan) -> Option<ContentSpan> {
 impl EditLog {
     #[cfg(test)]
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.entries.is_empty()
     }
 
     pub fn has_lost(&self) -> bool {
@@ -127,23 +109,22 @@ impl EditLog {
     }
 
     pub fn changes(&self) -> impl Iterator<Item = LoggedChange> + '_ {
-        self.entries[..self.len].iter().map(|entry| entry.change)
+        self.entries.iter().map(|entry| entry.change)
     }
 
     fn append(&mut self, change: LoggedChange, through: u64) {
-        if self.len == MAX_LOGGED {
+        if self.entries.len() == MAX_LOGGED {
             self.lose(through);
             return;
         }
-        self.entries[self.len] = Logged { change, through };
-        self.len += 1;
+        self.entries.push(Logged { change, through });
     }
 
     // A block written next to or inside blocks written since the last row or column was
     // inserted or deleted joins them, so typing down a column is one entry.
     fn mergeable(&self, sheet: u32, span: ContentSpan) -> Option<(usize, ContentSpan)> {
-        for at in (0..self.len).rev() {
-            let logged = self.entries[at].change;
+        for (at, entry) in self.entries.iter().enumerate().rev() {
+            let logged = entry.change;
             match logged.change {
                 SheetChange::Content(other) if logged.sheet == sheet => {
                     if let Some(union) = merged(other, span) {
@@ -166,8 +147,7 @@ impl EditLog {
                 while let Some((at, union)) = self.mergeable(change.sheet, span) {
                     span = union;
                     through = through.max(self.entries[at].through);
-                    self.entries.copy_within(at + 1..self.len, at);
-                    self.len -= 1;
+                    self.entries.remove(at);
                 }
                 let content = SheetChange::Content(span);
                 self.append(
@@ -184,14 +164,7 @@ impl EditLog {
     // A save made the file what the sheet was at change `seq`: what was logged up to it is
     // in the file, and what is lost up to it no longer matters.
     pub fn clear_through(&mut self, seq: u64) {
-        let mut kept = 0;
-        for at in 0..self.len {
-            if self.entries[at].through > seq {
-                self.entries[kept] = self.entries[at];
-                kept += 1;
-            }
-        }
-        self.len = kept;
+        self.entries.retain(|entry| entry.through > seq);
         if self.lost_through.is_some_and(|lost| lost <= seq) {
             self.lost_through = None;
         }
@@ -199,7 +172,7 @@ impl EditLog {
 
     // The workbook was rebuilt, so the engine's numbers start again from the first.
     pub fn rebase(&mut self) {
-        for entry in &mut self.entries[..self.len] {
+        for entry in &mut self.entries {
             entry.through = 0;
         }
         if self.lost_through.is_some() {
@@ -208,10 +181,20 @@ impl EditLog {
     }
 }
 
+enum Layer {
+    // Blocks written between two line operations, with the block that holds them all.
+    Content {
+        bounds: ContentSpan,
+        spans: Vec<ContentSpan>,
+    },
+    Lines(LineOp),
+}
+
 // Where the cells of a sheet were in the file before the changes of its log, and whether the
-// log says the user wrote them.
+// log says the user wrote them. Built once per save, so a cell is looked up in the layers and
+// not in every change.
 pub struct Walk {
-    changes: Vec<SheetChange>,
+    layers: Vec<Layer>,
 }
 
 fn origin(op: LineOp, mut index: u32) -> Option<u32> {
@@ -227,44 +210,78 @@ fn origin(op: LineOp, mut index: u32) -> Option<u32> {
 
 impl Walk {
     pub fn new(logged: impl IntoIterator<Item = LoggedChange>, sheet: u32) -> Walk {
-        Walk {
-            changes: logged
-                .into_iter()
-                .filter(|logged| logged.sheet == sheet)
-                .map(|logged| logged.change)
-                .collect(),
+        let mut layers: Vec<Layer> = Vec::new();
+        for logged in logged.into_iter().filter(|logged| logged.sheet == sheet) {
+            match logged.change {
+                SheetChange::Lines(op) => layers.push(Layer::Lines(op)),
+                SheetChange::Content(span) => match layers.last_mut() {
+                    Some(Layer::Content { bounds, spans }) => {
+                        let (row, rows) = extent(
+                            bounds.row,
+                            span.row,
+                            end(bounds.row, bounds.rows),
+                            end(span.row, span.rows),
+                        );
+                        let (col, cols) = extent(
+                            bounds.col,
+                            span.col,
+                            end(bounds.col, bounds.cols),
+                            end(span.col, span.cols),
+                        );
+                        *bounds = ContentSpan {
+                            row,
+                            col,
+                            rows,
+                            cols,
+                        };
+                        spans.push(span);
+                    }
+                    _ => layers.push(Layer::Content {
+                        bounds: span,
+                        spans: vec![span],
+                    }),
+                },
+                SheetChange::Unknown => {}
+            }
         }
+        Walk { layers }
     }
 
     #[cfg(test)]
     pub fn is_untouched(&self) -> bool {
-        self.changes.is_empty()
+        self.layers.is_empty()
+    }
+
+    fn moves(&self, wanted: LineAxis) -> bool {
+        self.layers
+            .iter()
+            .any(|layer| matches!(layer, Layer::Lines(op) if op.axis == wanted))
     }
 
     pub fn moves_columns(&self) -> bool {
-        self.changes
-            .iter()
-            .any(|change| matches!(change, SheetChange::Lines(op) if op.axis == LineAxis::Column))
+        self.moves(LineAxis::Column)
     }
 
     pub fn moves_rows(&self) -> bool {
-        self.changes
-            .iter()
-            .any(|change| matches!(change, SheetChange::Lines(op) if op.axis == LineAxis::Row))
+        self.moves(LineAxis::Row)
     }
 
     // The position in the file of a cell nobody wrote since: `None` for one that was, or that
     // sits in a row or column inserted since, which have nothing of the file's.
     pub fn file_position(&self, pos: CellPos) -> Option<CellPos> {
         let (mut row, mut col) = (pos.row.get(), u32::from(pos.col.get()));
-        for change in self.changes.iter().rev() {
-            match change {
-                SheetChange::Content(span) if span.contains(row, col) => return None,
-                SheetChange::Lines(op) => match op.axis {
+        for layer in self.layers.iter().rev() {
+            match layer {
+                Layer::Content { bounds, spans } => {
+                    if bounds.contains(row, col) && spans.iter().any(|span| span.contains(row, col))
+                    {
+                        return None;
+                    }
+                }
+                Layer::Lines(op) => match op.axis {
                     LineAxis::Row => row = origin(*op, row)?,
                     LineAxis::Column => col = origin(*op, col)?,
                 },
-                SheetChange::Content(_) | SheetChange::Unknown => {}
             }
         }
         let col = ColIdx::new(u16::try_from(col).ok()?)?;
@@ -274,8 +291,8 @@ impl Walk {
     // The row of the file a row of the sheet comes from, whatever was written in it.
     pub fn file_row(&self, row: RowIdx) -> Option<RowIdx> {
         let mut row = row.get();
-        for change in self.changes.iter().rev() {
-            if let SheetChange::Lines(op) = change
+        for layer in self.layers.iter().rev() {
+            if let Layer::Lines(op) = layer
                 && op.axis == LineAxis::Row
             {
                 row = origin(*op, row)?;
@@ -284,24 +301,26 @@ impl Walk {
         RowIdx::new(row)
     }
 
-    // Where a row of the file is now; a row that was deleted is where the deletion was.
-    pub fn current_row(&self, file_row: u32) -> u32 {
-        let mut row = file_row;
-        for change in &self.changes {
-            let SheetChange::Lines(op) = change else {
+    // Where the end of a run of the file's rows is now, the end being the number of rows
+    // before it: rows deleted from the end of the run pull it up, and rows inserted at it
+    // leave it where it was.
+    pub fn current_end(&self, file_end: u32) -> u32 {
+        let mut end = file_end;
+        for layer in &self.layers {
+            let Layer::Lines(op) = layer else {
                 continue;
             };
             if op.axis != LineAxis::Row {
                 continue;
             }
             match op.change {
-                LineChange::Insert if row >= op.at => row = row.saturating_add(op.count),
-                LineChange::Delete if row >= op.at.saturating_add(op.count) => row -= op.count,
-                LineChange::Delete if row >= op.at => row = op.at,
+                LineChange::Insert if end > op.at => end = end.saturating_add(op.count),
+                LineChange::Delete if end > op.at.saturating_add(op.count) => end -= op.count,
+                LineChange::Delete if end > op.at => end = op.at,
                 _ => {}
             }
         }
-        row
+        end
     }
 }
 
@@ -365,6 +384,9 @@ mod tests {
         assert_eq!(log.changes().count(), 2);
         log.push(content(1, 1, 1, 1, 1), 3);
         assert_eq!(log.changes().count(), 3);
+        log.push(content(1, u32::MAX - 1, 0, 1, 1), 4);
+        log.push(content(1, u32::MAX, 0, u32::MAX, 1), 5);
+        assert_eq!(log.changes().count(), 4);
     }
 
     #[test]
@@ -387,11 +409,11 @@ mod tests {
             log.push(content(1, n * 2, n * 2, 1, 1), u64::from(n) + 1);
         }
         assert!(!log.has_lost());
-        log.push(content(1, 500, 500, 1, 1), 99);
+        log.push(content(1, 5000, 5000, 1, 1), 5000);
         assert!(log.has_lost());
-        log.clear_through(98);
+        log.clear_through(4999);
         assert!(log.has_lost());
-        log.clear_through(99);
+        log.clear_through(5000);
         assert!(!log.has_lost());
         assert!(log.is_empty());
 
@@ -476,6 +498,23 @@ mod tests {
     }
 
     #[test]
+    fn blocks_between_the_same_two_operations_are_looked_up_together() {
+        let walk = Walk::new(
+            [
+                content(1, 0, 0, 1, 1),
+                content(1, 40, 7, 2, 2),
+                content(1, 100, 0, 1, 1),
+            ],
+            1,
+        );
+        assert_eq!(walk.file_position(at(0, 0)), None);
+        assert_eq!(walk.file_position(at(41, 8)), None);
+        assert_eq!(walk.file_position(at(41, 6)), Some(at(41, 6)));
+        assert_eq!(walk.file_position(at(50, 0)), Some(at(50, 0)));
+        assert_eq!(walk.file_position(at(100, 0)), None);
+    }
+
+    #[test]
     fn rows_and_columns_are_mapped_apart_and_deletions_pull_the_rest_up() {
         let walk = Walk::new(
             [
@@ -488,12 +527,13 @@ mod tests {
         assert_eq!(walk.file_position(at(0, 0)), Some(at(0, 1)));
         assert_eq!(walk.file_position(at(1, 2)), Some(at(3, 3)));
         assert_eq!(walk.file_row(RowIdx::new(1).unwrap()), RowIdx::new(3));
-        assert_eq!(walk.current_row(0), 0);
-        assert_eq!(walk.current_row(2), 1);
-        assert_eq!(walk.current_row(5), 3);
+        assert_eq!(walk.current_end(0), 0);
+        assert_eq!(walk.current_end(2), 1);
+        assert_eq!(walk.current_end(5), 3);
         let inserted = Walk::new([lines(1, LineAxis::Row, LineChange::Insert, 1, 2)], 1);
         assert_eq!(inserted.file_row(RowIdx::new(2).unwrap()), None);
-        assert_eq!(inserted.current_row(1), 3);
-        assert_eq!(inserted.current_row(0), 0);
+        assert_eq!(inserted.current_end(1), 1);
+        assert_eq!(inserted.current_end(2), 4);
+        assert_eq!(inserted.current_end(0), 0);
     }
 }

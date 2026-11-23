@@ -98,9 +98,13 @@ impl Losses {
 
 // A document that is the CSV file itself. `options` is `None` until the file has been read for
 // them; a save reads it then, and fails if it cannot, rather than write in a format guessed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CsvBinding {
     pub options: Option<CsvOptions>,
+    // The sheet the file was read into, by the identity its place in the workbook does not
+    // change. Only that sheet has fields of the file to write back.
+    #[serde(default)]
+    pub file_sheet: Option<u32>,
     #[serde(default)]
     pub accepted: Losses,
     #[serde(default)]
@@ -122,9 +126,17 @@ impl CsvBinding {
         }
     }
 
+    pub fn with_sheet(self, sheet: Option<u32>) -> CsvBinding {
+        CsvBinding {
+            file_sheet: sheet,
+            ..self
+        }
+    }
+
     pub fn unresolved() -> CsvBinding {
         CsvBinding {
             options: None,
+            file_sheet: None,
             accepted: Losses::default(),
             introduced: Losses::default(),
             log: EditLog::default(),
@@ -190,6 +202,7 @@ mod tests {
             ] {
                 for line_ending in [LineEnding::Crlf, LineEnding::Lf, LineEnding::Cr] {
                     let binding = CsvBinding {
+                        file_sheet: Some(7),
                         options: Some(CsvOptions {
                             delimiter,
                             encoding,

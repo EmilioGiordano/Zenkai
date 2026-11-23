@@ -104,6 +104,8 @@ impl FileSeen {
 pub struct CsvLoad {
     pub options: CsvOptions,
     pub seen: FileSeen,
+    // The identity of the sheet the file was read into.
+    pub sheet: Option<u32>,
 }
 
 // What a workbook left in memory when it went to disk with its undo history: where its dump
@@ -327,7 +329,7 @@ impl Document {
             origin: Some(self.origin),
             kind: DocumentKind::Workbook,
             mode: ViewMode::default(),
-            csv: self.csv,
+            csv: self.settled_csv(),
             base: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
