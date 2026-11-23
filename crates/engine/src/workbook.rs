@@ -793,6 +793,15 @@ impl Workbook {
         self.model.format_edits()
     }
 
+    // For what typing a cell does on its own (widening a column, wrapping text): it is content
+    // entry, so the commands it runs are not counted as formatting.
+    pub fn without_counting<T>(&mut self, edit: impl FnOnce(&mut Workbook) -> T) -> T {
+        let before = self.model.format_edits();
+        let result = edit(self);
+        self.model.set_format_edits(before);
+        result
+    }
+
     // Call on a background thread after building or editing, so the UI thread never walks a sheet.
     pub fn warm_used_areas(&self) {
         for sheet in self.sheets() {
@@ -1017,6 +1026,7 @@ impl Engine for Workbook {
         key: ColIdx,
         descending: bool,
     ) -> Result<(), EngineError> {
+        self.model.count_copy_edit();
         if range.cell_count() > MAX_FILL_CELLS {
             return Err(rejected(format!(
                 "sorting {} cells at once is not supported",
@@ -1077,6 +1087,7 @@ impl Engine for Workbook {
         text: &str,
         range: Range,
     ) -> Result<(), EngineError> {
+        self.model.count_copy_edit();
         // Refused before anything is written, so a huge selection leaves no partial edit.
         if range.cell_count() > MAX_FILL_CELLS {
             return Err(rejected(format!(
@@ -1115,6 +1126,7 @@ impl Engine for Workbook {
     // The fill handle: the cells of `target` past `source` (below it or to its right)
     // repeat the source pattern, formulas shifted, in one undo step.
     fn extend(&mut self, sheet: SheetId, source: Range, target: Range) -> Result<(), EngineError> {
+        self.model.count_copy_edit();
         let down = target.end.row > source.end.row;
         let rest = if down {
             Range::new(
@@ -1279,6 +1291,7 @@ impl Engine for Workbook {
         copied: &Copied,
         cut: bool,
     ) -> Result<(), EngineError> {
+        self.model.count_copy_edit();
         let field = |name: &str| {
             copied
                 .payload
@@ -1301,6 +1314,7 @@ impl Engine for Workbook {
     // with references shifted and its cells' formats copied whole, as in Excel; a single
     // row (or column) extends the one above (or left).
     fn fill(&mut self, sheet: SheetId, target: Range, down: bool) -> Result<(), EngineError> {
+        self.model.count_copy_edit();
         let source_line = if down {
             if target.rows() == 1 {
                 target.start.row.get().checked_sub(1)
@@ -1395,6 +1409,7 @@ impl Engine for Workbook {
     }
 
     fn clear_all(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         // Whole rows or columns can carry row or column styles, which are not cells, so
         // they need the formatting pass too (a second undo step). Otherwise one call on
         // the used part clears everything there is, in one step.
@@ -1534,6 +1549,7 @@ impl Engine for Workbook {
         range: Range,
         hidden: bool,
     ) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         self.model
             .edit_keeping_cells(|model| {
                 model.set_rows_hidden(
@@ -1552,6 +1568,7 @@ impl Engine for Workbook {
         range: Range,
         hidden: bool,
     ) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         self.model
             .edit_keeping_cells(|model| {
                 model.set_columns_hidden(
@@ -1628,6 +1645,7 @@ impl Engine for Workbook {
         col: ColIdx,
         pixels: f32,
     ) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         // Excel's widest column is 255 characters; a non-finite drag maps to zero.
         let pixels = if pixels.is_finite() {
             f64::from(pixels)
@@ -1649,6 +1667,7 @@ impl Engine for Workbook {
         row: RowIdx,
         pixels: f32,
     ) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         let row = row_i32(row);
         // Excel's tallest row is 409.5 points.
         let height = (if pixels.is_finite() {
@@ -1673,6 +1692,7 @@ impl Engine for Workbook {
     }
 
     fn set_frozen(&mut self, sheet: SheetId, rows: u32, cols: u16) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         let rows = i32::try_from(rows).map_err(|e| rejected(e.to_string()))?;
         self.model
             .edit_keeping_cells(|model| {
@@ -1695,6 +1715,7 @@ impl Engine for Workbook {
     }
 
     fn insert_rows(&mut self, sheet: SheetId, at: RowIdx, count: u32) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         let count = i32::try_from(count).map_err(|e| rejected(e.to_string()))?;
         self.model
             .insert_rows(sheet.0, row_i32(at), count)
@@ -1704,6 +1725,7 @@ impl Engine for Workbook {
     }
 
     fn delete_rows(&mut self, sheet: SheetId, at: RowIdx, count: u32) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         let count = i32::try_from(count).map_err(|e| rejected(e.to_string()))?;
         self.model
             .delete_rows(sheet.0, row_i32(at), count)
@@ -1718,6 +1740,7 @@ impl Engine for Workbook {
         at: ColIdx,
         count: u16,
     ) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         self.model
             .insert_columns(sheet.0, col_i32(at), i32::from(count))
             .map_err(rejected)?;
@@ -1731,6 +1754,7 @@ impl Engine for Workbook {
         at: ColIdx,
         count: u16,
     ) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         self.model
             .delete_columns(sheet.0, col_i32(at), i32::from(count))
             .map_err(rejected)?;
@@ -1797,6 +1821,7 @@ impl Engine for Workbook {
     }
 
     fn add_sheet(&mut self) -> Result<SheetId, EngineError> {
+        self.model.count_style_edit();
         self.model.new_sheet().map_err(rejected)?;
         let count = self.model.get_worksheets_properties().len();
         Ok(SheetId(u32::try_from(count.saturating_sub(1)).unwrap_or(0)))
@@ -1805,18 +1830,22 @@ impl Engine for Workbook {
     // The copy lands right after the source, with formulas that pointed at the source
     // now pointing at the copy, as in Excel.
     fn duplicate_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         self.model.duplicate_sheet(sheet.0).map_err(rejected)
     }
 
     fn rename_sheet(&mut self, sheet: SheetId, name: &str) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         self.model.rename_sheet(sheet.0, name).map_err(rejected)
     }
 
     fn delete_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         self.model.delete_sheet(sheet.0).map_err(rejected)
     }
 
     fn move_sheet(&mut self, sheet: SheetId, to: u32) -> Result<(), EngineError> {
+        self.model.count_style_edit();
         self.model.move_sheet(sheet.0, to).map_err(rejected)
     }
 
@@ -2160,6 +2189,37 @@ mod tests {
             book.set_number_format(SheetId(0), a1, &"x".repeat(300))
                 .is_err()
         );
+        assert_eq!(book.format_edits(), counted);
+    }
+
+    #[test]
+    fn every_command_but_entering_or_clearing_content_is_counted() {
+        let sheet = SheetId(0);
+        let a1 = CellPos::default();
+        let b2 = CellPos::new(RowIdx::clamped(1), ColIdx::clamped(1));
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_input(sheet, a1, "0.5").unwrap();
+        book.set_inputs(sheet, a1, &[vec!["1".to_string(), "2".to_string()]])
+            .unwrap();
+        book.set_scattered_inputs(sheet, &[(a1, "3".to_string())])
+            .unwrap();
+        book.clear(sheet, Range::single(a1)).unwrap();
+        book.undo().unwrap();
+        book.redo().unwrap();
+        assert_eq!(book.format_edits(), crate::model::FormatEdits::default());
+
+        book.set_column_width(sheet, ColIdx::clamped(0), 120.0)
+            .unwrap();
+        let counted = book.format_edits();
+        assert_eq!((counted.numbers, counted.other), (0, 1));
+
+        let copied = book.copy(sheet, Range::single(a1)).unwrap();
+        book.paste(sheet, b2, &copied, false).unwrap();
+        let counted = book.format_edits();
+        assert_eq!((counted.numbers, counted.other), (1, 2));
+
+        book.without_counting(|book| book.set_column_width(sheet, ColIdx::clamped(1), 90.0))
+            .unwrap();
         assert_eq!(book.format_edits(), counted);
     }
 
