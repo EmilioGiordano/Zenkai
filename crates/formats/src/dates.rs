@@ -78,6 +78,47 @@ fn parts(field: &str) -> Option<(u32, u32, u32)> {
     (first >= 1 && second >= 1).then_some((first, second, year))
 }
 
+// Text of the shape a date takes in a cell: three numbers around one separator, year first
+// with four digits or last with two or four.
+pub fn looks_like_date(text: &str) -> bool {
+    let Some(separator) = text.chars().find(|c| matches!(c, '/' | '-' | '.')) else {
+        return false;
+    };
+    let pieces: Vec<&str> = text.split(separator).collect();
+    let [a, b, c] = pieces[..] else {
+        return false;
+    };
+    let digits = |piece: &str, lengths: &[usize]| {
+        lengths.contains(&piece.len()) && piece.bytes().all(|b| b.is_ascii_digit())
+    };
+    (digits(a, &[4]) && digits(b, &[1, 2]) && digits(c, &[1, 2]))
+        || (digits(a, &[1, 2]) && digits(b, &[1, 2]) && digits(c, &[2, 4]))
+}
+
+// The date an Excel serial number stands for, as yyyy-mm-dd. Serials below 61 are left out:
+// Excel counts a 29 February 1900 that never existed.
+pub fn iso_date(serial: f64) -> Option<String> {
+    if serial.fract() != 0.0 || !(61.0..=2_958_465.0).contains(&serial) {
+        return None;
+    }
+    let days_since_1970 = serial as i64 - 25_569;
+    let z = days_since_1970 + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    Some(format!("{year:04}-{month:02}-{day:02}"))
+}
+
 fn valid(day: u32, month: u32, year: u32) -> bool {
     let leap = (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400);
     let days = match month {
@@ -141,6 +182,28 @@ mod tests {
                 "Total"
             ]
         );
+    }
+
+    #[test]
+    fn a_serial_number_is_the_date_it_counts_days_to() {
+        assert_eq!(iso_date(46_303.0).as_deref(), Some("2026-10-08"));
+        assert_eq!(iso_date(61.0).as_deref(), Some("1900-03-01"));
+        assert_eq!(iso_date(25_569.0).as_deref(), Some("1970-01-01"));
+        assert_eq!(iso_date(36_585.0).as_deref(), Some("2000-02-29"));
+        assert_eq!(iso_date(2_958_465.0).as_deref(), Some("9999-12-31"));
+        for serial in [60.0, 0.0, -1.0, 46_303.5, 2_958_466.0, f64::NAN] {
+            assert_eq!(iso_date(serial), None, "{serial}");
+        }
+    }
+
+    #[test]
+    fn dates_are_told_from_other_numbers_by_their_shape() {
+        for text in ["10/8/2026", "2026-10-08", "8.10.2026", "08-10-26"] {
+            assert!(looks_like_date(text), "{text}");
+        }
+        for text in ["1.5", "1,234.5", "12-10", "1/2/3/4", "100/1/1", "abc", ""] {
+            assert!(!looks_like_date(text), "{text}");
+        }
     }
 
     #[test]

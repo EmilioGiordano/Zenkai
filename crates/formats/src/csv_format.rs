@@ -104,6 +104,7 @@ pub struct ParsedCsv {
     pub delimiter: Delimiter,
     pub encoding: Encoding,
     pub line_ending: LineEnding,
+    pub ends_with_newline: bool,
     // Some bytes were not valid in the encoding and were replaced, so the rows are not the
     // file's own text and writing them back would change it.
     pub lossy: bool,
@@ -243,15 +244,33 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
     } = decode(bytes);
     let delimiter = sniff(&text, hint);
     let line_ending = detect_line_ending(&text, delimiter);
+    let ends_with_newline = text.is_empty() || text.ends_with(['\n', '\r']);
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
         .delimiter(delimiter.byte())
         .from_reader(text.as_bytes());
-    let mut rows = Vec::new();
+    let mut rows: Vec<Vec<String>> = Vec::new();
     let mut fields = 0usize;
-    for record in reader.records() {
-        let record = record.map_err(|e| CsvError::Malformed(e.to_string()))?;
+    let mut record = csv::StringRecord::new();
+    // The reader skips empty lines. Its line count (of `\n`) tells how many it skipped before
+    // each record, so they stay empty rows and the rows after them keep their place.
+    let mut line_after_previous = 1;
+    while reader
+        .read_record(&mut record)
+        .map_err(|e| CsvError::Malformed(e.to_string()))?
+    {
+        let line_after = reader.position().line();
+        let own_lines = 1 + record
+            .iter()
+            .map(|field| field.matches('\n').count() as u64)
+            .sum::<u64>();
+        let blank = (line_after - line_after_previous).saturating_sub(own_lines);
+        line_after_previous = line_after;
+        if rows.len() as u64 + blank >= u64::from(MAX_ROWS) {
+            return Err(CsvError::TooManyCells);
+        }
+        rows.extend((0..blank).map(|_| Vec::new()));
         // Checked before the row is allocated, so a file of bare separators cannot
         // build billions of empty strings.
         fields += record.len();
@@ -281,6 +300,7 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
         delimiter,
         encoding,
         line_ending,
+        ends_with_newline,
         lossy,
     })
 }
@@ -346,6 +366,41 @@ mod tests {
         assert_eq!(ending("5\" pipe,x\n1,2\n"), LineEnding::Lf);
         assert_eq!(ending("5\" pipe,\"y\r\nz\"\n"), LineEnding::Lf);
         assert_eq!(ending("\"say \"\"hi\"\"\",b\r\n1,2\r\n"), LineEnding::Crlf);
+    }
+
+    #[test]
+    fn empty_lines_stay_empty_rows_so_the_rows_after_them_keep_their_place() {
+        let rows = |text: &str| {
+            parse_csv(text.as_bytes(), Some(Delimiter::Comma))
+                .unwrap()
+                .rows
+        };
+        let empty: Vec<String> = Vec::new();
+        let row = |fields: &[&str]| fields.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(rows("a\n\nb\n"), [row(&["a"]), empty.clone(), row(&["b"])]);
+        assert_eq!(
+            rows("\n\na,b\r\n\r\nc\r\n"),
+            [
+                empty.clone(),
+                empty.clone(),
+                row(&["a", "b"]),
+                empty.clone(),
+                row(&["c"])
+            ]
+        );
+        assert_eq!(
+            rows("\"x\ny\",1\n\nz\n"),
+            [row(&["x\ny", "1"]), empty.clone(), row(&["z"])]
+        );
+        assert_eq!(rows("a\n\n"), [row(&["a"])]);
+    }
+
+    #[test]
+    fn says_whether_the_file_ends_with_a_line_break() {
+        let ends = |text: &str| parse_csv(text.as_bytes(), None).unwrap().ends_with_newline;
+        assert!(ends("a,b\n"));
+        assert!(ends("a,b\r\n"));
+        assert!(!ends("a,b"));
     }
 
     #[test]

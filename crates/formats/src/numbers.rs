@@ -40,6 +40,85 @@ pub fn decimal_comma_field(field: &str) -> Option<String> {
     .then(|| field.replace('.', "").replace(',', "."))
 }
 
+const CURRENCY_SYMBOLS: [char; 4] = ['$', '€', '£', '¥'];
+
+// The number a cell's text stands for, in the English form the engine reads: a sign, a currency
+// symbol around the digits, grouping commas, a decimal dot, an exponent and a trailing percent
+// sign.
+pub fn number_value(text: &str) -> Option<f64> {
+    let text = text.trim();
+    let (text, percent) = match text.strip_suffix('%') {
+        Some(rest) => (rest.trim_end(), true),
+        None => (text, false),
+    };
+    let (negative, text) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let body = text
+        .trim_start_matches(CURRENCY_SYMBOLS)
+        .trim_end_matches(CURRENCY_SYMBOLS)
+        .trim();
+    let (mantissa, exponent) = match body.find(['e', 'E']) {
+        Some(at) => (&body[..at], Some(&body[at + 1..])),
+        None => (body, None),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let whole = if whole.contains(',') {
+        let groups: Vec<&str> = whole.split(',').collect();
+        let well_formed = groups.iter().all(|g| g.bytes().all(|b| b.is_ascii_digit()))
+            && groups
+                .first()
+                .is_some_and(|first| (1..=3).contains(&first.len()))
+            && groups.iter().skip(1).all(|group| group.len() == 3);
+        if !well_formed {
+            return None;
+        }
+        groups.concat()
+    } else if whole.bytes().all(|b| b.is_ascii_digit()) {
+        whole.to_string()
+    } else {
+        return None;
+    };
+    if whole.is_empty() && fraction.is_empty() {
+        return None;
+    }
+    let exponent = match exponent {
+        None => "0",
+        Some(exponent) => {
+            let digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            exponent
+        }
+    };
+    let value: f64 = format!("0{whole}.{fraction}0e{exponent}").parse().ok()?;
+    let value = if percent { value / 100.0 } else { value };
+    Some(if negative { -value } else { value })
+}
+
+// Whether the engine's input for a cell is what importing `expected` gives, up to how the
+// engine writes it: the same text, the same number (to the 15 digits a spreadsheet keeps), or
+// the same boolean in another case.
+pub fn same_value(input: &str, expected: &str) -> bool {
+    if input == expected {
+        return true;
+    }
+    match (number_value(input), number_value(expected)) {
+        (Some(a), Some(b)) => a == b || (a - b).abs() <= 1e-12 * a.abs().max(b.abs()),
+        _ => {
+            ["true", "false"]
+                .iter()
+                .any(|word| input.eq_ignore_ascii_case(word))
+                && input.eq_ignore_ascii_case(expected)
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 enum Shape {
     /// "1,5", "1.234,5", "-0,25%"
@@ -122,6 +201,63 @@ mod tests {
                 "Total", "1234.56", "-0.5", "12.5%", "1234567", "2026", "a,b"
             ]
         );
+    }
+
+    #[test]
+    fn the_same_value_is_told_whatever_way_the_engine_writes_it() {
+        for (input, expected) in [
+            ("7", "007"),
+            ("1.5", "1.50"),
+            ("1000", "1e3"),
+            ("100000", "1E5"),
+            ("0.12345", "12.345%"),
+            ("12.345%", "12.345%"),
+            ("1.999", "$1.999"),
+            ("-5", "-$5"),
+            ("1234.5678", "1,234.5678"),
+            ("-0.1", "-0.10"),
+            ("1234567890123", "1234567890123"),
+            ("0.000000001", "1E-9"),
+            ("TRUE", "true"),
+            ("abc", "abc"),
+        ] {
+            assert!(same_value(input, expected), "{input} {expected}");
+        }
+        for (input, expected) in [
+            ("1.5", "1.6"),
+            ("7", "007x"),
+            ("1.5", "abc"),
+            ("abc", "abd"),
+            ("1234", "1,23"),
+            ("TRUE", "false"),
+            ("1", "inf"),
+        ] {
+            assert!(!same_value(input, expected), "{input} {expected}");
+        }
+    }
+
+    #[test]
+    fn a_decimal_comma_file_is_compared_after_the_import_rewrites_its_numbers() {
+        for (field, input) in [
+            ("1.234.567,89", "1234567.89"),
+            ("1,50", "1.5"),
+            ("00123", "123"),
+            ("12,345%", "0.12345"),
+            ("1.234", "1234"),
+        ] {
+            let expected = decimal_comma_field(field).unwrap_or_else(|| field.to_string());
+            assert!(same_value(input, &expected), "{field} {input}");
+        }
+    }
+
+    #[test]
+    fn comparing_cells_costs_the_same_per_cell_however_many_there_are() {
+        let started = std::time::Instant::now();
+        let matches = (0..1_100_000)
+            .filter(|n| same_value("1.5", if n % 2 == 0 { "1.50" } else { "$1.5" }))
+            .count();
+        assert_eq!(matches, 1_100_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(60));
     }
 
     #[test]

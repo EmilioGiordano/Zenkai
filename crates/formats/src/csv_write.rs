@@ -119,6 +119,7 @@ pub struct CsvWriter<W: Write> {
     writer: csv::Writer<SharedOut<Encoded<W>>>,
     out: SharedOut<Encoded<W>>,
     delimiter: u8,
+    terminator: &'static [u8],
 }
 
 // The csv writer owns its output and has no way to reach it, but long runs of empty
@@ -148,10 +149,10 @@ impl<W: Write> CsvWriter<W> {
 
     pub fn in_format(out: W, format: CsvFormat) -> Result<CsvWriter<W>, CsvError> {
         let out = SharedOut(Rc::new(RefCell::new(Encoded::new(out, format.encoding)?)));
-        let terminator = match format.line_ending {
-            LineEnding::Crlf => csv::Terminator::CRLF,
-            LineEnding::Lf => csv::Terminator::Any(b'\n'),
-            LineEnding::Cr => csv::Terminator::Any(b'\r'),
+        let (terminator, bytes): (_, &'static [u8]) = match format.line_ending {
+            LineEnding::Crlf => (csv::Terminator::CRLF, b"\r\n"),
+            LineEnding::Lf => (csv::Terminator::Any(b'\n'), b"\n"),
+            LineEnding::Cr => (csv::Terminator::Any(b'\r'), b"\r"),
         };
         let writer = csv::WriterBuilder::new()
             .delimiter(format.delimiter.byte())
@@ -162,6 +163,7 @@ impl<W: Write> CsvWriter<W> {
             writer,
             out,
             delimiter: format.delimiter.byte(),
+            terminator: bytes,
         })
     }
 
@@ -204,16 +206,29 @@ impl<W: Write> CsvWriter<W> {
         Ok(self.writer.write_record(std::iter::empty::<&[u8]>())?)
     }
 
+    // An empty line, which the csv writer never writes by itself: a row with no fields.
+    pub fn write_blank_line(&mut self) -> Result<(), CsvError> {
+        self.writer.flush()?;
+        self.out.0.borrow_mut().write_all(self.terminator)?;
+        Ok(())
+    }
+
     pub fn write_row<'a>(
         &mut self,
         fields: impl IntoIterator<Item = &'a str>,
     ) -> Result<(), CsvError> {
+        let mut fields = fields.into_iter().peekable();
+        if fields.peek().is_none() {
+            return self.write_blank_line();
+        }
         for field in fields {
             self.write_field(field)?;
         }
         self.end_row()
     }
 
+    // The file ends after the last field written, with no line break, when it is not preceded
+    // by `end_row`.
     pub fn finish(mut self) -> Result<(), CsvError> {
         Ok(self.writer.flush()?)
     }
@@ -426,6 +441,21 @@ mod tests {
     }
 
     #[test]
+    fn a_row_with_no_fields_is_an_empty_line_and_the_file_can_end_without_a_line_break() {
+        let rows: &[&[&str]] = &[&["a", "b"], &[], &["c"]];
+        let mut format = format(Encoding::Utf8, LineEnding::Lf);
+        format.delimiter = Delimiter::Comma;
+        assert_eq!(in_format(format, rows).unwrap(), b"a,b\n\nc\n");
+
+        let mut bytes = Vec::new();
+        let mut writer = CsvWriter::in_format(&mut bytes, format).unwrap();
+        writer.write_row(["a", "b"]).unwrap();
+        writer.write_verbatim_field("c").unwrap();
+        writer.finish().unwrap();
+        assert_eq!(bytes, b"a,b\nc");
+    }
+
+    #[test]
     fn a_long_run_of_empty_fields_equals_the_same_fields_one_by_one() {
         for gap in [0usize, 1, 2, 3, 5, 8191, 8192, 8193, 20_000] {
             for lead in [false, true] {
@@ -508,7 +538,7 @@ mod tests {
                         proptest::strategy::Just(String::new()),
                         "[a1=+@,;| \t\"\r\n-]{0,4}",
                     ],
-                    0..5,
+                    1..5,
                 ),
                 0..6,
             ),

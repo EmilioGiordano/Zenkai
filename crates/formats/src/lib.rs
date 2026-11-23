@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod csv_format;
+mod csv_guess;
 mod csv_write;
 mod dates;
 mod numbers;
@@ -9,9 +10,14 @@ mod values;
 pub use csv_format::{
     CsvError, Delimiter, Encoding, LineEnding, MAX_CSV_BYTES, ParsedCsv, parse_csv,
 };
+pub use csv_guess::{DecimalMark, Guess, apply, guess};
 pub use csv_write::{CsvFormat, CsvWriter, write_csv};
-pub use dates::{DateOrder, day_first_field, detect_date_order, normalize_day_first};
-pub use numbers::{decimal_comma_field, detect_decimal_comma, normalize_decimal_comma};
+pub use dates::{
+    DateOrder, day_first_field, detect_date_order, iso_date, looks_like_date, normalize_day_first,
+};
+pub use numbers::{
+    decimal_comma_field, detect_decimal_comma, normalize_decimal_comma, number_value, same_value,
+};
 pub use values::{
     Block, MAX_ALLOCATED_CELLS, MAX_CELL_BYTES, MAX_CELLS, MAX_TEXT_BYTES, SheetValues,
     ValuesError, read_values,
