@@ -1,6 +1,6 @@
 use encoding_rs::{UTF_16BE, UTF_16LE, WINDOWS_1252};
 use serde::{Deserialize, Serialize};
-use zenkai_types::{MAX_COLS, MAX_ROWS};
+use zenkai_types::{MAX_COLS, MAX_ROWS, RowIdx};
 
 pub const MAX_CSV_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_FIELD_BYTES: usize = 32_767;
@@ -98,25 +98,46 @@ pub enum LineEnding {
     Cr,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FinalNewline {
+    Present,
+    Missing,
+}
+
+// Whether the rows are the file's own, so that writing them back leaves it as it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fidelity {
+    Exact,
+    // Some bytes were not valid in the encoding and were replaced.
+    BytesReplaced,
+    // The empty lines of the file could not be put back among its rows.
+    EmptyLinesUnplaced,
+}
+
+impl Fidelity {
+    fn from_decoding(had_errors: bool) -> Fidelity {
+        if had_errors {
+            Fidelity::BytesReplaced
+        } else {
+            Fidelity::Exact
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParsedCsv {
     pub rows: Vec<Vec<String>>,
     pub delimiter: Delimiter,
     pub encoding: Encoding,
     pub line_ending: LineEnding,
-    pub ends_with_newline: bool,
-    // The empty lines of the file could not be put back among its rows, so their places are
-    // unknown and writing the rows back would change the file.
-    pub shape_unknown: bool,
-    // Some bytes were not valid in the encoding and were replaced, so the rows are not the
-    // file's own text and writing them back would change it.
-    pub lossy: bool,
+    pub final_newline: FinalNewline,
+    pub fidelity: Fidelity,
 }
 
 struct Decoded {
     text: String,
     encoding: Encoding,
-    lossy: bool,
+    fidelity: Fidelity,
 }
 
 fn decode(bytes: &[u8]) -> Decoded {
@@ -125,12 +146,12 @@ fn decode(bytes: &[u8]) -> Decoded {
             std::borrow::Cow::Borrowed(text) => Decoded {
                 text: text.to_string(),
                 encoding: Encoding::Utf8Bom,
-                lossy: false,
+                fidelity: Fidelity::Exact,
             },
             std::borrow::Cow::Owned(text) => Decoded {
                 text,
                 encoding: Encoding::Utf8Bom,
-                lossy: true,
+                fidelity: Fidelity::BytesReplaced,
             },
         };
     }
@@ -139,7 +160,7 @@ fn decode(bytes: &[u8]) -> Decoded {
         return Decoded {
             text: text.into_owned(),
             encoding: Encoding::Utf16Le,
-            lossy,
+            fidelity: Fidelity::from_decoding(lossy),
         };
     }
     if bytes.starts_with(b"\xFE\xFF") {
@@ -147,21 +168,21 @@ fn decode(bytes: &[u8]) -> Decoded {
         return Decoded {
             text: text.into_owned(),
             encoding: Encoding::Utf16Be,
-            lossy,
+            fidelity: Fidelity::from_decoding(lossy),
         };
     }
     match std::str::from_utf8(bytes) {
         Ok(text) => Decoded {
             text: text.to_string(),
             encoding: Encoding::Utf8,
-            lossy: false,
+            fidelity: Fidelity::Exact,
         },
         Err(_) => {
             let (text, _, lossy) = WINDOWS_1252.decode(bytes);
             Decoded {
                 text: text.into_owned(),
                 encoding: Encoding::Windows1252,
-                lossy,
+                fidelity: Fidelity::from_decoding(lossy),
             }
         }
     }
@@ -226,7 +247,7 @@ fn detect_line_ending(text: &str, delimiter: Delimiter) -> LineEnding {
 // The csv reader skips empty lines, so they are found by reading the text as it does. For each,
 // how many records came before it; and how many records there are in all.
 struct EmptyLines {
-    after_records: Vec<usize>,
+    after_records: Vec<RowIdx>,
     records: usize,
 }
 
@@ -266,7 +287,8 @@ fn empty_lines(text: &str, delimiter: Delimiter) -> Result<EmptyLines, CsvError>
                 if line_has_content {
                     found.records += 1;
                 } else {
-                    found.after_records.push(found.records);
+                    let before = i64::try_from(found.records).unwrap_or(i64::MAX);
+                    found.after_records.push(RowIdx::clamped(before));
                 }
                 if found.records + found.after_records.len() > MAX_ROWS as usize {
                     return Err(CsvError::TooManyCells);
@@ -286,17 +308,17 @@ fn empty_lines(text: &str, delimiter: Delimiter) -> Result<EmptyLines, CsvError>
     Ok(found)
 }
 
-// Puts the empty lines back among the records; true when the two readings counted different
-// records (malformed quoting), so their places are unknown.
+// Puts the empty lines back among the records; they stay unplaced when the two readings counted
+// different records (malformed quoting).
 fn with_empty_lines(
     records: Vec<Vec<String>>,
     empty: &EmptyLines,
-) -> Result<(Vec<Vec<String>>, bool), CsvError> {
+) -> Result<(Vec<Vec<String>>, Fidelity), CsvError> {
     if empty.after_records.is_empty() {
-        return Ok((records, false));
+        return Ok((records, Fidelity::Exact));
     }
     if empty.records != records.len() {
-        return Ok((records, true));
+        return Ok((records, Fidelity::EmptyLinesUnplaced));
     }
     if records.len() + empty.after_records.len() > MAX_ROWS as usize {
         return Err(CsvError::TooManyCells);
@@ -304,13 +326,16 @@ fn with_empty_lines(
     let mut rows = Vec::with_capacity(records.len() + empty.after_records.len());
     let mut empties = empty.after_records.iter().peekable();
     for (index, record) in records.into_iter().enumerate() {
-        while empties.next_if(|before| **before == index).is_some() {
+        while empties
+            .next_if(|before| before.get() as usize == index)
+            .is_some()
+        {
             rows.push(Vec::new());
         }
         rows.push(record);
     }
     rows.extend(empties.map(|_| Vec::new()));
-    Ok((rows, false))
+    Ok((rows, Fidelity::Exact))
 }
 
 fn count_outside_quotes(line: &str, delimiter: char) -> usize {
@@ -332,11 +357,15 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
     let Decoded {
         text,
         encoding,
-        lossy,
+        fidelity: decoded,
     } = decode(bytes);
     let delimiter = sniff(&text, hint);
     let line_ending = detect_line_ending(&text, delimiter);
-    let ends_with_newline = text.is_empty() || text.ends_with(['\n', '\r']);
+    let final_newline = if text.is_empty() || text.ends_with(['\n', '\r']) {
+        FinalNewline::Present
+    } else {
+        FinalNewline::Missing
+    };
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -370,15 +399,19 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
             .collect::<Result<Vec<_>, _>>()?;
         records.push(row);
     }
-    let (rows, shape_unknown) = with_empty_lines(records, &empty_lines(&text, delimiter)?)?;
+    let (rows, placed) = with_empty_lines(records, &empty_lines(&text, delimiter)?)?;
+    let fidelity = if decoded == Fidelity::Exact {
+        placed
+    } else {
+        decoded
+    };
     Ok(ParsedCsv {
         rows,
         delimiter,
         encoding,
         line_ending,
-        ends_with_newline,
-        shape_unknown,
-        lossy,
+        final_newline,
+        fidelity,
     })
 }
 
@@ -500,34 +533,35 @@ mod tests {
     fn empty_lines_that_cannot_be_placed_make_the_shape_unknown() {
         let record = vec![vec!["a".to_string()]];
         let disagreeing = EmptyLines {
-            after_records: vec![0],
+            after_records: vec![RowIdx::clamped(0)],
             records: 3,
         };
-        let (rows, unknown) = with_empty_lines(record.clone(), &disagreeing).unwrap();
-        assert!(unknown);
+        let (rows, fidelity) = with_empty_lines(record.clone(), &disagreeing).unwrap();
+        assert_eq!(fidelity, Fidelity::EmptyLinesUnplaced);
         assert_eq!(rows, record);
         let agreeing = EmptyLines {
-            after_records: vec![0],
+            after_records: vec![RowIdx::clamped(0)],
             records: 1,
         };
-        let (rows, unknown) = with_empty_lines(record, &agreeing).unwrap();
-        assert!(!unknown);
+        let (rows, fidelity) = with_empty_lines(record, &agreeing).unwrap();
+        assert_eq!(fidelity, Fidelity::Exact);
         assert_eq!(rows.len(), 2);
         let parsed = parse_csv(b"a\n\nb\n", Some(Delimiter::Comma)).unwrap();
-        assert!(!parsed.shape_unknown);
+        assert_eq!(parsed.fidelity, Fidelity::Exact);
     }
 
     #[test]
     fn says_whether_the_file_ends_with_a_line_break() {
-        let ends = |text: &str| parse_csv(text.as_bytes(), None).unwrap().ends_with_newline;
-        assert!(ends("a,b\n"));
-        assert!(ends("a,b\r\n"));
-        assert!(!ends("a,b"));
+        let ends = |text: &str| parse_csv(text.as_bytes(), None).unwrap().final_newline;
+        assert_eq!(ends("a,b\n"), FinalNewline::Present);
+        assert_eq!(ends("a,b\r\n"), FinalNewline::Present);
+        assert_eq!(ends("a,b"), FinalNewline::Missing);
     }
 
     #[test]
     fn reports_when_decoding_replaced_something() {
-        let lossy = |bytes: &[u8]| parse_csv(bytes, None).unwrap().lossy;
+        let lossy =
+            |bytes: &[u8]| parse_csv(bytes, None).unwrap().fidelity == Fidelity::BytesReplaced;
         assert!(!lossy(b"a,b\n"));
         assert!(!lossy(b"\xEF\xBB\xBFa,b\n"));
         assert!(!lossy(b"caf\xe9,x\n"));

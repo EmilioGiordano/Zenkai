@@ -8,7 +8,8 @@ mod numbers;
 mod values;
 
 pub use csv_format::{
-    CsvError, Delimiter, Encoding, LineEnding, MAX_CSV_BYTES, ParsedCsv, parse_csv,
+    CsvError, Delimiter, Encoding, Fidelity, FinalNewline, LineEnding, MAX_CSV_BYTES, ParsedCsv,
+    parse_csv,
 };
 pub use csv_guess::{DecimalMark, Guess, apply, guess};
 pub use csv_write::{CsvFormat, CsvWriter, write_csv};

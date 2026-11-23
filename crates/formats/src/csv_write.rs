@@ -45,6 +45,10 @@ enum Recode {
     Windows1252,
 }
 
+fn invalid_data(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
 fn utf16(text: &str, to_bytes: fn(u16) -> [u8; 2]) -> Vec<u8> {
     text.encode_utf16().flat_map(to_bytes).collect()
 }
@@ -77,7 +81,8 @@ impl<W: Write> Encoded<W> {
         self.pending.extend_from_slice(bytes);
         let whole = match std::str::from_utf8(&self.pending) {
             Ok(text) => text.len(),
-            Err(error) => error.valid_up_to(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(_) => return Err(invalid_data("the writer produced bytes that are not UTF-8")),
         };
         let unfinished = self.pending.split_off(whole);
         let text = String::from_utf8_lossy(&self.pending);
@@ -87,8 +92,7 @@ impl<W: Write> Encoded<W> {
             Recode::Windows1252 => {
                 let (bytes, _, unmappable) = WINDOWS_1252.encode(&text);
                 if unmappable {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
+                    return Err(invalid_data(
                         "the text has characters Windows-1252 cannot hold",
                     ));
                 }
@@ -110,6 +114,9 @@ impl<W: Write> Write for Encoded<W> {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        if !self.pending.is_empty() {
+            return Err(invalid_data("the output ends in the middle of a character"));
+        }
         self.inner.flush()
     }
 }
@@ -380,6 +387,21 @@ mod tests {
         encoded.write_all(&[0xC3]).unwrap();
         encoded.write_all(&[0xA9]).unwrap();
         assert_eq!(out, b"\xFF\xFE\xE9\x00");
+    }
+
+    #[test]
+    fn bytes_that_are_not_utf8_or_end_inside_a_character_are_an_error_not_a_replacement() {
+        let invalid = |error: io::Error| error.kind() == io::ErrorKind::InvalidData;
+        let mut out = Vec::new();
+        let mut encoded = Encoded::new(&mut out, Encoding::Utf16Le).unwrap();
+        assert!(invalid(encoded.write_all(&[b'a', 0xFF, b'b']).unwrap_err()));
+
+        let mut out = Vec::new();
+        let mut encoded = Encoded::new(&mut out, Encoding::Windows1252).unwrap();
+        encoded.write_all(&[b'a', 0xC3]).unwrap();
+        assert!(invalid(encoded.flush().unwrap_err()));
+        encoded.write_all(&[0xA9]).unwrap();
+        encoded.flush().unwrap();
     }
 
     #[test]
