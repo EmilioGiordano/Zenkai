@@ -118,6 +118,7 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
                         read_only: link.read_only,
                         origin: link.origin.unwrap_or(FileOrigin::Internet),
                         reader_fallback: None,
+                        csv: None,
                     }),
                     provenance: Provenance::Dump,
                     copy: None,
@@ -148,6 +149,7 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
                         // A recovery copy does not record where the work came from; it fails closed.
                         origin: FileOrigin::Internet,
                         reader_fallback: None,
+                        csv: None,
                     }),
                     provenance: Provenance::Recovery,
                     copy: Some(copy.clone()),
@@ -174,7 +176,11 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
     let Some(path) = &link.path else {
         return Some(LinkLoad::Missing);
     };
-    let loaded = files::load_workbook(path, reader, cancel);
+    let loaded = if files::is_delimited_text(path) {
+        files::load_csv(path, link.csv.map(|binding| binding.options))
+    } else {
+        files::load_workbook(path, reader, cancel)
+    };
     if cancelled() {
         return None;
     }
@@ -477,12 +483,12 @@ impl Workspace {
             self.open_pdf_file(path, window, cx);
             return;
         }
-        if files::is_delimited_text(&path) {
-            self.import_csv(path, window, cx);
-            return;
-        }
         if let Some(open) = self.documents.find_by_path(&path) {
             self.switch_to(open, window, cx);
+            return;
+        }
+        if files::is_delimited_text(&path) {
+            self.import_csv(path, window, cx);
             return;
         }
         let (load, cancel) = self
@@ -531,6 +537,7 @@ impl Workspace {
                             read_only,
                             origin,
                             reader_fallback,
+                            csv: _,
                         } = file;
                         let id = this.open_document(workbook, Some(path), unsupported, window, cx);
                         if let Some(document) = this.documents.get_mut(id) {
@@ -690,6 +697,7 @@ impl Workspace {
                     read_only: file.read_only,
                     origin: file.origin,
                     provenance,
+                    csv: file.csv,
                 });
                 self.refuse_orphaned_agent_change(window, cx);
                 if let Some(copy) = copy {
@@ -862,6 +870,7 @@ mod tests {
 
     use zenkai_agent::protected_view::FileOrigin;
     use zenkai_engine::{Engine, SaveTarget, Stamp, Workbook, XlsxReader};
+    use zenkai_formats::{DateOrder, Delimiter, Encoding, LineEnding};
     use zenkai_grid::ViewState;
     use zenkai_types::{CellPos, SheetId, WorkbookId};
 
@@ -869,6 +878,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use super::{Arrival, LinkLoad, arrival, changed_while_out_of_memory, read_link};
+    use crate::csv_options::{CsvBinding, CsvOptions};
     use crate::documents::Provenance;
     use crate::entry::{FileSeen, Hibernation, Link, LinkStatus, Rested};
     use crate::files::FileLoad;
@@ -914,6 +924,7 @@ mod tests {
             origin: Some(FileOrigin::Local),
             kind: Default::default(),
             mode: Default::default(),
+            csv: None,
             base: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
@@ -1033,6 +1044,54 @@ mod tests {
         assert!(read_link(&setup.link, XlsxReader::Fast, &cancel).is_none());
         assert!(setup.dump.exists());
         assert!(setup.copy.exists());
+    }
+
+    // A saved CSV document that is out of memory: nothing but its file and the choices it was
+    // read with.
+    fn csv_link(setup: &mut Setup, options: CsvOptions) -> PathBuf {
+        let file = setup._dir.path().join("prices.csv");
+        std::fs::write(&file, b"1,5;2\r\n").unwrap();
+        setup.link.path = Some(file.clone());
+        setup.link.recovery = None;
+        setup.link.dirty = false;
+        setup.link.rested = None;
+        setup.link.csv = Some(CsvBinding::new(options));
+        file
+    }
+
+    #[test]
+    fn a_csv_link_reloads_through_the_csv_reader_with_the_choices_it_was_read_with() {
+        let mut setup = hibernated();
+        let options = CsvOptions {
+            delimiter: Delimiter::Semicolon,
+            encoding: Encoding::Utf8,
+            line_ending: LineEnding::Crlf,
+            decimal_comma: true,
+            date_order: DateOrder::MonthFirst,
+        };
+        csv_link(&mut setup, options);
+        let (file, provenance, _) = loaded(read(&setup.link));
+        assert_eq!(provenance, Provenance::File);
+        assert_eq!(text(&file.workbook), "1.5");
+        let csv = file.csv.expect("a CSV link loads as a CSV");
+        assert_eq!(csv.options, options);
+        assert!(!file.read_only);
+
+        let as_text = CsvOptions {
+            decimal_comma: false,
+            ..options
+        };
+        csv_link(&mut setup, as_text);
+        let (file, _, _) = loaded(read(&setup.link));
+        assert_eq!(text(&file.workbook), "1,5");
+    }
+
+    #[test]
+    fn a_csv_link_whose_file_is_gone_is_reported_missing() {
+        let mut setup = hibernated();
+        let file = csv_link(&mut setup, CsvOptions::exported_as(Path::new("prices.csv")));
+        std::fs::remove_file(file).unwrap();
+        assert!(matches!(read(&setup.link), Some(LinkLoad::Missing)));
     }
 
     #[test]

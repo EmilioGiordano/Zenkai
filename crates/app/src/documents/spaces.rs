@@ -86,6 +86,7 @@ impl Documents {
             origin: None,
             kind,
             mode,
+            csv: None,
             base: None,
             pdf: Default::default(),
             text_zoom: Default::default(),

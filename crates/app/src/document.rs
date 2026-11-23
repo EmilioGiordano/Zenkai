@@ -13,6 +13,7 @@ use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
 use crate::agent_review::Review;
+use crate::csv_options::{CsvBinding, CsvOptions};
 use crate::entry::{FileSeen, display_name};
 use crate::files;
 use crate::find::FindBar;
@@ -60,6 +61,9 @@ pub struct Document {
     // the copy can tell what saving over the file drops.
     pub restored: bool,
     pub read_only: bool,
+    // Set for every document whose path is a delimited text file: Save writes that file as a
+    // CSV, never the workbook as xlsx.
+    pub csv: Option<CsvBinding>,
     // Where the file came from; a download keeps agents read-only, as Excel's Protected View.
     pub origin: FileOrigin,
     pending: Vec<Edit>,
@@ -147,6 +151,10 @@ impl Document {
         unsupported: Vec<Unsupported>,
     ) -> Document {
         let sheets = workbook.sheets();
+        let csv = path
+            .as_deref()
+            .filter(|path| files::is_delimited_text(path))
+            .map(|path| CsvBinding::new(CsvOptions::exported_as(path)));
         Document {
             id,
             space,
@@ -164,6 +172,7 @@ impl Document {
             unsupported,
             restored: false,
             read_only: false,
+            csv,
             origin: FileOrigin::Local,
             pending: Vec::new(),
             generation: GENERATION.fetch_add(1, Ordering::Relaxed),
@@ -701,6 +710,14 @@ pub enum DocumentSave {
     BaseChanged,
 }
 
+// A file that is gone is not a change: saving recreates it. Without a guard nothing was seen.
+pub fn file_changed_since(guard: Option<FileSeen>, target: &Path) -> bool {
+    guard.is_some_and(|seen| match Stamp::of(target) {
+        Ok(now) => seen.changed(now),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    })
+}
+
 // Checked on every attempt: a retry writes the whole file and may drop more than the first.
 pub fn save_document_file(
     shared: &RwLock<Workbook>,
@@ -712,12 +729,7 @@ pub fn save_document_file(
 ) -> Result<DocumentSave, EngineError> {
     // A workbook that came back from a copy of its work does not hold the file it was opened
     // from, so the engine cannot tell the file changed; the stamp taken at rest can.
-    if changed == ChangedFile::Ask
-        && guard.is_some_and(|seen| match Stamp::of(target) {
-            Ok(now) => seen.changed(now),
-            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
-        })
-    {
+    if changed == ChangedFile::Ask && file_changed_since(guard, target) {
         return Ok(DocumentSave::BaseChanged);
     }
     let saved = with_snapshot(

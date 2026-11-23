@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,8 +8,8 @@ use std::time::Instant;
 use zenkai_agent::preferences::XlsxReaderChoice;
 use zenkai_agent::protected_view::{FileOrigin, file_origin};
 use zenkai_engine::{
-    Engine, EngineError, ShownCells, Unsupported, Workbook, XlsxReader, open_xlsx_cancellable,
-    run_with_engine_stack, write_atomic_streaming,
+    Engine, EngineError, ShownCells, Stamp, Unsupported, Workbook, XlsxReader,
+    open_xlsx_cancellable, run_with_engine_stack, write_atomic_streaming,
 };
 use zenkai_formats::{CsvError, CsvWriter, Delimiter, ParsedCsv, parse_csv};
 use zenkai_i18n::t;
@@ -17,7 +18,10 @@ use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
 use zenkai_values_host::client::{HOST_FILE, ReadError, ValuesClient};
 use zenkai_values_host::wire::FailureKind;
 
+use crate::csv_options::{CsvLoad, CsvOptions};
+use crate::csv_preview;
 use crate::document::read_shared;
+use crate::entry::FileSeen;
 use crate::text_document::DocumentKind;
 
 pub const SPREADSHEET_EXTENSIONS: [&str; 7] = ["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"];
@@ -145,12 +149,83 @@ pub fn is_delimited_text(path: &Path) -> bool {
     matches!(extension(path).as_deref(), Some("csv" | "tsv" | "txt"))
 }
 
-pub fn read_csv(path: &Path) -> Result<(Vec<u8>, ParsedCsv), String> {
-    let bytes = std::fs::read(path)
+fn tsv_delimiter(path: &Path) -> Option<Delimiter> {
+    (extension(path).as_deref() == Some("tsv")).then_some(Delimiter::Tab)
+}
+
+pub fn export_delimiter(path: &Path) -> Delimiter {
+    tsv_delimiter(path).unwrap_or(Delimiter::Comma)
+}
+
+pub struct CsvRead {
+    pub bytes: Vec<u8>,
+    pub parsed: ParsedCsv,
+    pub seen: FileSeen,
+}
+
+// The stamp is taken before the read, so a change in between counts as one.
+fn read_with_stamp(path: &Path) -> std::io::Result<(Vec<u8>, FileSeen)> {
+    let stamp = Stamp::of(path).ok();
+    let bytes = std::fs::read(path)?;
+    Ok((bytes, FileSeen::from_stamp(stamp)))
+}
+
+pub fn read_csv(path: &Path) -> Result<CsvRead, String> {
+    let (bytes, seen) = read_with_stamp(path)
         .map_err(|e| t!("file.read_failed", path = path.display(), error = e))?;
-    let hint = (extension(path).as_deref() == Some("tsv")).then_some(Delimiter::Tab);
-    let parsed = parse_csv(&bytes, hint).map_err(|e| e.to_string())?;
-    Ok((bytes, parsed))
+    let parsed = parse_csv(&bytes, tsv_delimiter(path)).map_err(|e| e.to_string())?;
+    Ok(CsvRead {
+        bytes,
+        parsed,
+        seen,
+    })
+}
+
+// Opens a CSV as the document it is, without a preview: with the choices stored when the user
+// made them, or read from the file as the preview does. Encoding and line ending are always
+// the file's own as it is now.
+pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, LoadFailure> {
+    let (bytes, seen) = read_with_stamp(path).map_err(|source| match source.kind() {
+        std::io::ErrorKind::NotFound => LoadFailure::Missing,
+        _ => LoadFailure::Engine(EngineError::Read {
+            path: path.to_path_buf(),
+            source,
+        }),
+    })?;
+    let hint = stored
+        .map(|options| options.delimiter)
+        .or_else(|| tsv_delimiter(path));
+    let parsed = parse_csv(&bytes, hint)
+        .map_err(|e| LoadFailure::Engine(EngineError::Rejected(e.to_string())))?;
+    let options = match stored {
+        Some(stored) => CsvOptions {
+            encoding: parsed.encoding,
+            line_ending: parsed.line_ending,
+            ..stored
+        },
+        None => {
+            let guess = csv_preview::guess(&parsed);
+            CsvOptions {
+                delimiter: parsed.delimiter,
+                encoding: parsed.encoding,
+                line_ending: parsed.line_ending,
+                decimal_comma: guess.decimal_comma,
+                date_order: guess.date_order,
+            }
+        }
+    };
+    let mut rows = parsed.rows;
+    csv_preview::apply(options.decimal_comma, options.date_order, &mut rows);
+    let workbook =
+        workbook_from_rows(rows).map_err(|e| LoadFailure::Engine(EngineError::Rejected(e)))?;
+    Ok(FileLoad {
+        workbook,
+        unsupported: Vec::new(),
+        read_only: false,
+        origin: file_origin(path),
+        reader_fallback: None,
+        csv: Some(CsvLoad { options, seen }),
+    })
 }
 
 pub fn workbook_from_rows(rows: Vec<Vec<String>>) -> Result<Workbook, String> {
@@ -169,6 +244,7 @@ pub struct FileLoad {
     pub read_only: bool,
     pub origin: FileOrigin,
     pub reader_fallback: Option<String>,
+    pub csv: Option<CsvLoad>,
 }
 
 // ZENKAI_XLSX_READER=fast, shadow or standard overrides the setting, for testing.
@@ -184,6 +260,7 @@ pub fn xlsx_reader(choice: XlsxReaderChoice) -> XlsxReader {
     }
 }
 
+#[derive(Debug)]
 pub enum LoadFailure {
     Missing,
     Engine(EngineError),
@@ -233,6 +310,7 @@ fn load_any(
             read_only: false,
             origin: file_origin(path),
             reader_fallback: opened.fallback,
+            csv: None,
         }),
         Err(EngineError::InvalidFile(_)) if cancel.load(Ordering::Relaxed) => {
             Err(LoadFailure::Engine(EngineError::Cancelled))
@@ -244,6 +322,7 @@ fn load_any(
                 read_only: true,
                 origin: file_origin(path),
                 reader_fallback: None,
+                csv: None,
             }),
             Err(_) if cancel.load(Ordering::Relaxed) => {
                 Err(LoadFailure::Engine(EngineError::Cancelled))
@@ -324,14 +403,23 @@ pub fn write_csv_file(
     shown: &ShownCells,
     cancel: &AtomicBool,
 ) -> Result<(), EngineError> {
-    let delimiter = if extension(path).as_deref() == Some("tsv") {
-        Delimiter::Tab
-    } else {
-        Delimiter::Comma
-    };
+    write_csv_as(path, shown, &CsvOptions::exported_as(path), cancel)
+}
+
+pub fn write_csv_as(
+    path: &Path,
+    shown: &ShownCells,
+    options: &CsvOptions,
+    cancel: &AtomicBool,
+) -> Result<(), EngineError> {
     write_atomic_streaming(path, |out| {
-        write_shown_rows(out, shown, delimiter, cancel).map_err(|error| match error {
+        write_shown_rows(out, shown, options, cancel).map_err(|error| match error {
             ExportStop::Cancelled => EngineError::Cancelled,
+            ExportStop::Csv(CsvError::Write(source))
+                if source.kind() == std::io::ErrorKind::InvalidData =>
+            {
+                EngineError::Rejected(t!("csv.cannot_encode", encoding = options.encoding.label()))
+            }
             ExportStop::Csv(CsvError::Write(source)) => EngineError::Write {
                 path: path.to_path_buf(),
                 source,
@@ -339,6 +427,17 @@ pub fn write_csv_file(
             ExportStop::Csv(other) => EngineError::Rejected(other.to_string()),
         })
     })
+}
+
+// The inverse of reading a file whose numbers use a decimal comma: reading was only chosen when
+// no number in the file used a dot, so a dot in a number is that comma.
+fn with_decimal_comma(text: &str) -> Cow<'_, str> {
+    let number = text.strip_suffix('%').unwrap_or(text);
+    if number.contains('.') && number.parse::<f64>().is_ok() {
+        Cow::Owned(text.replace('.', ","))
+    } else {
+        Cow::Borrowed(text)
+    }
 }
 
 enum ExportStop {
@@ -357,11 +456,11 @@ impl From<CsvError> for ExportStop {
 fn write_shown_rows(
     out: &mut dyn Write,
     shown: &ShownCells,
-    delimiter: Delimiter,
+    options: &CsvOptions,
     cancel: &AtomicBool,
 ) -> Result<(), ExportStop> {
     let width = usize::from(shown.end.col.get()) + 1;
-    let mut writer = CsvWriter::new(out, delimiter)?;
+    let mut writer = CsvWriter::in_format(out, options.format())?;
     let mut cells = shown.cells.iter().peekable();
     for row in 0..=shown.end.row.get() {
         if cancel.load(Ordering::Relaxed) {
@@ -371,7 +470,11 @@ fn write_shown_rows(
         while let Some((pos, text)) = cells.next_if(|(pos, _)| pos.row.get() == row) {
             let col = usize::from(pos.col.get());
             writer.write_empty_fields(col.saturating_sub(next_col))?;
-            writer.write_field(text)?;
+            if options.decimal_comma {
+                writer.write_field(&with_decimal_comma(text))?;
+            } else {
+                writer.write_field(text)?;
+            }
             next_col = col + 1;
         }
         writer.write_empty_fields(width.saturating_sub(next_col))?;
@@ -436,7 +539,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("in.csv");
         std::fs::write(&source, "name;qty\nAna;3\nLuis;4\n").unwrap();
-        let (_, parsed) = read_csv(&source).unwrap();
+        let parsed = read_csv(&source).unwrap().parsed;
         assert_eq!(parsed.delimiter, Delimiter::Semicolon);
         let workbook = workbook_from_rows(parsed.rows).unwrap();
         let target = dir.path().join("out.csv");
@@ -596,6 +699,45 @@ mod tests {
         // 8 October 2026 and 25 October 2026 as Excel serials.
         assert_eq!(serial(0), Some(46303.0));
         assert_eq!(serial(1), Some(46320.0));
+    }
+
+    #[test]
+    fn a_csv_loads_with_the_options_found_in_it_and_keeps_the_choices_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prices.csv");
+        std::fs::write(&path, "1,5;2\r\n3;4\r\n").unwrap();
+
+        let found = load_csv(&path, None).unwrap();
+        let csv = found.csv.unwrap();
+        assert_eq!(csv.options.delimiter, Delimiter::Semicolon);
+        assert_eq!(csv.options.encoding, zenkai_formats::Encoding::Utf8);
+        assert_eq!(csv.options.line_ending, zenkai_formats::LineEnding::Crlf);
+        assert!(csv.options.decimal_comma);
+        assert_eq!(number_at(&found.workbook, 0), Some(1.5));
+
+        let stored = CsvOptions {
+            decimal_comma: false,
+            ..csv.options
+        };
+        let again = load_csv(&path, Some(stored)).unwrap();
+        assert_eq!(again.csv.unwrap().options, stored);
+        assert_eq!(number_at(&again.workbook, 0), None);
+    }
+
+    #[test]
+    fn a_missing_csv_is_reported_as_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let failure = load_csv(&dir.path().join("gone.csv"), None).err();
+        assert!(matches!(failure, Some(LoadFailure::Missing)));
+    }
+
+    #[test]
+    fn a_decimal_comma_is_written_back_only_on_numbers() {
+        assert_eq!(with_decimal_comma("1.5"), "1,5");
+        assert_eq!(with_decimal_comma("-0.25%"), "-0,25%");
+        assert_eq!(with_decimal_comma("v1.2.3"), "v1.2.3");
+        assert_eq!(with_decimal_comma("3"), "3");
+        assert_eq!(with_decimal_comma("a.b"), "a.b");
     }
 
     #[test]

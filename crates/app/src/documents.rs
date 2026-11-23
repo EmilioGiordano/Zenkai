@@ -5,6 +5,7 @@ use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{Kept, Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
+use crate::csv_options::{CsvBinding, CsvLoad};
 use crate::document::{self, Document, FileJob, SharedWorkbook};
 use crate::entry::{Entry, Link, LinkStatus, Slot};
 use crate::files;
@@ -122,6 +123,8 @@ pub struct Loaded {
     pub read_only: bool,
     pub origin: FileOrigin,
     pub provenance: Provenance,
+    // Set when the workbook was read from its CSV file.
+    pub csv: Option<CsvLoad>,
 }
 
 impl Loaded {
@@ -158,6 +161,15 @@ impl Loaded {
             // The recovery copy was written from this very work, and the new document has
             // made no edit yet.
             document.set_autosaved_at(Some(document.edit_count()));
+        }
+        if let Some(csv) = self.csv {
+            document.csv = Some(CsvBinding {
+                options: csv.options,
+                loss_accepted: link.csv.is_some_and(|binding| binding.loss_accepted),
+            });
+            document.guard_file(csv.seen);
+        } else if let Some(binding) = link.csv {
+            document.csv = Some(binding);
         }
         document.origin = link.origin.unwrap_or(self.origin);
         document.view = link.view;
@@ -855,6 +867,7 @@ mod tests {
             read_only: false,
             kind: Default::default(),
             mode: Default::default(),
+            csv: None,
             base: None,
             file_modified: None,
             pdf: Default::default(),

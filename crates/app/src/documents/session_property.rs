@@ -136,6 +136,7 @@ impl Model {
             read_only: false,
             origin: FileOrigin::Local,
             provenance,
+            csv: None,
         });
         if provenance == Provenance::Dump {
             let woken = self.documents.get(id).unwrap();

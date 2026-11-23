@@ -7,6 +7,7 @@ use zenkai_grid::ViewState;
 use zenkai_i18n::t;
 use zenkai_types::{SheetId, WorkbookId};
 
+use crate::csv_options::CsvBinding;
 use crate::document::{Document, FileJob};
 use crate::notes_tab::NotesTab;
 use crate::pdf::PdfPosition;
@@ -44,6 +45,9 @@ pub struct Link {
     pub origin: Option<FileOrigin>,
     pub kind: DocumentKind,
     pub mode: ViewMode,
+    // How the file was read when the workbook is a CSV opened as itself; it loads through the
+    // CSV reader and saves back as the same CSV.
+    pub csv: Option<CsvBinding>,
     // The disk stamp a text's edits were based on, kept across a restart.
     pub base: Option<StampRecord>,
     pub pdf: PdfPosition,
@@ -71,6 +75,14 @@ impl FileSeen {
             stamp: None,
             at: SystemTime::UNIX_EPOCH,
         }
+    }
+
+    // A file that could not be stamped is taken as unknown, so a save asks before replacing it.
+    pub fn from_stamp(stamp: Option<Stamp>) -> FileSeen {
+        stamp.map_or_else(FileSeen::unknown, |stamp| FileSeen {
+            stamp: Some(stamp),
+            at: stamp.modified(),
+        })
     }
 
     pub fn changed(&self, now: Stamp) -> bool {
@@ -302,6 +314,7 @@ impl Document {
             origin: Some(self.origin),
             kind: DocumentKind::Workbook,
             mode: ViewMode::default(),
+            csv: self.csv,
             base: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
@@ -316,12 +329,7 @@ impl Document {
     // file, so the guard it was restored with is what carries on.
     fn file_seen(&self) -> FileSeen {
         self.file_guard().unwrap_or_else(|| {
-            self.workbook()
-                .and_then(|workbook| workbook.file_stamp())
-                .map_or_else(FileSeen::unknown, |stamp| FileSeen {
-                    stamp: Some(stamp),
-                    at: stamp.modified(),
-                })
+            FileSeen::from_stamp(self.workbook().and_then(|workbook| workbook.file_stamp()))
         })
     }
 
@@ -344,8 +352,7 @@ impl Document {
         }
     }
 
-    // Work that exists only in memory: unsaved edits, or an untitled workbook such as a CSV
-    // import that was never saved.
+    // Work that exists only in memory: unsaved edits, or an untitled workbook that was never saved.
     pub fn needs_recovery(&self) -> bool {
         self.dirty || (self.path.is_none() && !self.is_pristine())
     }

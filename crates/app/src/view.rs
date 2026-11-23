@@ -31,6 +31,7 @@ mod agent_review;
 mod chat_dock;
 mod close_dialog;
 mod closing;
+mod csv_files;
 mod messages;
 mod notice_card;
 mod notices;
@@ -62,6 +63,7 @@ use crate::chat_layout::{ChatLayout, ChatLayoutState};
 use crate::clipboard;
 use crate::close_prompt::{CloseGoal, Departure};
 use crate::csv_export_size::ExportSize;
+use crate::csv_options::{CsvBinding, CsvOptions};
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
@@ -342,14 +344,14 @@ fn target_action(
 #[derive(Debug, PartialEq)]
 enum DelimitedAction {
     Export,
-    ConfirmReplacing,
+    SaveInPlace,
 }
 
 // The native dialog already warns about an existing file, and a delimited name is never
-// rewritten by Zenkai; only the open source file is confirmed again.
+// rewritten by Zenkai. Naming the CSV the document is open as saves it, as Save does.
 fn delimited_action(probe: &files::TargetProbe) -> DelimitedAction {
     if probe.same_as_source {
-        DelimitedAction::ConfirmReplacing
+        DelimitedAction::SaveInPlace
     } else {
         DelimitedAction::Export
     }
@@ -357,7 +359,6 @@ fn delimited_action(probe: &files::TargetProbe) -> DelimitedAction {
 
 enum Replacing {
     Existing,
-    ExistingExport,
     Original(Vec<Unsupported>),
 }
 
@@ -1495,9 +1496,9 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    files::read_csv(&task_path).map(|(bytes, parsed)| {
-                        let guess = csv_preview::guess(&parsed);
-                        (bytes, parsed, guess)
+                    files::read_csv(&task_path).map(|read| {
+                        let guess = csv_preview::guess(&read.parsed);
+                        (read, guess)
                     })
                 })
                 .await;
@@ -1508,12 +1509,13 @@ impl Workspace {
                     return;
                 }
                 match result {
-                    Ok((bytes, parsed, guess)) => {
+                    Ok((read, guess)) => {
                         this.csv_preview = Some(CsvPreview {
                             path,
-                            bytes: Arc::new(bytes),
-                            parsed,
+                            bytes: Arc::new(read.bytes),
+                            parsed: read.parsed,
                             guess,
+                            seen: read.seen,
                         });
                         window.focus(&this.focus, cx);
                         cx.notify();
@@ -1583,8 +1585,15 @@ impl Workspace {
             bytes,
             parsed,
             guess,
+            seen,
         } = preview;
-        let delimiter = parsed.delimiter;
+        let options = CsvOptions {
+            delimiter: parsed.delimiter,
+            encoding: parsed.encoding,
+            line_ending: parsed.line_ending,
+            decimal_comma: guess.decimal_comma,
+            date_order: guess.date_order,
+        };
         let mut rows = parsed.rows;
         let origin_path = path.clone();
         cx.spawn_in(window, async move |this, cx| {
@@ -1593,10 +1602,11 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     let origin = file_origin(&origin_path);
-                    csv_preview::apply(guess, &mut rows);
+                    csv_preview::apply(options.decimal_comma, options.date_order, &mut rows);
                     // On failure, parse again so the preview comes back as it was.
-                    let result = files::workbook_from_rows(rows)
-                        .map_err(|error| (error, parse_csv(&task_bytes, Some(delimiter)).ok()));
+                    let result = files::workbook_from_rows(rows).map_err(|error| {
+                        (error, parse_csv(&task_bytes, Some(options.delimiter)).ok())
+                    });
                     (result, origin)
                 })
                 .await;
@@ -1605,9 +1615,16 @@ impl Workspace {
                 match result {
                     Ok(_) if this.csv_request != request => {}
                     Ok(workbook) => {
-                        let id = this.open_document(workbook, None, Vec::new(), window, cx);
+                        this.remember_recent(&path, cx);
+                        if let Some(open) = this.documents.find_by_path(&path) {
+                            this.switch_to(open, window, cx);
+                            return;
+                        }
+                        let id = this.open_document(workbook, Some(path), Vec::new(), window, cx);
                         if let Some(document) = this.documents.get_mut(id) {
                             document.origin = origin;
+                            document.csv = Some(CsvBinding::new(options));
+                            document.guard_file(seen);
                         }
                         this.notify(Severity::Info, summary, cx);
                     }
@@ -1620,6 +1637,7 @@ impl Workspace {
                                 bytes,
                                 parsed,
                                 guess,
+                                seen,
                             });
                             window.focus(&this.focus, cx);
                         }
@@ -2016,6 +2034,9 @@ impl Workspace {
         let must_rename =
             document.may_lose_unseen_content() || document.is_macro_enabled() || document.read_only;
         match document.path.clone() {
+            Some(path) if document.csv.is_some() => {
+                self.save_csv(id, path, ChangedFile::Ask, window, cx)
+            }
             Some(path) if !must_rename => self.save_to(
                 id,
                 path,
@@ -2110,7 +2131,14 @@ impl Workspace {
                         .trim_start_matches("• ")
                         .to_string()
                 },
-                |stem| files::copy_stem(&stem.to_string_lossy()),
+                |stem| {
+                    // A CSV saved as .xlsx is a new file of its own, not a copy of the CSV.
+                    if document.csv.is_some() {
+                        stem.to_string_lossy().into_owned()
+                    } else {
+                        files::copy_stem(&stem.to_string_lossy())
+                    }
+                },
             );
         let path = cx.prompt_for_new_path(&directory, Some(&format!("{suggested}.xlsx")));
         cx.spawn_in(window, async move |this, cx| {
@@ -2213,9 +2241,7 @@ impl Workspace {
         }
         match delimited_action(&probe) {
             DelimitedAction::Export => self.export_csv(id, path, window, cx),
-            DelimitedAction::ConfirmReplacing => {
-                self.confirm_replace(id, path, Replacing::ExistingExport, window, cx);
-            }
+            DelimitedAction::SaveInPlace => self.save_csv(id, path, ChangedFile::Ask, window, cx),
         }
     }
 
@@ -2280,9 +2306,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let exports = matches!(replacing, Replacing::ExistingExport);
         let (title, detail, overwrite) = match replacing {
-            Replacing::Existing | Replacing::ExistingExport => (
+            Replacing::Existing => (
                 t!("save.replace_existing_title"),
                 t!("save.replace_existing_detail", path = path.display()),
                 None,
@@ -2307,9 +2332,7 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| {
-                if choice == Some(1) && exports {
-                    this.export_csv(id, path, window, cx)
-                } else if choice == Some(1) {
+                if choice == Some(1) {
                     this.save_to(id, path, overwrite, ChangedFile::Ask, window, cx)
                 } else {
                     this.save_ended(id, false, window, cx)
@@ -2346,6 +2369,11 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| match choice {
+                Some(CHANGED_FILE_REPLACE)
+                    if this.documents.get(id).is_some_and(|d| d.csv.is_some()) =>
+                {
+                    this.save_csv(id, path, ChangedFile::Replace, window, cx)
+                }
                 Some(CHANGED_FILE_REPLACE) => {
                     this.save_to(id, path, Some(overwrite), ChangedFile::Replace, window, cx)
                 }
@@ -2448,6 +2476,8 @@ impl Workspace {
                     Ok(Saved::Written { kept, lacks }) => {
                         document.saved_over_file(kept);
                         document.path = Some(path);
+                        // Save As an .xlsx makes the document that file, no longer the CSV.
+                        document.csv = None;
                         let edited_meanwhile = document.edit_count() != edits_at_start;
                         document.dirty = edited_meanwhile;
                         fully_saved = !edited_meanwhile;
@@ -4960,7 +4990,7 @@ mod tests {
     }
 
     #[test]
-    fn delimited_export_only_asks_again_for_the_open_source_file() {
+    fn delimited_save_as_to_the_open_csv_saves_it_and_any_other_name_exports() {
         let probe = |same_as_source, exists| TargetProbe {
             same_as_source,
             exists,
@@ -4971,7 +5001,7 @@ mod tests {
         );
         assert_eq!(
             delimited_action(&probe(true, false)),
-            DelimitedAction::ConfirmReplacing
+            DelimitedAction::SaveInPlace
         );
         assert_eq!(
             delimited_action(&probe(false, false)),

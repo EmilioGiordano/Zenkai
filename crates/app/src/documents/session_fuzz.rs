@@ -21,6 +21,7 @@ fn file(path: Option<&str>, recovery: Option<&str>, active: bool) -> FileRecord 
         read_only: false,
         kind: Default::default(),
         mode: Default::default(),
+        csv: None,
         base: None,
         file_modified: None,
         pdf: Default::default(),

@@ -274,6 +274,7 @@ impl TextDocument {
             origin: None,
             kind: self.kind,
             mode: self.mode,
+            csv: None,
             base: self.stamp.map(Stamp::record),
             pdf: Default::default(),
             text_zoom: self.zoom,

@@ -69,6 +69,7 @@ fn unsaved_work_leaves_memory_as_a_link_and_comes_back_with_its_history() {
         read_only: false,
         origin: FileOrigin::Local,
         provenance: Provenance::Dump,
+        csv: None,
     });
     let document = documents.get_mut(id).unwrap();
     assert!(document.dirty);
@@ -283,6 +284,7 @@ fn a_saved_workbook_rests_as_a_link_without_a_recovery_copy_and_keeps_its_histor
         read_only: false,
         origin: FileOrigin::Local,
         provenance: Provenance::Dump,
+        csv: None,
     });
     let document = documents.get_mut(id).unwrap();
     assert!(!document.dirty);

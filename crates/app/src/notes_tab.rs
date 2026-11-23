@@ -35,6 +35,7 @@ impl NotesTab {
             origin: None,
             kind: DocumentKind::WhatsNew,
             mode: ViewMode::default(),
+            csv: None,
             base: None,
             pdf: Default::default(),
             text_zoom: Default::default(),

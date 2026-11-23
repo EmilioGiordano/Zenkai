@@ -13,6 +13,7 @@ use zenkai_formats::{
 };
 
 use crate::actions::{CancelCsvImport, ConfirmCsvImport};
+use crate::entry::FileSeen;
 use crate::interface_scale::rem_px;
 
 const PREVIEW_ROWS: usize = 12;
@@ -38,6 +39,8 @@ pub struct CsvPreview {
     pub bytes: Arc<Vec<u8>>,
     pub parsed: ParsedCsv,
     pub guess: Guess,
+    // The file as it was when read, for the document the import makes of it.
+    pub seen: FileSeen,
 }
 
 /// How numbers and dates are read on import; guessed from the file, switchable.
@@ -50,11 +53,11 @@ pub struct Guess {
 
 /// Rewrites day-first dates and decimal-comma numbers as the import will. Dates go first:
 /// a day-first date written with dots must not be read as a grouped number.
-pub fn apply(guess: Guess, rows: &mut [Vec<String>]) {
-    if guess.date_order == DateOrder::DayFirst {
+pub fn apply(decimal_comma: bool, date_order: DateOrder, rows: &mut [Vec<String>]) {
+    if date_order == DateOrder::DayFirst {
         normalize_day_first(rows);
     }
-    if guess.decimal_comma {
+    if decimal_comma {
         normalize_decimal_comma(rows);
     }
 }
@@ -103,7 +106,11 @@ pub fn render(
         .take(PREVIEW_ROWS)
         .map(|row| row.iter().take(PREVIEW_COLS).cloned().collect())
         .collect();
-    apply(preview.guess, &mut shown);
+    apply(
+        preview.guess.decimal_comma,
+        preview.guess.date_order,
+        &mut shown,
+    );
     let table = v_flex()
         .border_1()
         .border_color(theme.border)

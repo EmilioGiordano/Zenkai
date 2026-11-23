@@ -151,6 +151,7 @@ mod tests {
                     read_only: false,
                     kind: DocumentKind::Markdown,
                     mode: ViewMode::Source,
+                    csv: None,
                     base: None,
                     file_modified: None,
                     pdf: Default::default(),
