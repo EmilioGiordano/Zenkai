@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn text_that_looks_like_a_formula_is_saved_over_its_own_csv_as_it_was() {
-        assert_unchanged("contacts.csv", b"note,phone\n-,+34 600\n@ana,ok\n");
+        assert_unchanged("contacts.csv", b"note,phone\n-,@ana\n@bob,ok\n");
     }
 
     #[test]
@@ -370,11 +370,11 @@ mod tests {
             opened_csv(dir.path(), "edit.csv", b"a,b,c\n007,1.50,x\n00123,2,y\n");
         let csv = load.csv.take().unwrap();
         load.workbook.set_input(SheetId(0), at(1, 1), "9").unwrap();
-        load.workbook.set_input(SheetId(0), at(2, 2), "-z").unwrap();
+        load.workbook.set_input(SheetId(0), at(2, 2), "-").unwrap();
         load.workbook.set_input(SheetId(0), at(0, 0), "@a").unwrap();
         let (saved, bytes) = save(&path, load.workbook, &csv);
         assert!(matches!(saved, CsvSave::Written(..)));
-        assert_eq!(bytes, b"@a,b,c\n007,9,x\n00123,2,-z\n");
+        assert_eq!(bytes, b"@a,b,c\n007,9,x\n00123,2,-\n");
     }
 
     #[test]
@@ -475,7 +475,7 @@ mod tests {
             assert!(matches!(saved, CsvSave::Written(..)), "{name}");
             let mut written = b"f;n\n25/10/2026;1,5\n".to_vec();
             written.extend_from_slice(expected.as_bytes());
-            written.push(b'\n');
+            written.extend_from_slice(b";\n");
             assert_eq!(bytes, written, "{name}");
 
             let reopened = csv_io::load_csv(&path, None).unwrap();
@@ -681,6 +681,17 @@ mod tests {
         );
         assert!(matches!(saved, Err(EngineError::Rejected(_))));
         assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn a_field_the_engine_reads_as_a_formula_is_asked_about_not_written_over_silently() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = b"phone\n+34 600\n";
+        let (path, mut load) = opened_csv(dir.path(), "phones.csv", original);
+        let csv = load.csv.take().unwrap();
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::WouldLose(found) if found.formulas));
+        assert_eq!(bytes, original);
     }
 
     #[test]
