@@ -50,7 +50,7 @@ impl Documents {
             {
                 let id = self.take_id();
                 let link = session::link_of(file, id, space, recovery_directory);
-                self.after.push(Slot::Link(link));
+                self.after.push(Slot::Link(Box::new(link)));
                 if file.active {
                     active = Some(id);
                 }

@@ -69,7 +69,7 @@ impl Documents {
     pub fn add_link(&mut self, path: PathBuf, size: Option<u64>, mode: ViewMode) -> WorkbookId {
         let id = self.take_id();
         let kind = DocumentKind::of(&path);
-        self.after.push(Slot::Link(Link {
+        self.after.push(Slot::Link(Box::new(Link {
             id,
             space: self.current_space(),
             untitled: 0,
@@ -91,7 +91,7 @@ impl Documents {
             pdf: Default::default(),
             text_zoom: Default::default(),
             rested: None,
-        }));
+        })));
         id
     }
 

@@ -420,7 +420,7 @@ impl Documents {
 
     fn link_mut(&mut self, id: WorkbookId) -> Option<&mut Link> {
         match self.slot_mut(id)? {
-            SlotMut::Other(Slot::Link(link)) => Some(link),
+            SlotMut::Other(Slot::Link(link)) => Some(&mut **link),
             _ => None,
         }
     }
@@ -651,7 +651,7 @@ impl Documents {
         match slot {
             Slot::Loaded(document) if document.can_unload() => {
                 let model = document.shared_workbook();
-                *slot = Slot::Link(document.to_link());
+                *slot = Slot::Link(Box::new(document.to_link()));
                 self.retired.push(model);
                 true
             }
@@ -729,7 +729,7 @@ impl Documents {
             return false;
         }
         let model = document.shared_workbook();
-        *slot = Slot::Link(document.to_hibernated_link(recovery, dump, kept));
+        *slot = Slot::Link(Box::new(document.to_hibernated_link(recovery, dump, kept)));
         self.retired.push(model);
         true
     }

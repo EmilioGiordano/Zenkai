@@ -147,7 +147,7 @@ pub enum Slot {
     Text(Box<TextDocument>),
     Pdf(Box<PdfTab>),
     Notes(Box<NotesTab>),
-    Link(Link),
+    Link(Box<Link>),
 }
 
 // A borrowed look at any workbook of the list, on screen or not.
