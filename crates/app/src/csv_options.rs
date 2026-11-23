@@ -15,7 +15,6 @@ pub struct CsvOptions {
 }
 
 impl CsvOptions {
-    // What an export writes: Excel's own choices.
     pub fn exported_as(delimiter: Delimiter) -> CsvOptions {
         CsvOptions {
             delimiter,
@@ -90,7 +89,6 @@ pub struct CsvBinding {
     pub options: Option<CsvOptions>,
     #[serde(default)]
     pub accepted: Losses,
-    // Formatting and number formats changed by edits since the file was read.
     #[serde(default)]
     pub introduced: Losses,
 }

@@ -189,8 +189,7 @@ fn sniff(text: &str, hint: Option<Delimiter>) -> Delimiter {
 }
 
 // The first line break outside quotes decides; a file without one gets what exports write.
-// As in the csv reader, only a quote that starts a field opens a quoted one, so a stray quote
-// inside a plain field (`5" pipe`) changes nothing.
+// Only a quote that starts a field opens a quoted one, as in the csv reader.
 fn detect_line_ending(text: &str, delimiter: Delimiter) -> LineEnding {
     let delimiter = char::from(delimiter.byte());
     let mut quoted = false;
@@ -287,9 +286,8 @@ fn empty_lines(text: &str, delimiter: Delimiter) -> Result<EmptyLines, CsvError>
     Ok(found)
 }
 
-// Puts the empty lines back among the records, and says whether their places are unknown: the
-// two readings counted different records, as they can on malformed quoting, so the empty lines
-// cannot be put back.
+// Puts the empty lines back among the records; true when the two readings counted different
+// records (malformed quoting), so their places are unknown.
 fn with_empty_lines(
     records: Vec<Vec<String>>,
     empty: &EmptyLines,

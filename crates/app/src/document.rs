@@ -1004,6 +1004,44 @@ mod tests {
     }
 
     #[test]
+    fn a_csv_learns_of_every_command_that_is_not_entering_content() {
+        use zenkai_engine::Engine;
+        let sheet = SheetId(0);
+        let a1 = CellPos::default();
+        let b2 = CellPos::parse_a1("B2").unwrap();
+        let mut document = document();
+        document.csv = Some(CsvBinding::unresolved());
+        let generation = document.generation();
+        let introduced = |document: &Document| document.csv.unwrap().introduced;
+
+        {
+            let mut workbook = document.workbook.write().unwrap();
+            workbook.set_input(sheet, a1, "1").unwrap();
+            workbook.clear(sheet, Range::single(a1)).unwrap();
+        }
+        document.finish_batch(generation);
+        assert!(!introduced(&document).any());
+
+        document
+            .workbook
+            .write()
+            .unwrap()
+            .set_column_width(sheet, zenkai_types::ColIdx::clamped(0), 120.0)
+            .unwrap();
+        document.finish_batch(generation);
+        assert!(introduced(&document).formatting);
+        assert!(!introduced(&document).number_formats);
+
+        {
+            let mut workbook = document.workbook.write().unwrap();
+            let copied = workbook.copy(sheet, Range::single(a1)).unwrap();
+            workbook.paste(sheet, b2, &copied, false).unwrap();
+        }
+        document.finish_batch(generation);
+        assert!(introduced(&document).number_formats);
+    }
+
+    #[test]
     fn a_save_pressed_during_a_csv_export_runs_after_it() {
         let mut document = document();
         let generation = document.generation();

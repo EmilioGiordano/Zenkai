@@ -5,13 +5,13 @@ use std::sync::atomic::AtomicBool;
 
 use zenkai_engine::{Engine, EngineError, ShownCells, UNREADABLE_CELL, Workbook, is_date_format};
 use zenkai_formats::{
-    DateOrder, DecimalMark, day_first_field, decimal_comma_field, iso_date, number_value,
-    same_value,
+    DateOrder, DecimalMark, date_serial, day_first_field, decimal_comma_field, iso_date,
+    number_value, same_value,
 };
 use zenkai_i18n::t;
 use zenkai_types::{CellPos, Contents, SheetId, ValueKind};
 
-use crate::csv_io::{self, AsRead, BaselineRead, FieldKind, Layout};
+use crate::csv_io::{self, AsRead, BaselineRead, Layout};
 use crate::csv_options::{CsvBinding, CsvOptions, Losses};
 use crate::document::{ChangedFile, file_changed_since, read_shared};
 use crate::entry::FileSeen;
@@ -26,17 +26,13 @@ pub struct CsvSaveRequest {
 }
 
 pub enum CsvSave {
-    // The file was written, in these options, which the document keeps if it had none yet.
     Written(FileSeen, CsvOptions),
-    // Nothing was written: the user decides whether the CSV keeps only the active sheet's values.
     WouldLose(Losses),
-    // Nothing was written: the file changed on disk since it was read or last saved.
     FileChanged,
-    // Nothing was written: decoding the file replaced bytes, so writing it back would change it.
     LossyFile,
+    ShapeUnknown,
 }
 
-// What the import hands the engine for a field of the file.
 fn import_input<'a>(field: &'a str, options: &CsvOptions) -> Cow<'a, str> {
     let mut text = Cow::Borrowed(field);
     if options.date_order == DateOrder::DayFirst
@@ -57,22 +53,29 @@ fn field_at(rows: &mut [Vec<String>], pos: CellPos) -> Option<&mut String> {
     rows.get_mut(row)?.get_mut(usize::from(pos.col.get()))
 }
 
-// A number as a reader of the file takes it: no grouping commas, which it could not tell from
-// decimal ones, and the file's own decimal mark. Text that is not a number stays as shown.
-fn number_text(shown: &str, mark: DecimalMark) -> String {
-    let ungrouped = shown.replace(',', "");
-    if number_value(&ungrouped).is_none() {
-        return shown.to_string();
-    }
+// A number the file's reader takes back as the same one: no grouping, which it could not tell
+// from decimal commas; in a decimal-comma file a plain decimal, keeping only a percent sign.
+fn number_text(source: &str, mark: DecimalMark) -> String {
+    let (body, percent) = match source.strip_suffix('%') {
+        Some(body) => (body, true),
+        None => (source, false),
+    };
+    let ungrouped = body.replace(',', "");
+    let Some(value) = number_value(&ungrouped) else {
+        return source.to_string();
+    };
     match mark {
-        DecimalMark::Dot => ungrouped,
-        DecimalMark::Comma => ungrouped.replace('.', ","),
+        DecimalMark::Dot => format!("{ungrouped}{}", if percent { "%" } else { "" }),
+        DecimalMark::Comma => format!(
+            "{}{}",
+            value.to_string().replace('.', ","),
+            if percent { "%" } else { "" }
+        ),
     }
 }
 
-// A cell is unedited when the engine's input for it stands for what importing its field of the
-// file gives, and then it takes that field's text. Where rows or columns were inserted or
-// deleted the positions no longer line up, the values differ, and the cell counts as edited.
+// A cell whose input stands for what importing its position's field gives is unedited and takes
+// that field's text. After rows or columns move, the values differ and the cell counts as edited.
 fn take_unedited(
     text: &mut String,
     input: &str,
@@ -88,11 +91,17 @@ fn take_unedited(
     }
 }
 
-// The text of a number the user edited, so that reading the file gives the same value back. A
-// date in a day-first file is the one number that would be read another way, so it is written
-// yyyy-mm-dd; a date with a time of day cannot be read from text by the engine, and is written
-// as its serial number. What the cell shows is kept unless it rounds the value (General shows
-// nine decimals and switches to E notation), when the value itself is written.
+// What the cell shows if the file's reader takes it as the same date, else yyyy-mm-dd. A date
+// with a time has no text the engine reads back, so it is written as its serial.
+fn date_text(shown: &str, serial: f64, options: &CsvOptions) -> String {
+    if date_serial(shown, options.date_order) == Some(serial) {
+        return shown.to_string();
+    }
+    iso_date(serial).unwrap_or_else(|| number_text(&serial.to_string(), options.decimal_mark))
+}
+
+// The text of an edited number, so that reading the file gives the same value back: what the
+// cell shows unless that rounds the value (General), then the value. A formula writes its result.
 fn edited_number_text(
     workbook: &Workbook,
     sheet: SheetId,
@@ -101,28 +110,25 @@ fn edited_number_text(
     input: &str,
     options: &CsvOptions,
 ) -> String {
-    if options.date_order == DateOrder::DayFirst {
-        let view = workbook.cell(sheet, pos);
-        if let Some(serial) = view.number.filter(|_| is_date_format(&view.style.num_fmt)) {
-            return iso_date(serial).unwrap_or_else(|| serial.to_string());
-        }
+    let view = workbook.cell(sheet, pos);
+    if let Some(serial) = view.number.filter(|_| is_date_format(&view.style.num_fmt)) {
+        return date_text(shown, serial, options);
     }
-    let text = if same_value(shown, input) {
-        shown
-    } else {
-        input
+    let value = (!input.starts_with('=') && number_value(input).is_some()).then_some(input);
+    let source = match value {
+        Some(value) if !same_value(shown, value) => value,
+        _ => shown,
     };
-    number_text(text, options.decimal_mark)
+    number_text(source, options.decimal_mark)
 }
 
 struct Classified {
     shown: ShownCells,
-    kinds: Vec<FieldKind>,
     formulas: bool,
 }
 
-// One read lock for the whole pass, so what the sheet shows, what each cell holds and what it
-// has in it describe the same moment; an edit waiting for the write lock waits for this pass only.
+// One read lock for the whole pass, so the cells, their inputs and the loss all describe one
+// moment; an edit waiting for the write lock waits for this pass only.
 fn classify_sheet(
     shared: &RwLock<Workbook>,
     request: &CsvSaveRequest,
@@ -133,28 +139,21 @@ fn classify_sheet(
     let workbook = read_shared(shared);
     let mut shown = workbook.shown_cells(sheet)?;
     let contents = workbook.contents(sheet)?;
-    let mut kinds = Vec::with_capacity(shown.cells.len());
     let mut formulas = false;
     for (pos, text) in &mut shown.cells {
         if text == UNREADABLE_CELL && workbook.cell(sheet, *pos).kind == ValueKind::Error {
             return Err(EngineError::Rejected(t!("csv.unreadable_cell", cell = pos)));
         }
         let input = workbook.input(sheet, *pos);
-        formulas = formulas || input.starts_with('=');
         if take_unedited(text, &input, field_at(file, *pos), options) {
-            kinds.push(FieldKind::Unedited);
             continue;
         }
+        formulas = formulas || input.starts_with('=');
         if matches!(contents(*pos), Contents::Number(_)) {
             *text = edited_number_text(&workbook, sheet, *pos, text, &input, options);
         }
-        kinds.push(FieldKind::Edited);
     }
-    Ok(Classified {
-        shown,
-        kinds,
-        formulas,
-    })
+    Ok(Classified { shown, formulas })
 }
 
 pub fn save_csv_file(
@@ -170,6 +169,7 @@ pub fn save_csv_file(
         BaselineRead::Present(baseline) => Some(baseline),
         BaselineRead::Absent => None,
         BaselineRead::Lossy => return Ok(CsvSave::LossyFile),
+        BaselineRead::ShapeUnknown => return Ok(CsvSave::ShapeUnknown),
     };
     // Checked after the read, so the file compared with is the one that was checked.
     if request.changed == ChangedFile::Ask && file_changed_since(request.guard, &request.path) {
@@ -193,7 +193,6 @@ pub fn save_csv_file(
         return Ok(CsvSave::WouldLose(found));
     }
     let layout = Layout::AsRead(AsRead {
-        kinds: &classified.kinds,
         row_lengths: &row_lengths,
         content_rows,
         ends_with_newline,
@@ -452,7 +451,7 @@ mod tests {
         for (name, typed, format, expected) in [
             ("typed.csv", "10/8/2026", None, "2026-10-08"),
             ("words.csv", "10/8/2026", Some("d mmmm yyyy"), "2026-10-08"),
-            ("time.csv", "46303.5", Some("yyyy-mm-dd hh:mm"), "46303.5"),
+            ("time.csv", "46303.5", Some("yyyy-mm-dd hh:mm"), "46303,5"),
         ] {
             let (path, mut load) = opened_csv(dir.path(), name, b"f;n\n25/10/2026;1,5\n");
             let csv = load.csv.take().unwrap();
@@ -679,12 +678,85 @@ mod tests {
     #[test]
     fn a_number_is_written_without_grouping_and_with_the_files_decimal_mark() {
         assert_eq!(number_text("1,234.50", DecimalMark::Dot), "1234.50");
-        assert_eq!(number_text("1,234.50", DecimalMark::Comma), "1234,50");
         assert_eq!(number_text("-0.25%", DecimalMark::Comma), "-0,25%");
-        assert_eq!(
-            number_text("1.23457E+11", DecimalMark::Comma),
-            "1,23457E+11"
-        );
         assert_eq!(number_text("v1.2.3", DecimalMark::Comma), "v1.2.3");
+    }
+
+    #[test]
+    fn a_decimal_comma_number_is_a_plain_decimal_the_import_reads_as_the_same_number() {
+        let cases = [
+            ("$1,234.50", 1234.5),
+            ("1.5E+20", 1.5e20),
+            ("-12%", -0.12),
+            ("1,234", 1234.0),
+            ("0.0000001", 1e-7),
+        ];
+        for (shown, value) in cases {
+            let written = number_text(shown, DecimalMark::Comma);
+            assert!(!written.contains(['$', 'E', 'e']), "{written}");
+            let read = decimal_comma_field(&written).unwrap_or_else(|| written.clone());
+            let read = number_value(&read).unwrap();
+            assert!(
+                (read - value).abs() <= 1e-12 * value.abs(),
+                "{shown} {written}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_date_typed_into_a_month_first_file_is_written_as_a_date_and_not_as_its_serial() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "us.csv", b"d,n\n10/25/2026,1.5\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .set_input(SheetId(0), at(2, 0), "10/8/2026")
+            .unwrap();
+        let serial = value_at(&load.workbook, at(2, 0)).unwrap();
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::Written(..)));
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.starts_with("d,n\n10/25/2026,1.5\n"), "{text}");
+        assert!(!text.contains("46303"), "{text}");
+        let reopened = csv_io::load_csv(&path, None).unwrap();
+        assert_eq!(value_at(&reopened.workbook, at(2, 0)), Some(serial));
+    }
+
+    #[test]
+    fn formula_cells_are_written_as_what_they_show_and_only_those_written_from_the_sheet_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "f.csv", b"a\n=1+1\n");
+        let csv = load.csv.take().unwrap();
+        let shared = RwLock::new(load.workbook);
+        let cancel = AtomicBool::new(false);
+        let mut asked = request(&path, &csv, 1);
+        let outcome = save_csv_file(&shared, &asked, &cancel).unwrap();
+        assert!(matches!(outcome, CsvSave::Written(..)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"a\n=1+1\n");
+
+        {
+            let mut workbook = shared.write().unwrap();
+            workbook.set_input(SheetId(0), at(1, 1), "=A2*10").unwrap();
+            workbook
+                .set_input(SheetId(0), at(1, 2), "=\"x\"&\"y\"")
+                .unwrap();
+        }
+        asked.changed = ChangedFile::Replace;
+        let outcome = save_csv_file(&shared, &asked, &cancel).unwrap();
+        assert!(matches!(outcome, CsvSave::WouldLose(found) if found.formulas));
+
+        asked.binding.accepted.formulas = true;
+        save_csv_file(&shared, &asked, &cancel).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"a\n=1+1,20,xy\n");
+    }
+
+    #[test]
+    fn an_edited_row_never_loses_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "wide.csv", b"1,2,\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook.set_input(SheetId(0), at(0, 0), "9").unwrap();
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::Written(..)));
+        assert_eq!(bytes, b"9,2,\n");
     }
 }

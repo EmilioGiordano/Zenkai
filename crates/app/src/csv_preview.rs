@@ -38,6 +38,42 @@ pub struct CsvPreview {
     pub guess: Guess,
     // The file as it was when read, for the document the import makes of it.
     pub seen: FileSeen,
+    // What the table shows, built once and again when the reading changes, not every frame.
+    pub shown: Vec<Vec<String>>,
+}
+
+impl CsvPreview {
+    pub fn new(
+        path: PathBuf,
+        bytes: Arc<Vec<u8>>,
+        parsed: ParsedCsv,
+        guess: Guess,
+        seen: FileSeen,
+    ) -> CsvPreview {
+        let mut preview = CsvPreview {
+            path,
+            bytes,
+            parsed,
+            guess,
+            seen,
+            shown: Vec::new(),
+        };
+        preview.rebuild();
+        preview
+    }
+
+    // The table shows the values as they will be imported.
+    pub fn rebuild(&mut self) {
+        let mut shown: Vec<Vec<String>> = self
+            .parsed
+            .rows
+            .iter()
+            .take(PREVIEW_ROWS)
+            .map(|row| row.iter().take(PREVIEW_COLS).cloned().collect())
+            .collect();
+        apply(self.guess.decimal_mark, self.guess.date_order, &mut shown);
+        self.shown = shown;
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -59,25 +95,12 @@ pub fn render(
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let total_cols = preview.guess.columns;
-    // The table shows the values as they will be imported.
-    let mut shown: Vec<Vec<String>> = preview
-        .parsed
-        .rows
-        .iter()
-        .take(PREVIEW_ROWS)
-        .map(|row| row.iter().take(PREVIEW_COLS).cloned().collect())
-        .collect();
-    apply(
-        preview.guess.decimal_mark,
-        preview.guess.date_order,
-        &mut shown,
-    );
     let table = v_flex()
         .border_1()
         .border_color(theme.border)
         .rounded_md()
         .overflow_hidden()
-        .children(shown.into_iter().enumerate().map(|(index, row)| {
+        .children(preview.shown.iter().enumerate().map(|(index, row)| {
             h_flex()
                 .when(index % 2 == 1, |line| line.bg(theme.table_even))
                 .children((0..total_cols.min(PREVIEW_COLS)).map(|col| {

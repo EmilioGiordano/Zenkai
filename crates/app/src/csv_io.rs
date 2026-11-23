@@ -50,9 +50,8 @@ impl ReadStop {
     }
 }
 
-// The size is checked on the open file before anything is read, and the read is capped too, so
-// a file that grows meanwhile cannot fill memory. The stamp is taken before the read, so a
-// change in between counts as one.
+// The size is checked on the open file and the read is capped too, so a file that grows
+// meanwhile cannot fill memory. The stamp is taken before the read, so a change in between counts.
 fn read_with_stamp(path: &Path, limit: usize) -> Result<(Vec<u8>, FileSeen), ReadStop> {
     let seen = FileSeen::of(path);
     let file = std::fs::File::open(path).map_err(ReadStop::Io)?;
@@ -81,14 +80,11 @@ pub fn read_csv(path: &Path) -> Result<CsvRead, String> {
     })
 }
 
-// For a workbook that did not come from reading the file (a recovery copy, a memory dump):
-// the choices the file itself shows.
 pub fn detect_csv_options(path: &Path) -> Result<CsvOptions, String> {
     let read = read_csv(path)?;
     Ok(CsvOptions::from_read(&read.parsed, &guess(&read.parsed)))
 }
 
-// The file on disk, parsed as the import read it, which a save compares the sheet with.
 pub struct Baseline {
     pub rows: Vec<Vec<String>>,
     pub ends_with_newline: bool,
@@ -96,10 +92,9 @@ pub struct Baseline {
 
 pub enum BaselineRead {
     Present(Baseline),
-    // The file does not exist, so nothing of it can be kept.
     Absent,
-    // Decoding replaced bytes, so the rows are not the file's own text.
     Lossy,
+    ShapeUnknown,
 }
 
 // Only a missing file is no baseline: one that cannot be read or parsed fails the save, which
@@ -116,6 +111,8 @@ pub fn read_baseline(path: &Path, delimiter: Delimiter) -> Result<BaselineRead, 
         .map_err(|error| EngineError::Rejected(error.to_string()))?;
     Ok(if parsed.lossy {
         BaselineRead::Lossy
+    } else if parsed.shape_unknown {
+        BaselineRead::ShapeUnknown
     } else {
         BaselineRead::Present(Baseline {
             rows: parsed.rows,
@@ -124,9 +121,8 @@ pub fn read_baseline(path: &Path, delimiter: Delimiter) -> Result<BaselineRead, 
     })
 }
 
-// Opens a CSV as the document it is, without a preview: with the choices stored when the user
-// made them, or read from the file as the preview does. Encoding and line ending are always
-// the file's own as it is now.
+// Opens a CSV as the document it is, without a preview: with the stored choices, or those read
+// from the file. Encoding and line ending are always the file's own as it is now.
 pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, LoadFailure> {
     let (bytes, seen) = read_with_stamp(path, MAX_CSV_BYTES).map_err(|stop| match stop {
         ReadStop::Io(error) if error.kind() == std::io::ErrorKind::NotFound => LoadFailure::Missing,
@@ -184,24 +180,14 @@ pub fn write_csv_file(
     write_csv_as(path, shown, &options, &Layout::Rectangle, cancel)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FieldKind {
-    Unedited,
-    Edited,
-}
-
 pub struct AsRead<'a> {
-    // Aligned with the shown cells.
-    pub kinds: &'a [FieldKind],
     pub row_lengths: &'a [usize],
-    // Rows of the file up to its last one that holds anything.
     pub content_rows: usize,
     pub ends_with_newline: bool,
 }
 
 pub enum Layout<'a> {
     Rectangle,
-    // The file's own shape: its rows keep their field counts, empty lines and final line break.
     AsRead(AsRead<'a>),
 }
 
@@ -240,17 +226,13 @@ impl From<CsvError> for ExportStop {
     }
 }
 
-// A row of the file keeps its own field count only while nothing in it was edited; a row that
-// was, or one that moved, is as wide as its cells.
-fn field_count(cells: &[(&(CellPos, String), FieldKind)], file_length: Option<usize>) -> usize {
+// A row never has fewer fields than it had; one past the file's end has as many as its widest
+// row, as Excel pads to the used range.
+fn field_count(cells: &[&(CellPos, String)], file_length: Option<usize>, widest: usize) -> usize {
     let extent = cells
         .last()
-        .map_or(0, |((pos, _), _)| usize::from(pos.col.get()) + 1);
-    let untouched = cells.iter().all(|(_, kind)| *kind == FieldKind::Unedited);
-    match file_length {
-        Some(length) if untouched => extent.max(length),
-        _ => extent,
-    }
+        .map_or(0, |(pos, _)| usize::from(pos.col.get()) + 1);
+    extent.max(file_length.unwrap_or(widest))
 }
 
 // Every row up to the sheet's end has as many fields as the sheet has columns, as when
@@ -263,16 +245,15 @@ fn write_shown_rows(
     cancel: &AtomicBool,
 ) -> Result<(), ExportStop> {
     let sheet_width = usize::from(shown.end.col.get()) + 1;
-    let (kinds, as_read): (&[FieldKind], Option<&AsRead>) = match layout {
-        Layout::Rectangle => (&[], None),
-        Layout::AsRead(as_read) => (as_read.kinds, Some(as_read)),
+    let as_read = match layout {
+        Layout::Rectangle => None,
+        Layout::AsRead(as_read) => Some(as_read),
     };
+    let widest = as_read.map_or(0, |read| {
+        read.row_lengths.iter().copied().max().unwrap_or(0)
+    });
     let mut writer = CsvWriter::in_format(out, options.format())?;
-    let kinds = kinds
-        .iter()
-        .copied()
-        .chain(std::iter::repeat(FieldKind::Edited));
-    let mut cells = shown.cells.iter().zip(kinds).peekable();
+    let mut cells = shown.cells.iter().peekable();
     let mut row_cells = Vec::new();
     // The file's empty rows after its last cell stay while the content still ends where it did.
     let rows = as_read.map_or(shown.end.row.get() + 1, |read| {
@@ -292,7 +273,7 @@ fn write_shown_rows(
             return Err(ExportStop::Cancelled);
         }
         row_cells.clear();
-        while let Some(cell) = cells.next_if(|((pos, _), _)| pos.row.get() == row) {
+        while let Some(cell) = cells.next_if(|(pos, _)| pos.row.get() == row) {
             row_cells.push(cell);
         }
         let width = match as_read {
@@ -302,6 +283,7 @@ fn write_shown_rows(
                 usize::try_from(row)
                     .ok()
                     .and_then(|index| as_read.row_lengths.get(index).copied()),
+                widest,
             ),
         };
         if width == 0 {
@@ -309,7 +291,7 @@ fn write_shown_rows(
             continue;
         }
         let mut next_col = 0;
-        for ((pos, text), kind) in &row_cells {
+        for (pos, text) in &row_cells {
             let col = usize::from(pos.col.get());
             writer.write_empty_fields(col.saturating_sub(next_col))?;
             // Over its own file the text stays as typed, as in Excel: a prefix would corrupt it
@@ -546,15 +528,7 @@ mod tests {
             ],
         };
         let cancel = AtomicBool::new(false);
-        let kinds = [
-            FieldKind::Unedited,
-            FieldKind::Unedited,
-            FieldKind::Edited,
-            FieldKind::Edited,
-            FieldKind::Edited,
-        ];
         let layout = Layout::AsRead(AsRead {
-            kinds: &kinds,
             row_lengths: &[5],
             content_rows: 1,
             ends_with_newline: true,
@@ -581,14 +555,7 @@ mod tests {
                 (at(3, 2), "z".to_string()),
             ],
         };
-        let kinds = [
-            FieldKind::Unedited,
-            FieldKind::Unedited,
-            FieldKind::Unedited,
-            FieldKind::Edited,
-        ];
         let layout = Layout::AsRead(AsRead {
-            kinds: &kinds,
             row_lengths: &[3, 0, 1, 1],
             content_rows: 4,
             ends_with_newline: false,
@@ -616,11 +583,9 @@ mod tests {
             end: at(0, 1),
             cells: vec![(at(0, 0), "a".to_string()), (at(0, 1), "b".to_string())],
         };
-        let kinds = [FieldKind::Unedited, FieldKind::Unedited];
         let cancel = AtomicBool::new(false);
         let write = |row_lengths: &[usize], content_rows: usize| {
             let layout = Layout::AsRead(AsRead {
-                kinds: &kinds,
                 row_lengths,
                 content_rows,
                 ends_with_newline: true,
@@ -631,6 +596,28 @@ mod tests {
         assert_eq!(write(&[2, 3], 1), b"a,b\n,,\n");
         assert_eq!(write(&[2, 0, 0], 1), b"a,b\n\n\n");
         assert_eq!(write(&[2, 2, 2], 3), b"a,b\n");
+    }
+
+    #[test]
+    fn a_row_never_loses_fields_and_a_new_row_is_as_wide_as_the_widest() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("out.csv");
+        let shown = ShownCells {
+            end: at(1, 1),
+            cells: vec![
+                (at(0, 0), "9".to_string()),
+                (at(0, 1), "2".to_string()),
+                (at(1, 0), "x".to_string()),
+            ],
+        };
+        let layout = Layout::AsRead(AsRead {
+            row_lengths: &[3],
+            content_rows: 1,
+            ends_with_newline: true,
+        });
+        let cancel = AtomicBool::new(false);
+        write_csv_as(&target, &shown, &lf_options(&target), &layout, &cancel).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"9,2,\nx,,\n");
     }
 
     #[test]

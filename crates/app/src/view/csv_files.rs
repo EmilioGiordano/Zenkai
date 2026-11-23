@@ -173,9 +173,13 @@ impl Workspace {
                 self.confirm_csv_loss(id, path, found, changed, window, cx);
                 return;
             }
-            Ok(CsvSave::LossyFile) => {
+            Ok(refused @ (CsvSave::LossyFile | CsvSave::ShapeUnknown)) => {
                 self.flush_edits(id, cx);
-                self.notify(Severity::Warning, t!("save.csv_lossy"), cx);
+                let notice = match refused {
+                    CsvSave::LossyFile => t!("save.csv_lossy"),
+                    _ => t!("save.csv_shape_unknown"),
+                };
+                self.notify(Severity::Warning, notice, cx);
                 if shown {
                     self.save_as_dialog(id, window, cx);
                 } else {

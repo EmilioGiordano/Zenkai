@@ -1511,13 +1511,13 @@ impl Workspace {
                 }
                 match result {
                     Ok((read, guess)) => {
-                        this.csv_preview = Some(CsvPreview {
+                        this.csv_preview = Some(CsvPreview::new(
                             path,
-                            bytes: Arc::new(read.bytes),
-                            parsed: read.parsed,
+                            Arc::new(read.bytes),
+                            read.parsed,
                             guess,
-                            seen: read.seen,
-                        });
+                            read.seen,
+                        ));
                         window.focus(&this.focus, cx);
                         cx.notify();
                     }
@@ -1553,6 +1553,7 @@ impl Workspace {
                     if let Some(preview) = &mut this.csv_preview {
                         preview.guess = guess;
                         preview.parsed = parsed;
+                        preview.rebuild();
                     }
                     cx.notify();
                 }
@@ -1587,6 +1588,7 @@ impl Workspace {
             parsed,
             guess,
             seen,
+            ..
         } = preview;
         let options = CsvOptions::from_read(&parsed, &guess);
         let mut rows = parsed.rows;
@@ -1627,13 +1629,8 @@ impl Workspace {
                         if let Some(parsed) = parsed
                             && this.csv_request == request
                         {
-                            this.csv_preview = Some(CsvPreview {
-                                path,
-                                bytes,
-                                parsed,
-                                guess,
-                                seen,
-                            });
+                            this.csv_preview =
+                                Some(CsvPreview::new(path, bytes, parsed, guess, seen));
                             window.focus(&this.focus, cx);
                         }
                         this.notify(Severity::Error, error, cx);
@@ -1672,12 +1669,14 @@ impl Workspace {
                 csv_preview::PreviewEvent::DecimalMark(mark) => {
                     if let Some(preview) = &mut this.csv_preview {
                         preview.guess.decimal_mark = mark;
+                        preview.rebuild();
                         cx.notify();
                     }
                 }
                 csv_preview::PreviewEvent::DateOrder(order) => {
                     if let Some(preview) = &mut this.csv_preview {
                         preview.guess.date_order = order;
+                        preview.rebuild();
                         cx.notify();
                     }
                 }
@@ -4830,15 +4829,17 @@ fn enter_text(
     pos: CellPos,
     text: &str,
 ) -> Result<(), EngineError> {
-    wb.as_one_undo_step(|wb| {
-        // Excel turns on wrap text for a cell typed with a line break.
-        let wraps = text.contains('\n') && !text.starts_with('=');
-        wb.set_input(sheet, pos, text)?;
-        if wraps {
-            wb.apply_style(sheet, Range::single(pos), StyleChange::Wrap(true))?;
-            grow_wrapped_rows(wb, sheet, Range::single(pos))?;
-        }
-        widen_for_numbers(wb, sheet, Range::single(pos))
+    wb.without_counting(|wb| {
+        wb.as_one_undo_step(|wb| {
+            // Excel turns on wrap text for a cell typed with a line break.
+            let wraps = text.contains('\n') && !text.starts_with('=');
+            wb.set_input(sheet, pos, text)?;
+            if wraps {
+                wb.apply_style(sheet, Range::single(pos), StyleChange::Wrap(true))?;
+                grow_wrapped_rows(wb, sheet, Range::single(pos))?;
+            }
+            widen_for_numbers(wb, sheet, Range::single(pos))
+        })
     })
 }
 
