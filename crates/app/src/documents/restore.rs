@@ -131,10 +131,11 @@ mod tests {
     use super::super::test_support::*;
     use super::super::{Installed, Intent, Provenance};
     use super::*;
-    use crate::csv_options::{CsvBinding, CsvOptions, Losses};
+    use crate::csv_options::{CsvBinding, CsvOptions, Losses, Structure};
     use crate::entry::{CsvLoad, Entry, FileSeen, LinkStatus};
     use crate::session::{FileRecord, ViewRecord};
     use crate::spaces::SpaceId;
+    use zenkai_engine::FormatEdits;
     use zenkai_engine::Unsupported;
     use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
     use zenkai_types::SheetId;
@@ -416,6 +417,8 @@ mod tests {
                 number_formats: true,
                 ..Losses::default()
             },
+            structure: Structure::Changed,
+            seen_edits: FormatEdits::default(),
         }
     }
 

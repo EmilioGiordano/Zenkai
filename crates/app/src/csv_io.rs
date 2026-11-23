@@ -8,10 +8,11 @@ use zenkai_engine::{
     Engine, EngineError, ShownCells, Workbook, run_with_engine_stack, write_atomic_streaming,
 };
 use zenkai_formats::{
-    CsvError, CsvWriter, Delimiter, MAX_CSV_BYTES, ParsedCsv, apply, guess, parse_csv,
+    CsvError, CsvWriter, Delimiter, Fidelity, FinalNewline, MAX_CSV_BYTES, ParsedCsv, apply, guess,
+    parse_csv,
 };
 use zenkai_i18n::t;
-use zenkai_types::{CellPos, SheetId};
+use zenkai_types::{CellPos, RowIdx, SheetId};
 
 use crate::csv_options::CsvOptions;
 use crate::document::read_shared;
@@ -30,13 +31,6 @@ enum ReadStop {
 }
 
 impl ReadStop {
-    fn message(self, path: &Path) -> String {
-        match self {
-            ReadStop::Io(error) => t!("file.read_failed", path = path.display(), error = error),
-            ReadStop::TooLarge(megabytes) => CsvError::TooLarge(megabytes).to_string(),
-        }
-    }
-
     fn into_engine_error(self, path: &Path) -> EngineError {
         match self {
             ReadStop::Io(source) => EngineError::Read {
@@ -46,6 +40,15 @@ impl ReadStop {
             ReadStop::TooLarge(megabytes) => {
                 EngineError::Rejected(CsvError::TooLarge(megabytes).to_string())
             }
+        }
+    }
+
+    fn message(self, path: &Path) -> String {
+        match self.into_engine_error(path) {
+            EngineError::Read { path, source } => {
+                t!("file.read_failed", path = path.display(), error = source)
+            }
+            other => other.to_string(),
         }
     }
 }
@@ -87,7 +90,7 @@ pub fn detect_csv_options(path: &Path) -> Result<CsvOptions, String> {
 
 pub struct Baseline {
     pub rows: Vec<Vec<String>>,
-    pub ends_with_newline: bool,
+    pub final_newline: FinalNewline,
 }
 
 pub enum BaselineRead {
@@ -109,15 +112,13 @@ pub fn read_baseline(path: &Path, delimiter: Delimiter) -> Result<BaselineRead, 
     };
     let parsed = parse_csv(&bytes, Some(delimiter))
         .map_err(|error| EngineError::Rejected(error.to_string()))?;
-    Ok(if parsed.lossy {
-        BaselineRead::Lossy
-    } else if parsed.shape_unknown {
-        BaselineRead::ShapeUnknown
-    } else {
-        BaselineRead::Present(Baseline {
+    Ok(match parsed.fidelity {
+        Fidelity::BytesReplaced => BaselineRead::Lossy,
+        Fidelity::EmptyLinesUnplaced => BaselineRead::ShapeUnknown,
+        Fidelity::Exact => BaselineRead::Present(Baseline {
             rows: parsed.rows,
-            ends_with_newline: parsed.ends_with_newline,
-        })
+            final_newline: parsed.final_newline,
+        }),
     })
 }
 
@@ -180,10 +181,19 @@ pub fn write_csv_file(
     write_csv_as(path, shown, &options, &Layout::Rectangle, cancel)
 }
 
+pub enum Shape<'a> {
+    // The file's own: its rows keep their field counts, and its empty rows after the content stay.
+    File {
+        row_lengths: &'a [usize],
+        last_content_row: Option<RowIdx>,
+    },
+    // Every row as wide as the used range, as Excel writes it: the file's rows no longer apply.
+    UsedRange,
+}
+
 pub struct AsRead<'a> {
-    pub row_lengths: &'a [usize],
-    pub content_rows: usize,
-    pub ends_with_newline: bool,
+    pub shape: Shape<'a>,
+    pub final_newline: FinalNewline,
 }
 
 pub enum Layout<'a> {
@@ -228,15 +238,55 @@ impl From<CsvError> for ExportStop {
 
 // A row never has fewer fields than it had; one past the file's end has as many as its widest
 // row, as Excel pads to the used range.
-fn field_count(cells: &[&(CellPos, String)], file_length: Option<usize>, widest: usize) -> usize {
+fn file_row_width(
+    cells: &[&(CellPos, String)],
+    row_lengths: &[usize],
+    row: u32,
+    widest: usize,
+) -> usize {
     let extent = cells
         .last()
         .map_or(0, |(pos, _)| usize::from(pos.col.get()) + 1);
-    extent.max(file_length.unwrap_or(widest))
+    let length = usize::try_from(row)
+        .ok()
+        .and_then(|index| row_lengths.get(index).copied());
+    extent.max(length.unwrap_or(widest))
 }
 
-// Every row up to the sheet's end has as many fields as the sheet has columns, as when
-// the whole rectangle was written; gaps are written without building a string each.
+// Rows run to the last cell, and in a file's own shape on to the empty rows it had after its
+// content while the content still ends where it did.
+fn rows_to_write(shown: &ShownCells, layout: &Layout) -> u32 {
+    let content_rows = if shown.cells.is_empty() {
+        0
+    } else {
+        shown.end.row.get() + 1
+    };
+    match layout {
+        Layout::Rectangle => shown.end.row.get() + 1,
+        Layout::AsRead(AsRead {
+            shape: Shape::UsedRange,
+            ..
+        }) => content_rows,
+        Layout::AsRead(AsRead {
+            shape:
+                Shape::File {
+                    row_lengths,
+                    last_content_row,
+                },
+            ..
+        }) => {
+            let file_rows = u32::try_from(row_lengths.len()).unwrap_or(u32::MAX);
+            let file_content = last_content_row.map_or(0, |last| last.get() + 1);
+            if content_rows >= file_content {
+                content_rows.max(file_rows)
+            } else {
+                content_rows
+            }
+        }
+    }
+}
+
+// Gaps between cells are written without building a string each.
 fn write_shown_rows(
     out: &mut dyn Write,
     shown: &ShownCells,
@@ -249,25 +299,17 @@ fn write_shown_rows(
         Layout::Rectangle => None,
         Layout::AsRead(as_read) => Some(as_read),
     };
-    let widest = as_read.map_or(0, |read| {
-        read.row_lengths.iter().copied().max().unwrap_or(0)
-    });
+    let widest = match as_read {
+        Some(AsRead {
+            shape: Shape::File { row_lengths, .. },
+            ..
+        }) => row_lengths.iter().copied().max().unwrap_or(0),
+        _ => 0,
+    };
     let mut writer = CsvWriter::in_format(out, options.format())?;
     let mut cells = shown.cells.iter().peekable();
     let mut row_cells = Vec::new();
-    // The file's empty rows after its last cell stay while the content still ends where it did.
-    let rows = as_read.map_or(shown.end.row.get() + 1, |read| {
-        let file_rows = u32::try_from(read.row_lengths.len()).unwrap_or(u32::MAX);
-        let content_end = if shown.cells.is_empty() {
-            0
-        } else {
-            shown.end.row.get() + 1
-        };
-        match usize::try_from(content_end) {
-            Ok(end) if end >= read.content_rows => content_end.max(file_rows),
-            _ => content_end,
-        }
-    });
+    let rows = rows_to_write(shown, layout);
     for row in 0..rows {
         if cancel.load(Ordering::Relaxed) {
             return Err(ExportStop::Cancelled);
@@ -277,14 +319,11 @@ fn write_shown_rows(
             row_cells.push(cell);
         }
         let width = match as_read {
-            None => sheet_width,
-            Some(as_read) => field_count(
-                &row_cells,
-                usize::try_from(row)
-                    .ok()
-                    .and_then(|index| as_read.row_lengths.get(index).copied()),
-                widest,
-            ),
+            Some(AsRead {
+                shape: Shape::File { row_lengths, .. },
+                ..
+            }) => file_row_width(&row_cells, row_lengths, row, widest),
+            _ => sheet_width,
         };
         if width == 0 {
             writer.write_blank_line()?;
@@ -304,7 +343,8 @@ fn write_shown_rows(
             next_col = col + 1;
         }
         writer.write_empty_fields(width.saturating_sub(next_col))?;
-        let unterminated = row + 1 == rows && as_read.is_some_and(|read| !read.ends_with_newline);
+        let unterminated = row + 1 == rows
+            && as_read.is_some_and(|read| read.final_newline == FinalNewline::Missing);
         if !unterminated {
             writer.end_row()?;
         }
@@ -319,6 +359,20 @@ mod tests {
     use zenkai_types::{ColIdx, Contents, RowIdx};
 
     use super::*;
+
+    fn file_layout(
+        row_lengths: &[usize],
+        content_rows: u32,
+        final_newline: FinalNewline,
+    ) -> Layout<'_> {
+        Layout::AsRead(AsRead {
+            shape: Shape::File {
+                row_lengths,
+                last_content_row: content_rows.checked_sub(1).and_then(RowIdx::new),
+            },
+            final_newline,
+        })
+    }
 
     fn number_at(workbook: &Workbook, col: u16) -> Option<f64> {
         let pos = CellPos::new(RowIdx::clamped(0), ColIdx::clamped(i64::from(col)));
@@ -528,11 +582,7 @@ mod tests {
             ],
         };
         let cancel = AtomicBool::new(false);
-        let layout = Layout::AsRead(AsRead {
-            row_lengths: &[5],
-            content_rows: 1,
-            ends_with_newline: true,
-        });
+        let layout = file_layout(&[5], 1, FinalNewline::Present);
         write_csv_as(&target, &shown, &lf_options(&target), &layout, &cancel).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"-,+34 600,=x,-12%,ok\n");
         write_csv_file(&target, &shown, &cancel).unwrap();
@@ -555,11 +605,7 @@ mod tests {
                 (at(3, 2), "z".to_string()),
             ],
         };
-        let layout = Layout::AsRead(AsRead {
-            row_lengths: &[3, 0, 1, 1],
-            content_rows: 4,
-            ends_with_newline: false,
-        });
+        let layout = file_layout(&[3, 0, 1, 1], 4, FinalNewline::Missing);
         let cancel = AtomicBool::new(false);
         write_csv_as(&target, &shown, &lf_options(&target), &layout, &cancel).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"a,b,\n\nc\n,,z");
@@ -584,12 +630,8 @@ mod tests {
             cells: vec![(at(0, 0), "a".to_string()), (at(0, 1), "b".to_string())],
         };
         let cancel = AtomicBool::new(false);
-        let write = |row_lengths: &[usize], content_rows: usize| {
-            let layout = Layout::AsRead(AsRead {
-                row_lengths,
-                content_rows,
-                ends_with_newline: true,
-            });
+        let write = |row_lengths: &[usize], content_rows: u32| {
+            let layout = file_layout(row_lengths, content_rows, FinalNewline::Present);
             write_csv_as(&target, &shown, &lf_options(&target), &layout, &cancel).unwrap();
             std::fs::read(&target).unwrap()
         };
@@ -610,14 +652,17 @@ mod tests {
                 (at(1, 0), "x".to_string()),
             ],
         };
-        let layout = Layout::AsRead(AsRead {
-            row_lengths: &[3],
-            content_rows: 1,
-            ends_with_newline: true,
-        });
+        let layout = file_layout(&[3], 1, FinalNewline::Present);
         let cancel = AtomicBool::new(false);
         write_csv_as(&target, &shown, &lf_options(&target), &layout, &cancel).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"9,2,\nx,,\n");
+
+        let used_range = Layout::AsRead(AsRead {
+            shape: Shape::UsedRange,
+            final_newline: FinalNewline::Present,
+        });
+        write_csv_as(&target, &shown, &lf_options(&target), &used_range, &cancel).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"9,2\nx,\n");
     }
 
     #[test]
@@ -659,7 +704,7 @@ mod tests {
             panic!("a readable file is a baseline");
         };
         assert_eq!(baseline.rows.len(), 3);
-        assert!(!baseline.ends_with_newline);
+        assert_eq!(baseline.final_newline, FinalNewline::Missing);
 
         let wide = dir.path().join("wide.csv");
         std::fs::write(&wide, vec![b'x'; 40_000]).unwrap();

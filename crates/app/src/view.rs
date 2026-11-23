@@ -1399,10 +1399,17 @@ impl Workspace {
                 let sheets_before = document.sheets.len();
                 let sheet_before = document.sheet;
                 let pending_sheet = document.pending_sheet.take();
+                let lossy_state = |document: &Document| {
+                    document
+                        .csv
+                        .map(|binding| (binding.introduced, binding.structure))
+                };
+                let lossy_before = lossy_state(document);
                 if !document.finish_batch(generation) {
                     this.clear_calculating(cx);
                     return;
                 }
+                let lossy_changed = lossy_state(document) != lossy_before;
                 document.revalidate_review();
                 if let Some(target) = pending_sheet
                     && errors.is_empty()
@@ -1435,6 +1442,11 @@ impl Workspace {
                 }
                 this.clear_calculating(cx);
                 this.flush_edits(id, cx);
+                if lossy_changed {
+                    // A crash must not drop that the CSV's formatting changed while its recovery
+                    // copy keeps it.
+                    this.persist_session(cx);
+                }
             });
             if let Err(error) = update {
                 tracing::debug!(%error, "workspace closed during recalc");
@@ -1611,7 +1623,7 @@ impl Workspace {
                 this.clear_busy(t!("busy.importing"), cx);
                 match result {
                     Ok(_) if this.csv_request != request => {}
-                    Ok(workbook) => {
+                    Ok(workbook) if files::opens_as_itself(&path) => {
                         this.remember_recent(&path, cx);
                         if let Some(open) = this.documents.find_by_path(&path) {
                             this.switch_to(open, window, cx);
@@ -1622,6 +1634,13 @@ impl Workspace {
                             document.origin = origin;
                             document.csv = Some(CsvBinding::new(options));
                             document.guard_file(seen);
+                        }
+                        this.notify(Severity::Info, summary, cx);
+                    }
+                    Ok(workbook) => {
+                        let id = this.open_document(workbook, None, Vec::new(), window, cx);
+                        if let Some(document) = this.documents.get_mut(id) {
+                            document.origin = origin;
                         }
                         this.notify(Severity::Info, summary, cx);
                     }

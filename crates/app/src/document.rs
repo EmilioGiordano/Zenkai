@@ -13,7 +13,7 @@ use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
 use crate::agent_review::Review;
-use crate::csv_options::CsvBinding;
+use crate::csv_options::{CsvBinding, Structure};
 use crate::entry::{FileSeen, display_name};
 use crate::files;
 use crate::find::FindBar;
@@ -153,7 +153,7 @@ impl Document {
         let sheets = workbook.sheets();
         let csv = path
             .as_deref()
-            .filter(|path| files::is_delimited_text(path))
+            .filter(|path| files::opens_as_itself(path))
             .map(|_| CsvBinding::unresolved());
         Document {
             id,
@@ -477,27 +477,25 @@ impl Document {
     }
 
     // Every edit of the workbook, from the grid, a paste or an agent, ends in a batch, so this is
-    // where a CSV learns that formatting a CSV cannot hold was changed. If the workbook cannot
-    // be read now, it is taken that something was.
+    // where a CSV learns that formatting it cannot hold was changed, or that rows or columns
+    // moved. The engine's counters only grow, so a batch that cannot read them leaves the
+    // binding as it was and the next one that can sees the difference.
     fn note_format_edits(&mut self) {
         let Some(binding) = self.csv.as_mut() else {
             return;
         };
-        let edits = self
-            .workbook
-            .try_read()
-            .ok()
-            .map(|workbook| workbook.format_edits());
-        match edits {
-            Some(edits) => {
-                binding.introduced.number_formats |= edits.numbers > 0;
-                binding.introduced.formatting |= edits.other > 0;
-            }
-            None => {
-                binding.introduced.number_formats = true;
-                binding.introduced.formatting = true;
-            }
+        let edits = match self.workbook.try_read() {
+            Ok(workbook) => workbook.format_edits(),
+            Err(TryLockError::WouldBlock) => return,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().format_edits(),
+        };
+        let seen = binding.seen_edits;
+        binding.introduced.number_formats |= edits.numbers > seen.numbers;
+        binding.introduced.formatting |= edits.other > seen.other;
+        if edits.structure > seen.structure {
+            binding.structure = Structure::Changed;
         }
+        binding.seen_edits = edits;
     }
 
     pub fn sheets_stale(&self) -> bool {
@@ -1003,16 +1001,21 @@ mod tests {
         assert!(document.begin_file_job(FileJob::Saving).is_none());
     }
 
+    fn csv_document() -> Document {
+        let mut document = document();
+        document.csv = Some(CsvBinding::unresolved());
+        document
+    }
+
     #[test]
-    fn a_csv_learns_of_every_command_that_is_not_entering_content() {
+    fn a_csv_learns_of_what_it_cannot_hold_and_not_of_typing_or_moving_lines() {
         use zenkai_engine::Engine;
         let sheet = SheetId(0);
         let a1 = CellPos::default();
         let b2 = CellPos::parse_a1("B2").unwrap();
-        let mut document = document();
-        document.csv = Some(CsvBinding::unresolved());
+        let mut document = csv_document();
         let generation = document.generation();
-        let introduced = |document: &Document| document.csv.unwrap().introduced;
+        let binding = |document: &Document| document.csv.unwrap();
 
         {
             let mut workbook = document.workbook.write().unwrap();
@@ -1020,7 +1023,18 @@ mod tests {
             workbook.clear(sheet, Range::single(a1)).unwrap();
         }
         document.finish_batch(generation);
-        assert!(!introduced(&document).any());
+        assert!(!binding(&document).introduced.any());
+
+        {
+            let mut workbook = document.workbook.write().unwrap();
+            workbook
+                .insert_rows(sheet, zenkai_types::RowIdx::clamped(1), 1)
+                .unwrap();
+            workbook.rename_sheet(sheet, "Prices").unwrap();
+        }
+        document.finish_batch(generation);
+        assert!(!binding(&document).introduced.any());
+        assert_eq!(binding(&document).structure, Structure::Changed);
 
         document
             .workbook
@@ -1029,16 +1043,45 @@ mod tests {
             .set_column_width(sheet, zenkai_types::ColIdx::clamped(0), 120.0)
             .unwrap();
         document.finish_batch(generation);
-        assert!(introduced(&document).formatting);
-        assert!(!introduced(&document).number_formats);
+        assert!(binding(&document).introduced.formatting);
+        assert!(!binding(&document).introduced.number_formats);
 
         {
             let mut workbook = document.workbook.write().unwrap();
+            workbook
+                .apply_style(
+                    sheet,
+                    Range::single(a1),
+                    zenkai_types::StyleChange::Bold(true),
+                )
+                .unwrap();
             let copied = workbook.copy(sheet, Range::single(a1)).unwrap();
             workbook.paste(sheet, b2, &copied, false).unwrap();
         }
         document.finish_batch(generation);
-        assert!(introduced(&document).number_formats);
+        assert!(binding(&document).introduced.number_formats);
+    }
+
+    #[test]
+    fn a_busy_workbook_leaves_the_counts_for_the_next_batch_that_can_read_them() {
+        use zenkai_engine::Engine;
+        let sheet = SheetId(0);
+        let mut document = csv_document();
+        let generation = document.generation();
+        document
+            .workbook
+            .write()
+            .unwrap()
+            .set_column_width(sheet, zenkai_types::ColIdx::clamped(0), 120.0)
+            .unwrap();
+        let shared = Arc::clone(&document.workbook);
+        let held = shared.write().unwrap();
+        document.finish_batch(generation);
+        drop(held);
+        assert!(!document.csv.unwrap().introduced.any());
+
+        document.finish_batch(generation);
+        assert!(document.csv.unwrap().introduced.formatting);
     }
 
     #[test]

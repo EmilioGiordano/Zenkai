@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use zenkai_agent::protected_view::FileOrigin;
-use zenkai_engine::{Kept, Unsupported, Workbook};
+use zenkai_engine::{FormatEdits, Kept, Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
 use crate::csv_options::CsvBinding;
@@ -165,11 +165,15 @@ impl Loaded {
         if let Some(csv) = self.csv {
             document.csv = Some(CsvBinding {
                 options: Some(csv.options),
+                seen_edits: FormatEdits::default(),
                 ..link.csv.unwrap_or_else(|| CsvBinding::new(csv.options))
             });
             document.guard_file(csv.seen);
         } else if let Some(binding) = link.csv {
-            document.csv = Some(binding);
+            document.csv = Some(CsvBinding {
+                seen_edits: FormatEdits::default(),
+                ..binding
+            });
         }
         document.origin = link.origin.unwrap_or(self.origin);
         document.view = link.view;

@@ -144,6 +144,11 @@ pub fn is_delimited_text(path: &Path) -> bool {
     matches!(extension(path).as_deref(), Some("csv" | "tsv" | "txt"))
 }
 
+// Only csv and tsv open as themselves; a txt is imported into a new workbook.
+pub fn opens_as_itself(path: &Path) -> bool {
+    matches!(extension(path).as_deref(), Some("csv" | "tsv"))
+}
+
 pub fn tsv_delimiter(path: &Path) -> Option<Delimiter> {
     (extension(path).as_deref() == Some("tsv")).then_some(Delimiter::Tab)
 }
@@ -309,6 +314,16 @@ pub fn open_values(path: &Path, cancel: &AtomicBool) -> Result<Workbook, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_csv_and_tsv_open_as_themselves_and_a_txt_is_still_imported() {
+        for name in ["a.csv", "a.TSV"] {
+            assert!(opens_as_itself(Path::new(name)), "{name}");
+        }
+        assert!(!opens_as_itself(Path::new("a.txt")));
+        assert!(is_delimited_text(Path::new("a.txt")));
+        assert!(is_openable(Path::new("a.txt")));
+    }
 
     #[test]
     fn a_cancelled_open_of_an_unreadable_file_does_not_fall_back_to_a_second_read() {

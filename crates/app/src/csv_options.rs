@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use zenkai_engine::FormatEdits;
 use zenkai_formats::{
     CsvFormat, DateOrder, DecimalMark, Delimiter, Encoding, Guess, LineEnding, ParsedCsv,
 };
@@ -82,6 +83,16 @@ impl Losses {
     }
 }
 
+// Whether rows or columns were inserted or deleted since the file was read, so that the rows of
+// the sheet no longer line up with the rows of the file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Structure {
+    #[default]
+    Kept,
+    Changed,
+}
+
 // A document that is the CSV file itself. `options` is `None` until the file has been read for
 // them; a save reads it then, and fails if it cannot, rather than write in a format guessed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +102,11 @@ pub struct CsvBinding {
     pub accepted: Losses,
     #[serde(default)]
     pub introduced: Losses,
+    #[serde(default)]
+    pub structure: Structure,
+    // The engine's counters as last read. They restart with the workbook, so they are not kept.
+    #[serde(skip)]
+    pub seen_edits: FormatEdits,
 }
 
 impl CsvBinding {
@@ -106,6 +122,8 @@ impl CsvBinding {
             options: None,
             accepted: Losses::default(),
             introduced: Losses::default(),
+            structure: Structure::Kept,
+            seen_edits: FormatEdits::default(),
         }
     }
 }
@@ -146,6 +164,8 @@ mod tests {
                             number_formats: true,
                             ..Losses::default()
                         },
+                        structure: Structure::Changed,
+                        seen_edits: FormatEdits::default(),
                     };
                     let json = serde_json::to_string(&binding).unwrap();
                     assert_eq!(serde_json::from_str::<CsvBinding>(&json).unwrap(), binding);

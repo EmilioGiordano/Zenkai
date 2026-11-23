@@ -5,14 +5,14 @@ use std::sync::atomic::AtomicBool;
 
 use zenkai_engine::{Engine, EngineError, ShownCells, UNREADABLE_CELL, Workbook, is_date_format};
 use zenkai_formats::{
-    DateOrder, DecimalMark, date_serial, day_first_field, decimal_comma_field, iso_date,
-    number_value, same_value,
+    DateOrder, DecimalMark, FinalNewline, date_serial, day_first_field, decimal_comma_field,
+    iso_date, number_value, same_value,
 };
 use zenkai_i18n::t;
-use zenkai_types::{CellPos, Contents, SheetId, ValueKind};
+use zenkai_types::{CellPos, ColIdx, Contents, RowIdx, SheetId, ValueKind};
 
-use crate::csv_io::{self, AsRead, BaselineRead, Layout};
-use crate::csv_options::{CsvBinding, CsvOptions, Losses};
+use crate::csv_io::{self, AsRead, BaselineRead, Layout, Shape};
+use crate::csv_options::{CsvBinding, CsvOptions, Losses, Structure};
 use crate::document::{ChangedFile, file_changed_since, read_shared};
 use crate::entry::FileSeen;
 
@@ -74,6 +74,39 @@ fn number_text(source: &str, mark: DecimalMark) -> String {
     }
 }
 
+// The engine writes a formula back in capitals and without spaces, except inside quotes.
+fn normalized_formula(text: &str) -> Option<String> {
+    if !text.starts_with('=') {
+        return None;
+    }
+    let mut normalized = String::with_capacity(text.len());
+    let mut quote: Option<char> = None;
+    for c in text.chars() {
+        match quote {
+            Some(open) => {
+                normalized.push(c);
+                if c == open {
+                    quote = None;
+                }
+            }
+            None if c == '"' || c == '\'' => {
+                quote = Some(c);
+                normalized.push(c);
+            }
+            None if c.is_whitespace() => {}
+            None => normalized.extend(c.to_uppercase()),
+        }
+    }
+    Some(normalized)
+}
+
+// Whether the engine's input stands for what importing the file's field gives.
+fn stands_for(input: &str, field: &str, options: &CsvOptions) -> bool {
+    same_value(input, &import_input(field, options))
+        || normalized_formula(field)
+            .is_some_and(|formula| normalized_formula(input) == Some(formula))
+}
+
 // A cell whose input stands for what importing its position's field gives is unedited and takes
 // that field's text. After rows or columns move, the values differ and the cell counts as edited.
 fn take_unedited(
@@ -83,12 +116,52 @@ fn take_unedited(
     options: &CsvOptions,
 ) -> bool {
     match field.filter(|field| !field.is_empty()) {
-        Some(field) if same_value(input, &import_input(field, options)) => {
+        Some(field) if stands_for(input, field, options) => {
             *text = std::mem::take(field);
             true
         }
         _ => false,
     }
+}
+
+fn position_of(row: usize, col: usize) -> Option<CellPos> {
+    let row = RowIdx::new(u32::try_from(row).ok()?)?;
+    let col = ColIdx::new(u16::try_from(col).ok()?)?;
+    Some(CellPos::new(row, col))
+}
+
+// The sheet's shown cells leave out those that show nothing (`=""`, a lone `'`), so a field the
+// pass above never reached is kept as the file had it while the engine still holds it.
+fn restore_fields_that_show_nothing(
+    workbook: &Workbook,
+    sheet: SheetId,
+    shown: &mut ShownCells,
+    file: &mut [Vec<String>],
+    options: &CsvOptions,
+) {
+    let mut kept = Vec::new();
+    let mut visited = shown.cells.iter().map(|(pos, _)| *pos).peekable();
+    for (row, fields) in file.iter_mut().enumerate() {
+        for (col, field) in fields.iter_mut().enumerate() {
+            let Some(pos) = position_of(row, col).filter(|_| !field.is_empty()) else {
+                continue;
+            };
+            while visited
+                .next_if(|seen| (seen.row, seen.col) < (pos.row, pos.col))
+                .is_some()
+            {}
+            if visited.peek() == Some(&pos) {
+                continue;
+            }
+            if stands_for(&workbook.input(sheet, pos), field, options) {
+                kept.push((pos, std::mem::take(field)));
+            }
+        }
+    }
+    shown.cells.extend(kept);
+    shown
+        .cells
+        .sort_unstable_by_key(|(pos, _)| (pos.row, pos.col));
 }
 
 // What the cell shows if the file's reader takes it as the same date, else yyyy-mm-dd. A date
@@ -122,9 +195,16 @@ fn edited_number_text(
     number_text(source, options.decimal_mark)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FormulaCells {
+    None,
+    // A cell written from the sheet holds a formula, which the CSV keeps as its value.
+    Written,
+}
+
 struct Classified {
     shown: ShownCells,
-    formulas: bool,
+    formulas: FormulaCells,
 }
 
 // One read lock for the whole pass, so the cells, their inputs and the loss all describe one
@@ -139,7 +219,7 @@ fn classify_sheet(
     let workbook = read_shared(shared);
     let mut shown = workbook.shown_cells(sheet)?;
     let contents = workbook.contents(sheet)?;
-    let mut formulas = false;
+    let mut formulas = FormulaCells::None;
     for (pos, text) in &mut shown.cells {
         if text == UNREADABLE_CELL && workbook.cell(sheet, *pos).kind == ValueKind::Error {
             return Err(EngineError::Rejected(t!("csv.unreadable_cell", cell = pos)));
@@ -148,11 +228,14 @@ fn classify_sheet(
         if take_unedited(text, &input, field_at(file, *pos), options) {
             continue;
         }
-        formulas = formulas || input.starts_with('=');
+        if input.starts_with('=') {
+            formulas = FormulaCells::Written;
+        }
         if matches!(contents(*pos), Contents::Number(_)) {
             *text = edited_number_text(&workbook, sheet, *pos, text, &input, options);
         }
     }
+    restore_fields_that_show_nothing(&workbook, sheet, &mut shown, file, options);
     Ok(Classified { shown, formulas })
 }
 
@@ -175,27 +258,35 @@ pub fn save_csv_file(
     if request.changed == ChangedFile::Ask && file_changed_since(request.guard, &request.path) {
         return Ok(CsvSave::FileChanged);
     }
-    let (mut file, ends_with_newline) = baseline.map_or((Vec::new(), true), |baseline| {
-        (baseline.rows, baseline.ends_with_newline)
-    });
+    let present = baseline.is_some();
+    let (mut file, final_newline) = baseline
+        .map_or((Vec::new(), FinalNewline::Present), |baseline| {
+            (baseline.rows, baseline.final_newline)
+        });
     let row_lengths: Vec<usize> = file.iter().map(Vec::len).collect();
-    let content_rows = file
+    let last_content_row = file
         .iter()
         .rposition(|row| row.iter().any(|field| !field.is_empty()))
-        .map_or(0, |last| last + 1);
+        .and_then(|last| RowIdx::new(u32::try_from(last).ok()?));
     let classified = classify_sheet(shared, request, &options, &mut file)?;
     let found = Losses {
         sheets: request.sheets > 1,
-        formulas: classified.formulas,
+        formulas: classified.formulas == FormulaCells::Written,
         ..request.binding.introduced
     };
     if found.beyond(request.binding.accepted).any() {
         return Ok(CsvSave::WouldLose(found));
     }
+    let shape = match request.binding.structure {
+        Structure::Kept if present => Shape::File {
+            row_lengths: &row_lengths,
+            last_content_row,
+        },
+        _ => Shape::UsedRange,
+    };
     let layout = Layout::AsRead(AsRead {
-        row_lengths: &row_lengths,
-        content_rows,
-        ends_with_newline,
+        shape,
+        final_newline,
     });
     csv_io::write_csv_as(&request.path, &classified.shown, &options, &layout, cancel)?;
     Ok(CsvSave::Written(FileSeen::of(&request.path), options))
@@ -332,6 +423,30 @@ mod tests {
     #[test]
     fn text_that_looks_like_a_formula_is_saved_over_its_own_csv_as_it_was() {
         assert_unchanged("contacts.csv", b"note,phone\n-,@ana\n@bob,ok\n");
+    }
+
+    #[test]
+    fn fields_that_show_nothing_are_kept_while_the_engine_still_holds_them() {
+        assert_unchanged("empty.csv", b"a,\"=\"\"\"\"\"\n");
+        assert_unchanged("quote.csv", b"a,'\n");
+        assert_unchanged("if.csv", b"1,\"=IF(A1>5,\"\"x\"\",\"\"\"\")\"\n");
+    }
+
+    #[test]
+    fn a_field_the_user_cleared_is_not_brought_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "cleared.csv", b"a,\"=\"\"\"\"\"\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook.set_input(SheetId(0), at(0, 1), "").unwrap();
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::Written(..)));
+        assert_eq!(bytes, b"a,\n");
+    }
+
+    #[test]
+    fn formulas_the_engine_writes_back_normalized_are_unedited_and_no_loss() {
+        assert_unchanged("lower.csv", b"1,2,=sum(a1:b1)\n");
+        assert_unchanged("spaces.csv", b"=1 + 1,\"=\"\"a b\"\"&\"\"c\"\"\"\n");
     }
 
     #[test]
@@ -494,6 +609,35 @@ mod tests {
         let (saved, bytes) = save(&path, load.workbook, &csv);
         assert!(matches!(saved, CsvSave::Written(..)));
         assert_eq!(bytes, b"a,b\n,\n7,1.5\n123,2\n");
+    }
+
+    #[test]
+    fn after_rows_move_every_row_is_as_wide_as_the_used_range_and_nothing_is_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "moved.csv", b"a,b,\n1,2,\n3\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .insert_rows(SheetId(0), RowIdx::clamped(1), 1)
+            .unwrap();
+        let mut asked = request(&path, &csv, 1);
+        asked.binding.structure = crate::csv_options::Structure::Changed;
+        let shared = RwLock::new(load.workbook);
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::Written(..)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"a,b,\n,,\n1,2,\n3,,\n");
+    }
+
+    #[test]
+    fn a_deleted_file_is_written_with_every_row_as_wide_as_the_used_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "gone.csv", b"a,b,c\nx\n");
+        let csv = load.csv.take().unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let mut asked = request(&path, &csv, 1);
+        asked.changed = ChangedFile::Replace;
+        let outcome = save_csv_file(&RwLock::new(load.workbook), &asked, &AtomicBool::new(false));
+        assert!(matches!(outcome, Ok(CsvSave::Written(..))));
+        assert_eq!(std::fs::read(&path).unwrap(), b"a,b,c\nx,,\n");
     }
 
     #[test]

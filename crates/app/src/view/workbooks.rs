@@ -98,7 +98,7 @@ fn arrival(load: Option<LinkLoad>, delivered: bool) -> Arrival {
 // and a save reads them then, never guessing export defaults.
 fn csv_of_copy(link: &Link) -> Option<CsvLoad> {
     let path = link.path.as_deref().filter(|path| {
-        link.csv.is_none_or(|binding| binding.options.is_none()) && files::is_delimited_text(path)
+        link.csv.is_none_or(|binding| binding.options.is_none()) && files::opens_as_itself(path)
     })?;
     let options = csv_io::detect_csv_options(path)
         .inspect_err(|error| tracing::warn!(%error, ?path, "the options of a CSV stay unknown"))
@@ -196,7 +196,7 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
     let Some(path) = &link.path else {
         return Some(LinkLoad::Missing);
     };
-    let loaded = if files::is_delimited_text(path) {
+    let loaded = if files::opens_as_itself(path) {
         csv_io::load_csv(path, link.csv.and_then(|binding| binding.options))
     } else {
         files::load_workbook(path, reader, cancel)
