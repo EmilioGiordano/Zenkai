@@ -12,7 +12,7 @@ use zenkai_formats::{
     parse_csv,
 };
 use zenkai_i18n::t;
-use zenkai_types::{CellPos, RowIdx, SheetId};
+use zenkai_types::{CellPos, MAX_ROWS, RowIdx, SheetId};
 
 use crate::csv_options::CsvOptions;
 use crate::document::read_shared;
@@ -293,7 +293,7 @@ fn row_count(shown: &ShownCells, layout: &Layout) -> u32 {
 
 // The last row a write of the layout puts out, if it puts out any.
 pub fn last_row_to_write(shown: &ShownCells, layout: &Layout) -> Option<RowIdx> {
-    RowIdx::new(row_count(shown, layout).checked_sub(1)?)
+    RowIdx::new(row_count(shown, layout).min(MAX_ROWS).checked_sub(1)?)
 }
 
 fn rows_up_to(last: Option<RowIdx>) -> impl Iterator<Item = RowIdx> {

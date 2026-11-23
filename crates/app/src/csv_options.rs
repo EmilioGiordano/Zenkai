@@ -161,10 +161,11 @@ impl CsvBinding {
         self.seen_edits = edits;
     }
 
-    // A save made the file what the sheet was when it read `consumed`. Edits since stay: a
+    // A save made the file what sheet `sheet` was when it read `consumed`. Edits since stay: a
     // change made while the file was written is still to be saved, whether or not a batch
     // had noted it by then.
-    pub fn saved(&mut self, consumed: FormatEdits) {
+    pub fn saved(&mut self, consumed: FormatEdits, sheet: u32) {
+        self.file_sheet = Some(sheet);
         let seen = self.seen_edits;
         self.introduced.number_formats |= consumed.numbers > seen.numbers;
         self.introduced.formatting |= consumed.other > seen.other;

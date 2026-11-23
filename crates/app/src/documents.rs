@@ -186,6 +186,7 @@ fn rebuilt_csv_binding(
     link: &Link,
     provenance: Provenance,
 ) -> Option<CsvBinding> {
+    let unrecorded = link.csv.is_none();
     let binding = match (read, link.csv.clone()) {
         (Some(read), linked) => {
             let linked = linked.unwrap_or_else(|| CsvBinding::new(read.options));
@@ -211,6 +212,8 @@ fn rebuilt_csv_binding(
             };
         }
         Provenance::Recovery => rebuilt.log.lose(0),
+        // Work from a copy that no binding was stored for has no log to go by.
+        Provenance::Dump if unrecorded => rebuilt.log.lose(0),
         _ => {}
     }
     rebuilt.log.rebase();

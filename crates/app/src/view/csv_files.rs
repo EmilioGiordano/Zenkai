@@ -165,13 +165,13 @@ impl Workspace {
             return;
         };
         let fully_saved = match result {
-            Ok(CsvSave::Written(seen, options, consumed)) => {
+            Ok(CsvSave::Written(seen, options, consumed, sheet)) => {
                 document.saved_over_file(Vec::new());
                 document.guard_file(seen);
                 let edited_meanwhile = document.edit_count() != edits_at_start;
                 if let Some(binding) = document.csv.as_mut() {
                     binding.options.get_or_insert(options);
-                    binding.saved(consumed);
+                    binding.saved(consumed, sheet);
                 }
                 document.dirty = edited_meanwhile;
                 if shown {

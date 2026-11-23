@@ -550,6 +550,26 @@ mod tests {
     }
 
     #[test]
+    fn a_copy_woken_with_no_stored_binding_does_not_get_a_trusted_empty_log() {
+        for provenance in [Provenance::Recovery, Provenance::Dump] {
+            let mut documents = documents();
+            let id = documents
+                .restore(&session_with(file(Some("prices.csv"), true)), None)
+                .unwrap();
+            let mut read = loaded(id);
+            read.provenance = provenance;
+            read.csv = Some(CsvLoad {
+                options: read_options(),
+                seen: FileSeen::unknown(),
+                sheet: None,
+            });
+            documents.install(read);
+            let binding = documents.active().unwrap().csv.clone().unwrap();
+            assert!(binding.log.has_lost());
+        }
+    }
+
+    #[test]
     fn a_document_with_a_delimited_path_is_always_a_csv_with_options_still_to_find() {
         let mut documents = documents();
         let id = open_file(&mut documents, "export.tsv");

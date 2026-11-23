@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ironcalc::base::types::{Cell, FormulaValue, SpillValue};
-use zenkai_types::{CellPos, LoggedChange, Range, SheetId, ValueKind};
+use zenkai_types::{CellPos, LoggedChange, Range, SheetId};
 
 use crate::error::EngineError;
 use crate::model::{FormatEdits, content_cells_within, position};
@@ -35,6 +35,8 @@ pub struct FileCell {
     pub number: Option<f64>,
     // The serial number of a number the cell shows as a date.
     pub date: Option<f64>,
+    // What it shows could not be read, so `text` is not the cell's.
+    pub unreadable: bool,
 }
 
 impl FileCell {
@@ -54,8 +56,6 @@ pub struct FileCells {
     pub silent: Vec<(CellPos, String)>,
     // Each cell a dynamic array formula spilled into, with the cell of the formula; row-major.
     pub spilled: Vec<(CellPos, CellPos)>,
-    // The first cell that holds an error and could not be read.
-    pub unreadable: Option<CellPos>,
     pub edits: FormatEdits,
     // The identity of the sheet, which its changes are logged under.
     pub sheet_key: u32,
@@ -123,7 +123,6 @@ impl Workbook {
             cells: Vec::new(),
             silent: Vec::new(),
             spilled: Vec::new(),
-            unreadable: None,
             edits: self.model.format_edits(),
             sheet_key,
             changes: self.model.changes_since(seen_change),
@@ -144,16 +143,9 @@ impl Workbook {
                     false
                 }
             };
-            let text = match self.formatted_text(sheet, pos) {
-                Some(text) => text,
-                None => {
-                    if found.unreadable.is_none() && self.cell(sheet, pos).kind == ValueKind::Error
-                    {
-                        found.unreadable = Some(pos);
-                    }
-                    UNREADABLE_CELL.to_string()
-                }
-            };
+            let shown = self.formatted_text(sheet, pos);
+            let unreadable = shown.is_none();
+            let text = shown.unwrap_or_else(|| UNREADABLE_CELL.to_string());
             let input = self.input(sheet, pos);
             if text.is_empty() {
                 if !spilled {
@@ -175,6 +167,7 @@ impl Workbook {
                 text,
                 number,
                 date,
+                unreadable,
             });
         }
         Ok(found)

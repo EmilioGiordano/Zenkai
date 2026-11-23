@@ -8,7 +8,7 @@ use zenkai_formats::{
     FinalNewline, date_serial, iso_date, neutralize, number_text, stored_number_text,
 };
 use zenkai_i18n::t;
-use zenkai_types::{CellPos, LoggedChange, RowIdx, SheetChange, SheetId};
+use zenkai_types::{CellPos, LoggedChange, MAX_ROWS, RowIdx, SheetChange, SheetId};
 
 use crate::csv_export_size::ExportSize;
 use crate::csv_io::{self, AsRead, BaselineRead, Layout, Shape};
@@ -39,7 +39,8 @@ pub struct CsvSaveRequest {
 pub enum CsvSave {
     // The file now holds the sheet as the engine's counters, which the save read with its cells,
     // describe.
-    Written(FileSeen, CsvOptions, FormatEdits),
+    // The key of the sheet it holds is the last.
+    Written(FileSeen, CsvOptions, FormatEdits, u32),
     // Nothing was written, from here on: the user decides, or the file is not ours to write.
     WouldLose(Losses),
     TooLarge(ExportSize),
@@ -105,9 +106,6 @@ fn classify(
     file: &mut [Vec<String>],
     cancel: &AtomicBool,
 ) -> Result<Classified, EngineError> {
-    if let Some(pos) = found.unreadable {
-        return Err(EngineError::Rejected(t!("csv.unreadable_cell", cell = pos)));
-    }
     let FileCells {
         end,
         cells,
@@ -141,6 +139,12 @@ fn classify(
             }
             out.push((cell.pos, text));
             continue;
+        }
+        if cell.unreadable {
+            return Err(EngineError::Rejected(t!(
+                "csv.unreadable_cell",
+                cell = cell.pos
+            )));
         }
         let formula = cell.input().starts_with('=');
         if formula {
@@ -272,8 +276,11 @@ pub fn save_csv_file(
     }
     let content_rows = classified.shown.content_rows();
     let file_rows = u32::try_from(row_lengths.len()).unwrap_or(u32::MAX);
-    let mapped_rows = walk.current_end(file_rows);
-    let mapped_content = last_content_row.map_or(0, |last| walk.current_end(last.get() + 1));
+    // Rows inserted can carry the end of the file past the last row a sheet has.
+    let mapped_rows = walk.current_end(file_rows).min(MAX_ROWS);
+    let mapped_content = last_content_row
+        .map_or(0, |last| walk.current_end(last.get() + 1))
+        .min(MAX_ROWS);
     let widest = row_lengths.iter().copied().max().unwrap_or(0);
     // Rows keep the length their file row had when only rows moved, and the file's empty rows
     // at its end stay where they are now; with columns moved, or a file that is gone or that
@@ -295,7 +302,9 @@ pub fn save_csv_file(
             last_content_row,
         }
     } else {
-        let rows = (classified.shown.end.row.get() + 1).max(mapped_rows);
+        let rows = (classified.shown.end.row.get() + 1)
+            .max(mapped_rows)
+            .min(MAX_ROWS);
         mapped = (0..rows)
             .map(|row| {
                 RowIdx::new(row)
@@ -319,11 +328,17 @@ pub fn save_csv_file(
     if size.needs_confirmation() && !agreed {
         return Ok(CsvSave::TooLarge(size));
     }
+    if classified.shown.content_rows() > 0
+        && csv_io::last_row_to_write(&classified.shown, &layout).is_none()
+    {
+        return Err(EngineError::Rejected(t!("save.csv_no_rows").to_string()));
+    }
     csv_io::write_csv_as(&request.path, &classified.shown, &options, &layout, cancel)?;
     Ok(CsvSave::Written(
         FileSeen::of(&request.path),
         options,
         edits,
+        sheet_key,
     ))
 }
 
@@ -1015,7 +1030,7 @@ mod tests {
         assert!(!path.exists());
 
         std::fs::write(&path, b"a;b\r\n1,5;2\r\n").unwrap();
-        let Ok(CsvSave::Written(_, found, _)) = save_csv_file(&shared, &asked, &cancel) else {
+        let Ok(CsvSave::Written(_, found, _, _)) = save_csv_file(&shared, &asked, &cancel) else {
             panic!("a readable file gives its options");
         };
         assert_eq!(found.delimiter, Delimiter::Semicolon);
@@ -1182,6 +1197,59 @@ mod tests {
     }
 
     #[test]
+    fn once_another_sheet_was_saved_over_the_file_the_first_has_none_of_its_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "two.csv", b"a\n007\n");
+        let csv = load.csv.take().unwrap();
+        let other = load.workbook.add_sheet().unwrap();
+        load.workbook.set_input(other, at(0, 0), "bee").unwrap();
+        let shared = RwLock::new(load.workbook);
+        let mut binding = CsvBinding::new(csv.options).with_sheet(csv.sheet);
+        binding.accepted.sheets = true;
+
+        let mut asked = request(&path, &csv, 2);
+        asked.binding = binding.clone();
+        asked.sheet = other;
+        let CsvSave::Written(_, _, consumed, sheet) =
+            save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap()
+        else {
+            panic!("the other sheet should be written");
+        };
+        assert_eq!(std::fs::read(&path).unwrap(), b"bee\n");
+        binding.saved(consumed, sheet);
+
+        shared
+            .write()
+            .unwrap()
+            .set_input(SheetId(0), at(0, 0), "alpha")
+            .unwrap();
+        let mut asked = request(&path, &csv, 2);
+        asked.binding = binding;
+        asked.guard = Some(FileSeen::of(&path));
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::Written(..)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"alpha\n7\n");
+    }
+
+    #[test]
+    fn a_file_of_the_most_rows_keeps_them_all_when_rows_are_inserted_above() {
+        let dir = tempfile::tempdir().unwrap();
+        let rows = MAX_ROWS as usize;
+        let original = format!("a\n{}", "\n".repeat(rows - 1));
+        let (path, mut load) = opened_csv(dir.path(), "most.csv", original.as_bytes());
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .insert_rows(SheetId(0), RowIdx::clamped(0), 10)
+            .unwrap();
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::Written(..)));
+        let top = format!("{}a\n", "\"\"\n".repeat(10));
+        assert!(bytes.starts_with(top.as_bytes()));
+        assert_eq!(bytes.len(), top.len() + (rows - 11));
+        assert!(bytes[top.len()..].iter().all(|byte| *byte == b'\n'));
+    }
+
+    #[test]
     fn a_reordered_sheet_keeps_its_own_edits() {
         let dir = tempfile::tempdir().unwrap();
         let (path, mut load) = opened_csv(dir.path(), "sheets.csv", b"a\n007\n008\n");
@@ -1217,7 +1285,7 @@ mod tests {
             asked.binding = binding.clone();
             asked.guard = Some(FileSeen::of(&path));
             match save_csv_file(&shared, &asked, &cancel).unwrap() {
-                CsvSave::Written(_, _, consumed) => consumed,
+                CsvSave::Written(_, _, consumed, sheet) => (consumed, sheet),
                 _ => panic!("the save should write"),
             }
         };
@@ -1228,14 +1296,14 @@ mod tests {
             .set_input(SheetId(0), at(2, 0), "9")
             .unwrap();
         batch(&mut binding);
-        let consumed = save(&binding);
+        let (consumed, sheet) = save(&binding);
         shared
             .write()
             .unwrap()
             .set_input(SheetId(0), at(3, 0), "11")
             .unwrap();
         batch(&mut binding);
-        binding.saved(consumed);
+        binding.saved(consumed, sheet);
         shared
             .write()
             .unwrap()
@@ -1244,8 +1312,8 @@ mod tests {
         batch(&mut binding);
         let expected = b"a,b\n,\n007,x\n9,y\n11,z\n";
         for _ in 0..2 {
-            let consumed = save(&binding);
-            binding.saved(consumed);
+            let (consumed, sheet) = save(&binding);
+            binding.saved(consumed, sheet);
             assert_eq!(std::fs::read(&path).unwrap(), expected);
         }
         assert!(binding.log.is_empty());
