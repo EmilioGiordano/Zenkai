@@ -20,8 +20,14 @@ pub enum CsvError {
 }
 
 impl From<csv::Error> for CsvError {
+    // The kind of the underlying write failure survives, so callers can tell text an encoding
+    // cannot hold (InvalidData) from a disk error.
     fn from(error: csv::Error) -> CsvError {
-        CsvError::Write(error.into())
+        let kind = match error.kind() {
+            csv::ErrorKind::Io(source) => source.kind(),
+            _ => std::io::ErrorKind::Other,
+        };
+        CsvError::Write(std::io::Error::new(kind, error))
     }
 }
 
@@ -81,11 +87,19 @@ impl Encoding {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineEnding {
+    Crlf,
+    Lf,
+    Cr,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParsedCsv {
     pub rows: Vec<Vec<String>>,
     pub delimiter: Delimiter,
     pub encoding: Encoding,
+    pub line_ending: LineEnding,
 }
 
 fn decode(bytes: &[u8]) -> (String, Encoding) {
@@ -133,6 +147,27 @@ fn sniff(text: &str, hint: Option<Delimiter>) -> Delimiter {
         .unwrap_or(Delimiter::Comma)
 }
 
+// The first line break outside quotes decides; a file without one gets what exports write.
+fn detect_line_ending(text: &str) -> LineEnding {
+    let mut quoted = false;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => quoted = !quoted,
+            '\n' if !quoted => return LineEnding::Lf,
+            '\r' if !quoted => {
+                return if chars.peek() == Some(&'\n') {
+                    LineEnding::Crlf
+                } else {
+                    LineEnding::Cr
+                };
+            }
+            _ => {}
+        }
+    }
+    LineEnding::Crlf
+}
+
 fn count_outside_quotes(line: &str, delimiter: char) -> usize {
     let mut quoted = false;
     line.chars()
@@ -151,6 +186,7 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
     }
     let (text, encoding) = decode(bytes);
     let delimiter = sniff(&text, hint);
+    let line_ending = detect_line_ending(&text);
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -188,6 +224,7 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
         rows,
         delimiter,
         encoding,
+        line_ending,
     })
 }
 
@@ -235,6 +272,20 @@ mod tests {
         let parsed = parse_csv(b"caf\xe9,ni\xf1o\n", None).unwrap();
         assert_eq!(parsed.encoding, Encoding::Windows1252);
         assert_eq!(parsed.rows[0], vec!["café", "niño"]);
+    }
+
+    #[test]
+    fn detects_the_line_ending_outside_quotes() {
+        let ending = |text: &str| {
+            parse_csv(text.as_bytes(), Some(Delimiter::Comma))
+                .unwrap()
+                .line_ending
+        };
+        assert_eq!(ending("a,b\r\n1,2\r\n"), LineEnding::Crlf);
+        assert_eq!(ending("a,b\n1,2\n"), LineEnding::Lf);
+        assert_eq!(ending("a,b\r1,2\r"), LineEnding::Cr);
+        assert_eq!(ending("\"x\r\ny\",b\n1,2\n"), LineEnding::Lf);
+        assert_eq!(ending("a,b"), LineEnding::Crlf);
     }
 
     #[test]

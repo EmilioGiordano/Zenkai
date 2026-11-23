@@ -3,14 +3,121 @@ use std::cell::RefCell;
 use std::io::{self, Write};
 use std::rc::Rc;
 
-use crate::csv_format::{CsvError, Delimiter};
+use encoding_rs::WINDOWS_1252;
+
+use crate::csv_format::{CsvError, Delimiter, Encoding, LineEnding};
 
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CsvFormat {
+    pub delimiter: Delimiter,
+    pub encoding: Encoding,
+    pub line_ending: LineEnding,
+}
+
+impl CsvFormat {
+    // UTF-8 with BOM so Excel opens it right, and the line ending Excel writes.
+    pub fn export(delimiter: Delimiter) -> CsvFormat {
+        CsvFormat {
+            delimiter,
+            encoding: Encoding::Utf8Bom,
+            line_ending: LineEnding::Crlf,
+        }
+    }
+}
+
+// Reading recognises UTF-16 only by its BOM, so it is always written; plain UTF-8 and
+// Windows-1252 have none.
+fn byte_order_mark(encoding: Encoding) -> &'static [u8] {
+    match encoding {
+        Encoding::Utf8 | Encoding::Windows1252 => b"",
+        Encoding::Utf8Bom => UTF8_BOM,
+        Encoding::Utf16Le => b"\xFF\xFE",
+        Encoding::Utf16Be => b"\xFE\xFF",
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Recode {
+    Utf16Le,
+    Utf16Be,
+    Windows1252,
+}
+
+fn utf16(text: &str, to_bytes: fn(u16) -> [u8; 2]) -> Vec<u8> {
+    text.encode_utf16().flat_map(to_bytes).collect()
+}
+
+// Turns the UTF-8 the csv writer produces into the file's own encoding. A chunk may end in the
+// middle of a character, so the unfinished bytes wait for the next one.
+struct Encoded<W> {
+    inner: W,
+    recode: Option<Recode>,
+    pending: Vec<u8>,
+}
+
+impl<W: Write> Encoded<W> {
+    fn new(mut inner: W, encoding: Encoding) -> io::Result<Encoded<W>> {
+        inner.write_all(byte_order_mark(encoding))?;
+        let recode = match encoding {
+            Encoding::Utf8 | Encoding::Utf8Bom => None,
+            Encoding::Utf16Le => Some(Recode::Utf16Le),
+            Encoding::Utf16Be => Some(Recode::Utf16Be),
+            Encoding::Windows1252 => Some(Recode::Windows1252),
+        };
+        Ok(Encoded {
+            inner,
+            recode,
+            pending: Vec::new(),
+        })
+    }
+
+    fn write_recoded(&mut self, recode: Recode, bytes: &[u8]) -> io::Result<()> {
+        self.pending.extend_from_slice(bytes);
+        let whole = match std::str::from_utf8(&self.pending) {
+            Ok(text) => text.len(),
+            Err(error) => error.valid_up_to(),
+        };
+        let unfinished = self.pending.split_off(whole);
+        let text = String::from_utf8_lossy(&self.pending);
+        let encoded: Cow<[u8]> = match recode {
+            Recode::Utf16Le => Cow::Owned(utf16(&text, u16::to_le_bytes)),
+            Recode::Utf16Be => Cow::Owned(utf16(&text, u16::to_be_bytes)),
+            Recode::Windows1252 => {
+                let (bytes, _, unmappable) = WINDOWS_1252.encode(&text);
+                if unmappable {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "the text has characters Windows-1252 cannot hold",
+                    ));
+                }
+                bytes
+            }
+        };
+        self.inner.write_all(&encoded)?;
+        self.pending = unfinished;
+        Ok(())
+    }
+}
+
+impl<W: Write> Write for Encoded<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self.recode {
+            None => self.inner.write(buf),
+            Some(recode) => self.write_recoded(recode, buf).map(|()| buf.len()),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 // Writes an export row by row, so its memory never grows with the size of the sheet.
 pub struct CsvWriter<W: Write> {
-    writer: csv::Writer<SharedOut<W>>,
-    out: SharedOut<W>,
+    writer: csv::Writer<SharedOut<Encoded<W>>>,
+    out: SharedOut<Encoded<W>>,
     delimiter: u8,
 }
 
@@ -35,18 +142,26 @@ impl<W: Write> Write for SharedOut<W> {
 }
 
 impl<W: Write> CsvWriter<W> {
-    pub fn new(mut out: W, delimiter: Delimiter) -> Result<CsvWriter<W>, CsvError> {
-        out.write_all(UTF8_BOM)?;
-        let out = SharedOut(Rc::new(RefCell::new(out)));
+    pub fn new(out: W, delimiter: Delimiter) -> Result<CsvWriter<W>, CsvError> {
+        CsvWriter::in_format(out, CsvFormat::export(delimiter))
+    }
+
+    pub fn in_format(out: W, format: CsvFormat) -> Result<CsvWriter<W>, CsvError> {
+        let out = SharedOut(Rc::new(RefCell::new(Encoded::new(out, format.encoding)?)));
+        let terminator = match format.line_ending {
+            LineEnding::Crlf => csv::Terminator::CRLF,
+            LineEnding::Lf => csv::Terminator::Any(b'\n'),
+            LineEnding::Cr => csv::Terminator::Any(b'\r'),
+        };
         let writer = csv::WriterBuilder::new()
-            .delimiter(delimiter.byte())
-            .terminator(csv::Terminator::CRLF)
+            .delimiter(format.delimiter.byte())
+            .terminator(terminator)
             .flexible(true)
             .from_writer(out.clone());
         Ok(CsvWriter {
             writer,
             out,
-            delimiter: delimiter.byte(),
+            delimiter: format.delimiter.byte(),
         })
     }
 
@@ -158,6 +273,115 @@ mod tests {
                 .unwrap();
         });
         assert_eq!(text, "'=1+1,'+A1,-5,+3,'@x,'\tx,ok\r\n");
+    }
+
+    fn in_format(format: CsvFormat, rows: &[&[&str]]) -> Result<Vec<u8>, CsvError> {
+        let mut bytes = Vec::new();
+        let mut writer = CsvWriter::in_format(&mut bytes, format)?;
+        for row in rows {
+            writer.write_row(row.iter().copied())?;
+        }
+        writer.finish()?;
+        Ok(bytes)
+    }
+
+    fn format(encoding: Encoding, line_ending: LineEnding) -> CsvFormat {
+        CsvFormat {
+            delimiter: Delimiter::Semicolon,
+            encoding,
+            line_ending,
+        }
+    }
+
+    #[test]
+    fn writes_each_encoding_with_its_own_byte_order_mark() {
+        let rows: &[&[&str]] = &[&["é", "x"]];
+        let expected: [(Encoding, &[u8]); 5] = [
+            (Encoding::Utf8, b"\xC3\xA9;x\n"),
+            (Encoding::Utf8Bom, b"\xEF\xBB\xBF\xC3\xA9;x\n"),
+            (Encoding::Windows1252, b"\xE9;x\n"),
+            (Encoding::Utf16Le, b"\xFF\xFE\xE9\x00;\x00x\x00\n\x00"),
+            (Encoding::Utf16Be, b"\xFE\xFF\x00\xE9\x00;\x00x\x00\n"),
+        ];
+        for (encoding, bytes) in expected {
+            let written = in_format(format(encoding, LineEnding::Lf), rows).unwrap();
+            assert_eq!(written, bytes, "{encoding:?}");
+        }
+    }
+
+    #[test]
+    fn writes_the_chosen_line_ending() {
+        let rows: &[&[&str]] = &[&["a", "b"], &["c", "d"]];
+        let expected: [(LineEnding, &[u8]); 3] = [
+            (LineEnding::Crlf, b"a;b\r\nc;d\r\n"),
+            (LineEnding::Lf, b"a;b\nc;d\n"),
+            (LineEnding::Cr, b"a;b\rc;d\r"),
+        ];
+        for (line_ending, bytes) in expected {
+            let written = in_format(format(Encoding::Utf8, line_ending), rows).unwrap();
+            assert_eq!(written, bytes, "{line_ending:?}");
+        }
+    }
+
+    #[test]
+    fn text_windows_1252_cannot_hold_fails_instead_of_being_replaced() {
+        let rows: &[&[&str]] = &[&["caf\u{e9}", "\u{65e5}\u{672c}"]];
+        let failed = in_format(format(Encoding::Windows1252, LineEnding::Lf), rows);
+        assert!(matches!(
+            failed,
+            Err(CsvError::Write(error)) if error.kind() == io::ErrorKind::InvalidData
+        ));
+    }
+
+    #[test]
+    fn a_character_split_between_two_writes_is_encoded_whole() {
+        let mut out = Vec::new();
+        let mut encoded = Encoded::new(&mut out, Encoding::Utf16Le).unwrap();
+        encoded.write_all(&[0xC3]).unwrap();
+        encoded.write_all(&[0xA9]).unwrap();
+        assert_eq!(out, b"\xFF\xFE\xE9\x00");
+    }
+
+    #[test]
+    fn what_is_written_reads_back_in_the_same_format() {
+        use crate::csv_format::parse_csv;
+
+        let rows: Vec<Vec<String>> = vec![
+            vec!["name".into(), "caf\u{e9}".into(), "line 1\nline 2".into()],
+            vec!["1,5".into(), String::new(), "x".into()],
+        ];
+        let borrowed: Vec<Vec<&str>> = rows
+            .iter()
+            .map(|row| row.iter().map(String::as_str).collect())
+            .collect();
+        let borrowed: Vec<&[&str]> = borrowed.iter().map(Vec::as_slice).collect();
+        for delimiter in [
+            Delimiter::Comma,
+            Delimiter::Semicolon,
+            Delimiter::Tab,
+            Delimiter::Pipe,
+        ] {
+            for encoding in [
+                Encoding::Utf8,
+                Encoding::Utf8Bom,
+                Encoding::Utf16Le,
+                Encoding::Utf16Be,
+                Encoding::Windows1252,
+            ] {
+                for line_ending in [LineEnding::Crlf, LineEnding::Lf, LineEnding::Cr] {
+                    let format = CsvFormat {
+                        delimiter,
+                        encoding,
+                        line_ending,
+                    };
+                    let bytes = in_format(format, &borrowed).unwrap();
+                    let parsed = parse_csv(&bytes, Some(delimiter)).unwrap();
+                    assert_eq!(parsed.rows, rows, "{format:?}");
+                    assert_eq!(parsed.encoding, encoding, "{format:?}");
+                    assert_eq!(parsed.line_ending, line_ending, "{format:?}");
+                }
+            }
+        }
     }
 
     #[test]
