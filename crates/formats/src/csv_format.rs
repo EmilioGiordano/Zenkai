@@ -1,4 +1,5 @@
 use encoding_rs::{UTF_16BE, UTF_16LE, WINDOWS_1252};
+use serde::{Deserialize, Serialize};
 use zenkai_types::{MAX_COLS, MAX_ROWS};
 
 pub const MAX_CSV_BYTES: usize = 512 * 1024 * 1024;
@@ -31,7 +32,8 @@ impl From<csv::Error> for CsvError {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Delimiter {
     Comma,
     Semicolon,
@@ -66,7 +68,8 @@ impl Delimiter {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Encoding {
     Utf8,
     Utf8Bom,
@@ -87,7 +90,8 @@ impl Encoding {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LineEnding {
     Crlf,
     Lf,
@@ -100,28 +104,61 @@ pub struct ParsedCsv {
     pub delimiter: Delimiter,
     pub encoding: Encoding,
     pub line_ending: LineEnding,
+    // Some bytes were not valid in the encoding and were replaced, so the rows are not the
+    // file's own text and writing them back would change it.
+    pub lossy: bool,
 }
 
-fn decode(bytes: &[u8]) -> (String, Encoding) {
+struct Decoded {
+    text: String,
+    encoding: Encoding,
+    lossy: bool,
+}
+
+fn decode(bytes: &[u8]) -> Decoded {
     if let Some(rest) = bytes.strip_prefix(b"\xEF\xBB\xBF") {
-        return (
-            String::from_utf8_lossy(rest).into_owned(),
-            Encoding::Utf8Bom,
-        );
+        return match String::from_utf8_lossy(rest) {
+            std::borrow::Cow::Borrowed(text) => Decoded {
+                text: text.to_string(),
+                encoding: Encoding::Utf8Bom,
+                lossy: false,
+            },
+            std::borrow::Cow::Owned(text) => Decoded {
+                text,
+                encoding: Encoding::Utf8Bom,
+                lossy: true,
+            },
+        };
     }
     if bytes.starts_with(b"\xFF\xFE") {
-        let (text, _, _) = UTF_16LE.decode(bytes);
-        return (text.into_owned(), Encoding::Utf16Le);
+        let (text, _, lossy) = UTF_16LE.decode(bytes);
+        return Decoded {
+            text: text.into_owned(),
+            encoding: Encoding::Utf16Le,
+            lossy,
+        };
     }
     if bytes.starts_with(b"\xFE\xFF") {
-        let (text, _, _) = UTF_16BE.decode(bytes);
-        return (text.into_owned(), Encoding::Utf16Be);
+        let (text, _, lossy) = UTF_16BE.decode(bytes);
+        return Decoded {
+            text: text.into_owned(),
+            encoding: Encoding::Utf16Be,
+            lossy,
+        };
     }
     match std::str::from_utf8(bytes) {
-        Ok(text) => (text.to_string(), Encoding::Utf8),
+        Ok(text) => Decoded {
+            text: text.to_string(),
+            encoding: Encoding::Utf8,
+            lossy: false,
+        },
         Err(_) => {
-            let (text, _, _) = WINDOWS_1252.decode(bytes);
-            (text.into_owned(), Encoding::Windows1252)
+            let (text, _, lossy) = WINDOWS_1252.decode(bytes);
+            Decoded {
+                text: text.into_owned(),
+                encoding: Encoding::Windows1252,
+                lossy,
+            }
         }
     }
 }
@@ -148,21 +185,36 @@ fn sniff(text: &str, hint: Option<Delimiter>) -> Delimiter {
 }
 
 // The first line break outside quotes decides; a file without one gets what exports write.
-fn detect_line_ending(text: &str) -> LineEnding {
+// As in the csv reader, only a quote that starts a field opens a quoted one, so a stray quote
+// inside a plain field (`5" pipe`) changes nothing.
+fn detect_line_ending(text: &str, delimiter: Delimiter) -> LineEnding {
+    let delimiter = char::from(delimiter.byte());
     let mut quoted = false;
+    let mut field_start = true;
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
+        if quoted {
+            if c == '"' {
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                } else {
+                    quoted = false;
+                    field_start = false;
+                }
+            }
+            continue;
+        }
         match c {
-            '"' => quoted = !quoted,
-            '\n' if !quoted => return LineEnding::Lf,
-            '\r' if !quoted => {
+            '"' if field_start => quoted = true,
+            '\n' => return LineEnding::Lf,
+            '\r' => {
                 return if chars.peek() == Some(&'\n') {
                     LineEnding::Crlf
                 } else {
                     LineEnding::Cr
                 };
             }
-            _ => {}
+            c => field_start = c == delimiter,
         }
     }
     LineEnding::Crlf
@@ -184,9 +236,13 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
     if bytes.len() > MAX_CSV_BYTES {
         return Err(CsvError::TooLarge(bytes.len() / 1024 / 1024));
     }
-    let (text, encoding) = decode(bytes);
+    let Decoded {
+        text,
+        encoding,
+        lossy,
+    } = decode(bytes);
     let delimiter = sniff(&text, hint);
-    let line_ending = detect_line_ending(&text);
+    let line_ending = detect_line_ending(&text, delimiter);
     let mut reader = csv::ReaderBuilder::new()
         .has_headers(false)
         .flexible(true)
@@ -225,6 +281,7 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
         delimiter,
         encoding,
         line_ending,
+        lossy,
     })
 }
 
@@ -286,6 +343,31 @@ mod tests {
         assert_eq!(ending("a,b\r1,2\r"), LineEnding::Cr);
         assert_eq!(ending("\"x\r\ny\",b\n1,2\n"), LineEnding::Lf);
         assert_eq!(ending("a,b"), LineEnding::Crlf);
+        assert_eq!(ending("5\" pipe,x\n1,2\n"), LineEnding::Lf);
+        assert_eq!(ending("5\" pipe,\"y\r\nz\"\n"), LineEnding::Lf);
+        assert_eq!(ending("\"say \"\"hi\"\"\",b\r\n1,2\r\n"), LineEnding::Crlf);
+    }
+
+    #[test]
+    fn reports_when_decoding_replaced_something() {
+        let lossy = |bytes: &[u8]| parse_csv(bytes, None).unwrap().lossy;
+        assert!(!lossy(b"a,b\n"));
+        assert!(!lossy(b"\xEF\xBB\xBFa,b\n"));
+        assert!(!lossy(b"caf\xe9,x\n"));
+        assert!(lossy(b"\xEF\xBB\xBFa,\xFF\n"));
+        let utf16 = |text: &str| -> Vec<u8> {
+            [0xFF, 0xFE]
+                .into_iter()
+                .chain(text.encode_utf16().flat_map(u16::to_le_bytes))
+                .collect()
+        };
+        assert!(!lossy(&utf16("a,b\n")));
+        let mut odd = utf16("a,b\n");
+        odd.push(0x61);
+        assert!(lossy(&odd));
+        let mut surrogate = vec![0xFF, 0xFE, 0x00, 0xD8];
+        surrogate.extend(utf16("a,b\n").into_iter().skip(2));
+        assert!(lossy(&surrogate));
     }
 
     #[test]

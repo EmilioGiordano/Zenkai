@@ -22,15 +22,22 @@ pub fn detect_decimal_comma(rows: &[Vec<String>]) -> bool {
 pub fn normalize_decimal_comma(rows: &mut [Vec<String>]) -> usize {
     let mut changed = 0;
     for field in rows.iter_mut().flatten() {
-        if matches!(
-            shape(field),
-            Some(Shape::DecimalComma | Shape::Grouped | Shape::Ambiguous)
-        ) {
-            *field = field.replace('.', "").replace(',', ".");
+        if let Some(rewritten) = decimal_comma_field(field) {
+            *field = rewritten;
             changed += 1;
         }
     }
     changed
+}
+
+// What `normalize_decimal_comma` makes of one field, so a save can tell what the import
+// turned a field of the file into.
+pub fn decimal_comma_field(field: &str) -> Option<String> {
+    matches!(
+        shape(field),
+        Some(Shape::DecimalComma | Shape::Grouped | Shape::Ambiguous)
+    )
+    .then(|| field.replace('.', "").replace(',', "."))
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -2,7 +2,10 @@
 // outside the US. The engine reads slashed dates month first, so day-first fields are
 // rewritten to ISO (2026-10-25) before import; anything else is left alone.
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DateOrder {
     DayFirst,
     MonthFirst,
@@ -34,14 +37,19 @@ pub fn detect_date_order(rows: &[Vec<String>]) -> Option<DateOrder> {
 pub fn normalize_day_first(rows: &mut [Vec<String>]) -> usize {
     let mut changed = 0;
     for field in rows.iter_mut().flatten() {
-        if let Some((day, month, year)) = parts(field)
-            && valid(day, month, year)
-        {
-            *field = format!("{year:04}-{month:02}-{day:02}");
+        if let Some(rewritten) = day_first_field(field) {
+            *field = rewritten;
             changed += 1;
         }
     }
     changed
+}
+
+// What `normalize_day_first` makes of one field, so a save can tell what the import turned a
+// field of the file into.
+pub fn day_first_field(field: &str) -> Option<String> {
+    let (day, month, year) = parts(field)?;
+    valid(day, month, year).then(|| format!("{year:04}-{month:02}-{day:02}"))
 }
 
 // "d/m/y" with one or two digits for d and m, two or four for y, and the same separator

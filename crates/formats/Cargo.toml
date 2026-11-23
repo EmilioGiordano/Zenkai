@@ -9,6 +9,7 @@ publish.workspace = true
 calamine = "=0.38.0"
 csv = "1.4"
 encoding_rs = "0.8"
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 zenkai-types = { path = "../types" }
 

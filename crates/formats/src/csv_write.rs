@@ -10,20 +10,10 @@ use crate::csv_format::{CsvError, Delimiter, Encoding, LineEnding};
 const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FormulaText {
-    // For a file another program opens: text that starts like a formula is prefixed so it is
-    // shown, never evaluated (CSV formula injection).
-    Neutralize,
-    // For saving over the CSV the user opened: its text cells stay exactly as they were.
-    Verbatim,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CsvFormat {
     pub delimiter: Delimiter,
     pub encoding: Encoding,
     pub line_ending: LineEnding,
-    pub formulas: FormulaText,
 }
 
 impl CsvFormat {
@@ -33,7 +23,6 @@ impl CsvFormat {
             delimiter,
             encoding: Encoding::Utf8Bom,
             line_ending: LineEnding::Crlf,
-            formulas: FormulaText::Neutralize,
         }
     }
 }
@@ -130,7 +119,6 @@ pub struct CsvWriter<W: Write> {
     writer: csv::Writer<SharedOut<Encoded<W>>>,
     out: SharedOut<Encoded<W>>,
     delimiter: u8,
-    formulas: FormulaText,
 }
 
 // The csv writer owns its output and has no way to reach it, but long runs of empty
@@ -174,15 +162,17 @@ impl<W: Write> CsvWriter<W> {
             writer,
             out,
             delimiter: format.delimiter.byte(),
-            formulas: format.formulas,
         })
     }
 
+    // For text a program other than this one will read: what starts like a formula is
+    // prefixed so it is shown, never evaluated.
     pub fn write_field(&mut self, text: &str) -> Result<(), CsvError> {
-        let text = match self.formulas {
-            FormulaText::Neutralize => neutralize(text),
-            FormulaText::Verbatim => Cow::Borrowed(text),
-        };
+        Ok(self.writer.write_field(neutralize(text).as_bytes())?)
+    }
+
+    // For a field of the file the user opened and did not edit: it stays as it was.
+    pub fn write_verbatim_field(&mut self, text: &str) -> Result<(), CsvError> {
         Ok(self.writer.write_field(text.as_bytes())?)
     }
 
@@ -307,24 +297,25 @@ mod tests {
             delimiter: Delimiter::Semicolon,
             encoding,
             line_ending,
-            formulas: FormulaText::Neutralize,
         }
     }
 
     #[test]
-    fn verbatim_text_is_written_as_it_is_and_an_export_neutralizes_the_same_cells() {
-        let rows: &[&[&str]] = &[&["-", "+34 600", "=x", "@user", "ok"]];
-        let mut verbatim = format(Encoding::Utf8, LineEnding::Lf);
-        verbatim.formulas = FormulaText::Verbatim;
-        assert_eq!(
-            in_format(verbatim, rows).unwrap(),
-            b"-;+34 600;=x;@user;ok\n"
-        );
-        let neutralized = format(Encoding::Utf8, LineEnding::Lf);
-        assert_eq!(
-            in_format(neutralized, rows).unwrap(),
-            b"'-;'+34 600;'=x;'@user;ok\n"
-        );
+    fn a_verbatim_field_is_written_as_it_is_and_the_same_text_as_a_plain_field_is_neutralized() {
+        let texts = ["-", "+34 600", "=x", "@user", "ok"];
+        let mut bytes = Vec::new();
+        let mut writer =
+            CsvWriter::in_format(&mut bytes, format(Encoding::Utf8, LineEnding::Lf)).unwrap();
+        for text in texts {
+            writer.write_verbatim_field(text).unwrap();
+        }
+        writer.end_row().unwrap();
+        for text in texts {
+            writer.write_field(text).unwrap();
+        }
+        writer.end_row().unwrap();
+        writer.finish().unwrap();
+        assert_eq!(bytes, b"-;+34 600;=x;@user;ok\n'-;'+34 600;'=x;'@user;ok\n");
     }
 
     #[test]
@@ -407,7 +398,6 @@ mod tests {
                         delimiter,
                         encoding,
                         line_ending,
-                        formulas: FormulaText::Neutralize,
                     };
                     let bytes = in_format(format, &borrowed).unwrap();
                     let parsed = parse_csv(&bytes, Some(delimiter)).unwrap();
