@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -11,7 +11,7 @@ use zenkai_engine::{
     Engine, EngineError, ShownCells, Stamp, Unsupported, Workbook, XlsxReader,
     open_xlsx_cancellable, run_with_engine_stack, write_atomic_streaming,
 };
-use zenkai_formats::{CsvError, CsvWriter, Delimiter, FormulaText, ParsedCsv, parse_csv};
+use zenkai_formats::{CsvError, CsvWriter, Delimiter, MAX_CSV_BYTES, ParsedCsv, parse_csv};
 use zenkai_i18n::t;
 use zenkai_pdf_host::process::host_next_to_exe;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
@@ -163,16 +163,59 @@ pub struct CsvRead {
     pub seen: FileSeen,
 }
 
-// The stamp is taken before the read, so a change in between counts as one.
-fn read_with_stamp(path: &Path) -> std::io::Result<(Vec<u8>, FileSeen)> {
+enum ReadStop {
+    Io(std::io::Error),
+    TooLarge(usize),
+}
+
+impl ReadStop {
+    fn message(self, path: &Path) -> String {
+        match self {
+            ReadStop::Io(error) => t!("file.read_failed", path = path.display(), error = error),
+            ReadStop::TooLarge(megabytes) => CsvError::TooLarge(megabytes).to_string(),
+        }
+    }
+
+    fn into_engine_error(self, path: &Path) -> EngineError {
+        match self {
+            ReadStop::Io(source) => EngineError::Read {
+                path: path.to_path_buf(),
+                source,
+            },
+            ReadStop::TooLarge(megabytes) => {
+                EngineError::Rejected(CsvError::TooLarge(megabytes).to_string())
+            }
+        }
+    }
+}
+
+// The size is checked on the open file before anything is read, and the read is capped too, so
+// a file that grows meanwhile cannot fill memory. The stamp is taken before the read, so a
+// change in between counts as one.
+fn read_with_stamp(path: &Path) -> Result<(Vec<u8>, FileSeen), ReadStop> {
+    read_up_to(path, MAX_CSV_BYTES)
+}
+
+fn read_up_to(path: &Path, limit: usize) -> Result<(Vec<u8>, FileSeen), ReadStop> {
     let stamp = Stamp::of(path).ok();
-    let bytes = std::fs::read(path)?;
+    let file = std::fs::File::open(path).map_err(ReadStop::Io)?;
+    let length = file.metadata().map_err(ReadStop::Io)?.len();
+    let megabytes = |bytes: u64| usize::try_from(bytes / 1024 / 1024).unwrap_or(usize::MAX);
+    if length > limit as u64 {
+        return Err(ReadStop::TooLarge(megabytes(length)));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or_default());
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(ReadStop::Io)?;
+    if bytes.len() > limit {
+        return Err(ReadStop::TooLarge(megabytes(bytes.len() as u64)));
+    }
     Ok((bytes, FileSeen::from_stamp(stamp)))
 }
 
 pub fn read_csv(path: &Path) -> Result<CsvRead, String> {
-    let (bytes, seen) = read_with_stamp(path)
-        .map_err(|e| t!("file.read_failed", path = path.display(), error = e))?;
+    let (bytes, seen) = read_with_stamp(path).map_err(|stop| stop.message(path))?;
     let parsed = parse_csv(&bytes, tsv_delimiter(path)).map_err(|e| e.to_string())?;
     Ok(CsvRead {
         bytes,
@@ -181,16 +224,57 @@ pub fn read_csv(path: &Path) -> Result<CsvRead, String> {
     })
 }
 
+fn options_found_in(parsed: &ParsedCsv) -> CsvOptions {
+    let guess = csv_preview::guess(parsed);
+    CsvOptions {
+        delimiter: parsed.delimiter,
+        encoding: parsed.encoding,
+        line_ending: parsed.line_ending,
+        decimal_comma: guess.decimal_comma,
+        date_order: guess.date_order,
+    }
+}
+
+// For a workbook that did not come from reading the file (a recovery copy, a memory dump):
+// the choices the file itself shows. None when it cannot be read, and the caller keeps the
+// export defaults a save would otherwise use.
+pub fn detect_csv_options(path: &Path) -> Option<CsvOptions> {
+    let read = read_csv(path)
+        .inspect_err(|error| tracing::warn!(%error, ?path, "could not detect the CSV options"))
+        .ok()?;
+    Some(options_found_in(&read.parsed))
+}
+
+// The file as it is on disk, parsed as it was imported, which a save compares the sheet with.
+pub enum Baseline {
+    Rows(Vec<Vec<String>>),
+    // Missing or unreadable: nothing of it can be kept, so every cell is written as shown.
+    Absent,
+    // Decoding replaced bytes, so the rows are not the file's own text.
+    Lossy,
+}
+
+pub fn read_baseline(path: &Path, delimiter: Delimiter) -> Baseline {
+    let read = read_with_stamp(path)
+        .map_err(|stop| stop.message(path))
+        .and_then(|(bytes, _)| parse_csv(&bytes, Some(delimiter)).map_err(|e| e.to_string()));
+    match read {
+        Ok(parsed) if parsed.lossy => Baseline::Lossy,
+        Ok(parsed) => Baseline::Rows(parsed.rows),
+        Err(error) => {
+            tracing::warn!(%error, ?path, "the CSV on disk cannot be compared with");
+            Baseline::Absent
+        }
+    }
+}
+
 // Opens a CSV as the document it is, without a preview: with the choices stored when the user
 // made them, or read from the file as the preview does. Encoding and line ending are always
 // the file's own as it is now.
 pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, LoadFailure> {
-    let (bytes, seen) = read_with_stamp(path).map_err(|source| match source.kind() {
-        std::io::ErrorKind::NotFound => LoadFailure::Missing,
-        _ => LoadFailure::Engine(EngineError::Read {
-            path: path.to_path_buf(),
-            source,
-        }),
+    let (bytes, seen) = read_with_stamp(path).map_err(|stop| match stop {
+        ReadStop::Io(error) if error.kind() == std::io::ErrorKind::NotFound => LoadFailure::Missing,
+        other => LoadFailure::Engine(other.into_engine_error(path)),
     })?;
     let hint = stored
         .map(|options| options.delimiter)
@@ -203,16 +287,7 @@ pub fn load_csv(path: &Path, stored: Option<CsvOptions>) -> Result<FileLoad, Loa
             line_ending: parsed.line_ending,
             ..stored
         },
-        None => {
-            let guess = csv_preview::guess(&parsed);
-            CsvOptions {
-                delimiter: parsed.delimiter,
-                encoding: parsed.encoding,
-                line_ending: parsed.line_ending,
-                decimal_comma: guess.decimal_comma,
-                date_order: guess.date_order,
-            }
-        }
+        None => options_found_in(&parsed),
     };
     let mut rows = parsed.rows;
     csv_preview::apply(options.decimal_comma, options.date_order, &mut rows);
@@ -403,19 +478,29 @@ pub fn write_csv_file(
     shown: &ShownCells,
     cancel: &AtomicBool,
 ) -> Result<(), EngineError> {
-    let options = CsvOptions::exported_as(path);
-    write_csv_as(path, shown, &options, FormulaText::Neutralize, cancel)
+    write_csv_as(path, shown, &CsvOptions::exported_as(path), &[], cancel)
 }
 
+// How one written cell relates to the file it came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FieldKind {
+    // Not edited since it was read: written as the file had it.
+    Unedited,
+    Edited,
+    // An edited number in a file whose numbers use a decimal comma.
+    EditedNumber,
+}
+
+// `kinds` is aligned with `shown.cells`; cells beyond it, all of them for an export, are Edited.
 pub fn write_csv_as(
     path: &Path,
     shown: &ShownCells,
     options: &CsvOptions,
-    formulas: FormulaText,
+    kinds: &[FieldKind],
     cancel: &AtomicBool,
 ) -> Result<(), EngineError> {
     write_atomic_streaming(path, |out| {
-        write_shown_rows(out, shown, options, formulas, cancel).map_err(|error| match error {
+        write_shown_rows(out, shown, options, kinds, cancel).map_err(|error| match error {
             ExportStop::Cancelled => EngineError::Cancelled,
             ExportStop::Csv(CsvError::Write(source))
                 if source.kind() == std::io::ErrorKind::InvalidData =>
@@ -431,14 +516,15 @@ pub fn write_csv_as(
     })
 }
 
-// The inverse of reading a file whose numbers use a decimal comma: reading was only chosen when
-// no number in the file used a dot, so a dot in a number is that comma.
-fn with_decimal_comma(text: &str) -> Cow<'_, str> {
-    let number = text.strip_suffix('%').unwrap_or(text);
-    if number.contains('.') && number.parse::<f64>().is_ok() {
-        Cow::Owned(text.replace('.', ","))
+// An edited number in a file whose numbers use a decimal comma. The engine shows English
+// separators, so grouping commas go (a file read back could not tell them from decimals) and
+// the dot becomes the comma.
+fn for_decimal_comma(shown: &str) -> Cow<'_, str> {
+    let number = shown.strip_suffix('%').unwrap_or(shown);
+    if number.replace(',', "").parse::<f64>().is_ok() {
+        Cow::Owned(shown.replace(',', "").replace('.', ","))
     } else {
-        Cow::Borrowed(text)
+        Cow::Borrowed(shown)
     }
 }
 
@@ -459,24 +545,28 @@ fn write_shown_rows(
     out: &mut dyn Write,
     shown: &ShownCells,
     options: &CsvOptions,
-    formulas: FormulaText,
+    kinds: &[FieldKind],
     cancel: &AtomicBool,
 ) -> Result<(), ExportStop> {
     let width = usize::from(shown.end.col.get()) + 1;
-    let mut writer = CsvWriter::in_format(out, options.format(formulas))?;
-    let mut cells = shown.cells.iter().peekable();
+    let mut writer = CsvWriter::in_format(out, options.format())?;
+    let kinds = kinds
+        .iter()
+        .copied()
+        .chain(std::iter::repeat(FieldKind::Edited));
+    let mut cells = shown.cells.iter().zip(kinds).peekable();
     for row in 0..=shown.end.row.get() {
         if cancel.load(Ordering::Relaxed) {
             return Err(ExportStop::Cancelled);
         }
         let mut next_col = 0;
-        while let Some((pos, text)) = cells.next_if(|(pos, _)| pos.row.get() == row) {
+        while let Some(((pos, text), kind)) = cells.next_if(|((pos, _), _)| pos.row.get() == row) {
             let col = usize::from(pos.col.get());
             writer.write_empty_fields(col.saturating_sub(next_col))?;
-            if options.decimal_comma {
-                writer.write_field(&with_decimal_comma(text))?;
-            } else {
-                writer.write_field(text)?;
+            match kind {
+                FieldKind::Unedited => writer.write_verbatim_field(text)?,
+                FieldKind::Edited => writer.write_field(text)?,
+                FieldKind::EditedNumber => writer.write_field(&for_decimal_comma(text))?,
             }
             next_col = col + 1;
         }
@@ -728,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn only_an_export_neutralizes_text_that_starts_like_a_formula() {
+    fn only_cells_edited_since_the_read_are_neutralized_and_an_export_neutralizes_all() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("out.csv");
         let shown = ShownCells {
@@ -746,9 +836,15 @@ mod tests {
             ..CsvOptions::exported_as(&target)
         };
         let cancel = AtomicBool::new(false);
-        write_csv_as(&target, &shown, &options, FormulaText::Verbatim, &cancel).unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"-,+34 600,=x,ok\n");
-        write_csv_as(&target, &shown, &options, FormulaText::Neutralize, &cancel).unwrap();
+        let kinds = [
+            FieldKind::Unedited,
+            FieldKind::Unedited,
+            FieldKind::Edited,
+            FieldKind::Edited,
+        ];
+        write_csv_as(&target, &shown, &options, &kinds, &cancel).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"-,+34 600,'=x,ok\n");
+        write_csv_as(&target, &shown, &options, &[], &cancel).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"'-,'+34 600,'=x,ok\n");
         write_csv_file(&target, &shown, &cancel).unwrap();
         assert_eq!(
@@ -765,12 +861,27 @@ mod tests {
     }
 
     #[test]
-    fn a_decimal_comma_is_written_back_only_on_numbers() {
-        assert_eq!(with_decimal_comma("1.5"), "1,5");
-        assert_eq!(with_decimal_comma("-0.25%"), "-0,25%");
-        assert_eq!(with_decimal_comma("v1.2.3"), "v1.2.3");
-        assert_eq!(with_decimal_comma("3"), "3");
-        assert_eq!(with_decimal_comma("a.b"), "a.b");
+    fn an_edited_number_is_written_with_the_files_decimal_comma_and_no_grouping() {
+        assert_eq!(for_decimal_comma("1.5"), "1,5");
+        assert_eq!(for_decimal_comma("-0.25%"), "-0,25%");
+        assert_eq!(for_decimal_comma("1,234.50"), "1234,50");
+        assert_eq!(for_decimal_comma("1,234"), "1234");
+        assert_eq!(for_decimal_comma("v1.2.3"), "v1.2.3");
+        assert_eq!(for_decimal_comma("a.b"), "a.b");
+        assert_eq!(for_decimal_comma("a,b"), "a,b");
+    }
+
+    #[test]
+    fn a_csv_over_the_size_cap_is_refused_before_it_is_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.csv");
+        std::fs::write(&path, b"a,b\n1,2\n").unwrap();
+        assert!(read_up_to(&path, 8).is_ok());
+        assert!(matches!(read_up_to(&path, 7), Err(ReadStop::TooLarge(_))));
+        assert_eq!(
+            ReadStop::TooLarge(600).message(&path),
+            CsvError::TooLarge(600).to_string()
+        );
     }
 
     #[test]

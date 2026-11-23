@@ -2033,11 +2033,11 @@ impl Workspace {
         };
         let must_rename =
             document.may_lose_unseen_content() || document.is_macro_enabled() || document.read_only;
-        match document.path.clone() {
-            Some(path) if document.csv.is_some() => {
-                self.save_csv(id, path, ChangedFile::Ask, window, cx)
+        match (document.path.clone(), document.csv) {
+            (Some(path), Some(binding)) => {
+                self.save_csv(id, path, binding, ChangedFile::Ask, window, cx)
             }
-            Some(path) if !must_rename => self.save_to(
+            (Some(path), None) if !must_rename => self.save_to(
                 id,
                 path,
                 Some(Overwrite::InPlace),
@@ -2045,7 +2045,7 @@ impl Workspace {
                 window,
                 cx,
             ),
-            Some(_) => {
+            (Some(_), None) => {
                 let held = document::labels(&document.unsupported);
                 let detail = if document.read_only {
                     t!("save.read_only_detail").to_string()
@@ -2061,7 +2061,7 @@ impl Workspace {
                 };
                 self.offer_save_as(id, &detail, window, cx);
             }
-            None => self.save_as_dialog(id, window, cx),
+            (None, _) => self.save_as_dialog(id, window, cx),
         }
     }
 
@@ -2239,9 +2239,11 @@ impl Workspace {
             self.save_ended(id, false, window, cx);
             return;
         }
-        match delimited_action(&probe) {
-            DelimitedAction::Export => self.export_csv(id, path, window, cx),
-            DelimitedAction::SaveInPlace => self.save_csv(id, path, ChangedFile::Ask, window, cx),
+        match (delimited_action(&probe), document.csv) {
+            (DelimitedAction::SaveInPlace, Some(binding)) => {
+                self.save_csv(id, path, binding, ChangedFile::Ask, window, cx)
+            }
+            _ => self.export_csv(id, path, window, cx),
         }
     }
 
@@ -2369,14 +2371,14 @@ impl Workspace {
         cx.spawn_in(window, async move |this, cx| {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| match choice {
-                Some(CHANGED_FILE_REPLACE)
-                    if this.documents.get(id).is_some_and(|d| d.csv.is_some()) =>
-                {
-                    this.save_csv(id, path, ChangedFile::Replace, window, cx)
-                }
-                Some(CHANGED_FILE_REPLACE) => {
-                    this.save_to(id, path, Some(overwrite), ChangedFile::Replace, window, cx)
-                }
+                Some(CHANGED_FILE_REPLACE) => match this.documents.get(id).and_then(|d| d.csv) {
+                    Some(binding) => {
+                        this.save_csv(id, path, binding, ChangedFile::Replace, window, cx)
+                    }
+                    None => {
+                        this.save_to(id, path, Some(overwrite), ChangedFile::Replace, window, cx)
+                    }
+                },
                 Some(CHANGED_FILE_SAVE_AS) => this.save_as_dialog(id, window, cx),
                 _ => this.save_ended(id, false, window, cx),
             });

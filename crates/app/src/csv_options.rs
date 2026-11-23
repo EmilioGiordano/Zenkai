@@ -1,14 +1,14 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use zenkai_formats::{CsvFormat, DateOrder, Delimiter, Encoding, FormulaText, LineEnding};
+use zenkai_formats::{CsvFormat, DateOrder, Delimiter, Encoding, LineEnding};
 
 use crate::entry::FileSeen;
 use crate::files;
 
 // How a CSV was read, so that saving it writes it back the same way. The byte order mark is
 // part of the encoding: UTF-8 with BOM and both UTF-16 forms have one, the others do not.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CsvOptions {
     pub delimiter: Delimiter,
     pub encoding: Encoding,
@@ -30,17 +30,16 @@ impl CsvOptions {
         }
     }
 
-    pub fn format(self, formulas: FormulaText) -> CsvFormat {
+    pub fn format(self) -> CsvFormat {
         CsvFormat {
             delimiter: self.delimiter,
             encoding: self.encoding,
             line_ending: self.line_ending,
-            formulas,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CsvBinding {
     pub options: CsvOptions,
     // The user chose to keep the CSV format although the workbook holds more than a CSV can,
@@ -62,138 +61,41 @@ pub struct CsvLoad {
     pub seen: FileSeen,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CsvRecord {
-    delimiter: String,
-    encoding: String,
-    line_ending: String,
-    decimal_comma: bool,
-    day_first: bool,
-    loss_accepted: bool,
-}
-
-const DELIMITERS: [Delimiter; 4] = [
-    Delimiter::Comma,
-    Delimiter::Semicolon,
-    Delimiter::Tab,
-    Delimiter::Pipe,
-];
-
-const ENCODINGS: [Encoding; 5] = [
-    Encoding::Utf8,
-    Encoding::Utf8Bom,
-    Encoding::Utf16Le,
-    Encoding::Utf16Be,
-    Encoding::Windows1252,
-];
-
-const LINE_ENDINGS: [LineEnding; 3] = [LineEnding::Crlf, LineEnding::Lf, LineEnding::Cr];
-
-fn delimiter_code(delimiter: Delimiter) -> &'static str {
-    match delimiter {
-        Delimiter::Comma => "comma",
-        Delimiter::Semicolon => "semicolon",
-        Delimiter::Tab => "tab",
-        Delimiter::Pipe => "pipe",
-    }
-}
-
-fn encoding_code(encoding: Encoding) -> &'static str {
-    match encoding {
-        Encoding::Utf8 => "utf-8",
-        Encoding::Utf8Bom => "utf-8-bom",
-        Encoding::Utf16Le => "utf-16le",
-        Encoding::Utf16Be => "utf-16be",
-        Encoding::Windows1252 => "windows-1252",
-    }
-}
-
-fn line_ending_code(line_ending: LineEnding) -> &'static str {
-    match line_ending {
-        LineEnding::Crlf => "crlf",
-        LineEnding::Lf => "lf",
-        LineEnding::Cr => "cr",
-    }
-}
-
-impl CsvRecord {
-    pub fn of(binding: &CsvBinding) -> CsvRecord {
-        let options = binding.options;
-        CsvRecord {
-            delimiter: delimiter_code(options.delimiter).to_string(),
-            encoding: encoding_code(options.encoding).to_string(),
-            line_ending: line_ending_code(options.line_ending).to_string(),
-            decimal_comma: options.decimal_comma,
-            day_first: options.date_order == DateOrder::DayFirst,
-            loss_accepted: binding.loss_accepted,
-        }
-    }
-
-    // A code this version does not know gives nothing: the file is read again as if opened now.
-    pub fn binding(&self) -> Option<CsvBinding> {
-        let options = CsvOptions {
-            delimiter: DELIMITERS
-                .into_iter()
-                .find(|delimiter| delimiter_code(*delimiter) == self.delimiter)?,
-            encoding: ENCODINGS
-                .into_iter()
-                .find(|encoding| encoding_code(*encoding) == self.encoding)?,
-            line_ending: LINE_ENDINGS
-                .into_iter()
-                .find(|line_ending| line_ending_code(*line_ending) == self.line_ending)?,
-            decimal_comma: self.decimal_comma,
-            date_order: if self.day_first {
-                DateOrder::DayFirst
-            } else {
-                DateOrder::MonthFirst
-            },
-        };
-        Some(CsvBinding {
-            options,
-            loss_accepted: self.loss_accepted,
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn a_record_gives_back_the_binding_it_was_made_from() {
-        for delimiter in DELIMITERS {
-            for encoding in ENCODINGS {
-                for line_ending in LINE_ENDINGS {
-                    for day_first in [false, true] {
-                        let binding = CsvBinding {
-                            options: CsvOptions {
-                                delimiter,
-                                encoding,
-                                line_ending,
-                                decimal_comma: day_first,
-                                date_order: if day_first {
-                                    DateOrder::DayFirst
-                                } else {
-                                    DateOrder::MonthFirst
-                                },
-                            },
-                            loss_accepted: day_first,
-                        };
-                        let json = serde_json::to_string(&CsvRecord::of(&binding)).unwrap();
-                        let record: CsvRecord = serde_json::from_str(&json).unwrap();
-                        assert_eq!(record.binding(), Some(binding));
-                    }
+    fn a_binding_survives_the_session_file() {
+        for delimiter in [
+            Delimiter::Comma,
+            Delimiter::Semicolon,
+            Delimiter::Tab,
+            Delimiter::Pipe,
+        ] {
+            for encoding in [
+                Encoding::Utf8,
+                Encoding::Utf8Bom,
+                Encoding::Utf16Le,
+                Encoding::Utf16Be,
+                Encoding::Windows1252,
+            ] {
+                for line_ending in [LineEnding::Crlf, LineEnding::Lf, LineEnding::Cr] {
+                    let binding = CsvBinding {
+                        options: CsvOptions {
+                            delimiter,
+                            encoding,
+                            line_ending,
+                            decimal_comma: true,
+                            date_order: DateOrder::DayFirst,
+                        },
+                        loss_accepted: true,
+                    };
+                    let json = serde_json::to_string(&binding).unwrap();
+                    assert_eq!(serde_json::from_str::<CsvBinding>(&json).unwrap(), binding);
                 }
             }
         }
-    }
-
-    #[test]
-    fn an_unknown_code_gives_no_binding() {
-        let binding = CsvBinding::new(CsvOptions::exported_as(Path::new("a.csv")));
-        let mut record = CsvRecord::of(&binding);
-        record.encoding = "ebcdic".to_string();
-        assert_eq!(record.binding(), None);
     }
 
     #[test]

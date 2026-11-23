@@ -11,9 +11,10 @@ use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace, file_label};
 use crate::agent_settings;
+use crate::csv_options::CsvLoad;
 use crate::document;
 use crate::documents::{Installed, Intent, Loaded, Provenance, Step};
-use crate::entry::{Entry, Link, LinkStatus};
+use crate::entry::{Entry, FileSeen, Link, LinkStatus};
 use crate::failure::open_failure;
 use crate::files::{self, FileLoad, LoadFailure};
 use crate::recovery;
@@ -92,6 +93,23 @@ fn arrival(load: Option<LinkLoad>, delivered: bool) -> Arrival {
     }
 }
 
+// A copy of a CSV document's work (a recovery copy, a memory dump) from a session that did not
+// record how the file was read: the file shows it, instead of the export defaults a save would
+// otherwise write the CSV in.
+fn csv_of_copy(link: &Link) -> Option<CsvLoad> {
+    let path = link
+        .path
+        .as_deref()
+        .filter(|path| link.csv.is_none() && files::is_delimited_text(path))?;
+    Some(CsvLoad {
+        options: files::detect_csv_options(path)?,
+        seen: link
+            .rested
+            .as_ref()
+            .map_or_else(FileSeen::unknown, |rested| rested.file),
+    })
+}
+
 // Runs on the background executor. The recovery copy, when there is one, holds the unsaved
 // work and is read instead of the file. None when `cancel` was raised: nothing on disk has
 // been touched, so the link is exactly as it was.
@@ -118,7 +136,7 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
                         read_only: link.read_only,
                         origin: link.origin.unwrap_or(FileOrigin::Internet),
                         reader_fallback: None,
-                        csv: None,
+                        csv: csv_of_copy(link),
                     }),
                     provenance: Provenance::Dump,
                     copy: None,
@@ -149,7 +167,7 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
                         // A recovery copy does not record where the work came from; it fails closed.
                         origin: FileOrigin::Internet,
                         reader_fallback: None,
-                        csv: None,
+                        csv: csv_of_copy(link),
                     }),
                     provenance: Provenance::Recovery,
                     copy: Some(copy.clone()),
@@ -1084,6 +1102,20 @@ mod tests {
         csv_link(&mut setup, as_text);
         let (file, _, _) = loaded(read(&setup.link));
         assert_eq!(text(&file.workbook), "1,5");
+    }
+
+    #[test]
+    fn a_csv_document_restored_without_its_options_takes_them_from_the_file() {
+        let mut setup = hibernated();
+        let file = setup._dir.path().join("prices.csv");
+        std::fs::write(&file, b"a;b\r\n1,5;2\r\n").unwrap();
+        setup.link.path = Some(file);
+        let (file, provenance, _) = loaded(read(&setup.link));
+        assert_eq!(provenance, Provenance::Dump);
+        let csv = file.csv.expect("the file shows how it was read");
+        assert_eq!(csv.options.delimiter, Delimiter::Semicolon);
+        assert_eq!(csv.options.line_ending, LineEnding::Crlf);
+        assert!(csv.options.decimal_comma);
     }
 
     #[test]

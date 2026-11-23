@@ -8,6 +8,7 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Overwrite, Severity, Workspace, file_job_refusal};
+use crate::csv_options::CsvBinding;
 use crate::csv_save::{CsvLoss, CsvSave, CsvSaveRequest, save_csv_file};
 use crate::document::{ChangedFile, Document, FileJob};
 use crate::failure::{offer_another_location, save_failure};
@@ -45,6 +46,8 @@ struct CsvSaveRun {
     generation: u64,
     edits_at_start: u64,
     sheets: usize,
+    // Carried through the format prompt, so a Replace already chosen is not asked again.
+    changed: ChangedFile,
 }
 
 impl Workspace {
@@ -52,15 +55,12 @@ impl Workspace {
         &mut self,
         id: WorkbookId,
         path: PathBuf,
+        binding: CsvBinding,
         changed: ChangedFile,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(document) = self.documents.get_mut(id) else {
-            self.save_ended(id, false, window, cx);
-            return;
-        };
-        let Some(binding) = document.csv else {
             self.save_ended(id, false, window, cx);
             return;
         };
@@ -76,6 +76,7 @@ impl Workspace {
             generation: document.generation(),
             edits_at_start: document.edit_count(),
             sheets: document.sheets.len(),
+            changed,
         };
         let request = CsvSaveRequest {
             path,
@@ -120,6 +121,7 @@ impl Workspace {
             generation,
             edits_at_start,
             sheets,
+            changed,
         } = run;
         let shown = self.documents.active_id() == Some(id);
         let mut follow_up = AfterJob::Nothing;
@@ -164,7 +166,13 @@ impl Workspace {
             }
             Ok(CsvSave::WouldLose(loss)) => {
                 self.flush_edits(id, cx);
-                self.confirm_csv_loss(id, path, loss, window, cx);
+                self.confirm_csv_loss(id, path, loss, changed, window, cx);
+                return;
+            }
+            Ok(CsvSave::LossyFile) => {
+                self.flush_edits(id, cx);
+                self.notify(Severity::Warning, t!("save.csv_lossy"), cx);
+                self.save_as_dialog(id, window, cx);
                 return;
             }
             Ok(CsvSave::FileChanged) => {
@@ -201,6 +209,7 @@ impl Workspace {
         id: WorkbookId,
         path: PathBuf,
         loss: CsvLoss,
+        changed: ChangedFile,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -221,14 +230,18 @@ impl Workspace {
             let choice = answer.await;
             let update = this.update_in(cx, |this, window, cx| match choice {
                 Some(KEEP_CSV) => {
-                    if let Some(binding) = this
+                    let kept = this
                         .documents
                         .get_mut(id)
                         .and_then(|document| document.csv.as_mut())
-                    {
-                        binding.loss_accepted = true;
+                        .map(|binding| {
+                            binding.loss_accepted = true;
+                            *binding
+                        });
+                    match kept {
+                        Some(binding) => this.save_csv(id, path, binding, changed, window, cx),
+                        None => this.save_ended(id, false, window, cx),
                     }
-                    this.save_csv(id, path, ChangedFile::Ask, window, cx)
                 }
                 Some(SAVE_AS_XLSX) => this.save_as_dialog(id, window, cx),
                 _ => this.save_ended(id, false, window, cx),

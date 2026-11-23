@@ -7,7 +7,7 @@ use zenkai_engine::Unsupported;
 use zenkai_grid::{Selection, ViewState};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, WorkbookId};
 
-use crate::csv_options::CsvRecord;
+use crate::csv_options::CsvBinding;
 use crate::entry::{FileSeen, Link, LinkStatus, Rested};
 use crate::panel_width::PanelWidths;
 use crate::pdf::PdfPosition;
@@ -70,7 +70,7 @@ pub struct FileRecord {
     #[serde(default)]
     pub mode: ViewMode,
     #[serde(default)]
-    pub csv: Option<CsvRecord>,
+    pub csv: Option<CsvBinding>,
     #[serde(default)]
     pub base: Option<StampRecord>,
     #[serde(default)]
@@ -290,7 +290,7 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         read_only: link.read_only,
         kind: link.kind,
         mode: link.mode,
-        csv: link.csv.as_ref().map(CsvRecord::of),
+        csv: link.csv,
         base: link.base,
         file_modified: link
             .path
@@ -373,7 +373,7 @@ pub fn link_of(
         origin: None,
         kind: record.kind,
         mode: record.mode,
-        csv: record.csv.as_ref().and_then(CsvRecord::binding),
+        csv: record.csv,
         base: record.base,
         pdf: record.pdf,
         text_zoom: record.text_zoom,

@@ -131,7 +131,7 @@ mod tests {
     use super::super::test_support::*;
     use super::super::{Installed, Intent, Provenance};
     use super::*;
-    use crate::csv_options::{CsvBinding, CsvLoad, CsvOptions, CsvRecord};
+    use crate::csv_options::{CsvBinding, CsvLoad, CsvOptions};
     use crate::entry::{Entry, FileSeen, LinkStatus};
     use crate::session::{FileRecord, ViewRecord};
     use crate::spaces::SpaceId;
@@ -434,7 +434,7 @@ mod tests {
     #[test]
     fn a_csv_document_comes_back_from_a_session_bound_to_its_file_with_its_options() {
         let mut record = file(Some("prices.csv"), true);
-        record.csv = Some(CsvRecord::of(&csv_binding()));
+        record.csv = Some(csv_binding());
         let mut documents = documents();
         let id = documents.restore(&session_with(record), None).unwrap();
         let Some(Entry::Link(link)) = documents.entry(id) else {
@@ -451,10 +451,7 @@ mod tests {
 
         let snapshot = documents.snapshot(false, SpaceAppearance::default(), |_| None);
         let again = &snapshot.spaces[0].files[0];
-        assert_eq!(
-            again.csv.as_ref().and_then(CsvRecord::binding),
-            Some(csv_binding())
-        );
+        assert_eq!(again.csv, Some(csv_binding()));
     }
 
     #[test]
