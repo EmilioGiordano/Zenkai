@@ -78,23 +78,6 @@ fn parts(field: &str) -> Option<(u32, u32, u32)> {
     (first >= 1 && second >= 1).then_some((first, second, year))
 }
 
-// Text of the shape a date takes in a cell: three numbers around one separator, year first
-// with four digits or last with two or four.
-pub fn looks_like_date(text: &str) -> bool {
-    let Some(separator) = text.chars().find(|c| matches!(c, '/' | '-' | '.')) else {
-        return false;
-    };
-    let pieces: Vec<&str> = text.split(separator).collect();
-    let [a, b, c] = pieces[..] else {
-        return false;
-    };
-    let digits = |piece: &str, lengths: &[usize]| {
-        lengths.contains(&piece.len()) && piece.bytes().all(|b| b.is_ascii_digit())
-    };
-    (digits(a, &[4]) && digits(b, &[1, 2]) && digits(c, &[1, 2]))
-        || (digits(a, &[1, 2]) && digits(b, &[1, 2]) && digits(c, &[2, 4]))
-}
-
 // The date an Excel serial number stands for, as yyyy-mm-dd. Serials below 61 are left out:
 // Excel counts a 29 February 1900 that never existed.
 pub fn iso_date(serial: f64) -> Option<String> {
@@ -193,16 +176,6 @@ mod tests {
         assert_eq!(iso_date(2_958_465.0).as_deref(), Some("9999-12-31"));
         for serial in [60.0, 0.0, -1.0, 46_303.5, 2_958_466.0, f64::NAN] {
             assert_eq!(iso_date(serial), None, "{serial}");
-        }
-    }
-
-    #[test]
-    fn dates_are_told_from_other_numbers_by_their_shape() {
-        for text in ["10/8/2026", "2026-10-08", "8.10.2026", "08-10-26"] {
-            assert!(looks_like_date(text), "{text}");
-        }
-        for text in ["1.5", "1,234.5", "12-10", "1/2/3/4", "100/1/1", "abc", ""] {
-            assert!(!looks_like_date(text), "{text}");
         }
     }
 
