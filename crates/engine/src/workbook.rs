@@ -12,7 +12,7 @@ use crate::edit_profile::{EditProfile, RecalcMode};
 use crate::error::EngineError;
 use crate::file::Unsupported;
 use crate::inputs_plan::plan_inputs;
-use crate::model::{CachedModel, HistoryStep, content_cells_within};
+use crate::model::{CachedModel, HistoryStep, content_cells_within, for_each_within};
 use crate::rectangles::covering_rectangles;
 use crate::save::{ModelData, SaveSnapshot, SaveTarget};
 use crate::saved::{FileOnDisk, KnownFile, SavedSlot};
@@ -191,18 +191,6 @@ pub struct Copied {
     styled: bool,
 }
 
-// Whether any copied cell has a style other than the default one.
-fn carries_style(payload: &serde_json::Value) -> bool {
-    let default = serde_json::to_value(Style::default()).unwrap_or(serde_json::Value::Null);
-    let Some(rows) = payload.get("data").and_then(serde_json::Value::as_object) else {
-        return true;
-    };
-    rows.values()
-        .filter_map(serde_json::Value::as_object)
-        .flat_map(|cells| cells.values())
-        .any(|cell| cell.get("style") != Some(&default))
-}
-
 fn select(model: &mut UserModel<'static>, sheet: SheetId, range: Range) -> Result<(), EngineError> {
     model.set_selected_sheet(sheet.0).map_err(rejected)?;
     model
@@ -378,29 +366,17 @@ fn area(sheet: SheetId, range: Range) -> Area {
 }
 
 impl Workbook {
-    // Copying a cell that has no style of its own carries none; a failed read counts as styled.
-    fn cell_has_style(&self, sheet: SheetId, pos: CellPos) -> bool {
-        match self
-            .model
-            .get_model()
-            .get_style_for_cell(sheet.0, row_i32(pos.row), col_i32(pos.col))
-        {
-            Ok(style) => style != Style::default(),
-            Err(_) => true,
-        }
-    }
-
+    // Style 0 is the workbook's default, so a cell with any other has a style of its own.
+    // A sheet that cannot be read counts as styled.
     fn range_has_style(&self, sheet: SheetId, range: Range) -> bool {
-        range.cell_count() > MAX_FILL_CELLS
-            || (range.start.row.get()..=range.end.row.get()).any(|row| {
-                (range.start.col.get()..=range.end.col.get()).any(|col| {
-                    let pos = CellPos::new(
-                        RowIdx::clamped(i64::from(row)),
-                        ColIdx::clamped(i64::from(col)),
-                    );
-                    self.cell_has_style(sheet, pos)
-                })
-            })
+        let Ok(worksheet) = self.model.get_model().workbook.worksheet(sheet.0) else {
+            return true;
+        };
+        let mut styled = false;
+        for_each_within(&worksheet.sheet_data, range, |_, _, cell| {
+            styled |= cell.get_style() != 0;
+        });
+        styled
     }
 
     // Fills each line of `rest` as one undo step. A line whose source holds a plain formula
@@ -1322,7 +1298,7 @@ impl Engine for Workbook {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| rejected("clipboard payload lacks csv".to_string()))?
             .to_string();
-        let styled = carries_style(&payload);
+        let styled = self.range_has_style(sheet, range);
         Ok(Copied {
             text,
             payload,
@@ -1426,7 +1402,7 @@ impl Engine for Workbook {
             .collect();
         let styled = style_sources
             .iter()
-            .any(|(source, _)| self.cell_has_style(sheet, *source));
+            .any(|(source, _)| self.range_has_style(sheet, Range::single(*source)));
         self.fill_lines(sheet, rest, lines, &[], &style_sources, |model, pos| {
             let (from_row, from_col) = if down {
                 (source_line, u32::from(pos.col.get()))

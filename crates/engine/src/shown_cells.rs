@@ -1,3 +1,4 @@
+use ironcalc::base::types::Cell;
 use zenkai_types::{CellPos, Range, SheetId};
 
 use crate::error::EngineError;
@@ -12,11 +13,34 @@ pub struct ShownCells {
     pub cells: Vec<(CellPos, String)>,
 }
 
+// What a file that cannot hold formulas takes from a sheet: the shown cells, and where the
+// formulas are, even those that show nothing.
+pub struct FileCells {
+    pub shown: ShownCells,
+    pub formulas: Vec<CellPos>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpillCells {
+    Included,
+    Left,
+}
+
 impl Workbook {
     // What a sheet shows, spilled array cells included, for writing it out cell by cell.
     // The cost follows the cells the sheet holds, never the area up to its end.
     pub fn shown_cells(&self, sheet: SheetId) -> Result<ShownCells, EngineError> {
-        let end = self.used_end(sheet);
+        Ok(self.scan(sheet, SpillCells::Included)?.shown)
+    }
+
+    // As `shown_cells`, but what a dynamic array formula spilled is left out, as the formula that
+    // makes it is what the file holds; the end is that of the cells that remain.
+    pub fn file_cells(&self, sheet: SheetId) -> Result<FileCells, EngineError> {
+        self.scan(sheet, SpillCells::Left)
+    }
+
+    fn scan(&self, sheet: SheetId, spills: SpillCells) -> Result<FileCells, EngineError> {
+        let used = self.used_end(sheet);
         let ws = self
             .model
             .get_model()
@@ -24,19 +48,35 @@ impl Workbook {
             .worksheet(sheet.0)
             .map_err(|_| EngineError::UnknownSheet(sheet))?;
         let mut positions =
-            content_cells_within(&ws.sheet_data, Range::new(CellPos::default(), end));
+            content_cells_within(&ws.sheet_data, Range::new(CellPos::default(), used));
         positions.sort_unstable_by_key(|pos| (pos.row, pos.col));
-        let cells = positions
-            .into_iter()
-            .map(|pos| {
-                let text = self
-                    .formatted_text(sheet, pos)
-                    .unwrap_or_else(|| UNREADABLE_CELL.to_string());
-                (pos, text)
-            })
-            .filter(|(_, text)| !text.is_empty())
-            .collect();
-        Ok(ShownCells { end, cells })
+        let mut cells = Vec::new();
+        let mut formulas = Vec::new();
+        let mut end = CellPos::default();
+        for pos in positions {
+            let cell = ws.sheet_data.get(row_i32(pos.row), col_i32(pos.col));
+            if spills == SpillCells::Left && matches!(cell, Some(Cell::SpillCell(_))) {
+                continue;
+            }
+            if cell.is_some_and(|cell| cell.has_formula()) {
+                formulas.push(pos);
+            }
+            end = CellPos::new(end.row.max(pos.row), end.col.max(pos.col));
+            let text = self
+                .formatted_text(sheet, pos)
+                .unwrap_or_else(|| UNREADABLE_CELL.to_string());
+            if !text.is_empty() {
+                cells.push((pos, text));
+            }
+        }
+        let end = match spills {
+            SpillCells::Included => used,
+            SpillCells::Left => end,
+        };
+        Ok(FileCells {
+            shown: ShownCells { end, cells },
+            formulas,
+        })
     }
 
     pub(crate) fn formatted_text(&self, sheet: SheetId, pos: CellPos) -> Option<String> {
@@ -103,6 +143,26 @@ mod tests {
                 (pos(2, 2), "3"),
             ]
         );
+    }
+
+    #[test]
+    fn a_file_leaves_out_what_a_formula_spilled_and_finds_formulas_that_show_nothing() {
+        let mut workbook = Workbook::new_empty().unwrap();
+        workbook
+            .set_input(SheetId(0), pos(0, 0), "=SEQUENCE(3)")
+            .unwrap();
+        workbook.set_input(SheetId(0), pos(0, 2), "=\"\"").unwrap();
+        workbook.set_input(SheetId(0), pos(0, 3), "4").unwrap();
+        let file = workbook.file_cells(SheetId(0)).unwrap();
+        let texts: Vec<(CellPos, &str)> = file
+            .shown
+            .cells
+            .iter()
+            .map(|(pos, text)| (*pos, text.as_str()))
+            .collect();
+        assert_eq!(texts, vec![(pos(0, 0), "1"), (pos(0, 3), "4")]);
+        assert_eq!(file.shown.end, pos(0, 3));
+        assert_eq!(file.formulas, vec![pos(0, 0), pos(0, 2)]);
     }
 
     #[test]

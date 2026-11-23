@@ -20,10 +20,8 @@ pub struct CachedModel {
     format_edits: FormatEdits,
 }
 
-// How many commands that can change what a CSV cannot hold ran on this workbook since it was
-// built or woken: number formats, other styles and sizes, and rows or columns inserted or
-// deleted. Undo does not take them back, so a count above zero means something may have
-// changed, never that nothing did.
+// Commands that may change what a CSV cannot hold, counted since the workbook was built or
+// woken. Undo takes none back, so a count above zero means something may have changed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FormatEdits {
     pub numbers: u64,
