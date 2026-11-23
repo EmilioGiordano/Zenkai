@@ -105,6 +105,9 @@ pub struct ParsedCsv {
     pub encoding: Encoding,
     pub line_ending: LineEnding,
     pub ends_with_newline: bool,
+    // The empty lines of the file could not be put back among its rows, so their places are
+    // unknown and writing the rows back would change the file.
+    pub shape_unknown: bool,
     // Some bytes were not valid in the encoding and were replaced, so the rows are not the
     // file's own text and writing them back would change it.
     pub lossy: bool,
@@ -221,15 +224,16 @@ fn detect_line_ending(text: &str, delimiter: Delimiter) -> LineEnding {
     LineEnding::Crlf
 }
 
-// The csv reader skips empty lines. Reading the text the way it does (a quote opens a quoted
-// field only at a field's start, and `\n`, `\r\n` and a lone `\r` all end a line) finds them:
-// for each, how many records came before it, and how many records there are in all.
+// The csv reader skips empty lines, so they are found by reading the text as it does. For each,
+// how many records came before it; and how many records there are in all.
 struct EmptyLines {
     after_records: Vec<usize>,
     records: usize,
 }
 
-fn empty_lines(text: &str, delimiter: Delimiter) -> EmptyLines {
+// Records and empty lines together may not pass a sheet's rows, checked as they are counted so
+// a file of bare line breaks cannot grow the list.
+fn empty_lines(text: &str, delimiter: Delimiter) -> Result<EmptyLines, CsvError> {
     let delimiter = char::from(delimiter.byte());
     let mut found = EmptyLines {
         after_records: Vec::new(),
@@ -265,6 +269,9 @@ fn empty_lines(text: &str, delimiter: Delimiter) -> EmptyLines {
                 } else {
                     found.after_records.push(found.records);
                 }
+                if found.records + found.after_records.len() > MAX_ROWS as usize {
+                    return Err(CsvError::TooManyCells);
+                }
                 line_has_content = false;
                 field_start = true;
             }
@@ -277,17 +284,21 @@ fn empty_lines(text: &str, delimiter: Delimiter) -> EmptyLines {
     if line_has_content {
         found.records += 1;
     }
-    found
+    Ok(found)
 }
 
-// Puts the empty lines back among the records. If the two readings disagree about how many
-// records there are, as they can on malformed quoting, the empty lines are left out.
+// Puts the empty lines back among the records, and says whether their places are unknown: the
+// two readings counted different records, as they can on malformed quoting, so the empty lines
+// cannot be put back.
 fn with_empty_lines(
     records: Vec<Vec<String>>,
     empty: &EmptyLines,
-) -> Result<Vec<Vec<String>>, CsvError> {
-    if empty.after_records.is_empty() || empty.records != records.len() {
-        return Ok(records);
+) -> Result<(Vec<Vec<String>>, bool), CsvError> {
+    if empty.after_records.is_empty() {
+        return Ok((records, false));
+    }
+    if empty.records != records.len() {
+        return Ok((records, true));
     }
     if records.len() + empty.after_records.len() > MAX_ROWS as usize {
         return Err(CsvError::TooManyCells);
@@ -301,7 +312,7 @@ fn with_empty_lines(
         rows.push(record);
     }
     rows.extend(empties.map(|_| Vec::new()));
-    Ok(rows)
+    Ok((rows, false))
 }
 
 fn count_outside_quotes(line: &str, delimiter: char) -> usize {
@@ -361,13 +372,14 @@ pub fn parse_csv(bytes: &[u8], hint: Option<Delimiter>) -> Result<ParsedCsv, Csv
             .collect::<Result<Vec<_>, _>>()?;
         records.push(row);
     }
-    let rows = with_empty_lines(records, &empty_lines(&text, delimiter))?;
+    let (rows, shape_unknown) = with_empty_lines(records, &empty_lines(&text, delimiter)?)?;
     Ok(ParsedCsv {
         rows,
         delimiter,
         encoding,
         line_ending,
         ends_with_newline,
+        shape_unknown,
         lossy,
     })
 }
@@ -467,6 +479,44 @@ mod tests {
             rows("5\" pipe\n\nz"),
             [row(&["5\" pipe"]), empty, row(&["z"])]
         );
+    }
+
+    #[test]
+    fn a_file_of_bare_line_breaks_is_refused_before_it_fills_memory() {
+        let breaks = "\n".repeat(MAX_ROWS as usize + 1);
+        assert!(matches!(
+            parse_csv(breaks.as_bytes(), Some(Delimiter::Comma)),
+            Err(CsvError::TooManyCells)
+        ));
+        let fits = "\n".repeat(MAX_ROWS as usize - 1) + "a\n";
+        assert_eq!(
+            parse_csv(fits.as_bytes(), Some(Delimiter::Comma))
+                .unwrap()
+                .rows
+                .len(),
+            MAX_ROWS as usize
+        );
+    }
+
+    #[test]
+    fn empty_lines_that_cannot_be_placed_make_the_shape_unknown() {
+        let record = vec![vec!["a".to_string()]];
+        let disagreeing = EmptyLines {
+            after_records: vec![0],
+            records: 3,
+        };
+        let (rows, unknown) = with_empty_lines(record.clone(), &disagreeing).unwrap();
+        assert!(unknown);
+        assert_eq!(rows, record);
+        let agreeing = EmptyLines {
+            after_records: vec![0],
+            records: 1,
+        };
+        let (rows, unknown) = with_empty_lines(record, &agreeing).unwrap();
+        assert!(!unknown);
+        assert_eq!(rows.len(), 2);
+        let parsed = parse_csv(b"a\n\nb\n", Some(Delimiter::Comma)).unwrap();
+        assert!(!parsed.shape_unknown);
     }
 
     #[test]

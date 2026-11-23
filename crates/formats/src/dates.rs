@@ -78,6 +78,46 @@ fn parts(field: &str) -> Option<(u32, u32, u32)> {
     (first >= 1 && second >= 1).then_some((first, second, year))
 }
 
+// The serial number a text stands for when read as a date in a file with this order: year
+// first (2026-10-08) or a number, a number and a year (10/8/2026) read in `order`. `None` for
+// anything else, including a date with a time or with words.
+pub fn date_serial(text: &str, order: DateOrder) -> Option<f64> {
+    let separator = text.chars().find(|c| matches!(c, '/' | '-' | '.'))?;
+    let pieces: Vec<&str> = text.split(separator).collect();
+    let year_first = pieces.first().is_some_and(|first| first.len() == 4);
+    let (year, month, day) = if year_first {
+        let [a, b, c] = pieces[..] else {
+            return None;
+        };
+        let number = |piece: &str| {
+            (piece.len() <= 2 && piece.bytes().all(|b| b.is_ascii_digit()))
+                .then(|| piece.parse::<u32>().ok())
+                .flatten()
+        };
+        let year = (a.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| a.parse::<u32>().ok())
+            .flatten()?;
+        (year, number(b)?, number(c)?)
+    } else {
+        let (first, second, year) = parts(text)?;
+        match order {
+            DateOrder::DayFirst => (year, second, first),
+            DateOrder::MonthFirst => (year, first, second),
+        }
+    };
+    if !valid(day, month, year) {
+        return None;
+    }
+    let (y, m, d) = (i64::from(year), i64::from(month), i64::from(day));
+    let y = y - i64::from(m <= 2);
+    let era = y.div_euclid(400);
+    let year_of_era = y - era * 400;
+    let day_of_year = (153 * (m + if m > 2 { -3 } else { 9 }) + 2) / 5 + d - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let serial = era * 146_097 + day_of_era - 719_468 + 25_569;
+    (serial >= 61).then_some(serial as f64)
+}
+
 // The date an Excel serial number stands for, as yyyy-mm-dd. Serials below 61 are left out:
 // Excel counts a 29 February 1900 that never existed.
 pub fn iso_date(serial: f64) -> Option<String> {
@@ -176,6 +216,23 @@ mod tests {
         assert_eq!(iso_date(2_958_465.0).as_deref(), Some("9999-12-31"));
         for serial in [60.0, 0.0, -1.0, 46_303.5, 2_958_466.0, f64::NAN] {
             assert_eq!(iso_date(serial), None, "{serial}");
+        }
+    }
+
+    #[test]
+    fn a_text_is_the_serial_of_the_date_it_reads_as_in_a_files_order() {
+        let read = |text: &str, order| date_serial(text, order);
+        assert_eq!(read("10/8/2026", DateOrder::MonthFirst), Some(46_303.0));
+        assert_eq!(read("10/8/2026", DateOrder::DayFirst), Some(46_244.0));
+        assert_eq!(read("2026-10-08", DateOrder::DayFirst), Some(46_303.0));
+        assert_eq!(read("2026/10/8", DateOrder::MonthFirst), Some(46_303.0));
+        assert_eq!(read("8.10.2026", DateOrder::DayFirst), Some(46_303.0));
+        for text in ["8 October 2026", "2026-10-08 12:00", "13/13/2026", "x", ""] {
+            assert_eq!(read(text, DateOrder::MonthFirst), None, "{text}");
+        }
+        for serial in [61.0, 25_569.0, 46_303.0, 2_958_465.0] {
+            let iso = iso_date(serial).unwrap();
+            assert_eq!(read(&iso, DateOrder::DayFirst), Some(serial), "{iso}");
         }
     }
 
