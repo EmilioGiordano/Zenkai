@@ -12,7 +12,7 @@ pub use csv_format::{
     parse_csv,
 };
 pub use csv_guess::{DecimalMark, Guess, apply, guess, import_input, number_text, stands_for};
-pub use csv_write::{CsvFormat, CsvWriter, write_csv};
+pub use csv_write::{CsvFormat, CsvWriter, neutralize, write_csv};
 pub use dates::{
     DateOrder, date_serial, day_first_field, detect_date_order, iso_date, normalize_day_first,
 };

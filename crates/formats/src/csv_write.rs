@@ -250,7 +250,7 @@ impl<W: Write> CsvWriter<W> {
 
 // Cells that start like a formula are prefixed so another spreadsheet opening the
 // export shows the text instead of evaluating it (CSV formula injection).
-fn neutralize(text: &str) -> Cow<'_, str> {
+pub fn neutralize(text: &str) -> Cow<'_, str> {
     match text.chars().next() {
         Some('=' | '+' | '-' | '@' | '\t' | '\r') if text.parse::<f64>().is_err() => {
             Cow::Owned(format!("'{text}"))
