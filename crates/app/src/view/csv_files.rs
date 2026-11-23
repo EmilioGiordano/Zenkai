@@ -8,22 +8,32 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Overwrite, Severity, Workspace, file_job_refusal};
-use crate::csv_options::{CsvBinding, Losses};
-use crate::csv_save::{CsvSave, CsvSaveRequest, save_csv_file};
+use crate::csv_export_size::ExportSize;
+use crate::csv_options::{CsvBinding, Losses, Structure};
+use crate::csv_save::{CsvSave, CsvSaveRequest, LargeWrite, save_csv_file};
 use crate::document::{ChangedFile, Document, FileJob};
 use crate::failure::{offer_another_location, save_failure};
 use crate::job_pill::LongJob;
 use crate::pending_save::{AfterJob, JobEnd};
+use crate::sidebar_item::human_size;
 
 // Windows makes the first answer the default button, so Cancel goes first.
 const KEEP_CSV: usize = 1;
 const SAVE_AS_XLSX: usize = 2;
+const LARGE_SAVE: usize = 1;
 
 fn loss_answers() -> [PromptButton; 3] {
     [
         PromptButton::cancel(t!("button.cancel")),
         PromptButton::new(t!("button.keep_csv")),
         PromptButton::new(t!("button.save_as_xlsx")),
+    ]
+}
+
+fn large_answers() -> [PromptButton; 2] {
+    [
+        PromptButton::cancel(t!("button.cancel")),
+        PromptButton::new(t!("button.save")),
     ]
 }
 
@@ -61,6 +71,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let large = if self.large_csv_confirmed.remove(&id) {
+            LargeWrite::Confirmed
+        } else {
+            LargeWrite::Ask
+        };
         let Some(document) = self.documents.get_mut(id) else {
             self.save_ended(id, false, window, cx);
             return;
@@ -85,6 +100,7 @@ impl Workspace {
             sheets: run.sheets,
             sheet: document.sheet,
             changed,
+            large,
             guard: document.file_guard(),
         };
         let cancel = Arc::new(AtomicBool::new(false));
@@ -152,10 +168,14 @@ impl Workspace {
             Ok(CsvSave::Written(seen, options)) => {
                 document.saved_over_file(Vec::new());
                 document.guard_file(seen);
+                let edited_meanwhile = document.edit_count() != edits_at_start;
                 if let Some(binding) = document.csv.as_mut() {
                     binding.options.get_or_insert(options);
+                    // The file now has the sheet's rows, unless an edit came in while it wrote.
+                    if !edited_meanwhile {
+                        binding.structure = Structure::Kept;
+                    }
                 }
-                let edited_meanwhile = document.edit_count() != edits_at_start;
                 document.dirty = edited_meanwhile;
                 if shown {
                     window.set_window_title(&self.documents.shown_title());
@@ -187,13 +207,18 @@ impl Workspace {
                 }
                 return;
             }
+            Ok(CsvSave::TooLarge(size)) => {
+                self.flush_edits(id, cx);
+                self.confirm_large_csv(id, path, size, changed, window, cx);
+                return;
+            }
             Ok(CsvSave::FileChanged) => {
                 self.flush_edits(id, cx);
                 self.confirm_changed_file(id, path, Overwrite::InPlace, window, cx);
                 return;
             }
             Err(EngineError::Cancelled) => {
-                self.notify(Severity::Info, t!("notice.export_cancelled"), cx);
+                self.notify(Severity::Info, t!("notice.save_cancelled"), cx);
                 self.flush_edits(id, cx);
                 self.save_ended(id, false, window, cx);
                 return;
@@ -214,6 +239,53 @@ impl Workspace {
         if follow_up == AfterJob::SaveAgain {
             self.save_again(id, window, cx);
         }
+    }
+
+    fn confirm_large_csv(
+        &mut self,
+        id: WorkbookId,
+        path: PathBuf,
+        size: ExportSize,
+        changed: ChangedFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let detail = t!(
+            "save.large_detail",
+            rows = size.rows,
+            columns = size.columns,
+            size = human_size(size.bytes),
+            cells = size.cells
+        );
+        let answer = self.ask(
+            PromptLevel::Warning,
+            t!("save.large_title"),
+            Some(&detail),
+            &large_answers(),
+            window,
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let choice = answer.await;
+            let update = this.update_in(cx, |this, window, cx| {
+                let confirmed = this
+                    .documents
+                    .get(id)
+                    .and_then(|document| document.csv)
+                    .filter(|_| choice == Some(LARGE_SAVE));
+                match confirmed {
+                    Some(binding) => {
+                        this.large_csv_confirmed.insert(id);
+                        this.save_csv(id, path, binding, changed, window, cx);
+                    }
+                    None => this.save_ended(id, false, window, cx),
+                }
+            });
+            if let Err(error) = update {
+                tracing::debug!(%error, "workspace closed during the large save prompt");
+            }
+        })
+        .detach();
     }
 
     fn confirm_csv_loss(

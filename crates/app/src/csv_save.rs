@@ -1,20 +1,30 @@
-use std::borrow::Cow;
 use std::path::PathBuf;
 use std::sync::RwLock;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use zenkai_engine::{Engine, EngineError, ShownCells, UNREADABLE_CELL, Workbook, is_date_format};
+use zenkai_engine::{
+    Engine, EngineError, FileCells, FormatEdits, ShownCells, UNREADABLE_CELL, Workbook,
+    is_date_format,
+};
 use zenkai_formats::{
-    DateOrder, DecimalMark, FinalNewline, date_serial, day_first_field, decimal_comma_field,
-    iso_date, number_value, same_value,
+    FinalNewline, date_serial, iso_date, number_text, stands_for, stored_number_text,
 };
 use zenkai_i18n::t;
 use zenkai_types::{CellPos, ColIdx, Contents, RowIdx, SheetId, ValueKind};
 
+use crate::csv_export_size::ExportSize;
 use crate::csv_io::{self, AsRead, BaselineRead, Layout, Shape};
 use crate::csv_options::{CsvBinding, CsvOptions, Losses, Structure};
 use crate::document::{ChangedFile, file_changed_since, read_shared};
 use crate::entry::FileSeen;
+
+const CANCEL_CHECK_EVERY: usize = 4096;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LargeWrite {
+    Ask,
+    Confirmed,
+}
 
 pub struct CsvSaveRequest {
     pub path: PathBuf,
@@ -22,30 +32,20 @@ pub struct CsvSaveRequest {
     pub sheets: usize,
     pub sheet: SheetId,
     pub changed: ChangedFile,
+    pub large: LargeWrite,
     pub guard: Option<FileSeen>,
 }
 
 pub enum CsvSave {
     Written(FileSeen, CsvOptions),
+    // Nothing was written, from here on: the user decides, or the file is not ours to write.
     WouldLose(Losses),
+    TooLarge(ExportSize),
     FileChanged,
+    // Decoding replaced bytes, so writing the file back would change it.
     LossyFile,
+    // The file's empty lines could not be placed among its rows.
     ShapeUnknown,
-}
-
-fn import_input<'a>(field: &'a str, options: &CsvOptions) -> Cow<'a, str> {
-    let mut text = Cow::Borrowed(field);
-    if options.date_order == DateOrder::DayFirst
-        && let Some(rewritten) = day_first_field(&text)
-    {
-        text = Cow::Owned(rewritten);
-    }
-    if options.decimal_mark == DecimalMark::Comma
-        && let Some(rewritten) = decimal_comma_field(&text)
-    {
-        text = Cow::Owned(rewritten);
-    }
-    text
 }
 
 fn field_at(rows: &mut [Vec<String>], pos: CellPos) -> Option<&mut String> {
@@ -53,70 +53,26 @@ fn field_at(rows: &mut [Vec<String>], pos: CellPos) -> Option<&mut String> {
     rows.get_mut(row)?.get_mut(usize::from(pos.col.get()))
 }
 
-// A number the file's reader takes back as the same one: no grouping, which it could not tell
-// from decimal commas; in a decimal-comma file a plain decimal, keeping only a percent sign.
-fn number_text(source: &str, mark: DecimalMark) -> String {
-    let (body, percent) = match source.strip_suffix('%') {
-        Some(body) => (body, true),
-        None => (source, false),
-    };
-    let ungrouped = body.replace(',', "");
-    let Some(value) = number_value(&ungrouped) else {
-        return source.to_string();
-    };
-    match mark {
-        DecimalMark::Dot => format!("{ungrouped}{}", if percent { "%" } else { "" }),
-        DecimalMark::Comma => format!(
-            "{}{}",
-            value.to_string().replace('.', ","),
-            if percent { "%" } else { "" }
-        ),
-    }
-}
-
-// The engine writes a formula back in capitals and without spaces, except inside quotes.
-fn normalized_formula(text: &str) -> Option<String> {
-    if !text.starts_with('=') {
-        return None;
-    }
-    let mut normalized = String::with_capacity(text.len());
-    let mut quote: Option<char> = None;
-    for c in text.chars() {
-        match quote {
-            Some(open) => {
-                normalized.push(c);
-                if c == open {
-                    quote = None;
-                }
-            }
-            None if c == '"' || c == '\'' => {
-                quote = Some(c);
-                normalized.push(c);
-            }
-            None if c.is_whitespace() => {}
-            None => normalized.extend(c.to_uppercase()),
-        }
-    }
-    Some(normalized)
-}
-
-// Whether the engine's input stands for what importing the file's field gives.
-fn stands_for(input: &str, field: &str, options: &CsvOptions) -> bool {
-    same_value(input, &import_input(field, options))
-        || normalized_formula(field)
-            .is_some_and(|formula| normalized_formula(input) == Some(formula))
-}
-
 // A cell whose input stands for what importing its position's field gives is unedited and takes
 // that field's text. After rows or columns move, the values differ and the cell counts as edited.
 fn take_unedited(
     text: &mut String,
     input: &str,
+    stored: Option<f64>,
     field: Option<&mut String>,
     options: &CsvOptions,
 ) -> bool {
+    let unedited = |field: &str| {
+        stands_for(
+            input,
+            field,
+            options.decimal_mark,
+            options.date_order,
+            stored,
+        )
+    };
     match field.filter(|field| !field.is_empty()) {
-        Some(field) if stands_for(input, field, options) => {
+        Some(field) if unedited(field.as_str()) => {
             *text = std::mem::take(field);
             true
         }
@@ -138,11 +94,17 @@ fn restore_fields_that_show_nothing(
     shown: &mut ShownCells,
     file: &mut [Vec<String>],
     options: &CsvOptions,
-) {
+    cancel: &AtomicBool,
+) -> Result<(), EngineError> {
     let mut kept = Vec::new();
     let mut visited = shown.cells.iter().map(|(pos, _)| *pos).peekable();
+    let mut checked = 0usize;
     for (row, fields) in file.iter_mut().enumerate() {
         for (col, field) in fields.iter_mut().enumerate() {
+            checked += 1;
+            if checked.is_multiple_of(CANCEL_CHECK_EVERY) && cancel.load(Ordering::Relaxed) {
+                return Err(EngineError::Cancelled);
+            }
             let Some(pos) = position_of(row, col).filter(|_| !field.is_empty()) else {
                 continue;
             };
@@ -153,7 +115,14 @@ fn restore_fields_that_show_nothing(
             if visited.peek() == Some(&pos) {
                 continue;
             }
-            if stands_for(&workbook.input(sheet, pos), field, options) {
+            let input = workbook.input(sheet, pos);
+            if stands_for(
+                &input,
+                field,
+                options.decimal_mark,
+                options.date_order,
+                None,
+            ) {
                 kept.push((pos, std::mem::take(field)));
             }
         }
@@ -162,6 +131,7 @@ fn restore_fields_that_show_nothing(
     shown
         .cells
         .sort_unstable_by_key(|(pos, _)| (pos.row, pos.col));
+    Ok(())
 }
 
 // What the cell shows if the file's reader takes it as the same date, else yyyy-mm-dd. A date
@@ -173,26 +143,24 @@ fn date_text(shown: &str, serial: f64, options: &CsvOptions) -> String {
     iso_date(serial).unwrap_or_else(|| number_text(&serial.to_string(), options.decimal_mark))
 }
 
-// The text of an edited number, so that reading the file gives the same value back: what the
-// cell shows unless that rounds the value (General), then the value. A formula writes its result.
+// The text of an edited number, so that reading the file gives the same value back.
 fn edited_number_text(
     workbook: &Workbook,
     sheet: SheetId,
     pos: CellPos,
     shown: &str,
-    input: &str,
+    stored: f64,
+    formula: bool,
     options: &CsvOptions,
 ) -> String {
     let view = workbook.cell(sheet, pos);
     if let Some(serial) = view.number.filter(|_| is_date_format(&view.style.num_fmt)) {
         return date_text(shown, serial, options);
     }
-    let value = (!input.starts_with('=') && number_value(input).is_some()).then_some(input);
-    let source = match value {
-        Some(value) if !same_value(shown, value) => value,
-        _ => shown,
-    };
-    number_text(source, options.decimal_mark)
+    number_text(
+        &stored_number_text(shown, stored, formula),
+        options.decimal_mark,
+    )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -205,38 +173,65 @@ enum FormulaCells {
 struct Classified {
     shown: ShownCells,
     formulas: FormulaCells,
+    edits: FormatEdits,
 }
 
-// One read lock for the whole pass, so the cells, their inputs and the loss all describe one
-// moment; an edit waiting for the write lock waits for this pass only.
+// One read lock for the whole pass, so the cells, their inputs, the formulas and the engine's
+// counts all describe one moment; an edit waiting for the write lock waits for this pass only.
 fn classify_sheet(
     shared: &RwLock<Workbook>,
     request: &CsvSaveRequest,
     options: &CsvOptions,
     file: &mut [Vec<String>],
+    cancel: &AtomicBool,
 ) -> Result<Classified, EngineError> {
     let sheet = request.sheet;
     let workbook = read_shared(shared);
-    let mut shown = workbook.shown_cells(sheet)?;
+    let edits = workbook.format_edits();
+    let FileCells {
+        mut shown,
+        formulas: formula_cells,
+    } = workbook.file_cells(sheet)?;
     let contents = workbook.contents(sheet)?;
     let mut formulas = FormulaCells::None;
-    for (pos, text) in &mut shown.cells {
+    for (checked, (pos, text)) in shown.cells.iter_mut().enumerate() {
+        if checked.is_multiple_of(CANCEL_CHECK_EVERY) && cancel.load(Ordering::Relaxed) {
+            return Err(EngineError::Cancelled);
+        }
         if text == UNREADABLE_CELL && workbook.cell(sheet, *pos).kind == ValueKind::Error {
             return Err(EngineError::Rejected(t!("csv.unreadable_cell", cell = pos)));
         }
+        let stored = match contents(*pos) {
+            Contents::Number(number) => Some(number),
+            _ => None,
+        };
         let input = workbook.input(sheet, *pos);
-        if take_unedited(text, &input, field_at(file, *pos), options) {
+        if take_unedited(text, &input, stored, field_at(file, *pos), options) {
             continue;
         }
-        if input.starts_with('=') {
+        let formula = input.starts_with('=');
+        if formula {
             formulas = FormulaCells::Written;
         }
-        if matches!(contents(*pos), Contents::Number(_)) {
-            *text = edited_number_text(&workbook, sheet, *pos, text, &input, options);
+        if let Some(number) = stored {
+            *text = edited_number_text(&workbook, sheet, *pos, text, number, formula, options);
         }
     }
-    restore_fields_that_show_nothing(&workbook, sheet, &mut shown, file, options);
-    Ok(Classified { shown, formulas })
+    restore_fields_that_show_nothing(&workbook, sheet, &mut shown, file, options, cancel)?;
+    let shows_nothing_and_is_new = |pos: &CellPos| {
+        shown
+            .cells
+            .binary_search_by_key(&(pos.row, pos.col), |(cell, _)| (cell.row, cell.col))
+            .is_err()
+    };
+    if formula_cells.iter().any(shows_nothing_and_is_new) {
+        formulas = FormulaCells::Written;
+    }
+    Ok(Classified {
+        shown,
+        formulas,
+        edits,
+    })
 }
 
 pub fn save_csv_file(
@@ -268,26 +263,40 @@ pub fn save_csv_file(
         .iter()
         .rposition(|row| row.iter().any(|field| !field.is_empty()))
         .and_then(|last| RowIdx::new(u32::try_from(last).ok()?));
-    let classified = classify_sheet(shared, request, &options, &mut file)?;
+    let classified = classify_sheet(shared, request, &options, &mut file, cancel)?;
+    drop(file);
+    // The binding is as of the last batch, which could not read the counts while a recalculation
+    // held the workbook; these were read just now.
+    let (known, edits) = (request.binding.seen_edits, classified.edits);
     let found = Losses {
         sheets: request.sheets > 1,
         formulas: classified.formulas == FormulaCells::Written,
-        ..request.binding.introduced
+        number_formats: request.binding.introduced.number_formats || edits.numbers > known.numbers,
+        formatting: request.binding.introduced.formatting || edits.other > known.other,
     };
     if found.beyond(request.binding.accepted).any() {
         return Ok(CsvSave::WouldLose(found));
     }
-    let shape = match request.binding.structure {
-        Structure::Kept if present => Shape::File {
+    let moved =
+        request.binding.structure == Structure::Changed || edits.structure > known.structure;
+    let shape = if present && !moved {
+        Shape::File {
             row_lengths: &row_lengths,
             last_content_row,
-        },
-        _ => Shape::UsedRange,
+        }
+    } else {
+        Shape::UsedRange
     };
     let layout = Layout::AsRead(AsRead {
         shape,
         final_newline,
     });
+    if request.large == LargeWrite::Ask {
+        let size = ExportSize::of_layout(&classified.shown, &layout);
+        if size.needs_confirmation() {
+            return Ok(CsvSave::TooLarge(size));
+        }
+    }
     csv_io::write_csv_as(&request.path, &classified.shown, &options, &layout, cancel)?;
     Ok(CsvSave::Written(FileSeen::of(&request.path), options))
 }
@@ -330,6 +339,7 @@ mod tests {
             sheets,
             sheet: SheetId(0),
             changed: ChangedFile::Ask,
+            large: LargeWrite::Ask,
             guard: Some(csv.seen),
         }
     }
@@ -430,6 +440,102 @@ mod tests {
         assert_unchanged("empty.csv", b"a,\"=\"\"\"\"\"\n");
         assert_unchanged("quote.csv", b"a,'\n");
         assert_unchanged("if.csv", b"1,\"=IF(A1>5,\"\"x\"\",\"\"\"\")\"\n");
+    }
+
+    #[test]
+    fn what_a_formula_spilled_is_not_written_into_the_file() {
+        assert_unchanged("spill.csv", b"=SEQUENCE(3)\n");
+    }
+
+    #[test]
+    fn a_formula_that_shows_nothing_is_asked_about_when_typed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "typed.csv", b"a,b\n1,2\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .set_input(SheetId(0), at(1, 2), "=\"\"")
+            .unwrap();
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::WouldLose(found) if found.formulas));
+        assert_eq!(bytes, b"a,b\n1,2\n");
+    }
+
+    #[test]
+    fn a_long_id_edited_in_its_last_digit_is_written_whatever_its_length() {
+        let dir = tempfile::tempdir().unwrap();
+        for (original, edit, expected) in [
+            ("1234567890123456", "1234567890123457", "1234567890123457"),
+            (
+                "12345678901234567",
+                "12345678901234580",
+                "12345678901234580",
+            ),
+        ] {
+            let file = format!("id\n{original}\n");
+            let (path, mut load) = opened_csv(dir.path(), "id.csv", file.as_bytes());
+            let csv = load.csv.take().unwrap();
+            let (saved, bytes) = save(&path, load.workbook, &csv);
+            assert!(matches!(saved, CsvSave::Written(..)));
+            assert_eq!(bytes, file.as_bytes(), "{original} unedited");
+
+            let (path, mut load) = opened_csv(dir.path(), "id2.csv", file.as_bytes());
+            let csv = load.csv.take().unwrap();
+            load.workbook.set_input(SheetId(0), at(1, 0), edit).unwrap();
+            let (saved, bytes) = save(&path, load.workbook, &csv);
+            assert!(matches!(saved, CsvSave::Written(..)));
+            assert_eq!(bytes, format!("id\n{expected}\n").as_bytes(), "{edit}");
+        }
+    }
+
+    #[test]
+    fn a_currency_the_engine_keeps_as_text_is_not_taken_for_the_number() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "pound.csv", "p\n\u{a3}5\n".as_bytes());
+        let csv = load.csv.take().unwrap();
+        load.workbook.set_input(SheetId(0), at(1, 0), "5").unwrap();
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::Written(..)));
+        assert_eq!(bytes, b"p\n5\n");
+
+        let (path, mut load) = opened_csv(dir.path(), "seven.csv", b"p\n7\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .set_input(SheetId(0), at(1, 0), "\u{a3}7")
+            .unwrap();
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::Written(..)));
+        assert_eq!(bytes, "p\n\u{a3}7\n".as_bytes());
+    }
+
+    #[test]
+    fn an_edit_the_last_batch_could_not_count_is_found_when_the_save_reads_the_engine() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "late.csv", b"a,b\n1,2\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .set_column_width(SheetId(0), ColIdx::clamped(0), 120.0)
+            .unwrap();
+        let shared = RwLock::new(load.workbook);
+        let asked = request(&path, &csv, 1);
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::WouldLose(found) if found.formatting));
+    }
+
+    #[test]
+    fn a_crafted_wide_row_does_not_make_a_save_write_gigabytes_without_asking() {
+        let dir = tempfile::tempdir().unwrap();
+        let wide = format!("x{}\n", ",".repeat(15_999));
+        let (path, mut load) = opened_csv(dir.path(), "wide.csv", wide.as_bytes());
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .set_input(SheetId(0), at(1_000_000, 0), "y")
+            .unwrap();
+        let shared = RwLock::new(load.workbook);
+        let mut asked = request(&path, &csv, 1);
+        asked.changed = ChangedFile::Replace;
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::TooLarge(_)));
+        assert_eq!(std::fs::read(&path).unwrap(), wide.as_bytes());
     }
 
     #[test]
@@ -704,7 +810,7 @@ mod tests {
         for n in 0..1_000 {
             let mut text = "1.5".to_string();
             let field = field_at(&mut file, at(n / 40, n % 40));
-            unedited += usize::from(take_unedited(&mut text, "1.5", field, &options));
+            unedited += usize::from(take_unedited(&mut text, "1.5", Some(1.5), field, &options));
             assert_eq!(text, "1.50");
         }
         assert_eq!(unedited, 1_000);
@@ -836,34 +942,6 @@ mod tests {
         let (saved, bytes) = save(&path, load.workbook, &csv);
         assert!(matches!(saved, CsvSave::WouldLose(found) if found.formulas));
         assert_eq!(bytes, original);
-    }
-
-    #[test]
-    fn a_number_is_written_without_grouping_and_with_the_files_decimal_mark() {
-        assert_eq!(number_text("1,234.50", DecimalMark::Dot), "1234.50");
-        assert_eq!(number_text("-0.25%", DecimalMark::Comma), "-0,25%");
-        assert_eq!(number_text("v1.2.3", DecimalMark::Comma), "v1.2.3");
-    }
-
-    #[test]
-    fn a_decimal_comma_number_is_a_plain_decimal_the_import_reads_as_the_same_number() {
-        let cases = [
-            ("$1,234.50", 1234.5),
-            ("1.5E+20", 1.5e20),
-            ("-12%", -0.12),
-            ("1,234", 1234.0),
-            ("0.0000001", 1e-7),
-        ];
-        for (shown, value) in cases {
-            let written = number_text(shown, DecimalMark::Comma);
-            assert!(!written.contains(['$', 'E', 'e']), "{written}");
-            let read = decimal_comma_field(&written).unwrap_or_else(|| written.clone());
-            let read = number_value(&read).unwrap();
-            assert!(
-                (read - value).abs() <= 1e-12 * value.abs(),
-                "{shown} {written}"
-            );
-        }
     }
 
     #[test]

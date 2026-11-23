@@ -476,10 +476,8 @@ impl Document {
         true
     }
 
-    // Every edit of the workbook, from the grid, a paste or an agent, ends in a batch, so this is
-    // where a CSV learns that formatting it cannot hold was changed, or that rows or columns
-    // moved. The engine's counters only grow, so a batch that cannot read them leaves the
-    // binding as it was and the next one that can sees the difference.
+    // Every edit ends in a batch, so a CSV learns here what it cannot hold changed. The counters
+    // only grow, so a batch that cannot read them leaves the binding for the next one that can.
     fn note_format_edits(&mut self) {
         let Some(binding) = self.csv.as_mut() else {
             return;

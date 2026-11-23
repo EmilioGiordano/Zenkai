@@ -5,7 +5,7 @@ use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{FormatEdits, Kept, Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
-use crate::csv_options::CsvBinding;
+use crate::csv_options::{CsvBinding, Structure};
 use crate::document::{self, Document, FileJob, SharedWorkbook};
 use crate::entry::{CsvLoad, Entry, Link, LinkStatus, Slot};
 use crate::files;
@@ -165,6 +165,8 @@ impl Loaded {
         if let Some(csv) = self.csv {
             document.csv = Some(CsvBinding {
                 options: Some(csv.options),
+                // The workbook was read from the file just now, so its rows are the file's.
+                structure: Structure::Kept,
                 seen_edits: FormatEdits::default(),
                 ..link.csv.unwrap_or_else(|| CsvBinding::new(csv.options))
             });

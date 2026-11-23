@@ -17,10 +17,15 @@ pub struct CsvOptions {
 
 impl CsvOptions {
     pub fn exported_as(delimiter: Delimiter) -> CsvOptions {
+        let CsvFormat {
+            delimiter,
+            encoding,
+            line_ending,
+        } = CsvFormat::export(delimiter);
         CsvOptions {
             delimiter,
-            encoding: Encoding::Utf8Bom,
-            line_ending: LineEnding::Crlf,
+            encoding,
+            line_ending,
             decimal_mark: DecimalMark::Dot,
             date_order: DateOrder::MonthFirst,
         }

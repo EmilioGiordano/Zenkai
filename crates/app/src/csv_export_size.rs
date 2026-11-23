@@ -1,5 +1,7 @@
 use zenkai_engine::ShownCells;
 
+use crate::csv_io::{Layout, fields_to_write, rows_to_write};
+
 const MIN_CONFIRMED_BYTES: u64 = 100 * 1024 * 1024;
 const OUTSIZED_FACTOR: u64 = 50;
 const BYTE_ORDER_MARK_BYTES: u64 = 3;
@@ -19,12 +21,25 @@ impl ExportSize {
     pub fn of(shown: &ShownCells) -> ExportSize {
         let rows = u64::from(shown.end.row.get()) + 1;
         let columns = u64::from(shown.end.col.get()) + 1;
+        ExportSize::sized(rows, rows * columns, shown)
+    }
+
+    // What a save over the file writes: the rows and the fields its layout gives them.
+    pub fn of_layout(shown: &ShownCells, layout: &Layout) -> ExportSize {
+        let rows = u64::from(rows_to_write(shown, layout));
+        ExportSize::sized(rows, fields_to_write(shown, layout), shown)
+    }
+
+    fn sized(rows: u64, fields: u64, shown: &ShownCells) -> ExportSize {
         let text_bytes: u64 = shown.cells.iter().map(|(_, text)| text.len() as u64).sum();
-        let bytes = BYTE_ORDER_MARK_BYTES + rows * (columns - 1 + LINE_BREAK_BYTES) + text_bytes;
+        let bytes = BYTE_ORDER_MARK_BYTES
+            + fields.saturating_sub(rows)
+            + rows * LINE_BREAK_BYTES
+            + text_bytes;
         ExportSize {
             bytes,
             rows,
-            columns,
+            columns: fields.div_ceil(rows.max(1)),
             cells: shown.cells.len(),
             text_bytes,
         }

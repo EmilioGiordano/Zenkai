@@ -255,7 +255,7 @@ fn file_row_width(
 
 // Rows run to the last cell, and in a file's own shape on to the empty rows it had after its
 // content while the content still ends where it did.
-fn rows_to_write(shown: &ShownCells, layout: &Layout) -> u32 {
+pub fn rows_to_write(shown: &ShownCells, layout: &Layout) -> u32 {
     let content_rows = if shown.cells.is_empty() {
         0
     } else {
@@ -286,6 +286,41 @@ fn rows_to_write(shown: &ShownCells, layout: &Layout) -> u32 {
     }
 }
 
+// The longest row the file had, which a row it did not have is as wide as.
+pub fn widest_row(layout: &Layout) -> usize {
+    match layout {
+        Layout::AsRead(AsRead {
+            shape: Shape::File { row_lengths, .. },
+            ..
+        }) => row_lengths.iter().copied().max().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+// How many fields a write of the layout puts out, those of rows with nothing in them included.
+pub fn fields_to_write(shown: &ShownCells, layout: &Layout) -> u64 {
+    let rows = rows_to_write(shown, layout);
+    let Layout::AsRead(AsRead {
+        shape: Shape::File { row_lengths, .. },
+        ..
+    }) = layout
+    else {
+        return u64::from(rows) * (u64::from(shown.end.col.get()) + 1);
+    };
+    let widest = widest_row(layout);
+    let mut cells = shown.cells.iter().peekable();
+    let mut row_cells = Vec::new();
+    let mut fields = 0u64;
+    for row in 0..rows {
+        row_cells.clear();
+        while let Some(cell) = cells.next_if(|(pos, _)| pos.row.get() == row) {
+            row_cells.push(cell);
+        }
+        fields += file_row_width(&row_cells, row_lengths, row, widest) as u64;
+    }
+    fields
+}
+
 // Gaps between cells are written without building a string each.
 fn write_shown_rows(
     out: &mut dyn Write,
@@ -299,17 +334,12 @@ fn write_shown_rows(
         Layout::Rectangle => None,
         Layout::AsRead(as_read) => Some(as_read),
     };
-    let widest = match as_read {
-        Some(AsRead {
-            shape: Shape::File { row_lengths, .. },
-            ..
-        }) => row_lengths.iter().copied().max().unwrap_or(0),
-        _ => 0,
-    };
+    let widest = widest_row(layout);
     let mut writer = CsvWriter::in_format(out, options.format())?;
     let mut cells = shown.cells.iter().peekable();
     let mut row_cells = Vec::new();
     let rows = rows_to_write(shown, layout);
+    let mut blank_run = 0;
     for row in 0..rows {
         if cancel.load(Ordering::Relaxed) {
             return Err(ExportStop::Cancelled);
@@ -326,9 +356,10 @@ fn write_shown_rows(
             _ => sheet_width,
         };
         if width == 0 {
-            writer.write_blank_line()?;
+            blank_run += 1;
             continue;
         }
+        writer.write_blank_lines(std::mem::take(&mut blank_run))?;
         let mut next_col = 0;
         for (pos, text) in &row_cells {
             let col = usize::from(pos.col.get());
@@ -349,6 +380,7 @@ fn write_shown_rows(
             writer.end_row()?;
         }
     }
+    writer.write_blank_lines(blank_run)?;
     writer.finish()?;
     Ok(())
 }

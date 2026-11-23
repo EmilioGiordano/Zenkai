@@ -486,6 +486,23 @@ mod tests {
     }
 
     #[test]
+    fn a_workbook_rebuilt_from_its_csv_has_the_rows_of_the_file_again() {
+        let mut documents = documents();
+        let mut record = file(Some("prices.csv"), true);
+        record.csv = Some(csv_binding());
+        let id = documents.restore(&session_with(record), None).unwrap();
+        let mut read = loaded(id);
+        read.csv = Some(CsvLoad {
+            options: read_options(),
+            seen: FileSeen::unknown(),
+        });
+        documents.install(read);
+        let binding = documents.active().unwrap().csv.unwrap();
+        assert_eq!(binding.structure, Structure::Kept);
+        assert_eq!(binding.introduced, csv_binding().introduced);
+    }
+
+    #[test]
     fn a_document_with_a_delimited_path_is_always_a_csv_with_options_still_to_find() {
         let mut documents = documents();
         let id = open_file(&mut documents, "export.tsv");
