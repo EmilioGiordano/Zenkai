@@ -4,7 +4,7 @@ use crate::error::EngineError;
 use crate::model::content_cells_within;
 use crate::workbook::{Engine, Workbook, col_i32, row_i32};
 
-pub(crate) const UNREADABLE_CELL: &str = "#ERROR";
+pub const UNREADABLE_CELL: &str = "#ERROR";
 
 pub struct ShownCells {
     pub end: CellPos,

@@ -789,6 +789,10 @@ impl Workbook {
         self.saved.current().map(|file| file.stamp)
     }
 
+    pub fn format_edits(&self) -> crate::model::FormatEdits {
+        self.model.format_edits()
+    }
+
     // Call on a background thread after building or editing, so the UI thread never walks a sheet.
     pub fn warm_used_areas(&self) {
         for sheet in self.sheets() {
@@ -1379,9 +1383,15 @@ impl Engine for Workbook {
         let Some(target) = self.style_target(sheet, range)? else {
             return Ok(());
         };
-        self.model
+        let cleared = self
+            .model
             .range_clear_formatting(&area(sheet, target))
-            .map_err(rejected)
+            .map_err(rejected);
+        if cleared.is_ok() {
+            self.model.count_number_format_edit();
+            self.model.count_style_edit();
+        }
+        cleared
     }
 
     fn clear_all(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
@@ -1439,7 +1449,13 @@ impl Engine for Workbook {
             StyleChange::Wrap(on) => ("alignment.wrap_text", flag(on)),
             // Excel's font sizes run from 1 to 409 points.
             StyleChange::FontSize(points) => ("font.size", points.clamp(1, 409).to_string()),
-            StyleChange::Borders(preset) => return self.apply_borders(sheet, range, preset),
+            StyleChange::Borders(preset) => {
+                let applied = self.apply_borders(sheet, range, preset);
+                if applied.is_ok() {
+                    self.model.count_style_edit();
+                }
+                return applied;
+            }
             StyleChange::FontColor(color) => ("font.color", hex(color)),
             StyleChange::Fill(color) => ("fill.fg_color", hex(color)),
             StyleChange::Align(align) => (
@@ -1455,11 +1471,20 @@ impl Engine for Workbook {
             StyleChange::NumberFormat(format) => ("num_fmt", format.code().to_string()),
         };
         let target = self.formattable(sheet, range)?;
-        self.model
+        let applied = self
+            .model
             .write_within(sheet, target, |model| {
                 model.update_range_style(&area(sheet, target), path, &value)
             })
-            .map_err(rejected)
+            .map_err(rejected);
+        if applied.is_ok() {
+            if matches!(change, StyleChange::NumberFormat(_)) {
+                self.model.count_number_format_edit();
+            } else {
+                self.model.count_style_edit();
+            }
+        }
+        applied
     }
 
     fn set_number_format(
@@ -1470,11 +1495,16 @@ impl Engine for Workbook {
     ) -> Result<(), EngineError> {
         check_format_code(code)?;
         let target = self.formattable(sheet, range)?;
-        self.model
+        let applied = self
+            .model
             .write_within(sheet, target, |model| {
                 model.update_range_style(&area(sheet, target), "num_fmt", code)
             })
-            .map_err(rejected)
+            .map_err(rejected);
+        if applied.is_ok() {
+            self.model.count_number_format_edit();
+        }
+        applied
     }
 
     // IronCalc has no batch write, so each cell is its own undo step; evaluation waits
@@ -1947,7 +1977,7 @@ fn has_day_or_year_letter(code: &str) -> bool {
     false
 }
 
-fn is_date_format(code: &str) -> bool {
+pub fn is_date_format(code: &str) -> bool {
     use ironcalc::base::formatter::parser::{ParsePart, Parser, TextToken};
     // The lexer reads only lowercase d, m and y; Excel accepts "YYYY-MM-DD" too. Brackets
     // keep their case because "Color 3" and "[H]" are read as written.
@@ -2107,6 +2137,31 @@ mod tests {
     use super::*;
     use ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX;
     use ironcalc::error::XlsxError;
+
+    #[test]
+    fn successful_format_commands_are_counted_and_typing_is_not() {
+        let mut book = Workbook::new_empty().unwrap();
+        let a1 = Range::single(CellPos::default());
+        book.set_input(SheetId(0), CellPos::default(), "0.5")
+            .unwrap();
+        assert_eq!(book.format_edits(), crate::model::FormatEdits::default());
+        book.set_number_format(SheetId(0), a1, "0.00%").unwrap();
+        book.apply_style(SheetId(0), a1, StyleChange::Bold(true))
+            .unwrap();
+        book.apply_style(
+            SheetId(0),
+            a1,
+            StyleChange::NumberFormat(zenkai_types::NumberFormat::Number),
+        )
+        .unwrap();
+        let counted = book.format_edits();
+        assert_eq!((counted.numbers, counted.other), (2, 1));
+        assert!(
+            book.set_number_format(SheetId(0), a1, &"x".repeat(300))
+                .is_err()
+        );
+        assert_eq!(book.format_edits(), counted);
+    }
 
     #[test]
     fn date_formats_ignore_quoted_escaped_and_bracketed_letters() {

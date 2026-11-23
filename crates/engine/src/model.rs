@@ -17,6 +17,16 @@ use crate::workbook::{col_i32, row_i32};
 pub struct CachedModel {
     model: UserModel<'static>,
     extents: Mutex<HashMap<SheetId, Extent>>,
+    format_edits: FormatEdits,
+}
+
+// How many formatting commands succeeded on this workbook since it was built or woken: the
+// number-format ones apart from the rest. Undo does not take them back, so a count above zero
+// means a format may have been changed, never that none was.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FormatEdits {
+    pub numbers: u64,
+    pub other: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -138,7 +148,20 @@ impl CachedModel {
         CachedModel {
             model,
             extents: Mutex::new(HashMap::new()),
+            format_edits: FormatEdits::default(),
         }
+    }
+
+    pub fn format_edits(&self) -> FormatEdits {
+        self.format_edits
+    }
+
+    pub(crate) fn count_number_format_edit(&mut self) {
+        self.format_edits.numbers += 1;
+    }
+
+    pub(crate) fn count_style_edit(&mut self) {
+        self.format_edits.other += 1;
     }
 
     // The cache only holds derived values, so a lock poisoned by a panicked reader
