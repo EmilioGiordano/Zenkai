@@ -6,7 +6,7 @@ use ironcalc::base::cell_store::CellStore;
 use ironcalc::base::expressions::types::Area;
 use ironcalc::base::types::Cell;
 use ironcalc::base::{StepCells, UserModel};
-use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId};
+use zenkai_types::{CellPos, ColIdx, LineOp, Range, RowIdx, SheetId};
 
 use crate::workbook::{col_i32, row_i32};
 
@@ -18,7 +18,12 @@ pub struct CachedModel {
     model: UserModel<'static>,
     extents: Mutex<HashMap<SheetId, Extent>>,
     format_edits: FormatEdits,
+    line_ops: Vec<LineOp>,
 }
+
+// A save maps the sheet's rows back to the file's through these, so a long run of them is not
+// kept: past the bound the log is lost and the cells count as moved.
+const MAX_LOGGED_LINE_OPS: usize = 64;
 
 // Commands that may change what a CSV cannot hold, counted since the workbook was built or
 // woken. Undo takes none back, so a count above zero means something may have changed.
@@ -26,7 +31,10 @@ pub struct CachedModel {
 pub struct FormatEdits {
     pub numbers: u64,
     pub other: u64,
+    // Rows or columns inserted or deleted.
     pub structure: u64,
+    // Cells rearranged in a way no row or column operation describes.
+    pub moved: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -149,6 +157,7 @@ impl CachedModel {
             model,
             extents: Mutex::new(HashMap::new()),
             format_edits: FormatEdits::default(),
+            line_ops: Vec::new(),
         }
     }
 
@@ -164,8 +173,26 @@ impl CachedModel {
         self.format_edits.other += 1;
     }
 
-    pub(crate) fn count_structure_edit(&mut self) {
+    pub(crate) fn record_line_op(&mut self, op: LineOp) {
         self.format_edits.structure += 1;
+        if self.line_ops.len() < MAX_LOGGED_LINE_OPS {
+            self.line_ops.push(op);
+        }
+    }
+
+    pub(crate) fn count_moved_edit(&mut self) {
+        self.format_edits.moved += 1;
+    }
+
+    // The operations after the first `seen`; `None` when the log lost some.
+    pub fn line_ops_since(&self, seen: u64) -> Option<Vec<LineOp>> {
+        let kept = self.line_ops.len();
+        let all = usize::try_from(self.format_edits.structure).ok()?;
+        if all > kept {
+            return None;
+        }
+        let from = usize::try_from(seen).map_or(kept, |seen| seen.min(kept));
+        Some(self.line_ops[from..].to_vec())
     }
 
     pub(crate) fn set_format_edits(&mut self, edits: FormatEdits) {
