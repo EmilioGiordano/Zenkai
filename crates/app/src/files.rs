@@ -11,7 +11,7 @@ use zenkai_engine::{
     Engine, EngineError, ShownCells, Stamp, Unsupported, Workbook, XlsxReader,
     open_xlsx_cancellable, run_with_engine_stack, write_atomic_streaming,
 };
-use zenkai_formats::{CsvError, CsvWriter, Delimiter, ParsedCsv, parse_csv};
+use zenkai_formats::{CsvError, CsvWriter, Delimiter, FormulaText, ParsedCsv, parse_csv};
 use zenkai_i18n::t;
 use zenkai_pdf_host::process::host_next_to_exe;
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId};
@@ -403,17 +403,19 @@ pub fn write_csv_file(
     shown: &ShownCells,
     cancel: &AtomicBool,
 ) -> Result<(), EngineError> {
-    write_csv_as(path, shown, &CsvOptions::exported_as(path), cancel)
+    let options = CsvOptions::exported_as(path);
+    write_csv_as(path, shown, &options, FormulaText::Neutralize, cancel)
 }
 
 pub fn write_csv_as(
     path: &Path,
     shown: &ShownCells,
     options: &CsvOptions,
+    formulas: FormulaText,
     cancel: &AtomicBool,
 ) -> Result<(), EngineError> {
     write_atomic_streaming(path, |out| {
-        write_shown_rows(out, shown, options, cancel).map_err(|error| match error {
+        write_shown_rows(out, shown, options, formulas, cancel).map_err(|error| match error {
             ExportStop::Cancelled => EngineError::Cancelled,
             ExportStop::Csv(CsvError::Write(source))
                 if source.kind() == std::io::ErrorKind::InvalidData =>
@@ -457,10 +459,11 @@ fn write_shown_rows(
     out: &mut dyn Write,
     shown: &ShownCells,
     options: &CsvOptions,
+    formulas: FormulaText,
     cancel: &AtomicBool,
 ) -> Result<(), ExportStop> {
     let width = usize::from(shown.end.col.get()) + 1;
-    let mut writer = CsvWriter::in_format(out, options.format())?;
+    let mut writer = CsvWriter::in_format(out, options.format(formulas))?;
     let mut cells = shown.cells.iter().peekable();
     for row in 0..=shown.end.row.get() {
         if cancel.load(Ordering::Relaxed) {
@@ -722,6 +725,36 @@ mod tests {
         let again = load_csv(&path, Some(stored)).unwrap();
         assert_eq!(again.csv.unwrap().options, stored);
         assert_eq!(number_at(&again.workbook, 0), None);
+    }
+
+    #[test]
+    fn only_an_export_neutralizes_text_that_starts_like_a_formula() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("out.csv");
+        let shown = ShownCells {
+            end: at(0, 3),
+            cells: vec![
+                (at(0, 0), "-".to_string()),
+                (at(0, 1), "+34 600".to_string()),
+                (at(0, 2), "=x".to_string()),
+                (at(0, 3), "ok".to_string()),
+            ],
+        };
+        let options = CsvOptions {
+            encoding: zenkai_formats::Encoding::Utf8,
+            line_ending: zenkai_formats::LineEnding::Lf,
+            ..CsvOptions::exported_as(&target)
+        };
+        let cancel = AtomicBool::new(false);
+        write_csv_as(&target, &shown, &options, FormulaText::Verbatim, &cancel).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"-,+34 600,=x,ok\n");
+        write_csv_as(&target, &shown, &options, FormulaText::Neutralize, &cancel).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"'-,'+34 600,'=x,ok\n");
+        write_csv_file(&target, &shown, &cancel).unwrap();
+        assert_eq!(
+            &std::fs::read(&target).unwrap()[3..],
+            b"'-,'+34 600,'=x,ok\r\n"
+        );
     }
 
     #[test]

@@ -3,6 +3,7 @@ use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 
 use zenkai_engine::{Engine, EngineError, Stamp, Workbook};
+use zenkai_formats::FormulaText;
 use zenkai_types::{CellPos, CellStyle, ColIdx, RowIdx, SheetId};
 
 use crate::csv_options::CsvBinding;
@@ -87,7 +88,14 @@ pub fn save_csv_file(
         }
     }
     let shown = files::gather_export(shared, request.sheet)?;
-    files::write_csv_as(&request.path, &shown, &request.binding.options, cancel)?;
+    // The file is the user's own, so what is in its cells is not rewritten for another program.
+    files::write_csv_as(
+        &request.path,
+        &shown,
+        &request.binding.options,
+        FormulaText::Verbatim,
+        cancel,
+    )?;
     Ok(CsvSave::Written(FileSeen::from_stamp(
         Stamp::of(&request.path).ok(),
     )))
@@ -164,6 +172,16 @@ mod tests {
         ] {
             assert_eq!(open_and_save(dir.path(), "plain.csv", original), original);
         }
+    }
+
+    #[test]
+    fn text_that_looks_like_a_formula_is_saved_over_its_own_csv_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = b"note,phone\n-,+34 600\n@ana,ok\n";
+        assert_eq!(
+            open_and_save(dir.path(), "contacts.csv", original),
+            original
+        );
     }
 
     fn opened_csv(dir: &Path, original: &[u8]) -> (PathBuf, files::FileLoad) {

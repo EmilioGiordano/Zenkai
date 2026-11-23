@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use zenkai_formats::{CsvFormat, DateOrder, Delimiter, Encoding, LineEnding};
+use zenkai_formats::{CsvFormat, DateOrder, Delimiter, Encoding, FormulaText, LineEnding};
 
 use crate::entry::FileSeen;
 use crate::files;
@@ -30,11 +30,12 @@ impl CsvOptions {
         }
     }
 
-    pub fn format(self) -> CsvFormat {
+    pub fn format(self, formulas: FormulaText) -> CsvFormat {
         CsvFormat {
             delimiter: self.delimiter,
             encoding: self.encoding,
             line_ending: self.line_ending,
+            formulas,
         }
     }
 }
