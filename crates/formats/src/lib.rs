@@ -11,13 +11,14 @@ pub use csv_format::{
     CsvError, Delimiter, Encoding, Fidelity, FinalNewline, LineEnding, MAX_CSV_BYTES, ParsedCsv,
     parse_csv,
 };
-pub use csv_guess::{DecimalMark, Guess, apply, guess};
+pub use csv_guess::{DecimalMark, Guess, apply, guess, import_input, number_text, stands_for};
 pub use csv_write::{CsvFormat, CsvWriter, write_csv};
 pub use dates::{
     DateOrder, date_serial, day_first_field, detect_date_order, iso_date, normalize_day_first,
 };
 pub use numbers::{
     decimal_comma_field, detect_decimal_comma, normalize_decimal_comma, number_value, same_value,
+    stored_number_text,
 };
 pub use values::{
     Block, MAX_ALLOCATED_CELLS, MAX_CELL_BYTES, MAX_CELLS, MAX_TEXT_BYTES, SheetValues,

@@ -213,10 +213,17 @@ impl<W: Write> CsvWriter<W> {
         Ok(self.writer.write_record(std::iter::empty::<&[u8]>())?)
     }
 
-    // An empty line, which the csv writer never writes by itself: a row with no fields.
-    pub fn write_blank_line(&mut self) -> Result<(), CsvError> {
+    // Empty lines, which the csv writer never writes by itself: rows with no fields. A run is
+    // one flush of what the csv writer holds, not one per line.
+    pub fn write_blank_lines(&mut self, count: usize) -> Result<(), CsvError> {
+        if count == 0 {
+            return Ok(());
+        }
         self.writer.flush()?;
-        self.out.0.borrow_mut().write_all(self.terminator)?;
+        let mut out = self.out.0.borrow_mut();
+        for _ in 0..count {
+            out.write_all(self.terminator)?;
+        }
         Ok(())
     }
 
@@ -226,7 +233,7 @@ impl<W: Write> CsvWriter<W> {
     ) -> Result<(), CsvError> {
         let mut fields = fields.into_iter().peekable();
         if fields.peek().is_none() {
-            return self.write_blank_line();
+            return self.write_blank_lines(1);
         }
         for field in fields {
             self.write_field(field)?;
