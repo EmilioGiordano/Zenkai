@@ -22,7 +22,7 @@ La v0.1 es una planilla que abre, muestra, edita, recalcula y guarda xlsx de uso
 
 Dentro de la v0.1:
 
-- Abrir y guardar .xlsx; importar .csv.
+- Abrir y guardar .xlsx; abrir y guardar .csv y .tsv en el mismo archivo, con una vista previa al abrir.
 - Varias hojas con pestañas (crear, renombrar, reordenar, borrar).
 - Edición de celdas y barra de fórmulas.
 - Recálculo automático con el conjunto mínimo de funciones (ver sección de funcionalidad).
@@ -46,7 +46,7 @@ Requisitos desde la Fase 1:
 - **Capa de formatos separada del motor:** cada formato es un adaptador de lectura y escritura detrás de una interfaz común. En la v0.1: xlsx (a través del motor), csv y tsv (propios). Sumar xlsm, xls u ods después no debe tocar la grilla ni el motor.
 - **Lectura tolerante:** aceptar las desviaciones menores del estándar que Excel acepta (archivos generados por librerías, OOXML transitional y strict, strings compartidos o en línea, sistema de fechas 1904).
 - **Plan B de solo lectura:** si el motor no puede abrir un archivo, intentar abrir sus valores con `calamine` (lee xlsx, xls y ods) en modo solo lectura, con un aviso claro, en vez de fallar.
-- **CSV como Excel:** detectar separador (coma, punto y coma, tabulación, barra), codificación (UTF-8 con y sin BOM, UTF-16, Windows-1252), campos entre comillas con saltos de línea, y decimales y fechas según configuración regional, con una vista previa antes de importar. Exportar en UTF-8 con BOM por defecto para que Excel lo abra bien.
+- **CSV como Excel:** detectar separador (coma, punto y coma, tabulación, barra), codificación (UTF-8 con y sin BOM, UTF-16, Windows-1252), campos entre comillas con saltos de línea, y decimales y fechas según configuración regional, con una vista previa al abrir. Un csv o tsv se abre como el archivo mismo: al guardar se escribe de vuelta con el mismo separador, codificación, BOM y saltos de línea, y antes del primer guardado que perdería algo que el csv no puede guardar (más de una hoja, fórmulas o formato) se pregunta una vez, como el aviso de formato de Excel. Exportar a otro csv escribe UTF-8 con BOM por defecto para que Excel lo abra bien.
 
 Corpus de compatibilidad:
 
