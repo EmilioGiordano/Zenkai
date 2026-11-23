@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use ironcalc::base::types::{Cell, FormulaValue, SpillValue};
-use zenkai_types::{CellPos, LineOp, Range, SheetId, ValueKind};
+use zenkai_types::{CellPos, LoggedChange, Range, SheetId, ValueKind};
 
 use crate::error::EngineError;
 use crate::model::{FormatEdits, content_cells_within, position};
 use crate::workbook::{Engine, Workbook, col_i32, is_date_format, row_i32};
 
-pub const UNREADABLE_CELL: &str = "#ERROR";
+pub(crate) const UNREADABLE_CELL: &str = "#ERROR";
 
 pub struct ShownCells {
     pub end: CellPos,
@@ -46,9 +46,11 @@ pub struct FileCells {
     // The first cell that holds an error and could not be read.
     pub unreadable: Option<CellPos>,
     pub edits: FormatEdits,
-    // The rows and columns inserted or deleted after the first `seen_structure`; `None` when
-    // the engine lost some.
-    pub line_ops: Option<Vec<LineOp>>,
+    // The identity of the sheet, which its changes are logged under.
+    pub sheet_key: u32,
+    // The changes logged after the one numbered `seen_change`; `None` when the engine dropped
+    // some.
+    pub changes: Option<Vec<LoggedChange>>,
 }
 
 fn stored_number(cell: &Cell) -> Option<f64> {
@@ -92,11 +94,11 @@ impl Workbook {
         Ok(ShownCells { end, cells })
     }
 
-    pub fn file_cells(
-        &self,
-        sheet: SheetId,
-        seen_structure: u64,
-    ) -> Result<FileCells, EngineError> {
+    pub fn file_cells(&self, sheet: SheetId, seen_change: u64) -> Result<FileCells, EngineError> {
+        let sheet_key = self
+            .model
+            .sheet_key(sheet.0)
+            .ok_or(EngineError::UnknownSheet(sheet))?;
         let used = self.used_end(sheet);
         let model = self.model.get_model();
         let ws = model
@@ -113,7 +115,8 @@ impl Workbook {
             spilled: Vec::new(),
             unreadable: None,
             edits: self.model.format_edits(),
-            line_ops: self.model.line_ops_since(seen_structure),
+            sheet_key,
+            changes: self.model.changes_since(seen_change),
         };
         let mut date_styles: HashMap<i32, bool> = HashMap::new();
         for pos in positions {
@@ -264,7 +267,7 @@ mod tests {
         assert_eq!(file.silent, vec![(pos(0, 2), "=\"\"".to_string())]);
         assert_eq!(file.cells[0].input(), "=SEQUENCE(3)");
         assert_eq!(file.cells[1].number, Some(4.0));
-        assert_eq!(file.line_ops, Some(Vec::new()));
+        assert!(file.changes.is_some_and(|changes| changes.len() == 3));
     }
 
     #[test]

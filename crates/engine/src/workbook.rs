@@ -19,9 +19,9 @@ use crate::saved::{FileOnDisk, KnownFile, SavedSlot};
 use crate::sheet_settings::{Carried, SheetSettings};
 use crate::shown_cells::UNREADABLE_CELL;
 use zenkai_types::{
-    BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, Contents, DefinedName, HAlign,
-    LineAxis, LineChange, LineOp, Range, Rgb, RowIdx, SheetId, SheetInfo, SheetSizes,
-    SheetVisibility, StyleChange, VAlign, ValueKind,
+    BorderPreset, CellPos, CellStyle, CellView, ColIdx, ColumnSpan, ContentSpan, Contents,
+    DefinedName, HAlign, LineAxis, LineChange, LineOp, Range, Rgb, RowIdx, SheetChange, SheetId,
+    SheetInfo, SheetSizes, SheetVisibility, StyleChange, VAlign, ValueKind,
 };
 
 const LOCALE: &str = "en";
@@ -366,6 +366,25 @@ fn area(sheet: SheetId, range: Range) -> Area {
 }
 
 impl Workbook {
+    // What a command wrote or cleared, for a save over a CSV to know which cells are the
+    // user's. Logged before the write: a command that fails leaves a cell marked that was not
+    // changed, which is written as shown, never lost.
+    fn log_content(&mut self, sheet: SheetId, range: Range) {
+        match self.sheet_id(sheet) {
+            Some(key) => self
+                .model
+                .record_change(key, SheetChange::Content(ContentSpan::of(range))),
+            None => self.model.record_unknown(),
+        }
+    }
+
+    fn log_lines(&mut self, sheet: SheetId, op: LineOp) {
+        match self.sheet_id(sheet) {
+            Some(key) => self.model.record_change(key, SheetChange::Lines(op)),
+            None => self.model.record_unknown(),
+        }
+    }
+
     // Whether copying cells of `range` carries a style, resolved as IronCalc's copy resolves it:
     // the cell's own, else its row's or column's. A style counts when it differs from the
     // workbook's default, which is what a cell with the first style looks like. Cheap: one
@@ -376,17 +395,20 @@ impl Workbook {
         let Ok(worksheet) = model.workbook.worksheet(sheet.0) else {
             return true;
         };
-        let (first_row, last_row) = (row_i32(range.start.row), row_i32(range.end.row));
-        let (first_col, last_col) = (col_i32(range.start.col), col_i32(range.end.col));
-        let styled_row = worksheet
-            .rows
-            .iter()
-            .any(|row| row.custom_format && row.s != 0 && (first_row..=last_row).contains(&row.r));
-        let styled_column = worksheet.cols.iter().any(|col| {
-            col.style.is_some_and(|style| style != 0) && col.min <= last_col && col.max >= first_col
-        });
-        if styled_row || styled_column {
-            return true;
+        if self.model.sheet_has_line_styles(sheet) {
+            let (first_row, last_row) = (row_i32(range.start.row), row_i32(range.end.row));
+            let (first_col, last_col) = (col_i32(range.start.col), col_i32(range.end.col));
+            let styled_row = worksheet.rows.iter().any(|row| {
+                row.custom_format && row.s != 0 && (first_row..=last_row).contains(&row.r)
+            });
+            let styled_column = worksheet.cols.iter().any(|col| {
+                col.style.is_some_and(|style| style != 0)
+                    && col.min <= last_col
+                    && col.max >= first_col
+            });
+            if styled_row || styled_column {
+                return true;
+            }
         }
         let mut seen: Vec<(i32, i32, i32)> = Vec::new();
         for_each_within(&worksheet.sheet_data, range, |row, col, cell| {
@@ -722,14 +744,6 @@ impl Workbook {
         self.carried.history_replayed(sheet_ids);
     }
 
-    // The log of inserted and deleted lines cannot follow a replay of one, so those cells count as
-    // moved.
-    fn count_replayed_moves(&mut self, moved: Option<&[u32]>) {
-        if moved.is_some_and(|sheets| !sheets.is_empty()) {
-            self.model.count_moved_edit();
-        }
-    }
-
     fn columns_moved(&mut self, sheet: SheetId, from: ColIdx) {
         if let Some(id) = self.sheet_id(sheet) {
             self.carried.columns_moved(id, u32::from(from.get()) + 1);
@@ -846,10 +860,14 @@ impl Workbook {
         self.model.format_edits()
     }
 
-    // The rows and columns inserted or deleted after the first `seen`; `None` when too many
-    // were made to keep.
-    pub fn line_ops_since(&self, seen: u64) -> Option<Vec<LineOp>> {
-        self.model.line_ops_since(seen)
+    // The changes made after the one numbered `seen`; `None` when some were dropped.
+    pub fn changes_since(&self, seen: u64) -> Option<Vec<zenkai_types::LoggedChange>> {
+        self.model.changes_since(seen)
+    }
+
+    // For a workbook built with the commands a change is logged for, once it is built.
+    pub fn forget_changes(&mut self) {
+        self.model.forget_changes();
     }
 
     // For what typing a cell does on its own (widening a column, wrapping text): it is content
@@ -991,6 +1009,7 @@ impl Engine for Workbook {
     }
 
     fn set_input(&mut self, sheet: SheetId, pos: CellPos, text: &str) -> Result<(), EngineError> {
+        self.log_content(sheet, Range::single(pos));
         self.write_cell(sheet, pos, text, |model, row, col| {
             model.set_user_input(sheet.0, row, col, text)
         })
@@ -1027,6 +1046,7 @@ impl Engine for Workbook {
                 .offset(i64::try_from(width).unwrap_or(i64::MAX) - 1),
         );
         let target = Range::new(origin, end);
+        self.log_content(sheet, target);
         let plan = {
             let sheet_data = &self
                 .model
@@ -1204,6 +1224,7 @@ impl Engine for Workbook {
                 rest.cell_count()
             )));
         }
+        self.log_content(sheet, rest);
         let lines: Vec<Option<Series>> = if down {
             (source.start.col.get()..=source.end.col.get())
                 .map(|col| {
@@ -1372,6 +1393,30 @@ impl Engine for Workbook {
         let source_range: (i32, i32, i32, i32) =
             serde_json::from_value(field("range")?).map_err(parse)?;
         select(&mut self.model, sheet, Range::single(at))?;
+        let (first_row, first_col, last_row, last_col) = source_range;
+        let (height, width) = (
+            i64::from(last_row) - i64::from(first_row),
+            i64::from(last_col) - i64::from(first_col),
+        );
+        self.log_content(
+            sheet,
+            Range::new(
+                at,
+                CellPos::new(at.row.offset(height), at.col.offset(width)),
+            ),
+        );
+        if cut {
+            let corner = |row: i32, col: i32| {
+                CellPos::new(
+                    RowIdx::clamped(i64::from(row) - 1),
+                    ColIdx::clamped(i64::from(col) - 1),
+                )
+            };
+            self.log_content(
+                SheetId(source_sheet),
+                Range::new(corner(first_row, first_col), corner(last_row, last_col)),
+            );
+        }
         self.model
             .paste_from_clipboard(source_sheet, source_range, &data, cut)
             .map_err(rejected)
@@ -1420,6 +1465,7 @@ impl Engine for Workbook {
                 rest.cell_count()
             )));
         }
+        self.log_content(sheet, rest);
         let lines: Vec<(Option<CellPos>, Range)> = if down {
             (rest.start.col.get()..=rest.end.col.get())
                 .map(|col| {
@@ -1449,9 +1495,22 @@ impl Engine for Workbook {
             .iter()
             .filter_map(|(source, line)| source.map(|source| (source, *line)))
             .collect();
-        let styled = style_sources
-            .iter()
-            .any(|(source, _)| self.range_has_style(sheet, Range::single(*source)));
+        let styled = match (
+            style_sources.iter().map(|(source, _)| source.row).min(),
+            style_sources.iter().map(|(source, _)| source.row).max(),
+            style_sources.iter().map(|(source, _)| source.col).min(),
+            style_sources.iter().map(|(source, _)| source.col).max(),
+        ) {
+            (Some(first_row), Some(last_row), Some(first_col), Some(last_col)) => self
+                .range_has_style(
+                    sheet,
+                    Range::new(
+                        CellPos::new(first_row, first_col),
+                        CellPos::new(last_row, last_col),
+                    ),
+                ),
+            _ => false,
+        };
         self.fill_lines(sheet, rest, lines, &[], &style_sources, |model, pos| {
             let (from_row, from_col) = if down {
                 (source_line, u32::from(pos.col.get()))
@@ -1491,6 +1550,7 @@ impl Engine for Workbook {
     }
 
     fn clear_all(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+        self.log_content(sheet, range);
         // Whole rows or columns can carry row or column styles, which are not cells, so
         // they need the formatting pass too (a second undo step). Otherwise one call on
         // the used part clears everything there is, in one step.
@@ -1514,6 +1574,7 @@ impl Engine for Workbook {
     // never the selection (a whole sheet has 17 billion cells), and gaps get no empty cells
     // that would grow the used area. All rectangles go in one call, so one undo step.
     fn clear(&mut self, sheet: SheetId, range: Range) -> Result<(), EngineError> {
+        self.log_content(sheet, range);
         let cells = self.content_cells_in(sheet, range)?;
         if cells.is_empty() {
             return Ok(());
@@ -1613,6 +1674,9 @@ impl Engine for Workbook {
         for (_, text) in inputs {
             check_input(text)?;
         }
+        for (pos, _) in inputs {
+            self.log_content(sheet, Range::single(*pos));
+        }
         self.model.pause_evaluation();
         let written = inputs.iter().try_for_each(|(pos, text)| {
             self.model
@@ -1668,7 +1732,6 @@ impl Engine for Workbook {
             .model
             .step(HistoryStep::Undo, |model, take| take(model))
             .map_err(rejected);
-        self.count_replayed_moves(moved.as_deref());
         self.history_replayed(moved, undone.is_ok(), HistoryStep::Undo);
         undone
     }
@@ -1679,7 +1742,6 @@ impl Engine for Workbook {
             .model
             .step(HistoryStep::Redo, |model, take| take(model))
             .map_err(rejected);
-        self.count_replayed_moves(moved.as_deref());
         self.history_replayed(moved, redone.is_ok(), HistoryStep::Redo);
         redone
     }
@@ -1802,13 +1864,15 @@ impl Engine for Workbook {
         self.model
             .insert_rows(sheet.0, row_i32(at), count)
             .map_err(rejected)?;
-        self.model.record_line_op(LineOp {
-            sheet: sheet.0,
-            axis: LineAxis::Row,
-            change: LineChange::Insert,
-            at: at.get(),
-            count: count.unsigned_abs(),
-        });
+        self.log_lines(
+            sheet,
+            LineOp {
+                axis: LineAxis::Row,
+                change: LineChange::Insert,
+                at: at.get(),
+                count: count.unsigned_abs(),
+            },
+        );
         self.rows_moved(sheet, at);
         Ok(())
     }
@@ -1818,13 +1882,15 @@ impl Engine for Workbook {
         self.model
             .delete_rows(sheet.0, row_i32(at), count)
             .map_err(rejected)?;
-        self.model.record_line_op(LineOp {
-            sheet: sheet.0,
-            axis: LineAxis::Row,
-            change: LineChange::Delete,
-            at: at.get(),
-            count: count.unsigned_abs(),
-        });
+        self.log_lines(
+            sheet,
+            LineOp {
+                axis: LineAxis::Row,
+                change: LineChange::Delete,
+                at: at.get(),
+                count: count.unsigned_abs(),
+            },
+        );
         self.rows_moved(sheet, at);
         Ok(())
     }
@@ -1838,13 +1904,15 @@ impl Engine for Workbook {
         self.model
             .insert_columns(sheet.0, col_i32(at), i32::from(count))
             .map_err(rejected)?;
-        self.model.record_line_op(LineOp {
-            sheet: sheet.0,
-            axis: LineAxis::Column,
-            change: LineChange::Insert,
-            at: u32::from(at.get()),
-            count: u32::from(count),
-        });
+        self.log_lines(
+            sheet,
+            LineOp {
+                axis: LineAxis::Column,
+                change: LineChange::Insert,
+                at: u32::from(at.get()),
+                count: u32::from(count),
+            },
+        );
         self.columns_moved(sheet, at);
         Ok(())
     }
@@ -1858,13 +1926,15 @@ impl Engine for Workbook {
         self.model
             .delete_columns(sheet.0, col_i32(at), i32::from(count))
             .map_err(rejected)?;
-        self.model.record_line_op(LineOp {
-            sheet: sheet.0,
-            axis: LineAxis::Column,
-            change: LineChange::Delete,
-            at: u32::from(at.get()),
-            count: u32::from(count),
-        });
+        self.log_lines(
+            sheet,
+            LineOp {
+                axis: LineAxis::Column,
+                change: LineChange::Delete,
+                at: u32::from(at.get()),
+                count: u32::from(count),
+            },
+        );
         self.columns_moved(sheet, at);
         Ok(())
     }
@@ -1944,7 +2014,11 @@ impl Engine for Workbook {
     }
 
     fn delete_sheet(&mut self, sheet: SheetId) -> Result<(), EngineError> {
-        self.model.delete_sheet(sheet.0).map_err(rejected)
+        self.model.delete_sheet(sheet.0).map_err(rejected)?;
+        // A sheet added next may take the identity of this one, so what is logged for it
+        // no longer says what it did.
+        self.model.record_unknown();
+        Ok(())
     }
 
     fn move_sheet(&mut self, sheet: SheetId, to: u32) -> Result<(), EngineError> {
@@ -2108,7 +2182,7 @@ fn has_day_or_year_letter(code: &str) -> bool {
     false
 }
 
-pub fn is_date_format(code: &str) -> bool {
+pub(crate) fn is_date_format(code: &str) -> bool {
     use ironcalc::base::formatter::parser::{ParsePart, Parser, TextToken};
     // The lexer reads only lowercase d, m and y; Excel accepts "YYYY-MM-DD" too. Brackets
     // keep their case because "Color 3" and "[H]" are read as written.
@@ -2269,13 +2343,18 @@ mod tests {
     use ironcalc::base::open_budget::BUDGET_REFUSAL_PREFIX;
     use ironcalc::error::XlsxError;
 
+    fn counts(book: &Workbook) -> (u64, u64, u64) {
+        let edits = book.format_edits();
+        (edits.numbers, edits.other, edits.moved)
+    }
+
     #[test]
     fn successful_format_commands_are_counted_and_typing_is_not() {
         let mut book = Workbook::new_empty().unwrap();
         let a1 = Range::single(CellPos::default());
         book.set_input(SheetId(0), CellPos::default(), "0.5")
             .unwrap();
-        assert_eq!(book.format_edits(), crate::model::FormatEdits::default());
+        assert_eq!(counts(&book), (0, 0, 0));
         book.set_number_format(SheetId(0), a1, "0.00%").unwrap();
         book.apply_style(SheetId(0), a1, StyleChange::Bold(true))
             .unwrap();
@@ -2319,20 +2398,14 @@ mod tests {
         book.add_sheet().unwrap();
         book.move_sheet(sheet, 1).unwrap();
         book.duplicate_sheet(sheet).unwrap();
-        book.delete_sheet(SheetId(2)).unwrap();
-        assert_eq!(book.format_edits(), crate::model::FormatEdits::default());
+        assert_eq!(counts(&book), (0, 0, 0));
         let sheet = book.sheets()[0].id;
 
         book.insert_rows(sheet, RowIdx::clamped(1), 1).unwrap();
-        assert_eq!(book.format_edits().structure, 1);
         book.delete_rows(sheet, RowIdx::clamped(1), 1).unwrap();
         book.insert_columns(sheet, ColIdx::clamped(1), 1).unwrap();
         book.delete_columns(sheet, ColIdx::clamped(1), 1).unwrap();
-        let counted = book.format_edits();
-        assert_eq!(
-            (counted.numbers, counted.other, counted.structure),
-            (0, 0, 4)
-        );
+        assert_eq!(counts(&book), (0, 0, 0));
 
         book.set_column_width(sheet, ColIdx::clamped(0), 120.0)
             .unwrap();
@@ -2342,7 +2415,7 @@ mod tests {
             .unwrap();
         book.set_frozen(sheet, 1, 0).unwrap();
         let counted = book.format_edits();
-        assert_eq!((counted.numbers, counted.other), (0, 4));
+        assert_eq!((counted.numbers, counted.other, counted.moved), (0, 4, 0));
 
         book.apply_style(sheet, Range::single(b2), StyleChange::Bold(true))
             .unwrap();
@@ -2361,35 +2434,111 @@ mod tests {
         assert_eq!(book.format_edits(), before);
     }
 
+    fn content(row: u32, col: u32, rows: u32, cols: u32) -> SheetChange {
+        SheetChange::Content(ContentSpan {
+            row,
+            col,
+            rows,
+            cols,
+        })
+    }
+
     #[test]
-    fn inserted_and_deleted_lines_are_logged_for_a_save_to_follow() {
+    fn every_command_that_writes_content_is_logged_with_its_range_and_in_order() {
         let sheet = SheetId(0);
+        let a1 = CellPos::default();
+        let b2 = CellPos::new(RowIdx::clamped(1), ColIdx::clamped(1));
         let mut book = Workbook::new_empty().unwrap();
-        assert_eq!(book.line_ops_since(0), Some(Vec::new()));
+        assert_eq!(book.changes_since(0), Some(Vec::new()));
+        book.set_input(sheet, b2, "x").unwrap();
+        book.set_inputs(
+            sheet,
+            a1,
+            &[
+                vec!["1".to_string(), "2".to_string()],
+                vec!["3".to_string()],
+            ],
+        )
+        .unwrap();
         book.insert_rows(sheet, RowIdx::clamped(1), 2).unwrap();
-        book.delete_columns(sheet, ColIdx::clamped(0), 1).unwrap();
-        let first = LineOp {
-            sheet: 0,
+        book.clear(sheet, Range::new(a1, b2)).unwrap();
+        let key = book.sheet_id(sheet).unwrap();
+        let logged = |change| zenkai_types::LoggedChange { sheet: key, change };
+        let lines = SheetChange::Lines(LineOp {
             axis: LineAxis::Row,
             change: LineChange::Insert,
             at: 1,
             count: 2,
-        };
-        let second = LineOp {
-            sheet: 0,
-            axis: LineAxis::Column,
-            change: LineChange::Delete,
-            at: 0,
-            count: 1,
-        };
-        assert_eq!(book.line_ops_since(0), Some(vec![first, second]));
-        assert_eq!(book.line_ops_since(1), Some(vec![second]));
-        assert_eq!(book.line_ops_since(2), Some(Vec::new()));
-        assert_eq!(book.format_edits().moved, 0);
-        for _ in 0..70 {
+        });
+        assert_eq!(
+            book.changes_since(0),
+            Some(vec![
+                logged(content(1, 1, 1, 1)),
+                logged(content(0, 0, 2, 2)),
+                logged(lines),
+                logged(content(0, 0, 2, 2)),
+            ])
+        );
+        assert_eq!(book.changes_since(3).unwrap().len(), 1);
+        assert_eq!(book.format_edits().seq, 4);
+        assert_eq!(counts(&book), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_log_that_outgrew_its_bound_tells_a_reader_that_fell_behind() {
+        let sheet = SheetId(0);
+        let mut book = Workbook::new_empty().unwrap();
+        for _ in 0..1100 {
             book.insert_rows(sheet, RowIdx::clamped(0), 1).unwrap();
         }
-        assert_eq!(book.line_ops_since(0), None);
+        assert_eq!(book.changes_since(0), None);
+        assert_eq!(book.changes_since(1099).unwrap().len(), 1);
+        assert_eq!(book.changes_since(1100), Some(Vec::new()));
+        book.forget_changes();
+        assert_eq!(book.changes_since(0), Some(Vec::new()));
+    }
+
+    #[test]
+    fn what_a_sheet_does_is_logged_by_its_identity_not_by_its_place() {
+        let mut book = Workbook::new_empty().unwrap();
+        let first = SheetId(0);
+        let key = book.sheet_id(first).unwrap();
+        book.add_sheet().unwrap();
+        book.move_sheet(first, 1).unwrap();
+        let moved = SheetId(1);
+        assert_eq!(book.sheet_id(moved), Some(key));
+        book.set_input(moved, CellPos::default(), "1").unwrap();
+        let logged = book.changes_since(0).unwrap();
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0].sheet, key);
+    }
+
+    #[test]
+    fn an_undo_logs_the_content_it_changes_and_a_deleted_sheet_makes_the_log_unknown() {
+        let sheet = SheetId(0);
+        let mut book = Workbook::new_empty().unwrap();
+        book.set_input(sheet, CellPos::default(), "1").unwrap();
+        book.apply_style(
+            sheet,
+            Range::single(CellPos::default()),
+            StyleChange::Bold(true),
+        )
+        .unwrap();
+        book.undo().unwrap();
+        assert_eq!(book.changes_since(1), Some(Vec::new()));
+        book.undo().unwrap();
+        let logged = book.changes_since(1).unwrap();
+        assert_eq!(logged.len(), 1);
+        assert_eq!(logged[0].change, content(0, 0, 1, 1));
+
+        book.add_sheet().unwrap();
+        book.delete_sheet(SheetId(1)).unwrap();
+        let logged = book.changes_since(2).unwrap();
+        assert_eq!(
+            logged.last().map(|change| change.change),
+            Some(SheetChange::Unknown)
+        );
+        assert_eq!(book.format_edits().moved, 1);
     }
 
     #[test]
@@ -2412,11 +2561,6 @@ mod tests {
         assert_eq!(book.format_edits().moved, 1);
         book.paste(sheet, c1, &copied, true).unwrap();
         assert_eq!(book.format_edits().moved, 2);
-
-        book.insert_rows(sheet, RowIdx::clamped(1), 1).unwrap();
-        assert_eq!(book.format_edits().moved, 2);
-        book.undo().unwrap();
-        assert_eq!(book.format_edits().moved, 3);
     }
 
     #[test]

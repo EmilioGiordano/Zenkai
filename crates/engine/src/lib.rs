@@ -46,9 +46,9 @@ pub use model::FormatEdits;
 pub use preflight::run_with_engine_stack;
 pub use save::{SaveSnapshot, SaveTarget, save_xlsx, write_xlsx_unverified};
 pub use saved::Stamp;
-pub use shown_cells::{FileCell, FileCells, ShownCells, UNREADABLE_CELL};
+pub use shown_cells::{FileCell, FileCells, ShownCells};
 pub use streamed_write::write_atomic_streaming;
-pub use workbook::{Copied, Engine, Workbook, format_preview, is_date_format};
+pub use workbook::{Copied, Engine, Workbook, format_preview};
 pub use xlsx_read::{
     ListedSheet, ReadBook, ReaderComparison, XlsxReader, compare_readers, read_xlsx_bytes,
     sheet_names_of,
