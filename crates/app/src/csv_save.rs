@@ -1,22 +1,21 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use zenkai_engine::{
-    Engine, EngineError, FileCells, FormatEdits, ShownCells, UNREADABLE_CELL, Workbook,
-    is_date_format,
-};
+use zenkai_engine::{EngineError, FileCell, FileCells, ShownCells, Workbook};
 use zenkai_formats::{
-    FinalNewline, date_serial, iso_date, number_text, stands_for, stored_number_text,
+    FinalNewline, date_serial, iso_date, neutralize, number_text, stands_for, stored_number_text,
 };
 use zenkai_i18n::t;
-use zenkai_types::{CellPos, ColIdx, Contents, RowIdx, SheetId, ValueKind};
+use zenkai_types::{CellPos, RowIdx, SheetId};
 
 use crate::csv_export_size::ExportSize;
 use crate::csv_io::{self, AsRead, BaselineRead, Layout, Shape};
-use crate::csv_options::{CsvBinding, CsvOptions, Losses, Structure};
+use crate::csv_options::{CsvBinding, CsvOptions, Losses};
 use crate::document::{ChangedFile, file_changed_since, read_shared};
 use crate::entry::FileSeen;
+use crate::line_map::{LineMap, MAX_LINE_OPS};
 
 const CANCEL_CHECK_EVERY: usize = 4096;
 
@@ -53,85 +52,23 @@ fn field_at(rows: &mut [Vec<String>], pos: CellPos) -> Option<&mut String> {
     rows.get_mut(row)?.get_mut(usize::from(pos.col.get()))
 }
 
-// A cell whose input stands for what importing its position's field gives is unedited and takes
-// that field's text. After rows or columns move, the values differ and the cell counts as edited.
-fn take_unedited(
-    text: &mut String,
+// A cell whose input stands for what importing its field of the file gives is unedited and takes
+// that field's text.
+fn unedited_text(
     input: &str,
     stored: Option<f64>,
     field: Option<&mut String>,
     options: &CsvOptions,
-) -> bool {
-    let unedited = |field: &str| {
-        stands_for(
-            input,
-            field,
-            options.decimal_mark,
-            options.date_order,
-            stored,
-        )
-    };
-    match field.filter(|field| !field.is_empty()) {
-        Some(field) if unedited(field.as_str()) => {
-            *text = std::mem::take(field);
-            true
-        }
-        _ => false,
-    }
-}
-
-fn position_of(row: usize, col: usize) -> Option<CellPos> {
-    let row = RowIdx::new(u32::try_from(row).ok()?)?;
-    let col = ColIdx::new(u16::try_from(col).ok()?)?;
-    Some(CellPos::new(row, col))
-}
-
-// The sheet's shown cells leave out those that show nothing (`=""`, a lone `'`), so a field the
-// pass above never reached is kept as the file had it while the engine still holds it.
-fn restore_fields_that_show_nothing(
-    workbook: &Workbook,
-    sheet: SheetId,
-    shown: &mut ShownCells,
-    file: &mut [Vec<String>],
-    options: &CsvOptions,
-    cancel: &AtomicBool,
-) -> Result<(), EngineError> {
-    let mut kept = Vec::new();
-    let mut visited = shown.cells.iter().map(|(pos, _)| *pos).peekable();
-    let mut checked = 0usize;
-    for (row, fields) in file.iter_mut().enumerate() {
-        for (col, field) in fields.iter_mut().enumerate() {
-            checked += 1;
-            if checked.is_multiple_of(CANCEL_CHECK_EVERY) && cancel.load(Ordering::Relaxed) {
-                return Err(EngineError::Cancelled);
-            }
-            let Some(pos) = position_of(row, col).filter(|_| !field.is_empty()) else {
-                continue;
-            };
-            while visited
-                .next_if(|seen| (seen.row, seen.col) < (pos.row, pos.col))
-                .is_some()
-            {}
-            if visited.peek() == Some(&pos) {
-                continue;
-            }
-            let input = workbook.input(sheet, pos);
-            if stands_for(
-                &input,
-                field,
-                options.decimal_mark,
-                options.date_order,
-                None,
-            ) {
-                kept.push((pos, std::mem::take(field)));
-            }
-        }
-    }
-    shown.cells.extend(kept);
-    shown
-        .cells
-        .sort_unstable_by_key(|(pos, _)| (pos.row, pos.col));
-    Ok(())
+) -> Option<String> {
+    let field = field.filter(|field| !field.is_empty())?;
+    stands_for(
+        input,
+        field.as_str(),
+        options.decimal_mark,
+        options.date_order,
+        stored,
+    )
+    .then(|| std::mem::take(field))
 }
 
 // What the cell shows if the file's reader takes it as the same date, else yyyy-mm-dd. A date
@@ -145,16 +82,13 @@ fn date_text(shown: &str, serial: f64, options: &CsvOptions) -> String {
 
 // The text of an edited number, so that reading the file gives the same value back.
 fn edited_number_text(
-    workbook: &Workbook,
-    sheet: SheetId,
-    pos: CellPos,
     shown: &str,
     stored: f64,
     formula: bool,
+    date: Option<f64>,
     options: &CsvOptions,
 ) -> String {
-    let view = workbook.cell(sheet, pos);
-    if let Some(serial) = view.number.filter(|_| is_date_format(&view.style.num_fmt)) {
+    if let Some(serial) = date {
         return date_text(shown, serial, options);
     }
     number_text(
@@ -173,64 +107,120 @@ enum FormulaCells {
 struct Classified {
     shown: ShownCells,
     formulas: FormulaCells,
-    edits: FormatEdits,
 }
 
-// One read lock for the whole pass, so the cells, their inputs, the formulas and the engine's
-// counts all describe one moment; an edit waiting for the write lock waits for this pass only.
-fn classify_sheet(
-    shared: &RwLock<Workbook>,
-    request: &CsvSaveRequest,
+// Pairs each cell of the sheet with the field of the file it came from, found through the
+// rows and columns inserted or deleted since. Needs no lock: the sheet was read already.
+fn classify(
+    found: FileCells,
+    map: &LineMap,
     options: &CsvOptions,
     file: &mut [Vec<String>],
     cancel: &AtomicBool,
 ) -> Result<Classified, EngineError> {
-    let sheet = request.sheet;
-    let workbook = read_shared(shared);
-    let edits = workbook.format_edits();
+    if let Some(pos) = found.unreadable {
+        return Err(EngineError::Rejected(t!("csv.unreadable_cell", cell = pos)));
+    }
     let FileCells {
-        mut shown,
-        formulas: formula_cells,
-    } = workbook.file_cells(sheet)?;
-    let contents = workbook.contents(sheet)?;
+        end,
+        cells,
+        silent,
+        spilled,
+        ..
+    } = found;
+    let anchors: HashSet<CellPos> = spilled.iter().map(|(_, anchor)| *anchor).collect();
+    let mut matched: HashSet<CellPos> = HashSet::new();
     let mut formulas = FormulaCells::None;
-    for (checked, (pos, text)) in shown.cells.iter_mut().enumerate() {
+    let mut out: Vec<(CellPos, String)> = Vec::with_capacity(cells.len());
+    for (checked, cell) in cells.into_iter().enumerate() {
         if checked.is_multiple_of(CANCEL_CHECK_EVERY) && cancel.load(Ordering::Relaxed) {
             return Err(EngineError::Cancelled);
         }
-        if text == UNREADABLE_CELL && workbook.cell(sheet, *pos).kind == ValueKind::Error {
-            return Err(EngineError::Rejected(t!("csv.unreadable_cell", cell = pos)));
-        }
-        let stored = match contents(*pos) {
-            Contents::Number(number) => Some(number),
-            _ => None,
-        };
-        let input = workbook.input(sheet, *pos);
-        if take_unedited(text, &input, stored, field_at(file, *pos), options) {
+        let field = map
+            .file_position(cell.pos)
+            .and_then(|origin| field_at(file, origin));
+        if let Some(text) = unedited_text(cell.input(), cell.number, field, options) {
+            if anchors.contains(&cell.pos) {
+                matched.insert(cell.pos);
+            }
+            out.push((cell.pos, text));
             continue;
         }
-        let formula = input.starts_with('=');
+        let formula = cell.input().starts_with('=');
         if formula {
             formulas = FormulaCells::Written;
         }
-        if let Some(number) = stored {
-            *text = edited_number_text(&workbook, sheet, *pos, text, number, formula, options);
+        let FileCell {
+            pos,
+            text,
+            number,
+            date,
+            ..
+        } = cell;
+        let text = match number {
+            Some(number) => edited_number_text(&text, number, formula, date, options),
+            None => text,
+        };
+        // A formula's result is not what the user typed, so it is made safe for another program.
+        let text = if formula {
+            neutralize(&text).into_owned()
+        } else {
+            text
+        };
+        out.push((pos, text));
+    }
+    // Cells that show nothing are not in the shown cells: a field of the file they still hold
+    // is kept, and a formula that is not one of those has no text to write.
+    for (checked, (pos, input)) in silent.iter().enumerate() {
+        if checked.is_multiple_of(CANCEL_CHECK_EVERY) && cancel.load(Ordering::Relaxed) {
+            return Err(EngineError::Cancelled);
+        }
+        let restored = map
+            .file_position(*pos)
+            .and_then(|origin| field_at(file, origin))
+            .filter(|field| {
+                !field.is_empty()
+                    && stands_for(
+                        input,
+                        field.as_str(),
+                        options.decimal_mark,
+                        options.date_order,
+                        None,
+                    )
+            })
+            .map(std::mem::take);
+        match restored {
+            Some(text) => {
+                if anchors.contains(pos) {
+                    matched.insert(*pos);
+                }
+                out.push((*pos, text));
+            }
+            None if input.starts_with('=') => formulas = FormulaCells::Written,
+            None => {}
         }
     }
-    restore_fields_that_show_nothing(&workbook, sheet, &mut shown, file, options, cancel)?;
-    let shows_nothing_and_is_new = |pos: &CellPos| {
-        shown
-            .cells
-            .binary_search_by_key(&(pos.row, pos.col), |(cell, _)| (cell.row, cell.col))
-            .is_err()
-    };
-    if formula_cells.iter().any(shows_nothing_and_is_new) {
-        formulas = FormulaCells::Written;
+    out.sort_unstable_by_key(|(pos, _)| (pos.row, pos.col));
+    // What a formula that the file holds spilled is the formula's own, so it is not written; of
+    // a formula that was edited or typed, the spilled cells are values like any other.
+    let mut end = end;
+    if !spilled.is_empty() {
+        out.retain(|(pos, _)| {
+            let Ok(at) = spilled
+                .binary_search_by_key(&(pos.row, pos.col), |(child, _)| (child.row, child.col))
+            else {
+                return true;
+            };
+            if matched.contains(&spilled[at].1) {
+                return false;
+            }
+            end = CellPos::new(end.row.max(pos.row), end.col.max(pos.col));
+            true
+        });
     }
     Ok(Classified {
-        shown,
+        shown: ShownCells { end, cells: out },
         formulas,
-        edits,
     })
 }
 
@@ -263,29 +253,56 @@ pub fn save_csv_file(
         .iter()
         .rposition(|row| row.iter().any(|field| !field.is_empty()))
         .and_then(|last| RowIdx::new(u32::try_from(last).ok()?));
-    let classified = classify_sheet(shared, request, &options, &mut file, cancel)?;
-    drop(file);
     // The binding is as of the last batch, which could not read the counts while a recalculation
-    // held the workbook; these were read just now.
-    let (known, edits) = (request.binding.seen_edits, classified.edits);
-    let found = Losses {
+    // held the workbook; these are read now, in one short look at the sheet.
+    let known = request.binding.seen_edits;
+    let mut found = read_shared(shared).file_cells(request.sheet, known.structure)?;
+    let (edits, line_ops) = (found.edits, found.line_ops.take());
+    let mut moved = request.binding.introduced.moved_cells || edits.moved > known.moved;
+    let mut lines = request.binding.lines.as_slice().to_vec();
+    match line_ops {
+        Some(more) => lines.extend(more),
+        None => moved = true,
+    }
+    moved |= lines.len() > MAX_LINE_OPS;
+    let map = LineMap::new(&lines, request.sheet.0);
+    let classified = classify(found, &map, &options, &mut file, cancel)?;
+    drop(file);
+    let losses = Losses {
         sheets: request.sheets > 1,
         formulas: classified.formulas == FormulaCells::Written,
         number_formats: request.binding.introduced.number_formats || edits.numbers > known.numbers,
         formatting: request.binding.introduced.formatting || edits.other > known.other,
+        moved_cells: moved,
     };
-    if found.beyond(request.binding.accepted).any() {
-        return Ok(CsvSave::WouldLose(found));
+    if losses.beyond(request.binding.accepted).any() {
+        return Ok(CsvSave::WouldLose(losses));
     }
-    let moved =
-        request.binding.structure == Structure::Changed || edits.structure > known.structure;
-    let shape = if present && !moved {
+    // Rows keep the length their file row had when only rows moved; a file that is gone, or
+    // columns that moved, leave every row as wide as the used range.
+    let widest = row_lengths.iter().copied().max().unwrap_or(0);
+    let mapped: Vec<usize>;
+    let shape = if !present || map.moves_columns() {
+        Shape::UsedRange
+    } else if map.is_identity() {
         Shape::File {
             row_lengths: &row_lengths,
             last_content_row,
         }
     } else {
-        Shape::UsedRange
+        mapped = (0..=classified.shown.end.row.get())
+            .map(|row| {
+                RowIdx::new(row)
+                    .and_then(|row| map.file_row(row))
+                    .and_then(|file_row| usize::try_from(file_row.get()).ok())
+                    .and_then(|index| row_lengths.get(index).copied())
+                    .unwrap_or(widest)
+            })
+            .collect();
+        Shape::File {
+            row_lengths: &mapped,
+            last_content_row: None,
+        }
     };
     let layout = Layout::AsRead(AsRead {
         shape,
@@ -305,8 +322,9 @@ pub fn save_csv_file(
 mod tests {
     use std::path::Path;
 
+    use zenkai_engine::Engine;
     use zenkai_formats::Delimiter;
-    use zenkai_types::{ColIdx, RowIdx};
+    use zenkai_types::{ColIdx, Range};
 
     use super::*;
     use crate::entry::CsvLoad;
@@ -705,32 +723,119 @@ mod tests {
     }
 
     #[test]
-    fn cells_moved_by_inserting_a_row_are_written_as_shown_and_the_rest_as_they_were() {
+    fn cells_moved_by_inserting_a_row_are_still_written_as_their_own_field() {
         let dir = tempfile::tempdir().unwrap();
-        let (path, mut load) = opened_csv(dir.path(), "insert.csv", b"a,b\n007,1.50\n00123,2\n");
+        let original = b"a,b\n007,\"1,234.50\"\n1234567890123456789,x\n";
+        let (path, mut load) = opened_csv(dir.path(), "insert.csv", original);
         let csv = load.csv.take().unwrap();
         load.workbook
             .insert_rows(SheetId(0), RowIdx::clamped(1), 1)
             .unwrap();
         let (saved, bytes) = save(&path, load.workbook, &csv);
         assert!(matches!(saved, CsvSave::Written(..)));
-        assert_eq!(bytes, b"a,b\n,\n7,1.5\n123,2\n");
+        assert_eq!(
+            bytes,
+            b"a,b\n,\n007,\"1,234.50\"\n1234567890123456789,x\n".as_slice()
+        );
     }
 
     #[test]
-    fn after_rows_move_every_row_is_as_wide_as_the_used_range_and_nothing_is_asked() {
+    fn after_rows_move_each_row_keeps_the_length_of_its_file_row() {
         let dir = tempfile::tempdir().unwrap();
         let (path, mut load) = opened_csv(dir.path(), "moved.csv", b"a,b,\n1,2,\n3\n");
         let csv = load.csv.take().unwrap();
         load.workbook
             .insert_rows(SheetId(0), RowIdx::clamped(1), 1)
             .unwrap();
-        let mut asked = request(&path, &csv, 1);
-        asked.binding.structure = crate::csv_options::Structure::Changed;
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::Written(..)));
+        assert_eq!(bytes, b"a,b,\n,,\n1,2,\n3\n");
+    }
+
+    #[test]
+    fn deleting_a_column_leaves_the_fields_right_of_it_as_the_file_had_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "cols.csv", b"a,b,c\n1,2,007\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .delete_columns(SheetId(0), ColIdx::clamped(0), 1)
+            .unwrap();
+        let (saved, bytes) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::Written(..)));
+        assert_eq!(bytes, b"b,c\n2,007\n");
+    }
+
+    #[test]
+    fn sorting_cells_asks_before_they_are_written_as_they_show() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "sort.csv", b"n\n3\n1\n2\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .sort(
+                SheetId(0),
+                Range::new(at(1, 0), at(3, 0)),
+                ColIdx::clamped(0),
+                false,
+            )
+            .unwrap();
         let shared = RwLock::new(load.workbook);
+        let mut asked = request(&path, &csv, 1);
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::WouldLose(found) if found.moved_cells));
+        assert_eq!(std::fs::read(&path).unwrap(), b"n\n3\n1\n2\n");
+
+        asked.binding.accepted.moved_cells = true;
         let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
         assert!(matches!(outcome, CsvSave::Written(..)));
-        assert_eq!(std::fs::read(&path).unwrap(), b"a,b,\n,,\n1,2,\n3,,\n");
+        assert_eq!(std::fs::read(&path).unwrap(), b"n\n1\n2\n3\n");
+    }
+
+    #[test]
+    fn more_operations_than_the_bound_ask_as_moved_cells() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "many.csv", b"a\n1\n");
+        let csv = load.csv.take().unwrap();
+        for _ in 0..=MAX_LINE_OPS {
+            load.workbook
+                .insert_rows(SheetId(0), RowIdx::clamped(5), 1)
+                .unwrap();
+        }
+        let (saved, _) = save(&path, load.workbook, &csv);
+        assert!(matches!(saved, CsvSave::WouldLose(found) if found.moved_cells));
+    }
+
+    #[test]
+    fn a_typed_dynamic_array_is_written_as_the_values_it_shows() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "array.csv", b"a\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .set_input(SheetId(0), at(0, 1), "=SEQUENCE(3)")
+            .unwrap();
+        let shared = RwLock::new(load.workbook);
+        let mut asked = request(&path, &csv, 1);
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::WouldLose(found) if found.formulas));
+        asked.binding.accepted.formulas = true;
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::Written(..)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"a,1\n,2\n,3\n");
+    }
+
+    #[test]
+    fn the_result_of_an_edited_formula_that_looks_like_a_formula_is_made_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        let (path, mut load) = opened_csv(dir.path(), "safe.csv", b"a\n");
+        let csv = load.csv.take().unwrap();
+        load.workbook
+            .set_input(SheetId(0), at(0, 1), "=\"-\"&\"x\"")
+            .unwrap();
+        let shared = RwLock::new(load.workbook);
+        let mut asked = request(&path, &csv, 1);
+        asked.binding.accepted.formulas = true;
+        let outcome = save_csv_file(&shared, &asked, &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, CsvSave::Written(..)));
+        assert_eq!(std::fs::read(&path).unwrap(), b"a,'-x\n");
     }
 
     #[test]
@@ -810,8 +915,9 @@ mod tests {
         for n in 0..1_000 {
             let mut text = "1.5".to_string();
             let field = field_at(&mut file, at(n / 40, n % 40));
-            unedited += usize::from(take_unedited(&mut text, "1.5", Some(1.5), field, &options));
-            assert_eq!(text, "1.50");
+            let taken = unedited_text("1.5", Some(1.5), field, &options);
+            assert_eq!(taken.as_deref(), Some("1.50"));
+            unedited += usize::from(taken.is_some());
         }
         assert_eq!(unedited, 1_000);
     }

@@ -241,13 +241,13 @@ impl From<CsvError> for ExportStop {
 fn file_row_width(
     cells: &[&(CellPos, String)],
     row_lengths: &[usize],
-    row: u32,
+    row: RowIdx,
     widest: usize,
 ) -> usize {
     let extent = cells
         .last()
         .map_or(0, |(pos, _)| usize::from(pos.col.get()) + 1);
-    let length = usize::try_from(row)
+    let length = usize::try_from(row.get())
         .ok()
         .and_then(|index| row_lengths.get(index).copied());
     extent.max(length.unwrap_or(widest))
@@ -255,7 +255,7 @@ fn file_row_width(
 
 // Rows run to the last cell, and in a file's own shape on to the empty rows it had after its
 // content while the content still ends where it did.
-pub fn rows_to_write(shown: &ShownCells, layout: &Layout) -> u32 {
+fn row_count(shown: &ShownCells, layout: &Layout) -> u32 {
     let content_rows = if shown.cells.is_empty() {
         0
     } else {
@@ -286,6 +286,15 @@ pub fn rows_to_write(shown: &ShownCells, layout: &Layout) -> u32 {
     }
 }
 
+// The last row a write of the layout puts out, if it puts out any.
+pub fn last_row_to_write(shown: &ShownCells, layout: &Layout) -> Option<RowIdx> {
+    RowIdx::new(row_count(shown, layout).checked_sub(1)?)
+}
+
+fn rows_up_to(last: Option<RowIdx>) -> impl Iterator<Item = RowIdx> {
+    (0..last.map_or(0, |last| last.get() + 1)).filter_map(RowIdx::new)
+}
+
 // The longest row the file had, which a row it did not have is as wide as.
 pub fn widest_row(layout: &Layout) -> usize {
     match layout {
@@ -299,21 +308,22 @@ pub fn widest_row(layout: &Layout) -> usize {
 
 // How many fields a write of the layout puts out, those of rows with nothing in them included.
 pub fn fields_to_write(shown: &ShownCells, layout: &Layout) -> u64 {
-    let rows = rows_to_write(shown, layout);
+    let last = last_row_to_write(shown, layout);
     let Layout::AsRead(AsRead {
         shape: Shape::File { row_lengths, .. },
         ..
     }) = layout
     else {
-        return u64::from(rows) * (u64::from(shown.end.col.get()) + 1);
+        let rows = last.map_or(0, |last| u64::from(last.get()) + 1);
+        return rows * (u64::from(shown.end.col.get()) + 1);
     };
     let widest = widest_row(layout);
     let mut cells = shown.cells.iter().peekable();
     let mut row_cells = Vec::new();
     let mut fields = 0u64;
-    for row in 0..rows {
+    for row in rows_up_to(last) {
         row_cells.clear();
-        while let Some(cell) = cells.next_if(|(pos, _)| pos.row.get() == row) {
+        while let Some(cell) = cells.next_if(|(pos, _)| pos.row == row) {
             row_cells.push(cell);
         }
         fields += file_row_width(&row_cells, row_lengths, row, widest) as u64;
@@ -338,14 +348,14 @@ fn write_shown_rows(
     let mut writer = CsvWriter::in_format(out, options.format())?;
     let mut cells = shown.cells.iter().peekable();
     let mut row_cells = Vec::new();
-    let rows = rows_to_write(shown, layout);
+    let last = last_row_to_write(shown, layout);
     let mut blank_run = 0;
-    for row in 0..rows {
+    for row in rows_up_to(last) {
         if cancel.load(Ordering::Relaxed) {
             return Err(ExportStop::Cancelled);
         }
         row_cells.clear();
-        while let Some(cell) = cells.next_if(|(pos, _)| pos.row.get() == row) {
+        while let Some(cell) = cells.next_if(|(pos, _)| pos.row == row) {
             row_cells.push(cell);
         }
         let width = match as_read {
@@ -374,7 +384,7 @@ fn write_shown_rows(
             next_col = col + 1;
         }
         writer.write_empty_fields(width.saturating_sub(next_col))?;
-        let unterminated = row + 1 == rows
+        let unterminated = Some(row) == last
             && as_read.is_some_and(|read| read.final_newline == FinalNewline::Missing);
         if !unterminated {
             writer.end_row()?;
@@ -532,6 +542,19 @@ mod tests {
             &exported(workbook, "column.csv")[3..],
             b"top\r\n\"\"\r\nbottom\r\n"
         );
+    }
+
+    #[test]
+    fn a_sheet_ending_at_the_last_row_exports_every_row_quickly() {
+        let last_row = i64::from(zenkai_types::MAX_ROWS - 1);
+        let workbook = sheet_with(&[(at(0, 0), "first"), (at(last_row, 1), "last")]);
+        let started = std::time::Instant::now();
+        let bytes = exported(workbook, "tall.csv");
+        assert!(started.elapsed() < std::time::Duration::from_secs(120));
+        let lines = bytes.iter().filter(|byte| **byte == b'\n').count();
+        assert_eq!(lines, zenkai_types::MAX_ROWS as usize);
+        assert!(bytes[3..].starts_with(b"first,\r\n,\r\n"));
+        assert!(bytes.ends_with(b",\r\n,last\r\n"));
     }
 
     #[test]

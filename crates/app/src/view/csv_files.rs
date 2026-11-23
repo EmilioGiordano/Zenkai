@@ -9,7 +9,7 @@ use zenkai_types::WorkbookId;
 
 use super::{Overwrite, Severity, Workspace, file_job_refusal};
 use crate::csv_export_size::ExportSize;
-use crate::csv_options::{CsvBinding, Losses, Structure};
+use crate::csv_options::{CsvBinding, Losses};
 use crate::csv_save::{CsvSave, CsvSaveRequest, LargeWrite, save_csv_file};
 use crate::document::{ChangedFile, Document, FileJob};
 use crate::failure::{offer_another_location, save_failure};
@@ -43,6 +43,7 @@ fn loss_list(loss: Losses) -> String {
         (loss.formulas, t!("save.csv_loss.formulas")),
         (loss.formatting, t!("save.csv_loss.formatting")),
         (loss.number_formats, t!("save.csv_loss.number_formats")),
+        (loss.moved_cells, t!("save.csv_loss.moved_cells")),
     ];
     let lost: Vec<&str> = named
         .into_iter()
@@ -71,7 +72,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let large = if self.large_csv_confirmed.remove(&id) {
+        let large = if self.large_csv_confirmed.contains(&id) {
             LargeWrite::Confirmed
         } else {
             LargeWrite::Ask
@@ -173,7 +174,8 @@ impl Workspace {
                     binding.options.get_or_insert(options);
                     // The file now has the sheet's rows, unless an edit came in while it wrote.
                     if !edited_meanwhile {
-                        binding.structure = Structure::Kept;
+                        binding.lines.clear();
+                        binding.introduced.moved_cells = false;
                     }
                 }
                 document.dirty = edited_meanwhile;
@@ -376,6 +378,7 @@ mod tests {
             formulas: true,
             formatting: true,
             number_formats: true,
+            moved_cells: true,
         };
         let list = loss_list(all);
         for label in [
@@ -383,6 +386,7 @@ mod tests {
             t!("save.csv_loss.formulas"),
             t!("save.csv_loss.formatting"),
             t!("save.csv_loss.number_formats"),
+            t!("save.csv_loss.moved_cells"),
         ] {
             assert!(list.contains(label), "{list}");
         }

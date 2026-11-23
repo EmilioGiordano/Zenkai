@@ -1,3 +1,4 @@
+use crate::line_map::LineOps;
 use serde::{Deserialize, Serialize};
 use zenkai_engine::FormatEdits;
 use zenkai_formats::{
@@ -61,11 +62,14 @@ pub struct Losses {
     pub formulas: bool,
     pub formatting: bool,
     pub number_formats: bool,
+    // Cells that were moved in a way no inserted or deleted row or column explains: sorted,
+    // cut and pasted, or too many operations to follow.
+    pub moved_cells: bool,
 }
 
 impl Losses {
     pub fn any(self) -> bool {
-        self.sheets || self.formulas || self.formatting || self.number_formats
+        self.sheets || self.formulas || self.formatting || self.number_formats || self.moved_cells
     }
 
     // The kinds in `self` that `accepted` does not cover.
@@ -75,6 +79,7 @@ impl Losses {
             formulas: self.formulas && !accepted.formulas,
             formatting: self.formatting && !accepted.formatting,
             number_formats: self.number_formats && !accepted.number_formats,
+            moved_cells: self.moved_cells && !accepted.moved_cells,
         }
     }
 
@@ -84,18 +89,9 @@ impl Losses {
             formulas: self.formulas || other.formulas,
             formatting: self.formatting || other.formatting,
             number_formats: self.number_formats || other.number_formats,
+            moved_cells: self.moved_cells || other.moved_cells,
         }
     }
-}
-
-// Whether rows or columns were inserted or deleted since the file was read, so that the rows of
-// the sheet no longer line up with the rows of the file.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Structure {
-    #[default]
-    Kept,
-    Changed,
 }
 
 // A document that is the CSV file itself. `options` is `None` until the file has been read for
@@ -107,8 +103,10 @@ pub struct CsvBinding {
     pub accepted: Losses,
     #[serde(default)]
     pub introduced: Losses,
+    // The rows and columns inserted or deleted since the file was read, so a save can find each
+    // cell's own field.
     #[serde(default)]
-    pub structure: Structure,
+    pub lines: LineOps,
     // The engine's counters as last read. They restart with the workbook, so they are not kept.
     #[serde(skip)]
     pub seen_edits: FormatEdits,
@@ -127,7 +125,7 @@ impl CsvBinding {
             options: None,
             accepted: Losses::default(),
             introduced: Losses::default(),
-            structure: Structure::Kept,
+            lines: LineOps::default(),
             seen_edits: FormatEdits::default(),
         }
     }
@@ -169,7 +167,7 @@ mod tests {
                             number_formats: true,
                             ..Losses::default()
                         },
-                        structure: Structure::Changed,
+                        lines: LineOps::default(),
                         seen_edits: FormatEdits::default(),
                     };
                     let json = serde_json::to_string(&binding).unwrap();

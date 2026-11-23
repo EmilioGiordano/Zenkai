@@ -78,6 +78,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.large_csv_confirmed.remove(&id);
         let settled = match self.departure.as_mut() {
             Some(departure) => departure.settled(id, saved),
             None => return,

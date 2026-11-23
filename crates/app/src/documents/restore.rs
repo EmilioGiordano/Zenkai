@@ -131,14 +131,16 @@ mod tests {
     use super::super::test_support::*;
     use super::super::{Installed, Intent, Provenance};
     use super::*;
-    use crate::csv_options::{CsvBinding, CsvOptions, Losses, Structure};
+    use crate::csv_options::{CsvBinding, CsvOptions, Losses};
     use crate::entry::{CsvLoad, Entry, FileSeen, LinkStatus};
+    use crate::line_map::LineOps;
     use crate::session::{FileRecord, ViewRecord};
     use crate::spaces::SpaceId;
     use zenkai_engine::FormatEdits;
     use zenkai_engine::Unsupported;
     use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
     use zenkai_types::SheetId;
+    use zenkai_types::{LineAxis, LineChange, LineOp};
 
     fn member_names(documents: &Documents, space: SpaceId) -> Vec<String> {
         documents.members(space).map(Entry::name).collect()
@@ -417,9 +419,21 @@ mod tests {
                 number_formats: true,
                 ..Losses::default()
             },
-            structure: Structure::Changed,
+            lines: one_line_moved(),
             seen_edits: FormatEdits::default(),
         }
+    }
+
+    fn one_line_moved() -> LineOps {
+        let mut lines = LineOps::default();
+        lines.push(LineOp {
+            sheet: 0,
+            axis: LineAxis::Row,
+            change: LineChange::Insert,
+            at: 1,
+            count: 1,
+        });
+        lines
     }
 
     fn read_options() -> CsvOptions {
@@ -485,21 +499,41 @@ mod tests {
         assert!(document.file_guard().is_some());
     }
 
-    #[test]
-    fn a_workbook_rebuilt_from_its_csv_has_the_rows_of_the_file_again() {
+    fn rebuilt_binding(provenance: Provenance) -> CsvBinding {
         let mut documents = documents();
         let mut record = file(Some("prices.csv"), true);
-        record.csv = Some(csv_binding());
+        let mut moved = csv_binding();
+        moved.introduced.moved_cells = true;
+        record.csv = Some(moved);
         let id = documents.restore(&session_with(record), None).unwrap();
         let mut read = loaded(id);
+        read.provenance = provenance;
         read.csv = Some(CsvLoad {
             options: read_options(),
             seen: FileSeen::unknown(),
         });
         documents.install(read);
-        let binding = documents.active().unwrap().csv.unwrap();
-        assert_eq!(binding.structure, Structure::Kept);
-        assert_eq!(binding.introduced, csv_binding().introduced);
+        documents.active().unwrap().csv.unwrap()
+    }
+
+    #[test]
+    fn a_workbook_rebuilt_from_its_csv_has_the_rows_of_the_file_again() {
+        let binding = rebuilt_binding(Provenance::File);
+        assert!(binding.lines.is_empty());
+        assert!(!binding.introduced.moved_cells);
+        assert_eq!(
+            binding.introduced.number_formats,
+            csv_binding().introduced.number_formats
+        );
+    }
+
+    #[test]
+    fn a_workbook_rebuilt_from_a_copy_of_the_work_keeps_the_lines_moved_in_it() {
+        for provenance in [Provenance::Recovery, Provenance::Dump] {
+            let binding = rebuilt_binding(provenance);
+            assert_eq!(binding.lines, one_line_moved());
+            assert!(binding.introduced.moved_cells);
+        }
     }
 
     #[test]

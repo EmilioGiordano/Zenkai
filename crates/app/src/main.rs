@@ -39,6 +39,7 @@ mod job_pill;
 mod jump;
 mod keymap;
 mod language;
+mod line_map;
 mod logging;
 mod markdown_depth;
 mod markdown_highlight;

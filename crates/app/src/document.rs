@@ -13,7 +13,7 @@ use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
 use crate::agent_review::Review;
-use crate::csv_options::{CsvBinding, Structure};
+use crate::csv_options::CsvBinding;
 use crate::entry::{FileSeen, display_name};
 use crate::files;
 use crate::find::FindBar;
@@ -482,16 +482,30 @@ impl Document {
         let Some(binding) = self.csv.as_mut() else {
             return;
         };
-        let edits = match self.workbook.try_read() {
-            Ok(workbook) => workbook.format_edits(),
-            Err(TryLockError::WouldBlock) => return,
-            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().format_edits(),
-        };
         let seen = binding.seen_edits;
+        let read = |workbook: &Workbook| {
+            (
+                workbook.format_edits(),
+                workbook.line_ops_since(seen.structure),
+            )
+        };
+        let (edits, line_ops) = match self.workbook.try_read() {
+            Ok(workbook) => read(&*workbook),
+            Err(TryLockError::WouldBlock) => return,
+            Err(TryLockError::Poisoned(poisoned)) => read(&*poisoned.into_inner()),
+        };
         binding.introduced.number_formats |= edits.numbers > seen.numbers;
         binding.introduced.formatting |= edits.other > seen.other;
+        binding.introduced.moved_cells |= edits.moved > seen.moved;
         if edits.structure > seen.structure {
-            binding.structure = Structure::Changed;
+            match line_ops {
+                Some(ops) => {
+                    for op in ops {
+                        binding.introduced.moved_cells |= !binding.lines.push(op);
+                    }
+                }
+                None => binding.introduced.moved_cells = true,
+            }
         }
         binding.seen_edits = edits;
     }
@@ -1032,7 +1046,7 @@ mod tests {
         }
         document.finish_batch(generation);
         assert!(!binding(&document).introduced.any());
-        assert_eq!(binding(&document).structure, Structure::Changed);
+        assert_eq!(binding(&document).lines.as_slice().len(), 1);
 
         document
             .workbook

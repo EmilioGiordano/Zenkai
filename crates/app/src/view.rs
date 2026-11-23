@@ -1404,7 +1404,7 @@ impl Workspace {
                 let lossy_state = |document: &Document| {
                     document
                         .csv
-                        .map(|binding| (binding.introduced, binding.structure))
+                        .map(|binding| (binding.introduced, binding.lines))
                 };
                 let lossy_before = lossy_state(document);
                 if !document.finish_batch(generation) {

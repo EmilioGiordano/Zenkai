@@ -1,6 +1,6 @@
 use zenkai_engine::ShownCells;
 
-use crate::csv_io::{Layout, fields_to_write, rows_to_write};
+use crate::csv_io::{Layout, fields_to_write, last_row_to_write};
 
 const MIN_CONFIRMED_BYTES: u64 = 100 * 1024 * 1024;
 const OUTSIZED_FACTOR: u64 = 50;
@@ -26,7 +26,7 @@ impl ExportSize {
 
     // What a save over the file writes: the rows and the fields its layout gives them.
     pub fn of_layout(shown: &ShownCells, layout: &Layout) -> ExportSize {
-        let rows = u64::from(rows_to_write(shown, layout));
+        let rows = last_row_to_write(shown, layout).map_or(0, |last| u64::from(last.get()) + 1);
         ExportSize::sized(rows, fields_to_write(shown, layout), shown)
     }
 
