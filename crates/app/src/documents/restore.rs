@@ -136,7 +136,7 @@ mod tests {
     use crate::session::{FileRecord, ViewRecord};
     use crate::spaces::SpaceId;
     use zenkai_engine::Unsupported;
-    use zenkai_formats::{DateLayout, DateOrder, DateSeparator, Delimiter, Encoding, LineEnding};
+    use zenkai_formats::{DateOrder, Delimiter, Encoding, LineEnding};
     use zenkai_types::SheetId;
 
     fn member_names(documents: &Documents, space: SpaceId) -> Vec<String> {
@@ -413,11 +413,6 @@ mod tests {
                 line_ending: LineEnding::Lf,
                 decimal_comma: true,
                 date_order: DateOrder::DayFirst,
-                date_layout: Some(DateLayout {
-                    separator: DateSeparator::Dash,
-                    padded: false,
-                    two_digit_year: true,
-                }),
             },
             loss_accepted: true,
         }

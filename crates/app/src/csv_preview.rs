@@ -8,8 +8,8 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use zenkai_formats::{
-    DateLayout, DateOrder, Delimiter, ParsedCsv, detect_date_layout, detect_date_order,
-    detect_decimal_comma, normalize_day_first, normalize_decimal_comma,
+    DateOrder, Delimiter, ParsedCsv, detect_date_order, detect_decimal_comma, normalize_day_first,
+    normalize_decimal_comma,
 };
 
 use crate::actions::{CancelCsvImport, ConfirmCsvImport};
@@ -48,18 +48,7 @@ pub struct CsvPreview {
 pub struct Guess {
     pub decimal_comma: bool,
     pub date_order: DateOrder,
-    // How the file writes its day-first dates, whatever order is chosen here.
-    pub date_layout: Option<DateLayout>,
     pub columns: usize,
-}
-
-impl Guess {
-    // Saving writes dates back in the file's layout only for a day-first file: month-first
-    // dates keep the number format the engine gave them from the same text.
-    pub fn saved_date_layout(self) -> Option<DateLayout> {
-        self.date_layout
-            .filter(|_| self.date_order == DateOrder::DayFirst)
-    }
 }
 
 /// Rewrites day-first dates and decimal-comma numbers as the import will. Dates go first:
@@ -86,7 +75,6 @@ pub fn guess(parsed: &ParsedCsv) -> Guess {
     Guess {
         decimal_comma,
         date_order,
-        date_layout: detect_date_layout(&parsed.rows),
         columns: parsed.rows.iter().map(Vec::len).max().unwrap_or(0),
     }
 }
