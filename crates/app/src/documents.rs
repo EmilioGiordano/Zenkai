@@ -5,9 +5,9 @@ use zenkai_agent::protected_view::FileOrigin;
 use zenkai_engine::{Kept, Unsupported, Workbook};
 use zenkai_types::{SheetId, WorkbookId};
 
-use crate::csv_options::{CsvBinding, CsvLoad};
+use crate::csv_options::CsvBinding;
 use crate::document::{self, Document, FileJob, SharedWorkbook};
-use crate::entry::{Entry, Link, LinkStatus, Slot};
+use crate::entry::{CsvLoad, Entry, Link, LinkStatus, Slot};
 use crate::files;
 use crate::pdf_tab::PdfTab;
 use crate::spaces::{SpaceId, Spaces};
@@ -165,7 +165,7 @@ impl Loaded {
         if let Some(csv) = self.csv {
             document.csv = Some(CsvBinding {
                 options: csv.options,
-                loss_accepted: link.csv.is_some_and(|binding| binding.loss_accepted),
+                ..link.csv.unwrap_or_else(|| CsvBinding::new(csv.options))
             });
             document.guard_file(csv.seen);
         } else if let Some(binding) = link.csv {

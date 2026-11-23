@@ -8,7 +8,7 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Overwrite, Severity, Workspace, file_job_refusal};
-use crate::csv_options::CsvBinding;
+use crate::csv_options::{CsvBinding, LossAnswer};
 use crate::csv_save::{CsvLoss, CsvSave, CsvSaveRequest, save_csv_file};
 use crate::document::{ChangedFile, Document, FileJob};
 use crate::failure::{offer_another_location, save_failure};
@@ -235,7 +235,7 @@ impl Workspace {
                         .get_mut(id)
                         .and_then(|document| document.csv.as_mut())
                         .map(|binding| {
-                            binding.loss_accepted = true;
+                            binding.loss_answer = LossAnswer::KeepCsv;
                             *binding
                         });
                     match kept {

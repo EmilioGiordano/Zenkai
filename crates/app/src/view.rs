@@ -13,7 +13,7 @@ use gpui_kit::*;
 
 use zenkai_agent::settings::SettingsError;
 use zenkai_engine::{Copied, Engine, EngineError, ShownCells, Unsupported, Workbook, save_xlsx};
-use zenkai_formats::{Delimiter, parse_csv};
+use zenkai_formats::{Delimiter, apply, guess, parse_csv};
 use zenkai_grid::{
     CycleReference, DeleteForward, Direction, EditMode, Grid, GridEvent, Layout, SheetView,
 };
@@ -63,7 +63,8 @@ use crate::chat_layout::{ChatLayout, ChatLayoutState};
 use crate::clipboard;
 use crate::close_prompt::{CloseGoal, Departure};
 use crate::csv_export_size::ExportSize;
-use crate::csv_options::{CsvBinding, CsvOptions};
+use crate::csv_io;
+use crate::csv_options::{CsvBinding, CsvOptions, NumberFormats};
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
@@ -1496,8 +1497,8 @@ impl Workspace {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    files::read_csv(&task_path).map(|read| {
-                        let guess = csv_preview::guess(&read.parsed);
+                    csv_io::read_csv(&task_path).map(|read| {
+                        let guess = guess(&read.parsed);
                         (read, guess)
                     })
                 })
@@ -1541,7 +1542,7 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     parse_csv(&bytes, Some(delimiter)).map(|parsed| {
-                        let guess = csv_preview::guess(&parsed);
+                        let guess = guess(&parsed);
                         (parsed, guess)
                     })
                 })
@@ -1587,13 +1588,7 @@ impl Workspace {
             guess,
             seen,
         } = preview;
-        let options = CsvOptions {
-            delimiter: parsed.delimiter,
-            encoding: parsed.encoding,
-            line_ending: parsed.line_ending,
-            decimal_comma: guess.decimal_comma,
-            date_order: guess.date_order,
-        };
+        let options = CsvOptions::from_read(&parsed, &guess);
         let mut rows = parsed.rows;
         let origin_path = path.clone();
         cx.spawn_in(window, async move |this, cx| {
@@ -1602,9 +1597,9 @@ impl Workspace {
                 .background_executor()
                 .spawn(async move {
                     let origin = file_origin(&origin_path);
-                    csv_preview::apply(options.decimal_comma, options.date_order, &mut rows);
+                    apply(options.decimal_mark, options.date_order, &mut rows);
                     // On failure, parse again so the preview comes back as it was.
-                    let result = files::workbook_from_rows(rows).map_err(|error| {
+                    let result = csv_io::workbook_from_rows(rows).map_err(|error| {
                         (error, parse_csv(&task_bytes, Some(options.delimiter)).ok())
                     });
                     (result, origin)
@@ -1674,9 +1669,9 @@ impl Workspace {
         let on_event = move |event: csv_preview::PreviewEvent, _: &mut Window, cx: &mut App| {
             let result = entity.update(cx, |this, cx| match event {
                 csv_preview::PreviewEvent::Delimiter(delimiter) => this.reparse_csv(delimiter, cx),
-                csv_preview::PreviewEvent::DecimalComma(comma) => {
+                csv_preview::PreviewEvent::DecimalMark(mark) => {
                     if let Some(preview) = &mut this.csv_preview {
-                        preview.guess.decimal_comma = comma;
+                        preview.guess.decimal_mark = mark;
                         cx.notify();
                     }
                 }
@@ -1728,7 +1723,7 @@ impl Workspace {
             let gathered = cx
                 .background_executor()
                 .spawn(async move {
-                    let shown = files::gather_export(&shared, sheet)?;
+                    let shown = csv_io::gather_export(&shared, sheet)?;
                     let size = ExportSize::of(&shown);
                     Ok::<_, EngineError>((shown, size))
                 })
@@ -1814,7 +1809,7 @@ impl Workspace {
             let target = export.path.clone();
             let written = cx
                 .background_executor()
-                .spawn(async move { files::write_csv_file(&target, &shown, &cancel) })
+                .spawn(async move { csv_io::write_csv_file(&target, &shown, &cancel) })
                 .await;
             let update = this.update_in(cx, |this, window, cx| {
                 this.export_cancels.remove(&export.id);
@@ -2034,7 +2029,7 @@ impl Workspace {
         let must_rename =
             document.may_lose_unseen_content() || document.is_macro_enabled() || document.read_only;
         match (document.path.clone(), document.csv) {
-            (Some(path), Some(binding)) => {
+            (Some(path), Some(binding)) if !must_rename => {
                 self.save_csv(id, path, binding, ChangedFile::Ask, window, cx)
             }
             (Some(path), None) if !must_rename => self.save_to(
@@ -2045,7 +2040,7 @@ impl Workspace {
                 window,
                 cx,
             ),
-            (Some(_), None) => {
+            (Some(_), _) => {
                 let held = document::labels(&document.unsupported);
                 let detail = if document.read_only {
                     t!("save.read_only_detail").to_string()
@@ -2239,7 +2234,12 @@ impl Workspace {
             self.save_ended(id, false, window, cx);
             return;
         }
+        let protected = document.read_only || document.may_lose_unseen_content();
         match (delimited_action(&probe), document.csv) {
+            (DelimitedAction::SaveInPlace, Some(_)) if protected => {
+                self.notify(Severity::Error, t!("save.original_protected"), cx);
+                self.save_ended(id, false, window, cx);
+            }
             (DelimitedAction::SaveInPlace, Some(binding)) => {
                 self.save_csv(id, path, binding, ChangedFile::Ask, window, cx)
             }
@@ -2556,6 +2556,9 @@ impl Workspace {
             return;
         };
         let range = self.selection(cx);
+        if matches!(change, StyleChange::NumberFormat(_)) {
+            self.note_number_format_edit();
+        }
         self.edit(window, cx, move |wb| {
             wb.as_one_undo_step(|wb| {
                 wb.apply_style(sheet, range, change)?;
@@ -2565,6 +2568,17 @@ impl Workspace {
                 Ok(())
             })
         });
+    }
+
+    // A CSV cannot hold a number format, so the save asks once after one was changed.
+    fn note_number_format_edit(&mut self) {
+        if let Some(binding) = self
+            .documents
+            .active_mut()
+            .and_then(|document| document.csv.as_mut())
+        {
+            binding.number_formats = NumberFormats::Changed;
+        }
     }
 
     fn toggle_flag(
@@ -3118,6 +3132,7 @@ impl Workspace {
         ) else {
             return;
         };
+        self.note_number_format_edit();
         self.edit(window, cx, move |wb| {
             wb.as_one_undo_step(|wb| {
                 wb.set_number_format(sheet, range, &code)?;
@@ -3242,6 +3257,7 @@ impl Workspace {
         let Some(sheet) = self.active_sheet() else {
             return;
         };
+        self.note_number_format_edit();
         self.edit(window, cx, move |wb| {
             wb.as_one_undo_step(|wb| {
                 wb.set_number_format(sheet, range, &code)?;
@@ -4321,6 +4337,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ClearFormats, window, cx| {
                 if let Some(sheet) = this.active_sheet() {
                     let range = this.selection(cx);
+                    this.note_number_format_edit();
                     this.edit(window, cx, move |wb| wb.clear_formats(sheet, range));
                 }
             }))

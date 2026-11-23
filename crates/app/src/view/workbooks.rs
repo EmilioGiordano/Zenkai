@@ -11,10 +11,10 @@ use zenkai_types::WorkbookId;
 
 use super::{Severity, Workspace, file_label};
 use crate::agent_settings;
-use crate::csv_options::CsvLoad;
+use crate::csv_io;
 use crate::document;
 use crate::documents::{Installed, Intent, Loaded, Provenance, Step};
-use crate::entry::{Entry, FileSeen, Link, LinkStatus};
+use crate::entry::{CsvLoad, Entry, FileSeen, Link, LinkStatus};
 use crate::failure::open_failure;
 use crate::files::{self, FileLoad, LoadFailure};
 use crate::recovery;
@@ -102,7 +102,7 @@ fn csv_of_copy(link: &Link) -> Option<CsvLoad> {
         .as_deref()
         .filter(|path| link.csv.is_none() && files::is_delimited_text(path))?;
     Some(CsvLoad {
-        options: files::detect_csv_options(path)?,
+        options: csv_io::detect_csv_options(path)?,
         seen: link
             .rested
             .as_ref()
@@ -195,7 +195,7 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
         return Some(LinkLoad::Missing);
     };
     let loaded = if files::is_delimited_text(path) {
-        files::load_csv(path, link.csv.map(|binding| binding.options))
+        csv_io::load_csv(path, link.csv.map(|binding| binding.options))
     } else {
         files::load_workbook(path, reader, cancel)
     };
@@ -888,7 +888,7 @@ mod tests {
 
     use zenkai_agent::protected_view::FileOrigin;
     use zenkai_engine::{Engine, SaveTarget, Stamp, Workbook, XlsxReader};
-    use zenkai_formats::{DateOrder, Delimiter, Encoding, LineEnding};
+    use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
     use zenkai_grid::ViewState;
     use zenkai_types::{CellPos, SheetId, WorkbookId};
 
@@ -1084,7 +1084,7 @@ mod tests {
             delimiter: Delimiter::Semicolon,
             encoding: Encoding::Utf8,
             line_ending: LineEnding::Crlf,
-            decimal_comma: true,
+            decimal_mark: DecimalMark::Comma,
             date_order: DateOrder::MonthFirst,
         };
         csv_link(&mut setup, options);
@@ -1096,7 +1096,7 @@ mod tests {
         assert!(!file.read_only);
 
         let as_text = CsvOptions {
-            decimal_comma: false,
+            decimal_mark: DecimalMark::Dot,
             ..options
         };
         csv_link(&mut setup, as_text);
@@ -1115,13 +1115,13 @@ mod tests {
         let csv = file.csv.expect("the file shows how it was read");
         assert_eq!(csv.options.delimiter, Delimiter::Semicolon);
         assert_eq!(csv.options.line_ending, LineEnding::Crlf);
-        assert!(csv.options.decimal_comma);
+        assert_eq!(csv.options.decimal_mark, DecimalMark::Comma);
     }
 
     #[test]
     fn a_csv_link_whose_file_is_gone_is_reported_missing() {
         let mut setup = hibernated();
-        let file = csv_link(&mut setup, CsvOptions::exported_as(Path::new("prices.csv")));
+        let file = csv_link(&mut setup, CsvOptions::exported_as(Delimiter::Comma));
         std::fs::remove_file(file).unwrap();
         assert!(matches!(read(&setup.link), Some(LinkLoad::Missing)));
     }

@@ -131,12 +131,12 @@ mod tests {
     use super::super::test_support::*;
     use super::super::{Installed, Intent, Provenance};
     use super::*;
-    use crate::csv_options::{CsvBinding, CsvLoad, CsvOptions};
-    use crate::entry::{Entry, FileSeen, LinkStatus};
+    use crate::csv_options::{CsvBinding, CsvOptions, LossAnswer, NumberFormats};
+    use crate::entry::{CsvLoad, Entry, FileSeen, LinkStatus};
     use crate::session::{FileRecord, ViewRecord};
     use crate::spaces::SpaceId;
     use zenkai_engine::Unsupported;
-    use zenkai_formats::{DateOrder, Delimiter, Encoding, LineEnding};
+    use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Encoding, LineEnding};
     use zenkai_types::SheetId;
 
     fn member_names(documents: &Documents, space: SpaceId) -> Vec<String> {
@@ -411,10 +411,11 @@ mod tests {
                 delimiter: Delimiter::Semicolon,
                 encoding: Encoding::Windows1252,
                 line_ending: LineEnding::Lf,
-                decimal_comma: true,
+                decimal_mark: DecimalMark::Comma,
                 date_order: DateOrder::DayFirst,
             },
-            loss_accepted: true,
+            loss_answer: LossAnswer::KeepCsv,
+            number_formats: NumberFormats::Changed,
         }
     }
 
@@ -478,9 +479,7 @@ mod tests {
         let document = documents.get(id).unwrap();
         assert_eq!(
             document.csv,
-            Some(CsvBinding::new(CsvOptions::exported_as(Path::new(
-                "export.tsv"
-            ))))
+            Some(CsvBinding::new(CsvOptions::exported_as(Delimiter::Tab)))
         );
         let id = open_file(&mut documents, "book.xlsx");
         assert_eq!(documents.get(id).unwrap().csv, None);

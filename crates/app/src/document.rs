@@ -154,7 +154,7 @@ impl Document {
         let csv = path
             .as_deref()
             .filter(|path| files::is_delimited_text(path))
-            .map(|path| CsvBinding::new(CsvOptions::exported_as(path)));
+            .map(|path| CsvBinding::new(CsvOptions::exported_as(files::export_delimiter(path))));
         Document {
             id,
             space,

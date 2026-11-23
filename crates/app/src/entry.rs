@@ -7,7 +7,7 @@ use zenkai_grid::ViewState;
 use zenkai_i18n::t;
 use zenkai_types::{SheetId, WorkbookId};
 
-use crate::csv_options::CsvBinding;
+use crate::csv_options::{CsvBinding, CsvOptions};
 use crate::document::{Document, FileJob};
 use crate::notes_tab::NotesTab;
 use crate::pdf::PdfPosition;
@@ -85,12 +85,25 @@ impl FileSeen {
         })
     }
 
+    pub fn of(path: &Path) -> FileSeen {
+        let stamp = Stamp::of(path)
+            .inspect_err(|error| tracing::warn!(%error, ?path, "could not stamp a file"))
+            .ok();
+        FileSeen::from_stamp(stamp)
+    }
+
     pub fn changed(&self, now: Stamp) -> bool {
         match self.stamp {
             Some(seen) => seen != now,
             None => now.modified() > self.at,
         }
     }
+}
+
+// What reading a CSV file leaves for the document made of it.
+pub struct CsvLoad {
+    pub options: CsvOptions,
+    pub seen: FileSeen,
 }
 
 // What a workbook left in memory when it went to disk with its undo history: where its dump

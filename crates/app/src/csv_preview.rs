@@ -7,10 +7,7 @@ use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use zenkai_formats::{
-    DateOrder, Delimiter, ParsedCsv, detect_date_order, detect_decimal_comma, normalize_day_first,
-    normalize_decimal_comma,
-};
+use zenkai_formats::{DateOrder, DecimalMark, Delimiter, Guess, ParsedCsv, apply};
 
 use crate::actions::{CancelCsvImport, ConfirmCsvImport};
 use crate::entry::FileSeen;
@@ -43,46 +40,10 @@ pub struct CsvPreview {
     pub seen: FileSeen,
 }
 
-/// How numbers and dates are read on import; guessed from the file, switchable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Guess {
-    pub decimal_comma: bool,
-    pub date_order: DateOrder,
-    pub columns: usize,
-}
-
-/// Rewrites day-first dates and decimal-comma numbers as the import will. Dates go first:
-/// a day-first date written with dots must not be read as a grouped number.
-pub fn apply(decimal_comma: bool, date_order: DateOrder, rows: &mut [Vec<String>]) {
-    if date_order == DateOrder::DayFirst {
-        normalize_day_first(rows);
-    }
-    if decimal_comma {
-        normalize_decimal_comma(rows);
-    }
-}
-
-/// Scans every row, so it runs on a background thread.
-pub fn guess(parsed: &ParsedCsv) -> Guess {
-    let decimal_comma = parsed.delimiter != Delimiter::Comma && detect_decimal_comma(&parsed.rows);
-    // Dates that read both ways follow the number style: a decimal comma means a locale
-    // that writes the day first.
-    let date_order = detect_date_order(&parsed.rows).unwrap_or(if decimal_comma {
-        DateOrder::DayFirst
-    } else {
-        DateOrder::MonthFirst
-    });
-    Guess {
-        decimal_comma,
-        date_order,
-        columns: parsed.rows.iter().map(Vec::len).max().unwrap_or(0),
-    }
-}
-
 #[derive(Clone, Copy)]
 pub enum PreviewEvent {
     Delimiter(Delimiter),
-    DecimalComma(bool),
+    DecimalMark(DecimalMark),
     DateOrder(DateOrder),
 }
 
@@ -107,7 +68,7 @@ pub fn render(
         .map(|row| row.iter().take(PREVIEW_COLS).cloned().collect())
         .collect();
     apply(
-        preview.guess.decimal_comma,
+        preview.guess.decimal_mark,
         preview.guess.date_order,
         &mut shown,
     );
@@ -152,13 +113,14 @@ pub fn render(
             PreviewEvent::Delimiter(delimiter),
         )
     });
-    let decimal_buttons = [(false, "1.5"), (true, "1,5")].map(|(comma, label)| {
-        choice(
-            label,
-            preview.guess.decimal_comma == comma,
-            PreviewEvent::DecimalComma(comma),
-        )
-    });
+    let decimal_buttons =
+        [(DecimalMark::Dot, "1.5"), (DecimalMark::Comma, "1,5")].map(|(mark, label)| {
+            choice(
+                label,
+                preview.guess.decimal_mark == mark,
+                PreviewEvent::DecimalMark(mark),
+            )
+        });
     let date_buttons = [
         (DateOrder::DayFirst, t!("csv.date_day_first")),
         (DateOrder::MonthFirst, t!("csv.date_month_first")),
