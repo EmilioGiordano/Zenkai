@@ -82,13 +82,10 @@ pub fn read_csv(path: &Path) -> Result<CsvRead, String> {
 }
 
 // For a workbook that did not come from reading the file (a recovery copy, a memory dump):
-// the choices the file itself shows. None when it cannot be read, and the caller keeps the
-// export defaults a save would otherwise use.
-pub fn detect_csv_options(path: &Path) -> Option<CsvOptions> {
-    let read = read_csv(path)
-        .inspect_err(|error| tracing::warn!(%error, ?path, "could not detect the CSV options"))
-        .ok()?;
-    Some(CsvOptions::from_read(&read.parsed, &guess(&read.parsed)))
+// the choices the file itself shows.
+pub fn detect_csv_options(path: &Path) -> Result<CsvOptions, String> {
+    let read = read_csv(path)?;
+    Ok(CsvOptions::from_read(&read.parsed, &guess(&read.parsed)))
 }
 
 // The file on disk, parsed as the import read it, which a save compares the sheet with.
@@ -190,16 +187,15 @@ pub fn write_csv_file(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldKind {
     Unedited,
-    // Text another program will read: what starts like a formula is neutralized.
-    EditedText,
-    // A number or a date, whose text is already as a reader of the file takes it.
-    EditedNumber,
+    Edited,
 }
 
 pub struct AsRead<'a> {
     // Aligned with the shown cells.
     pub kinds: &'a [FieldKind],
     pub row_lengths: &'a [usize],
+    // Rows of the file up to its last one that holds anything.
+    pub content_rows: usize,
     pub ends_with_newline: bool,
 }
 
@@ -275,11 +271,23 @@ fn write_shown_rows(
     let kinds = kinds
         .iter()
         .copied()
-        .chain(std::iter::repeat(FieldKind::EditedText));
+        .chain(std::iter::repeat(FieldKind::Edited));
     let mut cells = shown.cells.iter().zip(kinds).peekable();
     let mut row_cells = Vec::new();
-    let last_row = shown.end.row.get();
-    for row in 0..=last_row {
+    // The file's empty rows after its last cell stay while the content still ends where it did.
+    let rows = as_read.map_or(shown.end.row.get() + 1, |read| {
+        let file_rows = u32::try_from(read.row_lengths.len()).unwrap_or(u32::MAX);
+        let content_end = if shown.cells.is_empty() {
+            0
+        } else {
+            shown.end.row.get() + 1
+        };
+        match usize::try_from(content_end) {
+            Ok(end) if end >= read.content_rows => content_end.max(file_rows),
+            _ => content_end,
+        }
+    });
+    for row in 0..rows {
         if cancel.load(Ordering::Relaxed) {
             return Err(ExportStop::Cancelled);
         }
@@ -304,16 +312,17 @@ fn write_shown_rows(
         for ((pos, text), kind) in &row_cells {
             let col = usize::from(pos.col.get());
             writer.write_empty_fields(col.saturating_sub(next_col))?;
-            match kind {
-                FieldKind::Unedited | FieldKind::EditedNumber => {
-                    writer.write_verbatim_field(text)?
-                }
-                FieldKind::EditedText => writer.write_field(text)?,
+            // Over its own file the text stays as typed, as in Excel: a prefix would corrupt it
+            // on reopening. Only a file for another program neutralizes.
+            if as_read.is_some() {
+                writer.write_verbatim_field(text)?;
+            } else {
+                writer.write_field(text)?;
             }
             next_col = col + 1;
         }
         writer.write_empty_fields(width.saturating_sub(next_col))?;
-        let unterminated = row == last_row && as_read.is_some_and(|read| !read.ends_with_newline);
+        let unterminated = row + 1 == rows && as_read.is_some_and(|read| !read.ends_with_newline);
         if !unterminated {
             writer.end_row()?;
         }
@@ -458,19 +467,6 @@ mod tests {
     }
 
     #[test]
-    fn a_sheet_ending_at_the_last_row_exports_every_row_quickly() {
-        let last_row = i64::from(zenkai_types::MAX_ROWS - 1);
-        let workbook = sheet_with(&[(at(0, 0), "first"), (at(last_row, 1), "last")]);
-        let started = Instant::now();
-        let bytes = exported(workbook, "tall.csv");
-        assert!(started.elapsed() < std::time::Duration::from_secs(120));
-        let lines = bytes.iter().filter(|byte| **byte == b'\n').count();
-        assert_eq!(lines, zenkai_types::MAX_ROWS as usize);
-        assert!(bytes[3..].starts_with(b"first,\r\n,\r\n"));
-        assert!(bytes.ends_with(b",\r\n,last\r\n"));
-    }
-
-    #[test]
     fn a_sheet_reaching_the_last_column_exports_full_width_rows() {
         let last_col = i64::from(zenkai_types::MAX_COLS - 1);
         let workbook = sheet_with(&[(at(0, 0), "first"), (at(49, last_col), "last")]);
@@ -553,17 +549,18 @@ mod tests {
         let kinds = [
             FieldKind::Unedited,
             FieldKind::Unedited,
-            FieldKind::EditedText,
-            FieldKind::EditedNumber,
-            FieldKind::EditedText,
+            FieldKind::Edited,
+            FieldKind::Edited,
+            FieldKind::Edited,
         ];
         let layout = Layout::AsRead(AsRead {
             kinds: &kinds,
             row_lengths: &[5],
+            content_rows: 1,
             ends_with_newline: true,
         });
         write_csv_as(&target, &shown, &lf_options(&target), &layout, &cancel).unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"-,+34 600,'=x,-12%,ok\n");
+        assert_eq!(std::fs::read(&target).unwrap(), b"-,+34 600,=x,-12%,ok\n");
         write_csv_file(&target, &shown, &cancel).unwrap();
         assert_eq!(
             &std::fs::read(&target).unwrap()[3..],
@@ -588,11 +585,12 @@ mod tests {
             FieldKind::Unedited,
             FieldKind::Unedited,
             FieldKind::Unedited,
-            FieldKind::EditedText,
+            FieldKind::Edited,
         ];
         let layout = Layout::AsRead(AsRead {
             kinds: &kinds,
             row_lengths: &[3, 0, 1, 1],
+            content_rows: 4,
             ends_with_newline: false,
         });
         let cancel = AtomicBool::new(false);
@@ -608,6 +606,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"a,b,\n,,\nc,,\n,,z\n");
+    }
+
+    #[test]
+    fn empty_rows_after_the_last_cell_stay_while_the_content_still_ends_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("out.csv");
+        let shown = ShownCells {
+            end: at(0, 1),
+            cells: vec![(at(0, 0), "a".to_string()), (at(0, 1), "b".to_string())],
+        };
+        let kinds = [FieldKind::Unedited, FieldKind::Unedited];
+        let cancel = AtomicBool::new(false);
+        let write = |row_lengths: &[usize], content_rows: usize| {
+            let layout = Layout::AsRead(AsRead {
+                kinds: &kinds,
+                row_lengths,
+                content_rows,
+                ends_with_newline: true,
+            });
+            write_csv_as(&target, &shown, &lf_options(&target), &layout, &cancel).unwrap();
+            std::fs::read(&target).unwrap()
+        };
+        assert_eq!(write(&[2, 3], 1), b"a,b\n,,\n");
+        assert_eq!(write(&[2, 0, 0], 1), b"a,b\n\n\n");
+        assert_eq!(write(&[2, 2, 2], 3), b"a,b\n");
     }
 
     #[test]

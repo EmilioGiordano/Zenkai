@@ -64,7 +64,7 @@ use crate::clipboard;
 use crate::close_prompt::{CloseGoal, Departure};
 use crate::csv_export_size::ExportSize;
 use crate::csv_io;
-use crate::csv_options::{CsvBinding, CsvOptions, NumberFormats};
+use crate::csv_options::{CsvBinding, CsvOptions};
 use crate::csv_preview::{self, CsvPreview};
 use crate::decimals;
 use crate::document::{self, ChangedFile, Document, DocumentSave, FileJob};
@@ -2556,9 +2556,6 @@ impl Workspace {
             return;
         };
         let range = self.selection(cx);
-        if matches!(change, StyleChange::NumberFormat(_)) {
-            self.note_number_format_edit();
-        }
         self.edit(window, cx, move |wb| {
             wb.as_one_undo_step(|wb| {
                 wb.apply_style(sheet, range, change)?;
@@ -2568,17 +2565,6 @@ impl Workspace {
                 Ok(())
             })
         });
-    }
-
-    // A CSV cannot hold a number format, so the save asks once after one was changed.
-    fn note_number_format_edit(&mut self) {
-        if let Some(binding) = self
-            .documents
-            .active_mut()
-            .and_then(|document| document.csv.as_mut())
-        {
-            binding.number_formats = NumberFormats::Changed;
-        }
     }
 
     fn toggle_flag(
@@ -3132,7 +3118,6 @@ impl Workspace {
         ) else {
             return;
         };
-        self.note_number_format_edit();
         self.edit(window, cx, move |wb| {
             wb.as_one_undo_step(|wb| {
                 wb.set_number_format(sheet, range, &code)?;
@@ -3257,7 +3242,6 @@ impl Workspace {
         let Some(sheet) = self.active_sheet() else {
             return;
         };
-        self.note_number_format_edit();
         self.edit(window, cx, move |wb| {
             wb.as_one_undo_step(|wb| {
                 wb.set_number_format(sheet, range, &code)?;
@@ -4337,7 +4321,6 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ClearFormats, window, cx| {
                 if let Some(sheet) = this.active_sheet() {
                     let range = this.selection(cx);
-                    this.note_number_format_edit();
                     this.edit(window, cx, move |wb| wb.clear_formats(sheet, range));
                 }
             }))

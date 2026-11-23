@@ -131,7 +131,7 @@ mod tests {
     use super::super::test_support::*;
     use super::super::{Installed, Intent, Provenance};
     use super::*;
-    use crate::csv_options::{CsvBinding, CsvOptions, LossAnswer, NumberFormats};
+    use crate::csv_options::{CsvBinding, CsvOptions, Losses};
     use crate::entry::{CsvLoad, Entry, FileSeen, LinkStatus};
     use crate::session::{FileRecord, ViewRecord};
     use crate::spaces::SpaceId;
@@ -407,15 +407,25 @@ mod tests {
 
     fn csv_binding() -> CsvBinding {
         CsvBinding {
-            options: CsvOptions {
-                delimiter: Delimiter::Semicolon,
-                encoding: Encoding::Windows1252,
-                line_ending: LineEnding::Lf,
-                decimal_mark: DecimalMark::Comma,
-                date_order: DateOrder::DayFirst,
+            options: Some(read_options()),
+            accepted: Losses {
+                formatting: true,
+                ..Losses::default()
             },
-            loss_answer: LossAnswer::KeepCsv,
-            number_formats: NumberFormats::Changed,
+            introduced: Losses {
+                number_formats: true,
+                ..Losses::default()
+            },
+        }
+    }
+
+    fn read_options() -> CsvOptions {
+        CsvOptions {
+            delimiter: Delimiter::Semicolon,
+            encoding: Encoding::Windows1252,
+            line_ending: LineEnding::Lf,
+            decimal_mark: DecimalMark::Comma,
+            date_order: DateOrder::DayFirst,
         }
     }
 
@@ -463,24 +473,21 @@ mod tests {
             .unwrap();
         let mut read = loaded(id);
         read.csv = Some(CsvLoad {
-            options: csv_binding().options,
+            options: read_options(),
             seen: FileSeen::unknown(),
         });
         documents.install(read);
         let document = documents.active().unwrap();
-        assert_eq!(document.csv, Some(CsvBinding::new(csv_binding().options)));
+        assert_eq!(document.csv, Some(CsvBinding::new(read_options())));
         assert!(document.file_guard().is_some());
     }
 
     #[test]
-    fn a_document_with_a_delimited_path_is_always_a_csv_never_an_xlsx_to_write() {
+    fn a_document_with_a_delimited_path_is_always_a_csv_with_options_still_to_find() {
         let mut documents = documents();
         let id = open_file(&mut documents, "export.tsv");
         let document = documents.get(id).unwrap();
-        assert_eq!(
-            document.csv,
-            Some(CsvBinding::new(CsvOptions::exported_as(Delimiter::Tab)))
-        );
+        assert_eq!(document.csv, Some(CsvBinding::unresolved()));
         let id = open_file(&mut documents, "book.xlsx");
         assert_eq!(documents.get(id).unwrap().csv, None);
     }

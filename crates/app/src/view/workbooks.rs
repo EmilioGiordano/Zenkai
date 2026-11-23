@@ -94,15 +94,17 @@ fn arrival(load: Option<LinkLoad>, delivered: bool) -> Arrival {
 }
 
 // A copy of a CSV document's work (a recovery copy, a memory dump) from a session that did not
-// record how the file was read: the file shows it, instead of the export defaults a save would
-// otherwise write the CSV in.
+// record how the file was read: the file shows it. If it cannot be read the options stay unknown
+// and a save reads them then, never guessing export defaults.
 fn csv_of_copy(link: &Link) -> Option<CsvLoad> {
-    let path = link
-        .path
-        .as_deref()
-        .filter(|path| link.csv.is_none() && files::is_delimited_text(path))?;
+    let path = link.path.as_deref().filter(|path| {
+        link.csv.is_none_or(|binding| binding.options.is_none()) && files::is_delimited_text(path)
+    })?;
+    let options = csv_io::detect_csv_options(path)
+        .inspect_err(|error| tracing::warn!(%error, ?path, "the options of a CSV stay unknown"))
+        .ok()?;
     Some(CsvLoad {
-        options: csv_io::detect_csv_options(path)?,
+        options,
         seen: link
             .rested
             .as_ref()
@@ -195,7 +197,7 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
         return Some(LinkLoad::Missing);
     };
     let loaded = if files::is_delimited_text(path) {
-        csv_io::load_csv(path, link.csv.map(|binding| binding.options))
+        csv_io::load_csv(path, link.csv.and_then(|binding| binding.options))
     } else {
         files::load_workbook(path, reader, cancel)
     };
@@ -1116,6 +1118,15 @@ mod tests {
         assert_eq!(csv.options.delimiter, Delimiter::Semicolon);
         assert_eq!(csv.options.line_ending, LineEnding::Crlf);
         assert_eq!(csv.options.decimal_mark, DecimalMark::Comma);
+    }
+
+    #[test]
+    fn a_csv_document_restored_while_its_file_cannot_be_read_keeps_its_options_unknown() {
+        let mut setup = hibernated();
+        setup.link.path = Some(setup._dir.path().join("gone.csv"));
+        let (file, provenance, _) = loaded(read(&setup.link));
+        assert_eq!(provenance, Provenance::Dump);
+        assert!(file.csv.is_none());
     }
 
     #[test]

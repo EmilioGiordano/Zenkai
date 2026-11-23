@@ -13,7 +13,7 @@ use zenkai_grid::{GridCell, ViewState};
 use zenkai_types::{CellPos, Contents, Range, SheetId, SheetInfo, WorkbookId};
 
 use crate::agent_review::Review;
-use crate::csv_options::{CsvBinding, CsvOptions};
+use crate::csv_options::CsvBinding;
 use crate::entry::{FileSeen, display_name};
 use crate::files;
 use crate::find::FindBar;
@@ -154,7 +154,7 @@ impl Document {
         let csv = path
             .as_deref()
             .filter(|path| files::is_delimited_text(path))
-            .map(|path| CsvBinding::new(CsvOptions::exported_as(files::export_delimiter(path))));
+            .map(|_| CsvBinding::unresolved());
         Document {
             id,
             space,
@@ -471,8 +471,33 @@ impl Document {
         }
         self.batch_running = false;
         self.stale.clear();
+        self.note_format_edits();
         self.sync_sheets();
         true
+    }
+
+    // Every edit of the workbook, from the grid, a paste or an agent, ends in a batch, so this is
+    // where a CSV learns that formatting a CSV cannot hold was changed. If the workbook cannot
+    // be read now, it is taken that something was.
+    fn note_format_edits(&mut self) {
+        let Some(binding) = self.csv.as_mut() else {
+            return;
+        };
+        let edits = self
+            .workbook
+            .try_read()
+            .ok()
+            .map(|workbook| workbook.format_edits());
+        match edits {
+            Some(edits) => {
+                binding.introduced.number_formats |= edits.numbers > 0;
+                binding.introduced.formatting |= edits.other > 0;
+            }
+            None => {
+                binding.introduced.number_formats = true;
+                binding.introduced.formatting = true;
+            }
+        }
     }
 
     pub fn sheets_stale(&self) -> bool {

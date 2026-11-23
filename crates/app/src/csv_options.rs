@@ -47,39 +47,67 @@ impl CsvOptions {
     }
 }
 
+// The kinds of content a CSV cannot hold. A set of them says what a save would lose, what the
+// user accepted losing, and what edits have introduced.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LossAnswer {
-    #[default]
-    NotAsked,
-    // The user chose to keep the CSV format although the workbook holds more than a CSV can.
-    KeepCsv,
+#[serde(default)]
+pub struct Losses {
+    pub sheets: bool,
+    pub formulas: bool,
+    pub formatting: bool,
+    pub number_formats: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NumberFormats {
-    #[default]
-    AsRead,
-    // A number format was edited since the file was read, which a CSV cannot hold.
-    Changed,
+impl Losses {
+    pub fn any(self) -> bool {
+        self.sheets || self.formulas || self.formatting || self.number_formats
+    }
+
+    // The kinds in `self` that `accepted` does not cover.
+    pub fn beyond(self, accepted: Losses) -> Losses {
+        Losses {
+            sheets: self.sheets && !accepted.sheets,
+            formulas: self.formulas && !accepted.formulas,
+            formatting: self.formatting && !accepted.formatting,
+            number_formats: self.number_formats && !accepted.number_formats,
+        }
+    }
+
+    pub fn with(self, other: Losses) -> Losses {
+        Losses {
+            sheets: self.sheets || other.sheets,
+            formulas: self.formulas || other.formulas,
+            formatting: self.formatting || other.formatting,
+            number_formats: self.number_formats || other.number_formats,
+        }
+    }
 }
 
+// A document that is the CSV file itself. `options` is `None` until the file has been read for
+// them; a save reads it then, and fails if it cannot, rather than write in a format guessed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CsvBinding {
-    pub options: CsvOptions,
+    pub options: Option<CsvOptions>,
     #[serde(default)]
-    pub loss_answer: LossAnswer,
+    pub accepted: Losses,
+    // Formatting and number formats changed by edits since the file was read.
     #[serde(default)]
-    pub number_formats: NumberFormats,
+    pub introduced: Losses,
 }
 
 impl CsvBinding {
     pub fn new(options: CsvOptions) -> CsvBinding {
         CsvBinding {
-            options,
-            loss_answer: LossAnswer::NotAsked,
-            number_formats: NumberFormats::AsRead,
+            options: Some(options),
+            ..CsvBinding::unresolved()
+        }
+    }
+
+    pub fn unresolved() -> CsvBinding {
+        CsvBinding {
+            options: None,
+            accepted: Losses::default(),
+            introduced: Losses::default(),
         }
     }
 }
@@ -105,21 +133,50 @@ mod tests {
             ] {
                 for line_ending in [LineEnding::Crlf, LineEnding::Lf, LineEnding::Cr] {
                     let binding = CsvBinding {
-                        options: CsvOptions {
+                        options: Some(CsvOptions {
                             delimiter,
                             encoding,
                             line_ending,
                             decimal_mark: DecimalMark::Comma,
                             date_order: DateOrder::DayFirst,
+                        }),
+                        accepted: Losses {
+                            formatting: true,
+                            ..Losses::default()
                         },
-                        loss_answer: LossAnswer::KeepCsv,
-                        number_formats: NumberFormats::Changed,
+                        introduced: Losses {
+                            number_formats: true,
+                            ..Losses::default()
+                        },
                     };
                     let json = serde_json::to_string(&binding).unwrap();
                     assert_eq!(serde_json::from_str::<CsvBinding>(&json).unwrap(), binding);
                 }
             }
         }
+        let unresolved = serde_json::to_string(&CsvBinding::unresolved()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<CsvBinding>(&unresolved).unwrap(),
+            CsvBinding::unresolved()
+        );
+    }
+
+    #[test]
+    fn what_a_save_would_lose_is_asked_only_for_the_kinds_not_yet_accepted() {
+        let found = Losses {
+            sheets: true,
+            formatting: true,
+            ..Losses::default()
+        };
+        let accepted = Losses {
+            formatting: true,
+            ..Losses::default()
+        };
+        let new = found.beyond(accepted);
+        assert!(new.sheets && !new.formatting);
+        assert!(!found.beyond(found).any());
+        assert!(!found.beyond(accepted.with(found)).any());
+        assert!(accepted.with(found).sheets);
     }
 
     #[test]

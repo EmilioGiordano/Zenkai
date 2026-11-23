@@ -8,8 +8,8 @@ use zenkai_i18n::t;
 use zenkai_types::WorkbookId;
 
 use super::{Overwrite, Severity, Workspace, file_job_refusal};
-use crate::csv_options::{CsvBinding, LossAnswer};
-use crate::csv_save::{CsvLoss, CsvSave, CsvSaveRequest, save_csv_file};
+use crate::csv_options::{CsvBinding, Losses};
+use crate::csv_save::{CsvSave, CsvSaveRequest, save_csv_file};
 use crate::document::{ChangedFile, Document, FileJob};
 use crate::failure::{offer_another_location, save_failure};
 use crate::job_pill::LongJob;
@@ -27,11 +27,12 @@ fn loss_answers() -> [PromptButton; 3] {
     ]
 }
 
-fn loss_list(loss: CsvLoss) -> String {
+fn loss_list(loss: Losses) -> String {
     let named = [
         (loss.sheets, t!("save.csv_loss.sheets")),
         (loss.formulas, t!("save.csv_loss.formulas")),
         (loss.formatting, t!("save.csv_loss.formatting")),
+        (loss.number_formats, t!("save.csv_loss.number_formats")),
     ];
     let lost: Vec<&str> = named
         .into_iter()
@@ -129,7 +130,7 @@ impl Workspace {
             document.end_file_job(generation);
             let current = document.is_current(generation);
             if current {
-                let end = if matches!(result, Ok(CsvSave::Written(_))) {
+                let end = if matches!(result, Ok(CsvSave::Written(..))) {
                     JobEnd::Saved {
                         edited_meanwhile: document.edit_count() != edits_at_start,
                     }
@@ -148,9 +149,12 @@ impl Workspace {
             return;
         };
         let fully_saved = match result {
-            Ok(CsvSave::Written(seen)) => {
+            Ok(CsvSave::Written(seen, options)) => {
                 document.saved_over_file(Vec::new());
                 document.guard_file(seen);
+                if let Some(binding) = document.csv.as_mut() {
+                    binding.options.get_or_insert(options);
+                }
                 let edited_meanwhile = document.edit_count() != edits_at_start;
                 document.dirty = edited_meanwhile;
                 if shown {
@@ -164,15 +168,19 @@ impl Workspace {
                 }
                 !edited_meanwhile
             }
-            Ok(CsvSave::WouldLose(loss)) => {
+            Ok(CsvSave::WouldLose(found)) => {
                 self.flush_edits(id, cx);
-                self.confirm_csv_loss(id, path, loss, changed, window, cx);
+                self.confirm_csv_loss(id, path, found, changed, window, cx);
                 return;
             }
             Ok(CsvSave::LossyFile) => {
                 self.flush_edits(id, cx);
                 self.notify(Severity::Warning, t!("save.csv_lossy"), cx);
-                self.save_as_dialog(id, window, cx);
+                if shown {
+                    self.save_as_dialog(id, window, cx);
+                } else {
+                    self.save_ended(id, false, window, cx);
+                }
                 return;
             }
             Ok(CsvSave::FileChanged) => {
@@ -208,7 +216,7 @@ impl Workspace {
         &mut self,
         id: WorkbookId,
         path: PathBuf,
-        loss: CsvLoss,
+        found: Losses,
         changed: ChangedFile,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -218,10 +226,18 @@ impl Workspace {
             .get(id)
             .map(Document::name)
             .unwrap_or_default();
+        let accepted = self
+            .documents
+            .get(id)
+            .and_then(|document| document.csv)
+            .map_or_else(Losses::default, |binding| binding.accepted);
         let answer = self.ask(
             PromptLevel::Warning,
             &t!("save.csv_loses_title", name = name),
-            Some(&t!("save.csv_loses_detail", list = loss_list(loss))),
+            Some(&t!(
+                "save.csv_loses_detail",
+                list = loss_list(found.beyond(accepted))
+            )),
             &loss_answers(),
             window,
             cx,
@@ -235,7 +251,7 @@ impl Workspace {
                         .get_mut(id)
                         .and_then(|document| document.csv.as_mut())
                         .map(|binding| {
-                            binding.loss_answer = LossAnswer::KeepCsv;
+                            binding.accepted = binding.accepted.with(found);
                             *binding
                         });
                     match kept {
@@ -272,21 +288,23 @@ mod tests {
 
     #[test]
     fn the_prompt_names_only_what_would_be_lost() {
-        let formulas_only = CsvLoss {
+        let formulas_only = Losses {
             formulas: true,
-            ..CsvLoss::default()
+            ..Losses::default()
         };
         assert_eq!(loss_list(formulas_only), t!("save.csv_loss.formulas"));
-        let all = CsvLoss {
+        let all = Losses {
             sheets: true,
             formulas: true,
             formatting: true,
+            number_formats: true,
         };
         let list = loss_list(all);
         for label in [
             t!("save.csv_loss.sheets"),
             t!("save.csv_loss.formulas"),
             t!("save.csv_loss.formatting"),
+            t!("save.csv_loss.number_formats"),
         ] {
             assert!(list.contains(label), "{list}");
         }

@@ -164,7 +164,7 @@ impl Loaded {
         }
         if let Some(csv) = self.csv {
             document.csv = Some(CsvBinding {
-                options: csv.options,
+                options: Some(csv.options),
                 ..link.csv.unwrap_or_else(|| CsvBinding::new(csv.options))
             });
             document.guard_file(csv.seen);
