@@ -20,14 +20,15 @@ pub struct CachedModel {
     format_edits: FormatEdits,
 }
 
-// How many commands other than entering or clearing cell content ran on this workbook since it
-// was built or woken, the ones that can change a number format apart from the rest. Undo does
-// not take them back, so a count above zero means a format may have changed, never that none
-// did.
+// How many commands that can change what a CSV cannot hold ran on this workbook since it was
+// built or woken: number formats, other styles and sizes, and rows or columns inserted or
+// deleted. Undo does not take them back, so a count above zero means something may have
+// changed, never that nothing did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct FormatEdits {
     pub numbers: u64,
     pub other: u64,
+    pub structure: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -165,11 +166,15 @@ impl CachedModel {
         self.format_edits.other += 1;
     }
 
+    pub(crate) fn count_structure_edit(&mut self) {
+        self.format_edits.structure += 1;
+    }
+
     pub(crate) fn set_format_edits(&mut self, edits: FormatEdits) {
         self.format_edits = edits;
     }
 
-    // Commands that carry the formatting of cells along with their content.
+    // Commands that carry the style of cells along with their content.
     pub(crate) fn count_copy_edit(&mut self) {
         self.format_edits.numbers += 1;
         self.format_edits.other += 1;
