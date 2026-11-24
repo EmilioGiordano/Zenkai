@@ -11,7 +11,7 @@ pub use csv_format::{
     CsvError, Delimiter, Encoding, Fidelity, FinalNewline, LineEnding, MAX_CSV_BYTES, ParsedCsv,
     parse_csv,
 };
-pub use csv_guess::{DecimalMark, Guess, apply, guess, number_text};
+pub use csv_guess::{DecimalMark, Guess, apply, guess, import_input, number_text};
 pub use csv_write::{CsvFormat, CsvWriter, neutralize, write_csv};
 pub use dates::{
     DateOrder, date_serial, day_first_field, detect_date_order, iso_date, normalize_day_first,
