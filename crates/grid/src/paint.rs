@@ -1002,4 +1002,48 @@ mod tests {
         assert_eq!(f32::from(area.origin.y), 44.0);
         assert!(f32::from(area.origin.x + area.size.width) <= 168.0 + 2.0);
     }
+
+    #[test]
+    fn multiple_whole_columns_or_rows_span_their_visible_extent() {
+        let columns = Columns {
+            xs: vec![
+                (ColIdx::default(), 40.0, 64.0),
+                (ColIdx::clamped(1), 104.0, 64.0),
+                (ColIdx::clamped(2), 168.0, 80.0),
+            ],
+        };
+        let rows = Rows {
+            ys: vec![
+                (row(0), 22.0, 20.0),
+                (row(1), 42.0, 20.0),
+                (row(2), 62.0, 20.0),
+            ],
+        };
+        let origin = point(px(0.0), px(0.0));
+        let cols = Range::new(
+            CellPos::new(RowIdx::default(), ColIdx::clamped(1)),
+            CellPos::new(RowIdx::LAST, ColIdx::clamped(2)),
+        );
+        let area = range_rect(cols, &columns, &rows, origin, 1.0).unwrap();
+        assert_eq!(f32::from(area.origin.x), 104.0);
+        assert_eq!(f32::from(area.origin.y), 22.0);
+        assert_eq!(f32::from(area.size.width), 144.0);
+        assert_eq!(f32::from(area.size.height), 62.0);
+
+        let rows_range = Range::new(
+            CellPos::new(row(1), ColIdx::default()),
+            CellPos::new(row(2), ColIdx::LAST),
+        );
+        let area = range_rect(rows_range, &columns, &rows, origin, 1.0).unwrap();
+        assert_eq!(f32::from(area.origin.x), 40.0);
+        assert_eq!(f32::from(area.origin.y), 42.0);
+        assert_eq!(f32::from(area.size.width), 210.0);
+        assert_eq!(f32::from(area.size.height), 40.0);
+
+        let offscreen_col = Range::new(
+            CellPos::new(RowIdx::default(), ColIdx::clamped(5)),
+            CellPos::new(RowIdx::LAST, ColIdx::clamped(5)),
+        );
+        assert!(range_rect(offscreen_col, &columns, &rows, origin, 1.0).is_none());
+    }
 }
