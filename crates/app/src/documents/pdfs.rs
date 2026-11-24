@@ -97,6 +97,7 @@ mod tests {
                     csv: None,
                     base: None,
                     file_modified: None,
+                    file_len: None,
                     pdf: position,
                     text_zoom: Default::default(),
                     unsupported: Vec::new(),

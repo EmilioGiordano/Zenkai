@@ -157,6 +157,7 @@ mod tests {
             csv: None,
             base: None,
             file_modified: None,
+            file_len: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
             unsupported: Vec::new(),
@@ -723,8 +724,52 @@ mod tests {
         let opened = zenkai_engine::open_xlsx(&target).unwrap().workbook;
         let mut documents = documents();
         documents.open(opened, Some(target.clone()), Vec::new());
-        let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
-        assert_eq!(recorded(&documents).file_modified, Some(modified));
+        let metadata = std::fs::metadata(&target).unwrap();
+        let record = recorded(&documents);
+        assert_eq!(record.file_modified, Some(metadata.modified().unwrap()));
+        assert_eq!(record.file_len, Some(metadata.len()));
+    }
+
+    #[test]
+    fn the_stamp_of_a_workbook_without_a_patch_base_is_still_recorded_in_the_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("a.xlsx");
+        let book = blank();
+        zenkai_engine::save_xlsx(
+            book.save_snapshot(&target, zenkai_engine::SaveTarget::Document)
+                .unwrap(),
+        )
+        .unwrap();
+        let opened = zenkai_engine::open_xlsx_with(&target, zenkai_engine::XlsxReader::IronCalc)
+            .unwrap()
+            .workbook;
+        let mut documents = documents();
+        documents.open(opened, Some(target.clone()), Vec::new());
+        let metadata = std::fs::metadata(&target).unwrap();
+        let record = recorded(&documents);
+        assert_eq!(record.file_modified, Some(metadata.modified().unwrap()));
+        assert_eq!(record.file_len, Some(metadata.len()));
+    }
+
+    #[test]
+    fn the_stamp_is_still_recorded_while_a_recalculation_holds_the_workbook() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("a.xlsx");
+        let book = blank();
+        zenkai_engine::save_xlsx(
+            book.save_snapshot(&target, zenkai_engine::SaveTarget::Document)
+                .unwrap(),
+        )
+        .unwrap();
+        let opened = zenkai_engine::open_xlsx(&target).unwrap().workbook;
+        let mut documents = documents();
+        documents.open(opened, Some(target.clone()), Vec::new());
+        let shared = documents.active().unwrap().shared_workbook();
+        let _held = shared.write().unwrap();
+        let metadata = std::fs::metadata(&target).unwrap();
+        let record = recorded(&documents);
+        assert_eq!(record.file_modified, Some(metadata.modified().unwrap()));
+        assert_eq!(record.file_len, Some(metadata.len()));
     }
 
     #[test]

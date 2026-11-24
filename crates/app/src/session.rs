@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
-use zenkai_engine::Unsupported;
+use zenkai_engine::{Stamp, Unsupported};
 use zenkai_grid::{Selection, ViewState};
 use zenkai_types::{CellPos, ColIdx, RowIdx, SheetId, WorkbookId};
 
@@ -75,6 +75,8 @@ pub struct FileRecord {
     pub base: Option<StampRecord>,
     #[serde(default)]
     pub file_modified: Option<SystemTime>,
+    #[serde(default)]
+    pub file_len: Option<u64>,
     #[serde(default)]
     pub pdf: PdfPosition,
     #[serde(default)]
@@ -164,6 +166,8 @@ impl Session {
                 file.recovery = None;
                 file.dirty = false;
                 file.active = false;
+                file.file_modified = None;
+                file.file_len = None;
             }
         }
         self
@@ -275,6 +279,24 @@ impl ViewRecord {
 }
 
 pub fn record_of(link: &Link, active: bool) -> FileRecord {
+    let seen = link
+        .path
+        .as_ref()
+        .zip(link.recovery.as_ref())
+        .and(link.rested.as_ref())
+        .map(|rested| rested.file);
+    let file_modified = seen
+        .map(|file| file.stamp.map_or(file.at, |stamp| stamp.modified()))
+        // serde cannot write a time before 1970, and the epoch itself means unknown: both
+        // restore unguarded, so Save asks.
+        .filter(|modified| {
+            modified
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .is_ok_and(|since| !since.is_zero())
+        });
+    let file_len = file_modified
+        .and(seen)
+        .and_then(|file| file.stamp.map(|stamp| stamp.size()));
     FileRecord {
         path: link
             .path
@@ -292,24 +314,8 @@ pub fn record_of(link: &Link, active: bool) -> FileRecord {
         mode: link.mode,
         csv: link.csv.clone(),
         base: link.base,
-        file_modified: link
-            .path
-            .as_ref()
-            .zip(link.recovery.as_ref())
-            .and(link.rested.as_ref())
-            .map(|rested| {
-                rested
-                    .file
-                    .stamp
-                    .map_or(rested.file.at, |stamp| stamp.modified())
-            })
-            // serde cannot write a time before 1970, and the epoch itself means unknown: both
-            // restore unguarded, so Save asks.
-            .filter(|modified| {
-                modified
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .is_ok_and(|since| !since.is_zero())
-            }),
+        file_modified,
+        file_len,
         pdf: link.pdf,
         text_zoom: link.text_zoom,
         unsupported: link
@@ -378,9 +384,12 @@ pub fn link_of(
         pdf: record.pdf,
         text_zoom: record.text_zoom,
         rested: record.file_modified.map(|modified| {
+            let stamp = record
+                .file_len
+                .map(|size| Stamp::from_parts(size, modified));
             Box::new(Rested {
                 file: FileSeen {
-                    stamp: None,
+                    stamp,
                     at: modified,
                 },
                 hibernation: None,
@@ -513,6 +522,7 @@ mod tests {
             csv: None,
             base: None,
             file_modified: None,
+            file_len: None,
             pdf: Default::default(),
             text_zoom: Default::default(),
             unsupported: vec!["charts".to_string(), "macros".to_string()],
@@ -847,12 +857,60 @@ mod tests {
         object.remove("mode");
         object.remove("text_zoom");
         object.remove("file_modified");
+        object.remove("file_len");
         let old: FileRecord = serde_json::from_value(value).unwrap();
         assert_eq!(old.kind, DocumentKind::Workbook);
         assert_eq!(old.mode, ViewMode::Preview);
         assert_eq!(old.text_zoom, TextZoom::default());
         assert_eq!(old.base, None);
         assert_eq!(old.file_modified, None);
+        assert_eq!(old.file_len, None);
+    }
+
+    #[test]
+    fn the_full_file_stamp_survives_the_session_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        std::fs::write(&target, b"original").unwrap();
+        let stamp = Stamp::of(&target).unwrap();
+        let mut link = link_of(&record(), WorkbookId(1), SpaceId(0), Some(dir.path()));
+        link.rested = Some(Box::new(Rested {
+            file: FileSeen::from_stamp(Some(stamp)),
+            hibernation: None,
+        }));
+        let stored = record_of(&link, true);
+        assert_eq!(stored.file_modified, Some(stamp.modified()));
+        assert_eq!(stored.file_len, Some(stamp.size()));
+
+        let json = serde_json::to_string(&stored).unwrap();
+        let back: FileRecord = serde_json::from_str(&json).unwrap();
+        let restored = link_of(&back, WorkbookId(1), SpaceId(0), Some(dir.path()));
+        let seen = restored.rested.unwrap().file;
+        assert_eq!(seen.stamp, Some(stamp));
+        assert!(!seen.changed(stamp));
+
+        let same_time_other_size = Stamp::from_parts(stamp.size() + 1, stamp.modified());
+        assert!(seen.changed(same_time_other_size));
+    }
+
+    #[test]
+    fn a_legacy_session_with_only_file_modified_still_guards_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("book.xlsx");
+        std::fs::write(&target, b"original").unwrap();
+        let stamp = Stamp::of(&target).unwrap();
+        let mut legacy = record();
+        legacy.file_modified = Some(stamp.modified());
+        legacy.file_len = None;
+        let restored = link_of(&legacy, WorkbookId(1), SpaceId(0), Some(dir.path()));
+        let seen = restored.rested.unwrap().file;
+        assert_eq!(seen.stamp, None);
+        assert!(!seen.changed(stamp));
+        let later = Stamp::from_parts(
+            stamp.size(),
+            stamp.modified() + std::time::Duration::from_secs(2),
+        );
+        assert!(seen.changed(later));
     }
 
     #[test]
