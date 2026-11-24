@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use gpui_kit::*;
 use zenkai_agent::protected_view::FileOrigin;
@@ -116,6 +116,20 @@ fn csv_of_copy(link: &Link) -> Option<CsvLoad> {
     })
 }
 
+// A recovery copy is never the document's own file: nothing is copied from it on save,
+// and saving over the original path checks the stamp it was opened with.
+fn detach_recovery_copy(workbook: &mut Workbook, link: &Link) {
+    let Some(path) = link.path.as_deref() else {
+        workbook.forget_saved_file();
+        return;
+    };
+    match link.rested.as_ref().map(|rested| rested.file) {
+        Some(file) if file.stamp.is_some() => workbook.guard_file(path, file.stamp),
+        Some(file) if file.at != SystemTime::UNIX_EPOCH => workbook.forget_saved_file(),
+        _ => workbook.guard_file(path, None),
+    }
+}
+
 // Runs on the background executor. The recovery copy, when there is one, holds the unsaved
 // work and is read instead of the file. None when `cancel` was raised: nothing on disk has
 // been touched, so the link is exactly as it was.
@@ -161,10 +175,11 @@ fn read_link(link: &Link, reader: XlsxReader, cancel: &Arc<AtomicBool>) -> Optio
     let mut recovery_lost = link.recovery_lost;
     if let Some(copy) = link.recovery.as_ref().filter(|copy| copy.exists()) {
         match open_xlsx_cancellable(copy, XlsxReader::Fast, cancel) {
-            Ok(opened) => {
+            Ok(mut opened) => {
                 if cancelled() {
                     return None;
                 }
+                detach_recovery_copy(&mut opened.workbook, link);
                 return Some(LinkLoad::Loaded {
                     file: Box::new(FileLoad {
                         workbook: opened.workbook,
@@ -904,10 +919,13 @@ mod tests {
 
     use super::{Arrival, LinkLoad, arrival, changed_while_out_of_memory, read_link};
     use crate::csv_options::{CsvBinding, CsvOptions};
-    use crate::documents::Provenance;
+    use crate::document::{self, ChangedFile, DocumentSave, FileJob};
+    use crate::documents::{Documents, Loaded, Provenance};
     use crate::entry::{FileSeen, Hibernation, Link, LinkStatus, Rested};
     use crate::files::FileLoad;
     use crate::recovery;
+    use crate::session;
+    use crate::space_appearance::SpaceAppearance;
     use crate::spaces::SpaceId;
 
     struct Setup {
@@ -1350,5 +1368,263 @@ mod tests {
         assert!(file_changed);
         assert!(!dump_lost);
         assert_eq!(text(&file.workbook), "changed elsewhere");
+    }
+
+    fn plain_xlsx(path: &Path) {
+        let mut book = rust_xlsxwriter::Workbook::new();
+        let sheet = book.add_worksheet();
+        sheet.write_number(0, 0, 10.0).unwrap();
+        sheet.write_number(1, 0, 20.0).unwrap();
+        sheet
+            .write_formula(2, 0, rust_xlsxwriter::Formula::new("=SUM(A1:A2)"))
+            .unwrap();
+        sheet.set_column_width(0, 18.0).unwrap();
+        book.save(path).unwrap();
+    }
+
+    struct RestoredWorkbook {
+        _dir: tempfile::TempDir,
+        target: PathBuf,
+        adopted_copy: PathBuf,
+        documents: Documents,
+        active: WorkbookId,
+        file_changed: bool,
+    }
+
+    fn open_edit_quit_and_restore(
+        reader: XlsxReader,
+        mutate_before_restore: impl FnOnce(&Path),
+    ) -> RestoredWorkbook {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("plain.xlsx");
+        let session_dir = dir.path().join("session");
+        let recovery_dir = session_dir.join("recovery");
+        plain_xlsx(&target);
+
+        let opened = zenkai_engine::open_xlsx_with(&target, reader).unwrap();
+        assert!(opened.unsupported.is_empty());
+        let mut documents = Documents::new(Workbook::new_empty().unwrap());
+        let id = documents.open(opened.workbook, Some(target.clone()), opened.unsupported);
+        {
+            let document = documents.get_mut(id).unwrap();
+            document
+                .workbook_mut()
+                .unwrap()
+                .set_input(SheetId(0), CellPos::default(), "50")
+                .unwrap();
+            document.dirty = true;
+        }
+
+        let old_copy = recovery_dir.join("autosave-1-1-0.xlsx");
+        let shared = documents.get(id).unwrap().shared_workbook();
+        document::write_snapshot(
+            &shared,
+            FileJob::Autosaving,
+            &old_copy,
+            SaveTarget::Copy,
+            recovery::write,
+        )
+        .unwrap();
+        documents.get_mut(id).unwrap().mark_recovery_adopted();
+
+        let snapshot = documents.snapshot(true, SpaceAppearance::default(), |doc_id| {
+            (doc_id == id).then(|| old_copy.clone())
+        });
+        session::save(&session_dir, &snapshot).unwrap();
+
+        mutate_before_restore(&target);
+
+        let session::Loaded::Restored(restored_session) = session::load(&session_dir) else {
+            panic!("the session was not restored");
+        };
+        let mut fresh = Documents::new(Workbook::new_empty().unwrap());
+        let active = fresh
+            .restore(&restored_session, Some(&recovery_dir))
+            .unwrap();
+        let link = fresh.start_loading(active).unwrap();
+        let Some(LinkLoad::Loaded {
+            file,
+            provenance,
+            copy,
+            file_changed,
+            ..
+        }) = read(&link)
+        else {
+            panic!("the restored link did not load");
+        };
+        assert_eq!(provenance, Provenance::Recovery);
+        fresh.install(Loaded {
+            id: active,
+            workbook: file.workbook,
+            unsupported: file.unsupported,
+            read_only: file.read_only,
+            origin: file.origin,
+            provenance,
+            csv: file.csv,
+        });
+        let adopted_copy = recovery_dir.join("autosave-2-2-1.xlsx");
+        recovery::adopt(&copy.unwrap(), &adopted_copy).unwrap();
+        fresh.get_mut(active).unwrap().mark_recovery_adopted();
+        RestoredWorkbook {
+            _dir: dir,
+            target,
+            adopted_copy,
+            documents: fresh,
+            active,
+            file_changed,
+        }
+    }
+
+    #[test]
+    fn restoring_a_plain_xlsx_from_recovery_saves_in_place_without_asking() {
+        for reader in [XlsxReader::Fast, XlsxReader::IronCalc] {
+            let mut restored = open_edit_quit_and_restore(reader, |_| {});
+            assert!(!restored.file_changed);
+            let document = restored.documents.get(restored.active).unwrap();
+            assert!(!document.may_lose_unseen_content());
+            assert!(!document.read_only);
+            assert_eq!(document.path.as_deref(), Some(restored.target.as_path()));
+            let guard = document.file_guard();
+            let shared = document.shared_workbook();
+            std::fs::write(&restored.adopted_copy, b"not a zip").unwrap();
+            let saved = document::save_document_file(
+                &shared,
+                &restored.target,
+                &[],
+                ChangedFile::Ask,
+                guard,
+                zenkai_engine::save_xlsx,
+            );
+            assert_eq!(
+                saved.unwrap(),
+                DocumentSave::Written { kept: Vec::new() },
+                "{reader:?}"
+            );
+            let reopened = zenkai_engine::open_xlsx(&restored.target).unwrap().workbook;
+            assert_eq!(text(&reopened), "50");
+            assert_eq!(
+                reopened
+                    .cell(SheetId(0), CellPos::parse_a1("A3").unwrap())
+                    .text,
+                "70"
+            );
+            let document = restored.documents.get_mut(restored.active).unwrap();
+            document.saved_over_file(Vec::new());
+            assert!(!document.restored);
+            assert!(document.file_guard().is_none());
+            assert_eq!(
+                document.file_stamp(),
+                Some(Stamp::of(&restored.target).unwrap())
+            );
+
+            document
+                .workbook_mut()
+                .unwrap()
+                .set_input(SheetId(0), CellPos::default(), "80")
+                .unwrap();
+            let next = document::save_document_file(
+                &shared,
+                &restored.target,
+                &[],
+                ChangedFile::Ask,
+                document.file_guard(),
+                zenkai_engine::save_xlsx,
+            );
+            assert_eq!(
+                next.unwrap(),
+                DocumentSave::Written { kept: Vec::new() },
+                "{reader:?}"
+            );
+            let reopened = zenkai_engine::open_xlsx(&restored.target).unwrap().workbook;
+            assert_eq!(text(&reopened), "80");
+            assert_eq!(
+                reopened
+                    .cell(SheetId(0), CellPos::parse_a1("A3").unwrap())
+                    .text,
+                "100"
+            );
+        }
+    }
+
+    #[test]
+    fn a_restored_workbook_whose_file_was_changed_by_another_program_still_asks() {
+        let restored = open_edit_quit_and_restore(XlsxReader::Fast, |target| {
+            let original_time = std::fs::metadata(target).unwrap().modified().unwrap();
+            write_file(target, "theirs");
+            std::fs::File::options()
+                .write(true)
+                .open(target)
+                .unwrap()
+                .set_modified(original_time + std::time::Duration::from_secs(5))
+                .unwrap();
+        });
+        assert!(restored.file_changed);
+        let document = restored.documents.get(restored.active).unwrap();
+        let shared = document.shared_workbook();
+        let guard = document.file_guard();
+        let asked = document::save_document_file(
+            &shared,
+            &restored.target,
+            &[],
+            ChangedFile::Ask,
+            guard,
+            zenkai_engine::save_xlsx,
+        );
+        assert_eq!(asked.unwrap(), DocumentSave::BaseChanged);
+        let on_disk = zenkai_engine::open_xlsx(&restored.target).unwrap().workbook;
+        assert_eq!(text(&on_disk), "theirs");
+
+        let replaced = document::save_document_file(
+            &shared,
+            &restored.target,
+            &[],
+            ChangedFile::Replace,
+            guard,
+            zenkai_engine::save_xlsx,
+        );
+        assert_eq!(
+            replaced.unwrap(),
+            DocumentSave::Written { kept: Vec::new() }
+        );
+        let updated = zenkai_engine::open_xlsx(&restored.target).unwrap().workbook;
+        assert_eq!(text(&updated), "50");
+    }
+
+    #[test]
+    fn a_restored_workbook_without_a_stored_stamp_still_asks_after_an_autosave() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("plain.xlsx");
+        plain_xlsx(&target);
+        let copy = dir.path().join("autosave-1-1-0.xlsx");
+        write_file(&copy, "recovered");
+        let mut setup = hibernated();
+        setup.link.path = Some(target.clone());
+        setup.link.recovery = Some(copy);
+        setup.link.rested = None;
+
+        let (file, provenance, _) = loaded(read(&setup.link));
+        assert_eq!(provenance, Provenance::Recovery);
+        let shared = std::sync::RwLock::new(file.workbook);
+        let next_copy = dir.path().join("autosave-2-2-0.xlsx");
+        document::write_snapshot(
+            &shared,
+            FileJob::Autosaving,
+            &next_copy,
+            SaveTarget::Copy,
+            recovery::write,
+        )
+        .unwrap();
+
+        let asked = document::save_document_file(
+            &shared,
+            &target,
+            &[],
+            ChangedFile::Ask,
+            None,
+            zenkai_engine::save_xlsx,
+        );
+        assert_eq!(asked.unwrap(), DocumentSave::BaseChanged);
+        let on_disk = zenkai_engine::open_xlsx(&target).unwrap().workbook;
+        assert_eq!(text(&on_disk), "10");
     }
 }
