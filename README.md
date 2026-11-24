@@ -44,4 +44,4 @@ is built with [GPUI](https://www.gpui.rs).
 
 ## License
 
-[Apache-2.0](LICENSE)
+[AGPL-3.0-only](LICENSE). Versions 0.1.0 and 0.1.1 were released under Apache-2.0.

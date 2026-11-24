@@ -23,7 +23,7 @@ exclude = ["vendor"]
 [workspace.package]
 version = "0.1.1"
 edition = "2024"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 publish = false
 
 [workspace.lints.rust]
