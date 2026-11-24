@@ -1869,6 +1869,9 @@ fn wheel_steps(remainder: f32, delta: f32) -> (i64, f32) {
         remainder
     };
     let total = carried + delta;
+    if !total.is_finite() {
+        return (0, 0.0);
+    }
     let steps = total.trunc();
     (steps as i64, total - steps)
 }
@@ -2015,6 +2018,13 @@ mod tests {
         (first..=last)
             .map(|col| ColIdx::clamped(i64::from(col)))
             .collect()
+    }
+
+    #[test]
+    fn a_wheel_delta_that_is_not_a_number_is_dropped() {
+        assert_eq!(wheel_steps(0.5, f32::NAN), (0, 0.0));
+        assert_eq!(wheel_steps(0.0, f32::INFINITY), (0, 0.0));
+        assert_eq!(wheel_steps(0.0, 1.0), (1, 0.0));
     }
 
     #[test]
