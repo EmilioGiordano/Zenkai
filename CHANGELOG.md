@@ -7,6 +7,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1]
+
+### Spreadsheet
+
+- A `.csv` or `.tsv` now opens as the file itself, not as an untitled Book: Save writes back
+  to it in its own separator, encoding and line endings, and cells you did not edit are kept
+  exactly as the file had them. The options preview still shows when the file opens.
+- Before a save would drop something a CSV cannot hold (other sheets, formulas, formatting),
+  Zenkai asks once: keep the CSV, or save as `.xlsx`.
+- The Windows installer adds Zenkai to "Open with" for `.tsv` files too.
+
+### Security
+
+- Update the `url` dependency for RUSTSEC-2026-0592.
+
 ## [0.1.0]
 
 First release. Windows x64; the Linux and macOS (Apple silicon) builds are experimental.
