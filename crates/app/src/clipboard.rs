@@ -3,6 +3,13 @@ use zenkai_types::{CellPos, ColIdx, Range, RowIdx, SheetId, ValueKind};
 
 pub const MAX_COPY_CELLS: u64 = 1_000_000;
 
+pub fn copy_range(selection: Range, used_end: CellPos) -> Option<Range> {
+    let clipped = selection
+        .clip_to(used_end)
+        .unwrap_or(Range::single(selection.start));
+    (clipped.cell_count() <= MAX_COPY_CELLS).then_some(clipped)
+}
+
 // What was copied, as values: text that would read as a formula keeps a leading
 // apostrophe, which Excel and the engine treat as "this is text".
 pub fn values_only(text: &str) -> Vec<Vec<String>> {
@@ -129,5 +136,44 @@ mod tests {
         assert_eq!(rows, vec![vec!["a", "b"], vec!["multi\nline", "q\"x"]]);
         assert_eq!(parse_tsv("1\t2"), vec![vec!["1", "2"]]);
         assert!(parse_tsv("").is_empty());
+    }
+
+    #[test]
+    fn whole_columns_and_rows_clip_to_the_used_area_for_copying() {
+        let used_end = CellPos::parse_a1("D10").unwrap();
+        let whole_col = Range::new(
+            CellPos::new(RowIdx::default(), ColIdx::clamped(1)),
+            CellPos::new(RowIdx::LAST, ColIdx::clamped(1)),
+        );
+        assert_eq!(
+            copy_range(whole_col, used_end),
+            Some(Range::parse_a1("B1:B10").unwrap())
+        );
+        let whole_rows = Range::new(
+            CellPos::new(RowIdx::clamped(2), ColIdx::default()),
+            CellPos::new(RowIdx::clamped(4), ColIdx::LAST),
+        );
+        assert_eq!(
+            copy_range(whole_rows, used_end),
+            Some(Range::parse_a1("A3:D5").unwrap())
+        );
+        let past_used = Range::new(
+            CellPos::new(RowIdx::default(), ColIdx::clamped(6)),
+            CellPos::new(RowIdx::LAST, ColIdx::clamped(6)),
+        );
+        assert_eq!(
+            copy_range(past_used, used_end),
+            Some(Range::parse_a1("G1").unwrap())
+        );
+    }
+
+    #[test]
+    fn copy_refuses_selections_past_the_cell_limit_even_after_clipping() {
+        let used_end = CellPos::new(RowIdx::LAST, ColIdx::clamped(5));
+        let whole_col = Range::new(
+            CellPos::new(RowIdx::default(), ColIdx::clamped(1)),
+            CellPos::new(RowIdx::LAST, ColIdx::clamped(1)),
+        );
+        assert_eq!(copy_range(whole_col, used_end), None);
     }
 }
